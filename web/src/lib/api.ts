@@ -1,4 +1,4 @@
-import type { UploadResponse, SettingsResponse } from "./types";
+import type { UploadResponse, SettingsResponse, ExtendedSettingsResponse } from "./types";
 
 // Shared fetch helper — parses JSON error bodies for useful messages
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -46,4 +46,22 @@ export async function testConnection(
 
 export async function getResultJson(sessionId: string): Promise<Record<string, unknown>> {
   return apiFetch(`/api/result/${sessionId}/result.json`);
+}
+
+export async function getExtendedSettings(): Promise<ExtendedSettingsResponse> {
+  return apiFetch<ExtendedSettingsResponse>("/api/settings");
+}
+
+// ---------------------------------------------------------------------------
+// Abort / Rerun
+// ---------------------------------------------------------------------------
+
+/** Cancel all running agents in a session. */
+export async function abortAll(sessionId: string): Promise<{ cancelled: number }> {
+  return apiFetch(`/api/abort/${sessionId}`, { method: "POST" });
+}
+
+/** Cancel a single agent within a session. */
+export async function abortAgent(sessionId: string, agentId: string): Promise<{ cancelled: string }> {
+  return apiFetch(`/api/abort/${sessionId}/${agentId}`, { method: "POST" });
 }

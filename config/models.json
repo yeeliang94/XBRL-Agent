@@ -1,0 +1,51 @@
+[
+  {
+    "id": "vertex_ai.gemini-3-flash-preview",
+    "display_name": "Gemini 3 Flash Preview",
+    "provider": "google",
+    "supports_vision": true,
+    "notes": "Fast, cost-effective. Default for extraction and scout."
+  },
+  {
+    "id": "vertex_ai.gemini-3-pro",
+    "display_name": "Gemini 3 Pro",
+    "provider": "google",
+    "supports_vision": true,
+    "notes": "Higher quality, slower. Good for complex statements."
+  },
+  {
+    "id": "claude-sonnet-4-6",
+    "display_name": "Claude Sonnet 4.6",
+    "provider": "anthropic",
+    "supports_vision": true,
+    "notes": "Strong reasoning, good balance of speed and quality."
+  },
+  {
+    "id": "claude-opus-4-6",
+    "display_name": "Claude Opus 4.6",
+    "provider": "anthropic",
+    "supports_vision": true,
+    "notes": "Highest quality Anthropic model. Best for difficult extractions."
+  },
+  {
+    "id": "claude-haiku-4-5",
+    "display_name": "Claude Haiku 4.5",
+    "provider": "anthropic",
+    "supports_vision": true,
+    "notes": "Fastest Anthropic model. Good for simple statements."
+  },
+  {
+    "id": "gpt-5.4",
+    "display_name": "GPT-5.4",
+    "provider": "openai",
+    "supports_vision": true,
+    "notes": "Placeholder — confirm exact model ID from OpenAI docs."
+  },
+  {
+    "id": "gpt-5.4-mini",
+    "display_name": "GPT-5.4 Mini",
+    "provider": "openai",
+    "supports_vision": true,
+    "notes": "Placeholder — confirm exact model ID from OpenAI docs."
+  }
+]

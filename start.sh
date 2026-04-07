@@ -65,28 +65,58 @@ else
     echo "Install Node.js 18+ from https://nodejs.org/"
 fi
 
-# Start local LiteLLM proxy if configured for localhost — mirrors Windows enterprise setup
-LITELLM_PID=""
-if grep -qE '^LLM_PROXY_URL=http://localhost:4000' .env 2>/dev/null; then
-    # Export GEMINI_API_KEY from .env so litellm can reach Gemini
-    set -a; source .env; set +a
-    if [ -z "$GEMINI_API_KEY" ]; then
-        echo "ERROR: GEMINI_API_KEY must be set in .env for local LiteLLM proxy."
-        exit 1
-    fi
-    echo "Starting local LiteLLM proxy on :4000..."
-    litellm --config litellm_config.yaml --port 4000 > litellm.log 2>&1 &
-    LITELLM_PID=$!
-    trap 'kill $LITELLM_PID 2>/dev/null || true' EXIT INT TERM
-    # Wait for proxy to be ready
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        if curl -sf http://localhost:4000/health/readiness > /dev/null 2>&1; then
-            echo "  LiteLLM ready."
-            break
-        fi
-        sleep 1
-    done
+# --- Local LiteLLM proxy (simulates enterprise proxy) ---
+LITELLM_PORT=4000
+LITELLM_URL="http://localhost:${LITELLM_PORT}"
+
+echo ""
+echo "Starting local LiteLLM proxy on ${LITELLM_URL}..."
+
+# Kill any leftover proxy from a previous run
+if lsof -ti :${LITELLM_PORT} &>/dev/null; then
+    echo "  Stopping existing process on port ${LITELLM_PORT}..."
+    kill $(lsof -ti :${LITELLM_PORT}) 2>/dev/null || true
+    sleep 1
 fi
+
+# Launch proxy in background — logs go to litellm.log
+litellm --config litellm_config.yaml --port ${LITELLM_PORT} \
+    2>&1 > litellm.log &
+LITELLM_PID=$!
+
+# Wait for proxy to be ready (up to 15 seconds)
+echo -n "  Waiting for proxy"
+for i in $(seq 1 15); do
+    if curl -s -H "Authorization: Bearer sk-local-dev-key" "${LITELLM_URL}/health" >/dev/null 2>&1; then
+        echo " ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+if ! curl -s -H "Authorization: Bearer sk-local-dev-key" "${LITELLM_URL}/health" >/dev/null 2>&1; then
+    echo ""
+    echo "WARNING: LiteLLM proxy didn't start. Check litellm.log"
+    echo "Falling back to direct API mode (no proxy)."
+    kill $LITELLM_PID 2>/dev/null || true
+    LITELLM_PID=""
+else
+    # Point the server at the local proxy (simulates enterprise setup)
+    export LLM_PROXY_URL="${LITELLM_URL}/v1"
+    export GOOGLE_API_KEY="sk-local-dev-key"
+    echo "  LLM_PROXY_URL=${LLM_PROXY_URL}"
+fi
+
+# Cleanup proxy on exit
+cleanup() {
+    if [ -n "$LITELLM_PID" ]; then
+        echo ""
+        echo "Stopping LiteLLM proxy (PID $LITELLM_PID)..."
+        kill $LITELLM_PID 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
 
 echo ""
 echo "Starting server on http://localhost:8002"

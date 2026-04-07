@@ -5,11 +5,20 @@ from typing import Optional
 
 import openpyxl
 
+# Forward reference: statement_types imports are kept local to the dispatch
+# function to avoid a circular import if verifier ever grows into a package.
+
 
 @dataclass
 class VerificationResult:
-    is_balanced: bool
-    matches_pdf: bool
+    # `is_balanced` is True/False for statements where the concept applies
+    # (currently SOFP) and None when the check is not applicable to the
+    # statement type (e.g. SOPL has no balance identity to verify).
+    is_balanced: Optional[bool]
+    # True/False when PDF reference values were compared; None when no
+    # comparison was performed (e.g. non-SOFP statements without per-statement
+    # comparison maps). Consumers must not treat None as "passed".
+    matches_pdf: Optional[bool]
     computed_totals: dict[str, float] = field(default_factory=dict)
     pdf_values: dict[str, float] = field(default_factory=dict)
     mismatches: list[str] = field(default_factory=list)
@@ -27,7 +36,8 @@ def _resolve_cell_value(
     wb: openpyxl.Workbook,
     sheet_name: str,
     cell_ref: str,
-    visited: Optional[set] = None,
+    visited: Optional[set[str]] = None,
+    warnings: Optional[list[str]] = None,
 ) -> float:
     """Resolve a cell's value, recursing through formulas with cycle detection."""
     if visited is None:
@@ -41,31 +51,72 @@ def _resolve_cell_value(
     try:
         raw = wb[sheet_name][cell_ref].value
     except KeyError:
+        if warnings is not None:
+            warnings.append(f"Missing reference: sheet '{sheet_name}' or cell {cell_ref} not found")
         return 0.0
 
     if raw is None:
         return 0.0
 
     if isinstance(raw, str) and raw.startswith("="):
-        return _evaluate_formula(wb, sheet_name, raw, visited)
+        return _evaluate_formula(wb, sheet_name, raw, visited, warnings)
 
     try:
         return float(raw)
     except (ValueError, TypeError):
+        if warnings is not None:
+            warnings.append(f"Unparseable value in {sheet_name}!{cell_ref}: {raw!r}")
         return 0.0
+
+
+def _expand_range(range_ref: str) -> list[str]:
+    """Expand a cell range like E6:L6 into individual cell references.
+
+    Handles single-row ranges (E6:L6), single-column ranges (B3:B10),
+    and rectangular ranges (A1:C3).
+    """
+    match = re.match(r"([A-Z]+)(\d+):([A-Z]+)(\d+)$", range_ref)
+    if not match:
+        return [range_ref]
+
+    col1_str, row1_str, col2_str, row2_str = match.groups()
+    row1, row2 = int(row1_str), int(row2_str)
+
+    # Convert column letters to numbers (A=1, B=2, ..., Z=26, AA=27, ...)
+    def col_to_num(s: str) -> int:
+        n = 0
+        for ch in s:
+            n = n * 26 + (ord(ch) - ord("A") + 1)
+        return n
+
+    def num_to_col(n: int) -> str:
+        result = ""
+        while n > 0:
+            n, remainder = divmod(n - 1, 26)
+            result = chr(65 + remainder) + result
+        return result
+
+    c1, c2 = col_to_num(col1_str), col_to_num(col2_str)
+    cells = []
+    for r in range(min(row1, row2), max(row1, row2) + 1):
+        for c in range(min(c1, c2), max(c1, c2) + 1):
+            cells.append(f"{num_to_col(c)}{r}")
+    return cells
 
 
 def _evaluate_formula(
     wb: openpyxl.Workbook,
     sheet_name: str,
     formula: str,
-    visited: Optional[set] = None,
+    visited: Optional[set[str]] = None,
+    warnings: Optional[list[str]] = None,
 ) -> float:
     """Parse and evaluate a cell formula, recursing into referenced cells.
 
-    Handles two patterns found in SSM MBRS templates:
+    Handles patterns found in SSM MBRS templates:
     - Cross-sheet references: ='SOFP-Sub-CuNonCu'!B39
     - Weighted sums: =1*B139+1*B140+1*B141  (weights are always 1 or -1)
+    - SUM with ranges: =SUM(E6:L6)
     """
     if visited is None:
         visited = set()
@@ -79,7 +130,22 @@ def _evaluate_formula(
     cross_ref = re.match(r"'?([^'!]+)'?!([A-Z]+\d+)$", formula_body)
     if cross_ref:
         ref_sheet, ref_cell = cross_ref.groups()
-        return _resolve_cell_value(wb, ref_sheet, ref_cell, visited)
+        return _resolve_cell_value(wb, ref_sheet, ref_cell, visited, warnings)
+
+    # SUM function with range: =SUM(E6:L6) or =SUM(E6:L6,M6)
+    sum_match = re.match(r"SUM\((.+)\)$", formula_body, re.IGNORECASE)
+    if sum_match:
+        args = sum_match.group(1)
+        total = 0.0
+        for arg in args.split(","):
+            arg = arg.strip()
+            if ":" in arg:
+                for cell_ref in _expand_range(arg):
+                    total += _resolve_cell_value(wb, sheet_name, cell_ref, visited, warnings)
+            else:
+                # Single cell reference
+                total += _resolve_cell_value(wb, sheet_name, arg, visited, warnings)
+        return total
 
     # Weighted sum: 1*B139+1*B140-1*B141+...
     ws_name = sheet_name
@@ -94,7 +160,7 @@ def _evaluate_formula(
     if terms:
         total = 0.0
         for sign, coeff, cell_ref in terms:
-            val = _resolve_cell_value(wb, ws_name, cell_ref, visited)
+            val = _resolve_cell_value(wb, ws_name, cell_ref, visited, warnings)
             weight = int(coeff) if coeff else 1
             if sign == "-":
                 weight = -weight
@@ -105,7 +171,7 @@ def _evaluate_formula(
     refs = re.findall(r'[A-Z]+\d+', formula_body)
     total = 0.0
     for ref in refs:
-        total += _resolve_cell_value(wb, ws_name, ref, visited)
+        total += _resolve_cell_value(wb, ws_name, ref, visited, warnings)
     return total
 
 
@@ -130,6 +196,7 @@ def verify_totals(
     is_balanced = True
     mismatches: list[str] = []
     feedback_lines: list[str] = []
+    formula_warnings: list[str] = []
 
     # Scan for the exact total labels we care about
     for row in ws.iter_rows():
@@ -139,20 +206,24 @@ def verify_totals(
             label = _normalize_label(str(cell.value))
 
             if label == _TOTAL_ASSETS_LABEL or label == "total assets":
-                val_b = _get_cell_value(wb, ws, cell.row, 2)
-                val_c = _get_cell_value(wb, ws, cell.row, 3)
+                val_b = _get_cell_value(wb, ws, cell.row, 2, warnings=formula_warnings)
+                val_c = _get_cell_value(wb, ws, cell.row, 3, warnings=formula_warnings)
                 if val_b is not None:
                     computed_totals["total_assets_cy"] = val_b
                 if val_c is not None:
                     computed_totals["total_assets_py"] = val_c
 
             elif label == _TOTAL_EQ_LIAB_LABEL or label == "total equity and liabilities":
-                val_b = _get_cell_value(wb, ws, cell.row, 2)
-                val_c = _get_cell_value(wb, ws, cell.row, 3)
+                val_b = _get_cell_value(wb, ws, cell.row, 2, warnings=formula_warnings)
+                val_c = _get_cell_value(wb, ws, cell.row, 3, warnings=formula_warnings)
                 if val_b is not None:
                     computed_totals["total_equity_liabilities_cy"] = val_b
                 if val_c is not None:
                     computed_totals["total_equity_liabilities_py"] = val_c
+
+    # Surface formula resolution warnings as mismatches
+    for w in dict.fromkeys(formula_warnings):  # deduplicate, preserve order
+        mismatches.append(f"Formula warning: {w}")
 
     # Check CY balance
     if (
@@ -219,7 +290,10 @@ def _normalize_label(label: str) -> str:
     return label.strip().lstrip("*").strip().lower()
 
 
-def _get_cell_value(wb: openpyxl.Workbook, ws, row: int, col: int) -> Optional[float]:
+def _get_cell_value(
+    wb: openpyxl.Workbook, ws, row: int, col: int,
+    warnings: Optional[list[str]] = None,
+) -> Optional[float]:
     """Get a cell's effective value — evaluate its formula if it has one,
     otherwise return the literal value. Recurses through formula chains."""
     cell = ws.cell(row=row, column=col)
@@ -229,9 +303,627 @@ def _get_cell_value(wb: openpyxl.Workbook, ws, row: int, col: int) -> Optional[f
         return None
 
     if isinstance(raw, str) and raw.startswith("="):
-        return _evaluate_formula(wb, ws.title, raw)
+        return _evaluate_formula(wb, ws.title, raw, warnings=warnings)
 
     try:
         return float(raw)
     except (ValueError, TypeError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Parametric verifier entry point (Phase 1, Step 1.3)
+#
+# `verify_totals` above keeps doing SOFP-specific balance checks so the
+# legacy single-agent SOFP pipeline keeps passing byte-identically.
+# `verify_statement` is the new front door that dispatches on statement type.
+# Only SOFP has a meaningful balance identity right now; the other four
+# statements return is_balanced=None ("not applicable") while still letting
+# the caller supply PDF reference values for cross-checking.
+# ---------------------------------------------------------------------------
+
+def verify_statement(
+    path: str,
+    statement_type: "object",  # statement_types.StatementType, duck-typed
+    variant: str = "",
+    pdf_values: Optional[dict[str, float]] = None,
+) -> VerificationResult:
+    """Verify a filled workbook for a given statement type.
+
+    Each statement type has its own balance identity:
+    - SOFP: Total assets == Total equity and liabilities
+    - SOCIE: Equity at end == Equity at beginning (restated) + Total increase
+    - SOCF: Cash at end == Cash at beginning + Net increase after FX
+    - SOPL: Profit == Revenue - Costs (attribution check)
+    - SOCI: Total comprehensive income == P&L + Total OCI (attribution check)
+    """
+    from statement_types import StatementType
+
+    name = statement_type.value if hasattr(statement_type, "value") else str(statement_type)
+
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Template not found: {path}")
+
+    if name == StatementType.SOFP.value:
+        return verify_totals(path, pdf_values=pdf_values)
+    elif name == StatementType.SOCIE.value:
+        return _verify_socie(path, pdf_values=pdf_values)
+    elif name == StatementType.SOCF.value:
+        return _verify_socf(path, variant=variant, pdf_values=pdf_values)
+    elif name == StatementType.SOPL.value:
+        return _verify_sopl(path, variant=variant, pdf_values=pdf_values)
+    elif name == StatementType.SOCI.value:
+        return _verify_soci(path, variant=variant, pdf_values=pdf_values)
+
+    return VerificationResult(
+        is_balanced=None,
+        matches_pdf=None,
+        computed_totals={},
+        pdf_values=pdf_values or {},
+        mismatches=[],
+        feedback=f"No intra-statement balance check defined for {name}/{variant or 'Default'}.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# SOCIE verifier: closing equity == restated opening + total increase
+# ---------------------------------------------------------------------------
+
+def _verify_socie(
+    path: str,
+    pdf_values: Optional[dict[str, float]] = None,
+) -> VerificationResult:
+    wb = openpyxl.load_workbook(path, data_only=False)
+    ws = wb["SOCIE"] if "SOCIE" in wb.sheetnames else wb.active
+
+    computed_totals: dict[str, float] = {}
+    mismatches: list[str] = []
+    is_balanced = True
+    formula_warnings: list[str] = []
+
+    # Find key rows by label (column A)
+    label_rows: dict[str, list[int]] = {}
+    for row in range(1, ws.max_row + 1):
+        val = ws.cell(row=row, column=1).value
+        if val:
+            norm = _normalize_label(str(val))
+            label_rows.setdefault(norm, []).append(row)
+
+    restated_rows = label_rows.get("equity at beginning of period, restated", [])
+    total_inc_rows = label_rows.get("total increase (decrease) in equity", [])
+    closing_rows = label_rows.get("equity at end of period", [])
+
+    # Fail closed: if we can't find the rows we need, report it
+    if not restated_rows or not total_inc_rows or not closing_rows:
+        missing = []
+        if not restated_rows:
+            missing.append("'Equity at beginning of period, restated'")
+        if not total_inc_rows:
+            missing.append("'Total increase (decrease) in equity'")
+        if not closing_rows:
+            missing.append("'Equity at end of period'")
+        wb.close()
+        return VerificationResult(
+            is_balanced=False,
+            matches_pdf=_check_pdf_values({}, pdf_values),
+            computed_totals={},
+            pdf_values=pdf_values or {},
+            mismatches=[f"Required label not found: {', '.join(missing)}"],
+            feedback=f"SOCIE verification failed: missing labels {', '.join(missing)}",
+        )
+
+    # Check each period block — the "Total" column is X (col 24)
+    total_col = 24  # Column X = grand total
+
+    for i, (rest_r, inc_r, close_r) in enumerate(
+        zip(restated_rows, total_inc_rows, closing_rows)
+    ):
+        period = "CY" if i == 0 else "PY"
+
+        restated = _get_cell_value(wb, ws, rest_r, total_col, warnings=formula_warnings) or 0.0
+        increase = _get_cell_value(wb, ws, inc_r, total_col, warnings=formula_warnings) or 0.0
+        closing = _get_cell_value(wb, ws, close_r, total_col, warnings=formula_warnings) or 0.0
+
+        computed_totals[f"restated_equity_{period.lower()}"] = restated
+        computed_totals[f"total_increase_{period.lower()}"] = increase
+        computed_totals[f"closing_equity_{period.lower()}"] = closing
+
+        expected = restated + increase
+        diff = closing - expected
+        if abs(diff) > 0.01:
+            is_balanced = False
+            mismatches.append(
+                f"{period}: closing equity ({closing}) != "
+                f"restated ({restated}) + total increase ({increase}) = {expected}"
+            )
+
+    for w in dict.fromkeys(formula_warnings):
+        mismatches.append(f"Formula warning: {w}")
+
+    wb.close()
+
+    matches_pdf = _check_pdf_values(computed_totals, pdf_values)
+
+    return VerificationResult(
+        is_balanced=is_balanced,
+        matches_pdf=matches_pdf,
+        computed_totals=computed_totals,
+        pdf_values=pdf_values or {},
+        mismatches=mismatches,
+        feedback="\n".join(mismatches) if mismatches else "SOCIE balance check passed.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# SOCF verifier: cash at end == cash at beginning + net increase after FX
+# ---------------------------------------------------------------------------
+
+def _verify_socf(
+    path: str,
+    variant: str = "",
+    pdf_values: Optional[dict[str, float]] = None,
+) -> VerificationResult:
+    wb = openpyxl.load_workbook(path, data_only=False)
+
+    # Try to find the right sheet
+    sheet_names_to_try = ["SOCF-Indirect", "SOCF-Direct"]
+    ws = None
+    for sn in sheet_names_to_try:
+        if sn in wb.sheetnames:
+            ws = wb[sn]
+            break
+    if ws is None:
+        ws = wb.active
+
+    computed_totals: dict[str, float] = {}
+    mismatches: list[str] = []
+    is_balanced = True
+    formula_warnings: list[str] = []
+
+    # Find key rows
+    rows_by_label: dict[str, int] = {}
+    for row in range(1, ws.max_row + 1):
+        val = ws.cell(row=row, column=1).value
+        if val:
+            norm = _normalize_label(str(val))
+            if "net cash flows" in norm and "operating" in norm:
+                rows_by_label["net_operating"] = row
+            elif "net cash flows" in norm and "investing" in norm:
+                rows_by_label["net_investing"] = row
+            elif "net cash flows" in norm and "financing" in norm:
+                rows_by_label["net_financing"] = row
+            elif "net increase" in norm and "after" in norm:
+                rows_by_label["net_increase_after_fx"] = row
+            elif "net increase" in norm and "before" in norm:
+                rows_by_label["net_increase_before_fx"] = row
+            elif "cash and cash equivalents at end" in norm:
+                rows_by_label["cash_end"] = row
+            elif "cash and cash equivalents at beginning" in norm:
+                rows_by_label["cash_beginning"] = row
+
+    # Fail closed: require at least operating + net increase rows
+    required = ["net_operating", "net_increase_before_fx"]
+    missing = [k for k in required if k not in rows_by_label]
+    if missing:
+        wb.close()
+        return VerificationResult(
+            is_balanced=False,
+            matches_pdf=_check_pdf_values({}, pdf_values),
+            computed_totals={},
+            pdf_values=pdf_values or {},
+            mismatches=[f"Required SOCF rows not found: {', '.join(missing)}"],
+            feedback=f"SOCF verification failed: missing rows {', '.join(missing)}",
+        )
+
+    # Check: operating + investing + financing == net increase before FX
+    for key in ["net_operating", "net_investing", "net_financing", "net_increase_before_fx"]:
+        if key in rows_by_label:
+            computed_totals[key] = _get_cell_value(wb, ws, rows_by_label[key], 2, warnings=formula_warnings) or 0.0
+
+    if all(k in computed_totals for k in ["net_operating", "net_investing", "net_financing", "net_increase_before_fx"]):
+        expected = computed_totals["net_operating"] + computed_totals["net_investing"] + computed_totals["net_financing"]
+        actual = computed_totals["net_increase_before_fx"]
+        if abs(actual - expected) > 0.01:
+            is_balanced = False
+            mismatches.append(
+                f"Net increase before FX ({actual}) != "
+                f"Operating ({computed_totals['net_operating']}) + "
+                f"Investing ({computed_totals['net_investing']}) + "
+                f"Financing ({computed_totals['net_financing']}) = {expected}"
+            )
+
+    # Check: cash at end == cash at beginning + net increase after FX
+    for key in ["cash_beginning", "cash_end", "net_increase_after_fx"]:
+        if key in rows_by_label:
+            computed_totals[key] = _get_cell_value(wb, ws, rows_by_label[key], 2, warnings=formula_warnings) or 0.0
+
+    if all(k in computed_totals for k in ["cash_beginning", "cash_end", "net_increase_after_fx"]):
+        expected = computed_totals["cash_beginning"] + computed_totals["net_increase_after_fx"]
+        actual = computed_totals["cash_end"]
+        if abs(actual - expected) > 0.01:
+            is_balanced = False
+            mismatches.append(
+                f"Cash at end ({actual}) != "
+                f"Cash at beginning ({computed_totals['cash_beginning']}) + "
+                f"Net increase after FX ({computed_totals['net_increase_after_fx']}) = {expected}"
+            )
+
+    for w in dict.fromkeys(formula_warnings):
+        mismatches.append(f"Formula warning: {w}")
+
+    wb.close()
+
+    matches_pdf = _check_pdf_values(computed_totals, pdf_values)
+
+    return VerificationResult(
+        is_balanced=is_balanced,
+        matches_pdf=matches_pdf,
+        computed_totals=computed_totals,
+        pdf_values=pdf_values or {},
+        mismatches=mismatches,
+        feedback="\n".join(mismatches) if mismatches else "SOCF balance check passed.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# SOPL verifier: attribution check (total P&L == owners + NCI)
+# ---------------------------------------------------------------------------
+
+def _verify_sopl(
+    path: str,
+    variant: str = "",
+    pdf_values: Optional[dict[str, float]] = None,
+) -> VerificationResult:
+    wb = openpyxl.load_workbook(path, data_only=False)
+
+    sheet_names_to_try = ["SOPL-Function", "SOPL-Nature"]
+    ws = None
+    for sn in sheet_names_to_try:
+        if sn in wb.sheetnames:
+            ws = wb[sn]
+            break
+    if ws is None:
+        ws = wb.active
+
+    computed_totals: dict[str, float] = {}
+    mismatches: list[str] = []
+    is_balanced = True
+    formula_warnings: list[str] = []
+
+    # Find profit/loss and attribution total rows.
+    # SOPL-Function uses "Total profit (loss)" for the attribution row.
+    # SOPL-Nature uses a second "Profit (loss)" row instead.
+    profit_loss_row = None
+    total_profit_row = None
+    last_profit_loss_row = None  # track the last "profit (loss)" for Nature variant
+    for row in range(1, ws.max_row + 1):
+        val = ws.cell(row=row, column=1).value
+        if val:
+            norm = _normalize_label(str(val))
+            if norm == "profit (loss)":
+                if profit_loss_row is None:
+                    profit_loss_row = row
+                last_profit_loss_row = row
+            elif norm == "total profit (loss)":
+                total_profit_row = row
+
+    # For Nature variant: if no "Total profit (loss)" exists but there are
+    # multiple "Profit (loss)" rows, the last one is the attribution total.
+    if total_profit_row is None and last_profit_loss_row and last_profit_loss_row != profit_loss_row:
+        total_profit_row = last_profit_loss_row
+
+    # Fail closed: require at least the primary profit/loss row
+    if not profit_loss_row:
+        wb.close()
+        return VerificationResult(
+            is_balanced=False,
+            matches_pdf=_check_pdf_values({}, pdf_values),
+            computed_totals={},
+            pdf_values=pdf_values or {},
+            mismatches=["Required label not found: 'Profit (loss)'"],
+            feedback="SOPL verification failed: missing 'Profit (loss)' label",
+        )
+
+    computed_totals["profit_loss_cy"] = _get_cell_value(wb, ws, profit_loss_row, 2, warnings=formula_warnings) or 0.0
+    if total_profit_row:
+        computed_totals["total_profit_attribution_cy"] = _get_cell_value(wb, ws, total_profit_row, 2, warnings=formula_warnings) or 0.0
+
+    # Attribution check: profit/loss should equal attribution total
+    if total_profit_row:
+        pl = computed_totals["profit_loss_cy"]
+        attr = computed_totals["total_profit_attribution_cy"]
+        if abs(pl - attr) > 0.01:
+            is_balanced = False
+            mismatches.append(
+                f"Profit/loss ({pl}) != attribution total ({attr})"
+            )
+
+    for w in dict.fromkeys(formula_warnings):
+        mismatches.append(f"Formula warning: {w}")
+
+    wb.close()
+
+    matches_pdf = _check_pdf_values(computed_totals, pdf_values)
+
+    return VerificationResult(
+        is_balanced=is_balanced,
+        matches_pdf=matches_pdf,
+        computed_totals=computed_totals,
+        pdf_values=pdf_values or {},
+        mismatches=mismatches,
+        feedback="\n".join(mismatches) if mismatches else "SOPL attribution check passed.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# SOCI verifier: total comprehensive income == P&L + OCI; attribution check
+# ---------------------------------------------------------------------------
+
+def _verify_soci(
+    path: str,
+    variant: str = "",
+    pdf_values: Optional[dict[str, float]] = None,
+) -> VerificationResult:
+    wb = openpyxl.load_workbook(path, data_only=False)
+
+    sheet_names_to_try = ["SOCI-BeforeOfTax", "SOCI-NetOfTax"]
+    ws = None
+    for sn in sheet_names_to_try:
+        if sn in wb.sheetnames:
+            ws = wb[sn]
+            break
+    if ws is None:
+        ws = wb.active
+
+    computed_totals: dict[str, float] = {}
+    mismatches: list[str] = []
+    is_balanced = True
+    formula_warnings: list[str] = []
+
+    # Find key rows
+    pl_row = None
+    total_oci_row = None
+    total_ci_rows = []
+
+    for row in range(1, ws.max_row + 1):
+        val = ws.cell(row=row, column=1).value
+        if val:
+            norm = _normalize_label(str(val))
+            if norm == "profit (loss)" and pl_row is None:
+                pl_row = row
+            elif norm == "total other comprehensive income" and total_oci_row is None:
+                total_oci_row = row
+            elif norm == "total comprehensive income":
+                total_ci_rows.append(row)
+
+    # Fail closed: require at least P&L and one Total CI row
+    if not pl_row or not total_ci_rows:
+        missing = []
+        if not pl_row:
+            missing.append("'Profit (loss)'")
+        if not total_ci_rows:
+            missing.append("'Total comprehensive income'")
+        wb.close()
+        return VerificationResult(
+            is_balanced=False,
+            matches_pdf=_check_pdf_values({}, pdf_values),
+            computed_totals={},
+            pdf_values=pdf_values or {},
+            mismatches=[f"Required label not found: {', '.join(missing)}"],
+            feedback=f"SOCI verification failed: missing labels {', '.join(missing)}",
+        )
+
+    computed_totals["profit_loss_cy"] = _get_cell_value(wb, ws, pl_row, 2, warnings=formula_warnings) or 0.0
+    if total_oci_row:
+        computed_totals["total_oci_cy"] = _get_cell_value(wb, ws, total_oci_row, 2, warnings=formula_warnings) or 0.0
+
+    # First "Total comprehensive income" should be P&L + OCI
+    if total_ci_rows:
+        ci_val = _get_cell_value(wb, ws, total_ci_rows[0], 2, warnings=formula_warnings) or 0.0
+        computed_totals["total_comprehensive_income_cy"] = ci_val
+
+        if pl_row and total_oci_row:
+            expected = computed_totals["profit_loss_cy"] + computed_totals["total_oci_cy"]
+            if abs(ci_val - expected) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"Total CI ({ci_val}) != P&L ({computed_totals['profit_loss_cy']}) "
+                    f"+ OCI ({computed_totals['total_oci_cy']}) = {expected}"
+                )
+
+    # Attribution check: second "Total comprehensive income" should match first
+    if len(total_ci_rows) >= 2:
+        ci_main = _get_cell_value(wb, ws, total_ci_rows[0], 2, warnings=formula_warnings) or 0.0
+        ci_attr = _get_cell_value(wb, ws, total_ci_rows[1], 2, warnings=formula_warnings) or 0.0
+        computed_totals["total_ci_attribution_cy"] = ci_attr
+        if abs(ci_main - ci_attr) > 0.01:
+            is_balanced = False
+            mismatches.append(
+                f"Total CI ({ci_main}) != attribution total ({ci_attr})"
+            )
+
+    for w in dict.fromkeys(formula_warnings):
+        mismatches.append(f"Formula warning: {w}")
+
+    wb.close()
+
+    matches_pdf = _check_pdf_values(computed_totals, pdf_values)
+
+    return VerificationResult(
+        is_balanced=is_balanced,
+        matches_pdf=matches_pdf,
+        computed_totals=computed_totals,
+        pdf_values=pdf_values or {},
+        mismatches=mismatches,
+        feedback="\n".join(mismatches) if mismatches else "SOCI balance check passed.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cross-sheet validation: run all inter-statement consistency checks
+# ---------------------------------------------------------------------------
+
+def verify_cross_sheet(
+    workbook_paths: dict[str, str],
+) -> VerificationResult:
+    """Check inter-statement identities across filled workbooks.
+
+    `workbook_paths` maps statement type names (e.g. "SOFP", "SOCIE") to
+    file paths of their filled workbooks.
+
+    Checks performed:
+    - SOFP Total equity == SOCIE Closing equity (Total column)
+    - SOPL Profit/loss == SOCI Profit/loss (top of SOCI)
+    - SOCF Cash at end == SOFP Cash and cash equivalents
+    """
+    mismatches: list[str] = []
+    computed_totals: dict[str, float] = {}
+    is_balanced = True
+
+    # Helper to get a labelled value from a workbook.
+    # Uses exact-match-first to avoid "total equity" matching
+    # "total equity attributable to owners" before "total equity".
+    def _find_value(path: str, sheet_names: list[str], label_target: str, col: int = 2) -> Optional[float]:
+        wb = openpyxl.load_workbook(path, data_only=False)
+        ws = None
+        for sn in sheet_names:
+            if sn in wb.sheetnames:
+                ws = wb[sn]
+                break
+        if ws is None:
+            ws = wb.active
+
+        target = label_target.strip().lower()
+        exact_row = None
+        substr_row = None
+        for row in range(1, ws.max_row + 1):
+            val = ws.cell(row=row, column=1).value
+            if val is None:
+                continue
+            normalized = _normalize_label(str(val))
+            if normalized == target:
+                exact_row = row
+                break
+            if substr_row is None and target in normalized:
+                substr_row = row
+
+        match_row = exact_row or substr_row
+        if match_row is None:
+            wb.close()
+            return None
+
+        result = _get_cell_value(wb, ws, match_row, col)
+        wb.close()
+        return result
+
+    # Check 1: SOFP Total equity == SOCIE Closing equity
+    if "SOFP" in workbook_paths and "SOCIE" in workbook_paths:
+        sofp_equity = _find_value(
+            workbook_paths["SOFP"],
+            ["SOFP-CuNonCu", "SOFP-OrdOfLiq"],
+            "total equity",
+            col=2,
+        )
+        # SOCIE closing equity is in column X (24), last "Equity at end" row
+        socie_wb = openpyxl.load_workbook(workbook_paths["SOCIE"], data_only=False)
+        socie_ws = socie_wb["SOCIE"] if "SOCIE" in socie_wb.sheetnames else socie_wb.active
+        socie_closing = None
+        for row in range(1, socie_ws.max_row + 1):
+            val = socie_ws.cell(row=row, column=1).value
+            if val and "equity at end of period" in _normalize_label(str(val)):
+                socie_closing = _get_cell_value(socie_wb, socie_ws, row, 24)  # col X
+                break  # First period = CY
+        socie_wb.close()
+
+        if sofp_equity is not None:
+            computed_totals["sofp_total_equity"] = sofp_equity
+        if socie_closing is not None:
+            computed_totals["socie_closing_equity"] = socie_closing
+
+        if sofp_equity is not None and socie_closing is not None:
+            if abs(sofp_equity - socie_closing) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"SOFP Total equity ({sofp_equity}) != SOCIE Closing equity ({socie_closing})"
+                )
+
+    # Check 2: SOPL Profit/loss == SOCI Profit/loss
+    if "SOPL" in workbook_paths and "SOCI" in workbook_paths:
+        sopl_profit = _find_value(
+            workbook_paths["SOPL"],
+            ["SOPL-Function", "SOPL-Nature"],
+            "profit (loss)",
+            col=2,
+        )
+        soci_profit = _find_value(
+            workbook_paths["SOCI"],
+            ["SOCI-BeforeOfTax", "SOCI-NetOfTax"],
+            "profit (loss)",
+            col=2,
+        )
+
+        if sopl_profit is not None:
+            computed_totals["sopl_profit_loss"] = sopl_profit
+        if soci_profit is not None:
+            computed_totals["soci_profit_loss"] = soci_profit
+
+        if sopl_profit is not None and soci_profit is not None:
+            if abs(sopl_profit - soci_profit) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"SOPL Profit/loss ({sopl_profit}) != SOCI Profit/loss ({soci_profit})"
+                )
+
+    # Check 3: SOCF Cash at end == SOFP Cash and cash equivalents
+    if "SOCF" in workbook_paths and "SOFP" in workbook_paths:
+        socf_cash = _find_value(
+            workbook_paths["SOCF"],
+            ["SOCF-Indirect", "SOCF-Direct"],
+            "cash and cash equivalents at end",
+            col=2,
+        )
+        sofp_cash = _find_value(
+            workbook_paths["SOFP"],
+            ["SOFP-CuNonCu", "SOFP-OrdOfLiq"],
+            "cash and cash equivalents",
+            col=2,
+        )
+
+        if socf_cash is not None:
+            computed_totals["socf_cash_end"] = socf_cash
+        if sofp_cash is not None:
+            computed_totals["sofp_cash"] = sofp_cash
+
+        if socf_cash is not None and sofp_cash is not None:
+            if abs(socf_cash - sofp_cash) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"SOCF Cash at end ({socf_cash}) != SOFP Cash ({sofp_cash})"
+                )
+
+    return VerificationResult(
+        is_balanced=is_balanced,
+        matches_pdf=None,
+        computed_totals=computed_totals,
+        pdf_values={},
+        mismatches=mismatches,
+        feedback="\n".join(mismatches) if mismatches else "All cross-sheet checks passed.",
+    )
+
+
+def _check_pdf_values(
+    computed_totals: dict[str, float],
+    pdf_values: Optional[dict[str, float]],
+) -> Optional[bool]:
+    """Compare computed totals against PDF reference values if provided."""
+    if not pdf_values:
+        return None
+    matches = True
+    for key, expected in pdf_values.items():
+        actual = computed_totals.get(key)
+        if actual is None:
+            matches = False
+        elif abs(actual - expected) > 0.01:
+            matches = False
+    return matches

@@ -25,7 +25,7 @@ export const pwc = {
 
   // Typography
   fontHeading: '"Arial", "Helvetica Neue", sans-serif',
-  fontBody:    '"Arial", serif',
+  fontBody:    '"Arial", sans-serif',
   fontMono:    '"SF Mono", "Fira Code", "Consolas", monospace',
 
   // Spacing scale (px)

@@ -7,6 +7,8 @@ from typing import Optional
 
 import openpyxl
 
+from tools.section_headers import header_set
+
 logger = logging.getLogger(__name__)
 
 
@@ -146,19 +148,20 @@ class _LabelEntry:
     section: str  # e.g. "non-current assets", "current liabilities"
 
 
-# Top-level section headers for the main SOFP sheet. These are the only
-# headers that define sections on the face — individual line items like
-# "Biological assets" or "Inventories" are NOT section boundaries here.
-_MAIN_SECTION_HEADERS = {
+# Legacy keyword fallbacks. These mirror the section headers previously
+# hard-coded here — we keep them as an `extra_keywords` safety net for the
+# `header_set()` discovery helper, in case a template ships a section header
+# without the expected fill colour. Discovery by fill colour is the primary
+# path; these keywords only add missing entries, never remove any.
+_LEGACY_MAIN_HEADER_KEYWORDS = frozenset({
     "non-current assets",
     "current assets",
     "equity",
     "non-current liabilities",
     "current liabilities",
-}
+})
 
-# Sub-sheet has more granular section headers for its detailed breakdowns.
-_SUB_SECTION_HEADERS = _MAIN_SECTION_HEADERS | {
+_LEGACY_SUB_HEADER_KEYWORDS = _LEGACY_MAIN_HEADER_KEYWORDS | frozenset({
     "property, plant and equipment",
     "investment property",
     "biological assets",
@@ -184,7 +187,7 @@ _SUB_SECTION_HEADERS = _MAIN_SECTION_HEADERS | {
     "current non-trade payables",
     "non-current derivative financial liabilities",
     "current derivative financial liabilities",
-}
+})
 
 
 def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
@@ -199,9 +202,13 @@ def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
         entries: list[_LabelEntry] = []
         current_section = ""
 
-        # Use granular sections only for sub-sheets; main sheet uses top-level only
-        is_sub_sheet = "sub" in name.lower()
-        headers = _SUB_SECTION_HEADERS if is_sub_sheet else _MAIN_SECTION_HEADERS
+        # Use granular sections only for sub-sheets; main sheet uses top-level only.
+        # Section headers are discovered from the template itself (fill colour)
+        # so new MBRS templates work without code changes; the legacy keyword
+        # set is passed as a safety net for any header missing a coloured fill.
+        is_sub_sheet = "sub" in name.lower() or "analysis" in name.lower()
+        fallback = _LEGACY_SUB_HEADER_KEYWORDS if is_sub_sheet else _LEGACY_MAIN_HEADER_KEYWORDS
+        headers = header_set(wb, name, extra_keywords=fallback)
 
         for row in range(1, ws.max_row + 1):
             cell_val = ws.cell(row=row, column=1).value

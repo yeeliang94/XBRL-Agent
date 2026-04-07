@@ -11,8 +11,7 @@ describe("UploadPanel — P1 enhancements", () => {
         onUpload={noop}
         isRunning={true}
         filename="test.pdf"
-        onRun={() => {}}
-        canRun={false}
+
         startTime={Date.now()}
       />,
     );
@@ -27,8 +26,7 @@ describe("UploadPanel — P1 enhancements", () => {
         onUpload={noop}
         isRunning={true}
         filename="test.pdf"
-        onRun={() => {}}
-        canRun={false}
+
         startTime={Date.now()}
       />,
     );
@@ -42,8 +40,7 @@ describe("UploadPanel — P1 enhancements", () => {
         onUpload={noop}
         isRunning={false}
         filename="test.pdf"
-        onRun={() => {}}
-        canRun={true}
+
         startTime={null}
       />,
     );
@@ -58,8 +55,7 @@ describe("UploadPanel — P1 enhancements", () => {
         onUpload={noop}
         isRunning={false}
         filename={null}
-        onRun={() => {}}
-        canRun={false}
+
         startTime={null}
       />,
     );
@@ -74,8 +70,7 @@ describe("UploadPanel — P1 enhancements", () => {
         onUpload={noop}
         isRunning={false}
         filename={null}
-        onRun={() => {}}
-        canRun={false}
+
         startTime={null}
       />,
     );

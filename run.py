@@ -1,8 +1,14 @@
+import asyncio
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Set
+
+from dotenv import load_dotenv
 
 from token_tracker import TokenReport
+from statement_types import StatementType
 
 # Default output directory relative to this script, not the working directory
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -38,40 +44,70 @@ def _next_run_dir(base_dir: str) -> str:
 
 def run_agent(
     pdf_path: str,
-    template_path: str,
-    model: str = "google-gla:gemini-3-flash-preview",
+    template_path: Optional[str] = None,
+    model: str = "google-gla:gemini-3-flash-preview",  # resolved through _create_proxy_model
     output_dir: str = _DEFAULT_OUTPUT_DIR,
     cache_template: bool = False,
+    statements: Optional[Set[StatementType]] = None,
 ) -> AgentResult:
-    from agent import create_sofp_agent, AgentDeps
+    """Run extraction via the coordinator for one or more statement types.
 
-    # Each run gets its own numbered subdirectory so results don't overwrite
+    Args:
+        pdf_path: path to the PDF to extract from.
+        template_path: ignored (kept for backward compat). Templates are
+            resolved per-statement by the coordinator.
+        model: default model string for all agents.
+        output_dir: base output directory (a numbered run_XXX subdir is created).
+        cache_template: unused (kept for backward compat).
+        statements: set of StatementType to extract. Defaults to all 5.
+    """
+    from coordinator import RunConfig, run_extraction
+    from server import _create_proxy_model
+    from workbook_merger import merge as merge_workbooks
+
+    # Each run gets its own numbered subdirectory
     output_dir = _next_run_dir(output_dir)
 
-    agent, deps = create_sofp_agent(
+    if statements is None:
+        statements = set(StatementType)
+
+    # Resolve model through the same proxy/direct routing as the web server
+    load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+    proxy_url = os.environ.get("LLM_PROXY_URL", "")
+    api_key = (os.environ.get("GOOGLE_API_KEY", "")
+               or os.environ.get("GEMINI_API_KEY", ""))
+    resolved_model = _create_proxy_model(model, proxy_url, api_key)
+
+    config = RunConfig(
         pdf_path=pdf_path,
-        template_path=template_path,
-        model=model,
         output_dir=output_dir,
-        cache_template=cache_template,
+        model=resolved_model,
+        statements_to_run=statements,
     )
 
-    result = agent.run_sync(
-        "Extract the SOFP data from the PDF into the template. "
-        "Follow the strategy in your system prompt. Begin by reading the template.",
-        deps=deps,
-    )
+    # Run all agents concurrently
+    coordinator_result = asyncio.run(run_extraction(config))
 
-    # Save the full conversation trace for analysis
-    _save_conversation_trace(result, output_dir)
+    # Merge workbooks into a single file
+    merged_path = str(Path(output_dir) / "filled.xlsx")
+    if coordinator_result.workbook_paths:
+        merge_workbooks(coordinator_result.workbook_paths, merged_path)
+
+    # Determine success: all agents must succeed
+    success = coordinator_result.all_succeeded
+    errors = [
+        f"{r.statement_type.value}: {r.error}"
+        for r in coordinator_result.agent_results
+        if r.status == "failed"
+    ]
 
     return AgentResult(
-        success=bool(result.output),
+        success=success,
         fields_filled=0,
-        token_report=deps.token_report,
+        token_report=TokenReport(),
         output_json_path=str(Path(output_dir) / "result.json"),
-        output_excel_path=deps.filled_path or str(Path(output_dir) / "filled.xlsx"),
-        errors=[],
+        output_excel_path=merged_path,
+        errors=errors,
     )
 
 
@@ -121,26 +157,43 @@ def _strip_binary(obj):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="SOFP Agent Extraction")
-    parser.add_argument("pdf", nargs="?", default="data/FINCO-Audited-Financial-Statement-2021.pdf")
-    parser.add_argument("template", nargs="?", default="SOFP-Xbrl-template.xlsx")
-    parser.add_argument("--model", default="google-gla:gemini-3-flash-preview",
-                        help="Model to use (e.g. google-gla:gemini-3.1-pro-preview)")
-    parser.add_argument("--cache-template", action="store_true",
-                        help="Embed template in system prompt for caching")
+    all_stmt_names = [s.value for s in StatementType]
+
+    parser = argparse.ArgumentParser(description="XBRL Extraction Agent")
+    parser.add_argument("pdf", nargs="?", default="data/FINCO-Audited-Financial-Statement-2021.pdf",
+                        help="Path to the PDF to extract from")
+    parser.add_argument("--model", default=None,
+                        help="Model to use (e.g. gemini-3-flash-preview, gpt-5.4, claude-sonnet-4-6). "
+                             "Defaults to TEST_MODEL from .env")
+    parser.add_argument("--statements", nargs="+", default=all_stmt_names,
+                        choices=all_stmt_names,
+                        help="Statements to extract (default: all 5)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Base output directory (default: output/ next to this script)")
     args = parser.parse_args()
 
-    print(f"Model: {args.model}")
-    print(f"Cache template: {args.cache_template}")
+    stmts = {StatementType(s) for s in args.statements}
 
-    result = run_agent(
+    # Resolve model: CLI flag > TEST_MODEL env var > default
+    load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+    model = args.model or os.environ.get("TEST_MODEL", "google-gla:gemini-3-flash-preview")
+
+    print(f"Model: {model}")
+    print(f"Statements: {', '.join(s.value for s in stmts)}")
+
+    kwargs: dict = dict(
         pdf_path=args.pdf,
-        template_path=args.template,
-        model=args.model,
-        cache_template=args.cache_template,
+        model=model,
+        statements=stmts,
     )
-    print(result.token_report.format_table())
+    if args.output_dir:
+        kwargs["output_dir"] = args.output_dir
+
+    result = run_agent(**kwargs)
+
+    if result.errors:
+        print(f"\nErrors:")
+        for err in result.errors:
+            print(f"  - {err}")
     print(f"\nExcel: {result.output_excel_path}")
-    print(f"JSON:  {result.output_json_path}")
-    print(f"Trace: {Path(result.output_json_path).parent / 'conversation_trace.json'}")
     print(f"Success: {result.success}")

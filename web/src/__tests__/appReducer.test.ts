@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
-import { appReducer, initialState } from "../App";
+import { appReducer, agentReducer, initialState } from "../App";
 import type { SSEEvent } from "../lib/types";
+import { createAgentState } from "../lib/types";
 
 // Helper: get to a "running" state
 function runningState() {
@@ -274,5 +275,203 @@ describe("appReducer", () => {
       "tool_result",
       "text_delta",
     ]);
+  });
+
+  // --- Phase 10: Per-agent event routing ---
+
+  test("Events with agent_id route to per-agent state", () => {
+    let state = runningState();
+
+    // Status event with agent_id creates agent slot and routes
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: { phase: "reading_template", message: "Start", agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+
+    expect(state.agents).toHaveProperty("sofp_0");
+    expect(state.agents.sofp_0.status).toBe("running");
+    expect(state.agents.sofp_0.currentPhase).toBe("reading_template");
+    expect(state.agentTabOrder).toContain("sofp_0");
+    // First tab auto-selected
+    expect(state.activeTab).toBe("sofp_0");
+  });
+
+  test("Events from multiple agents populate separate state slices", () => {
+    let state = runningState();
+
+    // SOFP agent event
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "thinking_delta",
+        data: { content: "Analyzing SOFP", thinking_id: "t1", agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+
+    // SOPL agent event
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "thinking_delta",
+        data: { content: "Analyzing SOPL", thinking_id: "t2", agent_id: "sopl_0", agent_role: "SOPL" },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+
+    expect(state.agents.sofp_0.thinkingBuffer).toBe("Analyzing SOFP");
+    expect(state.agents.sopl_0.thinkingBuffer).toBe("Analyzing SOPL");
+    expect(state.agentTabOrder).toEqual(["sofp_0", "sopl_0"]);
+  });
+
+  test("Per-agent complete event marks agent as complete/failed", () => {
+    let state = runningState();
+
+    // Create agent
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: { phase: "reading_template", message: "Start", agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+
+    // Agent completes successfully
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "complete",
+        data: { success: true, agent_id: "sofp_0", agent_role: "SOFP", workbook_path: "/out/sofp.xlsx", error: null },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+
+    expect(state.agents.sofp_0.status).toBe("complete");
+    expect(state.agents.sofp_0.workbookPath).toBe("/out/sofp.xlsx");
+    // Run should NOT be marked complete (that's run_complete's job)
+    expect(state.isComplete).toBe(false);
+  });
+
+  test("run_complete stores cross-checks and creates validator tab", () => {
+    let state = runningState();
+
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/out/filled.xlsx",
+          merge_errors: [],
+          cross_checks: [
+            { name: "sofp_balance", status: "passed", expected: 100, actual: 100, diff: 0, tolerance: 1, message: "OK" },
+            { name: "sopl_to_socie_profit", status: "pending", expected: null, actual: null, diff: null, tolerance: 1, message: "SOPL not run" },
+          ],
+          statements_completed: ["SOFP"],
+          statements_failed: [],
+        },
+        timestamp: 3,
+      } as SSEEvent,
+    });
+
+    expect(state.isComplete).toBe(true);
+    expect(state.crossChecks).toHaveLength(2);
+    expect(state.crossChecks[0].name).toBe("sofp_balance");
+    expect(state.crossChecks[0].status).toBe("passed");
+    expect(state.agents).toHaveProperty("validator");
+    expect(state.agentTabOrder).toContain("validator");
+  });
+
+  test("SET_ACTIVE_TAB switches the active tab", () => {
+    let state = runningState();
+
+    // Create two agents
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: { phase: "reading_template", message: "Start", agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: { phase: "reading_template", message: "Start", agent_id: "sopl_0", agent_role: "SOPL" },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+
+    expect(state.activeTab).toBe("sofp_0"); // first tab auto-selected
+
+    state = appReducer(state, { type: "SET_ACTIVE_TAB", payload: "sopl_0" });
+    expect(state.activeTab).toBe("sopl_0");
+  });
+
+  test("RUN_STARTED with statements records statementsInRun", () => {
+    const withSession = appReducer(initialState, {
+      type: "UPLOADED",
+      payload: { sessionId: "abc", filename: "test.pdf" },
+    });
+    const state = appReducer(withSession, {
+      type: "RUN_STARTED",
+      payload: { statements: ["SOFP", "SOPL"] },
+    });
+    expect(state.statementsInRun).toEqual(["SOFP", "SOPL"]);
+  });
+});
+
+// --- agentReducer unit tests ---
+
+describe("agentReducer", () => {
+  test("status event sets currentPhase and marks running", () => {
+    const agent = createAgentState("sofp_0", "SOFP", "SOFP");
+    const result = agentReducer(agent, {
+      event: "status",
+      data: { phase: "viewing_pdf", message: "Viewing" },
+      timestamp: 1,
+    } as SSEEvent);
+    expect(result.currentPhase).toBe("viewing_pdf");
+    expect(result.status).toBe("running");
+  });
+
+  test("thinking_delta accumulates in agent buffer", () => {
+    let agent = createAgentState("sofp_0", "SOFP", "SOFP");
+    agent = agentReducer(agent, {
+      event: "thinking_delta",
+      data: { content: "Part 1 ", thinking_id: "t1" },
+      timestamp: 1,
+    } as SSEEvent);
+    agent = agentReducer(agent, {
+      event: "thinking_delta",
+      data: { content: "Part 2", thinking_id: "t1" },
+      timestamp: 2,
+    } as SSEEvent);
+    expect(agent.thinkingBuffer).toBe("Part 1 Part 2");
+  });
+
+  test("tool_call and tool_result pair correctly", () => {
+    let agent = createAgentState("sofp_0", "SOFP", "SOFP");
+    agent = agentReducer(agent, {
+      event: "tool_call",
+      data: { tool_name: "fill_workbook", tool_call_id: "tc_1", args: { row: 5 } },
+      timestamp: 1,
+    } as SSEEvent);
+    expect(agent.toolTimeline).toHaveLength(1);
+    expect(agent.toolTimeline[0].result_summary).toBeNull();
+
+    agent = agentReducer(agent, {
+      event: "tool_result",
+      data: { tool_name: "fill_workbook", tool_call_id: "tc_1", result_summary: "Wrote row 5", duration_ms: 50 },
+      timestamp: 2,
+    } as SSEEvent);
+    expect(agent.toolTimeline[0].result_summary).toBe("Wrote row 5");
+    expect(agent.toolTimeline[0].duration_ms).toBe(50);
   });
 });

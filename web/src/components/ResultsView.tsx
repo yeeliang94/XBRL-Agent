@@ -246,7 +246,7 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson }
           />
         )}
         {activeTab === "downloads" && (
-          <DownloadsTab sessionId={sessionId} />
+          <DownloadsTab sessionId={sessionId} statementsCompleted={complete.statementsCompleted} />
         )}
       </div>
     </div>
@@ -317,9 +317,22 @@ function DataPreviewTab({
     return <div style={styles.loading}>No data available</div>;
   }
 
-  // Extract fields from result.json
-  const fields = (data.fields || data) as Record<string, unknown>;
-  const entries = Object.entries(fields);
+  // Extract fields from result.json — supports both list format
+  // (multi-agent: [{statement, field_label, value}, ...]) and legacy
+  // dict format (single-agent: {field_label: value, ...}).
+  const rawFields = data.fields || data;
+  const rows: { label: string; value: unknown }[] = [];
+
+  if (Array.isArray(rawFields)) {
+    for (const f of rawFields as { statement?: string; field_label?: string; value?: unknown }[]) {
+      const prefix = f.statement ? `${f.statement} — ` : "";
+      rows.push({ label: `${prefix}${f.field_label || ""}`, value: f.value });
+    }
+  } else {
+    for (const [name, value] of Object.entries(rawFields as Record<string, unknown>)) {
+      rows.push({ label: name, value });
+    }
+  }
 
   return (
     <table style={styles.table}>
@@ -330,13 +343,13 @@ function DataPreviewTab({
         </tr>
       </thead>
       <tbody>
-        {entries.map(([name, value], i) => {
-          const isEmpty = value === null || value === undefined || value === "";
+        {rows.map((row, i) => {
+          const isEmpty = row.value === null || row.value === undefined || row.value === "";
           return (
-            <tr key={name} style={{ background: i % 2 === 0 ? pwc.white : pwc.grey50 }}>
-              <td style={isEmpty ? styles.tdEmpty : styles.td}>{name}</td>
+            <tr key={`${row.label}-${i}`} style={{ background: i % 2 === 0 ? pwc.white : pwc.grey50 }}>
+              <td style={isEmpty ? styles.tdEmpty : styles.td}>{row.label}</td>
               <td style={isEmpty ? styles.tdEmpty : styles.td}>
-                {isEmpty ? "—" : String(value)}
+                {isEmpty ? "—" : String(row.value)}
               </td>
             </tr>
           );
@@ -348,26 +361,79 @@ function DataPreviewTab({
 
 // --- Downloads Tab ---
 
-function DownloadsTab({ sessionId }: { sessionId: string }) {
-  const downloads = [
+function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; statementsCompleted?: string[] }) {
+  const [error, setError] = useState<string | null>(null);
+
+  const downloads: { label: string; filename: string; icon: string }[] = [
     { label: "Download Excel", filename: "filled.xlsx", icon: "📊" },
-    { label: "Download JSON", filename: "result.json", icon: "📄" },
-    { label: "Download Trace", filename: "conversation_trace.json", icon: "🔍" },
   ];
 
+  // Add per-statement downloads when multi-agent results are available
+  if (statementsCompleted && statementsCompleted.length > 0) {
+    for (const stmt of statementsCompleted) {
+      downloads.push(
+        { label: `${stmt} Excel`, filename: `${stmt}_filled.xlsx`, icon: "📊" },
+        { label: `${stmt} JSON`, filename: `${stmt}_result.json`, icon: "📄" },
+        { label: `${stmt} Trace`, filename: `${stmt}_conversation_trace.json`, icon: "🔍" },
+      );
+    }
+  } else {
+    // Legacy single-agent downloads
+    downloads.push(
+      { label: "Download JSON", filename: "result.json", icon: "📄" },
+      { label: "Download Trace", filename: "conversation_trace.json", icon: "🔍" },
+    );
+  }
+
+  const handleDownload = async (filename: string) => {
+    setError(null);
+    const url = `/api/result/${sessionId}/${filename}`;
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        let detail = `${filename} not available (${resp.status})`;
+        try {
+          const body = await resp.json();
+          if (body.detail) detail = `${filename}: ${body.detail}`;
+        } catch { /* no JSON body */ }
+        setError(detail);
+        return;
+      }
+      // Trigger browser download from the successful response
+      const blob = await resp.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      setError(`Failed to download ${filename}: ${e instanceof Error ? e.message : "network error"}`);
+    }
+  };
+
   return (
-    <div style={styles.downloadRow}>
-      {downloads.map((d) => (
-        <a
-          key={d.filename}
-          href={`/api/result/${sessionId}/${d.filename}`}
-          download={d.filename}
-          style={styles.downloadButton}
-        >
-          <span>{d.icon}</span>
-          {d.label}
-        </a>
-      ))}
+    <div>
+      {error && (
+        <div style={{ ...styles.fetchError, textAlign: "left" as const, marginBottom: pwc.space.md }}>
+          {error}
+        </div>
+      )}
+      <div style={styles.downloadRow}>
+        {downloads.map((d) => (
+          <button
+            key={d.filename}
+            onClick={() => handleDownload(d.filename)}
+            style={{
+              ...styles.downloadButton,
+              cursor: "pointer",
+              background: pwc.white,
+            }}
+          >
+            <span>{d.icon}</span>
+            {d.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

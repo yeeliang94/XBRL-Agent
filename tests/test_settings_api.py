@@ -13,6 +13,7 @@ def test_get_settings_default(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "ENV_FILE", env_file)
     # Clear env so defaults apply
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("TEST_MODEL", raising=False)
     monkeypatch.delenv("LLM_PROXY_URL", raising=False)
 

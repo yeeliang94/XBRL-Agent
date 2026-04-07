@@ -7,8 +7,6 @@ interface Props {
   onUpload: (file: File) => Promise<UploadResponse>;
   isRunning: boolean;
   filename: string | null;
-  onRun: () => void;
-  canRun: boolean;
   startTime: number | null;
 }
 
@@ -123,7 +121,7 @@ const styles = {
   } as React.CSSProperties,
 };
 
-export function UploadPanel({ onUpload, isRunning, filename, onRun, canRun, startTime }: Props) {
+export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -201,12 +199,6 @@ export function UploadPanel({ onUpload, isRunning, filename, onRun, canRun, star
             <div style={styles.fileIcon}>PDF</div>
             <span style={styles.fileName}>{filename}</span>
           </div>
-
-          {canRun && (
-            <button onClick={onRun} style={styles.runButton}>
-              Run Extraction
-            </button>
-          )}
 
           {isRunning && (
             <div style={styles.runningRow}>
