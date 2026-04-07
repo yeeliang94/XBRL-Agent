@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="100%" height="100%">
+  <defs>
+    <style>
+      .case { fill: #E8E4D9; }
+      .case-dark { fill: #C4C0B6; }
+      .screen { fill: #1E252B; }
+      .eye { fill: #2ECC71; }
+      .thruster { fill: #7F8C8D; }
+      .shadow { fill: #EAEAEA; }
+      
+      .squish { animation: squish 1.5s infinite steps(2, end); }
+      .pen-group { animation: write 4s infinite ease-in-out; }
+      .check1 { animation: appear1 4s infinite steps(1); opacity: 0; }
+      .check2 { animation: appear2 4s infinite steps(1); opacity: 0; }
+      .check3 { animation: appear3 4s infinite steps(1); opacity: 0; }
+
+      @keyframes squish { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(1px); } }
+      @keyframes write {
+        0%, 10% { transform: translate(0px, -2px); }
+        20%, 25% { transform: translate(-7px, 5px); } 
+        30%      { transform: translate(-5px, 4px); } 
+        40%, 45% { transform: translate(-7px, 7px); } 
+        50%      { transform: translate(-5px, 6px); }
+        60%, 65% { transform: translate(-7px, 9px); } 
+        70%      { transform: translate(-5px, 8px); }
+        80%, 100% { transform: translate(0px, -2px); }
+      }
+      @keyframes appear1 { 0%, 25% { opacity: 0; } 26%, 100% { opacity: 1; } }
+      @keyframes appear2 { 0%, 45% { opacity: 0; } 46%, 100% { opacity: 1; } }
+      @keyframes appear3 { 0%, 65% { opacity: 0; } 66%, 100% { opacity: 1; } }
+    </style>
+  </defs>
+  <g shape-rendering="crispEdges">
+    <rect x="8" y="25" width="16" height="1" class="shadow"/>
+
+    <rect x="10" y="24" width="4" height="1" class="thruster"/>
+    <rect x="11" y="22" width="2" height="2" class="case-dark"/>
+    <rect x="18" y="24" width="4" height="1" class="thruster"/>
+    <rect x="19" y="22" width="2" height="2" class="case-dark"/>
+    
+    <g class="squish">
+      <rect x="9" y="8" width="14" height="1" class="case"/>
+      <rect x="8" y="9" width="16" height="12" class="case"/>
+      <rect x="9" y="21" width="14" height="2" class="case-dark"/>
+      <rect x="8" y="21" width="1" height="1" class="case-dark"/>
+      <rect x="23" y="21" width="1" height="1" class="case-dark"/>
+      
+      <rect x="10" y="10" width="12" height="9" class="screen"/>
+      <rect x="9" y="11" width="1" height="7" class="screen"/>
+      <rect x="22" y="11" width="1" height="7" class="screen"/>
+      
+      <rect x="12" y="13" width="2" height="3" class="eye"/>
+      <rect x="18" y="13" width="2" height="3" class="eye"/>
+
+      <!-- Clipboard/Form -->
+      <g transform="translate(0, 2)">
+        <rect x="9" y="16" width="14" height="10" fill="#D4AC0D"/>
+        <rect x="10" y="17" width="12" height="8" fill="#FFF"/>
+        <!-- Checkboxes -->
+        <rect x="11" y="18" width="1" height="1" fill="#CCCCCC"/>
+        <rect x="13" y="18" width="6" height="1" fill="#CCCCCC"/>
+        <rect x="11" y="20" width="1" height="1" fill="#CCCCCC"/>
+        <rect x="13" y="20" width="6" height="1" fill="#CCCCCC"/>
+        <rect x="11" y="22" width="1" height="1" fill="#CCCCCC"/>
+        <rect x="13" y="22" width="4" height="1" fill="#CCCCCC"/>
+
+        <!-- Ticks -->
+        <rect x="11" y="18" width="1" height="1" fill="#2ECC71" class="check1"/>
+        <rect x="11" y="20" width="1" height="1" fill="#2ECC71" class="check2"/>
+        <rect x="11" y="22" width="1" height="1" fill="#2ECC71" class="check3"/>
+
+        <!-- Hand + Pen -->
+        <g class="pen-group">
+          <!-- Hand holding pen -->
+          <rect x="20" y="10" width="3" height="3" class="case"/>
+          
+          <!-- Pen -->
+          <rect x="18" y="13" width="1" height="1" fill="#111"/>
+          <rect x="19" y="12" width="1" height="1" fill="#E74C3C"/>
+          <rect x="20" y="11" width="1" height="1" fill="#E74C3C"/>
+          <rect x="21" y="10" width="1" height="1" fill="#E74C3C"/>
+          <rect x="22" y="9" width="1" height="1" fill="#34495E"/>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>

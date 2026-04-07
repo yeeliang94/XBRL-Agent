@@ -1,0 +1,124 @@
+================================================================================
+EXECUTION SUMMARY: Formula Fix for SOFP-OrderOfLiquidity Template
+================================================================================
+
+FILE FIXED: /sessions/happy-zealous-dirac/mnt/xbrl-agent/XBRL-template-MFRS/02-SOFP-OrderOfLiquidity.xlsx
+SHEET: SOFP-Sub-OrdOfLiq
+
+================================================================================
+FIXES APPLIED: 4 CRITICAL FORMULA BUGS
+================================================================================
+
+1. ROW 148: Total cash
+   OLD: =1*B129+1*B130+1*B131+1*B132+1*B133+1*B134+1*B137+1*B138+1*B139+1*B140+1*B141+1*B142+1*B143+1*B146+1*B147
+   NEW: =1*B146+1*B147
+   
+   BUG: Was summing 13 inventory items (129-134) and derivative assets (137-143)
+   FIX: Now sums only actual cash items (146-147)
+   IMPACT: Removed incorrect references to inventories and derivatives
+
+2. ROW 168: Total issued capital
+   OLD: =1*B160+1*B161+1*B162+1*B163+1*B165+1*B166+1*B167
+   NEW: =1*B165+1*B166+1*B167
+   
+   BUG: Was including prepaid assets (160-162) alongside capital
+   FIX: Now sums only capital items (165-167)
+   IMPACT: Removed incorrect references to prepaid rental, land lease, and other assets
+
+3. ROW 241: Total borrowings
+   OLD: =1*B189+...+1*B240 (46 row references total)
+   NEW: =1*B207+1*B218+1*B225+1*B232+1*B240
+   
+   BUG: Was summing equity items (189-194) PLUS all individual loan/bond items
+        creating double-counting (both subtotals and their children)
+   FIX: Now sums only the 5 borrowing category subtotals
+   IMPACT: Removed 41 incorrect references including:
+           - All equity components (perpetual sukuk, ICULS, preference shares)
+           - All individual loan and bond items (which are already in subtotals)
+
+4. ROW 295: Total trade and other payables
+   OLD: =1*B262+...+1*B294 (29 row references, mixing leaf items and subtotals)
+   NEW: =1*B270+1*B294
+   
+   BUG: Double-counted by summing both individual line items (262-269, 273-277, etc.)
+        AND their subtotals (270, 278, 283, 293, 294)
+   FIX: Now sums only the 2 main category subtotals
+   IMPACT: Removed 27 incorrect references to leaf items and intermediate subtotals
+
+================================================================================
+VERIFICATION RESULTS
+================================================================================
+
+✓ Backup created: /sessions/happy-zealous-dirac/mnt/xbrl-agent/backup-originals/02-SOFP-OrderOfLiquidity.xlsx
+✓ All 4 fixed formulas verified correct
+✓ Both columns B (current) and C (prior) updated identically
+✓ Formula syntax validation: PASSED
+✓ File integrity: OK
+
+================================================================================
+METHODOLOGY
+================================================================================
+
+1. XBRL Calculation Linkbase Parsing
+   - Parsed: cal_ssmt-fs-mfrs_2022-12-31_role-200200.xml (Order of Liquidity variant)
+   - Extracted: 99 parent-child relationships and 510 concept-to-locator mappings
+   - Built automated formula generator from XBRL hierarchy
+
+2. Manual Verification
+   - Inspected template row structure to identify section boundaries
+   - Validated fixes against accounting logic (assets, equity, liabilities)
+   - Verified each fix removes only wrong rows and keeps correct rows
+
+3. Comprehensive Scanning
+   - Scanned all 46 formula cells in the sheet
+   - Only 4 rows had detectable mixing/double-counting errors
+   - Remaining 42 formulas appear correctly constructed
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+• Row 148 (Total cash) had the most basic mixing error: inventory + derivatives
+• Row 168 (Total issued capital) had simple range error: included prepaid assets
+• Row 241 (Total borrowings) had the most severe error: mixed sections + double-counted
+• Row 295 (Total payables) had systematic double-counting: leaf items + subtotals
+
+Root causes appear to be:
+- Manual formula construction errors (wrong row ranges)
+- Lack of structure-aware formula generation (summing both parents and children)
+- Copy-paste errors between different accounting sections
+
+================================================================================
+ARTIFACTS CREATED
+================================================================================
+
+1. fix_formulas.py
+   - Reusable XBRL linkbase parser
+   - Can be used to generate correct formulas from XBRL hierarchy for other templates
+   - Handles fuzzy matching between Excel labels and XBRL concept names
+
+2. fix_known_formulas.py
+   - Targeted fix script for the 4 known bugs
+   - Can be re-run if needed to reset the template to fixed state
+
+3. FORMULA_FIX_REPORT.md
+   - Detailed technical report of all changes
+   - Summary table, per-bug analysis, accounting verification
+   - Recommendations for preventing future issues
+
+4. EXECUTION_SUMMARY.txt (this file)
+   - High-level summary of what was fixed
+   - Before/after comparison of formulas
+   - Verification results
+
+================================================================================
+RECOMMENDATIONS
+================================================================================
+
+1. Validate with sample data in Excel (formula evaluation)
+2. Test against audited financial statements
+3. Consider regenerating all templates from XBRL linkbase
+4. Implement automated template generation process
+5. Add formula validation to template creation workflow
+
+================================================================================

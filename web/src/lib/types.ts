@@ -11,10 +11,13 @@ export interface SettingsResponse {
 }
 
 export type EventPhase =
+  | "starting"           // Multi-agent run initializing
+  | "scouting"           // Scout analyzing PDF structure
   | "reading_template"
   | "viewing_pdf"
   | "filling_workbook"
   | "verifying"
+  | "cancelled"          // Agent was aborted by user
   | "complete";
 
 // SSE event types — extended for streaming architecture (P0)
@@ -27,7 +30,8 @@ export type SSEEventType =
   | "tool_result"      // Tool completion (after execution)
   | "token_update"     // Running token totals
   | "error"            // Agent/system error
-  | "complete";        // Run finished
+  | "complete"         // Single-agent run finished (legacy) OR per-agent completion (multi-agent)
+  | "run_complete";    // Final aggregate event for multi-agent runs
 
 export interface SSEEvent {
   event: SSEEventType;
@@ -40,7 +44,9 @@ export interface SSEEvent {
     | ToolResultData
     | TokenData
     | ErrorData
-    | CompleteData;
+    | CompleteData
+    | AgentCompleteData
+    | RunCompleteData;
   timestamp: number;
 }
 
@@ -98,6 +104,37 @@ export interface CompleteData {
   trace_path: string;
   total_tokens: number;
   cost: number;
+  statementsCompleted?: string[];
+}
+
+/** Per-agent completion event emitted by multi-agent runs. */
+export interface AgentCompleteData {
+  success: boolean;
+  agent_id: string;
+  agent_role: string;
+  workbook_path: string | null;
+  error: string | null;
+}
+
+/** Cross-check result as emitted in run_complete SSE event. */
+export interface CrossCheckResult {
+  name: string;
+  status: "passed" | "failed" | "not_applicable" | "pending";
+  expected: number | null;
+  actual: number | null;
+  diff: number | null;
+  tolerance: number | null;
+  message: string;
+}
+
+/** Final aggregate event for multi-agent runs. */
+export interface RunCompleteData {
+  success: boolean;
+  merged_workbook: string | null;
+  merge_errors: string[];
+  cross_checks: CrossCheckResult[];
+  statements_completed: string[];
+  statements_failed: string[];
 }
 
 // --- P0: Extended state types for streaming ---
@@ -125,4 +162,99 @@ export interface ToolTimelineEntry {
 export interface ResultJsonData {
   fields: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+}
+
+// --- Phase 8/9: Multi-agent run configuration types ---
+
+export interface ModelEntry {
+  id: string;
+  display_name: string;
+  provider: string;
+  supports_vision: boolean;
+  notes: string;
+}
+
+export type StatementType = "SOFP" | "SOPL" | "SOCI" | "SOCF" | "SOCIE";
+
+export const STATEMENT_TYPES: StatementType[] = ["SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"];
+
+export const STATEMENT_LABELS: Record<StatementType, string> = {
+  SOFP: "Statement of Financial Position",
+  SOPL: "Statement of Profit or Loss",
+  SOCI: "Statement of Comprehensive Income",
+  SOCF: "Statement of Cash Flows",
+  SOCIE: "Statement of Changes in Equity",
+};
+
+/** Known variants per statement type (matches statement_types.py registry). */
+export const VARIANTS: Record<StatementType, string[]> = {
+  SOFP: ["CuNonCu", "OrderOfLiquidity"],
+  SOPL: ["Function", "Nature"],
+  SOCI: ["BeforeTax", "NetOfTax"],
+  SOCF: ["Indirect", "Direct"],
+  SOCIE: ["Default"],
+};
+
+export type ConfidenceLevel = "high" | "medium" | "low";
+
+export interface VariantSelection {
+  variant: string;
+  confidence: ConfidenceLevel | null;  // null when manually selected
+}
+
+export interface ExtendedSettingsResponse extends SettingsResponse {
+  available_models: ModelEntry[];
+  default_models: Record<string, string>;
+  scout_enabled_default: boolean;
+  tolerance_rm: number;
+}
+
+/** Shape sent to POST /api/run/{session_id} */
+export interface RunConfigPayload {
+  statements: StatementType[];
+  variants: Record<string, string>;
+  models: Record<string, string>;
+  infopack: Record<string, unknown> | null;
+  use_scout: boolean;
+}
+
+// --- Phase 10: Per-agent state for tab-based UI ---
+
+export type AgentTabStatus = "pending" | "running" | "complete" | "failed" | "cancelled" | "aborting";
+
+/** Per-agent streaming state — one per agent in a multi-agent run. */
+export interface AgentState {
+  agentId: string;
+  role: string;            // e.g. "SOFP", "SOPL", "scout", "validator"
+  label: string;           // Display label
+  status: AgentTabStatus;  // "pending" | "running" | "complete" | "failed" | "cancelled" | "aborting"
+  currentPhase: EventPhase | null;
+  events: SSEEvent[];
+  thinkingBuffer: string;
+  activeThinkingId: string | null;
+  thinkingBlocks: ThinkingBlock[];
+  toolTimeline: ToolTimelineEntry[];
+  streamingText: string;
+  tokens: TokenData | null;
+  error: ErrorData | null;
+  workbookPath: string | null;
+}
+
+export function createAgentState(agentId: string, role: string, label: string): AgentState {
+  return {
+    agentId,
+    role,
+    label,
+    status: "pending",
+    currentPhase: null,
+    events: [],
+    thinkingBuffer: "",
+    activeThinkingId: null,
+    thinkingBlocks: [],
+    toolTimeline: [],
+    streamingText: "",
+    tokens: null,
+    error: null,
+    workbookPath: null,
+  };
 }

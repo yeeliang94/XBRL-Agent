@@ -1,0 +1,362 @@
+
+
+---
+
+# DocWeaver2 — Enterprise Environment Transition Guide
+
+**Prepared by:** Platform / Infrastructure Team
+**Date:** 9 March 2026
+**For:** AI Agent Development Team
+**Status:** All connectivity tests passed ✅
+
+---
+
+## 1. Executive Summary
+
+Our enterprise environment does **not allow direct connections** to Google's Gemini API (`generativelanguage.googleapis.com`). All AI model traffic **must** route through the enterprise GenAI proxy. This document describes the required code changes to transition DocWeaver2 from direct Gemini API calls to the enterprise proxy setup.
+
+**The key change:** Replace all `google-genai` native SDK calls with the **LiteLLM wrapper** (`LiteLlm`), which translates requests to the OpenAI-compatible protocol that our proxy speaks.
+
+---
+
+## 2. Enterprise Proxy Details
+
+| Property | Value |
+|---|---|
+| **Proxy URL** | `https://genai-sharedservice-emea.pwc.com` |
+| **Protocol** | OpenAI-compatible (`/chat/completions`) |
+| **Authentication** | Bearer Token (API key) |
+| **Backend Model** | `vertex_ai.gemini-3-flash-preview` (Vertex AI Gemini) |
+| **Environment Label** | Prod-EU |
+| **API Management Tool** | Bruno v2.7.0 |
+
+### What the proxy does
+
+```
+Your App (OpenAI format) → Enterprise Proxy → Vertex AI Gemini → Response → Proxy → Your App (OpenAI format)
+```
+
+### What does NOT work
+
+| Method | Status | Error |
+|---|---|---|
+| Direct `google-genai` SDK (`genai.Client()`) | ❌ Blocked | `403 Forbidden — fault filter abort` |
+| Direct Google API (`generativelanguage.googleapis.com`) | ❌ Blocked | Network / firewall |
+| Google-native protocol via proxy | ❌ Rejected | `403 Forbidden` |
+
+---
+
+## 3. Required Code Changes
+
+### 3.1 Environment Variables (`.env`)
+
+```env
+LLM_PROXY_URL=https://genai-sharedservice-emea.pwc.com
+GOOGLE_API_KEY=sk-xXNO2...  (obtain from Bruno → Collection → Auth tab → Vars/Secrets)
+TEST_MODEL=vertex_ai.gemini-3-flash-preview
+```
+
+### 3.2 Additional Dependencies
+
+```bash
+pip install litellm openai
+```
+
+Add to `requirements.txt`:
+```
+litellm
+openai
+```
+
+### 3.3 ADK Agent — Before vs After
+
+**❌ BEFORE (direct Gemini — does NOT work in enterprise):**
+
+```python
+from google.adk.agents import LlmAgent
+
+# This gets 403 Forbidden at the enterprise proxy
+agent = LlmAgent(
+    name="xbrl_review_agent",
+    model="gemini-2.0-flash",                  # ← Direct Google model
+    instruction="You are an XBRL review agent...",
+    tools=[my_tool],
+)
+```
+
+**✅ AFTER (via enterprise proxy — works):**
+
+```python
+from google.adk.agents import LlmAgent
+from google.adk.models.lite_llm import LiteLlm
+import os
+
+agent = LlmAgent(
+    name="xbrl_review_agent",
+    model=LiteLlm(                              # ← LiteLlm wrapper
+        model="openai/vertex_ai.gemini-3-flash-preview",  # ← "openai/" prefix required
+        api_key=os.environ["GOOGLE_API_KEY"],
+        api_base=os.environ["LLM_PROXY_URL"],
+    ),
+    instruction="You are an XBRL review agent...",
+    tools=[my_tool],
+)
+```
+
+**Three mandatory changes per agent:**
+
+| # | Change | Why |
+|---|---|---|
+| 1 | Wrap model in `LiteLlm()` | Routes traffic through the proxy |
+| 2 | Prefix model name with `"openai/"` | Tells LiteLLM to use OpenAI-compatible protocol |
+| 3 | Set `api_key` and `api_base` | Points to enterprise proxy with auth |
+
+### 3.4 GenAI Client — Before vs After
+
+If any part of the codebase uses the `google-genai` client directly (e.g. `llm_client.py`):
+
+**❌ BEFORE:**
+
+```python
+from google import genai
+
+client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+response = client.models.generate_content(
+    model="gemini-2.0-flash",
+    contents="Hello",
+)
+```
+
+**✅ AFTER:**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ["GOOGLE_API_KEY"],
+    base_url=os.environ["LLM_PROXY_URL"],
+)
+response = client.chat.completions.create(
+    model="vertex_ai.gemini-3-flash-preview",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+text = response.choices[0].message.content
+```
+
+### 3.5 Model Name Change
+
+| Context | Old Value | New Value |
+|---|---|---|
+| ADK `LiteLlm()` | `gemini-2.0-flash` | `openai/vertex_ai.gemini-3-flash-preview` |
+| OpenAI SDK | N/A | `vertex_ai.gemini-3-flash-preview` (no prefix) |
+| `.env` / config | `gemini-2.0-flash` | `vertex_ai.gemini-3-flash-preview` |
+
+---
+
+## 4. Feature-Specific Guidance
+
+### 4.1 Vision / Image Input
+
+Both **URL** and **base64** methods are confirmed working.
+
+**URL method (for images hosted online):**
+
+```python
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this image."},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}},
+        ],
+    }
+]
+```
+
+**Base64 method (for local files):**
+
+```python
+import base64
+
+with open("document_scan.png", "rb") as f:
+    img_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this image."},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+            },
+        ],
+    }
+]
+```
+
+**Multiple images** in a single request are also supported — add multiple `image_url` blocks in the `content` array.
+
+### 4.2 Tool / Function Calling
+
+Function calling works through the proxy. No special changes needed beyond the `LiteLlm` wrapper. Define tools as standard Python functions and pass them to `LlmAgent(tools=[...])`.
+
+### 4.3 Thinking / Reasoning Effort
+
+To enable deeper reasoning (higher quality for complex tasks):
+
+**In ADK Agent:**
+```python
+agent = LlmAgent(
+    model=LiteLlm(...),
+    generate_content_config={
+        "reasoning_effort": "high",   # Options: "minimal", "low", "medium", "high"
+    },
+    ...
+)
+```
+
+**In OpenAI SDK:**
+```python
+response = client.chat.completions.create(
+    model="vertex_ai.gemini-3-flash-preview",
+    messages=[...],
+    extra_body={"reasoning_effort": "high"},
+)
+```
+
+**Cost/speed tradeoffs:**
+
+| Level | Speed | Cost | Use Case |
+|---|---|---|---|
+| `minimal` | ⚡ Fastest | 💰 Cheapest | Simple Q&A, translations |
+| `low` | ⚡ Fast | 💰 Low | Chat, summaries |
+| `medium` | ⏱ Moderate | 💰💰 Medium | Analysis, general reasoning |
+| `high` | 🐢 Slowest | 💰💰💰 Highest | Complex math, deep analysis |
+
+**Important:** For Gemini 3 models, keep `temperature` at `1.0` (the default). Lower values can cause failures or infinite loops.
+
+### 4.4 Streaming
+
+If your app uses streaming responses:
+
+```python
+response = client.chat.completions.create(
+    model="vertex_ai.gemini-3-flash-preview",
+    messages=[...],
+    stream=True,
+)
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+---
+
+## 5. Files to Modify (Checklist)
+
+Based on the original test script which mirrors the DocWeaver2 codebase patterns:
+
+| File | Change Required |
+|---|---|
+| `llm_client.py` | Replace `genai.Client()` with `OpenAI()` client |
+| `xbrl_review_agent.py` | Wrap `model=` with `LiteLlm()` |
+| `doc_review_agent.py` | Wrap `model=` with `LiteLlm()` |
+| Any other `LlmAgent()` | Wrap `model=` with `LiteLlm()` |
+| `agent_loop.py` | No change needed (Runner/Session stay the same) |
+| `.env` / `.env.example` | Add `LLM_PROXY_URL`, update `TEST_MODEL` |
+| `requirements.txt` | Add `litellm`, `openai` |
+
+---
+
+## 6. Known Warnings (Safe to Ignore)
+
+```
+LiteLLM:WARNING: Failed to fetch remote model cost map from https://raw.githubusercontent.com/...
+[SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate in certificate chain
+```
+
+This is LiteLLM trying to download a pricing file from GitHub. The enterprise firewall blocks it. It **falls back to a local copy** and everything works fine. To suppress:
+
+```python
+import litellm
+litellm.suppress_debug_info = True
+```
+
+---
+
+## 7. Verified Test Results (9 March 2026)
+
+| Test | Status | Details |
+|---|---|---|
+| Proxy Health Check | ✅ Pass | `/v1/models` → HTTP 200 |
+| Basic Chat Completion | ✅ Pass | `CONNECTIVITY_OK` (1.20s) |
+| OpenAI Python SDK | ✅ Pass | `CONNECTIVITY_OK` (2.19s) |
+| Tool / Function Calling | ✅ Pass | Model called `get_system_time` (4.84s) |
+| ADK Agent + Tools | ✅ Pass | `AGENT_OK` with tool result (4.44s) |
+| Vision — URL | ✅ Pass | Described cat image correctly (3.21s) |
+| Vision — Base64 (local file) | ✅ Pass | Described Bruno screenshot correctly (5.93s) |
+| Vision — Multiple Images | ✅ Pass | Described both images separately (4.62s) |
+| ADK Agent + Vision + Tools | ✅ Pass | Agent saw image, called tool, responded (9.09s) |
+| Google-native GenAI protocol | ❌ Blocked | `403 Forbidden — fault filter abort` |
+
+---
+
+## 8. Quick Reference — Copy-Paste Template
+
+```python
+"""Template for any new ADK agent in the enterprise environment."""
+from google.adk.agents import LlmAgent
+from google.adk.models.lite_llm import LiteLlm
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
+import asyncio
+import os
+
+# --- Define your tools ---
+def my_tool(input_text: str) -> dict:
+    """Your tool description here."""
+    return {"result": f"Processed: {input_text}"}
+
+# --- Build the agent ---
+agent = LlmAgent(
+    name="my_agent",
+    model=LiteLlm(
+        model=f"openai/{os.environ['TEST_MODEL']}",
+        api_key=os.environ["GOOGLE_API_KEY"],
+        api_base=os.environ["LLM_PROXY_URL"],
+    ),
+    instruction="Your agent instructions here...",
+    tools=[my_tool],
+)
+
+# --- Run the agent (same pattern as before — no changes needed) ---
+async def run():
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=agent,
+        app_name="my_app",
+        session_service=session_service,
+    )
+    session = await session_service.create_session(
+        app_name="my_app",
+        user_id="user1",
+    )
+    content = types.Content(
+        role="user",
+        parts=[types.Part(text="Your user message here")],
+    )
+    async for event in runner.run_async(
+        user_id="user1",
+        session_id=session.id,
+        new_message=content,
+    ):
+        if event.is_final_response() and event.content and event.content.parts:
+            print(event.content.parts[0].text)
+
+asyncio.run(run())
+```
+
+---
+

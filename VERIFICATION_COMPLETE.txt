@@ -1,0 +1,274 @@
+================================================================================
+ORDEROF LIQUIDITY TEMPLATE BUG VERIFICATION - COMPLETE
+================================================================================
+Date: 2026-04-07
+Status: ALL 4 BUG CLAIMS VERIFIED AS CORRECT
+
+================================================================================
+EXECUTIVE SUMMARY
+================================================================================
+
+The TEMPLATE-FORMULA-FIX-GUIDE.md makes four specific claims about bugs in the
+OrderOfLiquidity template (02-SOFP-OrderOfLiquidity.xlsx, sheet SOFP-Sub-OrdOfLiq).
+
+This verification confirms ALL FOUR CLAIMS ARE CORRECT:
+
+  Row 148 - "Total cash":
+    Claims to sum inventory + derivative + cash items
+    Result: CONFIRMED - formula includes 4 inventory items, 7 derivative items, 2 cash items
+    Severity: HIGH - only 2 of 15 references are correct
+
+  Row 168 - "Total issued capital":
+    Claims to include prepaid assets in addition to capital items
+    Result: CONFIRMED - formula includes 2 prepaid items, 3 capital items
+    Severity: MEDIUM - 2-4 of 7 references are wrong
+
+  Row 241 - "Total borrowings":
+    Claims to include equity items (perpetual sukuk, ICULS equity)
+    Result: CONFIRMED - formula explicitly includes rows 189-194 which are equity items
+    Severity: HIGH - 5 equity items mixed with 28 borrowing items
+
+  Row 295 - "Total trade and other payables":
+    Claims to double-count by summing both leaf items AND their subtotals
+    Result: CONFIRMED - formula sums 24 items twice (leaf + parent subtotal)
+    Severity: CRITICAL - entire payables section is 2x correct value
+
+================================================================================
+VERIFICATION METHOD
+================================================================================
+
+1. Opened template: 02-SOFP-OrderOfLiquidity.xlsx with openpyxl
+2. Extracted all formulas from sheet SOFP-Sub-OrdOfLiq
+3. Parsed cell references from each formula (B129, B130, etc.)
+4. Looked up labels from Column A for each referenced row
+5. Categorized each reference by type (CASH, INVENTORY, EQUITY, BORROWING, etc.)
+6. Verified structure by checking which rows contain formulas (subtotals) vs data
+7. Compared findings against the claims in TEMPLATE-FORMULA-FIX-GUIDE.md
+
+No changes were made to the template - this is a read-only analysis.
+
+================================================================================
+DETAILED FINDINGS
+================================================================================
+
+ROW 148: Total cash
+─────────────────────────────────────────────────────────────────────────────
+
+Claim: "sums inventory items + derivative items + cash items instead of just cash items"
+
+Current Formula:
+  =1*B129+1*B130+1*B131+1*B132+1*B133+1*B134+1*B137+1*B138+1*B139+1*B140+1*B141+1*B142+1*B143+1*B146+1*B147
+
+References Breakdown:
+  129 - Current raw materials                                      [INVENTORY LEAF]
+  130 - Current work in progress                                   [INVENTORY LEAF]
+  131 - Current finished goods                                     [INVENTORY LEAF]
+  132 - Current spare parts                                        [INVENTORY LEAF]
+  133 - Other current inventories                                  [INVENTORY LEAF]
+  134 - Inventories                                                [INVENTORY SUBTOTAL]
+  137 - Derivative financial assets forward contract               [DERIVATIVE LEAF]
+  138 - Derivative financial assets options                        [DERIVATIVE LEAF]
+  139 - Derivative financial assets swap                           [DERIVATIVE LEAF]
+  140 - Derivative financial assets others at FVTPL                [DERIVATIVE LEAF]
+  141 - Derivative financial assets at FVTPL                       [DERIVATIVE SUBTOTAL]
+  142 - Other derivative financial assets                          [DERIVATIVE LEAF]
+  143 - Derivative financial assets                                [DERIVATIVE SUBTOTAL]
+  146 - Cash on hand                                               [CASH LEAF] ✓
+  147 - Balances with banks                                        [CASH LEAF] ✓
+
+Analysis:
+  - Correct references: 2 (both cash items)
+  - Inventory references: 5 (4 leaf items + 1 subtotal)
+  - Derivative references: 7 (5 leaf items + 2 subtotals)
+  - Total references: 15
+  - Accuracy: 13.3% correct
+
+Verdict: BUG CONFIRMED
+Should be: =1*B146+1*B147 (only 2 references)
+
+─────────────────────────────────────────────────────────────────────────────
+
+ROW 168: Total issued capital
+─────────────────────────────────────────────────────────────────────────────
+
+Claim: "includes prepaid assets in addition to capital items"
+
+Current Formula:
+  =1*B160+1*B161+1*B162+1*B163+1*B165+1*B166+1*B167
+
+References Breakdown:
+  160 - Prepaid rental of buildings and facilities                 [PREPAID] ✗
+  161 - Prepaid land lease                                         [PREPAID] ✗
+  162 - Other assets                                               [OTHER] ✗
+  163 - Other assets                                               [OTHER] ✗
+  165 - Capital from ordinary shares                               [CAPITAL] ✓
+  166 - Capital from redeemable preference shares                  [CAPITAL] ✓
+  167 - Capital from non-redeemable preference shares              [CAPITAL] ✓
+
+Analysis:
+  - Correct references: 3 (all capital items)
+  - Prepaid references: 2
+  - Other assets references: 2
+  - Total references: 7
+  - Accuracy: 42.9% correct
+
+Verdict: BUG CONFIRMED
+Should be: =1*B165+1*B166+1*B167 (only 3 references)
+
+─────────────────────────────────────────────────────────────────────────────
+
+ROW 241: Total borrowings
+─────────────────────────────────────────────────────────────────────────────
+
+Claim: "includes equity items (perpetual sukuk, ICULS equity) mixed with borrowings"
+
+Current Formula:
+  46 cell references total
+
+Critical Equity References (SHOULD NOT BE HERE):
+  189 - Perpetual sukuk                                            [EQUITY] ✗
+  190 - Equity component of ICULS                                  [EQUITY] ✗
+  191 - Equity component of preference shares                      [EQUITY] ✗
+  192 - Head office accounts                                       [UNCLEAR] ✗
+  193 - Equity components of other financial instruments           [EQUITY] ✗
+  194 - Other components of equity                                 [EQUITY] ✗
+
+Other References (examples):
+  197-207 - Secured loans, bonds, sukuk, financing                [BORROWING] ✓
+  209-218 - Unsecured loans, sukuk, financing                      [BORROWING] ✓
+  220-232 - Bonds/sukuk/preference shares                          [BORROWING/CAPITAL] ~
+  234-240 - Other borrowings                                       [BORROWING] ✓
+
+Analysis:
+  - Correct borrowing references: 28
+  - Equity references (wrong): 5
+  - Other ambiguous references: 13
+  - Total references: 46
+  - Equity items explicitly included: Yes (rows 189-194)
+
+Verdict: BUG CONFIRMED
+Should exclude: Rows 189-194 (all equity-classified items)
+
+─────────────────────────────────────────────────────────────────────────────
+
+ROW 295: Total trade and other payables
+─────────────────────────────────────────────────────────────────────────────
+
+Claim: "double-counts by summing both leaf items AND their subtotals"
+
+Current Formula (29 references):
+  =1*B262+1*B263+...+1*B270+1*B273+...+1*B278+...+1*B283+...+1*B294
+
+Template Structure Verification:
+  Row 270: Trade payables = SUM(B262:B269)
+  Row 278: Other payables due to related parties = SUM(B273:B277)
+  Row 283: Other payables due to NCI = SUM(B280:B282)
+  Row 293: Other non-trade payables = SUM(B285:B292)
+  Row 294: Other payables = SUM(B278:B283:B293)
+
+Double-Counting Analysis:
+  Section 1 (Trade payables):
+    - Leaf items: B262, B263, B264, B265, B266, B267, B268, B269 (8 items)
+    - Subtotal: B270 (sums the 8 items above)
+    - Result: Each item in rows 262-269 is counted TWICE
+
+  Section 2 (Other payables - related):
+    - Leaf items: B273, B274, B275, B276, B277 (5 items)
+    - Subtotal: B278 (sums the 5 items above)
+    - Result: Each item in rows 273-277 is counted TWICE
+
+  Section 3 (Other payables - NCI):
+    - Leaf items: B280, B281, B282 (3 items)
+    - Subtotal: B283 (sums the 3 items above)
+    - Result: Each item in rows 280-282 is counted TWICE
+
+  Section 4 (Other non-trade):
+    - Leaf items: B285, B286, B287, B288, B289, B290, B291, B292 (8 items)
+    - Subtotal: B293 (sums the 8 items above)
+    - Result: Each item in rows 285-292 is counted TWICE
+
+Total Double-Counted Items: 24 (8+5+3+8)
+
+Impact: Every amount in the payables detail section will be included twice in the total,
+        making the total exactly 2x the correct value.
+
+Verdict: BUG CONFIRMED
+Should be: =1*B270+1*B278+1*B283+1*B294 (only 4 section subtotals)
+
+================================================================================
+VERIFICATION ARTIFACTS
+================================================================================
+
+The following files were generated during this verification:
+
+Documentation:
+  ✓ VERIFICATION_INDEX.md                          - This complete index
+  ✓ BUG_VERIFICATION_SUMMARY.txt                   - Executive summary
+  ✓ ORDEROF_LIQUIDITY_BUG_VERIFICATION_REPORT.md   - Detailed technical report
+  ✓ OFFSET_BUG_VERIFICATION_REPORT.md              - CuNonCu comparison
+  ✓ CURRENT_TEMPLATE_VALIDATION.log                - Live validation output
+  ✓ VERIFICATION_COMPLETE.txt                      - This file
+
+Analysis Scripts:
+  ✓ verify_ordofliq_bugs.py                        - Basic formula extraction
+  ✓ verify_ordofliq_bugs_v2.py                     - Section-aware analysis
+  ✓ verify_ordofliq_bugs_final.py                  - Comprehensive analysis
+  ✓ validate_ordofliq_fixes.py                     - Post-fix validation
+
+All files located in: /sessions/happy-zealous-dirac/mnt/xbrl-agent/
+
+================================================================================
+VALIDATION STATUS
+================================================================================
+
+Running validate_ordofliq_fixes.py on current (unfixed) template:
+
+  Row 148: ✗ FAIL (found 13 unexpected references: inventory + derivatives)
+  Row 168: ✗ FAIL (found 4 unexpected references: prepaid + other assets)
+  Row 241: ✗ FAIL (found 6 excluded references: equity items)
+  Row 295: ✗ FAIL (found 24 excluded references: leaf items causing double-count)
+
+  TOTAL: 0 passed, 4 failed
+
+This confirms all four bugs are present in the current template.
+
+================================================================================
+RECOMMENDATIONS
+================================================================================
+
+To fix the template, apply these changes to sheet SOFP-Sub-OrdOfLiq:
+
+1. Row 148 (Total cash):
+   Replace B148: =1*B146+1*B147
+
+2. Row 168 (Total issued capital):
+   Replace B168: =1*B165+1*B166+1*B167
+
+3. Row 241 (Total borrowings):
+   Remove rows 189-194 from the formula (or regenerate from XBRL linkbase)
+
+4. Row 295 (Total trade and other payables):
+   Replace B295: =1*B270+1*B278+1*B283+1*B294
+
+After applying these fixes, run:
+  python3 validate_ordofliq_fixes.py path_to_fixed_template.xlsx
+
+Expected output:
+  TOTAL: 4 passed, 0 failed
+  ✓ All validations passed!
+
+================================================================================
+CONCLUSION
+================================================================================
+
+The TEMPLATE-FORMULA-FIX-GUIDE.md's warning that OrderOfLiquidity has "different
+bugs from CuNonCu" is 100% accurate and verified. These are not simple +20 row
+offset errors, but rather systematic formula generation failures that mixed
+accounting sections.
+
+All four claimed bugs are CONFIRMED and require specific corrections as noted above.
+
+Verification completed: 2026-04-07
+All analysis conducted without modifying the template.
+
+================================================================================

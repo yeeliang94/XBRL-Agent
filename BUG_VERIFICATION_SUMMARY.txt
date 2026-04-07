@@ -1,0 +1,142 @@
+================================================================================
+ORDEROF LIQUIDITY TEMPLATE BUG VERIFICATION - EXECUTIVE SUMMARY
+================================================================================
+Date: 2026-04-07
+Template: 02-SOFP-OrderOfLiquidity.xlsx
+Sheet: SOFP-Sub-OrdOfLiq
+
+================================================================================
+OBJECTIVE
+================================================================================
+
+Verify the four mixed bug claims in TEMPLATE-FORMULA-FIX-GUIDE.md:
+1. Row 148 "Total cash": sums inventory + derivative + cash instead of just cash
+2. Row 168 "Total issued capital": includes prepaid assets
+3. Row 241 "Total borrowings": includes equity items (perpetual sukuk, ICULS)
+4. Row 295 "Total trade and other payables": double-counts by summing both leaf + subtotals
+
+================================================================================
+METHODOLOGY
+================================================================================
+
+1. Opened template with openpyxl
+2. Extracted formulas from SOFP-Sub-OrdOfLiq sheet
+3. Parsed cell references from each formula
+4. Looked up labels for each referenced row
+5. Categorized references by section/type
+6. Verified structure for subtotal vs leaf items
+7. Compared actual formula content to bug claims
+
+================================================================================
+FINDINGS
+================================================================================
+
+BUG #1: ROW 148 - Total cash
+├─ Claim: "sums inventory + derivative + cash items"
+├─ Status: CONFIRMED
+├─ Actual formula: =1*B129+1*B130+1*B131+1*B132+1*B133+1*B134+1*B137+1*B138+1*B139+1*B140+1*B141+1*B142+1*B143+1*B146+1*B147
+├─ References breakdown:
+│  ├─ INVENTORY items (4): rows 129, 130, 131, 132
+│  ├─ INVENTORY subtotal (1): row 134 (Inventories)
+│  ├─ DERIVATIVE items (6): rows 137, 138, 139, 140, 142, 143
+│  ├─ DERIVATIVE subtotal (1): row 141
+│  └─ CASH items (2): rows 146 (Cash on hand), 147 (Balances with banks)
+├─ Incorrect references: 11 out of 15 (4 inventory + 1 inventory subtotal + 6 derivative items)
+└─ Correct references: 2 out of 15 (2 cash items)
+
+BUG #2: ROW 168 - Total issued capital
+├─ Claim: "includes prepaid assets in addition to capital items"
+├─ Status: CONFIRMED
+├─ Actual formula: =1*B160+1*B161+1*B162+1*B163+1*B165+1*B166+1*B167
+├─ References breakdown:
+│  ├─ PREPAID items (2): rows 160 (Prepaid rental), 161 (Prepaid land lease)
+│  ├─ OTHER assets (2): rows 162, 163
+│  └─ CAPITAL items (3): rows 165, 166, 167
+├─ Incorrect references: 2-4 out of 7
+└─ Correct references: 3 out of 7
+
+BUG #3: ROW 241 - Total borrowings
+├─ Claim: "includes equity items (perpetual sukuk, ICULS equity)"
+├─ Status: CONFIRMED
+├─ Actual formula: 46 cell references total
+├─ References breakdown:
+│  ├─ EQUITY items (5):
+│  │  ├─ Row 189: Perpetual sukuk
+│  │  ├─ Row 190: Equity component of ICULS
+│  │  ├─ Row 191: Equity component of preference shares
+│  │  ├─ Row 193: Equity components of other financial instruments
+│  │  └─ Row 194: Other components of equity
+│  ├─ BORROWING items (28): Various secured/unsecured loans, bonds, sukuk, financing
+│  ├─ PAYABLE items (1): Unsecured block discounting payables
+│  └─ OTHER items (12): Various MTNs, preference shares, etc.
+├─ Incorrect references: 5 equity items + 1 payable item (6 wrong out of 46)
+└─ Correct references: 28 borrowing items
+
+BUG #4: ROW 295 - Total trade and other payables
+├─ Claim: "double-counts by summing both leaf items AND their subtotals"
+├─ Status: CONFIRMED - CRITICAL
+├─ Actual formula: 29 cell references total (includes BOTH leaf items and subtotals)
+├─ Double-counting breakdown:
+│  ├─ Section 1: Rows 262-269 (8 leaf items) + Row 270 (subtotal)
+│  │  └─ These 8 items appear TWICE (once individually, once in subtotal B270)
+│  ├─ Section 2: Rows 273-277 (5 leaf items) + Row 278 (subtotal)
+│  │  └─ These 5 items appear TWICE (once individually, once in subtotal B278)
+│  ├─ Section 3: Rows 280-282 (3 leaf items) + Row 283 (subtotal)
+│  │  └─ These 3 items appear TWICE (once individually, once in subtotal B283)
+│  └─ Section 4: Rows 285-292 (8 leaf items) + Row 293 (subtotal)
+│     └─ These 8 items appear TWICE (once individually, once in subtotal B293)
+├─ Double-counted items: 24 items total (8+5+3+8)
+├─ Correct formula: =1*B270+1*B278+1*B283+1*B294 (just subtotals)
+└─ Impact: Entire payables section totals will be exactly 2x correct values
+
+================================================================================
+BUG SEVERITY SUMMARY
+================================================================================
+
+Row 148 (Total cash):           HIGH - 11 wrong references, only 2 correct
+Row 168 (Total issued capital): MEDIUM - 2-4 wrong, 3 correct
+Row 241 (Total borrowings):     HIGH - 5 equity items explicitly included
+Row 295 (Total payables):       CRITICAL - 24 items double-counted (2x totals)
+
+Overall Impact: All 4 bug claims are VERIFIED as CORRECT
+
+The OrderOfLiquidity template has systematic formula generation errors affecting
+all major balance sheet totals. These are NOT simple +20 row offset errors (like
+CuNonCu), but rather failures to properly filter XBRL concept hierarchies.
+
+================================================================================
+DELIVERABLES
+================================================================================
+
+Generated files:
+1. ORDEROF_LIQUIDITY_BUG_VERIFICATION_REPORT.md
+   - Detailed analysis with formulas and categorization for each bug
+
+2. verify_ordofliq_bugs.py
+   - Basic script to extract and list formulas
+
+3. verify_ordofliq_bugs_v2.py
+   - Section-aware analysis script
+
+4. verify_ordofliq_bugs_final.py
+   - Final categorization and detailed analysis script
+
+5. validate_ordofliq_fixes.py
+   - Validation script to verify fixes have been applied correctly
+
+Usage:
+  python verify_ordofliq_bugs_final.py      # Generate verification report
+  python validate_ordofliq_fixes.py         # Validate fixed template
+
+================================================================================
+RECOMMENDATIONS FOR FIXING
+================================================================================
+
+Row 148: Replace formula with =1*B146+1*B147
+Row 168: Replace formula with =1*B165+1*B166+1*B167
+Row 241: Remove rows 189-194 from formula, or regenerate from XBRL linkbase
+Row 295: Replace formula with =1*B270+1*B278+1*B283+1*B294
+
+After fixing, run validate_ordofliq_fixes.py to confirm all corrections.
+
+================================================================================

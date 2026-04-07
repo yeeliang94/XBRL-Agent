@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="100%" height="100%">
+  <defs>
+    <style>
+      .case { fill: #E8E4D9; }
+      .case-dark { fill: #C4C0B6; }
+      .screen { fill: #1E252B; }
+      .eye { fill: #2ECC71; }
+      .thruster { fill: #7F8C8D; }
+      .shadow { fill: #EAEAEA; }
+      
+      .squish { animation: squish 1.5s infinite steps(2, end); }
+      .dot1 { animation: blink 1.5s infinite steps(1); }
+      .dot2 { animation: blink 1.5s infinite steps(1); animation-delay: 0.5s; }
+      .dot3 { animation: blink 1.5s infinite steps(1); animation-delay: 1.0s; }
+      .eyes { animation: eye-close 3s infinite steps(1); opacity: 1; }
+
+      @keyframes squish { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(1px); } }
+      @keyframes blink { 0%, 33% { opacity: 0; } 34%, 100% { opacity: 1; } }
+      @keyframes eye-close { 0%, 90%, 100% { opacity: 1; } 91%, 95% { opacity: 0; } }
+    </style>
+  </defs>
+
+  <!-- Thought Bubble Above -->
+  <g shape-rendering="crispEdges">
+    <rect x="21" y="9" width="1" height="1" fill="#FFF"/>
+    <rect x="22" y="7" width="2" height="1" fill="#FFF"/>
+    <rect x="18" y="2" width="11" height="5" fill="#FFF"/>
+    <rect x="19" y="1" width="9" height="1" fill="#FFF"/>
+    <rect x="19" y="7" width="9" height="1" fill="#FFF"/>
+    <rect x="17" y="3" width="1" height="3" fill="#FFF"/>
+    <rect x="29" y="3" width="1" height="3" fill="#FFF"/>
+    <rect x="19" y="0" width="9" height="1" fill="#E8E4D9"/>
+    <rect x="18" y="1" width="1" height="1" fill="#E8E4D9"/>
+    
+    <rect x="20" y="4" width="1" height="1" fill="#3498DB" class="dot1"/>
+    <rect x="23" y="4" width="1" height="1" fill="#3498DB" class="dot2"/>
+    <rect x="26" y="4" width="1" height="1" fill="#3498DB" class="dot3"/>
+  </g>
+
+  <g shape-rendering="crispEdges">
+    <rect x="8" y="25" width="16" height="1" class="shadow"/>
+
+    <rect x="10" y="24" width="4" height="1" class="thruster"/>
+    <rect x="11" y="22" width="2" height="2" class="case-dark"/>
+    <rect x="18" y="24" width="4" height="1" class="thruster"/>
+    <rect x="19" y="22" width="2" height="2" class="case-dark"/>
+    
+    <g class="squish">
+      <rect x="9" y="8" width="14" height="1" class="case"/>
+      <rect x="8" y="9" width="16" height="12" class="case"/>
+      <rect x="9" y="21" width="14" height="2" class="case-dark"/>
+      <rect x="8" y="21" width="1" height="1" class="case-dark"/>
+      <rect x="23" y="21" width="1" height="1" class="case-dark"/>
+      
+      <rect x="10" y="10" width="12" height="9" class="screen"/>
+      <rect x="9" y="11" width="1" height="7" class="screen"/>
+      <rect x="22" y="11" width="1" height="7" class="screen"/>
+      
+      <g class="eyes">
+        <rect x="12" y="13" width="2" height="3" class="eye"/>
+        <rect x="18" y="13" width="2" height="3" class="eye"/>
+      </g>
+
+      <!-- Pondering hands -->
+      <g transform="translate(0, 0)">
+        <rect x="11" y="21" width="3" height="3" class="case"/>
+        
+        <rect x="18" y="21" width="3" height="3" class="case"/>
+      </g>
+    </g>
+  </g>
+</svg>
