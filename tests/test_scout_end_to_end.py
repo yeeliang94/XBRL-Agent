@@ -8,10 +8,27 @@ from unittest.mock import patch, AsyncMock
 
 import fitz
 
-from statement_types import StatementType
+from statement_types import StatementType, variants_for
 from scout.infopack import Infopack
 from scout.runner import run_scout
 from scout.vision import VisionTocResult, VisionTocEntry
+from scout.variant_detector import VariantDetectionResult
+
+
+async def _mock_detect_variant(statement_type, page_text, pdf_path, page_num, model):
+    """Auto-pick the first detectable variant for any statement type."""
+    detectable = [v for v in variants_for(statement_type) if v.detection_signals]
+    if detectable:
+        return VariantDetectionResult(variant=detectable[0].name, confident=True, method="deterministic")
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _mock_hybrid_detector():
+    """All end-to-end scout tests mock the hybrid variant detector so they
+    don't need a real LLM for variant classification."""
+    with patch("scout.runner.detect_variant", side_effect=_mock_detect_variant):
+        yield
 
 
 @pytest.fixture
@@ -102,8 +119,8 @@ class TestRunScout:
             }
             expected_name = page_map.get(page_num, "")
             if expected_name and expected_name.lower() in statement_name.lower():
-                return {"found": True, "variant_suggestion": None}
-            return {"found": False, "variant_suggestion": None}
+                return {"found": True}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             infopack = await run_scout(synthetic_pdf, model="fake-model")
@@ -130,8 +147,8 @@ class TestRunScout:
             }
             keyword = page_map.get(page_num, "")
             if keyword and keyword in statement_name.lower():
-                return {"found": True, "variant_suggestion": None}
-            return {"found": False, "variant_suggestion": None}
+                return {"found": True}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             infopack = await run_scout(synthetic_pdf, model="fake-model")
@@ -144,8 +161,8 @@ class TestRunScout:
         """When statements_to_find is specified, only those are in the result."""
         async def mock_validate(pdf_path, page_num, statement_name, model):
             if page_num == 8 and "cash flow" in statement_name.lower():
-                return {"found": True, "variant_suggestion": "Indirect"}
-            return {"found": False, "variant_suggestion": None}
+                return {"found": True}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             infopack = await run_scout(
@@ -163,8 +180,8 @@ class TestRunScout:
         """Produced infopack should round-trip through JSON."""
         async def mock_validate(pdf_path, page_num, statement_name, model):
             if page_num == 5 and "financial position" in statement_name.lower():
-                return {"found": True, "variant_suggestion": "CuNonCu"}
-            return {"found": False, "variant_suggestion": None}
+                return {"found": True}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             infopack = await run_scout(
@@ -208,10 +225,10 @@ class TestRunScoutImageOnly:
 
         async def mock_validate(pdf_path, page_num, statement_name, model):
             if page_num == 8 and "financial position" in statement_name.lower():
-                return {"found": True, "variant_suggestion": "CuNonCu"}
+                return {"found": True}
             if page_num == 10 and "profit or loss" in statement_name.lower():
-                return {"found": True, "variant_suggestion": "Function"}
-            return {"found": False, "variant_suggestion": None}
+                return {"found": True}
+            return {"found": False}
 
         with patch("scout.runner.extract_toc_via_vision", side_effect=mock_vision) as vision_mock, \
              patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
@@ -262,8 +279,8 @@ class TestLowConfidenceOmission:
         async def mock_validate(pdf_path, page_num, statement_name, model):
             # Only SOFP found, SOPL never found
             if page_num == 5 and "financial position" in statement_name.lower():
-                return {"found": True, "variant_suggestion": "CuNonCu"}
-            return {"found": False, "variant_suggestion": None}
+                return {"found": True}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             infopack = await run_scout(synthetic_pdf, model="fake-model")

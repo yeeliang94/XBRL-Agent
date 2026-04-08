@@ -186,11 +186,13 @@ export const STATEMENT_LABELS: Record<StatementType, string> = {
   SOCIE: "Statement of Changes in Equity",
 };
 
-/** Known variants per statement type (matches statement_types.py registry). */
+/** Known variants per statement type (matches statement_types.py registry).
+ *  NotPrepared is a meta-variant meaning no standalone SOCI was found —
+ *  it's included so the UI can display it but extraction is skipped. */
 export const VARIANTS: Record<StatementType, string[]> = {
   SOFP: ["CuNonCu", "OrderOfLiquidity"],
   SOPL: ["Function", "Nature"],
-  SOCI: ["BeforeTax", "NetOfTax"],
+  SOCI: ["BeforeTax", "NetOfTax", "NotPrepared"],
   SOCF: ["Indirect", "Direct"],
   SOCIE: ["Default"],
 };

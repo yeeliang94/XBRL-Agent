@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import type {
   StatementType,
   VariantSelection,
@@ -105,6 +105,27 @@ const styles = {
     alignItems: "center",
     gap: pwc.space.sm,
   } as React.CSSProperties,
+  scoutProgressPanel: {
+    padding: pwc.space.md,
+    background: "#FFFBF5",
+    borderRadius: pwc.radius.sm,
+    borderLeft: `3px solid ${pwc.orange500}`,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xs,
+  } as React.CSSProperties,
+  scoutProgressHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  scoutProgressStep: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey500,
+    paddingLeft: pwc.space.lg,
+  } as React.CSSProperties,
 };
 
 function makeEmptySelections(): Record<StatementType, VariantSelection> {
@@ -128,6 +149,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scoutError, setScoutError] = useState<string | null>(null);
   const [scoutProgress, setScoutProgress] = useState<string | null>(null);
+  const [scoutMessages, setScoutMessages] = useState<string[]>([]);
+  const [scoutStartTime, setScoutStartTime] = useState<number | null>(null);
   const [scoutEnabled, setScoutEnabled] = useState(true);
   const [isDetecting, setIsDetecting] = useState(false);
   const [infopack, setInfopack] = useState<Record<string, unknown> | null>(null);
@@ -185,32 +208,67 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     [],
   );
 
+  // Elapsed-time ticker for scout progress
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!scoutStartTime) { setElapsed(0); return; }
+    const interval = setInterval(() => setElapsed(Math.floor((Date.now() - scoutStartTime) / 1000)), 1000);
+    return () => clearInterval(interval);
+  }, [scoutStartTime]);
+  const elapsedText = elapsed > 0 ? `${elapsed}s` : "";
+
+  // AbortController ref for cancelling in-flight scout requests on unmount
+  const scoutAbortRef = React.useRef<AbortController | null>(null);
+
+  // Cleanup on unmount: abort any in-flight scout request
+  useEffect(() => {
+    return () => { scoutAbortRef.current?.abort(); };
+  }, []);
+
   const handleAutoDetect = useCallback(async () => {
+    // Abort any previous in-flight scout request
+    scoutAbortRef.current?.abort();
+    const abortController = new AbortController();
+    scoutAbortRef.current = abortController;
+    let cancelled = false;
+
     setIsDetecting(true);
     setScoutError(null);
     setScoutProgress(null);
+    setScoutMessages([]);
+    setScoutStartTime(Date.now());
     try {
       // Call the scout endpoint via SSE
-      const response = await fetch(`/api/scout/${sessionId}`, { method: "POST" });
+      const response = await fetch(`/api/scout/${sessionId}`, {
+        method: "POST",
+        signal: abortController.signal,
+      });
       if (!response.ok) {
         let detail = `Scout failed (${response.status})`;
         try {
           const body = await response.json();
           detail = body.detail || body.message || detail;
         } catch { /* no JSON body */ }
-        setScoutError(detail);
+        if (!cancelled) setScoutError(detail);
         return;
       }
       const reader = response.body?.getReader();
       if (!reader) {
-        setScoutError("No response stream from scout");
+        if (!cancelled) setScoutError("No response stream from scout");
         return;
       }
+
+      // Cancel reader when abort fires
+      abortController.signal.addEventListener("abort", () => {
+        cancelled = true;
+        reader.cancel().catch(() => {});
+      });
 
       const decoder = new TextDecoder();
       let buffer = "";
 
       const processLine = (line: string) => {
+        if (cancelled) return;
         if (line.startsWith("event:")) return; // event labels — skip
         if (!line.startsWith("data: ")) return;
         try {
@@ -218,13 +276,16 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
 
           // Status/progress events (have `phase`, no `traceback`)
           if (data.phase && !data.traceback) {
-            setScoutProgress(data.message || null);
+            const msg = data.message || null;
+            setScoutProgress(msg);
+            if (msg) setScoutMessages(prev => [...prev, msg]);
             return;
           }
 
           // Error events from server (have `traceback`)
           if (data.traceback) {
             setScoutError(data.message || "Scout failed");
+            setScoutStartTime(null);
             return;
           }
 
@@ -237,8 +298,21 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
             // confidence (HIGH/MEDIUM/LOW) — normalize to our lowercase type.
             const statements = data.infopack.statements || {};
 
-            // First, mark all enabled statements — detected ones get their
-            // variant + confidence; missing ones get a "not_detected" marker.
+            // Auto-disable statements the scout didn't find — saves tokens
+            // by not running extraction on missing statements. User can
+            // re-enable manually if the scout was wrong.
+            setStatementsEnabled((prev) => {
+              const next = { ...prev };
+              for (const stmt of STATEMENT_TYPES) {
+                if (!(stmt in statements)) {
+                  next[stmt] = false;
+                }
+              }
+              return next;
+            });
+
+            // Detected statements get their variant + confidence;
+            // missing ones get a "not_detected" marker.
             setVariantSelections((prev) => {
               const next = { ...prev };
               for (const stmt of STATEMENT_TYPES) {
@@ -280,9 +354,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
       // Process any remaining data left in the buffer after stream closes
       if (buffer.trim()) processLine(buffer);
     } catch (err) {
-      setScoutError(err instanceof Error ? err.message : "Auto-detect failed");
+      if (!cancelled) {
+        const msg = err instanceof Error ? err.message : "Auto-detect failed";
+        // AbortError is expected when we cancel — don't show it to the user
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setScoutError(msg);
+      }
     } finally {
-      setIsDetecting(false);
+      if (!cancelled) {
+        setIsDetecting(false);
+        setScoutStartTime(null);
+      }
     }
   }, [sessionId]);
 
@@ -339,15 +421,29 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
           isDetecting={isDetecting}
           canAutoDetect={!!sessionId}
         />
-        {isDetecting && scoutProgress && (
-          <p style={styles.progressText}>
-            <span style={{
-              width: 10, height: 10, borderRadius: "50%",
-              border: `2px solid ${pwc.grey200}`, borderTop: `2px solid ${pwc.orange500}`,
-              animation: "spin 0.8s linear infinite", flexShrink: 0,
-            }} />
-            {scoutProgress}
-          </p>
+        {isDetecting && (
+          <div style={styles.scoutProgressPanel}>
+            <div style={styles.scoutProgressHeader}>
+              <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
+                <span style={{
+                  width: 16, height: 16, borderRadius: "50%",
+                  border: `2px solid ${pwc.grey200}`, borderTop: `2px solid ${pwc.orange500}`,
+                  animation: "spin 0.8s linear infinite", flexShrink: 0, display: "inline-block",
+                }} />
+                <span style={{ fontFamily: pwc.fontHeading, fontSize: 13, fontWeight: 600, color: pwc.grey800 }}>
+                  {scoutProgress || "Starting scout..."}
+                </span>
+              </div>
+              {scoutStartTime && (
+                <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey300 }}>
+                  {elapsedText}
+                </span>
+              )}
+            </div>
+            {scoutMessages.length > 1 && scoutMessages.slice(0, -1).map((msg, i) => (
+              <p key={i} style={styles.scoutProgressStep}>{"\u2713"} {msg}</p>
+            ))}
+          </div>
         )}
         {scoutError && <p style={styles.errorText}>{scoutError}</p>}
       </div>

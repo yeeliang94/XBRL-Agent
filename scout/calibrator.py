@@ -71,12 +71,12 @@ def _build_search_window(stated_page: int, pdf_length: int) -> list[int]:
 # -- LLM page validation (the part that gets mocked in tests) -----------------
 
 class _PageValidationResult(BaseModel):
-    """LLM structured output for page validation."""
+    """LLM structured output for page validation.
+
+    This is purely a found/not-found check. Variant classification is handled
+    separately by the hybrid detector in variant_detector.py.
+    """
     found: bool = Field(description="True if this page contains the expected statement header")
-    variant_suggestion: Optional[str] = Field(
-        default=None,
-        description="Detected variant name (e.g. CuNonCu, Function, Indirect) if found",
-    )
 
 
 _VALIDATION_PROMPT = """\
@@ -85,16 +85,8 @@ financial statement from a Malaysian annual report.
 
 The statement you are looking for: {statement_name}
 
-Look at the page image and answer:
-1. Does this page contain the title/header of that statement? (found: true/false)
-2. If found, what variant is it? For example:
-   - SOFP: "CuNonCu" (has current/non-current split) or "OrderOfLiquidity"
-   - SOPL: "Function" (cost of sales) or "Nature" (raw materials, employee benefits)
-   - SOCI: "BeforeTax" or "NetOfTax"
-   - SOCF: "Indirect" (starts from profit) or "Direct" (cash receipts)
-   - SOCIE: "Default"
-
-Only return found=true if you can clearly see the statement title on this page.
+Does this page contain the title/header of that statement?
+Return found=true only if you can clearly see the statement title on this page.
 Do NOT return found=true for notes pages or continuation pages.
 """
 
@@ -107,7 +99,7 @@ async def _validate_page_via_llm(
 ) -> dict:
     """Render a single page and ask LLM if it contains the statement header.
 
-    Returns dict with 'found' (bool) and 'variant_suggestion' (str|None).
+    Returns dict with 'found' (bool).
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         rendered = render_pages_to_images(
@@ -115,7 +107,7 @@ async def _validate_page_via_llm(
             output_dir=tmpdir, dpi=200,
         )
         if not rendered:
-            return {"found": False, "variant_suggestion": None}
+            return {"found": False}
         img_bytes = rendered[0].read_bytes()
 
     agent = Agent(
@@ -129,7 +121,7 @@ async def _validate_page_via_llm(
         BinaryContent(data=img_bytes, media_type="image/png"),
     ])
 
-    return {"found": result.output.found, "variant_suggestion": result.output.variant_suggestion}
+    return {"found": result.output.found}
 
 
 # -- Main calibration loop ----------------------------------------------------
@@ -180,7 +172,6 @@ async def calibrate_pages(
                     actual_page=candidate_page,
                     offset=candidate_page - entry.stated_page,
                     confidence="HIGH",
-                    variant_suggestion=validation["variant_suggestion"],
                 )
                 found = True
                 break

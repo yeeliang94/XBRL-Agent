@@ -28,15 +28,30 @@ class TestDetectVariantFromSignals:
 
     def test_sofp_order_of_liquidity(self):
         page_text = """
-        Statement of Financial Position
-        Assets
+        Statement of Financial Position (Order of Liquidity)
+        Total assets    5,000,000
+        Total liabilities    3,000,000
         Cash and cash equivalents    1,234,567
         Trade receivables    384,375
-        Liabilities
-        Equity
         """
         result = detect_variant_from_signals(StatementType.SOFP, page_text)
         assert result == "OrderOfLiquidity"
+
+    def test_sofp_cunoncu_not_confused_with_liquidity(self):
+        """CuNonCu text should not match OrderOfLiquidity even though
+        'assets' and 'liabilities' appear (those are no longer OoL signals)."""
+        page_text = """
+        Non-current assets
+        Property, plant and equipment    1,000,000
+        Current assets
+        Cash    500,000
+        Non-current liabilities
+        Borrowings    300,000
+        Total assets    2,000,000
+        Total liabilities    800,000
+        """
+        result = detect_variant_from_signals(StatementType.SOFP, page_text)
+        assert result == "CuNonCu"
 
     def test_sopl_function(self):
         page_text = """
@@ -88,33 +103,51 @@ class TestDetectVariantFromSignals:
         result = detect_variant_from_signals(StatementType.SOCIE, page_text)
         assert result == "Default"
 
-    def test_ambiguous_returns_first_variant(self):
-        """When no signals match clearly, return first variant as fallback."""
+    def test_no_signals_returns_none(self):
+        """When no signals match, return None so caller decides fallback."""
         page_text = "Some random text with no signals"
         result = detect_variant_from_signals(StatementType.SOCI, page_text)
-        # Should return something (first variant), not None
-        assert result is not None
+        assert result is None
 
-    def test_all_statement_types_have_variants(self):
-        """Every StatementType should be detectable."""
+    def test_sofp_absence_based_ool_detection(self):
+        """SOFP with generic financial content but NO current/non-current
+        headers should prefer OrderOfLiquidity via absence bonus."""
+        page_text = """
+        Statement of Financial Position
+        Total assets    5,000,000
+        Deposits from customers    2,000,000
+        Loans and advances    1,500,000
+        Total liabilities    3,000,000
+        """
+        result = detect_variant_from_signals(StatementType.SOFP, page_text)
+        assert result == "OrderOfLiquidity"
+
+    def test_empty_text_returns_none(self):
+        """Empty text should return None (no evidence to pick a variant)."""
         for st in StatementType:
             result = detect_variant_from_signals(st, "")
-            assert result is not None
+            # SOCIE has only one detectable variant, so it returns that
+            if st == StatementType.SOCIE:
+                assert result == "Default"
+            else:
+                assert result is None
 
 
 class TestCalibrationWithVariants:
-    """Variant detection integrated into calibration flow."""
+    """Calibration finds the page; variant detection is a separate step."""
 
     @pytest.mark.asyncio
-    async def test_calibrated_page_has_variant(self):
+    async def test_calibrated_page_found(self):
+        """Calibrator confirms the page exists — variant is handled separately
+        by the hybrid detector in variant_detector.py."""
         entries = [
             TocEntry("Statement of Financial Position", StatementType.SOFP, 42),
         ]
 
         async def mock_validate(pdf_path, page_num, statement_name, model):
             if page_num == 42:
-                return {"found": True, "variant_suggestion": "CuNonCu"}
-            return {"found": False, "variant_suggestion": None}
+                return {"found": True}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             result = await calibrate_pages(
@@ -124,4 +157,5 @@ class TestCalibrationWithVariants:
                 model="fake-model",
             )
 
-        assert result.pages[StatementType.SOFP].variant_suggestion == "CuNonCu"
+        assert result.pages[StatementType.SOFP].actual_page == 42
+        assert result.pages[StatementType.SOFP].confidence == "HIGH"
