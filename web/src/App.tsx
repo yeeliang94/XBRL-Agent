@@ -495,6 +495,7 @@ const styles = {
     border: "none",
     borderRadius: pwc.radius.sm,
     cursor: "pointer",
+    outline: "none",
   } as const,
   main: {
     maxWidth: 960,

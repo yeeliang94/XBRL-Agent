@@ -69,10 +69,11 @@ const styles = {
     fontSize: 12,
     fontFamily: pwc.fontHeading,
     fontWeight: 600,
-    background: "transparent",
+    background: pwc.white,
     color: pwc.grey700,
     border: "none",
     cursor: "pointer",
+    transition: "background 0.15s",
   } as React.CSSProperties,
   scrollArea: {
     maxHeight: 480,
@@ -200,7 +201,7 @@ export function AgentFeed({
       </div>
 
       {/* Scroll area */}
-      <div ref={scrollRef} style={styles.scrollArea} onScroll={handleScroll}>
+      <div ref={scrollRef} className="agent-scroll" style={styles.scrollArea} onScroll={handleScroll}>
         {viewMode === "timeline" ? (
           <TimelineView
             thinkingBlocks={thinkingBlocks}

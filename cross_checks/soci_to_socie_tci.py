@@ -37,16 +37,10 @@ class SOCIToSOCIETCICheck:
         socie_ws = find_sheet(socie_wb, "SOCIE")
         socie_tci = None
         if socie_ws is not None:
-            nci_col = 23  # Column W = Non-controlling interests
-            has_nci = False
-            for row in range(1, socie_ws.max_row + 1):
-                val = socie_ws.cell(row=row, column=nci_col).value
-                if val is not None and val != 0:
-                    has_nci = True
-                    break
-            socie_col = 24 if has_nci else 3
+            # Always read from Total col (X=24) — the formula aggregates all
+            # equity component columns, matching SOCI's group-level TCI.
             socie_tci = find_value_by_label(
-                socie_ws, "total comprehensive income", col=socie_col, wb=socie_wb,
+                socie_ws, "total comprehensive income", col=24, wb=socie_wb,
             )
         socie_wb.close()
 

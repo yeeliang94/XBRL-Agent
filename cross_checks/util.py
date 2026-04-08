@@ -13,6 +13,35 @@ import openpyxl
 # references and weighted sums found in MBRS templates.
 from tools.verifier import _resolve_cell_value
 
+# SOCIE column constants (pre-MBRS layout)
+_SOCIE_NCI_COL = 23       # W — Non-controlling interests
+_SOCIE_TOTAL_COL = 24     # X — Total
+_SOCIE_RETAINED_COL = 3   # C — Retained earnings
+
+
+def has_nci_data(ws, start_row: int = 1) -> bool:
+    """Check whether the SOCIE sheet has actual NCI data filled in.
+
+    The template's NCI column (W) contains metadata strings (e.g. the header
+    'Non-controlling interests' in row 2) and formula scaffolding.  This
+    function only counts **numeric** non-zero values — strings and formulas
+    are ignored, so metadata rows don't trigger false positives.
+    """
+    for row in range(start_row, ws.max_row + 1):
+        val = ws.cell(row=row, column=_SOCIE_NCI_COL).value
+        if val is None or val == 0:
+            continue
+        if isinstance(val, str):
+            continue
+        return True
+    return False
+
+
+def socie_column(ws, start_row: int = 1) -> int:
+    """Return the correct SOCIE read column: Total (X=24) if NCI data exists,
+    Retained earnings (C=3) otherwise."""
+    return _SOCIE_TOTAL_COL if has_nci_data(ws, start_row) else _SOCIE_RETAINED_COL
+
 
 def open_workbook(path: str) -> openpyxl.Workbook:
     """Open a workbook in data_only=False mode (preserves formulas for evaluation)."""

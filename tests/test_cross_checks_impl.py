@@ -184,10 +184,11 @@ class TestSOCIToSOCIETCI:
             ],
         }, soci_path)
 
+        # TCI check always reads Total col X (24) — pad to reach it
+        pad = [None] * 22
         _make_workbook({
             "SOCIE": [
-                [None, "Issued capital", "Retained earnings"],
-                ["*Total comprehensive income for the period", None, 260000.0],
+                ["*Total comprehensive income for the period", *pad, 260000.0],
             ],
         }, socie_path)
 
@@ -207,10 +208,10 @@ class TestSOCIToSOCIETCI:
             ],
         }, soci_path)
 
+        pad = [None] * 22
         _make_workbook({
             "SOCIE": [
-                [None, "Issued capital", "Retained earnings"],
-                ["*Total comprehensive income for the period", None, 999999.0],
+                ["*Total comprehensive income for the period", *pad, 999999.0],
             ],
         }, socie_path)
 
@@ -227,18 +228,15 @@ class TestSOCIToSOCIETCI:
 
 class TestSOCIEToSOFPEquity:
     def test_matching(self, tmp_dir):
+        """Equity check always reads Total col X (24)."""
         socie_path = os.path.join(tmp_dir, "socie.xlsx")
         sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
 
+        # Pad to col X (24) — 23 values where index 23 = col X
+        pad = [None] * 22
         _make_workbook({
             "SOCIE": [
-                [None, "Issued capital", "Retained earnings", None, None,
-                 None, None, None, None, None, None, None, None, None,
-                 None, None, None, None, None, None, None, None, None, "Total"],
-                # Closing balance row — col X (24) has total equity
-                ["*Equity at end of period", None, None, None, None,
-                 None, None, None, None, None, None, None, None, None,
-                 None, None, None, None, None, None, None, None, None, 750000.0],
+                ["*Equity at end of period", *pad, 750000.0],
             ],
         }, socie_path)
 
@@ -258,14 +256,10 @@ class TestSOCIEToSOFPEquity:
         socie_path = os.path.join(tmp_dir, "socie.xlsx")
         sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
 
+        pad = [None] * 22
         _make_workbook({
             "SOCIE": [
-                [None, "Issued capital", "Retained earnings", None, None,
-                 None, None, None, None, None, None, None, None, None,
-                 None, None, None, None, None, None, None, None, None, "Total"],
-                ["*Equity at end of period", None, None, None, None,
-                 None, None, None, None, None, None, None, None, None,
-                 None, None, None, None, None, None, None, None, None, 750000.0],
+                ["*Equity at end of period", *pad, 750000.0],
             ],
         }, socie_path)
 

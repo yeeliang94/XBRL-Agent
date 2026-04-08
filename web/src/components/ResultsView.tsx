@@ -177,6 +177,36 @@ const styles = {
     display: "inline-flex",
     alignItems: "center",
     gap: pwc.space.sm,
+    cursor: "pointer",
+    transition: "background 0.15s, border-color 0.15s",
+  } as React.CSSProperties,
+  downloadPrimary: {
+    padding: `${pwc.space.md}px ${pwc.space.xl}px`,
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: 600,
+    color: pwc.white,
+    background: pwc.orange500,
+    border: `1px solid ${pwc.orange500}`,
+    borderRadius: pwc.radius.md,
+    textDecoration: "none",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    cursor: "pointer",
+    transition: "background 0.15s",
+  } as React.CSSProperties,
+  downloadSection: {
+    marginBottom: pwc.space.lg,
+  } as React.CSSProperties,
+  downloadSectionLabel: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: 600,
+    color: pwc.grey500,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.05em",
+    marginBottom: pwc.space.sm,
   } as React.CSSProperties,
 };
 
@@ -364,27 +394,6 @@ function DataPreviewTab({
 function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; statementsCompleted?: string[] }) {
   const [error, setError] = useState<string | null>(null);
 
-  const downloads: { label: string; filename: string; icon: string }[] = [
-    { label: "Download Excel", filename: "filled.xlsx", icon: "📊" },
-  ];
-
-  // Add per-statement downloads when multi-agent results are available
-  if (statementsCompleted && statementsCompleted.length > 0) {
-    for (const stmt of statementsCompleted) {
-      downloads.push(
-        { label: `${stmt} Excel`, filename: `${stmt}_filled.xlsx`, icon: "📊" },
-        { label: `${stmt} JSON`, filename: `${stmt}_result.json`, icon: "📄" },
-        { label: `${stmt} Trace`, filename: `${stmt}_conversation_trace.json`, icon: "🔍" },
-      );
-    }
-  } else {
-    // Legacy single-agent downloads
-    downloads.push(
-      { label: "Download JSON", filename: "result.json", icon: "📄" },
-      { label: "Download Trace", filename: "conversation_trace.json", icon: "🔍" },
-    );
-  }
-
   const handleDownload = async (filename: string) => {
     setError(null);
     const url = `/api/result/${sessionId}/${filename}`;
@@ -399,7 +408,6 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
         setError(detail);
         return;
       }
-      // Trigger browser download from the successful response
       const blob = await resp.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -411,6 +419,8 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
     }
   };
 
+  const hasMulti = statementsCompleted && statementsCompleted.length > 0;
+
   return (
     <div>
       {error && (
@@ -418,22 +428,49 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
           {error}
         </div>
       )}
-      <div style={styles.downloadRow}>
-        {downloads.map((d) => (
-          <button
-            key={d.filename}
-            onClick={() => handleDownload(d.filename)}
-            style={{
-              ...styles.downloadButton,
-              cursor: "pointer",
-              background: pwc.white,
-            }}
-          >
-            <span>{d.icon}</span>
-            {d.label}
-          </button>
-        ))}
+
+      {/* Primary action — merged workbook */}
+      <div style={styles.downloadSection}>
+        <button
+          className="dl-btn"
+          onClick={() => handleDownload("filled.xlsx")}
+          style={styles.downloadPrimary}
+        >
+          <span>📊</span>
+          Download Merged Excel
+        </button>
       </div>
+
+      {/* Per-statement downloads grouped by statement */}
+      {hasMulti ? (
+        statementsCompleted.map((stmt) => (
+          <div key={stmt} style={styles.downloadSection}>
+            <div style={styles.downloadSectionLabel}>{stmt}</div>
+            <div style={styles.downloadRow}>
+              <button onClick={() => handleDownload(`${stmt}_filled.xlsx`)} className="dl-btn" style={styles.downloadButton}>
+                <span>📊</span> Excel
+              </button>
+              <button onClick={() => handleDownload(`${stmt}_result.json`)} className="dl-btn" style={styles.downloadButton}>
+                <span>📄</span> JSON
+              </button>
+              <button onClick={() => handleDownload(`${stmt}_conversation_trace.json`)} className="dl-btn" style={styles.downloadButton}>
+                <span>🔍</span> Trace
+              </button>
+            </div>
+          </div>
+        ))
+      ) : (
+        <div style={styles.downloadSection}>
+          <div style={styles.downloadRow}>
+            <button onClick={() => handleDownload("result.json")} style={styles.downloadButton}>
+              <span>📄</span> Download JSON
+            </button>
+            <button onClick={() => handleDownload("conversation_trace.json")} style={styles.downloadButton}>
+              <span>🔍</span> Download Trace
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
