@@ -55,7 +55,14 @@ VARIANTS: dict[tuple[StatementType, str], Variant] = {
         name="OrderOfLiquidity",
         template_filename="02-SOFP-OrderOfLiquidity.xlsx",
         # No current/non-current split; assets are presented in order of liquidity.
-        detection_signals=("assets", "liabilities", "equity"),
+        # Positive signals include the explicit phrase plus common patterns seen
+        # on liquidity-order sheets. Absence-based and negative-signal logic in
+        # variant_detector.py handles the case where these don't appear explicitly.
+        detection_signals=(
+            "order of liquidity", "by liquidity",
+            "total assets", "total liabilities",
+            "deposits from customers", "loans and advances",
+        ),
     ),
     (StatementType.SOPL, "Function"): Variant(
         statement=StatementType.SOPL,
@@ -80,6 +87,15 @@ VARIANTS: dict[tuple[StatementType, str], Variant] = {
         name="NetOfTax",
         template_filename="06-SOCI-NetOfTax.xlsx",
         detection_signals=("net of tax",),
+    ),
+    # NotPrepared: no standalone SOCI page. This happens when the company
+    # uses a combined SOPL+OCI statement, has zero OCI items, or the MBRS
+    # scoping chose "Not prepared". No template — coordinator skips extraction.
+    (StatementType.SOCI, "NotPrepared"): Variant(
+        statement=StatementType.SOCI,
+        name="NotPrepared",
+        template_filename="",  # no template — extraction is skipped
+        detection_signals=(),   # never auto-detected by signal matching
     ),
     (StatementType.SOCF, "Indirect"): Variant(
         statement=StatementType.SOCF,
@@ -117,8 +133,17 @@ def get_variant(statement: StatementType, variant_name: str) -> Variant:
 
 
 def template_path(statement: StatementType, variant_name: str) -> Path:
-    """Absolute filesystem path to the template for a given (statement, variant)."""
-    return TEMPLATE_DIR / get_variant(statement, variant_name).template_filename
+    """Absolute filesystem path to the template for a given (statement, variant).
+
+    Raises ValueError for meta-variants like NotPrepared that have no template.
+    """
+    v = get_variant(statement, variant_name)
+    if not v.template_filename:
+        raise ValueError(
+            f"{statement.value}/{variant_name} has no template — "
+            f"extraction should be skipped for this variant"
+        )
+    return TEMPLATE_DIR / v.template_filename
 
 
 def variants_for(statement: StatementType) -> list[Variant]:

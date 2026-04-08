@@ -127,7 +127,13 @@ async def run_extraction(
             variant = infopack.statements[stmt_type].variant_suggestion or None
         if not variant:
             from statement_types import variants_for
-            variant = variants_for(stmt_type)[0].name
+            detectable = [v for v in variants_for(stmt_type) if v.detection_signals]
+            variant = detectable[0].name if detectable else variants_for(stmt_type)[0].name
+
+        # Skip NotPrepared variants — no template to fill
+        if variant == "NotPrepared":
+            logger.info("Skipping %s — variant is NotPrepared (no template)", stmt_type.value)
+            continue
 
         model = config.models.get(stmt_type, config.model)
 

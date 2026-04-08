@@ -15,13 +15,29 @@ from statement_types import StatementType
 
 # Mapping from statement name patterns to StatementType.
 # Order matters: more specific patterns first to avoid false matches.
-_STATEMENT_PATTERNS: list[tuple[re.Pattern, StatementType]] = [
+#
+# Combined SOPL+OCI titles (e.g. "Statement of Profit or Loss and Other
+# Comprehensive Income") are tagged as _COMBINED_SOPL_OCI and expanded into
+# both SOPL and SOCI entries by parse_toc_entries_from_text().
+_COMBINED_SOPL_OCI = "COMBINED_SOPL_OCI"
+
+_STATEMENT_PATTERNS: list[tuple[re.Pattern, StatementType | str]] = [
+    # Combined title MUST come before individual SOPL/SOCI patterns
+    (re.compile(
+        r"(?:statement\s+of\s+)?profit\s+or\s+loss\s+and\s+(?:other\s+)?comprehensive\s+income",
+        re.I,
+    ), _COMBINED_SOPL_OCI),
     # English names
     (re.compile(r"statement\s+of\s+financial\s+position", re.I), StatementType.SOFP),
     (re.compile(r"(?:statement\s+of\s+)?(?:profit\s+or\s+loss|income\s+statement)", re.I), StatementType.SOPL),
     (re.compile(r"statement\s+of\s+comprehensive\s+income", re.I), StatementType.SOCI),
     (re.compile(r"statement\s+of\s+cash\s*flows?", re.I), StatementType.SOCF),
     (re.compile(r"statement\s+of\s+changes\s+in\s+equity", re.I), StatementType.SOCIE),
+    # Malay combined SOPL+OCI (must come before individual Malay SOPL/SOCI)
+    (re.compile(
+        r"penyata\s+untung\s+rugi\s+dan\s+pendapatan\s+komprehensif",
+        re.I,
+    ), _COMBINED_SOPL_OCI),
     # Malay names (Penyata Kewangan)
     (re.compile(r"penyata\s+kedudukan\s+kewangan", re.I), StatementType.SOFP),
     (re.compile(r"penyata\s+untung\s+rugi", re.I), StatementType.SOPL),
@@ -58,8 +74,11 @@ class TocEntry:
     stated_page: int
 
 
-def _classify_statement(name: str) -> Optional[StatementType]:
-    """Match a TOC line name against known statement patterns."""
+def _classify_statement(name: str) -> Optional[StatementType | str]:
+    """Match a TOC line name against known statement patterns.
+
+    Returns a StatementType, the _COMBINED_SOPL_OCI sentinel, or None.
+    """
     for pattern, st_type in _STATEMENT_PATTERNS:
         if pattern.search(name):
             return st_type
@@ -73,6 +92,12 @@ def parse_toc_entries_from_text(toc_text: str) -> list[TocEntry]:
     - "Statement of Financial Position    42"
     - "Statement of Financial Position ...... 42"
     - "Penyata Kedudukan Kewangan    8"
+
+    Combined SOPL+OCI titles (e.g. "Statement of Profit or Loss and Other
+    Comprehensive Income") are expanded into two entries: one for SOPL and
+    one for SOCI, both pointing to the same page. This ensures downstream
+    code sees both statement types even when the company uses a single
+    combined statement instead of separate SOPL and SOCI pages.
 
     Returns all entries found, including non-statement entries (with
     statement_type=None). This allows downstream code to use directors'
@@ -88,7 +113,21 @@ def parse_toc_entries_from_text(toc_text: str) -> list[TocEntry]:
         name = match.group(1).strip()
         page_num = int(match.group(2))
 
-        st_type = _classify_statement(name)
+        classification = _classify_statement(name)
+
+        # Combined SOPL+OCI: expand into two entries
+        if classification == _COMBINED_SOPL_OCI:
+            for st in (StatementType.SOPL, StatementType.SOCI):
+                if st not in seen_types:
+                    entries.append(TocEntry(
+                        statement_name=name,
+                        statement_type=st,
+                        stated_page=page_num,
+                    ))
+                    seen_types.add(st)
+            continue
+
+        st_type = classification  # StatementType or None
 
         # Avoid duplicates: first match for each statement type wins
         if st_type and st_type in seen_types:

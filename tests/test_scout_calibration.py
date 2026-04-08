@@ -55,7 +55,6 @@ class TestCalibratedPage:
             actual_page=48,
             offset=6,
             confidence="HIGH",
-            variant_suggestion="CuNonCu",
         )
         assert cp.actual_page == 48
         assert cp.offset == 6
@@ -77,10 +76,10 @@ class TestCalibration:
         # Mock: page 48 is SOFP (offset +6), page 50 is SOPL
         async def mock_validate(pdf_path, page_num, statement_name, model):
             if page_num == 48 and "financial position" in statement_name.lower():
-                return {"found": True, "variant_suggestion": "CuNonCu"}
+                return {"found": True}
             if page_num == 50 and "profit or loss" in statement_name.lower():
-                return {"found": True, "variant_suggestion": "Function"}
-            return {"found": False, "variant_suggestion": None}
+                return {"found": True}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             result = await calibrate_pages(
@@ -98,7 +97,7 @@ class TestCalibration:
     async def test_calibrate_rejects_false_positive(self, toc_entries):
         """When LLM says no for all candidates, confidence is LOW."""
         async def mock_validate(pdf_path, page_num, statement_name, model):
-            return {"found": False, "variant_suggestion": None}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             result = await calibrate_pages(
@@ -122,10 +121,10 @@ class TestCalibration:
         # SOFP offset +6, SOCF offset +8
         async def mock_validate(pdf_path, page_num, statement_name, model):
             if page_num == 48 and "financial position" in statement_name.lower():
-                return {"found": True, "variant_suggestion": "CuNonCu"}
+                return {"found": True}
             if page_num == 58 and "cash flow" in statement_name.lower():
-                return {"found": True, "variant_suggestion": "Indirect"}
-            return {"found": False, "variant_suggestion": None}
+                return {"found": True}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             result = await calibrate_pages(
@@ -142,7 +141,7 @@ class TestCalibration:
     async def test_calibration_result_has_all_entries(self, toc_entries):
         """Every TOC entry with a statement_type gets a CalibrationResult entry."""
         async def mock_validate(pdf_path, page_num, statement_name, model):
-            return {"found": False, "variant_suggestion": None}
+            return {"found": False}
 
         with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
             result = await calibrate_pages(

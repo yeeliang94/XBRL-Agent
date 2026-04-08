@@ -105,6 +105,48 @@ Independent Auditors' Report    25
         found_types = {e.statement_type for e in entries if e.statement_type}
         assert len(found_types) == 5
 
+    def test_combined_sopl_oci_title(self):
+        """Combined SOPL+OCI title should produce both SOPL and SOCI entries."""
+        toc_text = """
+Statement of Financial Position    8
+Statement of Profit or Loss and Other Comprehensive Income    10
+Statement of Cash Flows    14
+Statement of Changes in Equity    16
+"""
+        entries = parse_toc_entries_from_text(toc_text)
+        found_types = {e.statement_type for e in entries if e.statement_type}
+        assert StatementType.SOPL in found_types, "SOPL should be extracted from combined title"
+        assert StatementType.SOCI in found_types, "SOCI should be extracted from combined title"
+        # Both should point to the same page
+        sopl = [e for e in entries if e.statement_type == StatementType.SOPL][0]
+        soci = [e for e in entries if e.statement_type == StatementType.SOCI][0]
+        assert sopl.stated_page == soci.stated_page == 10
+
+    def test_combined_sopl_oci_no_duplicate_if_separate_soci_exists(self):
+        """If both combined title AND separate SOCI appear, no duplicate."""
+        toc_text = """
+Statement of Profit or Loss and Other Comprehensive Income    10
+Statement of Comprehensive Income    12
+"""
+        entries = parse_toc_entries_from_text(toc_text)
+        soci_entries = [e for e in entries if e.statement_type == StatementType.SOCI]
+        assert len(soci_entries) == 1, "Should not duplicate SOCI"
+        # First match wins — SOCI comes from the combined title
+        assert soci_entries[0].stated_page == 10
+
+    def test_combined_sopl_oci_malay(self):
+        """Malay combined SOPL+OCI title should produce both entries."""
+        toc_text = """
+Penyata Kedudukan Kewangan    8
+Penyata Untung Rugi dan Pendapatan Komprehensif Lain    10
+Penyata Aliran Tunai    14
+Penyata Perubahan Ekuiti    16
+"""
+        entries = parse_toc_entries_from_text(toc_text)
+        found_types = {e.statement_type for e in entries if e.statement_type}
+        assert StatementType.SOPL in found_types, "SOPL should be extracted from Malay combined title"
+        assert StatementType.SOCI in found_types, "SOCI should be extracted from Malay combined title"
+
     def test_empty_text_returns_empty(self):
         entries = parse_toc_entries_from_text("")
         assert entries == []

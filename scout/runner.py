@@ -25,7 +25,7 @@ from scout.toc_locator import find_toc_candidate_pages
 from scout.toc_parser import parse_toc_entries_from_text, TocEntry
 from scout.vision import extract_toc_via_vision, VisionTocEntry
 from scout.calibrator import calibrate_pages
-from scout.variant_detector import detect_variant_from_signals
+from scout.variant_detector import detect_variant, detect_variant_from_signals
 from scout.notes_discoverer import discover_note_pages
 
 logger = logging.getLogger(__name__)
@@ -161,14 +161,29 @@ async def run_scout(
             )
             continue
 
-        # Determine variant: use LLM suggestion if available, else detect from text
-        variant = cal_page.variant_suggestion
-        if not variant and cal_page.actual_page > 0:
+        # Determine variant via hybrid LLM + deterministic detection
+        variant = None
+        if cal_page.actual_page > 0:
             page_text = _extract_text_from_pages(pdf_path, [cal_page.actual_page])
-            variant = detect_variant_from_signals(st_type, page_text)
+            detection = await detect_variant(
+                statement_type=st_type,
+                page_text=page_text,
+                pdf_path=pdf_path,
+                page_num=cal_page.actual_page,
+                model=model,
+            )
+            if detection:
+                variant = detection.variant
+                if not detection.confident:
+                    logger.info(
+                        "%s: variant %r detected but not confident (method=%s)",
+                        st_type.value, variant, detection.method,
+                    )
         if not variant:
-            # Fallback to first variant
-            variant = detect_variant_from_signals(st_type, "")
+            # Fallback to first detectable variant for this statement type
+            from statement_types import variants_for as _variants_for
+            detectable = [v for v in _variants_for(st_type) if v.detection_signals]
+            variant = detectable[0].name if detectable else _variants_for(st_type)[0].name
 
         # Discover note pages — use this statement's own calibrated offset
         # instead of a single "typical" offset
