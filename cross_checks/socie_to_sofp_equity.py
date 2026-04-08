@@ -20,8 +20,9 @@ class SOCIEToSOFPEquityCheck:
         return True
 
     def run(self, workbook_paths: Dict[StatementType, str], tolerance: float) -> CrossCheckResult:
-        # Read SOCIE closing equity — col X (24) on the closing balance row
-        # Real label is "*Equity at end of period" (not "Balance at end of period")
+        # Read SOCIE closing equity — always from Total col (X=24).
+        # The Total formula (=U+V+W) aggregates all equity components, so it
+        # gives the correct answer for both simple and group entities.
         socie_wb = open_workbook(workbook_paths[StatementType.SOCIE])
         socie_ws = find_sheet(socie_wb, "SOCIE")
         socie_equity = None

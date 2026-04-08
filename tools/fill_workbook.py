@@ -112,14 +112,18 @@ def fill_workbook(
         cell.value = mapping.value
         fields_written += 1
 
-        # Write evidence/source to the column after the data columns (D for col B, E for col C)
-        # This gives humans a paper trail for every value the agent wrote
+        # Write evidence/source to a single column per sheet so notes don't repeat.
+        # SOCIE sheets use cols B-X for equity components, so evidence goes to col Y (25).
+        # All other sheets: evidence always goes to col D (4) — one column, not per-period.
         if mapping.evidence:
-            evidence_col = mapping.col + 2  # B→D, C→E
+            if "socie" in mapping.sheet.lower():
+                evidence_col = 25  # Y — after Total (X=24)
+            else:
+                evidence_col = 4  # D — single evidence column for all periods
             evidence_cell = ws.cell(row=target_row, column=evidence_col)
-            # Only write if the evidence cell is empty (don't overwrite existing data)
-            if evidence_cell.value is None:
-                evidence_cell.value = mapping.evidence
+            # Always overwrite evidence so correction passes don't accumulate
+            # stale provenance from values that were later replaced.
+            evidence_cell.value = mapping.evidence
 
     wb.save(output_path)
     wb.close()

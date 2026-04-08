@@ -95,7 +95,10 @@ export function TokenDashboard({ tokens, isRunning }: Props) {
   const metrics = [
     { label: "Prompt", value: fmt(tokens.prompt_tokens) },
     { label: "Completion", value: fmt(tokens.completion_tokens) },
-    { label: "Thinking", value: fmt(tokens.thinking_tokens) },
+    // Only show thinking tokens when the model actually used them
+    ...(tokens.thinking_tokens > 0
+      ? [{ label: "Thinking", value: fmt(tokens.thinking_tokens) }]
+      : []),
     { label: "Cumulative", value: fmt(tokens.cumulative) },
   ];
 

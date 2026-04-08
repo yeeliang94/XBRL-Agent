@@ -33,3 +33,35 @@
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.85); }
 }
+
+/* Keyboard-accessible focus ring for inline-styled buttons.
+   Overrides outline:none set in JS when keyboard-navigating. */
+button:focus-visible {
+  outline: 2px solid #D97706 !important;
+  outline-offset: 2px;
+}
+
+/* Custom scrollbar for agent activity panels */
+.agent-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.agent-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.agent-scroll::-webkit-scrollbar-thumb {
+  background: #CBD1D6;
+  border-radius: 3px;
+}
+.agent-scroll::-webkit-scrollbar-thumb:hover {
+  background: #A1A8B3;
+}
+/* Firefox */
+.agent-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #CBD1D6 transparent;
+}
+
+/* Download button hover states — scoped to avoid affecting all buttons */
+.dl-btn:hover {
+  filter: brightness(0.97);
+}

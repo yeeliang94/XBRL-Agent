@@ -90,7 +90,7 @@ describe("ResultsView — P4", () => {
   test("Downloads tab shows 3 download buttons (Excel, JSON, Trace)", () => {
     renderResults();
     fireEvent.click(screen.getByRole("button", { name: /downloads/i }));
-    expect(screen.getByText(/Download Excel/)).toBeInTheDocument();
+    expect(screen.getByText(/Download Merged Excel/)).toBeInTheDocument();
     expect(screen.getByText(/Download JSON/)).toBeInTheDocument();
     expect(screen.getByText(/Download Trace/)).toBeInTheDocument();
   });
