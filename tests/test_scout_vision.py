@@ -12,7 +12,7 @@ from scout.vision import (
     VisionTocResult,
     VisionTocEntry,
 )
-from scout.runner import _vision_entries_to_toc_entries
+from scout.vision import _vision_entries_to_toc_entries
 from statement_types import StatementType
 
 

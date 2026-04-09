@@ -1,0 +1,454 @@
+"""Tests for PydanticAI scout agent.
+
+The scout agent replaces the pipeline of one-shot LLM calls with a single
+PydanticAI agent that sees PDF pages directly and uses deterministic tools
+as cross-checks.
+"""
+from __future__ import annotations
+
+import json
+import pytest
+from pathlib import Path
+from typing import Optional
+from dataclasses import dataclass
+
+import fitz
+
+from statement_types import StatementType
+
+
+# ---------------------------------------------------------------------------
+# Synthetic PDF fixture (reusable across all phases)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def synthetic_pdf(tmp_path: Path) -> Path:
+    """Synthetic PDF with TOC + statement pages for agent testing."""
+    doc = fitz.open()
+
+    # Page 1: cover
+    page = doc.new_page()
+    w = fitz.TextWriter(page.rect)
+    w.append((72, 100), "Annual Report 2021", fontsize=16)
+    w.write_text(page)
+
+    # Page 2: TOC
+    page = doc.new_page()
+    w = fitz.TextWriter(page.rect)
+    w.append((72, 60), "Table of Contents", fontsize=16)
+    w.append((72, 100), "Statement of Financial Position .......... 5", fontsize=11)
+    w.append((72, 120), "Statement of Profit or Loss .......... 6", fontsize=11)
+    w.append((72, 140), "Statement of Comprehensive Income .......... 7", fontsize=11)
+    w.append((72, 160), "Statement of Cash Flows .......... 8", fontsize=11)
+    w.append((72, 180), "Statement of Changes in Equity .......... 9", fontsize=11)
+    w.append((72, 200), "Notes to the Financial Statements .......... 10", fontsize=11)
+    w.write_text(page)
+
+    # Pages 3-4: filler
+    for _ in range(2):
+        page = doc.new_page()
+        w = fitz.TextWriter(page.rect)
+        w.append((72, 100), "Directors Report content", fontsize=11)
+        w.write_text(page)
+
+    # Page 5: SOFP (CuNonCu)
+    page = doc.new_page()
+    w = fitz.TextWriter(page.rect)
+    w.append((72, 60), "Statement of Financial Position", fontsize=14)
+    w.append((72, 100), "Non-current assets", fontsize=11)
+    w.append((72, 120), "Property, plant and equipment  Note 4  1,234", fontsize=11)
+    w.append((72, 140), "Current assets", fontsize=11)
+    w.append((72, 160), "Trade receivables  Note 5  384", fontsize=11)
+    w.append((72, 180), "Non-current liabilities", fontsize=11)
+    w.write_text(page)
+
+    # Page 6: SOPL (Function)
+    page = doc.new_page()
+    w = fitz.TextWriter(page.rect)
+    w.append((72, 60), "Statement of Profit or Loss", fontsize=14)
+    w.append((72, 100), "Revenue  10,000", fontsize=11)
+    w.append((72, 120), "Cost of sales  (7,000)", fontsize=11)
+    w.append((72, 140), "Administrative expenses  (1,000)", fontsize=11)
+    w.write_text(page)
+
+    # Page 7: SOCI
+    page = doc.new_page()
+    w = fitz.TextWriter(page.rect)
+    w.append((72, 60), "Statement of Comprehensive Income", fontsize=14)
+    w.append((72, 100), "Profit for the year  2,000", fontsize=11)
+    w.append((72, 120), "Other comprehensive income before tax", fontsize=11)
+    w.write_text(page)
+
+    # Page 8: SOCF (Indirect)
+    page = doc.new_page()
+    w = fitz.TextWriter(page.rect)
+    w.append((72, 60), "Statement of Cash Flows", fontsize=14)
+    w.append((72, 100), "Profit before tax  2,500", fontsize=11)
+    w.append((72, 120), "Adjustments for:", fontsize=11)
+    w.append((72, 140), "Depreciation  500", fontsize=11)
+    w.write_text(page)
+
+    # Page 9: SOCIE
+    page = doc.new_page()
+    w = fitz.TextWriter(page.rect)
+    w.append((72, 60), "Statement of Changes in Equity", fontsize=14)
+    w.append((72, 100), "Share capital  Retained earnings  Total equity", fontsize=11)
+    w.write_text(page)
+
+    # Pages 10-12: notes
+    for i in range(3):
+        page = doc.new_page()
+        w = fitz.TextWriter(page.rect)
+        w.append((72, 60), f"Note {i + 4}", fontsize=14)
+        w.append((72, 100), f"Details for note {i + 4}", fontsize=11)
+        w.write_text(page)
+
+    path = tmp_path / "synthetic_annual_report.pdf"
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Agent creation + ScoutDeps
+# ---------------------------------------------------------------------------
+
+class TestCreateScoutAgent:
+    """Step 1/2: Agent factory returns correctly configured (Agent, ScoutDeps)."""
+
+    def test_returns_agent_and_deps(self, synthetic_pdf: Path):
+        from scout.agent import create_scout_agent, ScoutDeps
+
+        agent, deps = create_scout_agent(
+            pdf_path=synthetic_pdf,
+            model="test",
+        )
+        assert agent is not None
+        assert isinstance(deps, ScoutDeps)
+
+    def test_deps_holds_state(self, synthetic_pdf: Path):
+        from scout.agent import create_scout_agent, ScoutDeps
+
+        agent, deps = create_scout_agent(
+            pdf_path=synthetic_pdf,
+            model="test",
+            statements_to_find={StatementType.SOFP, StatementType.SOPL},
+        )
+        assert deps.pdf_path == synthetic_pdf
+        assert deps.pdf_length > 0
+        assert deps.statements_to_find == {StatementType.SOFP, StatementType.SOPL}
+        # Mutable state starts empty
+        assert deps.infopack is None
+
+    def test_agent_has_expected_tools(self, synthetic_pdf: Path):
+        from scout.agent import create_scout_agent
+
+        agent, _ = create_scout_agent(
+            pdf_path=synthetic_pdf,
+            model="test",
+        )
+        tool_names = set(agent._function_toolset.tools.keys())
+        expected = {
+            "find_toc",
+            "parse_toc_text",
+            "view_pages",
+            "check_variant_signals",
+            "discover_notes",
+            "save_infopack",
+        }
+        assert expected.issubset(tool_names), f"Missing tools: {expected - tool_names}"
+
+    def test_default_statements_is_all_five(self, synthetic_pdf: Path):
+        from scout.agent import create_scout_agent
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        assert deps.statements_to_find is None  # None means all 5
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Deterministic tool tests
+# ---------------------------------------------------------------------------
+
+class TestFindTocTool:
+    """Steps 3/4: find_toc tool wraps deterministic TOC detection."""
+
+    def test_finds_toc_in_synthetic_pdf(self, synthetic_pdf: Path):
+        from scout.agent import create_scout_agent
+        from scout.agent import _find_toc_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        result = _find_toc_impl(deps)
+        assert result["toc_page"] > 0
+        # Should find at least SOFP, SOPL entries
+        types_found = {e["type"] for e in result["entries"] if e["type"]}
+        assert "SOFP" in types_found
+        assert "SOPL" in types_found
+
+    def test_returns_empty_entries_for_no_toc(self, tmp_path: Path):
+        """PDF with no TOC text should return empty entries."""
+        doc = fitz.open()
+        for _ in range(5):
+            doc.new_page()  # blank pages
+        path = tmp_path / "no_toc.pdf"
+        doc.save(str(path))
+        doc.close()
+
+        from scout.agent import create_scout_agent, _find_toc_impl
+
+        _, deps = create_scout_agent(pdf_path=path, model="test")
+        result = _find_toc_impl(deps)
+        assert result["entries"] == []
+
+
+class TestParseTocTextTool:
+    """Step 5: parse_toc_text tool."""
+
+    def test_parses_toc_text(self):
+        from scout.agent import _parse_toc_text_impl
+
+        text = """
+Statement of Financial Position    8
+Statement of Profit or Loss    10
+Notes to the Financial Statements    18
+"""
+        result = _parse_toc_text_impl(text)
+        types_found = {e["type"] for e in result if e["type"]}
+        assert "SOFP" in types_found
+        assert "SOPL" in types_found
+
+
+class TestCheckVariantSignalsTool:
+    """Step 6: check_variant_signals tool."""
+
+    def test_detects_cunoncu(self):
+        from scout.agent import _check_variant_signals_impl
+
+        result = _check_variant_signals_impl(
+            "SOFP", "Non-current assets\nCurrent assets\nNon-current liabilities"
+        )
+        assert result["variant"] == "CuNonCu"
+
+    def test_returns_none_for_ambiguous(self):
+        from scout.agent import _check_variant_signals_impl
+
+        result = _check_variant_signals_impl("SOCI", "random text with no signals")
+        assert result["variant"] is None
+
+
+class TestDiscoverNotesTool:
+    """Step 7: discover_notes tool."""
+
+    def test_discovers_notes(self):
+        from scout.agent import _discover_notes_impl
+
+        result = _discover_notes_impl(
+            face_text="Property Note 4\nTrade receivables Note 5",
+            notes_start_page=10,
+            pdf_length=20,
+            toc_entries=[],
+        )
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Vision tool tests
+# ---------------------------------------------------------------------------
+
+class TestViewPagesTool:
+    """Steps 8/9: view_pages renders PDF pages for the agent to see."""
+
+    def test_returns_images_for_valid_pages(self, synthetic_pdf: Path, tmp_path: Path):
+        from scout.agent import create_scout_agent, _view_pages_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        result = _view_pages_impl(deps, [1, 2], str(tmp_path))
+        # Should contain page labels and image data
+        has_image = any(hasattr(item, "data") for item in result)
+        assert has_image, "Should return at least one BinaryContent image"
+
+    def test_rejects_out_of_range(self, synthetic_pdf: Path, tmp_path: Path):
+        from scout.agent import create_scout_agent, _view_pages_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        result = _view_pages_impl(deps, [999], str(tmp_path))
+        # Should get an error message, not a crash
+        assert any("invalid" in str(item).lower() or "skipped" in str(item).lower()
+                    for item in result)
+
+    def test_includes_text_alongside_image(self, synthetic_pdf: Path, tmp_path: Path):
+        from scout.agent import create_scout_agent, _view_pages_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        result = _view_pages_impl(deps, [5], str(tmp_path))  # SOFP page
+        text_items = [item for item in result if isinstance(item, str)]
+        # Should have page text that includes "Financial Position"
+        combined = " ".join(text_items)
+        assert "Financial Position" in combined or "Page 5" in combined
+
+    def test_caps_at_max_pages(self, synthetic_pdf: Path, tmp_path: Path):
+        from scout.agent import create_scout_agent, _view_pages_impl, MAX_VIEW_PAGES
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        all_pages = list(range(1, deps.pdf_length + 1))
+        result = _view_pages_impl(deps, all_pages, str(tmp_path))
+        # Count BinaryContent items (images)
+        image_count = sum(1 for item in result if hasattr(item, "data"))
+        assert image_count <= MAX_VIEW_PAGES
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: save_infopack tool tests
+# ---------------------------------------------------------------------------
+
+class TestSaveInfopackTool:
+    """Step 10: save_infopack persists the agent's result."""
+
+    def test_valid_infopack_stored(self, synthetic_pdf: Path):
+        from scout.agent import create_scout_agent, _save_infopack_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        infopack_data = {
+            "toc_page": 2,
+            "page_offset": 0,
+            "statements": {
+                "SOFP": {"variant_suggestion": "CuNonCu", "face_page": 5,
+                          "note_pages": [10, 11], "confidence": "HIGH"},
+            },
+        }
+        result = _save_infopack_impl(deps, json.dumps(infopack_data))
+        assert "saved" in result.lower() or "success" in result.lower()
+        assert deps.infopack is not None
+
+    def test_invalid_page_raises(self, synthetic_pdf: Path):
+        from scout.agent import create_scout_agent, _save_infopack_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        infopack_data = {
+            "toc_page": 2,
+            "page_offset": 0,
+            "statements": {
+                "SOFP": {"variant_suggestion": "CuNonCu", "face_page": 999,
+                          "note_pages": [], "confidence": "HIGH"},
+            },
+        }
+        result = _save_infopack_impl(deps, json.dumps(infopack_data))
+        assert "error" in result.lower() or "invalid" in result.lower() or "exceed" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: End-to-end agent run
+# ---------------------------------------------------------------------------
+
+class TestRunScoutAgent:
+    """Steps 11/12: run_scout() using the PydanticAI agent."""
+
+    @pytest.mark.asyncio
+    async def test_run_scout_returns_infopack(self, synthetic_pdf: Path):
+        """run_scout() should return a valid Infopack using the agent."""
+        from scout.agent import run_scout
+        from scout.infopack import Infopack
+        from unittest.mock import AsyncMock, patch
+        from pydantic_ai.models.function import FunctionModel, AgentInfo
+        from pydantic_ai.messages import (
+            ModelResponse, ToolCallPart, TextPart,
+        )
+
+        # Track tool calls to simulate a realistic agent flow:
+        # 1. find_toc  2. view_pages(5)  3. save_infopack
+        call_count = 0
+
+        def model_function(messages, info: AgentInfo):
+            nonlocal call_count
+            call_count += 1
+
+            if call_count == 1:
+                # Agent's first move: call find_toc
+                return ModelResponse(parts=[
+                    ToolCallPart(tool_name="find_toc", args={}, tool_call_id="tc1"),
+                ])
+            elif call_count == 2:
+                # After seeing TOC, save the infopack
+                infopack_data = {
+                    "toc_page": 2,
+                    "page_offset": 0,
+                    "statements": {
+                        "SOFP": {"variant_suggestion": "CuNonCu", "face_page": 5,
+                                  "note_pages": [10], "confidence": "HIGH"},
+                        "SOPL": {"variant_suggestion": "Function", "face_page": 6,
+                                  "note_pages": [], "confidence": "HIGH"},
+                    },
+                }
+                return ModelResponse(parts=[
+                    ToolCallPart(
+                        tool_name="save_infopack",
+                        args={"infopack_json": json.dumps(infopack_data)},
+                        tool_call_id="tc2",
+                    ),
+                ])
+            else:
+                # Done — return final text
+                return ModelResponse(parts=[
+                    TextPart(content="Scouting complete."),
+                ])
+
+        function_model = FunctionModel(model_function)
+
+        infopack = await run_scout(
+            pdf_path=synthetic_pdf,
+            model=function_model,
+            statements_to_find={StatementType.SOFP, StatementType.SOPL},
+        )
+
+        assert isinstance(infopack, Infopack)
+        assert StatementType.SOFP in infopack.statements
+        assert StatementType.SOPL in infopack.statements
+        assert infopack.statements[StatementType.SOFP].face_page == 5
+        assert infopack.statements[StatementType.SOFP].variant_suggestion == "CuNonCu"
+
+    @pytest.mark.asyncio
+    async def test_run_scout_progress_callback(self, synthetic_pdf: Path):
+        """run_scout() should call on_progress during the run."""
+        from scout.agent import run_scout
+        from pydantic_ai.models.function import FunctionModel, AgentInfo
+        from pydantic_ai.messages import ModelResponse, ToolCallPart, TextPart
+
+        call_count = 0
+        progress_messages = []
+
+        async def on_progress(msg: str):
+            progress_messages.append(msg)
+
+        def model_function(messages, info: AgentInfo):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return ModelResponse(parts=[
+                    ToolCallPart(tool_name="find_toc", args={}, tool_call_id="tc1"),
+                ])
+            elif call_count == 2:
+                infopack_data = {
+                    "toc_page": 2, "page_offset": 0,
+                    "statements": {
+                        "SOFP": {"variant_suggestion": "CuNonCu", "face_page": 5,
+                                  "note_pages": [], "confidence": "HIGH"},
+                    },
+                }
+                return ModelResponse(parts=[
+                    ToolCallPart(
+                        tool_name="save_infopack",
+                        args={"infopack_json": json.dumps(infopack_data)},
+                        tool_call_id="tc2",
+                    ),
+                ])
+            else:
+                return ModelResponse(parts=[TextPart(content="Done.")])
+
+        infopack = await run_scout(
+            pdf_path=synthetic_pdf,
+            model=FunctionModel(model_function),
+            on_progress=on_progress,
+        )
+        assert infopack is not None
+        # Should have received at least one progress message
+        assert len(progress_messages) >= 1

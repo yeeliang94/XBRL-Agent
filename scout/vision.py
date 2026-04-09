@@ -50,6 +50,20 @@ Return ALL entries you can read, even non-financial-statement ones.
 """
 
 
+def _vision_entries_to_toc_entries(vision_entries: list[VisionTocEntry]) -> list:
+    """Convert VisionTocEntry list into TocEntry objects via the parser.
+
+    Re-uses parse_toc_entries_from_text by reconstructing a text block
+    from the vision entries, so statement-type classification stays
+    in one place.
+    """
+    if not vision_entries:
+        return []
+    from scout.toc_parser import parse_toc_entries_from_text
+    lines = [f"{e.statement_name}    {e.stated_page}" for e in vision_entries]
+    return parse_toc_entries_from_text("\n".join(lines))
+
+
 async def extract_toc_via_vision(
     pdf_path: Path | str,
     candidate_pages: list[int],
