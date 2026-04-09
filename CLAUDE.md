@@ -52,7 +52,16 @@ cross_checks/
   socf_to_sofp_cash.py      SOCF cash = SOFP cash movement
 workbook_merger.py  Merges per-statement workbooks into single output file
 db/                 SQLite audit trail (runs, agents, events, cross-checks)
-scout/              PDF page-range detection for each statement
+scout/
+  agent.py          PydanticAI scout agent (single agent with 6 tools)
+  runner.py         Backward-compatible entry point (re-exports from agent.py)
+  toc_locator.py    Deterministic TOC page finder
+  toc_parser.py     TOC text parser (English + Malay, combined titles)
+  variant_detector.py  Deterministic variant signal scorer (cross-check tool)
+  notes_discoverer.py  Note page discovery from face-page references
+  calibrator.py     Legacy page calibrator (kept for reference, not used by agent)
+  vision.py         LLM vision helpers (TOC extraction for scanned PDFs)
+  infopack.py       Typed output: page refs, variants, confidence per statement
 web/                Vite + React frontend (inline styles, tab-based multi-agent UI)
 config/
   models.json       Available models registry (id, provider, display name)
