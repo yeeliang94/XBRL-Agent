@@ -19,7 +19,7 @@ No LLM orchestrator in this phase — coordinator is plain Python. LLM orchestra
 
 - **No LLM orchestrator in Phase 1** — scout + Python coordinator + deterministic validator cover all needs. LLM orchestrator deferred until correction loops are needed.
 - **Scout is a vision mini-agent** — reads TOC page(s) visually, extracts stated page numbers, then probes actual pages to calibrate offset. Validates each statement's header visible on the candidate page before locking it in.
-- **Scout is toggleable per run** — user can disable scout in the pre-run UI. When OFF, sub-agents receive no infopack and fall back to full-PDF exploration (they use `view_pdf_pages` freely to find their own sections, like the current SOFP agent does today). When ON (default), sub-agents are scoped to their infopack page ranges. Toggle is exposed in pre-run UI and in settings as a default.
+- **Scout is toggleable per run** — user can disable scout in the pre-run UI. When OFF, sub-agents receive no infopack and fall back to full-PDF exploration (they use `view_pdf_pages` freely to find their own sections). When ON (default), sub-agents receive page hints as soft guidance (recommended starting points) but can freely view any page in the PDF. Toggle is exposed in pre-run UI and in settings as a default.
 - **Page-offset calibration is required** — TOC-stated page numbers typically differ from actual PDF page indices (cover pages, prefaces, etc.). Scout must validate every page before sub-agents use it.
 - **Variant selection: user pre-selects OR auto-detect via scout** — scout returns recommendations, user confirms/overrides before run starts.
 - **Parallelism via `asyncio.gather`** — 5 sub-agents run concurrently, each writing to its own workbook file; merged at the end (zero write contention).
@@ -291,13 +291,13 @@ Goal: before writing prompts, derive concrete field-mapping rules for each new s
 
 - [x] 🟩 **Step 4.2: Generic extraction agent factory** — parametric replacement for `create_sofp_agent`.
   - [x] 🟩 **RED**: `tests/test_extraction_agent.py` — 9 tests: creates agent for each statement, has required tools, system prompt contains statement content, deps carry metadata/hints, backward compat.
-  - [x] 🟩 **GREEN**: `extraction/agent.py` — `ExtractionDeps` class + `create_extraction_agent()` factory. Tools: `read_template`, `view_pdf_pages` (with page restrictions), `fill_workbook`, `verify_totals` (uses `verify_statement`), `save_result`.
+  - [x] 🟩 **GREEN**: `extraction/agent.py` — `ExtractionDeps` class + `create_extraction_agent()` factory. Tools: `read_template`, `view_pdf_pages`, `fill_workbook`, `verify_totals` (uses `verify_statement`), `save_result`.
   - [x] 🟩 **REFACTOR**: `create_sofp_agent` in `agent.py` preserved as backward-compat wrapper. Added `from __future__ import annotations` to agent.py for Python 3.9 compat.
   - **Verify:** ✅ `pytest tests/test_extraction_agent.py -v` — 9 passed. Full suite: 201 passed.
 
-- [x] 🟩 **Step 4.3: Page hints restrict sub-agent PDF access (when scout is ON)** — sub-agents only see pages from the scout's infopack. When scout is OFF, sub-agents see the full PDF and self-navigate.
-  - [x] 🟩 **RED + GREEN**: `tests/test_page_hints.py` — 5 tests: deps carry allowed_pages, None when scout off, auto-derive from page_hints, scoped navigation in prompt, self-navigation in prompt.
-  - [x] 🟩 **GREEN**: `view_pdf_pages` tool in `extraction/agent.py` enforces `allowed_pages` membership; returns helpful error listing allowed pages on rejection. Auto-derives `allowed_pages` from `page_hints` when not explicitly set.
+- [x] 🟩 **Step 4.3: Page hints provide soft guidance to sub-agents** — scout page hints appear in the system prompt as recommended starting points. Sub-agents can view any page in the PDF regardless of hints. When scout is OFF, sub-agents self-navigate via TOC.
+  - [x] 🟩 **RED + GREEN**: `tests/test_page_hints.py` — 5 tests: no allowed_pages attribute, no restriction parameter, no restrictive prompt wording, page hints in prompt, self-navigation in prompt.
+  - [x] 🟩 **GREEN**: `view_pdf_pages` tool in `extraction/agent.py` validates page range (1-N) but does not restrict based on scout hints. `allowed_pages` mechanism fully removed (2026-04-09).
   - [x] 🟩 **GREEN**: self-navigation section in prompt instructs TOC-first strategy when no hints.
   - **Verify:** ✅ `pytest tests/test_page_hints.py -v` — 5 passed. Full suite: 206 passed.
 

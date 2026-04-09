@@ -19,7 +19,7 @@ from pydantic_ai.messages import BinaryContent
 from statement_types import StatementType
 from token_tracker import TokenReport
 from tools.template_reader import read_template as _read_template_impl, TemplateField
-from tools.pdf_viewer import render_pages_to_images, count_pdf_pages
+from tools.pdf_viewer import render_pages_to_png_bytes, count_pdf_pages
 from tools.fill_workbook import fill_workbook as _fill_workbook_impl
 from tools.verifier import verify_statement as _verify_statement_impl
 from prompts import render_prompt
@@ -40,7 +40,6 @@ class ExtractionDeps:
         statement_type: StatementType,
         variant: str,
         page_hints: Optional[dict] = None,
-        allowed_pages: Optional[set[int]] = None,
     ):
         self.pdf_path = pdf_path
         self.template_path = template_path
@@ -50,7 +49,6 @@ class ExtractionDeps:
         self.statement_type = statement_type
         self.variant = variant
         self.page_hints = page_hints
-        self.allowed_pages = allowed_pages
         # Per-statement output filename for workbook isolation
         self.filled_filename = f"{statement_type.value}_filled.xlsx"
         # Mutable state
@@ -60,10 +58,10 @@ class ExtractionDeps:
         self.filled_path: str = ""
 
 
-def _render_single_page(pdf_path: str, page_num: int, output_dir: str, dpi: int = 200) -> tuple[int, bytes]:
+def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
     """Render one PDF page to PNG bytes. Called in parallel by view_pdf_pages."""
-    images = render_pages_to_images(pdf_path, start=page_num, end=page_num, output_dir=output_dir, dpi=dpi)
-    return page_num, images[0].read_bytes()
+    images = render_pages_to_png_bytes(pdf_path, start=page_num, end=page_num, dpi=dpi)
+    return page_num, images[0]
 
 
 def _summarize_template(fields: list[TemplateField]) -> str:
@@ -111,7 +109,6 @@ def create_extraction_agent(
     output_dir: Optional[str] = None,
     cache_template: bool = False,
     page_hints: Optional[dict] = None,
-    allowed_pages: Optional[set[int]] = None,
 ) -> tuple[Agent[ExtractionDeps, str], ExtractionDeps]:
     """Create an extraction agent for any statement type.
 
@@ -123,26 +120,10 @@ def create_extraction_agent(
         model: LLM model name or PydanticAI Model object.
         output_dir: Where to write output files.
         cache_template: If True, embed template structure in system prompt.
-        page_hints: Dict from scout with face_page and note_pages.
-        allowed_pages: Set of PDF pages this agent may access (None = all).
+        page_hints: Dict from scout with face_page and note_pages (soft guidance only).
     """
     if output_dir is None:
         output_dir = str(Path(__file__).resolve().parent.parent / "output")
-
-    # When scout provides page hints, scope the agent to those pages unless the
-    # caller explicitly overrides the allowed set.
-    if page_hints and allowed_pages is None:
-        derived_allowed_pages: set[int] = set()
-
-        face_page = page_hints.get("face_page")
-        if isinstance(face_page, int):
-            derived_allowed_pages.add(face_page)
-
-        note_pages = page_hints.get("note_pages", [])
-        derived_allowed_pages.update(p for p in note_pages if isinstance(p, int))
-
-        if derived_allowed_pages:
-            allowed_pages = derived_allowed_pages
 
     token_report = TokenReport()
     deps = ExtractionDeps(
@@ -154,7 +135,6 @@ def create_extraction_agent(
         statement_type=statement_type,
         variant=variant,
         page_hints=page_hints,
-        allowed_pages=allowed_pages,
     )
 
     # Optionally embed template in system prompt for caching
@@ -196,28 +176,13 @@ def create_extraction_agent(
 
         requested_pages = [p for p in pages if isinstance(p, int)]
         invalid_pages = sorted({p for p in requested_pages if p < 1 or p > total_pages})
+        render_pages = sorted(set(p for p in requested_pages if p not in invalid_pages))
 
-        allowed_pages = ctx.deps.allowed_pages
-        render_pages = [p for p in requested_pages if p not in invalid_pages]
-        disallowed_pages: list[int] = []
-        if allowed_pages is not None:
-            disallowed_pages = sorted({p for p in render_pages if p not in allowed_pages})
-            render_pages = [p for p in render_pages if p in allowed_pages]
-
-        # Avoid duplicate work if the model requests the same page multiple times.
-        render_pages = sorted(set(render_pages))
-
-        out_dir = str(Path(ctx.deps.output_dir) / "images")
         results: List[Union[str, BinaryContent]] = []
 
         if invalid_pages:
             results.append(
                 f"Skipped invalid page(s) {invalid_pages}. Valid PDF page range is 1-{total_pages}."
-            )
-        if disallowed_pages:
-            allowed_sorted = sorted(allowed_pages)
-            results.append(
-                f"Skipped disallowed page(s) {disallowed_pages}. You may only view scout-approved pages {allowed_sorted}."
             )
         if not render_pages:
             results.append("No pages were rendered from this request.")
@@ -226,7 +191,7 @@ def create_extraction_agent(
         rendered: dict[int, bytes] = {}
         with ThreadPoolExecutor(max_workers=min(len(render_pages), 8)) as pool:
             futures = {
-                pool.submit(_render_single_page, ctx.deps.pdf_path, p, out_dir): p
+                pool.submit(_render_single_page, ctx.deps.pdf_path, p): p
                 for p in render_pages
             }
             for future in futures:
