@@ -24,7 +24,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
 
-from statement_types import StatementType, variants_for
+from statement_types import StatementType, variants_for, get_variant
 from scout.infopack import Infopack, StatementPageRef
 from scout.toc_locator import find_toc_candidate_pages
 from scout.toc_parser import parse_toc_entries_from_text, TocEntry
@@ -149,9 +149,11 @@ def _find_toc_impl(deps: ScoutDeps) -> dict:
     }
 
 
-def _parse_toc_text_impl(text: str) -> list[dict]:
-    """Parse raw TOC text into structured entries."""
+def _parse_toc_text_impl(deps: ScoutDeps, text: str) -> list[dict]:
+    """Parse raw TOC text into structured entries and cache them."""
     entries = parse_toc_entries_from_text(text)
+    # Cache so discover_notes has TOC context even on scanned PDFs
+    deps.toc_entries = entries
     return [
         {
             "name": e.statement_name,
@@ -270,15 +272,38 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
             st = StatementType(key)
         except ValueError:
             return f"Error: unknown statement type '{key}'"
+
+        # Validate variant against registry — reject hallucinated names
+        variant = ref_data.get("variant_suggestion", "")
+        try:
+            v = get_variant(st, variant)
+            if not v.template_filename:
+                return (
+                    f"Error: {key}/{variant} has no template (meta-variant). "
+                    f"Omit this statement or pick a real variant."
+                )
+        except KeyError:
+            known = [v.name for v in variants_for(st) if v.detection_signals]
+            return (
+                f"Error: unknown variant '{variant}' for {key}. "
+                f"Known variants: {known}"
+            )
+
         try:
             statements[st] = StatementPageRef(
-                variant_suggestion=ref_data["variant_suggestion"],
+                variant_suggestion=variant,
                 face_page=ref_data["face_page"],
                 note_pages=ref_data.get("note_pages", []),
                 confidence=ref_data.get("confidence", "HIGH"),
             )
         except (KeyError, ValueError) as e:
             return f"Error building {key} ref: {e}"
+
+    # Filter to requested statements only — ignore extras the LLM added
+    if deps.statements_to_find is not None:
+        extra = set(statements) - deps.statements_to_find
+        for st in extra:
+            del statements[st]
 
     infopack = Infopack(
         toc_page=data.get("toc_page", 1),
@@ -333,6 +358,17 @@ def create_scout_agent(
 
     # --- Tools ---
 
+    # Helper to emit progress from tools (fire-and-forget since tools are sync)
+    import asyncio
+
+    def _emit_progress(deps: ScoutDeps, msg: str) -> None:
+        if deps.on_progress:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(deps.on_progress(msg))
+            except RuntimeError:
+                pass  # no event loop — skip progress (e.g. in tests)
+
     @agent.tool
     def find_toc(ctx: RunContext[ScoutDeps]) -> str:
         """Search the PDF for a Table of Contents and parse it.
@@ -342,20 +378,23 @@ def create_scout_agent(
         found, entries will be empty — use view_pages to visually inspect
         candidate pages instead.
         """
+        _emit_progress(ctx.deps, "Finding table of contents...")
         result = _find_toc_impl(ctx.deps)
+        _emit_progress(ctx.deps, f"Found {len(result['entries'])} TOC entries")
         return json.dumps(result, indent=2)
 
-    @agent.tool_plain
-    def parse_toc_text(text: str) -> str:
+    @agent.tool
+    def parse_toc_text(ctx: RunContext[ScoutDeps], text: str) -> str:
         """Parse raw TOC text (from your visual reading) into structured entries.
 
         Pass the text you read from a TOC page image and this will classify
-        each line into statement types with page numbers.
+        each line into statement types with page numbers.  Also caches the
+        entries so discover_notes can use them later.
 
         Args:
             text: The TOC text you extracted from viewing page images.
         """
-        result = _parse_toc_text_impl(text)
+        result = _parse_toc_text_impl(ctx.deps, text)
         return json.dumps(result, indent=2)
 
     @agent.tool
@@ -369,6 +408,7 @@ def create_scout_agent(
         Args:
             pages: List of 1-indexed page numbers to view.
         """.format(max_pages=MAX_VIEW_PAGES)
+        _emit_progress(ctx.deps, f"Viewing pages {pages}...")
         out_dir = str(Path(ctx.deps.pdf_path).parent / "scout_images")
         return _view_pages_impl(ctx.deps, pages, out_dir)
 
@@ -429,6 +469,7 @@ def create_scout_agent(
         Args:
             infopack_json: JSON string with the complete infopack data.
         """
+        _emit_progress(ctx.deps, "Saving infopack...")
         result = _save_infopack_impl(ctx.deps, infopack_json)
         return result
 
@@ -477,10 +518,12 @@ async def run_scout(
     if on_progress:
         await on_progress("Scout complete.")
 
-    # If the agent saved an infopack via the tool, use it.
-    # Otherwise return an empty infopack (agent didn't find anything).
     if deps.infopack is not None:
         return deps.infopack
 
-    logger.warning("Scout agent finished without saving an infopack. Returning empty.")
-    return Infopack(toc_page=1, page_offset=0)
+    # Agent finished without saving a valid infopack.  This is an error —
+    # either it never called save_infopack, or every attempt was rejected.
+    raise RuntimeError(
+        "Scout agent finished without producing a valid infopack. "
+        "Check the agent conversation for tool errors."
+    )
