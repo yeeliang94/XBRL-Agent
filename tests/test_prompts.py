@@ -94,14 +94,17 @@ class TestRenderPrompt:
             assert len(prompt) > 200, f"Prompt for {stmt}/{variants[0].name} too short"
 
     def test_render_prompt_with_page_hints(self):
-        """When page_hints are provided, prompt should include navigation guidance."""
+        """When page_hints are provided, prompt should include soft navigation guidance."""
         prompt = render_prompt(
             StatementType.SOFP, "CuNonCu",
             page_hints={"face_page": 14, "note_pages": [30, 31, 32]},
         )
         assert "14" in prompt
-        # Should mention scoped pages or hints
         assert "page" in prompt.lower()
+        # Page hints are guidance, not restrictions — no restrictive language allowed
+        prompt_lower = prompt.lower()
+        assert "restricted" not in prompt_lower
+        assert "rejected" not in prompt_lower
 
     def test_render_prompt_without_page_hints_includes_navigation(self):
         """Without page hints (scout off), prompt should instruct self-navigation."""

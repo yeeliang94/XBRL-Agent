@@ -82,7 +82,7 @@ def _build_scoped_navigation(page_hints: dict) -> str:
     lines.append("")
     lines.append("Start by viewing the face page to see the statement.")
     lines.append("Then view note pages as needed for breakdowns.")
-    lines.append("You are restricted to these pages — requests for other pages will be rejected.")
+    lines.append("These are recommended starting points. You may view other pages if needed (e.g. adjacent pages for context or pages the scout missed).")
     return "\n".join(lines)
 
 

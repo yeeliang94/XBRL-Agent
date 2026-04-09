@@ -239,6 +239,16 @@ output/
 
 `run.py` uses `Path(__file__).resolve().parent / "output"` as the base — works regardless of working directory.
 
+### 10. Scout Page Hints are Soft Guidance Only
+
+When scout is ON, extraction agents receive `page_hints` (face_page + note_pages) in their
+system prompt as recommended starting points. Agents can freely view **any** PDF page —
+there is no `allowed_pages` enforcement or page filtering. The `view_pdf_pages` tool only
+validates that requested pages are within the document's 1-N range.
+
+Do NOT re-introduce page restriction logic (no `allowed_pages`, no "disallowed" filtering).
+Tests in `test_page_hints.py` assert this contract with negative assertions.
+
 ## Testing
 
 ```bash

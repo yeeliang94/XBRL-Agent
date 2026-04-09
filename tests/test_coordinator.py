@@ -124,7 +124,7 @@ class TestCoordinator:
 
     @pytest.mark.asyncio
     async def test_coordinator_runs_without_infopack(self, mock_run_config):
-        """Without infopack, sub-agents get allowed_pages=None (full PDF access)."""
+        """Without infopack, sub-agents get no page hints (full PDF access)."""
         from coordinator import run_extraction
 
         with patch("coordinator.create_extraction_agent") as mock_factory:
