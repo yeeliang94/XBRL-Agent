@@ -203,18 +203,22 @@ class TestFindTocTool:
 class TestParseTocTextTool:
     """Step 5: parse_toc_text tool."""
 
-    def test_parses_toc_text(self):
-        from scout.agent import _parse_toc_text_impl
+    def test_parses_toc_text(self, synthetic_pdf: Path):
+        from scout.agent import create_scout_agent, _parse_toc_text_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
 
         text = """
 Statement of Financial Position    8
 Statement of Profit or Loss    10
 Notes to the Financial Statements    18
 """
-        result = _parse_toc_text_impl(text)
+        result = _parse_toc_text_impl(deps, text)
         types_found = {e["type"] for e in result if e["type"]}
         assert "SOFP" in types_found
         assert "SOPL" in types_found
+        # Should cache entries in deps for discover_notes
+        assert len(deps.toc_entries) > 0
 
 
 class TestCheckVariantSignalsTool:
@@ -334,6 +338,66 @@ class TestSaveInfopackTool:
         }
         result = _save_infopack_impl(deps, json.dumps(infopack_data))
         assert "error" in result.lower() or "invalid" in result.lower() or "exceed" in result.lower()
+
+    def test_hallucinated_variant_rejected(self, synthetic_pdf: Path):
+        """Variant names not in the registry should be rejected."""
+        from scout.agent import create_scout_agent, _save_infopack_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        infopack_data = {
+            "toc_page": 2,
+            "page_offset": 0,
+            "statements": {
+                "SOFP": {"variant_suggestion": "CuNoCu", "face_page": 5,
+                          "note_pages": [], "confidence": "HIGH"},
+            },
+        }
+        result = _save_infopack_impl(deps, json.dumps(infopack_data))
+        assert "error" in result.lower()
+        assert "unknown variant" in result.lower()
+        assert deps.infopack is None
+
+    def test_not_prepared_variant_rejected(self, synthetic_pdf: Path):
+        """NotPrepared (meta-variant, no template) should be rejected."""
+        from scout.agent import create_scout_agent, _save_infopack_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        infopack_data = {
+            "toc_page": 2,
+            "page_offset": 0,
+            "statements": {
+                "SOCI": {"variant_suggestion": "NotPrepared", "face_page": 7,
+                          "note_pages": [], "confidence": "HIGH"},
+            },
+        }
+        result = _save_infopack_impl(deps, json.dumps(infopack_data))
+        assert "error" in result.lower()
+        assert "no template" in result.lower()
+
+    def test_extra_statements_filtered(self, synthetic_pdf: Path):
+        """Statements outside statements_to_find should be silently dropped."""
+        from scout.agent import create_scout_agent, _save_infopack_impl
+
+        _, deps = create_scout_agent(
+            pdf_path=synthetic_pdf,
+            model="test",
+            statements_to_find={StatementType.SOFP},
+        )
+        infopack_data = {
+            "toc_page": 2,
+            "page_offset": 0,
+            "statements": {
+                "SOFP": {"variant_suggestion": "CuNonCu", "face_page": 5,
+                          "note_pages": [], "confidence": "HIGH"},
+                "SOPL": {"variant_suggestion": "Function", "face_page": 6,
+                          "note_pages": [], "confidence": "HIGH"},
+            },
+        }
+        result = _save_infopack_impl(deps, json.dumps(infopack_data))
+        assert "success" in result.lower()
+        # Only SOFP should be in the infopack
+        assert StatementType.SOFP in deps.infopack.statements
+        assert StatementType.SOPL not in deps.infopack.statements
 
 
 # ---------------------------------------------------------------------------

@@ -231,9 +231,8 @@ class TestRunScoutImageOnly:
         return path
 
     @pytest.mark.asyncio
-    async def test_empty_pdf_returns_empty_infopack(self, image_only_pdf: Path):
-        """Agent on a blank PDF should return an empty infopack (no crash)."""
-        # Agent calls find_toc (empty), then gives up
+    async def test_empty_pdf_raises_when_no_infopack(self, image_only_pdf: Path):
+        """Agent on a blank PDF that never saves an infopack should raise."""
         call_count = 0
 
         def model_fn(messages, info: AgentInfo):
@@ -244,10 +243,7 @@ class TestRunScoutImageOnly:
                     ToolCallPart(tool_name="find_toc", args={}, tool_call_id="tc1"),
                 ])
             else:
-                # No statements found, just finish
                 return ModelResponse(parts=[TextPart(content="No TOC found.")])
 
-        infopack = await run_scout(image_only_pdf, model=FunctionModel(model_fn))
-        assert isinstance(infopack, Infopack)
-        # Agent didn't save an infopack, so we get empty
-        assert len(infopack.statements) == 0
+        with pytest.raises(RuntimeError, match="without producing a valid infopack"):
+            await run_scout(image_only_pdf, model=FunctionModel(model_fn))
