@@ -266,7 +266,7 @@ class TestViewPagesTool:
         from scout.agent import create_scout_agent, _view_pages_impl
 
         _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
-        result = _view_pages_impl(deps, [1, 2], str(tmp_path))
+        result = _view_pages_impl(deps, [1, 2])
         # Should contain page labels and image data
         has_image = any(hasattr(item, "data") for item in result)
         assert has_image, "Should return at least one BinaryContent image"
@@ -275,7 +275,7 @@ class TestViewPagesTool:
         from scout.agent import create_scout_agent, _view_pages_impl
 
         _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
-        result = _view_pages_impl(deps, [999], str(tmp_path))
+        result = _view_pages_impl(deps, [999])
         # Should get an error message, not a crash
         assert any("invalid" in str(item).lower() or "skipped" in str(item).lower()
                     for item in result)
@@ -284,7 +284,7 @@ class TestViewPagesTool:
         from scout.agent import create_scout_agent, _view_pages_impl
 
         _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
-        result = _view_pages_impl(deps, [5], str(tmp_path))  # SOFP page
+        result = _view_pages_impl(deps, [5])  # SOFP page
         text_items = [item for item in result if isinstance(item, str)]
         # Should have page text that includes "Financial Position"
         combined = " ".join(text_items)
@@ -295,10 +295,27 @@ class TestViewPagesTool:
 
         _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
         all_pages = list(range(1, deps.pdf_length + 1))
-        result = _view_pages_impl(deps, all_pages, str(tmp_path))
+        result = _view_pages_impl(deps, all_pages)
         # Count BinaryContent items (images)
         image_count = sum(1 for item in result if hasattr(item, "data"))
         assert image_count <= MAX_VIEW_PAGES
+
+    def test_uses_in_memory_renderer(self, synthetic_pdf: Path, tmp_path: Path, monkeypatch):
+        from scout.agent import create_scout_agent, _view_pages_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+
+        def fail_disk_render(*args, **kwargs):
+            raise AssertionError("disk renderer should not be used")
+
+        monkeypatch.setattr("tools.pdf_viewer.render_pages_to_images", fail_disk_render)
+        monkeypatch.setattr(
+            "scout.agent.render_pages_to_png_bytes",
+            lambda *args, **kwargs: [b"fake-png"],
+        )
+
+        result = _view_pages_impl(deps, [5])
+        assert any(hasattr(item, "data") for item in result)
 
 
 # ---------------------------------------------------------------------------

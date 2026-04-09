@@ -1,4 +1,8 @@
-from tools.pdf_viewer import render_pages_to_images, count_pdf_pages
+from tools.pdf_viewer import (
+    render_pages_to_images,
+    render_pages_to_png_bytes,
+    count_pdf_pages,
+)
 
 
 def test_count_pdf_pages():
@@ -47,6 +51,16 @@ def test_page_images_are_png(tmp_path):
         output_dir=str(tmp_path),
     )
     assert images[0].suffix == ".png"
+
+
+def test_render_pages_to_png_bytes_returns_png_data():
+    images = render_pages_to_png_bytes(
+        "data/FINCO-Audited-Financial-Statement-2021.pdf",
+        start=1,
+        end=1,
+    )
+    assert len(images) == 1
+    assert images[0].startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_invalid_page_range_raises(tmp_path):

@@ -6,7 +6,6 @@ deterministic parsing with visual confirmation.
 """
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -14,7 +13,7 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
 
-from tools.pdf_viewer import render_pages_to_images
+from tools.pdf_viewer import render_pages_to_png_bytes
 
 
 class VisionTocEntry(BaseModel):
@@ -81,20 +80,16 @@ async def extract_toc_via_vision(
     """
     pdf_path = Path(pdf_path)
 
-    # Render candidate pages to temp images
-    with tempfile.TemporaryDirectory() as tmpdir:
-        images: list[BinaryContent] = []
-        for page_num in candidate_pages:
-            rendered = render_pages_to_images(
-                str(pdf_path),
-                start=page_num,
-                end=page_num,
-                output_dir=tmpdir,
-                dpi=200,
-            )
-            if rendered:
-                img_bytes = rendered[0].read_bytes()
-                images.append(BinaryContent(data=img_bytes, media_type="image/png"))
+    images: list[BinaryContent] = []
+    for page_num in candidate_pages:
+        rendered = render_pages_to_png_bytes(
+            str(pdf_path),
+            start=page_num,
+            end=page_num,
+            dpi=200,
+        )
+        if rendered:
+            images.append(BinaryContent(data=rendered[0], media_type="image/png"))
 
     if not images:
         return VisionTocResult(entries=[])

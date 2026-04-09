@@ -15,6 +15,7 @@ from scout.calibrator import (
     CalibratedPage,
     calibrate_pages,
     _build_search_window,
+    _validate_page_via_llm,
 )
 
 
@@ -153,3 +154,38 @@ class TestCalibration:
 
         assert StatementType.SOFP in result.pages
         assert StatementType.SOPL in result.pages
+
+    @pytest.mark.asyncio
+    async def test_page_validation_uses_in_memory_renderer(self, tmp_path, monkeypatch):
+        import fitz
+
+        doc = fitz.open()
+        doc.new_page()
+        pdf_path = tmp_path / "single_page.pdf"
+        doc.save(str(pdf_path))
+        doc.close()
+
+        class _Result:
+            output = type("Output", (), {"found": True})()
+
+        mock_agent = AsyncMock()
+        mock_agent.run.return_value = _Result()
+
+        def fail_disk_render(*args, **kwargs):
+            raise AssertionError("disk renderer should not be used")
+
+        monkeypatch.setattr("tools.pdf_viewer.render_pages_to_images", fail_disk_render)
+        monkeypatch.setattr(
+            "scout.calibrator.render_pages_to_png_bytes",
+            lambda *args, **kwargs: [b"fake-png"],
+        )
+
+        with patch("scout.calibrator.Agent", return_value=mock_agent):
+            result = await _validate_page_via_llm(
+                pdf_path=pdf_path,
+                page_num=1,
+                statement_name="Statement of Financial Position",
+                model="fake-model",
+            )
+
+        assert result == {"found": True}

@@ -101,3 +101,29 @@ class TestExtractTocViaVision:
         """Empty candidate page list → empty result without calling LLM."""
         result = await extract_toc_via_vision(simple_pdf, [], model="fake")
         assert result.entries == []
+
+    @pytest.mark.asyncio
+    async def test_uses_in_memory_renderer(self, simple_pdf: Path, monkeypatch):
+        mock_result = VisionTocResult(entries=[
+            VisionTocEntry(statement_name="Statement of Financial Position", stated_page=8),
+        ])
+
+        mock_agent_result = MagicMock()
+        mock_agent_result.output = mock_result
+
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(return_value=mock_agent_result)
+
+        def fail_disk_render(*args, **kwargs):
+            raise AssertionError("disk renderer should not be used")
+
+        monkeypatch.setattr("tools.pdf_viewer.render_pages_to_images", fail_disk_render)
+        monkeypatch.setattr(
+            "scout.vision.render_pages_to_png_bytes",
+            lambda *args, **kwargs: [b"fake-png"],
+        )
+
+        with patch("scout.vision.Agent", return_value=mock_agent):
+            result = await extract_toc_via_vision(simple_pdf, [1], model="fake")
+
+        assert len(result.entries) == 1

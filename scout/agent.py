@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,7 +29,7 @@ from scout.toc_locator import find_toc_candidate_pages
 from scout.toc_parser import parse_toc_entries_from_text, TocEntry
 from scout.variant_detector import detect_variant_from_signals
 from scout.notes_discoverer import discover_note_pages
-from tools.pdf_viewer import render_pages_to_images
+from tools.pdf_viewer import render_pages_to_png_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +204,6 @@ def _discover_notes_impl(
 def _view_pages_impl(
     deps: ScoutDeps,
     pages: list[int],
-    output_dir: str,
 ) -> list[Union[str, BinaryContent]]:
     """Render PDF pages as images + extract text for the agent to see."""
     results: list[Union[str, BinaryContent]] = []
@@ -237,15 +235,13 @@ def _view_pages_impl(
         page_texts[pn] = doc[pn - 1].get_text()
     doc.close()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        rendered: dict[int, bytes] = {}
-        for pn in render_pages:
-            images = render_pages_to_images(
-                str(deps.pdf_path), start=pn, end=pn,
-                output_dir=tmpdir, dpi=200,
-            )
-            if images:
-                rendered[pn] = images[0].read_bytes()
+    rendered: dict[int, bytes] = {}
+    for pn in render_pages:
+        images = render_pages_to_png_bytes(
+            str(deps.pdf_path), start=pn, end=pn, dpi=200,
+        )
+        if images:
+            rendered[pn] = images[0]
 
     for pn in render_pages:
         text = page_texts.get(pn, "")
@@ -409,8 +405,7 @@ def create_scout_agent(
             pages: List of 1-indexed page numbers to view.
         """.format(max_pages=MAX_VIEW_PAGES)
         _emit_progress(ctx.deps, f"Viewing pages {pages}...")
-        out_dir = str(Path(ctx.deps.pdf_path).parent / "scout_images")
-        return _view_pages_impl(ctx.deps, pages, out_dir)
+        return _view_pages_impl(ctx.deps, pages)
 
     @agent.tool_plain
     def check_variant_signals(statement_type: str, page_text: str) -> str:

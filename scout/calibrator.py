@@ -11,7 +11,6 @@ confidence and flagged for user review.
 from __future__ import annotations
 
 import asyncio
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -23,7 +22,7 @@ from pydantic_ai.models import Model
 
 from statement_types import StatementType
 from scout.toc_parser import TocEntry
-from tools.pdf_viewer import render_pages_to_images
+from tools.pdf_viewer import render_pages_to_png_bytes
 
 # How far from the stated page to search (±WINDOW pages).
 _SEARCH_RADIUS = 10
@@ -101,14 +100,12 @@ async def _validate_page_via_llm(
 
     Returns dict with 'found' (bool).
     """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        rendered = render_pages_to_images(
-            str(pdf_path), start=page_num, end=page_num,
-            output_dir=tmpdir, dpi=200,
-        )
-        if not rendered:
-            return {"found": False}
-        img_bytes = rendered[0].read_bytes()
+    rendered = render_pages_to_png_bytes(
+        str(pdf_path), start=page_num, end=page_num, dpi=200,
+    )
+    if not rendered:
+        return {"found": False}
+    img_bytes = rendered[0]
 
     agent = Agent(
         model,

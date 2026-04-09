@@ -707,90 +707,99 @@ export default function App() {
           />
         )}
 
-        {/* Agent tabs + Stop All button — shown during multi-agent runs */}
-        {state.agentTabOrder.length > 0 && (
-          <div style={{ position: "relative" }}>
-            <AgentTabs
-              agents={Object.fromEntries(
-                Object.entries(state.agents).map(([id, a]) => [
-                  id,
-                  { agentId: a.agentId, label: a.label, status: a.status, role: a.role } as AgentTabState,
-                ]),
-              )}
-              tabOrder={state.agentTabOrder}
-              activeTab={state.activeTab || state.agentTabOrder[0]}
-              onTabClick={(id) => dispatch({ type: "SET_ACTIVE_TAB", payload: id })}
-              onAbortAgent={handleAbortAgent}
-              onRerunAgent={handleRerunAgent}
-              isRunning={state.isRunning}
-              skeletonTabs={
-                // Show skeleton tabs for statements in this run that haven't reported yet
-                STATEMENT_TYPES.filter(
-                  (st) =>
-                    state.statementsInRun.includes(st) &&
-                    !state.agentTabOrder.some((id) => state.agents[id]?.role === st),
-                )
-              }
-            />
-            {/* Stop All button — top-right of tab bar */}
-            {state.isRunning && (
-              <button
-                onClick={handleAbortAll}
-                style={styles.abortAllButton}
-                title="Stop all running agents"
-              >
-                Stop All
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Token dashboard (sticky while running) */}
+        {/* Token dashboard (sticky while running) — above the tabs+feed card */}
         {(state.isRunning || state.tokens) && (
           <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} />
         )}
 
-        {/* Agent feed — shows active tab's data in multi-agent mode, or global in legacy mode */}
-        {state.events.length > 0 && (() => {
-          // Validator tab — show cross-check results instead of agent feed
-          if (state.activeTab === "validator") {
-            return (
-              <ValidatorTab
-                crossChecks={state.crossChecks}
+        {/* Agent tabs + feed — wrapped together as a single visual card */}
+        {state.agentTabOrder.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {/* Tab bar */}
+            <div style={{ position: "relative" }}>
+              <AgentTabs
+                agents={Object.fromEntries(
+                  Object.entries(state.agents).map(([id, a]) => [
+                    id,
+                    { agentId: a.agentId, label: a.label, status: a.status, role: a.role } as AgentTabState,
+                  ]),
+                )}
+                tabOrder={state.agentTabOrder}
+                activeTab={state.activeTab || state.agentTabOrder[0]}
+                onTabClick={(id) => dispatch({ type: "SET_ACTIVE_TAB", payload: id })}
+                onAbortAgent={handleAbortAgent}
+                onRerunAgent={handleRerunAgent}
+                isRunning={state.isRunning}
+                skeletonTabs={
+                  // Show skeleton tabs for statements in this run that haven't reported yet
+                  STATEMENT_TYPES.filter(
+                    (st) =>
+                      state.statementsInRun.includes(st) &&
+                      !state.agentTabOrder.some((id) => state.agents[id]?.role === st),
+                  )
+                }
               />
-            );
-          }
+              {/* Stop All button — top-right of tab bar */}
+              {state.isRunning && (
+                <button
+                  onClick={handleAbortAll}
+                  style={styles.abortAllButton}
+                  title="Stop all running agents"
+                >
+                  Stop All
+                </button>
+              )}
+            </div>
 
-          const activeAgent = state.activeTab ? state.agents[state.activeTab] : null;
-          // In multi-agent mode, show the active tab's agent feed
-          if (activeAgent) {
-            return (
-              <AgentFeed
-                events={activeAgent.events}
-                thinkingBlocks={activeAgent.thinkingBlocks}
-                toolTimeline={activeAgent.toolTimeline}
-                streamingText={activeAgent.streamingText}
-                thinkingBuffer={activeAgent.thinkingBuffer}
-                activeThinkingId={activeAgent.activeThinkingId}
-                isRunning={activeAgent.status === "running"}
-                currentPhase={activeAgent.currentPhase}
-              />
-            );
-          }
-          // Legacy single-agent mode — use global state
-          return (
-            <AgentFeed
-              events={state.events}
-              thinkingBlocks={state.thinkingBlocks}
-              toolTimeline={state.toolTimeline}
-              streamingText={state.streamingText}
-              thinkingBuffer={state.thinkingBuffer}
-              activeThinkingId={state.activeThinkingId}
-              isRunning={state.isRunning}
-              currentPhase={state.currentPhase}
-            />
-          );
-        })()}
+            {/* Agent feed — directly below tabs with no gap */}
+            {state.events.length > 0 && (() => {
+              if (state.activeTab === "validator") {
+                return <ValidatorTab crossChecks={state.crossChecks} />;
+              }
+              const activeAgent = state.activeTab ? state.agents[state.activeTab] : null;
+              if (activeAgent) {
+                return (
+                  <AgentFeed
+                    events={activeAgent.events}
+                    thinkingBlocks={activeAgent.thinkingBlocks}
+                    toolTimeline={activeAgent.toolTimeline}
+                    streamingText={activeAgent.streamingText}
+                    thinkingBuffer={activeAgent.thinkingBuffer}
+                    activeThinkingId={activeAgent.activeThinkingId}
+                    isRunning={activeAgent.status === "running"}
+                    currentPhase={activeAgent.currentPhase}
+                  />
+                );
+              }
+              return (
+                <AgentFeed
+                  events={state.events}
+                  thinkingBlocks={state.thinkingBlocks}
+                  toolTimeline={state.toolTimeline}
+                  streamingText={state.streamingText}
+                  thinkingBuffer={state.thinkingBuffer}
+                  activeThinkingId={state.activeThinkingId}
+                  isRunning={state.isRunning}
+                  currentPhase={state.currentPhase}
+                />
+              );
+            })()}
+          </div>
+        )}
+
+        {/* Legacy: agent feed without tabs (single-agent mode) */}
+        {state.agentTabOrder.length === 0 && state.events.length > 0 && (
+          <AgentFeed
+            events={state.events}
+            thinkingBlocks={state.thinkingBlocks}
+            toolTimeline={state.toolTimeline}
+            streamingText={state.streamingText}
+            thinkingBuffer={state.thinkingBuffer}
+            activeThinkingId={state.activeThinkingId}
+            isRunning={state.isRunning}
+            currentPhase={state.currentPhase}
+          />
+        )}
 
         {/* Error display */}
         {state.hasError && state.error && (
