@@ -29,8 +29,9 @@ type ViewMode = "timeline" | "raw";
 const styles = {
   container: {
     background: pwc.white,
-    borderRadius: pwc.radius.md,
+    borderRadius: `0 0 ${pwc.radius.md}px ${pwc.radius.md}px`,
     border: `1px solid ${pwc.grey200}`,
+    borderTop: "none",
     boxShadow: pwc.shadow.card,
     overflow: "hidden",
   } as React.CSSProperties,
@@ -76,7 +77,7 @@ const styles = {
     transition: "background 0.15s",
   } as React.CSSProperties,
   scrollArea: {
-    maxHeight: 480,
+    maxHeight: 720,
     overflowY: "auto" as const,
     padding: pwc.space.lg,
     display: "flex",

@@ -88,7 +88,7 @@ export function AgentTabs({
   skeletonTabs,
 }: AgentTabsProps) {
   return (
-    <div role="tablist" style={styles.tabBar}>
+    <div role="tablist" className="tab-bar-scroll" style={styles.tabBar}>
       {/* Active agent tabs */}
       {tabOrder.map((agentId) => {
         const agent = agents[agentId];
@@ -164,6 +164,8 @@ const styles = {
     borderBottom: `2px solid ${pwc.grey200}`,
     background: pwc.white,
     borderRadius: `${pwc.radius.md}px ${pwc.radius.md}px 0 0`,
+    border: `1px solid ${pwc.grey200}`,
+    borderBottomWidth: 2,
     padding: `0 ${pwc.space.sm}px`,
     overflowX: "auto" as const,
   },

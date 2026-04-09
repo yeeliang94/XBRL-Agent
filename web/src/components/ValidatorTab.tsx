@@ -124,7 +124,9 @@ export function ValidatorTab({ crossChecks }: ValidatorTabProps) {
 const styles = {
   container: {
     background: pwc.white,
-    borderRadius: pwc.radius.md,
+    borderRadius: `0 0 ${pwc.radius.md}px ${pwc.radius.md}px`,
+    border: `1px solid ${pwc.grey200}`,
+    borderTop: "none",
     boxShadow: pwc.shadow.card,
     padding: pwc.space.lg,
   } as React.CSSProperties,

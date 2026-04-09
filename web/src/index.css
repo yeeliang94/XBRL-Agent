@@ -61,6 +61,14 @@ button:focus-visible {
   scrollbar-color: #CBD1D6 transparent;
 }
 
+/* Hide scrollbar on tab bar — still scrollable via drag/touch */
+.tab-bar-scroll::-webkit-scrollbar {
+  display: none;
+}
+.tab-bar-scroll {
+  scrollbar-width: none;
+}
+
 /* Download button hover states — scoped to avoid affecting all buttons */
 .dl-btn:hover {
   filter: brightness(0.97);
