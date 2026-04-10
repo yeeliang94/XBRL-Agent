@@ -9,6 +9,6 @@ continue to work without changes:
 from __future__ import annotations
 
 # Re-export the agent-based run_scout as the public API
-from scout.agent import run_scout  # noqa: F401
+from scout.agent import run_scout, run_scout_streaming  # noqa: F401
 
-__all__ = ["run_scout"]
+__all__ = ["run_scout", "run_scout_streaming"]

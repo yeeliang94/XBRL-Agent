@@ -164,6 +164,13 @@ export interface ResultJsonData {
   metadata?: Record<string, unknown>;
 }
 
+/** A completed text segment from one model turn, flushed when a tool_call arrives. */
+export interface TextSegment {
+  content: string;
+  timestamp: number;
+  phase: EventPhase | null;
+}
+
 // --- Phase 8/9: Multi-agent run configuration types ---
 
 export interface ModelEntry {
@@ -237,6 +244,7 @@ export interface AgentState {
   thinkingBlocks: ThinkingBlock[];
   toolTimeline: ToolTimelineEntry[];
   streamingText: string;
+  textSegments: TextSegment[];   // Completed text from prior model turns
   tokens: TokenData | null;
   error: ErrorData | null;
   workbookPath: string | null;
@@ -255,6 +263,7 @@ export function createAgentState(agentId: string, role: string, label: string): 
     thinkingBlocks: [],
     toolTimeline: [],
     streamingText: "",
+    textSegments: [],
     tokens: null,
     error: null,
     workbookPath: null,

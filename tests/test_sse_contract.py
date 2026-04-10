@@ -186,4 +186,95 @@ class TestEventContract:
         # thinking_end should be emitted when thinking transitions to text
         assert "thinking_end" in by_type, "Expected thinking_end event when thinking→text transition"
 
+        # tool_result summary should preserve content longer than 200 chars
+        # (was previously hard-truncated at 200, now raised to 800)
+        for data in by_type["tool_result"]:
+            summary = data["result_summary"]
+            # Our mock content is short, so just verify it's not artificially cut.
+            # The dedicated length test below covers the 800-char case.
+            assert isinstance(summary, str)
+
         assert "complete" in by_type
+
+    @pytest.mark.asyncio
+    async def test_tool_result_summary_allows_500_chars(self):
+        """Tool results with content up to 800 chars should NOT be truncated
+        at the old 200-char limit."""
+        from pydantic_ai.messages import FunctionToolResultEvent
+
+        # Simulate a tool result with 500 chars of content
+        long_content = "A" * 500
+        mock_result_part = MagicMock()
+        mock_result_part.tool_name = "verify_totals"
+        mock_result_part.tool_call_id = "tc_long"
+        mock_result_part.content = long_content
+
+        event_queue: asyncio.Queue = asyncio.Queue()
+
+        mock_agent = MagicMock()
+        mock_deps = MagicMock()
+        mock_deps.filled_path = "/tmp/test_filled.xlsx"
+
+        mock_call_tools_node = MagicMock()
+
+        # Yield only a tool_result (skip tool_call for brevity)
+        mock_tool_call_part = MagicMock()
+        mock_tool_call_part.tool_name = "verify_totals"
+        mock_tool_call_part.tool_call_id = "tc_long"
+        mock_tool_call_part.args = "{}"
+
+        from pydantic_ai.messages import FunctionToolCallEvent
+        tool_call_event = FunctionToolCallEvent(part=mock_tool_call_part)
+        tool_result_event = FunctionToolResultEvent(result=mock_result_part)
+
+        @asynccontextmanager
+        async def mock_tool_stream(ctx):
+            async def gen():
+                yield tool_call_event
+                yield tool_result_event
+            yield gen()
+        mock_call_tools_node.stream = mock_tool_stream
+
+        mock_run = MagicMock()
+        mock_result_obj = MagicMock()
+        mock_result_obj.all_messages = MagicMock(return_value=[])
+        mock_run.result = mock_result_obj
+        mock_run.usage = MagicMock(return_value=MagicMock(
+            request_tokens=10, response_tokens=5, total_tokens=15,
+        ))
+
+        async def node_iter(self_ignored=None):
+            yield mock_call_tools_node
+        mock_run.__aiter__ = node_iter
+
+        @asynccontextmanager
+        async def mock_iter(*args, **kwargs):
+            yield mock_run
+        mock_agent.iter = mock_iter
+
+        from pydantic_ai import Agent
+
+        config = RunConfig(
+            pdf_path="/tmp/test.pdf",
+            output_dir="/tmp/test_output",
+            model="test-model",
+            statements_to_run={StatementType.SOFP},
+            variants={StatementType.SOFP: "CuNonCu"},
+        )
+
+        with patch("coordinator.create_extraction_agent", return_value=(mock_agent, mock_deps)), \
+             patch.object(Agent, "is_call_tools_node", side_effect=lambda n: n is mock_call_tools_node), \
+             patch.object(Agent, "is_model_request_node", return_value=False):
+            await run_extraction(config, event_queue=event_queue)
+
+        # Drain and find tool_result
+        collected = []
+        while not event_queue.empty():
+            evt = event_queue.get_nowait()
+            if evt and evt.get("event") == "tool_result":
+                collected.append(evt["data"])
+
+        assert len(collected) >= 1, "Expected at least one tool_result event"
+        summary = collected[0]["result_summary"]
+        # Must preserve the full 500-char content (old limit was 200)
+        assert len(summary) == 500, f"Expected 500 chars, got {len(summary)}"

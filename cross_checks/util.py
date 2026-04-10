@@ -84,40 +84,43 @@ def find_value_by_label(
     """
     target = label_substr.strip().lower()
 
-    # Two-pass approach: exact match first, then substring containment.
-    # This avoids greedy matches where "assets" (a section header) matches
-    # before "total assets" (the actual total row).
-    exact_row = None
-    substr_row = None
+    # Collect all matching rows: exact matches first, then substring matches.
+    # Multiple rows can share the same label (e.g. SOCF has a data-entry row
+    # and a formula row both labelled "Cash and cash equivalents at end of period").
+    # We try each match in priority order, skipping rows with no value.
+    exact_rows: list[int] = []
+    substr_rows: list[int] = []
     for row in ws.iter_rows(min_col=1, max_col=1):
         cell = row[0]
         if cell.value is None:
             continue
         normalized = str(cell.value).strip().lstrip("*").strip().lower()
         if normalized == target:
-            exact_row = cell.row
-            break
-        if substr_row is None and (target in normalized or normalized in target):
-            substr_row = cell.row
+            exact_rows.append(cell.row)
+        elif target in normalized or normalized in target:
+            substr_rows.append(cell.row)
 
-    match_row = exact_row or substr_row
-    if match_row is None:
-        return None
+    # Try exact matches first, then substring matches
+    for match_row in exact_rows + substr_rows:
+        val_cell = ws.cell(row=match_row, column=col)
+        raw = val_cell.value
+        if raw is None:
+            continue
 
-    val_cell = ws.cell(row=match_row, column=col)
-    raw = val_cell.value
-    if raw is None:
-        return None
+        # Formula cell — evaluate it if we have the workbook
+        if isinstance(raw, str) and raw.startswith("="):
+            if wb is None:
+                continue
+            from openpyxl.utils import get_column_letter
+            cell_ref = f"{get_column_letter(col)}{match_row}"
+            resolved = _resolve_cell_value(wb, ws.title, cell_ref)
+            if resolved is not None:
+                return resolved
+            continue
 
-    # Formula cell — evaluate it if we have the workbook
-    if isinstance(raw, str) and raw.startswith("="):
-        if wb is None:
-            return None
-        from openpyxl.utils import get_column_letter
-        cell_ref = f"{get_column_letter(col)}{match_row}"
-        return _resolve_cell_value(wb, ws.title, cell_ref)
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            continue
 
-    try:
-        return float(raw)
-    except (ValueError, TypeError):
-        return None
+    return None

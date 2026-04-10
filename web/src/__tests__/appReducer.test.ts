@@ -414,6 +414,105 @@ describe("appReducer", () => {
     expect(state.activeTab).toBe("sopl_0");
   });
 
+  test("Global tokens aggregate across multiple agents", () => {
+    let state = runningState();
+
+    // Agent SOFP emits token update
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "token_update",
+        data: {
+          prompt_tokens: 1000,
+          completion_tokens: 200,
+          thinking_tokens: 0,
+          cumulative: 1200,
+          cost_estimate: 0.001,
+          agent_id: "sofp_0",
+          agent_role: "SOFP",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+
+    // Agent SOPL emits token update
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "token_update",
+        data: {
+          prompt_tokens: 800,
+          completion_tokens: 150,
+          thinking_tokens: 0,
+          cumulative: 950,
+          cost_estimate: 0.0008,
+          agent_id: "sopl_0",
+          agent_role: "SOPL",
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+
+    // Global tokens should be the SUM of both agents, not just the last event
+    expect(state.tokens).not.toBeNull();
+    expect(state.tokens!.prompt_tokens).toBe(1800);      // 1000 + 800
+    expect(state.tokens!.completion_tokens).toBe(350);    // 200 + 150
+    expect(state.tokens!.cumulative).toBe(2150);          // 1200 + 950
+    expect(state.tokens!.cost_estimate).toBeCloseTo(0.0018); // 0.001 + 0.0008
+
+    // Per-agent tokens should still be individual
+    expect(state.agents.sofp_0.tokens!.prompt_tokens).toBe(1000);
+    expect(state.agents.sopl_0.tokens!.prompt_tokens).toBe(800);
+  });
+
+  test("Global tokens update correctly when one agent updates multiple times", () => {
+    let state = runningState();
+
+    // SOFP first update
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "token_update",
+        data: {
+          prompt_tokens: 500, completion_tokens: 100, thinking_tokens: 0,
+          cumulative: 600, cost_estimate: 0.0005, agent_id: "sofp_0", agent_role: "SOFP",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+
+    // SOPL update
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "token_update",
+        data: {
+          prompt_tokens: 300, completion_tokens: 50, thinking_tokens: 0,
+          cumulative: 350, cost_estimate: 0.0003, agent_id: "sopl_0", agent_role: "SOPL",
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+
+    // SOFP second update (cumulative for that agent increases)
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "token_update",
+        data: {
+          prompt_tokens: 1000, completion_tokens: 200, thinking_tokens: 0,
+          cumulative: 1200, cost_estimate: 0.001, agent_id: "sofp_0", agent_role: "SOFP",
+        },
+        timestamp: 3,
+      } as SSEEvent,
+    });
+
+    // Global = SOFP(1000+200) + SOPL(300+50) = 1550
+    expect(state.tokens!.prompt_tokens).toBe(1300);    // 1000 + 300
+    expect(state.tokens!.completion_tokens).toBe(250);  // 200 + 50
+    expect(state.tokens!.cumulative).toBe(1550);        // 1200 + 350
+  });
+
   test("RUN_STARTED with statements records statementsInRun", () => {
     const withSession = appReducer(initialState, {
       type: "UPLOADED",
@@ -424,6 +523,114 @@ describe("appReducer", () => {
       payload: { statements: ["SOFP", "SOPL"] },
     });
     expect(state.statementsInRun).toEqual(["SOFP", "SOPL"]);
+  });
+
+  // --- Phase: Text segmentation across model turns ---
+
+  test("text_delta events from separate model turns produce separate textSegments", () => {
+    let state = runningState();
+
+    // Turn 1: agent says something, then calls a tool
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "text_delta",
+        data: { content: "Let me read the template.", agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+
+    // Tool call flushes turn-1 text into a segment
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "tool_call",
+        data: { tool_name: "read_template", tool_call_id: "tc_1", args: {}, agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+
+    // Tool result
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "tool_result",
+        data: { tool_name: "read_template", tool_call_id: "tc_1", result_summary: "ok", duration_ms: 100, agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 3,
+      } as SSEEvent,
+    });
+
+    // Turn 2: agent says something else
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "text_delta",
+        data: { content: "Extraction complete.", agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 4,
+      } as SSEEvent,
+    });
+
+    const agent = state.agents.sofp_0;
+    // Turn-1 text should be flushed into textSegments
+    expect(agent.textSegments).toHaveLength(1);
+    expect(agent.textSegments[0].content).toBe("Let me read the template.");
+    // Turn-2 text is still in streamingText (in-progress)
+    expect(agent.streamingText).toBe("Extraction complete.");
+  });
+
+  test("flushed text segment timestamp is strictly before the tool startTime", () => {
+    let state = runningState();
+
+    // Text then tool call
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "text_delta",
+        data: { content: "Analyzing...", agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "tool_call",
+        data: { tool_name: "read_template", tool_call_id: "tc_order", args: {}, agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+
+    const agent = state.agents.sofp_0;
+    // Segment must sort before the tool card — segment.timestamp < tool.startTime
+    expect(agent.textSegments[0].timestamp).toBeLessThan(agent.toolTimeline[0].startTime);
+  });
+
+  test("agent complete event flushes remaining streamingText into textSegments", () => {
+    let state = runningState();
+
+    // Text from final turn
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "text_delta",
+        data: { content: "Final summary.", agent_id: "sofp_0", agent_role: "SOFP" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+
+    // Agent completes — should flush streamingText into textSegments
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "complete",
+        data: { success: true, agent_id: "sofp_0", agent_role: "SOFP", workbook_path: "/out.xlsx", error: null },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+
+    const agent = state.agents.sofp_0;
+    expect(agent.textSegments).toHaveLength(1);
+    expect(agent.textSegments[0].content).toBe("Final summary.");
+    expect(agent.streamingText).toBe("");
   });
 });
 

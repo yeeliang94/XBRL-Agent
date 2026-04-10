@@ -67,7 +67,7 @@ def test_integration_mocks_vision_fills_workbook(tmp_path, mock_template, mock_p
 def test_integration_token_tracking(tmp_path):
     from token_tracker import TokenReport, TurnRecord
 
-    report = TokenReport()
+    report = TokenReport(model="vertex_ai.gemini-3-flash-preview")
     report.add_turn(
         TurnRecord(
             turn=1,

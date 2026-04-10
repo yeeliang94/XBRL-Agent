@@ -1,46 +1,78 @@
-# Implementation Plan: Remove Page Scope Restriction from Extraction Agent
+# Implementation Plan: Review Panel — Text Segmentation, Tool Result Truncation & Formatted Display
 
-**Overall Progress:** `100%` ✅
+**Overall Progress:** `100%`
 **Last Updated:** 2026-04-09
+**Approach:** Red-Green TDD — write failing tests first, then implement minimal code to pass
 
 ## Summary
-Remove the `allowed_pages` restriction that prevents extraction agents from viewing PDF pages not listed in scout hints. Scout page hints should remain as informational guidance in the system prompt, but agents must be free to view any page in the PDF. Uses red-green TDD: write failing tests first, then make minimal code changes to pass them.
+Fix three interrelated bugs in the agent review panel: (1) all model text across turns is concatenated into one blob shown out of order at the bottom of the timeline, (2) tool results are hard-truncated to 200 chars server-side, and (3) tool args/results display as raw JSON. The fix segments text by model turn, increases server-side result limits, and adds tool-specific formatters.
 
 ## Key Decisions
-- **Remove entirely, not soften**: The `allowed_pages` parameter, auto-derivation logic, and enforcement in `view_pdf_pages` are all deleted — not made optional or configurable.
-- **Keep page_hints as soft guidance**: The system prompt still tells the agent "start at page 14" etc. — it just can't be blocked from looking elsewhere.
-- **Red-green TDD**: Each phase writes a failing test first, then changes code to make it pass, then cleans up.
+- **Segment text per model turn in reducer, not server**: Add a `textSegments` array to agent state. Each model turn's text becomes a separate segment with a timestamp, interleaved chronologically with tool cards in the timeline. The existing `streamingText` string is kept for backward compat with the streaming caret.
+- **Increase server result_summary to 800 chars**: 200 is too aggressive. 800 covers most tool outputs without sending base64 image blobs. Frontend can still truncate for collapsed view.
+- **Tool-specific formatters in ToolCallCard**: Pattern-match on `tool_name` to render structured displays (key-value tables, pass/fail badges, page lists) instead of raw JSON. Falls back to JSON for unknown tools.
 
 ## Pre-Implementation Checklist
-- [x] 🟩 All questions from /explore resolved (remove entirely, confirmed)
-- [x] 🟩 Existing tests pass before we start (307 passed)
+- [x] 🟩 All questions from /explore resolved
+- [x] 🟩 Root cause identified (3 bugs traced through coordinator.py, App.tsx reducer, ToolCallCard.tsx)
+- [x] 🟩 No conflicting in-progress work
 
 ## Tasks
 
-### Phase 1: RED — Write Failing Tests
-- [x] 🟩 **Step 1: Update `test_page_hints.py` with new assertions** — Replaced restriction tests with no-restriction tests.
-  - [x] 🟩 `test_page_hints_do_not_restrict_pages` — asserts `allowed_pages` attribute doesn't exist on deps
-  - [x] 🟩 `test_no_allowed_pages_attribute_exists` — asserts attribute absent without hints too
-  - [x] 🟩 `test_no_page_restriction_mechanism` — asserts `create_extraction_agent` has no `allowed_pages` param
-  - **Verified:** 2 tests failed (RED) against old code ✅
+### Phase 1: Text Segmentation (frontend — reducer + timeline)
 
-### Phase 2: GREEN — Minimal Code Changes to Pass
-- [x] 🟩 **Step 2: Remove `allowed_pages` from `ExtractionDeps`** — Deleted param and attribute
-- [x] 🟩 **Step 3: Remove auto-derivation in `create_extraction_agent`** — Deleted derivation block + param
-- [x] 🟩 **Step 4: Remove enforcement in `view_pdf_pages`** — Deleted filtering + "disallowed" message
-  - **Verified:** 5/5 tests pass (GREEN) ✅
+- [x] 🟩 **Step 1: RED — Test that text_delta events from separate model turns produce separate segments**
+  - [x] 🟩 Added 2 tests in `appReducer.test.ts`: multi-turn segmentation + complete event flush
+  - **Verify:** Tests failed (red) — `textSegments` didn't exist yet
 
-### Phase 3: REFACTOR — Clean Up Callers and Remaining Tests
-- [x] 🟩 **Step 5: coordinator.py** — No `allowed_pages` references found (clean already)
-- [x] 🟩 **Step 6: coordinator tests** — Updated docstring in `test_coordinator_runs_without_infopack`
-- [x] 🟩 **Step 7: test_page_hints.py** — Class renamed to `TestPageHints`, obsolete tests replaced
-  - **Verified:** 10/10 tests pass ✅
+- [x] 🟩 **Step 2: GREEN — Add textSegments to AgentState and populate in reducer**
+  - [x] 🟩 Added `TextSegment` type to `types.ts`, `textSegments` to `AgentState` + `AppState`
+  - [x] 🟩 `applyStreamingEvent`: flushes `streamingText` into segment on `tool_call`
+  - [x] 🟩 `agentReducer`: flushes remaining text on `complete` event
+  - **Verify:** All 24 appReducer tests pass (green)
 
-### Phase 4: Full Suite Verification
-- [x] 🟩 **Step 8: Full test suite** — 307 passed, 0 failed
-- [x] 🟩 **Grep check** — Zero `allowed_pages`/`disallowed` references in production code (only in test assertions)
+- [x] 🟩 **Step 3: RED — Test that TimelineView renders text segments interleaved with tool cards**
+  - [x] 🟩 Added test asserting render order: segment1 → tool → segment2
+  - **Verify:** Test failed (red) — AgentFeed didn't accept/render textSegments
 
-## Files Changed
-- `extraction/agent.py` — Removed `allowed_pages` from `ExtractionDeps`, `create_extraction_agent`, and `view_pdf_pages`
-- `tests/test_page_hints.py` — Rewrote to assert no-restriction behavior
-- `tests/test_coordinator.py` — Updated one docstring
+- [x] 🟩 **Step 4: GREEN — Render textSegments in TimelineView chronologically**
+  - [x] 🟩 Added `textSegments` to AgentFeed/TimelineView props
+  - [x] 🟩 Segments sorted into `allEntries` by timestamp alongside thinking/tool items
+  - [x] 🟩 All 3 AgentFeed usages in App.tsx updated to pass `textSegments`
+  - **Verify:** All 142 frontend tests pass (green)
+
+### Phase 2: Tool Result Truncation (server-side)
+
+- [x] 🟩 **Step 5: RED — Test that tool_result summary exceeds 200 chars**
+  - [x] 🟩 Added `test_tool_result_summary_allows_500_chars` in `test_sse_contract.py`
+  - **Verify:** Test failed (red) — 500-char content was truncated to 200
+
+- [x] 🟩 **Step 6: GREEN — Increase result_summary limit to 800 chars**
+  - [x] 🟩 Changed `coordinator.py:355` from `[:200]` to `[:800]`
+  - **Verify:** All 3 SSE contract tests pass (green)
+
+### Phase 3: Tool-Specific Formatters (frontend — ToolCallCard)
+
+- [x] 🟩 **Steps 7-8: fill_workbook args render as a table**
+  - [x] 🟩 RED: test expects `<table>` with labels/values, not raw JSON
+  - [x] 🟩 GREEN: `renderArgs()` parses `fields_json` into a Label | Value table
+
+- [x] 🟩 **Steps 9-10: verify_totals result renders with pass/fail styling**
+  - [x] 🟩 RED: test expects PASS/FAIL badges
+  - [x] 🟩 GREEN: `renderResult()` splits lines, applies green/red background per line
+
+- [x] 🟩 **Steps 11-12: Collapsed preview is human-readable**
+  - [x] 🟩 RED: tests expect `"3 fields"` and `"pages 1, 5, 8"`
+  - [x] 🟩 GREEN: `argsPreview()` now tool-aware — counts fields, shows page numbers, extracts filenames
+
+### Phase 4: Integration Verification
+
+- [x] 🟩 **Step 13: Full test suite green**
+  - [x] 🟩 Frontend: 142 tests passed, 19 files
+  - [x] 🟩 Backend: 311 tests passed
+  - **Verify:** All existing + new tests pass
+
+## Rollback Plan
+- All changes are localized to 6 files: `types.ts`, `App.tsx`, `AgentFeed.tsx`, `ToolCallCard.tsx`, `coordinator.py`, and test files
+- `git stash` or `git checkout -- <file>` to revert any individual file
+- No database migrations, config changes, or SSE protocol changes (except the 200→800 limit bump which is backward-compatible)

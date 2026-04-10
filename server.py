@@ -145,13 +145,6 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
     return GoogleModel(bare, provider=provider)
 
 
-def _calc_cost(usage) -> float:
-    """Estimate cost from usage data. Rough pricing for Gemini via proxy."""
-    prompt = getattr(usage, "input_tokens", 0) or 0
-    completion = getattr(usage, "output_tokens", 0) or 0
-    # Approximate Gemini Flash pricing (per 1M tokens)
-    return (prompt * 0.075 + completion * 0.30) / 1_000_000
-
 
 # ---------------------------------------------------------------------------
 # Conversation trace saving
@@ -394,33 +387,40 @@ async def scout_pdf(session_id: str):
 
     async def scout_stream():
         import asyncio
-        progress_queue: asyncio.Queue[str] = asyncio.Queue()
+        import task_registry
 
-        async def on_progress(msg: str) -> None:
-            await progress_queue.put(msg)
+        # Queue for structured events from the streaming scout agent
+        event_queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
 
+        async def on_event(event_type: str, data: dict) -> None:
+            await event_queue.put((event_type, data))
+
+        scout_task: Optional[asyncio.Task] = None
         try:
             yield f"event: status\ndata: {json.dumps({'phase': 'scouting', 'message': 'Starting scout...'})}\n\n"
 
-            from scout.runner import run_scout
-            scout_task = asyncio.create_task(run_scout(
+            from scout.runner import run_scout_streaming
+            scout_task = asyncio.create_task(run_scout_streaming(
                 pdf_path=pdf_path,
                 model=scout_model,
-                on_progress=on_progress,
+                on_event=on_event,
             ))
 
-            # Yield progress events while scout runs
+            # Register so abort endpoints can cancel it
+            task_registry.register(session_id, "scout", scout_task)
+
+            # Forward structured events as SSE while scout runs
             while not scout_task.done():
                 try:
-                    msg = await asyncio.wait_for(progress_queue.get(), timeout=0.3)
-                    yield f"event: status\ndata: {json.dumps({'phase': 'scouting', 'message': msg})}\n\n"
+                    event_type, data = await asyncio.wait_for(event_queue.get(), timeout=0.3)
+                    yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
                 except asyncio.TimeoutError:
                     continue
 
-            # Drain any remaining progress messages
-            while not progress_queue.empty():
-                msg = progress_queue.get_nowait()
-                yield f"event: status\ndata: {json.dumps({'phase': 'scouting', 'message': msg})}\n\n"
+            # Drain any remaining events
+            while not event_queue.empty():
+                event_type, data = event_queue.get_nowait()
+                yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
             infopack = scout_task.result()
 
@@ -428,9 +428,24 @@ async def scout_pdf(session_id: str):
             infopack_dict = json.loads(infopack.to_json())
             yield f"event: scout_complete\ndata: {json.dumps({'success': True, 'infopack': infopack_dict})}\n\n"
 
+        except asyncio.CancelledError:
+            logger.info("Scout cancelled by user", extra={"session_id": session_id})
+            yield f"event: scout_cancelled\ndata: {json.dumps({'message': 'Scout cancelled by user'})}\n\n"
+
         except Exception as e:
             logger.exception("Scout failed", extra={"session_id": session_id})
             yield f"event: error\ndata: {json.dumps({'message': str(e), 'traceback': traceback.format_exc()})}\n\n"
+
+        finally:
+            # Cancel the scout task if still running (e.g. client disconnected)
+            if scout_task is not None and not scout_task.done():
+                scout_task.cancel()
+                try:
+                    await scout_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Clean up the task registry entry to avoid stale references
+            task_registry.unregister(session_id, "scout")
 
     return StreamingResponse(
         scout_stream(),
@@ -704,10 +719,13 @@ async def run_multi_agent_stream(
                 message=check_result.message,
             )
 
-        # Update run status — include merge outcome: merge failure degrades to "completed_with_errors"
-        if coordinator_result.all_succeeded and merge_result.success:
+        # Update run status — include merge outcome AND cross-check results
+        any_check_failed = any(cr.status == "failed" for cr in cross_check_results)
+        if coordinator_result.all_succeeded and merge_result.success and not any_check_failed:
             overall_status = "completed"
         elif coordinator_result.all_succeeded and not merge_result.success:
+            overall_status = "completed_with_errors"
+        elif coordinator_result.all_succeeded and any_check_failed:
             overall_status = "completed_with_errors"
         else:
             overall_status = "failed"
@@ -730,9 +748,10 @@ async def run_multi_agent_stream(
             "message": cr.message,
         })
 
-    # Final run_complete event — success requires both agent completion AND merge
+    # Final run_complete event — success requires agents + merge + cross-checks all passing
+    any_check_failed = any(cr.status == "failed" for cr in cross_check_results)
     yield {"event": "run_complete", "data": {
-        "success": coordinator_result.all_succeeded and merge_result.success,
+        "success": coordinator_result.all_succeeded and merge_result.success and not any_check_failed,
         "merged_workbook": merged_path if merge_result.success else None,
         "merge_errors": merge_result.errors,
         "cross_checks": checks_data,

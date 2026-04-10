@@ -3,6 +3,7 @@ import type {
   SSEEvent,
   ThinkingBlock as ThinkingBlockType,
   ToolTimelineEntry,
+  TextSegment,
   EventPhase,
   StatusData,
   ToolCallData,
@@ -18,6 +19,7 @@ interface Props {
   thinkingBlocks: ThinkingBlockType[];
   toolTimeline: ToolTimelineEntry[];
   streamingText: string;
+  textSegments: TextSegment[];
   thinkingBuffer: string;
   activeThinkingId: string | null;
   isRunning: boolean;
@@ -150,6 +152,7 @@ export function AgentFeed({
   thinkingBlocks,
   toolTimeline,
   streamingText,
+  textSegments,
   thinkingBuffer,
   activeThinkingId,
   isRunning,
@@ -208,6 +211,7 @@ export function AgentFeed({
             thinkingBlocks={thinkingBlocks}
             toolTimeline={toolTimeline}
             streamingText={streamingText}
+            textSegments={textSegments}
             thinkingBuffer={thinkingBuffer}
             activeThinkingId={activeThinkingId}
             isRunning={isRunning}
@@ -227,6 +231,7 @@ function TimelineView({
   thinkingBlocks,
   toolTimeline,
   streamingText,
+  textSegments,
   thinkingBuffer,
   activeThinkingId,
   isRunning,
@@ -235,6 +240,7 @@ function TimelineView({
   thinkingBlocks: ThinkingBlockType[];
   toolTimeline: ToolTimelineEntry[];
   streamingText: string;
+  textSegments: TextSegment[];
   thinkingBuffer: string;
   activeThinkingId: string | null;
   isRunning: boolean;
@@ -245,17 +251,17 @@ function TimelineView({
     | { type: "phase"; phase: EventPhase }
     | { type: "thinking"; block: ThinkingBlockType }
     | { type: "tool"; entry: ToolTimelineEntry }
+    | { type: "segment"; segment: TextSegment; index: number }
     | { type: "streaming_thinking" }
     | { type: "text" };
 
   const items: TimelineItem[] = [];
   let lastPhase: EventPhase | null = null;
 
-  // Interleave thinking blocks and tool entries by timestamp
+  // Interleave thinking blocks, tool entries, and text segments by timestamp
   const allEntries: { ts: number; item: TimelineItem }[] = [];
 
   for (const block of thinkingBlocks) {
-    // Add phase divider if phase changed
     if (block.phase && block.phase !== lastPhase) {
       allEntries.push({ ts: block.timestamp - 1, item: { type: "phase", phase: block.phase } });
       lastPhase = block.phase;
@@ -269,6 +275,12 @@ function TimelineView({
       lastPhase = entry.phase;
     }
     allEntries.push({ ts: entry.startTime, item: { type: "tool", entry } });
+  }
+
+  // Completed text segments from prior model turns
+  for (let i = 0; i < textSegments.length; i++) {
+    const seg = textSegments[i];
+    allEntries.push({ ts: seg.timestamp, item: { type: "segment", segment: seg, index: i } });
   }
 
   // Sort by timestamp
@@ -296,7 +308,7 @@ function TimelineView({
     items.push({ type: "streaming_thinking" });
   }
 
-  // Add streaming text at the end
+  // Add streaming text at the end (current in-progress turn)
   if (streamingText) {
     items.push({ type: "text" });
   }
@@ -324,6 +336,14 @@ function TimelineView({
             );
           case "tool":
             return <ToolCallCard key={`tool-${item.entry.tool_call_id}`} entry={item.entry} />;
+          case "segment":
+            return (
+              <StreamingText
+                key={`seg-${item.index}`}
+                text={item.segment.content}
+                isStreaming={false}
+              />
+            );
           case "streaming_thinking":
             return (
               <ThinkingBlock

@@ -75,7 +75,7 @@ def test_format_table():
 
 
 def test_estimate_cost():
-    report = TokenReport()
+    report = TokenReport(model="vertex_ai.gemini-3-flash-preview")
     report.add_turn(
         TurnRecord(
             turn=1,
@@ -90,4 +90,5 @@ def test_estimate_cost():
         )
     )
     cost = report.estimate_cost()
-    assert cost > 0
+    # Gemini 3 Flash: $0.50/MTok input + $3.00/MTok output = $3.50 for 1M+1M tokens
+    assert cost == 3.50

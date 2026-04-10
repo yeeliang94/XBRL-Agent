@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 import time
 
+from pricing import estimate_cost as _estimate_cost
+
 
 @dataclass
 class TurnRecord:
@@ -21,6 +23,7 @@ class TokenReport:
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
     total_thinking_tokens: int = 0
+    model: object = None  # str or PydanticAI model object for pricing lookup
 
     @property
     def grand_total(self) -> int:
@@ -52,14 +55,9 @@ class TokenReport:
         return "\n".join(lines)
 
     def estimate_cost(self) -> float:
-        price_per_million_input = 0.15
-        price_per_million_output = 0.60
-        price_per_million_thinking = 0.15
-        input_cost = (self.total_prompt_tokens / 1_000_000) * price_per_million_input
-        output_cost = (
-            self.total_completion_tokens / 1_000_000
-        ) * price_per_million_output
-        thinking_cost = (
-            self.total_thinking_tokens / 1_000_000
-        ) * price_per_million_thinking
-        return input_cost + output_cost + thinking_cost
+        return _estimate_cost(
+            self.total_prompt_tokens,
+            self.total_completion_tokens,
+            self.total_thinking_tokens,
+            self.model,
+        )

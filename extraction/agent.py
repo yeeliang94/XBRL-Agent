@@ -125,7 +125,7 @@ def create_extraction_agent(
     if output_dir is None:
         output_dir = str(Path(__file__).resolve().parent.parent / "output")
 
-    token_report = TokenReport()
+    token_report = TokenReport(model=model)
     deps = ExtractionDeps(
         pdf_path=pdf_path,
         template_path=template_path,
