@@ -15,6 +15,7 @@ import type {
   AgentCompleteData,
   ThinkingBlock,
   ToolTimelineEntry,
+  TextSegment,
   RunConfigPayload,
   AgentState,
   CrossCheckResult,
@@ -58,6 +59,7 @@ export interface AppState {
   thinkingBlocks: ThinkingBlock[];
   toolTimeline: ToolTimelineEntry[];
   streamingText: string;
+  textSegments: TextSegment[];
   // Phase 10: Per-agent state for tab UI
   agents: Record<string, AgentState>;
   agentTabOrder: string[];      // ordered agent IDs for tab rendering
@@ -94,6 +96,7 @@ export const initialState: AppState = {
   thinkingBlocks: [],
   toolTimeline: [],
   streamingText: "",
+  textSegments: [],
   // Phase 10: Per-agent state
   agents: {},
   agentTabOrder: [],
@@ -113,6 +116,7 @@ interface StreamingState {
   thinkingBlocks: ThinkingBlock[];
   toolTimeline: ToolTimelineEntry[];
   streamingText: string;
+  textSegments: TextSegment[];
   currentPhase: EventPhase | null;
 }
 
@@ -160,17 +164,30 @@ function applyStreamingEvent(
 
     case "tool_call": {
       const tc = event.data as ToolCallData;
+      const now = Date.now();
+      // Flush any accumulated text into a completed segment BEFORE the tool entry,
+      // so each model turn's text stays in chronological order with tool cards.
+      // Segment gets timestamp (now - 1) to guarantee it sorts before the tool.
+      const updates: Partial<StreamingState> = {};
+      if (state.streamingText) {
+        updates.textSegments = [
+          ...state.textSegments,
+          { content: state.streamingText, timestamp: now - 1, phase: state.currentPhase },
+        ];
+        updates.streamingText = "";
+      }
       const entry: ToolTimelineEntry = {
         tool_call_id: tc.tool_call_id,
         tool_name: tc.tool_name,
         args: tc.args,
         result_summary: null,
         duration_ms: null,
-        startTime: Date.now(),
+        startTime: now,
         endTime: null,
         phase: state.currentPhase,
       };
-      return { toolTimeline: [...state.toolTimeline, entry] };
+      updates.toolTimeline = [...state.toolTimeline, entry];
+      return updates;
     }
 
     case "tool_result": {
@@ -235,6 +252,14 @@ export function agentReducer(agent: AgentState, event: SSEEvent): AgentState {
       updates.workbookPath = cd.workbook_path ?? null;
       if (cd.error && cd.error !== "Cancelled by user") {
         updates.error = { message: cd.error, traceback: "" };
+      }
+      // Flush any remaining text from the final model turn into a segment
+      if (agent.streamingText) {
+        updates.textSegments = [
+          ...(updates.textSegments ?? agent.textSegments),
+          { content: agent.streamingText, timestamp: Date.now(), phase: agent.currentPhase },
+        ];
+        updates.streamingText = "";
       }
       break;
     }
@@ -338,9 +363,35 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       }
 
       switch (event.event) {
-        case "token_update":
-          updates.tokens = event.data as TokenData;
+        case "token_update": {
+          // If event has an agent_id, aggregate tokens across all agents.
+          // Per-agent tokens are already updated in agentReducer above.
+          const tokenAgentId = getAgentId(event);
+          if (tokenAgentId) {
+            const allAgents = updates.agents ?? state.agents;
+            let totalPrompt = 0, totalCompletion = 0, totalThinking = 0, totalCumulative = 0, totalCost = 0;
+            for (const a of Object.values(allAgents)) {
+              if (a.tokens) {
+                totalPrompt += a.tokens.prompt_tokens;
+                totalCompletion += a.tokens.completion_tokens;
+                totalThinking += a.tokens.thinking_tokens;
+                totalCumulative += a.tokens.cumulative;
+                totalCost += a.tokens.cost_estimate;
+              }
+            }
+            updates.tokens = {
+              prompt_tokens: totalPrompt,
+              completion_tokens: totalCompletion,
+              thinking_tokens: totalThinking,
+              cumulative: totalCumulative,
+              cost_estimate: totalCost,
+            };
+          } else {
+            // No agent_id (legacy single-agent mode) — use as-is
+            updates.tokens = event.data as TokenData;
+          }
           break;
+        }
 
         case "error": {
           // Per-agent errors (with agent_id) should NOT kill the global run —
@@ -375,13 +426,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           updates.isComplete = true;
           updates.isRunning = false;
           const rc = event.data as RunCompleteData;
+          const currentTokens = state.tokens;
           updates.complete = {
             success: rc.success,
             output_path: "",
             excel_path: rc.merged_workbook || "",
             trace_path: "",
-            total_tokens: 0,
-            cost: 0,
+            total_tokens: currentTokens?.cumulative ?? 0,
+            cost: currentTokens?.cost_estimate ?? 0,
             statementsCompleted: rc.statements_completed,
           } as CompleteData;
           // Store cross-check results for the Validator tab
@@ -764,6 +816,7 @@ export default function App() {
                     thinkingBlocks={activeAgent.thinkingBlocks}
                     toolTimeline={activeAgent.toolTimeline}
                     streamingText={activeAgent.streamingText}
+                    textSegments={activeAgent.textSegments}
                     thinkingBuffer={activeAgent.thinkingBuffer}
                     activeThinkingId={activeAgent.activeThinkingId}
                     isRunning={activeAgent.status === "running"}
@@ -777,6 +830,7 @@ export default function App() {
                   thinkingBlocks={state.thinkingBlocks}
                   toolTimeline={state.toolTimeline}
                   streamingText={state.streamingText}
+                  textSegments={state.textSegments}
                   thinkingBuffer={state.thinkingBuffer}
                   activeThinkingId={state.activeThinkingId}
                   isRunning={state.isRunning}
@@ -794,6 +848,7 @@ export default function App() {
             thinkingBlocks={state.thinkingBlocks}
             toolTimeline={state.toolTimeline}
             streamingText={state.streamingText}
+            textSegments={state.textSegments}
             thinkingBuffer={state.thinkingBuffer}
             activeThinkingId={state.activeThinkingId}
             isRunning={state.isRunning}

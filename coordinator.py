@@ -18,6 +18,7 @@ import dataclasses
 import json
 
 from pydantic_ai import Agent
+from pricing import estimate_cost
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -352,7 +353,7 @@ async def _run_single_agent(
                             elif isinstance(event, FunctionToolResultEvent):
                                 # Summarize tool result — content may be huge (images, etc.)
                                 content = event.result.content
-                                summary = str(content)[:200] if content else ""
+                                summary = str(content)[:800] if content else ""
                                 call_id = event.result.tool_call_id
                                 start_t = _tool_start_times.pop(call_id, None)
                                 duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
@@ -408,7 +409,7 @@ async def _run_single_agent(
                     "completion_tokens": completion_t,
                     "thinking_tokens": 0,  # PydanticAI doesn't separate thinking tokens
                     "cumulative": total,
-                    "cost_estimate": (prompt_t * 0.075 + completion_t * 0.30) / 1_000_000,
+                    "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
                 })
 
         # Get the final result — same RunResult as agent.run() returned

@@ -1,23 +1,36 @@
 model_list:
+  # Model IDs below mirror the Windows enterprise PwC LiteLLM proxy so the same
+  # config/models.json dropdown works in both environments. The Mac local proxy
+  # re-routes each Windows-style ID to the direct provider API.
+
   # --- Gemini (via direct Google API, GEMINI_API_KEY) ---
   - model_name: vertex_ai.gemini-3-flash-preview
     litellm_params:
       model: gemini/gemini-3-flash-preview
       api_key: os.environ/GEMINI_API_KEY
-  - model_name: vertex_ai.gemini-3-pro-preview
+  - model_name: vertex_ai.gemini-3.1-pro-preview
     litellm_params:
-      model: gemini/gemini-3-pro-preview
+      model: gemini/gemini-3.1-pro-preview
       api_key: os.environ/GEMINI_API_KEY
+  - model_name: vertex_ai.gemini-3.1-flash-lite-preview
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite-preview
+      api_key: os.environ/GEMINI_API_KEY
+  # Legacy bare name, kept for backward compat with older .env values
   - model_name: gemini-3-flash-preview
     litellm_params:
       model: gemini/gemini-3-flash-preview
       api_key: os.environ/GEMINI_API_KEY
-  - model_name: gemini-3-pro-preview
-    litellm_params:
-      model: gemini/gemini-3-pro-preview
-      api_key: os.environ/GEMINI_API_KEY
 
   # --- OpenAI (OPENAI_API_KEY) ---
+  # Windows-enterprise-style IDs (openai.*) — these are what config/models.json serves
+  - model_name: openai.gpt-5.4
+    litellm_params: { model: openai/gpt-5.4, api_key: os.environ/OPENAI_API_KEY }
+  - model_name: openai.gpt-5.4-mini
+    litellm_params: { model: openai/gpt-5.4-mini, api_key: os.environ/OPENAI_API_KEY }
+  - model_name: openai.gpt-5.4-nano
+    litellm_params: { model: openai/gpt-5.4-nano, api_key: os.environ/OPENAI_API_KEY }
+  # Legacy bare names, kept for backward compat
   - model_name: gpt-5
     litellm_params: { model: openai/gpt-5, api_key: os.environ/OPENAI_API_KEY }
   - model_name: gpt-5-mini
@@ -38,6 +51,15 @@ model_list:
     litellm_params: { model: openai/gpt-4o-mini, api_key: os.environ/OPENAI_API_KEY }
 
   # --- Anthropic (ANTHROPIC_API_KEY) ---
+  # Windows-enterprise-style IDs (bedrock.anthropic.*) — these are what config/models.json serves.
+  # Locally we route them to the direct Anthropic API instead of Bedrock.
+  - model_name: bedrock.anthropic.claude-sonnet-4-6
+    litellm_params: { model: anthropic/claude-sonnet-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
+  - model_name: bedrock.anthropic.claude-opus-4-6
+    litellm_params: { model: anthropic/claude-opus-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
+  - model_name: bedrock.anthropic.claude-haiku-4-5
+    litellm_params: { model: anthropic/claude-haiku-4-5, api_key: os.environ/ANTHROPIC_API_KEY }
+  # Legacy bare names, kept for backward compat
   - model_name: claude-sonnet-4-6
     litellm_params: { model: anthropic/claude-sonnet-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
   - model_name: claude-opus-4-6

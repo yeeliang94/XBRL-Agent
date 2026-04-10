@@ -201,6 +201,107 @@ describe("PreRunPanel", () => {
     fetchSpy.mockRestore();
   });
 
+  test("stop scout button appears during auto-detect and cancels on click", async () => {
+    // Mock a slow SSE stream that doesn't complete immediately
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // Send a status event but don't close — simulates ongoing scout
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode(
+          `event: status\ndata: ${JSON.stringify({ phase: "scouting", message: "Finding TOC..." })}\n\n`,
+        ));
+      },
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const getSettingsFn = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel
+        sessionId="abc-123"
+        getSettings={getSettingsFn}
+        onRun={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+
+    // Start scout
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    // A stop/cancel button should appear while scout is running
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /stop/i })).toBeInTheDocument();
+    });
+
+    // Click stop
+    fireEvent.click(screen.getByRole("button", { name: /stop/i }));
+
+    // After stopping, the stop button should disappear
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
+    });
+
+    fetchSpy.mockRestore();
+  });
+
+  test("scout tool calls are displayed in the progress area", async () => {
+    // Mock SSE stream that sends tool_call and tool_result events before completing
+    const scoutPayload = {
+      success: true,
+      infopack: {
+        toc_page: 3, page_offset: 6,
+        statements: {
+          SOFP: { variant_suggestion: "CuNonCu", face_page: 10, note_pages: [], confidence: "HIGH" },
+        },
+      },
+    };
+
+    const sseText = [
+      `event: status\ndata: ${JSON.stringify({ phase: "scouting", message: "Starting scout..." })}\n\n`,
+      `event: tool_call\ndata: ${JSON.stringify({ tool_name: "find_toc", tool_call_id: "tc_1", args: {} })}\n\n`,
+      `event: tool_result\ndata: ${JSON.stringify({ tool_name: "find_toc", tool_call_id: "tc_1", result_summary: "Found TOC on page 3", duration_ms: 120 })}\n\n`,
+      `event: tool_call\ndata: ${JSON.stringify({ tool_name: "view_pages", tool_call_id: "tc_2", args: { pages: [10] } })}\n\n`,
+      `event: tool_result\ndata: ${JSON.stringify({ tool_name: "view_pages", tool_call_id: "tc_2", result_summary: "Viewed 1 page", duration_ms: 200 })}\n\n`,
+      `event: scout_complete\ndata: ${JSON.stringify(scoutPayload)}\n\n`,
+    ].join("");
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseText));
+        controller.close();
+      },
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const getSettingsFn = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettingsFn} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    // Tool names should appear in the progress area
+    await waitFor(() => {
+      expect(screen.getByText(/find_toc/)).toBeInTheDocument();
+      expect(screen.getByText(/view_pages/)).toBeInTheDocument();
+    });
+
+    fetchSpy.mockRestore();
+  });
+
   test("disabling scout hides auto-detect button", async () => {
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
     render(

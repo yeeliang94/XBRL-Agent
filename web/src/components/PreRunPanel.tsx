@@ -8,6 +8,7 @@ import type {
 } from "../lib/types";
 import { STATEMENT_TYPES } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { abortAgent } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { ScoutToggle } from "./ScoutToggle";
 import { StatementRunConfig } from "./StatementRunConfig";
@@ -161,6 +162,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     {} as Record<StatementType, string>,
   );
   const [availableModels, setAvailableModels] = useState<ModelEntry[]>([]);
+  const [scoutToolCalls, setScoutToolCalls] = useState<Array<{
+    tool_name: string;
+    tool_call_id: string;
+    result_summary?: string;
+    duration_ms?: number;
+  }>>([]);
 
   // Load settings on mount
   useEffect(() => {
@@ -236,6 +243,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     setScoutError(null);
     setScoutProgress(null);
     setScoutMessages([]);
+    setScoutToolCalls([]);
     setScoutStartTime(Date.now());
     try {
       // Call the scout endpoint via SSE
@@ -266,13 +274,37 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
 
       const decoder = new TextDecoder();
       let buffer = "";
+      let currentEventType = "";
 
       const processLine = (line: string) => {
         if (cancelled) return;
-        if (line.startsWith("event:")) return; // event labels — skip
+        if (line.startsWith("event:")) {
+          currentEventType = line.slice(6).trim();
+          return;
+        }
         if (!line.startsWith("data: ")) return;
         try {
           const data = JSON.parse(line.slice(6));
+          const eventType = currentEventType;
+          currentEventType = ""; // reset for next event
+
+          // Structured tool events from streaming scout
+          if (eventType === "tool_call") {
+            setScoutToolCalls(prev => [...prev, {
+              tool_name: data.tool_name,
+              tool_call_id: data.tool_call_id,
+            }]);
+            return;
+          }
+
+          if (eventType === "tool_result") {
+            setScoutToolCalls(prev => prev.map(tc =>
+              tc.tool_call_id === data.tool_call_id
+                ? { ...tc, result_summary: data.result_summary, duration_ms: data.duration_ms }
+                : tc,
+            ));
+            return;
+          }
 
           // Status/progress events (have `phase`, no `traceback`)
           if (data.phase && !data.traceback) {
@@ -368,6 +400,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     }
   }, [sessionId]);
 
+  const handleStopScout = useCallback(() => {
+    scoutAbortRef.current?.abort();
+    setIsDetecting(false);
+    setScoutStartTime(null);
+    setScoutProgress(null);
+    // Best-effort server-side cancellation
+    if (sessionId) {
+      abortAgent(sessionId, "scout").catch(() => {});
+    }
+  }, [sessionId]);
+
   const handleRun = useCallback(() => {
     const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s]);
     const variants: Record<string, string> = {};
@@ -434,13 +477,42 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
                   {scoutProgress || "Starting scout..."}
                 </span>
               </div>
-              {scoutStartTime && (
-                <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey300 }}>
-                  {elapsedText}
-                </span>
-              )}
+              <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
+                {scoutStartTime && (
+                  <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey300 }}>
+                    {elapsedText}
+                  </span>
+                )}
+                <button
+                  onClick={handleStopScout}
+                  style={{
+                    padding: "2px 10px", fontSize: 12, fontFamily: pwc.fontBody,
+                    background: pwc.grey100, border: `1px solid ${pwc.grey200}`,
+                    borderRadius: 4, cursor: "pointer", color: pwc.grey800,
+                  }}
+                >
+                  Stop
+                </button>
+              </div>
             </div>
-            {scoutMessages.length > 1 && scoutMessages.slice(0, -1).map((msg, i) => (
+            {scoutToolCalls.length > 0 && scoutToolCalls.map((tc) => (
+              <div key={tc.tool_call_id} style={{
+                display: "flex", alignItems: "center", gap: pwc.space.sm,
+                padding: "3px 0", fontSize: 12, fontFamily: pwc.fontBody, color: pwc.grey700,
+              }}>
+                <span style={{
+                  color: tc.result_summary ? pwc.success : pwc.orange500,
+                  fontSize: 11,
+                }}>{tc.result_summary ? "\u2713" : "\u25CF"}</span>
+                <span style={{ fontWeight: 600, color: pwc.grey800 }}>{tc.tool_name}</span>
+                {tc.duration_ms != null && (
+                  <span style={{ color: pwc.grey300, fontSize: 11 }}>{tc.duration_ms}ms</span>
+                )}
+              </div>
+            ))}
+            {scoutMessages.length > 1 && scoutMessages.slice(0, -1).filter(msg =>
+              !msg.startsWith("Calling ") // avoid duplicate with tool call display
+            ).map((msg, i) => (
               <p key={i} style={styles.scoutProgressStep}>{"\u2713"} {msg}</p>
             ))}
           </div>

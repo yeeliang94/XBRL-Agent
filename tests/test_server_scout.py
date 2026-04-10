@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import asyncio
 from pathlib import Path
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -67,7 +67,7 @@ class TestScoutEndpoint:
         client, session_id = app_client
         infopack = _fake_infopack()
 
-        with patch("scout.runner.run_scout", new_callable=AsyncMock, return_value=infopack):
+        with patch("scout.runner.run_scout_streaming", new_callable=AsyncMock, return_value=infopack):
             resp = client.post(f"/api/scout/{session_id}")
 
         assert resp.status_code == 200
@@ -114,7 +114,7 @@ class TestScoutEndpoint:
 
         monkeypatch.setattr(server, "_create_proxy_model", spy_create)
 
-        with patch("scout.runner.run_scout", new_callable=AsyncMock, return_value=infopack):
+        with patch("scout.runner.run_scout_streaming", new_callable=AsyncMock, return_value=infopack):
             resp = client.post(f"/api/scout/{session_id}")
 
         assert resp.status_code == 200
@@ -125,7 +125,7 @@ class TestScoutEndpoint:
         """Scout failure emits an error event, not a crash."""
         client, session_id = app_client
 
-        with patch("scout.runner.run_scout", new_callable=AsyncMock, side_effect=RuntimeError("LLM timeout")):
+        with patch("scout.runner.run_scout_streaming", new_callable=AsyncMock, side_effect=RuntimeError("LLM timeout")):
             resp = client.post(f"/api/scout/{session_id}")
 
         assert resp.status_code == 200
@@ -133,6 +133,95 @@ class TestScoutEndpoint:
         error_events = [e for e in events if e["event"] == "error"]
         assert len(error_events) >= 1
         assert "LLM timeout" in error_events[0]["data"]["message"]
+
+
+    def test_scout_task_registered_in_task_registry(self, app_client):
+        """Scout task should be registered so abort endpoints can cancel it."""
+        client, session_id = app_client
+        import task_registry
+
+        register_calls = []
+        original_register = task_registry.register
+
+        def spy_register(sid, aid, task):
+            register_calls.append((sid, aid))
+            return original_register(sid, aid, task)
+
+        with patch.object(task_registry, "register", side_effect=spy_register):
+            infopack = _fake_infopack()
+            with patch("scout.runner.run_scout_streaming", new_callable=AsyncMock, return_value=infopack):
+                resp = client.post(f"/api/scout/{session_id}")
+
+        assert resp.status_code == 200
+        # Scout task MUST be registered with agent_id "scout"
+        assert len(register_calls) >= 1, "task_registry.register was never called for scout"
+        session_ids = [s for s, a in register_calls]
+        agent_ids = [a for s, a in register_calls]
+        assert session_id in session_ids, f"Scout not registered for session {session_id}"
+        assert "scout" in agent_ids, f"Scout not registered with agent_id 'scout', got: {agent_ids}"
+
+    def test_scout_emits_structured_tool_events(self, app_client):
+        """Scout SSE stream should contain tool_call and tool_result events, not just text status."""
+        client, session_id = app_client
+        infopack = _fake_infopack()
+
+        # Mock run_scout_streaming to yield structured events
+        async def fake_streaming(pdf_path, model, on_event=None):
+            if on_event:
+                await on_event("tool_call", {
+                    "tool_name": "find_toc",
+                    "tool_call_id": "tc_1",
+                    "args": {},
+                })
+                await on_event("tool_result", {
+                    "tool_name": "find_toc",
+                    "tool_call_id": "tc_1",
+                    "result_summary": "Found TOC on page 3",
+                    "duration_ms": 150,
+                })
+            return infopack
+
+        with patch("scout.runner.run_scout_streaming", new_callable=AsyncMock, side_effect=fake_streaming):
+            resp = client.post(f"/api/scout/{session_id}")
+
+        assert resp.status_code == 200
+        events = _parse_sse(resp.text)
+        event_types = [e["event"] for e in events]
+
+        # Must contain structured tool events, not just "status" text
+        assert "tool_call" in event_types, f"No tool_call events in: {event_types}"
+        assert "tool_result" in event_types, f"No tool_result events in: {event_types}"
+
+        # Verify tool_call shape
+        tc = next(e for e in events if e["event"] == "tool_call")
+        assert tc["data"]["tool_name"] == "find_toc"
+        assert tc["data"]["tool_call_id"] == "tc_1"
+
+        # Verify tool_result shape
+        tr = next(e for e in events if e["event"] == "tool_result")
+        assert tr["data"]["tool_name"] == "find_toc"
+        assert tr["data"]["duration_ms"] == 150
+
+    def test_scout_cancellation_emits_event(self, app_client):
+        """When scout task is cancelled, it should emit a cancellation SSE event."""
+        client, session_id = app_client
+
+        async def cancelled_scout(**kwargs):
+            raise asyncio.CancelledError()
+
+        with patch("scout.runner.run_scout_streaming", new_callable=AsyncMock, side_effect=cancelled_scout):
+            resp = client.post(f"/api/scout/{session_id}")
+
+        assert resp.status_code == 200
+        events = _parse_sse(resp.text)
+        # Should have a status event indicating cancellation, not an unhandled error
+        event_types = [e["event"] for e in events]
+        has_cancel = any(
+            e["event"] == "scout_cancelled" or
+            (e["event"] == "status" and "cancel" in str(e["data"]).lower())
+            for e in events
+        )
+        assert has_cancel, f"No cancellation event found in: {event_types}"
 
 
 def _parse_sse(text: str) -> list[dict]:

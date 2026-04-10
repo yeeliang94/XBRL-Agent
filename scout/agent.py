@@ -8,6 +8,7 @@ cross-checks, and assembles the result into an Infopack.
 Public API:
     create_scout_agent()  — returns (Agent, ScoutDeps)
     run_scout()           — backward-compatible entry point
+    run_scout_streaming() — streaming entry point with on_event callback
 """
 from __future__ import annotations
 
@@ -18,9 +19,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Set, Union
 
+import time
+
 import fitz
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.messages import BinaryContent
+from pydantic_ai.messages import (
+    BinaryContent,
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    PartDeltaEvent,
+    TextPartDelta,
+    ThinkingPartDelta,
+)
 from pydantic_ai.models import Model
 
 from statement_types import StatementType, variants_for, get_variant
@@ -518,6 +528,131 @@ async def run_scout(
 
     # Agent finished without saving a valid infopack.  This is an error —
     # either it never called save_infopack, or every attempt was rejected.
+    raise RuntimeError(
+        "Scout agent finished without producing a valid infopack. "
+        "Check the agent conversation for tool errors."
+    )
+
+
+async def run_scout_streaming(
+    pdf_path: Path | str,
+    model: Union[str, Model] = "google-gla:gemini-3-flash-preview",
+    statements_to_find: Optional[Set[StatementType]] = None,
+    on_event: Optional[Any] = None,
+) -> Infopack:
+    """Run the scout agent with structured event streaming.
+
+    Like run_scout(), but emits tool_call, tool_result, thinking_delta,
+    text_delta events via the on_event callback for real-time UI display.
+
+    Args:
+        on_event: async callback(event_type: str, data: dict) for SSE events.
+    """
+    agent, deps = create_scout_agent(
+        pdf_path=pdf_path,
+        model=model,
+        statements_to_find=statements_to_find,
+    )
+
+    stmt_desc = "all 5 statements"
+    if statements_to_find:
+        stmt_desc = ", ".join(sorted(s.value for s in statements_to_find))
+
+    prompt = (
+        f"Scout this {deps.pdf_length}-page PDF. "
+        f"Find {stmt_desc}. "
+        f"Start by calling find_toc to locate the Table of Contents."
+    )
+
+    tool_start_times: dict[str, float] = {}
+    thinking_counter = 0
+    MAX_ITERATIONS = 50
+
+    async def _emit(event_type: str, data: dict) -> None:
+        if on_event:
+            await on_event(event_type, data)
+
+    iteration_count = 0
+    async with agent.iter(prompt, deps=deps) as agent_run:
+        async for node in agent_run:
+            iteration_count += 1
+            if iteration_count > MAX_ITERATIONS:
+                raise RuntimeError(f"Scout hit iteration limit ({MAX_ITERATIONS}).")
+
+            if Agent.is_call_tools_node(node):
+                async with node.stream(agent_run.ctx) as tool_stream:
+                    async for event in tool_stream:
+                        if isinstance(event, FunctionToolCallEvent):
+                            raw_args = event.part.args
+                            if isinstance(raw_args, str):
+                                try:
+                                    parsed_args = json.loads(raw_args)
+                                except (json.JSONDecodeError, TypeError):
+                                    parsed_args = {}
+                            elif isinstance(raw_args, dict):
+                                parsed_args = raw_args
+                            else:
+                                parsed_args = {}
+                            await _emit("tool_call", {
+                                "tool_name": event.part.tool_name,
+                                "tool_call_id": event.part.tool_call_id,
+                                "args": parsed_args,
+                            })
+                            tool_start_times[event.part.tool_call_id] = time.monotonic()
+                            # Also emit as progress text for the existing status display
+                            await _emit("status", {
+                                "phase": "scouting",
+                                "message": f"Calling {event.part.tool_name}...",
+                            })
+
+                        elif isinstance(event, FunctionToolResultEvent):
+                            content = event.result.content
+                            summary = str(content)[:500] if content else ""
+                            call_id = event.result.tool_call_id
+                            start_t = tool_start_times.pop(call_id, None)
+                            duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
+                            await _emit("tool_result", {
+                                "tool_name": event.result.tool_name,
+                                "tool_call_id": call_id,
+                                "result_summary": summary,
+                                "duration_ms": duration_ms,
+                            })
+
+            elif Agent.is_model_request_node(node):
+                thinking_id = f"scout_think_{thinking_counter}"
+                thinking_active = False
+                async with node.stream(agent_run.ctx) as model_stream:
+                    async for event in model_stream:
+                        if isinstance(event, PartDeltaEvent):
+                            delta = event.delta
+                            if isinstance(delta, TextPartDelta):
+                                if thinking_active:
+                                    await _emit("thinking_end", {
+                                        "thinking_id": thinking_id,
+                                        "summary": "",
+                                        "full_length": 0,
+                                    })
+                                    thinking_active = False
+                                    thinking_counter += 1
+                                    thinking_id = f"scout_think_{thinking_counter}"
+                                await _emit("text_delta", {"content": delta.content_delta})
+                            elif isinstance(delta, ThinkingPartDelta):
+                                thinking_active = True
+                                await _emit("thinking_delta", {
+                                    "content": delta.content_delta or "",
+                                    "thinking_id": thinking_id,
+                                })
+                if thinking_active:
+                    await _emit("thinking_end", {
+                        "thinking_id": thinking_id,
+                        "summary": "",
+                        "full_length": 0,
+                    })
+                    thinking_counter += 1
+
+    if deps.infopack is not None:
+        return deps.infopack
+
     raise RuntimeError(
         "Scout agent finished without producing a valid infopack. "
         "Check the agent conversation for tool errors."

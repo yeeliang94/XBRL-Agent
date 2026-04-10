@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { AgentFeed } from "../components/AgentFeed";
-import type { SSEEvent, ThinkingBlock, ToolTimelineEntry, EventPhase } from "../lib/types";
+import type { SSEEvent, ThinkingBlock, ToolTimelineEntry, TextSegment, EventPhase } from "../lib/types";
 
 const sampleEvents: SSEEvent[] = [
   { event: "status", data: { phase: "reading_template" as EventPhase, message: "Starting..." }, timestamp: 1 },
@@ -41,6 +41,7 @@ describe("AgentFeed", () => {
         thinkingBlocks={sampleBlocks}
         toolTimeline={sampleTimeline}
         streamingText="Done"
+        textSegments={[]}
         thinkingBuffer=""
         activeThinkingId={null}
         isRunning={false}
@@ -62,6 +63,7 @@ describe("AgentFeed", () => {
         thinkingBlocks={sampleBlocks}
         toolTimeline={sampleTimeline}
         streamingText=""
+        textSegments={[]}
         thinkingBuffer=""
         activeThinkingId={null}
         isRunning={false}
@@ -81,6 +83,7 @@ describe("AgentFeed", () => {
         thinkingBlocks={sampleBlocks}
         toolTimeline={sampleTimeline}
         streamingText=""
+        textSegments={[]}
         thinkingBuffer=""
         activeThinkingId={null}
         isRunning={false}
@@ -101,6 +104,7 @@ describe("AgentFeed", () => {
         thinkingBlocks={sampleBlocks}
         toolTimeline={sampleTimeline}
         streamingText=""
+        textSegments={[]}
         thinkingBuffer=""
         activeThinkingId={null}
         isRunning={false}
@@ -118,6 +122,7 @@ describe("AgentFeed", () => {
         thinkingBlocks={sampleBlocks}
         toolTimeline={sampleTimeline}
         streamingText=""
+        textSegments={[]}
         thinkingBuffer=""
         activeThinkingId={null}
         isRunning={false}
@@ -126,5 +131,55 @@ describe("AgentFeed", () => {
     );
     // Phase label should appear as a divider
     expect(screen.getByText("reading_template")).toBeInTheDocument();
+  });
+
+  test("renders textSegments interleaved with tool cards in chronological order", () => {
+    const now = Date.now();
+    // Segment 1: text from turn 1 (before tool)
+    const segments: TextSegment[] = [
+      { content: "Let me read the template.", timestamp: now, phase: "reading_template" },
+      { content: "Extraction complete.", timestamp: now + 300, phase: "filling_workbook" },
+    ];
+    // Tool card between the two segments
+    const tools: ToolTimelineEntry[] = [{
+      tool_call_id: "tc_1",
+      tool_name: "read_template",
+      args: {},
+      result_summary: "ok",
+      duration_ms: 100,
+      startTime: now + 100,
+      endTime: now + 200,
+      phase: "reading_template",
+    }];
+
+    render(
+      <AgentFeed
+        events={[]}
+        thinkingBlocks={[]}
+        toolTimeline={tools}
+        streamingText=""
+        textSegments={segments}
+        thinkingBuffer=""
+        activeThinkingId={null}
+        isRunning={false}
+        currentPhase={null}
+      />,
+    );
+
+    // Both text segments should render
+    expect(screen.getByText("Let me read the template.")).toBeInTheDocument();
+    expect(screen.getByText("Extraction complete.")).toBeInTheDocument();
+    // Tool card should render between them
+    expect(screen.getByText("Reading template")).toBeInTheDocument();
+
+    // Verify chronological order: segment1 → tool → segment2
+    const container = screen.getByText("Let me read the template.").closest(".agent-scroll")
+      || document.body;
+    const allText = container.textContent || "";
+    const idx1 = allText.indexOf("Let me read the template.");
+    const idxTool = allText.indexOf("Reading template");
+    const idx2 = allText.indexOf("Extraction complete.");
+    expect(idx1).toBeLessThan(idxTool);
+    expect(idxTool).toBeLessThan(idx2);
   });
 });

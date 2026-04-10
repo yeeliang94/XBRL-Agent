@@ -28,6 +28,15 @@ def cancel_agent(session_id: str, agent_id: str) -> bool:
     return True
 
 
+def unregister(session_id: str, agent_id: str) -> None:
+    """Remove a single task reference (e.g. after it completes)."""
+    session = _tasks.get(session_id)
+    if session is not None:
+        session.pop(agent_id, None)
+        if not session:
+            del _tasks[session_id]
+
+
 def cancel_all(session_id: str) -> int:
     """Cancel all agents in a session. Returns number of tasks cancelled."""
     session = _tasks.get(session_id, {})
