@@ -1,68 +1,71 @@
 import { useState } from "react";
 import type { ToolTimelineEntry } from "../lib/types";
 import { pwc } from "../lib/theme";
+import {
+  humanToolName,
+  argsPreview,
+  resultSummary,
+  parseFillFields,
+  type FillField,
+  type ResultTone,
+} from "../lib/toolLabels";
 
 interface Props {
   entry: ToolTimelineEntry;
 }
 
-// Human-readable tool name mapping
-const TOOL_LABELS: Record<string, string> = {
-  read_template: "Reading template",
-  view_pdf_pages: "Viewing PDF pages",
-  fill_workbook: "Filling workbook",
-  verify_totals: "Verifying totals",
-  save_result: "Saving result",
-};
+// One of four lifecycle states. Drives the glyph, colour, and data-attributes
+// on the card so tests and CSS can target each state cleanly.
+type GlyphState = "active" | "done" | "failed" | "cancelled";
 
-function humanToolName(name: string): string {
-  return TOOL_LABELS[name] || name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+/**
+ * Derive the glyph state from an entry. Prefers an explicit `state` field
+ * (used by callers that know the tool errored or was cancelled out-of-band);
+ * otherwise falls back to "active" while result_summary is absent and "done"
+ * once it arrives.
+ */
+function getGlyphState(entry: ToolTimelineEntry): GlyphState {
+  if (entry.state) return entry.state;
+  return entry.result_summary === null ? "active" : "done";
 }
 
-/** Collapsed one-line preview shown next to the tool name. */
-function argsPreview(toolName: string, args: Record<string, unknown>): string {
-  // Tool-specific compact previews
-  if (toolName === "fill_workbook") {
-    const fields = parseFillFields(args);
-    if (fields) {
-      // Derive sheet name from the first entry's sheet key
-      const sheet = fields[0]?.sheet;
-      return sheet ? `${fields.length} fields → ${sheet}` : `${fields.length} fields`;
-    }
+function glyphStyleFor(state: GlyphState): React.CSSProperties {
+  const base: React.CSSProperties = {
+    width: 12,
+    height: 12,
+    borderRadius: "50%",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  };
+  if (state === "active") {
+    return {
+      ...base,
+      background: pwc.orange400,
+      boxShadow: `0 0 0 3px ${pwc.orange50}`,
+      animation: "glyph-pulse 1s ease-in-out infinite",
+    };
   }
-  if (toolName === "view_pdf_pages") {
-    const pages = args.pages;
-    if (Array.isArray(pages)) return `pages ${pages.join(", ")}`;
+  if (state === "done") {
+    return {
+      ...base,
+      background: pwc.success,
+      boxShadow: "0 0 0 3px #F0FDF4",
+    };
   }
-  if (toolName === "read_template") {
-    const path = args.path as string | undefined;
-    if (path) return path.split("/").pop() || path;
+  if (state === "failed") {
+    return {
+      ...base,
+      background: pwc.error,
+      boxShadow: "0 0 0 3px #FEF2F2",
+    };
   }
-  // Default: key: value pairs
-  const entries = Object.entries(args);
-  if (entries.length === 0) return "";
-  return entries.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(", ");
-}
-
-/** A single field entry from fill_workbook's fields_json, matching FieldMapping in fill_workbook.py. */
-interface FillField {
-  sheet: string;
-  field_label?: string;     // Label-matching mode (most statements)
-  row?: number;             // Coordinate mode (SOCIE matrix)
-  col?: number;
-  value: unknown;
-  section?: string;
-  evidence?: string;
-}
-
-/** Parse fill_workbook fields_json arg into typed field entries. */
-function parseFillFields(args: Record<string, unknown>): FillField[] | null {
-  try {
-    const raw = typeof args.fields_json === "string" ? JSON.parse(args.fields_json) : args.fields_json;
-    const arr = raw?.fields ?? (Array.isArray(raw) ? raw : null);
-    if (Array.isArray(arr) && arr.length > 0) return arr;
-  } catch { /* invalid JSON — fall through */ }
-  return null;
+  return {
+    ...base,
+    background: pwc.grey500,
+    boxShadow: `0 0 0 3px ${pwc.grey50}`,
+  };
 }
 
 /** Format a number with commas (1000000 → "1,000,000"). */
@@ -80,21 +83,49 @@ function fieldDisplayLabel(f: FillField): string {
   return "(unnamed)";
 }
 
-const styles = {
-  activeCard: {
-    background: pwc.orange50,
-    borderLeft: `3px solid ${pwc.orange500}`,
+// Per-state card chrome. Active rows stand out in the PwC orange tint; done
+// rows sit flat on white; failed/cancelled get a subdued grey-red border.
+// Keep the rows compact, but give them enough padding to read as distinct
+// items inside the activity container.
+const CARD_PADDING = "10px 12px";
+
+function cardStyleFor(state: GlyphState): React.CSSProperties {
+  const base: React.CSSProperties = {
     borderRadius: pwc.radius.sm,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    animation: "fade-in 0.2s ease-out",
-  } as React.CSSProperties,
-  completedCard: {
-    background: pwc.white,
+    padding: CARD_PADDING,
     border: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-  } as React.CSSProperties,
+  };
+  if (state === "active") {
+    return {
+      ...base,
+      background: pwc.orange50,
+      border: "1px solid #FED7AA",
+      borderLeft: `3px solid ${pwc.orange500}`,
+      animation: "fade-in 0.2s ease-out",
+    };
+  }
+  if (state === "failed") {
+    return {
+      ...base,
+      background: "#FFF8F8",
+      borderLeft: "3px solid #DC2626",
+    };
+  }
+  if (state === "cancelled") {
+    return {
+      ...base,
+      background: pwc.grey50,
+      borderLeft: `3px solid ${pwc.grey500}`,
+    };
+  }
+  // done
+  return {
+    ...base,
+    background: pwc.white,
+  };
+}
+
+const styles = {
   header: {
     display: "flex",
     alignItems: "center",
@@ -110,10 +141,8 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
+    minWidth: 0, // let the truncated args preview shrink
   } as React.CSSProperties,
-  toolIcon: {
-    fontSize: 14,
-  },
   toolName: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
@@ -122,29 +151,18 @@ const styles = {
   } as React.CSSProperties,
   argsSummary: {
     fontFamily: pwc.fontMono,
-    fontSize: 12,
+    fontSize: 11,
     color: pwc.grey500,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
     maxWidth: 300,
   } as React.CSSProperties,
-  durationBadge: {
+  badge: {
     fontFamily: pwc.fontMono,
     fontSize: 12,
-    color: pwc.success,
-    background: "#F0FDF4",
     padding: "2px 8px",
     borderRadius: pwc.radius.sm,
-    flexShrink: 0,
-  } as React.CSSProperties,
-  spinner: {
-    width: 14,
-    height: 14,
-    border: `2px solid ${pwc.grey200}`,
-    borderTop: `2px solid ${pwc.orange500}`,
-    borderRadius: "50%",
-    animation: "spin 0.8s linear infinite",
     flexShrink: 0,
   } as React.CSSProperties,
   detail: {
@@ -167,6 +185,14 @@ const styles = {
     wordBreak: "break-word" as const,
   } as React.CSSProperties,
 };
+
+// Badge background/foreground colour pairs per tone.
+const BADGE_TONE: Record<ResultTone, { bg: string; fg: string }> = {
+  success: { bg: "#F0FDF4", fg: pwc.success },
+  warn: { bg: "#FEF3C7", fg: "#92400E" },
+};
+
+const NEUTRAL_BADGE = { bg: pwc.grey50, fg: pwc.grey500 };
 
 /** Render expanded arguments — structured for known tools, JSON for unknown. */
 function renderArgs(toolName: string, args: Record<string, unknown>): React.ReactNode {
@@ -193,7 +219,6 @@ function renderArgs(toolName: string, args: Record<string, unknown>): React.Reac
       );
     }
   }
-  // Default: formatted JSON
   return <div style={styles.detailValue}>{JSON.stringify(args, null, 2)}</div>;
 }
 
@@ -224,30 +249,52 @@ function renderResult(toolName: string, summary: string): React.ReactNode {
       </div>
     );
   }
-  // Default: preformatted text
   return <div style={styles.detailValue}>{summary}</div>;
 }
 
 export function ToolCallCard({ entry }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const isActive = entry.result_summary === null;
+  const glyphState = getGlyphState(entry);
+  const isActive = glyphState === "active";
   const preview = argsPreview(entry.tool_name, entry.args);
 
+  // Right-side badge: prefer the friendly resultSummary over the raw duration.
+  // Active rows show no badge — the glyph alone tells the story.
+  let badge: React.ReactNode = null;
+  if (!isActive) {
+    const rs = entry.result_summary ? resultSummary(entry.tool_name, entry.result_summary) : null;
+    if (rs) {
+      const tone = BADGE_TONE[rs.tone];
+      badge = (
+        <span style={{ ...styles.badge, background: tone.bg, color: tone.fg }}>
+          {rs.text}
+        </span>
+      );
+    } else if (entry.duration_ms != null) {
+      badge = (
+        <span style={{ ...styles.badge, background: NEUTRAL_BADGE.bg, color: NEUTRAL_BADGE.fg }}>
+          {entry.duration_ms}ms
+        </span>
+      );
+    }
+  }
+
   return (
-    <div data-testid="tool-card" style={isActive ? styles.activeCard : styles.completedCard}>
+    <div
+      data-testid="tool-card"
+      data-state={glyphState}
+      style={cardStyleFor(glyphState)}
+    >
       <button onClick={() => setExpanded(!expanded)} style={styles.header} role="button">
         <div style={styles.headerLeft}>
-          <span style={styles.toolIcon}>🔧</span>
+          <span
+            data-glyph={glyphState}
+            style={glyphStyleFor(glyphState)}
+          />
           <span style={styles.toolName}>{humanToolName(entry.tool_name)}</span>
           {preview && <span style={styles.argsSummary}>{preview}</span>}
         </div>
-        {isActive ? (
-          <div style={styles.spinner} />
-        ) : (
-          entry.duration_ms != null && (
-            <span style={styles.durationBadge}>{entry.duration_ms}ms</span>
-          )
-        )}
+        {badge}
       </button>
 
       {expanded && (

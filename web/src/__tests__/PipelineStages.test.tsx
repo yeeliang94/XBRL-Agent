@@ -20,13 +20,12 @@ describe("PipelineStages", () => {
     }
   });
 
-  test("marks completed phases with green checkmark", () => {
+  test("marks completed phases with green completed indicators", () => {
     // When currentPhase is "filling_workbook", reading_template and viewing_pdf are done
     const { container } = render(
       <PipelineStages currentPhase="filling_workbook" isRunning={true} isComplete={false} />,
     );
-    // Completed steps have a checkmark (✓)
-    const checks = container.querySelectorAll("[data-testid='step-check']");
+    const checks = container.querySelectorAll("[data-testid='step-complete']");
     expect(checks.length).toBe(2); // reading_template + viewing_pdf
   });
 
@@ -69,7 +68,7 @@ describe("PipelineStages", () => {
     const { container } = render(
       <PipelineStages currentPhase="complete" isRunning={false} isComplete={true} />,
     );
-    const checks = container.querySelectorAll("[data-testid='step-check']");
+    const checks = container.querySelectorAll("[data-testid='step-complete']");
     expect(checks.length).toBe(5);
   });
 
@@ -82,7 +81,7 @@ describe("PipelineStages", () => {
     expect(activeDot?.getAttribute("style")).toContain("rgb(254, 124, 57)");
 
     // Completed step should use success green (#16A34A → rgb(22, 163, 74))
-    const check = container.querySelector("[data-testid='step-check']");
+    const check = container.querySelector("[data-testid='step-complete']");
     expect(check?.getAttribute("style")).toContain("rgb(22, 163, 74)");
 
     // Pending step should use grey300 (#CBD1D6 → rgb(203, 209, 214))

@@ -86,6 +86,26 @@ def _detect_provider(model_name: str) -> str:
     return "google"
 
 
+def _model_id(model_obj) -> str:
+    """Return the human-readable model id for a PydanticAI Model instance.
+
+    PydanticAI's Model classes (`OpenAIChatModel`, `GoogleModel`,
+    `AnthropicModel`) all have a useless `__str__` that returns just the
+    class name with empty parentheses (e.g. `'OpenAIChatModel()'`). The
+    actual configured id (`'gpt-5.4'`, `'gemini-3-flash-preview'`, etc.)
+    lives on the `model_name` attribute. Always prefer that attribute when
+    persisting model identity to the audit DB so the History UI and the
+    `?model=` filter both see the real id, not a class repr.
+
+    Falls back to `str()` only if `model_name` is missing or empty —
+    keeping the helper safe for the test stubs that pass plain strings.
+    """
+    name = getattr(model_obj, "model_name", None)
+    if isinstance(name, str) and name:
+        return name
+    return str(model_obj)
+
+
 def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
     """Create a PydanticAI model with multi-provider support.
 
@@ -350,6 +370,16 @@ async def upload_pdf(file: UploadFile = File(...)):
     session_dir.mkdir(parents=True, exist_ok=True)
     (session_dir / "uploaded.pdf").write_bytes(content)
 
+    # Persist the ORIGINAL filename as a sidecar so History can show a
+    # meaningful name later. The file on disk is always "uploaded.pdf" to
+    # keep downstream paths simple; the sidecar is the single source of
+    # truth for the user-facing name.
+    # UTF-8 encoding is mandatory — Windows defaults to charmap and will
+    # crash on non-ASCII filenames (see CLAUDE.md issue #1).
+    (session_dir / "original_filename.txt").write_text(
+        file.filename, encoding="utf-8"
+    )
+
     return {"session_id": session_id, "filename": file.filename}
 
 
@@ -456,6 +486,34 @@ async def scout_pdf(session_id: str):
 
 # --- Multi-agent SSE run endpoint (Phase 7.2 + 7.3 + 7.4) ---
 
+def _safe_mark_finished(
+    db_conn: "Optional[Any]",
+    run_id: Optional[int],
+    status: str,
+) -> bool:
+    """Best-effort call to repo.mark_run_finished used from except/finally.
+
+    Returns True on success. Swallows all exceptions so the calling handler
+    (which is already dealing with one failure) never gets a second one
+    from the audit write. The History page will simply not see this run
+    if the DB is unhappy — that's acceptable, since the extraction itself
+    has already failed or been cancelled.
+    """
+    if db_conn is None or run_id is None:
+        return False
+    try:
+        from db import repository as repo
+        repo.mark_run_finished(db_conn, run_id, status)
+        db_conn.commit()
+        return True
+    except Exception:
+        logger.warning(
+            "Failed to mark run %s as %s in audit DB",
+            run_id, status, exc_info=True,
+        )
+        return False
+
+
 async def run_multi_agent_stream(
     session_id: str,
     session_dir: Path,
@@ -468,6 +526,17 @@ async def run_multi_agent_stream(
 
     Runs the coordinator with per-agent event tagging, then merges workbooks,
     runs cross-checks, and persists everything to the audit DB.
+
+    Lifecycle contract (Phase 1.6 refactor):
+      1. The `runs` row is created BEFORE the coordinator launches, so
+         History captures the run even if the coordinator explodes
+         instantly.
+      2. The orchestration body is wrapped in try/except/finally. Any path
+         out of the function — success, exception, CancelledError, client
+         disconnect — leaves the row in a terminal status (never `running`).
+      3. `mark_run_merged` is called right after a successful merge, BEFORE
+         the final status update, so the download endpoint has a durable
+         pointer to filled.xlsx even if later persistence work crashes.
     """
     from coordinator import RunConfig, run_extraction as coordinator_run
     from statement_types import StatementType, get_variant, variants_for
@@ -478,248 +547,433 @@ async def run_multi_agent_stream(
     from cross_checks.soci_to_socie_tci import SOCIToSOCIETCICheck
     from cross_checks.socie_to_sofp_equity import SOCIEToSOFPEquityCheck
     from cross_checks.socf_to_sofp_cash import SOCFToSOFPCashCheck
-    from db.recorder import SSEEventRecorder
     from db.schema import init_db
     from db import repository as repo
+    import sqlite3
 
-    # Parse statement types
-    statements_to_run: Set[StatementType] = set()
-    for s in run_config.statements:
-        try:
-            statements_to_run.add(StatementType(s))
-        except ValueError:
-            yield {"event": "error", "data": {"message": f"Unknown statement type: {s}"}}
-            yield {"event": "run_complete", "data": {"success": False, "message": f"Unknown statement type: {s}"}}
-            return
-
-    # Build variant map — fall back to first registered variant if not specified
-    variants: Dict[StatementType, str] = {}
-    for stmt in statements_to_run:
-        if stmt.value in run_config.variants:
-            variants[stmt] = run_config.variants[stmt.value]
-        else:
-            # Will be resolved by coordinator (infopack suggestion or registry default)
-            pass
-
-    # Build model overrides — resolve each through _create_proxy_model so
-    # per-agent overrides use the same proxy/direct wiring as the default model.
-    models: Dict[StatementType, Any] = {}
-    for stmt in statements_to_run:
-        if stmt.value in run_config.models:
-            override_name = run_config.models[stmt.value]
-            models[stmt] = _create_proxy_model(override_name, proxy_url, api_key)
-
-    # Resolve infopack
-    infopack = None
-    if run_config.infopack:
-        from scout.infopack import Infopack
-        try:
-            # from_json expects a JSON string; request body gives us a dict
-            infopack = Infopack.from_json(json.dumps(run_config.infopack))
-        except Exception as e:
-            yield {"event": "error", "data": {"message": f"Invalid infopack: {e}"}}
-            yield {"event": "run_complete", "data": {"success": False, "message": f"Invalid infopack: {e}"}}
-            return
-
+    # --- Pre-validation bookkeeping that cannot fail ---
+    # These are the only values create_run needs. Compute them up-front so
+    # even a totally malformed request still leaves a History row behind.
     output_dir = str(session_dir)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+    # Read the original filename from the sidecar written at upload time.
+    # The on-disk file is always "uploaded.pdf" so that downstream tools
+    # can find it by a stable name; the sidecar records the user-visible
+    # name so History search stays meaningful. Fall back to "uploaded.pdf"
+    # if the sidecar is missing (legacy sessions from before this change).
+    sidecar = session_dir / "original_filename.txt"
+    if sidecar.exists():
+        try:
+            pdf_filename = sidecar.read_text(encoding="utf-8").strip() or "uploaded.pdf"
+        except OSError:
+            pdf_filename = "uploaded.pdf"
+    else:
+        pdf_filename = "uploaded.pdf"
+    merged_path = str(session_dir / "filled.xlsx")
 
-    # Create the model object for the coordinator
-    model = _create_proxy_model(model_name, proxy_url, api_key)
-
-    config = RunConfig(
-        pdf_path=str(session_dir / "uploaded.pdf"),
-        output_dir=output_dir,
-        model=model,
-        statements_to_run=statements_to_run,
-        variants=variants,
-        models=models,
-    )
-
-    # Set up audit DB
+    # --- Open the audit connection and create the runs row BEFORE any
+    # validation. Peer-review fix: if we parsed statements / infopack /
+    # model before this point, early failures (invalid enum, bad infopack,
+    # proxy unreachable) would never appear in History. ---
     init_db(AUDIT_DB_PATH)
 
-    yield {"event": "status", "data": {
-        "phase": "starting", "message": f"Starting extraction for {len(statements_to_run)} statements...",
-    }}
-
-    # Event bridge: concurrent agents push events into this queue,
-    # and the SSE generator drains it in real time. None = all done.
-    event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
-
-    # Launch coordinator as a background task so we can drain events while agents run
-    coordinator_task = asyncio.create_task(
-        coordinator_run(config, infopack=infopack, event_queue=event_queue, session_id=session_id)
-    )
-
-    # Drain events from the queue as they arrive from concurrent agents.
-    # If the client disconnects (GeneratorExit), cancel the coordinator task
-    # so we don't leave agents running in the background.
+    db_conn: Optional[sqlite3.Connection] = None
+    run_id: Optional[int] = None
+    # Tracks whether we've already written a terminal status to the runs
+    # row. Prevents the finally block from clobbering an earlier-set state.
+    terminal_status: Optional[str] = None
     try:
-        while True:
-            event = await event_queue.get()
-            if event is None:
-                # Sentinel: all agents finished
-                break
-            yield event
-    except (asyncio.CancelledError, GeneratorExit):
-        coordinator_task.cancel()
-        logger.info("Client disconnected, cancelled coordinator", extra={"session_id": session_id})
-        return
-    except Exception as e:
-        logger.exception("Event queue drain failed", extra={"session_id": session_id})
-        yield {"event": "error", "data": {"message": f"Stream error: {e}"}}
-
-    # Await the coordinator task to get CoordinatorResult for post-processing
-    try:
-        coordinator_result = await coordinator_task
-    except Exception as e:
-        logger.exception("Coordinator failed", extra={"session_id": session_id})
-        yield {"event": "error", "data": {"message": f"Coordinator error: {e}"}}
-        return
-
-    # Generate merged result.json from per-statement files so the
-    # preview tab can fetch a single file in both single- and multi-agent modes.
-    # Generate merged result.json from per-statement files so the
-    # preview tab can fetch a single file in both single- and multi-agent modes.
-    # Uses a list (not dict) to preserve duplicate labels (e.g. "Lease liabilities"
-    # appearing in both current and non-current sections of SOFP).
-    merged_fields: list[dict] = []
-    for agent_result in coordinator_result.agent_results:
-        stmt_result_path = Path(output_dir) / f"{agent_result.statement_type.value}_result.json"
-        if stmt_result_path.exists():
+        db_conn = sqlite3.connect(str(AUDIT_DB_PATH))
+        db_conn.execute("PRAGMA foreign_keys = ON")
+        db_conn.execute("PRAGMA journal_mode = WAL")
+        db_conn.execute("PRAGMA busy_timeout = 5000")
+        db_conn.row_factory = sqlite3.Row
+        run_id = repo.create_run(
+            db_conn,
+            pdf_filename=pdf_filename,
+            session_id=session_id,
+            output_dir=output_dir,
+            config=run_config.model_dump(),
+            scout_enabled=run_config.use_scout,
+        )
+        db_conn.commit()
+    except Exception:
+        # If the DB is unhappy, the extraction itself should still run —
+        # History just won't see this row. Log loudly so ops notices.
+        logger.exception(
+            "Failed to create runs row for session %s", session_id,
+        )
+        # Close a partially-opened connection so we don't leak file handles.
+        if db_conn is not None:
             try:
-                stmt_data = json.loads(stmt_result_path.read_text(encoding="utf-8"))
-                stmt_key = agent_result.statement_type.value
-                for field in stmt_data.get("fields", []):
-                    merged_fields.append({
-                        "statement": stmt_key,
-                        "field_label": field.get("field_label", ""),
-                        "value": field.get("value"),
-                        "section": field.get("section"),
-                    })
+                db_conn.close()
             except Exception:
-                logger.warning("Failed to merge result for %s", agent_result.statement_type.value, exc_info=True)
-    if merged_fields:
-        merged_result_path = Path(output_dir) / "result.json"
-        merged_result_path.write_text(
-            json.dumps({"fields": merged_fields}, indent=2, ensure_ascii=False),
-            encoding="utf-8",
+                pass
+            db_conn = None
+
+    coordinator_result = None  # type: ignore[assignment]
+    merge_result = None
+    cross_check_results: list = []
+    # These are filled in by the validation block below and used by the
+    # post-processing / persistence blocks further down.
+    statements_to_run: Set[StatementType] = set()
+    variants: Dict[StatementType, str] = {}
+    models: Dict[StatementType, Any] = {}
+    config: Optional[RunConfig] = None
+
+    try:
+        # --- Phase 3 fix: validate & construct INSIDE the outer try so
+        # any failure path runs through the except block and marks the
+        # runs row as failed. Previously these exits happened before the
+        # row existed. ---
+
+        # Parse statement types
+        for s in run_config.statements:
+            try:
+                statements_to_run.add(StatementType(s))
+            except ValueError:
+                yield {"event": "error", "data": {"message": f"Unknown statement type: {s}"}}
+                yield {"event": "run_complete", "data": {"success": False, "message": f"Unknown statement type: {s}"}}
+                if _safe_mark_finished(db_conn, run_id, "failed"):
+                    terminal_status = "failed"
+                return
+
+        # Build variant map — fall back to first registered variant if not specified
+        for stmt in statements_to_run:
+            if stmt.value in run_config.variants:
+                variants[stmt] = run_config.variants[stmt.value]
+            # else: coordinator will resolve from infopack / registry default.
+
+        # Build model overrides — resolve each through _create_proxy_model so
+        # per-agent overrides use the same proxy/direct wiring as the default.
+        # Wrap in try/except so a broken override key also produces a clean
+        # failed-row rather than bubbling out of the generator.
+        try:
+            for stmt in statements_to_run:
+                if stmt.value in run_config.models:
+                    override_name = run_config.models[stmt.value]
+                    models[stmt] = _create_proxy_model(override_name, proxy_url, api_key)
+        except Exception as e:
+            logger.exception(
+                "Override model construction failed for session %s", session_id,
+            )
+            yield {"event": "error", "data": {"message": f"Model override failed: {e}"}}
+            yield {"event": "run_complete", "data": {"success": False, "message": f"Model override failed: {e}"}}
+            if _safe_mark_finished(db_conn, run_id, "failed"):
+                terminal_status = "failed"
+            return
+
+        # Resolve infopack
+        infopack = None
+        if run_config.infopack:
+            from scout.infopack import Infopack
+            try:
+                # from_json expects a JSON string; request body gives us a dict
+                infopack = Infopack.from_json(json.dumps(run_config.infopack))
+            except Exception as e:
+                yield {"event": "error", "data": {"message": f"Invalid infopack: {e}"}}
+                yield {"event": "run_complete", "data": {"success": False, "message": f"Invalid infopack: {e}"}}
+                if _safe_mark_finished(db_conn, run_id, "failed"):
+                    terminal_status = "failed"
+                return
+
+        # Create the model object for the coordinator. May raise if the
+        # proxy is unreachable or the API key is invalid — treat it as an
+        # early validation failure (yield error + mark row failed + return)
+        # so the user gets a clean SSE close instead of a 500.
+        try:
+            model = _create_proxy_model(model_name, proxy_url, api_key)
+        except Exception as e:
+            logger.exception(
+                "Model construction failed for session %s", session_id,
+            )
+            yield {"event": "error", "data": {"message": f"Model setup failed: {e}"}}
+            yield {"event": "run_complete", "data": {"success": False, "message": f"Model setup failed: {e}"}}
+            if _safe_mark_finished(db_conn, run_id, "failed"):
+                terminal_status = "failed"
+            return
+
+        config = RunConfig(
+            pdf_path=str(session_dir / "uploaded.pdf"),
+            output_dir=output_dir,
+            model=model,
+            statements_to_run=statements_to_run,
+            variants=variants,
+            models=models,
         )
 
-    # Build workbook paths from ALL *_filled.xlsx in the session directory.
-    # This ensures reruns merge with previously successful workbooks.
-    all_workbook_paths: Dict[StatementType, str] = {}
-    for stmt in StatementType:
-        wb_path = session_dir / f"{stmt.value}_filled.xlsx"
-        if wb_path.exists():
-            all_workbook_paths[stmt] = str(wb_path)
-    # Override with any just-completed workbooks from this run
-    all_workbook_paths.update(coordinator_result.workbook_paths)
+        yield {"event": "status", "data": {
+            "phase": "starting", "message": f"Starting extraction for {len(statements_to_run)} statements...",
+        }}
 
-    # Merge workbooks (Phase 7.4)
-    merged_path = str(session_dir / "filled.xlsx")
-    merge_result = merge_workbooks(all_workbook_paths, merged_path)
+        # Phase 6.5: create run_agents rows UP FRONT so tool events can be
+        # keyed to the right agent as they stream out of the coordinator.
+        # The old path created these rows at the end of the run, by which
+        # point every tool_call had already been missed.
+        #
+        # We build a mapping {agent_id → run_agent_id} keyed by the SAME
+        # agent_id the coordinator puts on every SSE event (lowercase
+        # statement value, e.g. "sofp"). This lets persist_event resolve
+        # the right run_agent_id in O(1) without re-querying the DB.
+        run_agent_ids_by_agent_id: Dict[str, int] = {}
+        # We also keep a parallel map keyed by StatementType for the
+        # post-run finish_run_agent / save_extracted_field loop.
+        run_agent_ids_by_stmt: Dict[StatementType, int] = {}
+        if db_conn is not None and run_id is not None:
+            try:
+                # Iterate in sorted order so run_agents row IDs are
+                # deterministic across test runs (statements_to_run is a
+                # Set; its iteration order is hash-based and unstable).
+                for stmt in sorted(statements_to_run, key=lambda s: s.value):
+                    agent_model = config.models.get(stmt, config.model)
+                    rai = repo.create_run_agent(
+                        db_conn, run_id,
+                        statement_type=stmt.value,
+                        variant=variants.get(stmt),
+                        model=_model_id(agent_model),
+                    )
+                    run_agent_ids_by_agent_id[stmt.value.lower()] = rai
+                    run_agent_ids_by_stmt[stmt] = rai
+                db_conn.commit()
+            except Exception:
+                logger.warning("Failed to pre-create run_agents rows for %s",
+                               session_id, exc_info=True)
 
-    # Run cross-checks (Phase 5 wiring)
-    all_checks = [
-        SOFPBalanceCheck(), SOPLToSOCIEProfitCheck(), SOCIToSOCIETCICheck(),
-        SOCIEToSOFPEquityCheck(), SOCFToSOFPCashCheck(),
-    ]
-    check_config = {
-        "statements_to_run": statements_to_run,
-        "variants": {stmt: v for stmt, v in variants.items()},
-    }
-    tolerance = float(os.environ.get("XBRL_TOLERANCE_RM", "1.0"))
-    cross_check_results = run_cross_checks(
-        all_checks, all_workbook_paths, check_config,
-        tolerance=tolerance,
-    )
+        # Phase 6.5: in-place persistence of tool-level SSE events.
+        # Mirrors db/recorder.py's _COARSE_EVENT_TYPES — we write status,
+        # tool_call, tool_result, error, and complete rows. Thinking/text
+        # deltas are intentionally dropped (too high-frequency, low audit
+        # value). Failures self-disable for that agent so we never block
+        # the live stream on a wedged DB.
+        _persist_disabled: Set[int] = set()
+        _COARSE_EVENT_TYPES_SET = frozenset({
+            "status", "tool_call", "tool_result", "error", "complete",
+        })
 
-    # Persist to audit DB
-    try:
-        import sqlite3
-        conn = sqlite3.connect(str(AUDIT_DB_PATH))
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.row_factory = sqlite3.Row
+        def persist_event(evt: dict) -> None:
+            if db_conn is None:
+                return
+            event_type = str(evt.get("event", ""))
+            if event_type not in _COARSE_EVENT_TYPES_SET:
+                return
+            data = evt.get("data") or {}
+            if not isinstance(data, dict):
+                return
+            agent_id_raw = data.get("agent_id") or data.get("agent_role")
+            if not isinstance(agent_id_raw, str) or not agent_id_raw:
+                return
+            rai = run_agent_ids_by_agent_id.get(agent_id_raw.lower())
+            if rai is None or rai in _persist_disabled:
+                return
+            try:
+                phase = data.get("phase") if isinstance(data.get("phase"), str) else None
+                repo.log_event(
+                    db_conn,
+                    run_agent_id=rai,
+                    event_type=event_type,
+                    payload=data,
+                    phase=phase,
+                )
+                db_conn.commit()
+            except Exception:
+                # Stop trying for this agent — one failure likely means the
+                # DB is wedged and we shouldn't spam warnings on every event.
+                logger.warning(
+                    "persist_event disabled for run_agent %s after error",
+                    rai, exc_info=True,
+                )
+                _persist_disabled.add(rai)
 
-        run_id = repo.create_run(conn, Path(config.pdf_path).name)
+        # Event bridge: concurrent agents push events into this queue,
+        # and the SSE generator drains it in real time. None = all done.
+        event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
+        # Launch coordinator as a background task so we can drain events while agents run
+        coordinator_task = asyncio.create_task(
+            coordinator_run(config, infopack=infopack, event_queue=event_queue, session_id=session_id)
+        )
+
+        # Drain events from the queue as they arrive from concurrent agents.
+        # If the client disconnects (GeneratorExit), cancel the coordinator task
+        # so we don't leave agents running in the background.
+        try:
+            while True:
+                event = await event_queue.get()
+                if event is None:
+                    # Sentinel: all agents finished
+                    break
+                persist_event(event)
+                yield event
+        except (asyncio.CancelledError, GeneratorExit):
+            coordinator_task.cancel()
+            logger.info("Client disconnected, cancelled coordinator", extra={"session_id": session_id})
+            # Mark the row aborted before we return — the finally block will
+            # see terminal_status set and leave it alone.
+            if _safe_mark_finished(db_conn, run_id, "aborted"):
+                terminal_status = "aborted"
+            return
+        except Exception as e:
+            logger.exception("Event queue drain failed", extra={"session_id": session_id})
+            yield {"event": "error", "data": {"message": f"Stream error: {e}"}}
+
+        # Await the coordinator task to get CoordinatorResult for post-processing
+        try:
+            coordinator_result = await coordinator_task
+        except asyncio.CancelledError:
+            logger.info("Coordinator cancelled", extra={"session_id": session_id})
+            if _safe_mark_finished(db_conn, run_id, "aborted"):
+                terminal_status = "aborted"
+            yield {"event": "error", "data": {"message": "Run cancelled"}}
+            return
+        except Exception as e:
+            logger.exception("Coordinator failed", extra={"session_id": session_id})
+            if _safe_mark_finished(db_conn, run_id, "failed"):
+                terminal_status = "failed"
+            yield {"event": "error", "data": {"message": f"Coordinator error: {e}"}}
+            return
+
+        # Generate merged result.json from per-statement files so the
+        # preview tab can fetch a single file in both single- and multi-agent modes.
+        # Uses a list (not dict) to preserve duplicate labels (e.g. "Lease liabilities"
+        # appearing in both current and non-current sections of SOFP).
+        merged_fields: list[dict] = []
         for agent_result in coordinator_result.agent_results:
-            # Persist a serializable model name, not the provider-backed
-            # Model object — SQLite cannot store arbitrary Python objects.
-            agent_model = config.models.get(agent_result.statement_type, config.model)
-            run_agent_id = repo.create_run_agent(
-                conn, run_id,
-                statement_type=agent_result.statement_type.value,
-                variant=agent_result.variant,
-                model=str(agent_model),
-            )
-            status = agent_result.status
-            repo.finish_run_agent(conn, run_agent_id, status=status,
-                                  workbook_path=agent_result.workbook_path)
-
-            # Persist coarse agent_events for audit trail (mirrors what
-            # SSEEventRecorder does in the legacy single-agent path).
-            repo.log_event(conn, run_agent_id, "status", {
-                "phase": "started",
-                "statement_type": agent_result.statement_type.value,
-                "variant": agent_result.variant,
-            })
-            # Persist conversation trace as a complete event
-            trace_path = Path(output_dir) / f"{agent_result.statement_type.value}_conversation_trace.json"
-            if not trace_path.exists():
-                # Fall back to shared trace name (single-agent compat)
-                trace_path = Path(output_dir) / "conversation_trace.json"
-            trace_blob = None
-            if trace_path.exists():
+            stmt_result_path = Path(output_dir) / f"{agent_result.statement_type.value}_result.json"
+            if stmt_result_path.exists():
                 try:
-                    trace_blob = trace_path.read_text(encoding="utf-8")
+                    stmt_data = json.loads(stmt_result_path.read_text(encoding="utf-8"))
+                    stmt_key = agent_result.statement_type.value
+                    for field in stmt_data.get("fields", []):
+                        merged_fields.append({
+                            "statement": stmt_key,
+                            "field_label": field.get("field_label", ""),
+                            "value": field.get("value"),
+                            "section": field.get("section"),
+                        })
                 except Exception:
-                    pass
-            repo.log_event(conn, run_agent_id, "complete", {
-                "status": status,
-                "workbook_path": agent_result.workbook_path,
-                "error": agent_result.error,
-                "has_trace": trace_blob is not None,
-            })
-
-            # Persist extracted fields from per-statement result.json
-            result_json_path = Path(output_dir) / f"{agent_result.statement_type.value}_result.json"
-            if result_json_path.exists():
-                try:
-                    result_data = json.loads(result_json_path.read_text(encoding="utf-8"))
-                    for field in result_data.get("fields", []):
-                        repo.save_extracted_field(
-                            conn, run_agent_id,
-                            sheet=field.get("sheet", ""),
-                            field_label=field.get("field_label", ""),
-                            col=field.get("col", 2),
-                            value=field.get("value"),
-                            section=field.get("section"),
-                            row_num=field.get("row"),
-                            evidence=field.get("evidence"),
-                        )
-                except Exception as e:
-                    logger.warning("Failed to persist fields for %s: %s",
-                                   agent_result.statement_type.value, e)
-
-        # Persist cross-check results
-        for check_result in cross_check_results:
-            repo.save_cross_check(
-                conn, run_id,
-                check_name=check_result.name,
-                status=check_result.status,
-                expected=check_result.expected,
-                actual=check_result.actual,
-                diff=check_result.diff,
-                tolerance=check_result.tolerance,
-                message=check_result.message,
+                    logger.warning("Failed to merge result for %s", agent_result.statement_type.value, exc_info=True)
+        if merged_fields:
+            merged_result_path = Path(output_dir) / "result.json"
+            merged_result_path.write_text(
+                json.dumps({"fields": merged_fields}, indent=2, ensure_ascii=False),
+                encoding="utf-8",
             )
 
-        # Update run status — include merge outcome AND cross-check results
+        # Build workbook paths from ALL *_filled.xlsx in the session directory.
+        # This ensures reruns merge with previously successful workbooks.
+        all_workbook_paths: Dict[StatementType, str] = {}
+        for stmt in StatementType:
+            wb_path = session_dir / f"{stmt.value}_filled.xlsx"
+            if wb_path.exists():
+                all_workbook_paths[stmt] = str(wb_path)
+        # Override with any just-completed workbooks from this run
+        all_workbook_paths.update(coordinator_result.workbook_paths)
+
+        # Merge workbooks (Phase 7.4)
+        merge_result = merge_workbooks(all_workbook_paths, merged_path)
+
+        # Record the merged workbook path on the runs row IMMEDIATELY after
+        # a successful merge, before we tackle cross-checks and per-agent
+        # persistence. This is what History's download endpoint reads as
+        # the single source of truth — never derived from session_id.
+        if merge_result.success and db_conn is not None and run_id is not None:
+            try:
+                repo.mark_run_merged(db_conn, run_id, merged_path)
+                db_conn.commit()
+            except Exception:
+                logger.warning(
+                    "Failed to mark run_merged on run %s", run_id, exc_info=True,
+                )
+
+        # Run cross-checks (Phase 5 wiring)
+        all_checks = [
+            SOFPBalanceCheck(), SOPLToSOCIEProfitCheck(), SOCIToSOCIETCICheck(),
+            SOCIEToSOFPEquityCheck(), SOCFToSOFPCashCheck(),
+        ]
+        check_config = {
+            "statements_to_run": statements_to_run,
+            "variants": {stmt: v for stmt, v in variants.items()},
+        }
+        tolerance = float(os.environ.get("XBRL_TOLERANCE_RM", "1.0"))
+        cross_check_results = run_cross_checks(
+            all_checks, all_workbook_paths, check_config,
+            tolerance=tolerance,
+        )
+
+        # Persist per-agent FINAL state + extracted fields + cross-checks.
+        # Phase 6.5 moved create_run_agent() UP FRONT so tool events could
+        # be persisted live as the stream came in; this block now only
+        # finalises each agent row (finish_run_agent) and writes the
+        # extracted-field table. The coarse `status:started` and `complete`
+        # log_event() calls that lived here have been removed — the live
+        # stream already persisted the real complete event with the live
+        # `{success: bool, error: str | None}` shape.
+        if db_conn is not None and run_id is not None:
+            try:
+                for agent_result in coordinator_result.agent_results:
+                    run_agent_id = run_agent_ids_by_stmt.get(agent_result.statement_type)
+                    if run_agent_id is None:
+                        # Pre-create didn't happen (DB was unhappy earlier);
+                        # fall back to creating the row now so extracted
+                        # fields still have somewhere to hang off.
+                        agent_model = config.models.get(agent_result.statement_type, config.model)
+                        run_agent_id = repo.create_run_agent(
+                            db_conn, run_id,
+                            statement_type=agent_result.statement_type.value,
+                            variant=agent_result.variant,
+                            model=_model_id(agent_model),
+                        )
+                    status = agent_result.status
+                    # Pass the coordinator-resolved variant so runs where
+                    # the user didn't specify one still record which
+                    # template was actually used. (Phase 6.5 pre-creates
+                    # run_agents with the user-supplied variant, which may
+                    # be None.)
+                    repo.finish_run_agent(
+                        db_conn, run_agent_id,
+                        status=status,
+                        workbook_path=agent_result.workbook_path,
+                        variant=agent_result.variant,
+                    )
+
+                    # Persist extracted fields from per-statement result.json
+                    result_json_path = Path(output_dir) / f"{agent_result.statement_type.value}_result.json"
+                    if result_json_path.exists():
+                        try:
+                            result_data = json.loads(result_json_path.read_text(encoding="utf-8"))
+                            for field in result_data.get("fields", []):
+                                repo.save_extracted_field(
+                                    db_conn, run_agent_id,
+                                    sheet=field.get("sheet", ""),
+                                    field_label=field.get("field_label", ""),
+                                    col=field.get("col", 2),
+                                    value=field.get("value"),
+                                    section=field.get("section"),
+                                    row_num=field.get("row"),
+                                    evidence=field.get("evidence"),
+                                )
+                        except Exception as e:
+                            logger.warning("Failed to persist fields for %s: %s",
+                                           agent_result.statement_type.value, e)
+
+                # Persist cross-check results
+                for check_result in cross_check_results:
+                    repo.save_cross_check(
+                        db_conn, run_id,
+                        check_name=check_result.name,
+                        status=check_result.status,
+                        expected=check_result.expected,
+                        actual=check_result.actual,
+                        diff=check_result.diff,
+                        tolerance=check_result.tolerance,
+                        message=check_result.message,
+                    )
+                db_conn.commit()
+            except Exception as e:
+                logger.warning("Failed to persist run data to audit DB: %s", e)
+
+        # Compute the final run-level status — include merge outcome AND
+        # cross-check results — and stamp it on the runs row.
         any_check_failed = any(cr.status == "failed" for cr in cross_check_results)
         if coordinator_result.all_succeeded and merge_result.success and not any_check_failed:
             overall_status = "completed"
@@ -729,37 +983,53 @@ async def run_multi_agent_stream(
             overall_status = "completed_with_errors"
         else:
             overall_status = "failed"
-        repo.update_run_status(conn, run_id, overall_status)
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.warning("Failed to persist run to audit DB: %s", e)
+        if _safe_mark_finished(db_conn, run_id, overall_status):
+            terminal_status = overall_status
 
-    # Emit cross-check results as SSE events
-    checks_data = []
-    for cr in cross_check_results:
-        checks_data.append({
-            "name": cr.name,
-            "status": cr.status,
-            "expected": cr.expected,
-            "actual": cr.actual,
-            "diff": cr.diff,
-            "tolerance": cr.tolerance,
-            "message": cr.message,
-        })
+        # Emit cross-check results as SSE events
+        checks_data = []
+        for cr in cross_check_results:
+            checks_data.append({
+                "name": cr.name,
+                "status": cr.status,
+                "expected": cr.expected,
+                "actual": cr.actual,
+                "diff": cr.diff,
+                "tolerance": cr.tolerance,
+                "message": cr.message,
+            })
 
-    # Final run_complete event — success requires agents + merge + cross-checks all passing
-    any_check_failed = any(cr.status == "failed" for cr in cross_check_results)
-    yield {"event": "run_complete", "data": {
-        "success": coordinator_result.all_succeeded and merge_result.success and not any_check_failed,
-        "merged_workbook": merged_path if merge_result.success else None,
-        "merge_errors": merge_result.errors,
-        "cross_checks": checks_data,
-        "statements_completed": [r.statement_type.value for r in coordinator_result.agent_results
-                                  if r.status == "succeeded"],
-        "statements_failed": [r.statement_type.value for r in coordinator_result.agent_results
-                               if r.status == "failed"],
-    }}
+        # Final run_complete event — success requires agents + merge + cross-checks all passing
+        yield {"event": "run_complete", "data": {
+            "success": coordinator_result.all_succeeded and merge_result.success and not any_check_failed,
+            "merged_workbook": merged_path if merge_result.success else None,
+            "merge_errors": merge_result.errors,
+            "cross_checks": checks_data,
+            "statements_completed": [r.statement_type.value for r in coordinator_result.agent_results
+                                      if r.status == "succeeded"],
+            "statements_failed": [r.statement_type.value for r in coordinator_result.agent_results
+                                   if r.status == "failed"],
+        }}
+    except BaseException:
+        # Belt-and-braces: if we reach the outer except without having
+        # already recorded a terminal state, mark the run failed so History
+        # never shows a dangling 'running' row. BaseException catches
+        # CancelledError + KeyboardInterrupt too.
+        if terminal_status is None:
+            _safe_mark_finished(db_conn, run_id, "failed")
+            terminal_status = "failed"
+        raise
+    finally:
+        # Last-ditch cleanup: if no other code path left the row in a
+        # terminal state (e.g. the event loop was torn down between yields),
+        # call it aborted. Idempotent for rows that were already finalized.
+        if terminal_status is None:
+            _safe_mark_finished(db_conn, run_id, "aborted")
+        if db_conn is not None:
+            try:
+                db_conn.close()
+            except Exception:
+                pass
 
 
 @app.post("/api/run/{session_id}")
@@ -921,6 +1191,329 @@ async def test_connection(body: dict):
         return JSONResponse(status_code=502, content={"status": "error", "message": str(e)})
 
 
+# ---------------------------------------------------------------------------
+# History API — Phase 3 of frontend-upgrade-history
+#
+# Four endpoints under /api/runs that the new History tab consumes:
+#   GET    /api/runs                     — list with filters + pagination
+#   GET    /api/runs/{id}                — hydrated detail (agents + checks)
+#   DELETE /api/runs/{id}                — DB-only delete (leaves disk alone)
+#   GET    /api/runs/{id}/download/filled — stream the merged workbook
+#
+# All reads go through `db.repository`; this module never speaks raw SQL.
+# ---------------------------------------------------------------------------
+
+def _open_audit_conn():
+    """Open an audit-DB connection with the same pragmas as the lifecycle
+    path. Callers must close it themselves (or use the contextmanager via
+    `db_session`)."""
+    from db.schema import init_db
+    import sqlite3
+    init_db(AUDIT_DB_PATH)
+    conn = sqlite3.connect(str(AUDIT_DB_PATH))
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _run_summary_to_dict(summary) -> dict:
+    """Serialise a repository.RunSummary for the History list JSON payload.
+
+    Kept separate so both the list and the detail endpoint can reuse a
+    consistent wire shape if we ever want to embed a summary in the detail.
+    """
+    return {
+        "id": summary.id,
+        "created_at": summary.created_at,
+        "pdf_filename": summary.pdf_filename,
+        "status": summary.status,
+        "session_id": summary.session_id,
+        "statements_run": summary.statements_run,
+        "models_used": summary.models_used,
+        "duration_seconds": summary.duration_seconds,
+        "scout_enabled": summary.scout_enabled,
+        "has_merged_workbook": bool(summary.merged_workbook_path),
+    }
+
+
+@app.get("/api/runs")
+async def list_runs_endpoint(
+    q: Optional[str] = None,
+    status: Optional[str] = None,
+    model: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    # Accept `from`/`to` aliases too so the frontend can use human-friendly
+    # query params. FastAPI cannot parse a param named `from` (reserved
+    # keyword), so we alias via a secondary dependency below.
+):
+    """List past runs with optional filters. Newest first by default."""
+    from db import repository as repo
+    # Clamp once, use for both the DB query AND the response payload.
+    # Previously the response echoed the raw request values, so a caller
+    # asking for limit=500 would get back 200 rows with limit=500 in the
+    # payload, desyncing client-side pagination math (Load More offsets).
+    safe_limit = max(1, min(int(limit), 200))
+    safe_offset = max(0, int(offset))
+    conn = _open_audit_conn()
+    try:
+        summaries = repo.list_runs(
+            conn,
+            filename_substring=q,
+            status=status,
+            model=model,
+            date_from=date_from,
+            date_to=date_to,
+            limit=safe_limit,
+            offset=safe_offset,
+        )
+        total = repo.count_runs(
+            conn,
+            filename_substring=q,
+            status=status,
+            model=model,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    finally:
+        conn.close()
+    return {
+        "runs": [_run_summary_to_dict(s) for s in summaries],
+        "total": total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+    }
+
+
+# Because `from` is a Python keyword we cannot name a function parameter
+# `from`. FastAPI exposes a `Query(..., alias="from")` pattern but our
+# simpler approach is a second entry point that reads raw query params off
+# the request and forwards them — keeps the typed handler above clean.
+@app.middleware("http")
+async def _history_date_range_alias(request: Request, call_next):
+    """Rewrite `?from=...&to=...` to `?date_from=...&date_to=...` on /api/runs.
+
+    The frontend uses the human-friendly names; the handler signature uses
+    the Python-safe names. Doing the rewrite here keeps both ends ergonomic
+    without polluting unrelated endpoints.
+    """
+    # Only touch /api/runs reads — never anywhere else.
+    if request.url.path == "/api/runs" and request.method == "GET":
+        params = dict(request.query_params)
+        mutated = False
+        if "from" in params and "date_from" not in params:
+            params["date_from"] = params.pop("from")
+            mutated = True
+        if "to" in params and "date_to" not in params:
+            params["date_to"] = params.pop("to")
+            mutated = True
+        if mutated:
+            # Rebuild the querystring and reassign. Starlette's request
+            # query params are immutable; we swap the underlying scope.
+            from urllib.parse import urlencode
+            new_qs = urlencode(params)
+            request.scope["query_string"] = new_qs.encode("utf-8")
+    return await call_next(request)
+
+
+@app.get("/api/runs/{run_id}")
+async def get_run_detail_endpoint(run_id: int):
+    """Return a hydrated detail view of a single run.
+
+    Phase 7 / Phase 6.5: each agent now carries its persisted SSE-equivalent
+    events so History can replay the tool timeline via buildToolTimeline()
+    on the frontend. We also normalize a LEGACY `complete` payload shape
+    (`{status: "succeeded", ...}`) written by the pre-Phase-6.5 post-run
+    block into the live shape (`{success: bool, error: str | None}`) so
+    the frontend only ever sees one terminal-row contract.
+
+    Contract: frontend consumers (live SSE and history replay) MUST see
+    the same `complete` shape: `{success: bool, error?: string}`.
+    """
+    from db import repository as repo
+    from datetime import datetime
+    conn = _open_audit_conn()
+    try:
+        detail = repo.get_run_detail(conn, run_id)
+    finally:
+        conn.close()
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    def _event_ts_to_epoch_seconds(ts: str) -> float:
+        """Convert the DB's ISO-string timestamp to float epoch seconds.
+
+        The SSE client records `Date.now() / 1000` as `timestamp`, and
+        buildToolTimeline multiplies that back up by 1000 to get ms. We
+        match the same unit here so live and replay paths are pairwise
+        compatible.
+        """
+        try:
+            s = ts.replace("Z", "+00:00") if ts.endswith("Z") else ts
+            return datetime.fromisoformat(s).timestamp()
+        except Exception:
+            return 0.0
+
+    def _normalize_event_payload(event_type: str, data: dict) -> dict:
+        """Phase 7.4: migrate legacy `complete` payloads to the live shape.
+
+        Pre-Phase-6.5 runs wrote `{status: "succeeded"|"failed", error,
+        workbook_path, has_trace}`. The frontend terminal-row logic reads
+        `data.success` and `data.error`, so we synthesise them here when
+        they're missing. Original fields are preserved for debuggability.
+        """
+        if event_type == "complete" and "status" in data and "success" not in data:
+            return {
+                **data,
+                "success": data.get("status") == "succeeded",
+            }
+        return data
+
+    def _serialize_event(evt) -> dict:
+        data = evt.payload if isinstance(evt.payload, dict) else {}
+        return {
+            "event": evt.event_type,
+            "data": _normalize_event_payload(evt.event_type, data),
+            "timestamp": _event_ts_to_epoch_seconds(evt.ts),
+        }
+
+    run = detail.run
+    return {
+        "id": run.id,
+        "created_at": run.created_at,
+        "pdf_filename": run.pdf_filename,
+        "status": run.status,
+        "session_id": run.session_id,
+        "output_dir": run.output_dir,
+        "merged_workbook_path": run.merged_workbook_path,
+        "scout_enabled": run.scout_enabled,
+        "started_at": run.started_at,
+        "ended_at": run.ended_at,
+        "config": run.config,
+        "agents": [
+            {
+                "id": a.id,
+                "statement_type": a.statement_type,
+                "variant": a.variant,
+                "model": a.model,
+                "status": a.status,
+                "started_at": a.started_at,
+                "ended_at": a.ended_at,
+                "workbook_path": a.workbook_path,
+                "total_tokens": a.total_tokens,
+                "total_cost": a.total_cost,
+                "events": [_serialize_event(e) for e in a.events],
+            }
+            for a in detail.agents
+        ],
+        "cross_checks": [
+            {
+                "name": c.check_name,
+                "status": c.status,
+                "expected": c.expected,
+                "actual": c.actual,
+                "diff": c.diff,
+                "tolerance": c.tolerance,
+                "message": c.message,
+            }
+            for c in detail.cross_checks
+        ],
+    }
+
+
+@app.delete("/api/runs/{run_id}")
+async def delete_run_endpoint(run_id: int):
+    """Hard-delete a run row from the DB.
+
+    By design, this does NOT touch the on-disk `output/{session_id}/`
+    folder. Safer default: disk cleanup can come later if needed.
+
+    Safety guards (peer-review fix for [CRITICAL] deletion of in-flight
+    runs): reject deletion if the run is still executing. The DELETE
+    cascades through run_agents, agent_events, extracted_fields, and
+    cross_checks — so wiping the parent row mid-extraction either
+    orphans child inserts or triggers FK violations on the coordinator's
+    next write. Two independent checks cover both the happy path and
+    the stale-row case:
+
+      1. `runs.status == 'running'` — the authoritative DB state.
+      2. `session_id in active_runs` — the in-memory lock that the
+         run_multi_agent_stream endpoint holds for the lifetime of an
+         extraction. Catches edge cases where the DB row was left in a
+         terminal state by a crash but a fresh extraction is happening
+         right now on the same session.
+    """
+    from db import repository as repo
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        if run.status == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot delete a run that is still running. "
+                       "Wait for it to finish (or abort it) before deleting.",
+            )
+        # Second-layer guard: session still actively streaming.
+        if run.session_id and run.session_id in active_runs:
+            raise HTTPException(
+                status_code=409,
+                detail="An active extraction is running against this "
+                       "session. Cannot delete while it is still in flight.",
+            )
+
+        removed = repo.delete_run(conn, run_id)
+        conn.commit()
+    finally:
+        conn.close()
+    if not removed:
+        # Race: row vanished between fetch_run and delete_run. Treat as
+        # "already deleted" and report 404.
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"deleted": run_id}
+
+
+@app.get("/api/runs/{run_id}/download/filled")
+async def download_filled_endpoint(run_id: int):
+    """Stream the merged workbook for a past run.
+
+    Single source of truth for the file path is `runs.merged_workbook_path`.
+    We explicitly do NOT derive the path from session_id or probe the
+    filesystem — if the stored path no longer exists on disk we return a
+    clear 404 instead of a 500.
+    """
+    from db import repository as repo
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not run.merged_workbook_path:
+        raise HTTPException(
+            status_code=404,
+            detail="This run has no merged workbook (likely failed before merge).",
+        )
+    wb_path = Path(run.merged_workbook_path)
+    if not wb_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Merged workbook file no longer exists on disk: {wb_path}",
+        )
+    return FileResponse(
+        str(wb_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"run_{run_id}_filled.xlsx",
+    )
+
+
 # --- Download endpoints ---
 
 ALLOWED_DOWNLOADS = {"filled.xlsx", "result.json", "conversation_trace.json"}
@@ -943,10 +1536,68 @@ async def download_result(session_id: str, filename: str):
 
 
 # --- Serve built frontend (Vite output in dist/) ---
+#
+# Two-layer wiring:
+#
+#  1. A SPA-fallback catch-all is registered BEFORE the StaticFiles mount.
+#     For any non-API GET that StaticFiles can't satisfy with a real file,
+#     we return `index.html` so the React router can pick the URL up on the
+#     client side. Without this, refreshing /history (or any future client
+#     route) returns 404 in production.
+#
+#  2. The StaticFiles mount still serves real assets (JS bundles, CSS,
+#     images, the hashed Vite outputs under /assets/...) verbatim. The
+#     fallback only fires when StaticFiles itself would 404.
+#
+# Why register the fallback BEFORE the mount? FastAPI matches routes in
+# definition order. The mount at "/" is greedy and would otherwise
+# intercept every GET first.
+#
+# Extracted as a helper so tests can wire it up against a temp dist
+# directory without monkeypatching module globals.
+
+def mount_spa(app, dist_directory: Path) -> None:
+    """Register the SPA fallback + StaticFiles mount onto a FastAPI app.
+
+    Idempotent only at module-load time — calling this twice on the same
+    app will register two catch-all handlers, which is fine for testing
+    but should not happen in production code paths.
+    """
+    index_html = dist_directory / "index.html"
+    resolved_dist = dist_directory.resolve()
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_fallback(full_path: str):
+        # API routes never fall through to the SPA — a typo'd /api/... must
+        # surface as a real 404 so client code doesn't parse HTML as JSON.
+        if full_path.startswith("api/") or full_path == "api":
+            raise HTTPException(status_code=404, detail="Not found")
+
+        # If the request resolves to a real file inside dist/, serve it.
+        # Path-traversal guard: resolve and confirm the result is still
+        # under dist_dir before opening it.
+        if full_path:
+            candidate = (dist_directory / full_path).resolve()
+            try:
+                candidate.relative_to(resolved_dist)
+            except ValueError:
+                raise HTTPException(status_code=404, detail="Not found")
+            if candidate.is_file():
+                return FileResponse(str(candidate))
+
+        # Otherwise hand back the SPA shell. The client router takes over
+        # from here and renders the right view based on window.location.
+        return FileResponse(str(index_html), media_type="text/html")
+
+    # Mount StaticFiles AFTER the catch-all so the catch-all wins for
+    # arbitrary paths but the mount can still handle the bare "/" request
+    # (and gives us the asset MIME-type defaults StaticFiles bakes in).
+    app.mount("/", StaticFiles(directory=str(dist_directory), html=True), name="frontend")
+
 
 dist_dir = BASE_DIR / "dist"
 if dist_dir.exists():
-    app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
+    mount_spa(app, dist_dir)
 
 
 # ---------------------------------------------------------------------------

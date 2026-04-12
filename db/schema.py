@@ -12,7 +12,12 @@ from pathlib import Path
 # Schema version written by the current code. Bump this when you add a
 # backward-incompatible change and write a migration block that upgrades
 # older databases on init.
-CURRENT_SCHEMA_VERSION = 1
+#
+# v2 (frontend-upgrade-history): runs table gained seven lifecycle columns so
+# the History page can surface every run — including failed / aborted ones —
+# and download its merged workbook from `run_id` alone without guessing
+# filesystem paths.
+CURRENT_SCHEMA_VERSION = 2
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -20,13 +25,39 @@ CURRENT_SCHEMA_VERSION = 1
 # up all dependent rows.
 _CREATE_STATEMENTS: tuple[str, ...] = (
     # Top-level run: one per user-initiated extraction (web UI or CLI).
+    #
+    # v2 fields (see CURRENT_SCHEMA_VERSION note above):
+    #   session_id            — output directory name; the single source of
+    #                            truth that ties a DB row to its on-disk files.
+    #   output_dir            — absolute path to the session output folder.
+    #   merged_workbook_path  — absolute path to the final filled.xlsx, set
+    #                            only after a successful merge. Nullable so
+    #                            failed runs can still be listed.
+    #   run_config_json       — raw RunConfigRequest body; display-only. It is
+    #                            NEVER authoritative for per-agent model
+    #                            attribution — use run_agents.model for that.
+    #   scout_enabled         — whether scout was run before extraction.
+    #   started_at / ended_at — explicit lifecycle timestamps so History can
+    #                            show wall-clock duration without re-reading
+    #                            the last run_agent row.
+    #
+    # `status` now accepts the enum {running, completed, completed_with_errors,
+    # failed, aborted}. No CHECK constraint: a future enum addition would
+    # otherwise require a full-table migration.
     """
     CREATE TABLE IF NOT EXISTS runs (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        created_at      TEXT NOT NULL,           -- ISO 8601 UTC
-        pdf_filename    TEXT NOT NULL,
-        status          TEXT NOT NULL,           -- 'running' | 'completed' | 'failed'
-        notes           TEXT
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at            TEXT NOT NULL,           -- ISO 8601 UTC
+        pdf_filename          TEXT NOT NULL,
+        status                TEXT NOT NULL,           -- 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'aborted'
+        notes                 TEXT,
+        session_id            TEXT NOT NULL DEFAULT '',
+        output_dir            TEXT NOT NULL DEFAULT '',
+        merged_workbook_path  TEXT,
+        run_config_json       TEXT,
+        scout_enabled         INTEGER NOT NULL DEFAULT 0,
+        started_at            TEXT NOT NULL DEFAULT '',
+        ended_at              TEXT
     )
     """,
 
@@ -101,11 +132,28 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
 
 
 # Indexes on foreign-key columns so per-run queries stay cheap.
+# ix_runs_created_at supports the History list's default DESC sort.
 _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_run_agents_run_id ON run_agents(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_agent_events_run_agent_id ON agent_events(run_agent_id)",
     "CREATE INDEX IF NOT EXISTS ix_extracted_fields_run_agent_id ON extracted_fields(run_agent_id)",
     "CREATE INDEX IF NOT EXISTS ix_cross_checks_run_id ON cross_checks(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_runs_created_at ON runs(created_at DESC)",
+)
+
+
+# v2 columns that need to be added via ALTER TABLE when migrating an
+# existing v1 database. SQLite ALTER TABLE cannot add a NOT NULL column
+# without a default, so every entry here either is nullable or carries a
+# safe default. Order matters: later migrations may read earlier columns.
+_V2_MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("session_id",            "TEXT NOT NULL DEFAULT ''"),
+    ("output_dir",             "TEXT NOT NULL DEFAULT ''"),
+    ("merged_workbook_path",   "TEXT"),
+    ("run_config_json",        "TEXT"),
+    ("scout_enabled",          "INTEGER NOT NULL DEFAULT 0"),
+    ("started_at",             "TEXT NOT NULL DEFAULT ''"),
+    ("ended_at",               "TEXT"),
 )
 
 
@@ -126,11 +174,44 @@ def init_db(path: str | Path) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
         for sql in _CREATE_STATEMENTS:
             conn.execute(sql)
+
+        # Figure out the current schema version BEFORE running index/migration
+        # logic, so we know whether this is a fresh DB or an older one that
+        # needs to be walked forward.
+        cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+        existing = cur.fetchone()
+        current_version = int(existing[0]) if existing is not None else None
+
+        # Migrate v1 → v2: ALTER TABLE in runs to add the new lifecycle
+        # columns. We only do this when the runs table exists AND is missing
+        # the new columns — idempotent on already-migrated DBs and on fresh
+        # databases where CREATE TABLE already included them.
+        if current_version is not None and current_version < 2:
+            existing_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+            }
+            for col_name, col_ddl in _V2_MIGRATION_COLUMNS:
+                if col_name not in existing_cols:
+                    conn.execute(
+                        f"ALTER TABLE runs ADD COLUMN {col_name} {col_ddl}"
+                    )
+            # Best-effort backfill: mirror created_at into started_at for
+            # legacy rows so downstream duration math doesn't explode.
+            conn.execute(
+                "UPDATE runs SET started_at = created_at "
+                "WHERE (started_at IS NULL OR started_at = '')"
+            )
+            conn.execute(
+                "UPDATE schema_version SET version = ?",
+                (CURRENT_SCHEMA_VERSION,),
+            )
+
         for sql in _CREATE_INDEXES:
             conn.execute(sql)
-        # Record the current schema version if not already set.
-        cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
-        if cur.fetchone() is None:
+
+        # Record the current schema version if not already set (fresh DB).
+        if current_version is None:
             conn.execute(
                 "INSERT INTO schema_version(version) VALUES (?)",
                 (CURRENT_SCHEMA_VERSION,),

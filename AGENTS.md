@@ -32,7 +32,7 @@ python3 run.py data/FINCO.pdf --model gpt-5.4 --statements SOFP SOPL
 
 ```
 run.py              CLI entry point — runs coordinator for 1-5 statements
-server.py           FastAPI + SSE web server (POST /api/run/{session_id})
+server.py           FastAPI + SSE web server (POST /api/run/{session_id}, /api/runs history endpoints, SPA fallback)
 coordinator.py      Fans out N extraction agents concurrently via asyncio.gather
 extraction/
   agent.py          Generic extraction agent factory (one per statement type)
@@ -51,9 +51,37 @@ cross_checks/
   socie_to_sofp_equity.py   SOCIE closing equity = SOFP total equity
   socf_to_sofp_cash.py      SOCF cash = SOFP cash movement
 workbook_merger.py  Merges per-statement workbooks into single output file
-db/                 SQLite audit trail (runs, agents, events, cross-checks)
-scout/              PDF page-range detection for each statement
+db/
+  schema.py         SQLite DDL + v1→v2 migration (runs lifecycle columns)
+  repository.py     CRUD + history queries (list/filter/detail/delete, mark_run_finished/merged)
+  recorder.py       SSEEventRecorder — persists live events during a run
+scout/
+  agent.py          PydanticAI scout agent (single agent with 6 tools)
+  runner.py         Backward-compatible entry point (re-exports from agent.py)
+  toc_locator.py    Deterministic TOC page finder
+  toc_parser.py     TOC text parser (English + Malay, combined titles)
+  variant_detector.py  Deterministic variant signal scorer (cross-check tool)
+  notes_discoverer.py  Note page discovery from face-page references
+  calibrator.py     Legacy page calibrator (kept for reference, not used by agent)
+  vision.py         LLM vision helpers (TOC extraction for scanned PDFs)
+  infopack.py       Typed output: page refs, variants, confidence per statement
 web/                Vite + React frontend (inline styles, tab-based multi-agent UI)
+  src/App.tsx         Router shell — /extract and /history views share TopNav and app state
+  src/pages/
+    HistoryPage.tsx     Past-runs browser (filters + list + detail modal)
+  src/components/
+    TopNav.tsx          Extract / History nav bar
+    AgentTimeline.tsx   Terminal-style tool timeline (live + history replay)
+    ToolCallCard.tsx    Single tool-row primitive shared by live + history
+    HistoryList.tsx     Run table with status badges
+    HistoryFilters.tsx  Search / status / model / date filters
+    RunDetailModal.tsx  Wraps RunDetailView in a modal for the history list
+    RunDetailView.tsx   Replay a past run — agents, timeline, cross-checks, download
+    SuccessToast.tsx    Ephemeral success notification after merge
+  src/lib/
+    toolLabels.ts       humanToolName / argsPreview / resultSummary — shared label logic
+    buildToolTimeline.ts SSEEvent[] → ToolTimelineEntry[] reducer (live + persisted)
+    runStatus.ts        Run-status badge/color helpers
 config/
   models.json       Available models registry (id, provider, display name)
 litellm_config.yaml LiteLLM proxy config — routes models to correct provider APIs
@@ -192,8 +220,8 @@ but **missed same-sheet cross-section subtotal references**, leaving them +20 ro
 **All other templates verified clean:** 03-SOPL-Function, 04-SOPL-Nature, 05-SOCI-BeforeTax,
 06-SOCI-NetOfTax, 07-SOCF-Indirect, 08-SOCF-Direct, 09-SOCIE, 10-14 Notes.
 
-See `TEMPLATE-FORMULA-FIX-GUIDE.md` for full details, broken formula table, and XBRL
-linkbase verification methodology.
+See `docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md` for full details, broken formula table,
+and XBRL linkbase verification methodology.
 
 ### 4. fill_workbook Row Matching — Off-by-One with Reference File
 
@@ -239,7 +267,39 @@ output/
 
 `run.py` uses `Path(__file__).resolve().parent / "output"` as the base — works regardless of working directory.
 
-### 10. Scout Page Hints are Soft Guidance Only
+### 10. Run Lifecycle Contract — `runs` Row Created Before Validation
+
+`run_multi_agent_stream` in `server.py` creates the `runs` audit row **before**
+parsing statement types, resolving variants, or building models. This is
+deliberate: if validation or proxy-model creation fails, the History page still
+captures the failed run instead of silently dropping it. The orchestration body
+is wrapped in try/except/finally so every exit path — success, exception,
+`CancelledError`, or client disconnect — leaves the row in a terminal status
+(`completed`, `completed_with_errors`, `failed`, `aborted`) and never `running`.
+
+`mark_run_merged` is called immediately after a successful merge, **before** the
+final status update, so `GET /api/runs/{id}/download/filled` has a durable
+pointer to `filled.xlsx` even if later persistence work crashes.
+
+`_safe_mark_finished` in `server.py` swallows audit-write exceptions so error
+handlers never double-fault — a DB write failure during an already-failing run
+gets logged, not re-raised. Don't "fix" this by removing the try/except.
+
+### 11. DB Schema Version 2 — Auto-Migration on Startup
+
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION = 2`. `init_db` detects v1
+databases and runs `ALTER TABLE runs ADD COLUMN …` for the seven lifecycle
+fields (`session_id`, `output_dir`, `merged_workbook_path`, `run_config_json`,
+`scout_enabled`, `started_at`, `ended_at`). The migration is idempotent and
+backfills `started_at` from `created_at` for legacy rows so duration math
+doesn't explode.
+
+SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
+entry in `_V2_MIGRATION_COLUMNS` is either nullable or carries a safe default.
+The `status` column has no CHECK constraint on purpose: adding a new status
+enum value should not require a full-table migration.
+
+### 12. Scout Page Hints are Soft Guidance Only
 
 When scout is ON, extraction agents receive `page_hints` (face_page + note_pages) in their
 system prompt as recommended starting points. Agents can freely view **any** PDF page —
@@ -273,9 +333,23 @@ Key test files:
 - `tests/test_e2e.py` — full 5-agent mocked pipeline (coordinator → merger → cross-checks → DB)
 - `tests/test_multi_agent_integration.py` — multi-agent SSE event format + DB persistence
 - `tests/test_cross_checks.py` — cross-check framework unit tests
+- `tests/test_db_schema_v2.py` — v1→v2 migration + fresh-init schema invariants
+- `tests/test_db_repository.py` — repository CRUD + history list/filter/detail
+- `tests/test_history_repository.py` — repository helpers for the history endpoints
+- `tests/test_history_api.py` — `GET /api/runs`, `/api/runs/{id}`, delete, download/filled
+- `tests/test_server_run_lifecycle.py` — runs-row created before validation + terminal-status contract
+- `tests/test_spa_fallback.py` — `/history` and unknown paths served from the SPA
 - `web/src/__tests__/appReducer.test.ts` — per-agent event routing + state management
 - `web/src/__tests__/AgentTabs.test.tsx` — tab bar with status badges
 - `web/src/__tests__/ValidatorTab.test.tsx` — cross-check results display
+- `web/src/__tests__/AgentTimeline.test.tsx` — per-agent terminal-style tool timeline
+- `web/src/__tests__/buildToolTimeline.test.ts` — SSEEvent[] → ToolTimelineEntry[] reducer
+- `web/src/__tests__/toolLabels.test.ts` — shared human-readable tool labels
+- `web/src/__tests__/ToolCallCard.test.tsx` — single tool-call row (live + history shared)
+- `web/src/__tests__/App.test.tsx` + `AppRouting.test.tsx` — /extract ↔ /history routing + popstate
+- `web/src/__tests__/HistoryPage.test.tsx` + `HistoryList.test.tsx` + `HistoryFilters.test.tsx` — history browser
+- `web/src/__tests__/RunDetailView.test.tsx` + `RunDetailModal.test.tsx` — past-run replay UI
+- `web/src/__tests__/TopNav.test.tsx` + `SuccessToast.test.tsx` — chrome components
 
 Note: `test_pdf_viewer.py` and `test_template_reader.py` fail without sample PDF data present. All server/API tests pass independently.
 
@@ -286,13 +360,18 @@ Note: `test_pdf_viewer.py` and `test_template_reader.py` fail without sample PDF
 | pydantic-ai API | `server.py` (`_create_proxy_model`), `extraction/agent.py` (imports/agent creation) |
 | .env variable names | `server.py` (settings endpoints), `run.py` (loads .env), `.env.example`, `start.bat`, `start.sh`, `litellm_config.yaml` (references env vars) |
 | Agent tool names | `server.py` (`PHASE_MAP`), `extraction/agent.py` (tool definitions) |
-| Excel template structure | `tools/fill_workbook.py` (section headers), `tools/verifier.py`, `cross_checks/util.py` (label lookups), `TEMPLATE-FORMULA-FIX-GUIDE.md` (formula audit trail) |
+| Excel template structure | `tools/fill_workbook.py` (section headers), `tools/verifier.py`, `cross_checks/util.py` (label lookups), `docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md` (formula audit trail) |
 | XBRL template formulas | `XBRL-template-MFRS/*.xlsx` (sub-sheet formulas), `SSMxT_2022v1.0/` (authoritative XBRL calc linkbase), `XBRL-template-MFRS/backup-originals/` (pre-fix backups) |
 | Statement types / variants | `statement_types.py`, `coordinator.py`, `server.py` (`RunConfigRequest`), `prompts/` (per-variant files), `web/src/lib/types.ts` (`STATEMENT_TYPES`, `VARIANTS`) |
 | Cross-check implementations | `cross_checks/*.py`, `server.py` (`run_multi_agent_stream` check list), `cross_checks/util.py` |
 | Model wiring / proxy setup | `server.py` (`_create_proxy_model`, `_detect_provider`), `run.py` (also calls `_create_proxy_model`), `coordinator.py` (`RunConfig.model/models`), `litellm_config.yaml` (proxy model routing), `config/models.json` (UI model list) |
 | Frontend agent state types | `web/src/lib/types.ts` (`AgentState`, `CrossCheckResult`), `web/src/App.tsx` (`appReducer`, `agentReducer`) |
 | Tab/Validator UI | `web/src/components/AgentTabs.tsx`, `web/src/components/ValidatorTab.tsx`, `web/src/App.tsx` (tab wiring) |
+| Agent timeline / tool-row rendering | `web/src/lib/toolLabels.ts` (humanToolName/argsPreview/resultSummary), `web/src/lib/buildToolTimeline.ts` (SSE → timeline reducer), `web/src/components/ToolCallCard.tsx` (single row primitive), `web/src/components/AgentTimeline.tsx` (live + history + scout feed), `web/src/components/PreRunPanel.tsx` (scout auto-detect rendering), `web/src/components/RunDetailView.tsx` (history replay) |
+| DB schema (runs lifecycle) | `db/schema.py` (`CURRENT_SCHEMA_VERSION`, `_CREATE_STATEMENTS`, `_V2_MIGRATION_COLUMNS`), `db/repository.py` (`create_run`, `mark_run_merged`, `mark_run_finished`, list/detail queries), `tests/test_db_schema_v2.py`, `tests/test_db_repository.py` |
+| History API endpoints | `server.py` (`GET /api/runs`, `GET /api/runs/{id}`, `DELETE /api/runs/{id}`, `GET /api/runs/{id}/download/filled`, SPA fallback), `web/src/lib/api.ts` (fetch helpers), `web/src/lib/types.ts` (`RunSummaryJson`, `RunDetailJson`, `RunAgentJson`, `RunCrossCheckJson`, `RunsFilterParams`), `tests/test_history_api.py` |
+| Run lifecycle / terminal status | `server.py` (`run_multi_agent_stream` try/except/finally, `_safe_mark_finished`, pre-validation `create_run`), `db/repository.py` (`mark_run_finished` status enum), `tests/test_server_run_lifecycle.py` |
+| History UI / routing | `web/src/App.tsx` (`AppView`, popstate handling, `/history` hydration), `web/src/pages/HistoryPage.tsx`, `web/src/components/{HistoryList,HistoryFilters,RunDetailModal,RunDetailView,TopNav,SuccessToast}.tsx`, `web/src/lib/runStatus.ts` |
 
 ## Porting Checklist (Mac -> Windows)
 

@@ -392,6 +392,32 @@ class TestSOCFToSOFPCash:
         )
         assert result.status == "failed"
 
+    def test_matching_order_of_liquidity_variant(self, tmp_dir):
+        """OrdOfLiq SOFP labels the cash row 'Total Cash and bank balances',
+        not 'Cash and cash equivalents'. The check must still pass."""
+        socf_path = os.path.join(tmp_dir, "socf.xlsx")
+        sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
+
+        _make_workbook({
+            "SOCF-Indirect": [
+                ["*Cash and cash equivalents at end of period", 5023.0, 2955.0],
+            ],
+        }, socf_path)
+
+        _make_workbook({
+            "SOFP-OrdOfLiq": [
+                ["Total Cash and bank balances", 5023.0, 2955.0],
+            ],
+        }, sofp_path)
+
+        result = SOCFToSOFPCashCheck().run(
+            {StatementType.SOCF: socf_path, StatementType.SOFP: sofp_path},
+            tolerance=1.0,
+        )
+        assert result.status == "passed"
+        assert result.expected == 5023.0
+        assert result.actual == 5023.0
+
 
 # ---------------------------------------------------------------------------
 # Smoke tests against real MBRS templates (Finding 5 fix)
@@ -447,6 +473,23 @@ class TestRealTemplateSmoke:
         val = find_value_by_label(ws, "total assets", col=2, wb=wb)
         assert val == 0.0
         wb.close()
+
+    def test_sofp_cash_label_resolves_in_both_variants(self):
+        """The cash row has different labels per variant. The candidate-list
+        form of find_value_by_label must resolve it in both templates."""
+        candidates = ["cash and cash equivalents", "total cash and bank balances"]
+
+        cunoncu = open_workbook(str(TEMPLATE_DIR / "01-SOFP-CuNonCu.xlsx"))
+        ws = find_sheet(cunoncu, "SOFP-CuNonCu")
+        val = find_value_by_label(ws, candidates, col=2, wb=cunoncu)
+        assert val == 0.0, f"CuNonCu cash lookup returned {val}"
+        cunoncu.close()
+
+        ordofliq = open_workbook(str(TEMPLATE_DIR / "02-SOFP-OrderOfLiquidity.xlsx"))
+        ws = find_sheet(ordofliq, "SOFP-OrdOfLiq")
+        val = find_value_by_label(ws, candidates, col=2, wb=ordofliq)
+        assert val == 0.0, f"OrdOfLiq cash lookup returned {val}"
+        ordofliq.close()
 
     def test_soci_before_of_tax_sheet_found(self):
         """Real sheet name is SOCI-BeforeOfTax (not BeforeTax)."""

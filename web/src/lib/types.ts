@@ -137,17 +137,6 @@ export interface RunCompleteData {
   statements_failed: string[];
 }
 
-// --- P0: Extended state types for streaming ---
-
-export interface ThinkingBlock {
-  id: string;
-  content: string;
-  summary: string;
-  timestamp: number;
-  phase: EventPhase | null;        // Which pipeline phase this was in
-  durationMs: number | null;       // Real reasoning duration from server (null if unknown)
-}
-
 export interface ToolTimelineEntry {
   tool_call_id: string;
   tool_name: string;
@@ -157,18 +146,17 @@ export interface ToolTimelineEntry {
   startTime: number;
   endTime: number | null;
   phase: EventPhase | null;
+  // Optional explicit lifecycle state. When unset, the card derives:
+  //   result_summary === null  → "active"
+  //   result_summary !== null  → "done"
+  // Callers can pass "failed" or "cancelled" explicitly when they have
+  // out-of-band signal (e.g. a future backend emits a tool-level error).
+  state?: "active" | "done" | "failed" | "cancelled";
 }
 
 export interface ResultJsonData {
   fields: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-}
-
-/** A completed text segment from one model turn, flushed when a tool_call arrives. */
-export interface TextSegment {
-  content: string;
-  timestamp: number;
-  phase: EventPhase | null;
 }
 
 // --- Phase 8/9: Multi-agent run configuration types ---
@@ -231,7 +219,14 @@ export interface RunConfigPayload {
 
 export type AgentTabStatus = "pending" | "running" | "complete" | "failed" | "cancelled" | "aborting";
 
-/** Per-agent streaming state — one per agent in a multi-agent run. */
+/**
+ * Per-agent streaming state — one per agent in a multi-agent run.
+ *
+ * Phase 6: the chat-view streaming fields (thinkingBuffer, activeThinkingId,
+ * thinkingBlocks, streamingText, textSegments) were removed when the chat
+ * feed was replaced by the tool-call timeline. We now only track the event
+ * stream and the derived toolTimeline plus per-agent metadata.
+ */
 export interface AgentState {
   agentId: string;
   role: string;            // e.g. "SOFP", "SOPL", "scout", "validator"
@@ -239,15 +234,90 @@ export interface AgentState {
   status: AgentTabStatus;  // "pending" | "running" | "complete" | "failed" | "cancelled" | "aborting"
   currentPhase: EventPhase | null;
   events: SSEEvent[];
-  thinkingBuffer: string;
-  activeThinkingId: string | null;
-  thinkingBlocks: ThinkingBlock[];
   toolTimeline: ToolTimelineEntry[];
-  streamingText: string;
-  textSegments: TextSegment[];   // Completed text from prior model turns
   tokens: TokenData | null;
   error: ErrorData | null;
   workbookPath: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: History API wire shapes
+//
+// Matches the JSON emitted by `GET /api/runs`, `GET /api/runs/{id}`, etc.
+// Kept as plain interfaces (not classes) so the fetch helpers can return
+// decoded JSON directly without any conversion step.
+// ---------------------------------------------------------------------------
+
+export interface RunSummaryJson {
+  id: number;
+  created_at: string;
+  pdf_filename: string;
+  status: string;                 // 'running' | 'completed' | 'failed' | 'aborted'
+  session_id: string;
+  statements_run: string[];
+  models_used: string[];
+  duration_seconds: number | null;
+  scout_enabled: boolean;
+  has_merged_workbook: boolean;
+}
+
+export interface RunListResponse {
+  runs: RunSummaryJson[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface RunAgentJson {
+  id: number;
+  statement_type: string;
+  variant: string | null;
+  model: string | null;
+  status: string;
+  started_at: string | null;
+  ended_at: string | null;
+  workbook_path: string | null;
+  total_tokens: number | null;
+  total_cost: number | null;
+  // Phase 8: persisted SSE-equivalent events. The API client normalises
+  // a missing field to [] so downstream consumers never have to null-check.
+  events: SSEEvent[];
+}
+
+export interface RunCrossCheckJson {
+  name: string;
+  status: "passed" | "failed" | "not_applicable" | "pending";
+  expected: number | null;
+  actual: number | null;
+  diff: number | null;
+  tolerance: number | null;
+  message: string;
+}
+
+export interface RunDetailJson {
+  id: number;
+  created_at: string;
+  pdf_filename: string;
+  status: string;
+  session_id: string;
+  output_dir: string;
+  merged_workbook_path: string | null;
+  scout_enabled: boolean;
+  started_at: string | null;
+  ended_at: string | null;
+  config: Record<string, unknown> | null;
+  agents: RunAgentJson[];
+  cross_checks: RunCrossCheckJson[];
+}
+
+export interface RunsFilterParams {
+  q?: string;
+  status?: string;
+  model?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export function createAgentState(agentId: string, role: string, label: string): AgentState {
@@ -258,12 +328,7 @@ export function createAgentState(agentId: string, role: string, label: string): 
     status: "pending",
     currentPhase: null,
     events: [],
-    thinkingBuffer: "",
-    activeThinkingId: null,
-    thinkingBlocks: [],
     toolTimeline: [],
-    streamingText: "",
-    textSegments: [],
     tokens: null,
     error: null,
     workbookPath: null,

@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import { appReducer, agentReducer, initialState } from "../App";
 import type { SSEEvent } from "../lib/types";
 import { createAgentState } from "../lib/types";
+import { buildToolTimeline } from "../lib/buildToolTimeline";
 
 // Helper: get to a "running" state
 function runningState() {
@@ -112,35 +113,13 @@ describe("appReducer", () => {
 
   // --- P0: New streaming event types ---
 
-  test("THINKING_DELTA event appends to thinkingBuffer", () => {
-    const running = runningState();
-
-    const s1 = appReducer(running, {
-      type: "EVENT",
-      payload: {
-        event: "thinking_delta",
-        data: { content: "Let me analyze ", thinking_id: "think_1" },
-        timestamp: 1,
-      } as SSEEvent,
-    });
-    expect(s1.thinkingBuffer).toBe("Let me analyze ");
-    expect(s1.activeThinkingId).toBe("think_1");
-
-    const s2 = appReducer(s1, {
-      type: "EVENT",
-      payload: {
-        event: "thinking_delta",
-        data: { content: "this PDF...", thinking_id: "think_1" },
-        timestamp: 2,
-      } as SSEEvent,
-    });
-    expect(s2.thinkingBuffer).toBe("Let me analyze this PDF...");
-  });
-
-  test("THINKING_END event finalizes thinkingBuffer and clears it", () => {
+  // Phase 6: the chat feed's thinking buffers were deleted along with the
+  // ChatFeed path. thinking_delta and thinking_end events still land in
+  // state.events[] for the audit trail, but no streaming buffer or
+  // per-block reasoning object is synthesised from them any more.
+  test("thinking_delta and thinking_end events accumulate in events[] without streaming buffers", () => {
     let state = runningState();
 
-    // Accumulate some thinking
     state = appReducer(state, {
       type: "EVENT",
       payload: {
@@ -149,8 +128,6 @@ describe("appReducer", () => {
         timestamp: 1,
       } as SSEEvent,
     });
-
-    // End the thinking block
     state = appReducer(state, {
       type: "EVENT",
       payload: {
@@ -160,12 +137,12 @@ describe("appReducer", () => {
       } as SSEEvent,
     });
 
-    expect(state.thinkingBuffer).toBe("");
-    expect(state.activeThinkingId).toBeNull();
-    expect(state.thinkingBlocks).toHaveLength(1);
-    expect(state.thinkingBlocks[0].id).toBe("think_1");
-    expect(state.thinkingBlocks[0].content).toBe("Reasoning about SOFP fields");
-    expect(state.thinkingBlocks[0].summary).toBe("Reasoning about SOFP fields");
+    expect(state.events).toHaveLength(2);
+    // None of the old streaming fields should be on the state object.
+    const shape = state as unknown as Record<string, unknown>;
+    expect(shape.thinkingBuffer).toBeUndefined();
+    expect(shape.activeThinkingId).toBeUndefined();
+    expect(shape.thinkingBlocks).toBeUndefined();
   });
 
   test("TOOL_CALL event adds entry to toolTimeline with start timestamp", () => {
@@ -228,7 +205,10 @@ describe("appReducer", () => {
     expect(state.toolTimeline[0].endTime).toBeGreaterThan(0);
   });
 
-  test("TEXT_DELTA event appends to streamingText", () => {
+  // Phase 6: streamingText / textSegments were removed with the chat feed.
+  // text_delta events still land in events[] for the audit trail, but no
+  // streaming buffer is maintained.
+  test("text_delta events accumulate in events[] without streamingText", () => {
     let state = runningState();
 
     state = appReducer(state, {
@@ -239,8 +219,6 @@ describe("appReducer", () => {
         timestamp: 1,
       } as SSEEvent,
     });
-    expect(state.streamingText).toBe("I found ");
-
     state = appReducer(state, {
       type: "EVENT",
       payload: {
@@ -249,7 +227,10 @@ describe("appReducer", () => {
         timestamp: 2,
       } as SSEEvent,
     });
-    expect(state.streamingText).toBe("I found the SOFP data.");
+    expect(state.events).toHaveLength(2);
+    const shape = state as unknown as Record<string, unknown>;
+    expect(shape.streamingText).toBeUndefined();
+    expect(shape.textSegments).toBeUndefined();
   });
 
   test("Events accumulate in order for full audit trail", () => {
@@ -303,28 +284,27 @@ describe("appReducer", () => {
   test("Events from multiple agents populate separate state slices", () => {
     let state = runningState();
 
-    // SOFP agent event
+    // Two agents each get a status event. Phase 6: streaming buffers are
+    // gone, so we assert events[] and agentTabOrder routing instead.
     state = appReducer(state, {
       type: "EVENT",
       payload: {
-        event: "thinking_delta",
-        data: { content: "Analyzing SOFP", thinking_id: "t1", agent_id: "sofp_0", agent_role: "SOFP" },
+        event: "status",
+        data: { phase: "reading_template", message: "", agent_id: "sofp_0", agent_role: "SOFP" },
         timestamp: 1,
       } as SSEEvent,
     });
-
-    // SOPL agent event
     state = appReducer(state, {
       type: "EVENT",
       payload: {
-        event: "thinking_delta",
-        data: { content: "Analyzing SOPL", thinking_id: "t2", agent_id: "sopl_0", agent_role: "SOPL" },
+        event: "status",
+        data: { phase: "reading_template", message: "", agent_id: "sopl_0", agent_role: "SOPL" },
         timestamp: 2,
       } as SSEEvent,
     });
 
-    expect(state.agents.sofp_0.thinkingBuffer).toBe("Analyzing SOFP");
-    expect(state.agents.sopl_0.thinkingBuffer).toBe("Analyzing SOPL");
+    expect(state.agents.sofp_0.events).toHaveLength(1);
+    expect(state.agents.sopl_0.events).toHaveLength(1);
     expect(state.agentTabOrder).toEqual(["sofp_0", "sopl_0"]);
   });
 
@@ -525,112 +505,170 @@ describe("appReducer", () => {
     expect(state.statementsInRun).toEqual(["SOFP", "SOPL"]);
   });
 
-  // --- Phase: Text segmentation across model turns ---
+  // Phase 6: the text-segmentation tests that lived here covered the
+  // streamingText / textSegments flush logic, which was deleted when the
+  // chat feed was replaced by the tool-call timeline.
 
-  test("text_delta events from separate model turns produce separate textSegments", () => {
-    let state = runningState();
+  // --- Phase 4: Top-nav view switching ---
 
-    // Turn 1: agent says something, then calls a tool
-    state = appReducer(state, {
-      type: "EVENT",
-      payload: {
-        event: "text_delta",
-        data: { content: "Let me read the template.", agent_id: "sofp_0", agent_role: "SOFP" },
-        timestamp: 1,
-      } as SSEEvent,
-    });
-
-    // Tool call flushes turn-1 text into a segment
-    state = appReducer(state, {
-      type: "EVENT",
-      payload: {
-        event: "tool_call",
-        data: { tool_name: "read_template", tool_call_id: "tc_1", args: {}, agent_id: "sofp_0", agent_role: "SOFP" },
-        timestamp: 2,
-      } as SSEEvent,
-    });
-
-    // Tool result
-    state = appReducer(state, {
-      type: "EVENT",
-      payload: {
-        event: "tool_result",
-        data: { tool_name: "read_template", tool_call_id: "tc_1", result_summary: "ok", duration_ms: 100, agent_id: "sofp_0", agent_role: "SOFP" },
-        timestamp: 3,
-      } as SSEEvent,
-    });
-
-    // Turn 2: agent says something else
-    state = appReducer(state, {
-      type: "EVENT",
-      payload: {
-        event: "text_delta",
-        data: { content: "Extraction complete.", agent_id: "sofp_0", agent_role: "SOFP" },
-        timestamp: 4,
-      } as SSEEvent,
-    });
-
-    const agent = state.agents.sofp_0;
-    // Turn-1 text should be flushed into textSegments
-    expect(agent.textSegments).toHaveLength(1);
-    expect(agent.textSegments[0].content).toBe("Let me read the template.");
-    // Turn-2 text is still in streamingText (in-progress)
-    expect(agent.streamingText).toBe("Extraction complete.");
+  test("view state defaults to 'extract'", () => {
+    expect(initialState.view).toBe("extract");
   });
 
-  test("flushed text segment timestamp is strictly before the tool startTime", () => {
-    let state = runningState();
+  test("SET_VIEW switches between 'extract' and 'history'", () => {
+    const toHistory = appReducer(initialState, { type: "SET_VIEW", payload: "history" });
+    expect(toHistory.view).toBe("history");
 
-    // Text then tool call
-    state = appReducer(state, {
-      type: "EVENT",
-      payload: {
-        event: "text_delta",
-        data: { content: "Analyzing...", agent_id: "sofp_0", agent_role: "SOFP" },
-        timestamp: 1,
-      } as SSEEvent,
-    });
-    state = appReducer(state, {
-      type: "EVENT",
-      payload: {
-        event: "tool_call",
-        data: { tool_name: "read_template", tool_call_id: "tc_order", args: {}, agent_id: "sofp_0", agent_role: "SOFP" },
-        timestamp: 2,
-      } as SSEEvent,
-    });
-
-    const agent = state.agents.sofp_0;
-    // Segment must sort before the tool card — segment.timestamp < tool.startTime
-    expect(agent.textSegments[0].timestamp).toBeLessThan(agent.toolTimeline[0].startTime);
+    const backToExtract = appReducer(toHistory, { type: "SET_VIEW", payload: "extract" });
+    expect(backToExtract.view).toBe("extract");
   });
 
-  test("agent complete event flushes remaining streamingText into textSegments", () => {
-    let state = runningState();
+  test("SET_VIEW preserves other AppState fields (does not reset extract state)", () => {
+    // Upload and start a run — then switch to history — extract state must persist
+    const uploaded = appReducer(initialState, {
+      type: "UPLOADED",
+      payload: { sessionId: "abc", filename: "test.pdf" },
+    });
+    const running = appReducer(uploaded, { type: "RUN_STARTED" });
+    const switched = appReducer(running, { type: "SET_VIEW", payload: "history" });
 
-    // Text from final turn
-    state = appReducer(state, {
+    expect(switched.sessionId).toBe("abc");
+    expect(switched.filename).toBe("test.pdf");
+    expect(switched.isRunning).toBe(true);
+    expect(switched.view).toBe("history");
+  });
+
+  // --- Phase 9: Success toast ---
+
+  test("run_complete with success:true sets a success toast", () => {
+    const running = runningState();
+    const withToast = appReducer(running, {
       type: "EVENT",
       payload: {
-        event: "text_delta",
-        data: { content: "Final summary.", agent_id: "sofp_0", agent_role: "SOFP" },
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/tmp/filled.xlsx",
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: ["SOFP"],
+          statements_failed: [],
+        },
         timestamp: 1,
       } as SSEEvent,
     });
+    expect(withToast.toast).not.toBeNull();
+    expect(withToast.toast!.tone).toBe("success");
+    expect(withToast.toast!.message).toMatch(/complete/i);
+  });
 
-    // Agent completes — should flush streamingText into textSegments
-    state = appReducer(state, {
+  test("run_complete with success:false does NOT set a success toast", () => {
+    const running = runningState();
+    const withToast = appReducer(running, {
       type: "EVENT",
       payload: {
-        event: "complete",
-        data: { success: true, agent_id: "sofp_0", agent_role: "SOFP", workbook_path: "/out.xlsx", error: null },
-        timestamp: 2,
+        event: "run_complete",
+        data: {
+          success: false,
+          merged_workbook: null,
+          merge_errors: ["boom"],
+          cross_checks: [],
+          statements_completed: [],
+          statements_failed: ["SOFP"],
+        },
+        timestamp: 1,
       } as SSEEvent,
     });
+    expect(withToast.toast).toBeNull();
+  });
 
-    const agent = state.agents.sofp_0;
-    expect(agent.textSegments).toHaveLength(1);
-    expect(agent.textSegments[0].content).toBe("Final summary.");
-    expect(agent.streamingText).toBe("");
+  // Peer-review [HIGH] regression: starting a rerun used to leave stale
+  // completion state visible in the UI — the prior ResultsView, the old
+  // cross-checks in the validator tab, and the Phase 9 "Run completed
+  // successfully" toast all stuck around until the new run_complete
+  // eventually arrived. RERUN_STARTED must wipe all of them so the
+  // intermediate window reflects "run in progress" cleanly.
+  test("RERUN_STARTED clears completion state, errors, and toast", () => {
+    // Start from a state that looks like a completed run: upload, run,
+    // and receive run_complete. Then inject an agent slot so rerun has
+    // a target.
+    let state = runningState();
+    state = {
+      ...state,
+      agents: {
+        sofp_0: {
+          ...createAgentState("sofp_0", "SOFP", "SOFP"),
+          status: "failed",
+        },
+      },
+      agentTabOrder: ["sofp_0"],
+      isComplete: true,
+      complete: {
+        success: true,
+        output_path: "",
+        excel_path: "/tmp/filled.xlsx",
+        trace_path: "",
+        total_tokens: 1000,
+        cost: 0.01,
+      },
+      crossChecks: [
+        {
+          name: "sofp_balance",
+          status: "passed",
+          expected: 100,
+          actual: 100,
+          diff: 0,
+          tolerance: 1,
+          message: "ok",
+        },
+      ],
+      hasError: true,
+      error: { message: "stale error", traceback: "" },
+      toast: { message: "Run completed successfully", tone: "success" },
+    };
+
+    const rerun = appReducer(state, {
+      type: "RERUN_STARTED",
+      payload: { agentId: "sofp_0" },
+    });
+
+    // Primary contract: isRunning flips back on so ResultsView can hide.
+    expect(rerun.isRunning).toBe(true);
+    // Stale completion state is wiped.
+    expect(rerun.isComplete).toBe(false);
+    expect(rerun.complete).toBeNull();
+    expect(rerun.crossChecks).toEqual([]);
+    // Stale error state is wiped — the user is trying the failure again.
+    expect(rerun.hasError).toBe(false);
+    expect(rerun.error).toBeNull();
+    // Stale success toast is dismissed so it can't look like it's
+    // congratulating the NEW rerun before it's even started.
+    expect(rerun.toast).toBeNull();
+    // Sanity: the target agent is reset to pending.
+    expect(rerun.agents.sofp_0.status).toBe("pending");
+  });
+
+  test("DISMISS_TOAST clears the toast", () => {
+    const running = runningState();
+    const withToast = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/tmp/filled.xlsx",
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: ["SOFP"],
+          statements_failed: [],
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(withToast.toast).not.toBeNull();
+
+    const cleared = appReducer(withToast, { type: "DISMISS_TOAST" });
+    expect(cleared.toast).toBeNull();
   });
 });
 
@@ -648,20 +686,9 @@ describe("agentReducer", () => {
     expect(result.status).toBe("running");
   });
 
-  test("thinking_delta accumulates in agent buffer", () => {
-    let agent = createAgentState("sofp_0", "SOFP", "SOFP");
-    agent = agentReducer(agent, {
-      event: "thinking_delta",
-      data: { content: "Part 1 ", thinking_id: "t1" },
-      timestamp: 1,
-    } as SSEEvent);
-    agent = agentReducer(agent, {
-      event: "thinking_delta",
-      data: { content: "Part 2", thinking_id: "t1" },
-      timestamp: 2,
-    } as SSEEvent);
-    expect(agent.thinkingBuffer).toBe("Part 1 Part 2");
-  });
+  // Phase 6: thinking_delta no longer populates a thinkingBuffer. The event
+  // still lands in events[] so the audit trail is preserved and the Phase 6
+  // negative-shape tests below cover the "no streaming fields" invariant.
 
   test("tool_call and tool_result pair correctly", () => {
     let agent = createAgentState("sofp_0", "SOFP", "SOFP");
@@ -680,5 +707,64 @@ describe("agentReducer", () => {
     } as SSEEvent);
     expect(agent.toolTimeline[0].result_summary).toBe("Wrote row 5");
     expect(agent.toolTimeline[0].duration_ms).toBe(50);
+  });
+
+  // Phase 6 — dead streaming state is gone from AgentState/AppState. The
+  // reducers must still accept thinking/text events (they're still streamed
+  // by some agents) but they append to `events` only and do not populate
+  // any streaming-buffer fields.
+  test("thinking_delta event is recorded in events[] but no streaming buffer is written", () => {
+    let agent = createAgentState("sofp_0", "SOFP", "SOFP");
+    agent = agentReducer(agent, {
+      event: "thinking_delta",
+      data: { content: "thinking...", thinking_id: "t1" },
+      timestamp: 1,
+    } as SSEEvent);
+    // The event lands in events[] for completeness.
+    expect(agent.events).toHaveLength(1);
+    // AgentState type no longer has thinkingBuffer / activeThinkingId etc.,
+    // so we assert the fields are not present on the returned object.
+    expect((agent as unknown as Record<string, unknown>).thinkingBuffer).toBeUndefined();
+    expect((agent as unknown as Record<string, unknown>).activeThinkingId).toBeUndefined();
+    expect((agent as unknown as Record<string, unknown>).thinkingBlocks).toBeUndefined();
+  });
+
+  test("text_delta event does not create a streamingText field", () => {
+    let agent = createAgentState("sofp_0", "SOFP", "SOFP");
+    agent = agentReducer(agent, {
+      event: "text_delta",
+      data: { content: "Hello" },
+      timestamp: 1,
+    } as SSEEvent);
+    expect(agent.events).toHaveLength(1);
+    expect((agent as unknown as Record<string, unknown>).streamingText).toBeUndefined();
+    expect((agent as unknown as Record<string, unknown>).textSegments).toBeUndefined();
+  });
+
+  // Phase 5.4 — the live reducer must produce exactly the same timeline as
+  // buildToolTimeline(events) so live and history replay cannot drift.
+  test("agentReducer toolTimeline equals buildToolTimeline(events) for interleaved events", () => {
+    let agent = createAgentState("sofp_0", "SOFP", "SOFP");
+    const events: SSEEvent[] = [
+      { event: "status", data: { phase: "reading_template", message: "" }, timestamp: 1 } as SSEEvent,
+      { event: "tool_call", data: { tool_name: "read_template", tool_call_id: "a", args: {} }, timestamp: 2 } as SSEEvent,
+      { event: "status", data: { phase: "viewing_pdf", message: "" }, timestamp: 3 } as SSEEvent,
+      { event: "tool_call", data: { tool_name: "view_pdf_pages", tool_call_id: "b", args: { pages: [5] } }, timestamp: 4 } as SSEEvent,
+      // Results arrive out of order.
+      { event: "tool_result", data: { tool_name: "view_pdf_pages", tool_call_id: "b", result_summary: "rendered", duration_ms: 80 }, timestamp: 5 } as SSEEvent,
+      { event: "tool_result", data: { tool_name: "read_template", tool_call_id: "a", result_summary: "45 fields", duration_ms: 200 }, timestamp: 6 } as SSEEvent,
+    ];
+    for (const evt of events) {
+      agent = agentReducer(agent, evt);
+    }
+    // Deep-equal the live timeline to the pure function's output.
+    expect(agent.toolTimeline).toEqual(buildToolTimeline(agent.events));
+    // Spot-check: both calls populated, in call order, with matching phases.
+    expect(agent.toolTimeline.map((e) => [e.tool_call_id, e.phase])).toEqual([
+      ["a", "reading_template"],
+      ["b", "viewing_pdf"],
+    ]);
+    expect(agent.toolTimeline[0].result_summary).toBe("45 fields");
+    expect(agent.toolTimeline[1].result_summary).toBe("rendered");
   });
 });

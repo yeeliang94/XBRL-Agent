@@ -94,6 +94,14 @@ const styles = {
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
     borderRadius: pwc.radius.md,
   } as React.CSSProperties,
+  successDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: pwc.success,
+    display: "inline-block",
+    flexShrink: 0,
+  } as React.CSSProperties,
   failBadge: {
     display: "inline-flex",
     alignItems: "center",
@@ -105,6 +113,14 @@ const styles = {
     background: "#FEF2F2",
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
     borderRadius: pwc.radius.md,
+  } as React.CSSProperties,
+  failDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: pwc.error,
+    display: "inline-block",
+    flexShrink: 0,
   } as React.CSSProperties,
   // Data Preview
   table: {
@@ -305,9 +321,15 @@ function SummaryTab({ complete, runStartTime }: { complete: CompleteData; runSta
           <div style={styles.cardLabel}>Status</div>
           <div>
             {complete.success ? (
-              <span style={styles.successBadge}>✓ Success</span>
+              <span style={styles.successBadge}>
+                <span aria-hidden="true" style={styles.successDot} />
+                Success
+              </span>
             ) : (
-              <span style={styles.failBadge}>✗ Failed</span>
+              <span style={styles.failBadge}>
+                <span aria-hidden="true" style={styles.failDot} />
+                Failed
+              </span>
             )}
           </div>
         </div>

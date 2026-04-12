@@ -48,18 +48,22 @@ const styles = {
     height: 32,
   },
   // Circle indicators
-  checkCircle: {
+  completeCircle: {
     width: 24,
     height: 24,
     borderRadius: "50%",
-    background: pwc.success,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: pwc.white,
-    fontSize: 14,
-    fontWeight: 700,
+    background: "#F0FDF4",
+    border: `2px solid ${pwc.success}`,
     flexShrink: 0,
+  } as React.CSSProperties,
+  completeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: pwc.success,
   } as React.CSSProperties,
   activeCircle: {
     width: 24,
@@ -124,8 +128,8 @@ export function PipelineStages({ currentPhase, isRunning, isComplete }: Props) {
             <div style={styles.step}>
               {/* Step indicator */}
               {status === "completed" && (
-                <div data-testid="step-check" style={styles.checkCircle}>
-                  ✓
+                <div data-testid="step-complete" style={styles.completeCircle}>
+                  <span style={styles.completeDot} />
                 </div>
               )}
               {status === "active" && (

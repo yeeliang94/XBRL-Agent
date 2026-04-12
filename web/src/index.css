@@ -34,6 +34,13 @@
   50% { opacity: 0.4; transform: scale(0.85); }
 }
 
+/* Active tool-call glyph pulse — gentle opacity only, no scale so neighbouring
+   elements don't shift. Used by ToolCallCard's active state (Phase 2). */
+@keyframes glyph-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 /* Keyboard-accessible focus ring for inline-styled buttons.
    Overrides outline:none set in JS when keyboard-navigating. */
 button:focus-visible {

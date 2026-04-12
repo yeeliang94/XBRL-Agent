@@ -5,6 +5,7 @@ import type {
   ExtendedSettingsResponse,
   ModelEntry,
   RunConfigPayload,
+  ToolTimelineEntry,
 } from "../lib/types";
 import { STATEMENT_TYPES } from "../lib/types";
 import { pwc } from "../lib/theme";
@@ -12,6 +13,8 @@ import { abortAgent } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { ScoutToggle } from "./ScoutToggle";
 import { StatementRunConfig } from "./StatementRunConfig";
+import { ToolCallCard } from "./ToolCallCard";
+import { humanToolName } from "../lib/toolLabels";
 
 interface Props {
   sessionId: string;
@@ -121,12 +124,6 @@ const styles = {
     justifyContent: "space-between",
     gap: pwc.space.sm,
   } as React.CSSProperties,
-  scoutProgressStep: {
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    color: pwc.grey500,
-    paddingLeft: pwc.space.lg,
-  } as React.CSSProperties,
 };
 
 function makeEmptySelections(): Record<StatementType, VariantSelection> {
@@ -150,7 +147,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scoutError, setScoutError] = useState<string | null>(null);
   const [scoutProgress, setScoutProgress] = useState<string | null>(null);
-  const [scoutMessages, setScoutMessages] = useState<string[]>([]);
   const [scoutStartTime, setScoutStartTime] = useState<number | null>(null);
   const [scoutEnabled, setScoutEnabled] = useState(true);
   const [isDetecting, setIsDetecting] = useState(false);
@@ -162,12 +158,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     {} as Record<StatementType, string>,
   );
   const [availableModels, setAvailableModels] = useState<ModelEntry[]>([]);
-  const [scoutToolCalls, setScoutToolCalls] = useState<Array<{
-    tool_name: string;
-    tool_call_id: string;
-    result_summary?: string;
-    duration_ms?: number;
-  }>>([]);
+  // Phase 10: scout now feeds the same ToolCallCard used in the live
+  // extract timeline, so the row state is the shared ToolTimelineEntry.
+  const [scoutToolCalls, setScoutToolCalls] = useState<ToolTimelineEntry[]>([]);
 
   // Load settings on mount
   useEffect(() => {
@@ -242,7 +235,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     setIsDetecting(true);
     setScoutError(null);
     setScoutProgress(null);
-    setScoutMessages([]);
     setScoutToolCalls([]);
     setScoutStartTime(Date.now());
     try {
@@ -288,29 +280,49 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
           const eventType = currentEventType;
           currentEventType = ""; // reset for next event
 
-          // Structured tool events from streaming scout
+          // Structured tool events from streaming scout — pushed into
+          // the same ToolTimelineEntry shape the live extract view uses,
+          // so ToolCallCard can render them unchanged.
           if (eventType === "tool_call") {
-            setScoutToolCalls(prev => [...prev, {
-              tool_name: data.tool_name,
-              tool_call_id: data.tool_call_id,
-            }]);
+            const startTime = Date.now();
+            setScoutToolCalls(prev => [
+              ...prev,
+              {
+                tool_call_id: data.tool_call_id,
+                tool_name: data.tool_name,
+                args: data.args ?? {},
+                result_summary: null,
+                duration_ms: null,
+                startTime,
+                endTime: null,
+                phase: null,
+              },
+            ]);
+            // Mirror the tool name into the header line so users see
+            // friendly progress text without duplicating the bullet list.
+            setScoutProgress(`${humanToolName(data.tool_name)}…`);
             return;
           }
 
           if (eventType === "tool_result") {
             setScoutToolCalls(prev => prev.map(tc =>
               tc.tool_call_id === data.tool_call_id
-                ? { ...tc, result_summary: data.result_summary, duration_ms: data.duration_ms }
+                ? {
+                    ...tc,
+                    result_summary: data.result_summary ?? "",
+                    duration_ms: data.duration_ms ?? null,
+                    endTime: Date.now(),
+                  }
                 : tc,
             ));
             return;
           }
 
-          // Status/progress events (have `phase`, no `traceback`)
+          // Phase 10.3: the bullet list was removed, so status/phase
+          // events no longer feed a separate message buffer — header
+          // text is driven by the active tool instead. We still swallow
+          // the event type so it doesn't fall into the error branch.
           if (data.phase && !data.traceback) {
-            const msg = data.message || null;
-            setScoutProgress(msg);
-            if (msg) setScoutMessages(prev => [...prev, msg]);
             return;
           }
 
@@ -323,7 +335,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
 
           if (data.success && data.infopack) {
             setInfopack(data.infopack);
-            setScoutProgress(null);
+            setScoutProgress("Auto-detect complete");
 
             // Populate variant selections from infopack.
             // Scout sends variant_suggestion (not variant) and uppercase
@@ -495,25 +507,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
                 </button>
               </div>
             </div>
-            {scoutToolCalls.length > 0 && scoutToolCalls.map((tc) => (
-              <div key={tc.tool_call_id} style={{
-                display: "flex", alignItems: "center", gap: pwc.space.sm,
-                padding: "3px 0", fontSize: 12, fontFamily: pwc.fontBody, color: pwc.grey700,
-              }}>
-                <span style={{
-                  color: tc.result_summary ? pwc.success : pwc.orange500,
-                  fontSize: 11,
-                }}>{tc.result_summary ? "\u2713" : "\u25CF"}</span>
-                <span style={{ fontWeight: 600, color: pwc.grey800 }}>{tc.tool_name}</span>
-                {tc.duration_ms != null && (
-                  <span style={{ color: pwc.grey300, fontSize: 11 }}>{tc.duration_ms}ms</span>
-                )}
-              </div>
-            ))}
-            {scoutMessages.length > 1 && scoutMessages.slice(0, -1).filter(msg =>
-              !msg.startsWith("Calling ") // avoid duplicate with tool call display
-            ).map((msg, i) => (
-              <p key={i} style={styles.scoutProgressStep}>{"\u2713"} {msg}</p>
+            {scoutToolCalls.map((entry) => (
+              <ToolCallCard key={entry.tool_call_id} entry={entry} />
             ))}
           </div>
         )}
