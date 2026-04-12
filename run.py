@@ -49,6 +49,7 @@ def run_agent(
     output_dir: str = _DEFAULT_OUTPUT_DIR,
     cache_template: bool = False,
     statements: Optional[Set[StatementType]] = None,
+    filing_level: str = "company",
 ) -> AgentResult:
     """Run extraction via the coordinator for one or more statement types.
 
@@ -83,6 +84,7 @@ def run_agent(
         output_dir=output_dir,
         model=resolved_model,
         statements_to_run=statements,
+        filing_level=filing_level,
     )
 
     # Run all agents concurrently
@@ -170,6 +172,8 @@ if __name__ == "__main__":
                         help="Statements to extract (default: all 5)")
     parser.add_argument("--output-dir", default=None,
                         help="Base output directory (default: output/ next to this script)")
+    parser.add_argument("--level", default="company", choices=["company", "group"],
+                        help="Filing level: company (standalone) or group (consolidated + company)")
     args = parser.parse_args()
 
     stmts = {StatementType(s) for s in args.statements}
@@ -185,6 +189,7 @@ if __name__ == "__main__":
         pdf_path=args.pdf,
         model=model,
         statements=stmts,
+        filing_level=args.level,
     )
     if args.output_dir:
         kwargs["output_dir"] = args.output_dir

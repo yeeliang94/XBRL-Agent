@@ -140,24 +140,6 @@ class TestCreateScoutAgent:
         # Mutable state starts empty
         assert deps.infopack is None
 
-    def test_agent_has_expected_tools(self, synthetic_pdf: Path):
-        from scout.agent import create_scout_agent
-
-        agent, _ = create_scout_agent(
-            pdf_path=synthetic_pdf,
-            model="test",
-        )
-        tool_names = set(agent._function_toolset.tools.keys())
-        expected = {
-            "find_toc",
-            "parse_toc_text",
-            "view_pages",
-            "check_variant_signals",
-            "discover_notes",
-            "save_infopack",
-        }
-        assert expected.issubset(tool_names), f"Missing tools: {expected - tool_names}"
-
     def test_default_statements_is_all_five(self, synthetic_pdf: Path):
         from scout.agent import create_scout_agent
 

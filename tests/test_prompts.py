@@ -110,3 +110,47 @@ class TestRenderPrompt:
         """Without page hints (scout off), prompt should instruct self-navigation."""
         prompt = render_prompt(StatementType.SOFP, "CuNonCu", page_hints=None)
         assert "table of contents" in prompt.lower() or "TOC" in prompt
+
+
+class TestGroupPromptOverlay:
+    """When filing_level='group', the prompt should include Group-specific instructions."""
+
+    def test_group_sofp_includes_column_layout(self):
+        prompt = render_prompt(StatementType.SOFP, "CuNonCu", filing_level="group")
+        lower = prompt.lower()
+        assert "group" in lower
+        assert "company" in lower
+        # Must explain the 6-column layout
+        assert "column b" in lower or "col b" in lower or "column d" in lower or "col d" in lower
+
+    def test_company_sofp_omits_group_overlay(self):
+        prompt = render_prompt(StatementType.SOFP, "CuNonCu", filing_level="company")
+        # Should NOT contain the group overlay section
+        assert "GROUP FILING" not in prompt
+
+    def test_group_socie_references_four_blocks(self):
+        prompt = render_prompt(StatementType.SOCIE, "Default", filing_level="group")
+        lower = prompt.lower()
+        # Must mention both Group and Company blocks
+        assert "group" in lower
+        assert "company" in lower
+        # Must reference the block row ranges
+        assert "block" in lower or "rows 51" in lower or "row 51" in lower
+
+    def test_default_filing_level_is_company(self):
+        """Omitting filing_level should behave like 'company'."""
+        prompt_default = render_prompt(StatementType.SOFP, "CuNonCu")
+        prompt_company = render_prompt(StatementType.SOFP, "CuNonCu", filing_level="company")
+        assert prompt_default == prompt_company
+
+    def test_all_statements_have_group_overlay(self):
+        """Every statement with a template should include Group instructions when level='group'."""
+        from statement_types import variants_for
+        for stmt in StatementType:
+            variants = variants_for(stmt)
+            if not variants[0].template_filename:
+                continue
+            prompt = render_prompt(stmt, variants[0].name, filing_level="group")
+            assert "group" in prompt.lower(), (
+                f"Group overlay missing for {stmt.value}/{variants[0].name}"
+            )

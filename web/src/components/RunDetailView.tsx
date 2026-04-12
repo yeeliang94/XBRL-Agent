@@ -89,6 +89,10 @@ function ConfigBlock({ config }: { config: Record<string, unknown> | null }) {
     label: "Scout",
     value: config.use_scout ? "Enabled" : "Disabled",
   });
+  entries.push({
+    label: "Filing level",
+    value: (config.filing_level === "group" ? "Group" : "Company"),
+  });
   return (
     <dl style={styles.dl}>
       {entries.map((e) => (

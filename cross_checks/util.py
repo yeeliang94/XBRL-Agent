@@ -18,16 +18,28 @@ _SOCIE_NCI_COL = 23       # W — Non-controlling interests
 _SOCIE_TOTAL_COL = 24     # X — Total
 _SOCIE_RETAINED_COL = 3   # C — Retained earnings
 
+# Group SOCIE block row ranges (each block is a complete SOCIE for one entity/period)
+SOCIE_GROUP_BLOCKS = {
+    "group_cy":   (3, 25),
+    "group_py":   (27, 49),
+    "company_cy": (51, 73),
+    "company_py": (75, 97),
+}
 
-def has_nci_data(ws, start_row: int = 1) -> bool:
+
+def has_nci_data(ws, start_row: int = 1, end_row: Optional[int] = None) -> bool:
     """Check whether the SOCIE sheet has actual NCI data filled in.
 
     The template's NCI column (W) contains metadata strings (e.g. the header
     'Non-controlling interests' in row 2) and formula scaffolding.  This
     function only counts **numeric** non-zero values — strings and formulas
     are ignored, so metadata rows don't trigger false positives.
+
+    When end_row is provided, only checks within that range (for Group SOCIE
+    where each block may have different NCI characteristics).
     """
-    for row in range(start_row, ws.max_row + 1):
+    max_row = end_row if end_row is not None else ws.max_row
+    for row in range(start_row, max_row + 1):
         val = ws.cell(row=row, column=_SOCIE_NCI_COL).value
         if val is None or val == 0:
             continue
@@ -37,10 +49,57 @@ def has_nci_data(ws, start_row: int = 1) -> bool:
     return False
 
 
-def socie_column(ws, start_row: int = 1) -> int:
+def socie_column(ws, start_row: int = 1, end_row: Optional[int] = None) -> int:
     """Return the correct SOCIE read column: Total (X=24) if NCI data exists,
-    Retained earnings (C=3) otherwise."""
-    return _SOCIE_TOTAL_COL if has_nci_data(ws, start_row) else _SOCIE_RETAINED_COL
+    Retained earnings (C=3) otherwise.
+
+    For Group SOCIE, pass the block's row range so NCI detection is scoped
+    to that entity/period block only.
+    """
+    return _SOCIE_TOTAL_COL if has_nci_data(ws, start_row, end_row) else _SOCIE_RETAINED_COL
+
+
+def find_value_in_block(
+    ws,
+    label_substr: Union[str, Sequence[str]],
+    col: int,
+    start_row: int,
+    end_row: int,
+    wb: openpyxl.Workbook = None,
+) -> Optional[float]:
+    """Like find_value_by_label but restricted to a row range (for Group SOCIE blocks)."""
+    candidates: list[str]
+    if isinstance(label_substr, str):
+        candidates = [label_substr]
+    else:
+        candidates = list(label_substr)
+
+    for candidate in candidates:
+        target = candidate.strip().lower()
+        for r in range(start_row, end_row + 1):
+            cell = ws.cell(row=r, column=1)
+            if cell.value is None:
+                continue
+            normalized = str(cell.value).strip().lstrip("*").strip().lower()
+            if normalized == target or target in normalized or normalized in target:
+                val_cell = ws.cell(row=r, column=col)
+                raw = val_cell.value
+                if raw is None:
+                    continue
+                if isinstance(raw, str) and raw.startswith("="):
+                    if wb is None:
+                        continue
+                    from openpyxl.utils import get_column_letter
+                    cell_ref = f"{get_column_letter(col)}{r}"
+                    resolved = _resolve_cell_value(wb, ws.title, cell_ref)
+                    if resolved is not None:
+                        return resolved
+                    continue
+                try:
+                    return float(raw)
+                except (ValueError, TypeError):
+                    continue
+    return None
 
 
 def open_workbook(path: str) -> openpyxl.Workbook:

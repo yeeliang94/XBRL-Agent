@@ -37,6 +37,7 @@ def fill_workbook(
     template_path: str,
     output_path: str,
     fields_json: str,
+    filing_level: str = "company",
 ) -> FillResult:
     """Apply structured field mappings to an Excel template.
 
@@ -118,8 +119,10 @@ def fill_workbook(
         if mapping.evidence:
             if "socie" in mapping.sheet.lower():
                 evidence_col = 25  # Y — after Total (X=24)
+            elif filing_level == "group":
+                evidence_col = 6  # F — after Company PY (E=5)
             else:
-                evidence_col = 4  # D — single evidence column for all periods
+                evidence_col = 4  # D — after PY (C=3)
             evidence_cell = ws.cell(row=target_row, column=evidence_col)
             # Always overwrite evidence so correction passes don't accumulate
             # stale provenance from values that were later replaced.

@@ -64,6 +64,7 @@ class RunConfig:
     # Per-agent model overrides — same typing as model (str or Model object)
     models: Dict[StatementType, Any] = field(default_factory=dict)
     scout_enabled: bool = True
+    filing_level: str = "company"
 
 
 @dataclass
@@ -148,7 +149,7 @@ async def run_extraction(
             }
 
         # Resolve template path for this variant
-        tpl_path = str(get_template_path(stmt_type, variant))
+        tpl_path = str(get_template_path(stmt_type, variant, level=config.filing_level))
 
         # agent_id is the lowercase statement name (e.g. "sofp", "sopl").
         # This is stable across reruns — a single-statement rerun produces
@@ -167,6 +168,7 @@ async def run_extraction(
                 page_hints=page_hints,
                 event_queue=event_queue,
                 agent_id=agent_id,
+                filing_level=config.filing_level,
             ),
             name=agent_id,
         )
@@ -276,6 +278,7 @@ async def _run_single_agent(
     page_hints: Optional[Dict] = None,
     event_queue: Optional[asyncio.Queue] = None,
     agent_id: str = "",
+    filing_level: str = "company",
 ) -> AgentResult:
     """Run a single extraction agent, streaming events into event_queue if provided."""
     agent_role = statement_type.value
@@ -294,6 +297,7 @@ async def _run_single_agent(
             model=model,
             output_dir=output_dir,
             page_hints=page_hints,
+            filing_level=filing_level,
         )
 
         prompt = (

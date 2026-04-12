@@ -9,7 +9,7 @@ import pytest
 from tools.section_headers import discover_section_headers, header_set
 
 REPO = Path(__file__).resolve().parent.parent
-MFRS = REPO / "XBRL-template-MFRS"
+MFRS = REPO / "XBRL-template-MFRS" / "Company"
 LEGACY_TEMPLATE = REPO / "SOFP-Xbrl-template.xlsx"
 
 

@@ -40,6 +40,7 @@ class ExtractionDeps:
         statement_type: StatementType,
         variant: str,
         page_hints: Optional[dict] = None,
+        filing_level: str = "company",
     ):
         self.pdf_path = pdf_path
         self.template_path = template_path
@@ -49,6 +50,7 @@ class ExtractionDeps:
         self.statement_type = statement_type
         self.variant = variant
         self.page_hints = page_hints
+        self.filing_level = filing_level
         # Per-statement output filename for workbook isolation
         self.filled_filename = f"{statement_type.value}_filled.xlsx"
         # Mutable state
@@ -109,6 +111,7 @@ def create_extraction_agent(
     output_dir: Optional[str] = None,
     cache_template: bool = False,
     page_hints: Optional[dict] = None,
+    filing_level: str = "company",
 ) -> tuple[Agent[ExtractionDeps, str], ExtractionDeps]:
     """Create an extraction agent for any statement type.
 
@@ -135,6 +138,7 @@ def create_extraction_agent(
         statement_type=statement_type,
         variant=variant,
         page_hints=page_hints,
+        filing_level=filing_level,
     )
 
     # Optionally embed template in system prompt for caching
@@ -149,6 +153,7 @@ def create_extraction_agent(
         variant=variant,
         template_summary=template_summary,
         page_hints=page_hints,
+        filing_level=filing_level,
     )
 
     agent = Agent(
@@ -234,6 +239,7 @@ def create_extraction_agent(
             template_path=source_path,
             output_path=output_path,
             fields_json=fields_json,
+            filing_level=ctx.deps.filing_level,
         )
         if result.success:
             ctx.deps.filled_path = output_path
@@ -261,6 +267,7 @@ def create_extraction_agent(
             filled_path,
             ctx.deps.statement_type,
             ctx.deps.variant,
+            filing_level=ctx.deps.filing_level,
         )
 
         lines = []

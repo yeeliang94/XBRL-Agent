@@ -121,6 +121,21 @@ export function HistoryList({
                   <span style={styles.filename} title={run.pdf_filename}>
                     {run.pdf_filename}
                   </span>
+                  {run.filing_level === "group" && (
+                    <span style={{
+                      display: "inline-block",
+                      marginLeft: 6,
+                      padding: "1px 6px",
+                      borderRadius: 3,
+                      fontSize: 10,
+                      fontWeight: 600,
+                      background: "#EDE9FE",
+                      color: "#6D28D9",
+                      verticalAlign: "middle",
+                    }}>
+                      Group
+                    </span>
+                  )}
                 </td>
                 <td style={styles.td}>
                   <span style={styles.dim}>{formatDate(run.created_at)}</span>

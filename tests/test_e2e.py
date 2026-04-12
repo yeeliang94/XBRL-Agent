@@ -251,3 +251,79 @@ def test_full_extraction_live(tmp_path):
     wb = openpyxl.load_workbook(sofp_result.workbook_path)
     assert len(wb.sheetnames) >= 1
     wb.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: Group filing E2E (mocked LLM)
+# ---------------------------------------------------------------------------
+
+
+def test_group_filing_e2e_mocked(full_pipeline_env):
+    """Group filing: filing_level='group' flows through coordinator → cross-checks → DB."""
+    client, session_id, out, session_dir = full_pipeline_env
+
+    fake_coordinator_result = CoordinatorResult(agent_results=[
+        AgentResult(
+            statement_type=StatementType.SOFP,
+            variant="CuNonCu",
+            status="succeeded",
+            workbook_path=str(session_dir / "SOFP_filled.xlsx"),
+        ),
+    ])
+
+    fake_checks = [
+        CrossCheckResult(name="sofp_balance", status="passed",
+                         expected=1000.0, actual=1000.0, diff=0.0,
+                         tolerance=1.0, message="Group CY: balanced; Company CY: balanced"),
+    ]
+
+    run_config = {
+        "statements": ["SOFP"],
+        "variants": {"SOFP": "CuNonCu"},
+        "models": {},
+        "infopack": None,
+        "use_scout": False,
+        "filing_level": "group",
+    }
+
+    async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None):
+        # Verify filing_level reached the coordinator
+        assert config.filing_level == "group"
+        if event_queue is not None:
+            for ar in fake_coordinator_result.agent_results:
+                agent_id = ar.statement_type.value.lower()
+                await event_queue.put({
+                    "event": "complete",
+                    "data": {
+                        "success": True,
+                        "agent_id": agent_id,
+                        "agent_role": ar.statement_type.value,
+                        "workbook_path": ar.workbook_path,
+                        "error": None,
+                    },
+                })
+            await event_queue.put(None)
+        return fake_coordinator_result
+
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
+         patch("cross_checks.framework.run_all", return_value=fake_checks):
+
+        resp = client.post(f"/api/run/{session_id}", json=run_config)
+
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+
+    # Cross-checks are fully group-aware (Phase 6), so partial=False
+    rc = [e for e in events if e["event"] == "run_complete"][0]["data"]
+    assert rc["success"] is True
+    assert rc["cross_checks_partial"] is False
+
+    # DB persists filing_level in run_config_json
+    db_path = out / "xbrl_agent.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT run_config_json FROM runs LIMIT 1").fetchone()
+    stored = json.loads(row["run_config_json"])
+    assert stored["filing_level"] == "group"
+    conn.close()

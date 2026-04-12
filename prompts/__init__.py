@@ -17,6 +17,7 @@ def render_prompt(
     variant: str,
     template_summary: Optional[str] = None,
     page_hints: Optional[dict] = None,
+    filing_level: str = "company",
 ) -> str:
     """Build the full system prompt for a given statement type and variant.
 
@@ -26,6 +27,7 @@ def render_prompt(
         template_summary: Pre-read template structure to embed (avoids re-reading).
         page_hints: Dict with face_page and note_pages from scout infopack.
                     When None, prompt includes self-navigation instructions.
+        filing_level: 'company' (4-col template) or 'group' (6-col / 4-block SOCIE).
     """
     # Load base persona (shared across all statements)
     base = _load_prompt("_base.md")
@@ -50,6 +52,14 @@ def render_prompt(
 
     # Assemble full prompt
     parts = [base, statement_prompt, nav]
+
+    # Group filing overlay — appended after navigation so the agent sees
+    # column/block layout instructions after knowing which pages to visit.
+    if filing_level == "group":
+        if statement_type == StatementType.SOCIE:
+            parts.append(_load_prompt("_group_socie_overlay.md"))
+        else:
+            parts.append(_load_prompt("_group_overlay.md"))
 
     # Optionally embed template summary for caching
     if template_summary:

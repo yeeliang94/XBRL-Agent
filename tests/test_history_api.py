@@ -430,3 +430,52 @@ def test_download_filled_404_if_path_stored_but_file_deleted(api_env, tmp_path):
     assert r.status_code == 404
     body = r.json()
     assert "no longer exists" in body.get("detail", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Filing level in history responses
+# ---------------------------------------------------------------------------
+
+
+def test_list_runs_includes_filing_level(api_env):
+    """GET /api/runs returns filing_level from run_config_json."""
+    client, db_path, _ = api_env
+    _seed_run(
+        db_path, session_id="fl-co", pdf_filename="co.pdf",
+        output_dir="/tmp/fl-co",
+        config={"statements": ["SOFP"], "filing_level": "company"},
+    )
+    _seed_run(
+        db_path, session_id="fl-gr", pdf_filename="gr.pdf",
+        output_dir="/tmp/fl-gr",
+        config={"statements": ["SOFP"], "filing_level": "group"},
+    )
+    body = client.get("/api/runs").json()
+    runs = body["runs"]
+    levels = {r["pdf_filename"]: r["filing_level"] for r in runs}
+    assert levels["co.pdf"] == "company"
+    assert levels["gr.pdf"] == "group"
+
+
+def test_detail_includes_filing_level(api_env):
+    """GET /api/runs/{id} returns filing_level."""
+    client, db_path, _ = api_env
+    run_id = _seed_run(
+        db_path, session_id="fl-detail", pdf_filename="detail.pdf",
+        output_dir="/tmp/fl-detail",
+        config={"statements": ["SOFP"], "filing_level": "group"},
+    )
+    body = client.get(f"/api/runs/{run_id}").json()
+    assert body["filing_level"] == "group"
+
+
+def test_list_runs_defaults_filing_level_for_legacy(api_env):
+    """Runs created before the filing_level feature default to 'company'."""
+    client, db_path, _ = api_env
+    _seed_run(
+        db_path, session_id="legacy", pdf_filename="legacy.pdf",
+        output_dir="/tmp/legacy",
+        config={"statements": ["SOFP"]},
+    )
+    body = client.get("/api/runs").json()
+    assert body["runs"][0]["filing_level"] == "company"

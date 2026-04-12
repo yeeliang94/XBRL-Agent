@@ -7,7 +7,7 @@ from openpyxl import load_workbook
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SOFP_TEMPLATE = REPO_ROOT / "XBRL-template-MFRS" / "01-SOFP-CuNonCu.xlsx"
+SOFP_TEMPLATE = REPO_ROOT / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 
 
 def test_sofp_secured_borrowings_total_uses_leaf_rows() -> None:

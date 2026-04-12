@@ -132,18 +132,31 @@ def get_variant(statement: StatementType, variant_name: str) -> Variant:
         ) from exc
 
 
-def template_path(statement: StatementType, variant_name: str) -> Path:
-    """Absolute filesystem path to the template for a given (statement, variant).
+_VALID_LEVELS = ("company", "group")
 
-    Raises ValueError for meta-variants like NotPrepared that have no template.
+
+def template_path(
+    statement: StatementType,
+    variant_name: str,
+    level: str = "company",
+) -> Path:
+    """Absolute filesystem path to the template for a given (statement, variant, level).
+
+    Templates live under XBRL-template-MFRS/Company/ or XBRL-template-MFRS/Group/.
+    Raises ValueError for meta-variants like NotPrepared that have no template,
+    or for an unrecognised filing level.
     """
+    if level not in _VALID_LEVELS:
+        raise ValueError(
+            f"Invalid filing level {level!r} — must be one of {_VALID_LEVELS}"
+        )
     v = get_variant(statement, variant_name)
     if not v.template_filename:
         raise ValueError(
             f"{statement.value}/{variant_name} has no template — "
             f"extraction should be skipped for this variant"
         )
-    return TEMPLATE_DIR / v.template_filename
+    return TEMPLATE_DIR / level.capitalize() / v.template_filename
 
 
 def variants_for(statement: StatementType) -> list[Variant]:

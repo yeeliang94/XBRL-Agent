@@ -1,4 +1,12 @@
+import pytest
+from pathlib import Path
+
 from tools.template_reader import read_template, TemplateField
+
+pytestmark = pytest.mark.skipif(
+    not Path("SOFP-Xbrl-template.xlsx").exists(),
+    reason="Template XLSX not in repo — run with local data only",
+)
 
 
 def test_read_template_returns_fields():

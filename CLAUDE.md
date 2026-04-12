@@ -23,6 +23,9 @@ python3 run.py data/FINCO-Audited-Financial-Statement-2021.pdf
 # Mac — CLI, specific model + statements
 python3 run.py data/FINCO.pdf --model gpt-5.4 --statements SOFP SOPL
 
+# Mac — CLI, group filing (consolidated + company figures)
+python3 run.py data/FINCO.pdf --level group --statements SOFP SOPL
+
 # Windows (enterprise proxy) — just double-click start.bat
 # Or: start.bat
 # Web UI at http://localhost:8002
@@ -36,8 +39,10 @@ server.py           FastAPI + SSE web server (POST /api/run/{session_id}, /api/r
 coordinator.py      Fans out N extraction agents concurrently via asyncio.gather
 extraction/
   agent.py          Generic extraction agent factory (one per statement type)
-statement_types.py  StatementType enum, variant registry, template path resolver
+statement_types.py  StatementType enum, variant registry, template path resolver (routes to Company/ or Group/ by filing level)
 prompts/            Per-statement system prompt templates (sofp.md, sopl.md, etc.)
+  _group_overlay.md   Group extraction instructions for SOFP/SOPL/SOCI/SOCF (6-column layout)
+  _group_socie_overlay.md  Group SOCIE instructions (4 vertical row blocks)
 tools/
   template_reader.py   Read template structure
   pdf_viewer.py        Render PDF pages to images
@@ -87,7 +92,9 @@ config/
 litellm_config.yaml LiteLLM proxy config — routes models to correct provider APIs
 start.bat           Windows startup script (finds Python/Node, sets UTF-8)
 start.sh            Mac/Linux startup script (launches LiteLLM proxy + server)
-XBRL-template-MFRS/ Template Excel files (01-SOFP-CuNonCu.xlsx through 09-SOCIE.xlsx)
+XBRL-template-MFRS/ Template Excel files organized by filing level
+  Company/           Company-level templates (4 cols: label, CY, PY, source)
+  Group/             Group-level templates (6 cols: label, Group CY, Group PY, Company CY, Company PY, source)
 ```
 
 ## LLM Provider Setup
@@ -299,7 +306,28 @@ entry in `_V2_MIGRATION_COLUMNS` is either nullable or carries a safe default.
 The `status` column has no CHECK constraint on purpose: adding a new status
 enum value should not require a full-table migration.
 
-### 12. Scout Page Hints are Soft Guidance Only
+### 12. Filing Level — Company vs Group Templates
+
+Each run has a single `filing_level` (`"company"` or `"group"`, default `"company"`)
+that flows from the frontend toggle (or `--level` CLI flag) through the entire pipeline:
+`RunConfigRequest` → `RunConfig` → `template_path()` → agent prompts → verifier → cross-checks → history.
+
+`template_path()` in `statement_types.py` routes to `XBRL-template-MFRS/Company/` or
+`XBRL-template-MFRS/Group/` based on the level. Both directories contain identically
+named files — the column structure inside the Excel differs:
+
+- **Company templates:** 4 columns (A=label, B=CY, C=PY, D=source)
+- **Group templates:** 6 columns (A=label, B=Group CY, C=Group PY, D=Company CY, E=Company PY, F=source)
+- **Group SOCIE is special:** same 24 equity-component columns but 4 row blocks
+  (rows 3-25 Group CY, 27-49 Group PY, 51-73 Company CY, 75-97 Company PY)
+
+For Group filings, the agent extracts both consolidated and standalone figures.
+Cross-checks and the verifier run twice — once for Group columns, once for Company
+columns — and report results separately.
+
+Root-level template xlsx files no longer exist. All templates live in `Company/` or `Group/`.
+
+### 13. Scout Page Hints are Soft Guidance Only
 
 When scout is ON, extraction agents receive `page_hints` (face_page + note_pages) in their
 system prompt as recommended starting points. Agents can freely view **any** PDF page —
@@ -351,7 +379,9 @@ Key test files:
 - `web/src/__tests__/RunDetailView.test.tsx` + `RunDetailModal.test.tsx` — past-run replay UI
 - `web/src/__tests__/TopNav.test.tsx` + `SuccessToast.test.tsx` — chrome components
 
-Note: `test_pdf_viewer.py` and `test_template_reader.py` fail without sample PDF data present. All server/API tests pass independently.
+- `tests/test_filing_level.py` — template path routing by level, RunConfig/API field, verifier + cross-checks with Group fixtures
+
+Note: `test_pdf_viewer.py` and `test_template_reader.py` auto-skip when sample data is absent (via `pytestmark`). All server/API tests pass independently.
 
 ## Files That Must Stay in Sync
 
@@ -361,7 +391,7 @@ Note: `test_pdf_viewer.py` and `test_template_reader.py` fail without sample PDF
 | .env variable names | `server.py` (settings endpoints), `run.py` (loads .env), `.env.example`, `start.bat`, `start.sh`, `litellm_config.yaml` (references env vars) |
 | Agent tool names | `server.py` (`PHASE_MAP`), `extraction/agent.py` (tool definitions) |
 | Excel template structure | `tools/fill_workbook.py` (section headers), `tools/verifier.py`, `cross_checks/util.py` (label lookups), `docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md` (formula audit trail) |
-| XBRL template formulas | `XBRL-template-MFRS/*.xlsx` (sub-sheet formulas), `SSMxT_2022v1.0/` (authoritative XBRL calc linkbase), `XBRL-template-MFRS/backup-originals/` (pre-fix backups) |
+| XBRL template formulas | `XBRL-template-MFRS/Company/*.xlsx` + `XBRL-template-MFRS/Group/*.xlsx` (sub-sheet formulas), `SSMxT_2022v1.0/` (authoritative XBRL calc linkbase), `XBRL-template-MFRS/backup-originals/` (pre-fix backups) |
 | Statement types / variants | `statement_types.py`, `coordinator.py`, `server.py` (`RunConfigRequest`), `prompts/` (per-variant files), `web/src/lib/types.ts` (`STATEMENT_TYPES`, `VARIANTS`) |
 | Cross-check implementations | `cross_checks/*.py`, `server.py` (`run_multi_agent_stream` check list), `cross_checks/util.py` |
 | Model wiring / proxy setup | `server.py` (`_create_proxy_model`, `_detect_provider`), `run.py` (also calls `_create_proxy_model`), `coordinator.py` (`RunConfig.model/models`), `litellm_config.yaml` (proxy model routing), `config/models.json` (UI model list) |
@@ -372,6 +402,7 @@ Note: `test_pdf_viewer.py` and `test_template_reader.py` fail without sample PDF
 | History API endpoints | `server.py` (`GET /api/runs`, `GET /api/runs/{id}`, `DELETE /api/runs/{id}`, `GET /api/runs/{id}/download/filled`, SPA fallback), `web/src/lib/api.ts` (fetch helpers), `web/src/lib/types.ts` (`RunSummaryJson`, `RunDetailJson`, `RunAgentJson`, `RunCrossCheckJson`, `RunsFilterParams`), `tests/test_history_api.py` |
 | Run lifecycle / terminal status | `server.py` (`run_multi_agent_stream` try/except/finally, `_safe_mark_finished`, pre-validation `create_run`), `db/repository.py` (`mark_run_finished` status enum), `tests/test_server_run_lifecycle.py` |
 | History UI / routing | `web/src/App.tsx` (`AppView`, popstate handling, `/history` hydration), `web/src/pages/HistoryPage.tsx`, `web/src/components/{HistoryList,HistoryFilters,RunDetailModal,RunDetailView,TopNav,SuccessToast}.tsx`, `web/src/lib/runStatus.ts` |
+| Filing level / templates | `statement_types.py` (`template_path` level param), `coordinator.py` (`RunConfig.filing_level`), `server.py` (`RunConfigRequest.filing_level`), `run.py` (`--level` flag), `extraction/agent.py` (passes to `render_prompt`), `prompts/__init__.py` (overlay injection), `prompts/_group_overlay.md`, `prompts/_group_socie_overlay.md`, `tools/verifier.py` (dual-column check), `cross_checks/framework.py` + all `cross_checks/*.py` (dual Group/Company validation), `web/src/lib/types.ts` (`RunConfigPayload.filing_level`), `web/src/components/PreRunPanel.tsx` (toggle), `web/src/components/HistoryList.tsx` (badge), `web/src/components/HistoryFilters.tsx` (filter) |
 
 ## Porting Checklist (Mac -> Windows)
 
