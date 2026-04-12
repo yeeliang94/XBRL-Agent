@@ -40,27 +40,26 @@ describe("ValidatorTab", () => {
     expect(failedRow.textContent).toContain("20");
   });
 
-  test("pending row shows Run and Skip buttons", () => {
+  test("pending row still shows Pending status text", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
     const pendingRow = screen.getByText("soci_to_socie_tci").closest("tr")!;
     expect(pendingRow.textContent).toContain("Pending");
-
-    // Should have Run and Skip buttons
-    const runBtn = pendingRow.querySelector("button[data-action='run']");
-    const skipBtn = pendingRow.querySelector("button[data-action='skip']");
-    expect(runBtn).toBeTruthy();
-    expect(skipBtn).toBeTruthy();
   });
 
-  test("Run and Skip buttons are disabled until backend support exists", () => {
-    render(<ValidatorTab crossChecks={makeCrossChecks()} />);
+  test("no Actions column rendered", () => {
+    const { container } = render(<ValidatorTab crossChecks={makeCrossChecks()} />);
+    const headers = Array.from(container.querySelectorAll("th")).map(
+      (th) => th.textContent?.trim() ?? "",
+    );
+    // The Actions header is dead scaffolding — it must be removed entirely.
+    expect(headers).not.toContain("Actions");
+  });
 
-    const pendingRow = screen.getByText("soci_to_socie_tci").closest("tr")!;
-    const runBtn = pendingRow.querySelector("button[data-action='run']") as HTMLButtonElement;
-    const skipBtn = pendingRow.querySelector("button[data-action='skip']") as HTMLButtonElement;
-    expect(runBtn.disabled).toBe(true);
-    expect(skipBtn.disabled).toBe(true);
+  test("no Run or Skip buttons rendered anywhere", () => {
+    const { container } = render(<ValidatorTab crossChecks={makeCrossChecks()} />);
+    expect(container.querySelector("button[data-action='run']")).toBeNull();
+    expect(container.querySelector("button[data-action='skip']")).toBeNull();
   });
 
   test("not_applicable row is styled muted", () => {

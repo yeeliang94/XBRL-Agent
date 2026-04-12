@@ -23,7 +23,17 @@ export interface AgentTabsProps {
   onRerunAgent?: (agentId: string) => void;
   isRunning?: boolean;         // when true, rerun buttons are hidden (avoid concurrent writes)
   skeletonTabs?: string[];     // labels for statements not in this run (greyed-out)
+  // Phase 8: gate statement tabs so pre-run state doesn't flash all 5
+  // skeletons. Pass the statements the user actually picked for this run;
+  // anything not in the list (and not a SPECIAL_TAB_IDS member) is hidden.
+  statementsInRun?: string[];
 }
+
+// Tabs in this set follow their own lifecycle (scout is spun up before the
+// run starts; validator is added on run_complete) and are therefore exempt
+// from the statementsInRun gate. Kept as a top-level constant so the rule
+// is discoverable without reading the render body.
+const SPECIAL_TAB_IDS = new Set(["validator", "scout"]);
 
 // ---------------------------------------------------------------------------
 // Status badge — small indicator showing agent state
@@ -33,7 +43,7 @@ function StatusBadge({ status }: { status: AgentTabStatus }) {
   if (status === "complete") {
     return (
       <span data-status="complete" style={badgeStyles.complete} aria-label="Complete">
-        &#10003;
+        <span style={badgeStyles.completeDot} />
       </span>
     );
   }
@@ -54,21 +64,21 @@ function StatusBadge({ status }: { status: AgentTabStatus }) {
   if (status === "failed") {
     return (
       <span data-status="failed" style={badgeStyles.failed} aria-label="Failed">
-        &#10005;
+        <span style={badgeStyles.failedDot} />
       </span>
     );
   }
   if (status === "cancelled") {
     return (
       <span data-status="cancelled" style={badgeStyles.cancelled} aria-label="Cancelled">
-        &#8856;
+        <span style={badgeStyles.cancelledDot} />
       </span>
     );
   }
   // pending
   return (
     <span data-status="pending" style={badgeStyles.pending} aria-label="Pending">
-      &#8226;
+      <span style={badgeStyles.pendingDot} />
     </span>
   );
 }
@@ -86,11 +96,50 @@ export function AgentTabs({
   onRerunAgent,
   isRunning,
   skeletonTabs,
+  statementsInRun,
 }: AgentTabsProps) {
+  // Phase 8 gating. The rule is:
+  //   Render a tab if ANY of the following is true:
+  //     1. The tab is a SPECIAL_TAB_IDS member (scout/validator) AND the
+  //        agent exists in state — these follow their own lifecycle.
+  //     2. `statementsInRun` was not passed at all (legacy callers / history
+  //        detail views) — we treat that as "no gate, show everything".
+  //     3. The agent's role is in statementsInRun — i.e. the user actually
+  //        picked this statement for the current run.
+  //
+  // Ordering: statement tabs render first in their original tabOrder, then
+  // scout (if present), then validator (if present) — so users always find
+  // the aggregate Validator pane at the far right after a run completes.
+  const gatedOrder = (() => {
+    const statementIds: string[] = [];
+    let scoutId: string | null = null;
+    let validatorId: string | null = null;
+    for (const id of tabOrder) {
+      const agent = agents[id];
+      if (!agent) continue;
+      if (SPECIAL_TAB_IDS.has(id)) {
+        if (id === "scout") scoutId = id;
+        else if (id === "validator") validatorId = id;
+        continue;
+      }
+      // Statement tabs — gated by statementsInRun unless prop is undefined.
+      if (statementsInRun === undefined) {
+        statementIds.push(id);
+      } else if (statementsInRun.includes(agent.role)) {
+        statementIds.push(id);
+      }
+    }
+    return [
+      ...statementIds,
+      ...(scoutId ? [scoutId] : []),
+      ...(validatorId ? [validatorId] : []),
+    ];
+  })();
+
   return (
     <div role="tablist" className="tab-bar-scroll" style={styles.tabBar}>
-      {/* Active agent tabs */}
-      {tabOrder.map((agentId) => {
+      {/* Active agent tabs (gated + reordered so special tabs sit last) */}
+      {gatedOrder.map((agentId) => {
         const agent = agents[agentId];
         if (!agent) return null;
         const isActive = agentId === activeTab;
@@ -145,7 +194,7 @@ export function AgentTabs({
           disabled
           style={{ ...styles.tab, ...styles.tabSkeleton }}
         >
-          <span data-status="pending" style={badgeStyles.skeleton}>&#8226;</span>
+          <span data-status="pending" style={badgeStyles.skeleton} />
           <span>{label}</span>
         </button>
       ))}
@@ -161,18 +210,17 @@ const styles = {
   tabBar: {
     display: "flex",
     gap: pwc.space.xs,
-    borderBottom: `2px solid ${pwc.grey200}`,
+    alignItems: "center",
     background: pwc.white,
     borderRadius: `${pwc.radius.md}px ${pwc.radius.md}px 0 0`,
     border: `1px solid ${pwc.grey200}`,
-    borderBottomWidth: 2,
-    padding: `0 ${pwc.space.sm}px`,
+    padding: `${pwc.space.sm}px`,
     overflowX: "auto" as const,
   },
   tabWrapper: {
     display: "flex",
     alignItems: "center",
-    position: "relative" as const,
+    gap: pwc.space.xs,
   },
   abortBtn: {
     display: "inline-flex",
@@ -187,8 +235,6 @@ const styles = {
     border: `1px solid ${pwc.error}`,
     borderRadius: "50%",
     cursor: "pointer",
-    marginLeft: -4,
-    marginRight: 4,
     lineHeight: 1,
   } as React.CSSProperties,
   rerunBtn: {
@@ -203,8 +249,6 @@ const styles = {
     border: `1px solid ${pwc.orange500}`,
     borderRadius: "50%",
     cursor: "pointer",
-    marginLeft: -4,
-    marginRight: 4,
     lineHeight: 1,
   } as React.CSSProperties,
   tab: {
@@ -216,39 +260,52 @@ const styles = {
     fontSize: 13,
     fontWeight: 500,
     color: pwc.grey700,
-    background: "none",
-    border: "none",
-    borderBottom: "2px solid transparent",
-    marginBottom: -2,
+    background: "transparent",
+    border: "1px solid transparent",
+    borderRadius: 999,
     cursor: "pointer",
     whiteSpace: "nowrap" as const,
-    transition: "color 0.15s, border-color 0.15s",
+    transition: "color 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s",
   },
   tabActive: {
-    color: pwc.orange500,
+    color: pwc.orange700,
     fontWeight: 600,
-    borderBottomColor: pwc.orange500,
+    background: pwc.orange50,
+    borderColor: "#FBD3B7",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
   },
   tabSkeleton: {
     color: pwc.grey300,
     cursor: "default",
     opacity: 0.5,
+    background: pwc.grey50,
   },
 } as const;
 
 const badgeStyles = {
   complete: {
-    color: pwc.success,
-    fontSize: 12,
-    fontWeight: 700,
-    lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 12,
+    height: 12,
+    borderRadius: "50%",
+    background: "#F0FDF4",
+  } as React.CSSProperties,
+  completeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: "50%",
+    background: pwc.success,
   } as React.CSSProperties,
   running: {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    width: 10,
-    height: 10,
+    width: 12,
+    height: 12,
+    borderRadius: "50%",
+    background: pwc.orange50,
   } as React.CSSProperties,
   runningDot: {
     display: "inline-block",
@@ -259,23 +316,43 @@ const badgeStyles = {
     animation: "pulse 1.2s ease-in-out infinite",
   } as React.CSSProperties,
   failed: {
-    color: pwc.error,
-    fontSize: 12,
-    fontWeight: 700,
-    lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 12,
+    height: 12,
+    borderRadius: "50%",
+    background: "#FEF2F2",
+  } as React.CSSProperties,
+  failedDot: {
+    width: 6,
+    height: 6,
+    borderRadius: "50%",
+    background: pwc.error,
   } as React.CSSProperties,
   cancelled: {
-    color: pwc.grey500,
-    fontSize: 12,
-    fontWeight: 700,
-    lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 12,
+    height: 12,
+    borderRadius: "50%",
+    background: pwc.grey100,
+  } as React.CSSProperties,
+  cancelledDot: {
+    width: 6,
+    height: 6,
+    borderRadius: "50%",
+    background: pwc.grey500,
   } as React.CSSProperties,
   aborting: {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    width: 10,
-    height: 10,
+    width: 12,
+    height: 12,
+    borderRadius: "50%",
+    background: "#FEF2F2",
   } as React.CSSProperties,
   abortingDot: {
     display: "inline-block",
@@ -286,13 +363,26 @@ const badgeStyles = {
     animation: "pulse 0.8s ease-in-out infinite",
   } as React.CSSProperties,
   pending: {
-    color: pwc.grey300,
-    fontSize: 14,
-    lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 12,
+    height: 12,
+    borderRadius: "50%",
+    background: pwc.white,
+    border: `1.5px solid ${pwc.grey300}`,
+  } as React.CSSProperties,
+  pendingDot: {
+    width: 4,
+    height: 4,
+    borderRadius: "50%",
+    background: pwc.grey300,
   } as React.CSSProperties,
   skeleton: {
-    color: pwc.grey300,
-    fontSize: 14,
-    lineHeight: 1,
+    display: "inline-block",
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: pwc.grey300,
   } as React.CSSProperties,
 } as const;

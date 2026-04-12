@@ -139,7 +139,7 @@ describe("ToolCallCard", () => {
     expect(screen.getByText(/3 fields → SOFP-CuNonCu/)).toBeInTheDocument();
   });
 
-  test("view_pdf_pages collapsed preview shows page numbers", () => {
+  test("view_pdf_pages collapsed preview shows page numbers (English list)", () => {
     const entry: ToolTimelineEntry = {
       ...activeEntry,
       tool_name: "view_pdf_pages",
@@ -149,13 +149,15 @@ describe("ToolCallCard", () => {
       endTime: null,
     };
     render(<ToolCallCard entry={entry} />);
-    expect(screen.getByText(/pages 1, 5, 8/)).toBeInTheDocument();
+    // Phase 1/2 wording: three pages get Oxford 'and' before the last.
+    expect(screen.getByText("pages 1, 5 and 8")).toBeInTheDocument();
   });
 
   test("renders other tool names correctly", () => {
     const viewEntry = { ...activeEntry, tool_name: "view_pdf_pages" };
     const { rerender } = render(<ToolCallCard entry={viewEntry} />);
-    expect(screen.getByText("Viewing PDF pages")).toBeInTheDocument();
+    // Phase 1/2 wording: "Checking PDF pages" (shared with scout view_pages).
+    expect(screen.getByText("Checking PDF pages")).toBeInTheDocument();
 
     const fillEntry = { ...activeEntry, tool_name: "fill_workbook" };
     rerender(<ToolCallCard entry={fillEntry} />);
@@ -168,5 +170,118 @@ describe("ToolCallCard", () => {
     const saveEntry = { ...activeEntry, tool_name: "save_result" };
     rerender(<ToolCallCard entry={saveEntry} />);
     expect(screen.getByText("Saving result")).toBeInTheDocument();
+  });
+
+  // --- Phase 2: state glyphs (active / done / failed / cancelled) ---
+
+  test("Step 2.1 — active row renders data-glyph='active' + data-state='active'", () => {
+    const { container } = render(<ToolCallCard entry={activeEntry} />);
+    const card = container.querySelector("[data-testid='tool-card']") as HTMLElement;
+    expect(card.getAttribute("data-state")).toBe("active");
+    expect(container.querySelector("[data-glyph='active']")).toBeTruthy();
+  });
+
+  test("Step 2.1 — completed row renders data-glyph='done' + data-state='done'", () => {
+    const { container } = render(<ToolCallCard entry={completedEntry} />);
+    const card = container.querySelector("[data-testid='tool-card']") as HTMLElement;
+    expect(card.getAttribute("data-state")).toBe("done");
+    expect(container.querySelector("[data-glyph='done']")).toBeTruthy();
+  });
+
+  test("Step 2.1 — failed row renders data-glyph='failed' + data-state='failed'", () => {
+    const failed: ToolTimelineEntry = { ...completedEntry, state: "failed" };
+    const { container } = render(<ToolCallCard entry={failed} />);
+    const card = container.querySelector("[data-testid='tool-card']") as HTMLElement;
+    expect(card.getAttribute("data-state")).toBe("failed");
+    expect(container.querySelector("[data-glyph='failed']")).toBeTruthy();
+  });
+
+  test("Step 2.1 — cancelled row renders data-glyph='cancelled'", () => {
+    const cancelled: ToolTimelineEntry = { ...completedEntry, state: "cancelled" };
+    const { container } = render(<ToolCallCard entry={cancelled} />);
+    expect(container.querySelector("[data-glyph='cancelled']")).toBeTruthy();
+  });
+
+  // --- Phase 2: friendly label + arg preview consumed from shared module ---
+
+  test("Step 2.3 — view_pdf_pages with [12, 13] renders 'Checking PDF pages' and 'pages 12 and 13'", () => {
+    const entry: ToolTimelineEntry = {
+      ...activeEntry,
+      tool_name: "view_pdf_pages",
+      args: { pages: [12, 13] },
+    };
+    render(<ToolCallCard entry={entry} />);
+    expect(screen.getByText("Checking PDF pages")).toBeInTheDocument();
+    expect(screen.getByText("pages 12 and 13")).toBeInTheDocument();
+  });
+
+  test("Step 2.3 — scout find_toc renders 'Locating table of contents'", () => {
+    const entry: ToolTimelineEntry = {
+      ...activeEntry,
+      tool_name: "find_toc",
+      args: {},
+    };
+    render(<ToolCallCard entry={entry} />);
+    expect(screen.getByText("Locating table of contents")).toBeInTheDocument();
+  });
+
+  test("Step 2.3 — unknown tool name falls back to title-cased", () => {
+    const entry: ToolTimelineEntry = {
+      ...activeEntry,
+      tool_name: "weird_tool",
+      args: {},
+    };
+    render(<ToolCallCard entry={entry} />);
+    expect(screen.getByText("Weird Tool")).toBeInTheDocument();
+  });
+
+  // --- Phase 2: badge prefers resultSummary over duration ---
+
+  test("Step 2.5 — badge prefers resultSummary 'N values' over '1234ms'", () => {
+    const entry: ToolTimelineEntry = {
+      ...activeEntry,
+      tool_name: "fill_workbook",
+      args: {},
+      result_summary: "wrote 24 fields",
+      duration_ms: 1234,
+      endTime: Date.now() + 1234,
+    };
+    render(<ToolCallCard entry={entry} />);
+    expect(screen.getByText("24 values")).toBeInTheDocument();
+    expect(screen.queryByText("1234ms")).not.toBeInTheDocument();
+  });
+
+  test("Step 2.5 — badge falls back to duration when resultSummary is null", () => {
+    const entry: ToolTimelineEntry = {
+      ...activeEntry,
+      tool_name: "read_template", // no resultSummary mapping
+      result_summary: "Some opaque text",
+      duration_ms: 80,
+      endTime: Date.now() + 80,
+    };
+    render(<ToolCallCard entry={entry} />);
+    expect(screen.getByText("80ms")).toBeInTheDocument();
+  });
+
+  test("Step 2.5 — active card shows only the animated glyph (no badge)", () => {
+    const { container } = render(<ToolCallCard entry={activeEntry} />);
+    // No duration badge, no resultSummary badge — only the glyph.
+    expect(screen.queryByText(/\d+ms/)).not.toBeInTheDocument();
+    expect(container.querySelector("[data-glyph='active']")).toBeTruthy();
+  });
+
+  // --- Phase 2: animation on the active glyph only ---
+
+  test("Step 2.8 — active glyph has the pulse animation class; done glyph does not", () => {
+    const { container, rerender } = render(<ToolCallCard entry={activeEntry} />);
+    const activeGlyph = container.querySelector("[data-glyph='active']") as HTMLElement;
+    expect(activeGlyph).toBeTruthy();
+    // Inline animation style set only while active.
+    expect(activeGlyph.style.animation).toMatch(/glyph-pulse/);
+
+    rerender(<ToolCallCard entry={completedEntry} />);
+    const doneGlyph = container.querySelector("[data-glyph='done']") as HTMLElement;
+    expect(doneGlyph).toBeTruthy();
+    expect(doneGlyph.style.animation || "").not.toMatch(/glyph-pulse/);
   });
 });

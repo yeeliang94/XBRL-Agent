@@ -3,19 +3,12 @@ import type {
   SSEEvent,
   EventPhase,
   StatusData,
-  ThinkingDeltaData,
-  ThinkingEndData,
-  TextDeltaData,
-  ToolCallData,
-  ToolResultData,
   TokenData,
   ErrorData,
   CompleteData,
   RunCompleteData,
   AgentCompleteData,
-  ThinkingBlock,
   ToolTimelineEntry,
-  TextSegment,
   RunConfigPayload,
   AgentState,
   CrossCheckResult,
@@ -24,16 +17,20 @@ import { createAgentState } from "./lib/types";
 import { pwc } from "./lib/theme";
 import { uploadPdf, getSettings, updateSettings, testConnection, getResultJson, getExtendedSettings, abortAll, abortAgent } from "./lib/api";
 import { createMultiAgentSSE } from "./lib/sse";
+import { buildToolTimeline } from "./lib/buildToolTimeline";
 import { UploadPanel } from "./components/UploadPanel";
 import { PreRunPanel } from "./components/PreRunPanel";
 import { PipelineStages } from "./components/PipelineStages";
-import { AgentFeed } from "./components/AgentFeed";
+import { AgentTimeline } from "./components/AgentTimeline";
 import { TokenDashboard } from "./components/TokenDashboard";
 import { ResultsView } from "./components/ResultsView";
 import { SettingsModal } from "./components/SettingsModal";
 import { AgentTabs } from "./components/AgentTabs";
 import type { AgentTabState } from "./components/AgentTabs";
 import { ValidatorTab } from "./components/ValidatorTab";
+import { TopNav } from "./components/TopNav";
+import { SuccessToast } from "./components/SuccessToast";
+import { HistoryPage } from "./pages/HistoryPage";
 import { STATEMENT_TYPES } from "./lib/types";
 import "./index.css";
 
@@ -52,14 +49,12 @@ export interface AppState {
   tokens: TokenData | null;
   error: ErrorData | null;
   complete: CompleteData | null;
-  // P0: Streaming state
   runStartTime: number | null;
-  thinkingBuffer: string;
-  activeThinkingId: string | null;
-  thinkingBlocks: ThinkingBlock[];
+  // Phase 6: streaming chat state (thinkingBuffer, activeThinkingId,
+  // thinkingBlocks, streamingText, textSegments) was removed when the chat
+  // feed was replaced by the tool-call timeline. toolTimeline is now the
+  // only derived-from-events field we keep on AppState.
   toolTimeline: ToolTimelineEntry[];
-  streamingText: string;
-  textSegments: TextSegment[];
   // Phase 10: Per-agent state for tab UI
   agents: Record<string, AgentState>;
   agentTabOrder: string[];      // ordered agent IDs for tab rendering
@@ -67,7 +62,22 @@ export interface AppState {
   crossChecks: CrossCheckResult[];
   statementsInRun: string[];    // which statements were requested (for skeleton tabs)
   lastRunConfig: RunConfigPayload | null;  // preserved for rerun with correct variant/model
+  // Phase 4: top-nav SPA routing — 'extract' is the main run workspace,
+  // 'history' is the past-runs browser. Switching views does NOT reset
+  // in-flight extraction state, so a user can peek at history mid-run.
+  view: AppView;
+  // Phase 9: transient toast surfaced in the top-right corner on run
+  // completion. Null when no toast is active. Dismissed via DISMISS_TOAST
+  // (either from the manual close button or the auto-dismiss timer).
+  toast: ToastState | null;
 }
+
+export interface ToastState {
+  message: string;
+  tone: "success" | "error";
+}
+
+export type AppView = "extract" | "history";
 
 export type AppAction =
   | { type: "UPLOADED"; payload: { sessionId: string; filename: string } }
@@ -76,6 +86,8 @@ export type AppAction =
   | { type: "SET_ACTIVE_TAB"; payload: string }
   | { type: "ABORT_AGENT"; payload: { agentId: string } }
   | { type: "RERUN_STARTED"; payload: { agentId: string } }
+  | { type: "SET_VIEW"; payload: AppView }
+  | { type: "DISMISS_TOAST" }
   | { type: "RESET" };
 
 export const initialState: AppState = {
@@ -89,124 +101,70 @@ export const initialState: AppState = {
   tokens: null,
   error: null,
   complete: null,
-  // P0: Streaming state
   runStartTime: null,
-  thinkingBuffer: "",
-  activeThinkingId: null,
-  thinkingBlocks: [],
   toolTimeline: [],
-  streamingText: "",
-  textSegments: [],
-  // Phase 10: Per-agent state
   agents: {},
   agentTabOrder: [],
   activeTab: null,
   crossChecks: [],
   statementsInRun: [],
   lastRunConfig: null,
+  view: "extract",
+  toast: null,
 };
 
+/**
+ * Lazy initializer for useReducer that inspects the current URL so deep-links
+ * and refreshes to `/history` land in the history tab without a flash of the
+ * extract UI. Computed at component mount (not module load) so test suites
+ * that rewrite the URL between renders get the correct boot view.
+ */
+function bootState(): AppState {
+  if (typeof window !== "undefined" && window.location.pathname.startsWith("/history")) {
+    return { ...initialState, view: "history" };
+  }
+  return initialState;
+}
+
 // ---------------------------------------------------------------------------
-// Shared streaming state shape — fields common to both AppState and AgentState
+// Shared derived-state shape — fields common to both AppState and AgentState
+// that get recomputed as events arrive. Phase 6 stripped the chat-streaming
+// fields (thinkingBuffer/activeThinkingId/thinkingBlocks/streamingText/
+// textSegments); what remains is the current pipeline phase and the tool
+// timeline derived via buildToolTimeline.
 // ---------------------------------------------------------------------------
 
-interface StreamingState {
-  thinkingBuffer: string;
-  activeThinkingId: string | null;
-  thinkingBlocks: ThinkingBlock[];
+interface DerivedStreamState {
+  events: SSEEvent[];
   toolTimeline: ToolTimelineEntry[];
-  streamingText: string;
-  textSegments: TextSegment[];
   currentPhase: EventPhase | null;
 }
 
 /**
- * Pure function that computes streaming state updates for an event.
+ * Pure function that computes shared derived-state updates for an event.
  * Used by both agentReducer (per-agent) and appReducer (global).
  */
 function applyStreamingEvent(
-  state: StreamingState,
+  state: DerivedStreamState,
   event: SSEEvent,
-): Partial<StreamingState> | null {
+): Partial<DerivedStreamState> | null {
   switch (event.event) {
     case "status":
       return { currentPhase: (event.data as StatusData).phase };
 
-    case "thinking_delta": {
-      const td = event.data as ThinkingDeltaData;
+    case "tool_call":
+    case "tool_result":
+      // Rebuild the timeline over the full event list — single source of
+      // truth shared with history replay. buildToolTimeline also walks
+      // status events itself to track phase, so each entry gets the right
+      // phase without the reducer keeping a separate cursor.
       return {
-        thinkingBuffer: state.thinkingBuffer + td.content,
-        activeThinkingId: td.thinking_id,
+        toolTimeline: buildToolTimeline([...state.events, event]),
       };
-    }
-
-    case "thinking_end": {
-      const te = event.data as ThinkingEndData;
-      const block: ThinkingBlock = {
-        id: te.thinking_id,
-        content: state.thinkingBuffer,
-        summary: te.summary,
-        timestamp: Date.now(),
-        phase: state.currentPhase,
-        durationMs: te.duration_ms ?? null,
-      };
-      return {
-        thinkingBlocks: [...state.thinkingBlocks, block],
-        thinkingBuffer: "",
-        activeThinkingId: null,
-      };
-    }
-
-    case "text_delta": {
-      const txtd = event.data as TextDeltaData;
-      return { streamingText: state.streamingText + txtd.content };
-    }
-
-    case "tool_call": {
-      const tc = event.data as ToolCallData;
-      const now = Date.now();
-      // Flush any accumulated text into a completed segment BEFORE the tool entry,
-      // so each model turn's text stays in chronological order with tool cards.
-      // Segment gets timestamp (now - 1) to guarantee it sorts before the tool.
-      const updates: Partial<StreamingState> = {};
-      if (state.streamingText) {
-        updates.textSegments = [
-          ...state.textSegments,
-          { content: state.streamingText, timestamp: now - 1, phase: state.currentPhase },
-        ];
-        updates.streamingText = "";
-      }
-      const entry: ToolTimelineEntry = {
-        tool_call_id: tc.tool_call_id,
-        tool_name: tc.tool_name,
-        args: tc.args,
-        result_summary: null,
-        duration_ms: null,
-        startTime: now,
-        endTime: null,
-        phase: state.currentPhase,
-      };
-      updates.toolTimeline = [...state.toolTimeline, entry];
-      return updates;
-    }
-
-    case "tool_result": {
-      const tr = event.data as ToolResultData;
-      return {
-        toolTimeline: state.toolTimeline.map((entry) =>
-          entry.tool_call_id === tr.tool_call_id
-            ? {
-                ...entry,
-                result_summary: tr.result_summary,
-                duration_ms: tr.duration_ms,
-                endTime: Date.now(),
-              }
-            : entry,
-        ),
-      };
-    }
 
     default:
+      // thinking_delta / thinking_end / text_delta land in events[] via the
+      // caller but don't drive any derived state anymore.
       return null;
   }
 }
@@ -252,14 +210,6 @@ export function agentReducer(agent: AgentState, event: SSEEvent): AgentState {
       updates.workbookPath = cd.workbook_path ?? null;
       if (cd.error && cd.error !== "Cancelled by user") {
         updates.error = { message: cd.error, traceback: "" };
-      }
-      // Flush any remaining text from the final model turn into a segment
-      if (agent.streamingText) {
-        updates.textSegments = [
-          ...(updates.textSegments ?? agent.textSegments),
-          { content: agent.streamingText, timestamp: Date.now(), phase: agent.currentPhase },
-        ];
-        updates.streamingText = "";
       }
       break;
     }
@@ -311,6 +261,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "UPLOADED":
       return {
         ...initialState,
+        // Preserve the current view so an upload from /history doesn't silently
+        // punt the user back to the extract tab.
+        view: state.view,
         sessionId: action.payload.sessionId,
         filename: action.payload.filename,
       };
@@ -328,6 +281,12 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case "SET_ACTIVE_TAB":
       return { ...state, activeTab: action.payload };
+
+    case "SET_VIEW":
+      return { ...state, view: action.payload };
+
+    case "DISMISS_TOAST":
+      return { ...state, toast: null };
 
     case "EVENT": {
       const event = action.payload;
@@ -426,6 +385,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           updates.isComplete = true;
           updates.isRunning = false;
           const rc = event.data as RunCompleteData;
+          // Phase 9: surface a minimal success toast. Failures already show
+          // their error in-panel, so no toast for the red path.
+          if (rc.success) {
+            updates.toast = {
+              message: "Run completed successfully",
+              tone: "success",
+            };
+          }
           const currentTokens = state.tokens;
           updates.complete = {
             success: rc.success,
@@ -479,12 +446,24 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "RERUN_STARTED": {
       // Reset one agent's state back to pending so the new SSE events
       // flow into a clean slate. Tab position is preserved.
+      //
+      // Peer-review [HIGH] fix: also wipe the prior run's completion
+      // state so stale ResultsView, stale cross-checks, stale error
+      // state, and the stale Phase 9 success toast don't linger during
+      // the rerun window. The new run_complete refreshes all of these
+      // when it lands; until then the UI should reflect "running" only.
       const { agentId } = action.payload;
       const agent = state.agents[agentId];
       if (!agent) return state;
       return {
         ...state,
         isRunning: true,
+        isComplete: false,
+        complete: null,
+        crossChecks: [],
+        hasError: false,
+        error: null,
+        toast: null,
         agents: {
           ...state.agents,
           [agentId]: createAgentState(agentId, agent.role, agent.label),
@@ -518,6 +497,11 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
   } as const,
+  headerLeft: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.xl,
+  } as const,
   headerTitle: {
     fontFamily: pwc.fontHeading,
     fontWeight: 600,
@@ -548,6 +532,53 @@ const styles = {
     borderRadius: pwc.radius.sm,
     cursor: "pointer",
     outline: "none",
+  } as const,
+  tabBarCard: {
+    position: "relative" as const,
+  } as const,
+  activitySection: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 0,
+  } as const,
+  activityCard: {
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    boxShadow: pwc.shadow.card,
+    overflow: "hidden" as const,
+    display: "flex",
+    flexDirection: "column" as const,
+  } as const,
+  activityCardAttached: {
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderTop: "none",
+    borderRadius: `0 0 ${pwc.radius.md}px ${pwc.radius.md}px`,
+    boxShadow: pwc.shadow.card,
+    overflow: "hidden" as const,
+    display: "flex",
+    flexDirection: "column" as const,
+    marginTop: -1,
+  } as const,
+  activityHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    background: pwc.grey50,
+  } as const,
+  activityTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: 600,
+    color: pwc.grey900,
+  } as const,
+  activityCount: {
+    fontFamily: pwc.fontMono,
+    fontSize: 11,
+    color: pwc.grey500,
   } as const,
   main: {
     maxWidth: 960,
@@ -601,7 +632,7 @@ const styles = {
 // ---------------------------------------------------------------------------
 
 export default function App() {
-  const [state, dispatch] = useReducer(appReducer, initialState);
+  const [state, dispatch] = useReducer(appReducer, undefined, bootState);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Hold the SSE controller so we can abort it on reset/unmount.
@@ -614,6 +645,26 @@ export default function App() {
     return () => {
       sseControllerRef.current?.abort();
     };
+  }, []);
+
+  // --- Phase 4: URL <-> view sync ----------------------------------------
+  // Push the view into the address bar whenever it changes, so deep-linking
+  // and copy/paste of the URL work. Listen for popstate so browser Back and
+  // Forward buttons update the in-memory view without a full reload.
+  useEffect(() => {
+    const expected = state.view === "history" ? "/history" : "/";
+    if (window.location.pathname !== expected) {
+      window.history.pushState({ view: state.view }, "", expected);
+    }
+  }, [state.view]);
+
+  useEffect(() => {
+    const onPop = () => {
+      const nextView = window.location.pathname.startsWith("/history") ? "history" : "extract";
+      dispatch({ type: "SET_VIEW", payload: nextView });
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   const handleReset = useCallback(() => {
@@ -719,7 +770,13 @@ export default function App() {
     <div style={styles.page}>
       {/* Header */}
       <header style={styles.header}>
-        <h1 style={styles.headerTitle}>XBRL Agent</h1>
+        <div style={styles.headerLeft}>
+          <h1 style={styles.headerTitle}>XBRL Agent</h1>
+          <TopNav
+            view={state.view}
+            onViewChange={(v) => dispatch({ type: "SET_VIEW", payload: v })}
+          />
+        </div>
         <button
           onClick={() => setSettingsOpen(true)}
           style={styles.settingsButton}
@@ -733,6 +790,73 @@ export default function App() {
       </header>
 
       <main style={styles.main}>
+        {state.view === "history" ? (
+          <HistoryPage />
+        ) : (
+          <ExtractView
+            state={state}
+            dispatch={dispatch}
+            handleUpload={handleUpload}
+            handleMultiRun={handleMultiRun}
+            handleAbortAll={handleAbortAll}
+            handleAbortAgent={handleAbortAgent}
+            handleRerunAgent={handleRerunAgent}
+            handleReset={handleReset}
+          />
+        )}
+      </main>
+
+      {/* Settings modal */}
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        getSettings={getSettings}
+        saveSettings={updateSettings}
+        testConnection={testConnection}
+      />
+
+      {/* Phase 9: Run-complete success toast — top-right, auto-dismiss 4 s */}
+      <SuccessToast
+        toast={state.toast}
+        onDismiss={() => dispatch({ type: "DISMISS_TOAST" })}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ExtractView — the extraction workspace. Split out from App so the header
+// and TopNav can stay mounted while switching between Extract and History
+// without re-mounting the run pipeline UI.
+// ---------------------------------------------------------------------------
+
+interface ExtractViewProps {
+  state: AppState;
+  dispatch: React.Dispatch<AppAction>;
+  handleUpload: (file: File) => Promise<UploadResponseShape>;
+  handleMultiRun: (config: RunConfigPayload) => void;
+  handleAbortAll: () => Promise<void>;
+  handleAbortAgent: (agentId: string) => Promise<void>;
+  handleRerunAgent: (agentId: string) => void;
+  handleReset: () => void;
+}
+
+// Minimal local alias — avoids circular import of the real UploadResponse type
+// while keeping the prop type honest.
+type UploadResponseShape = { session_id: string; filename: string };
+
+function ExtractView({
+  state,
+  dispatch,
+  handleUpload,
+  handleMultiRun,
+  handleAbortAll,
+  handleAbortAgent,
+  handleRerunAgent,
+  handleReset,
+}: ExtractViewProps) {
+  return (
+    <>
         {/* Upload + Run */}
         <UploadPanel
           onUpload={handleUpload}
@@ -764,11 +888,14 @@ export default function App() {
           <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} />
         )}
 
-        {/* Agent tabs + feed — wrapped together as a single visual card */}
+        {/* Agent tabs + monitor */}
         {state.agentTabOrder.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {/* Tab bar */}
-            <div style={{ position: "relative" }}>
+          <div
+            style={
+              state.events.length > 0 ? styles.activitySection : undefined
+            }
+          >
+            <div style={styles.tabBarCard}>
               <AgentTabs
                 agents={Object.fromEntries(
                   Object.entries(state.agents).map(([id, a]) => [
@@ -782,6 +909,8 @@ export default function App() {
                 onAbortAgent={handleAbortAgent}
                 onRerunAgent={handleRerunAgent}
                 isRunning={state.isRunning}
+                // Phase 8: gate statement tabs so nothing shows until a run starts.
+                statementsInRun={state.statementsInRun}
                 skeletonTabs={
                   // Show skeleton tabs for statements in this run that haven't reported yet
                   STATEMENT_TYPES.filter(
@@ -803,39 +932,38 @@ export default function App() {
               )}
             </div>
 
-            {/* Agent feed — directly below tabs with no gap */}
             {state.events.length > 0 && (() => {
               if (state.activeTab === "validator") {
-                return <ValidatorTab crossChecks={state.crossChecks} />;
-              }
-              const activeAgent = state.activeTab ? state.agents[state.activeTab] : null;
-              if (activeAgent) {
                 return (
-                  <AgentFeed
-                    events={activeAgent.events}
-                    thinkingBlocks={activeAgent.thinkingBlocks}
-                    toolTimeline={activeAgent.toolTimeline}
-                    streamingText={activeAgent.streamingText}
-                    textSegments={activeAgent.textSegments}
-                    thinkingBuffer={activeAgent.thinkingBuffer}
-                    activeThinkingId={activeAgent.activeThinkingId}
-                    isRunning={activeAgent.status === "running"}
-                    currentPhase={activeAgent.currentPhase}
-                  />
+                  <div style={styles.activityCardAttached}>
+                    <div style={styles.activityHeader}>
+                      <span style={styles.activityTitle}>Cross-checks</span>
+                      <span style={styles.activityCount}>
+                        {state.crossChecks.length} checks
+                      </span>
+                    </div>
+                    <ValidatorTab crossChecks={state.crossChecks} />
+                  </div>
                 );
               }
+              const activeAgent = state.activeTab ? state.agents[state.activeTab] : null;
+              const events = activeAgent ? activeAgent.events : state.events;
+              const toolTimeline = activeAgent ? activeAgent.toolTimeline : state.toolTimeline;
+              const running = activeAgent ? activeAgent.status === "running" : state.isRunning;
               return (
-                <AgentFeed
-                  events={state.events}
-                  thinkingBlocks={state.thinkingBlocks}
-                  toolTimeline={state.toolTimeline}
-                  streamingText={state.streamingText}
-                  textSegments={state.textSegments}
-                  thinkingBuffer={state.thinkingBuffer}
-                  activeThinkingId={state.activeThinkingId}
-                  isRunning={state.isRunning}
-                  currentPhase={state.currentPhase}
-                />
+                <div style={styles.activityCardAttached}>
+                  <div style={styles.activityHeader}>
+                    <span style={styles.activityTitle}>Agent Activity</span>
+                    <span style={styles.activityCount}>
+                      {events.length} {events.length === 1 ? "event" : "events"}
+                    </span>
+                  </div>
+                  <AgentTimeline
+                    events={events}
+                    toolTimeline={toolTimeline}
+                    isRunning={running}
+                  />
+                </div>
               );
             })()}
           </div>
@@ -843,16 +971,10 @@ export default function App() {
 
         {/* Legacy: agent feed without tabs (single-agent mode) */}
         {state.agentTabOrder.length === 0 && state.events.length > 0 && (
-          <AgentFeed
+          <AgentTimeline
             events={state.events}
-            thinkingBlocks={state.thinkingBlocks}
             toolTimeline={state.toolTimeline}
-            streamingText={state.streamingText}
-            textSegments={state.textSegments}
-            thinkingBuffer={state.thinkingBuffer}
-            activeThinkingId={state.activeThinkingId}
             isRunning={state.isRunning}
-            currentPhase={state.currentPhase}
           />
         )}
 
@@ -888,16 +1010,6 @@ export default function App() {
             Start new extraction
           </button>
         )}
-      </main>
-
-      {/* Settings modal */}
-      <SettingsModal
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        getSettings={getSettings}
-        saveSettings={updateSettings}
-        testConnection={testConnection}
-      />
-    </div>
+    </>
   );
 }

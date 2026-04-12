@@ -30,12 +30,19 @@ class SOCFToSOFPCashCheck:
             )
         socf_wb.close()
 
-        # Read SOFP cash (CY = col B)
+        # Read SOFP cash (CY = col B). Label differs between variants:
+        # CuNonCu uses "*Cash and cash equivalents"; OrdOfLiq uses
+        # "Total Cash and bank balances" for the same semantic row.
         sofp_wb = open_workbook(workbook_paths[StatementType.SOFP])
         sofp_ws = find_sheet(sofp_wb, "SOFP-CuNonCu", "SOFP-OrdOfLiq")
         sofp_cash = None
         if sofp_ws is not None:
-            sofp_cash = find_value_by_label(sofp_ws, "cash and cash equivalents", col=2, wb=sofp_wb)
+            sofp_cash = find_value_by_label(
+                sofp_ws,
+                ["cash and cash equivalents", "total cash and bank balances"],
+                col=2,
+                wb=sofp_wb,
+            )
         sofp_wb.close()
 
         if socf_cash is None or sofp_cash is None:

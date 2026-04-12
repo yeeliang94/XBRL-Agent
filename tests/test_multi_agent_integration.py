@@ -157,9 +157,13 @@ class TestMultiAgentIntegration:
         assert agents[0]["statement_type"] == "SOFP"
         assert agents[1]["statement_type"] == "SOPL"
 
-        # Verify coarse events persisted (finding 5 fix)
+        # Verify coarse events persisted (finding 5 fix).
+        # Phase 6.5 now also persists the per-tool SSE events at run time,
+        # so agent_events should include at least the `complete` rows even
+        # for this mock (which doesn't emit tool_call/tool_result — see the
+        # dedicated test_tool_events_persisted_during_run test below).
         events_db = conn.execute("SELECT * FROM agent_events ORDER BY id").fetchall()
-        assert len(events_db) >= 2  # at least status + complete per agent
+        assert len(events_db) >= 2
 
         # Verify cross-checks persisted
         checks_db = conn.execute("SELECT * FROM cross_checks ORDER BY id").fetchall()
@@ -228,3 +232,137 @@ class TestMultiAgentIntegration:
         run = conn.execute("SELECT * FROM runs").fetchone()
         assert run["status"] == "completed_with_errors"
         conn.close()
+
+    def test_tool_events_persisted_during_run(self, session_env):
+        """Phase 6.5: tool_call / tool_result SSE events must land in
+        agent_events at run time so history replay has real rows to serve.
+
+        Before Phase 6.5 the server only persisted `status:started` and
+        `complete` rows per agent, so historical tool timelines were empty.
+        """
+        client, session_id, out = session_env
+
+        fake_coordinator_result = CoordinatorResult(agent_results=[
+            AgentResult(
+                statement_type=StatementType.SOFP,
+                variant="CuNonCu",
+                status="succeeded",
+                workbook_path=str(out / session_id / "SOFP_filled.xlsx"),
+            ),
+            AgentResult(
+                statement_type=StatementType.SOPL,
+                variant="Function",
+                status="succeeded",
+                workbook_path=str(out / session_id / "SOPL_filled.xlsx"),
+            ),
+        ])
+        fake_merge = MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=3)
+
+        run_config = {
+            "statements": ["SOFP", "SOPL"],
+            "variants": {"SOFP": "CuNonCu", "SOPL": "Function"},
+            "models": {},
+            "infopack": None,
+            "use_scout": False,
+        }
+
+        async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None):
+            # Emit a realistic event burst per agent: status → tool_call →
+            # tool_result → complete. Tool events are the ones Phase 6.5
+            # must persist.
+            if event_queue is not None:
+                for ar in fake_coordinator_result.agent_results:
+                    agent_id = ar.statement_type.value.lower()
+                    await event_queue.put({
+                        "event": "status",
+                        "data": {
+                            "phase": "reading_template",
+                            "message": "",
+                            "agent_id": agent_id,
+                            "agent_role": ar.statement_type.value,
+                        },
+                    })
+                    await event_queue.put({
+                        "event": "tool_call",
+                        "data": {
+                            "tool_name": "read_template",
+                            "tool_call_id": f"tc_{agent_id}_1",
+                            "args": {"path": "/x.xlsx"},
+                            "agent_id": agent_id,
+                            "agent_role": ar.statement_type.value,
+                        },
+                    })
+                    await event_queue.put({
+                        "event": "tool_result",
+                        "data": {
+                            "tool_name": "read_template",
+                            "tool_call_id": f"tc_{agent_id}_1",
+                            "result_summary": "ok",
+                            "duration_ms": 50,
+                            "agent_id": agent_id,
+                            "agent_role": ar.statement_type.value,
+                        },
+                    })
+                    await event_queue.put({
+                        "event": "complete",
+                        "data": {
+                            "success": ar.status == "succeeded",
+                            "agent_id": agent_id,
+                            "agent_role": ar.statement_type.value,
+                            "workbook_path": ar.workbook_path,
+                            "error": ar.error,
+                        },
+                    })
+                await event_queue.put(None)
+            return fake_coordinator_result
+
+        with patch("server._create_proxy_model", return_value="fake-model"), \
+             patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
+             patch("workbook_merger.merge", return_value=fake_merge), \
+             patch("cross_checks.framework.run_all", return_value=[]):
+            resp = client.post(f"/api/run/{session_id}", json=run_config)
+
+        assert resp.status_code == 200
+
+        # The key assertion: agent_events contains tool_call AND tool_result
+        # rows, keyed to each agent's run_agent_id.
+        db_path = out / "xbrl_agent.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            agents = conn.execute(
+                "SELECT id, statement_type FROM run_agents ORDER BY id"
+            ).fetchall()
+            assert len(agents) == 2
+            agent_by_stmt = {a["statement_type"]: a["id"] for a in agents}
+
+            for stmt in ("SOFP", "SOPL"):
+                rows = conn.execute(
+                    "SELECT event_type FROM agent_events "
+                    "WHERE run_agent_id = ? ORDER BY id",
+                    (agent_by_stmt[stmt],),
+                ).fetchall()
+                types = [r["event_type"] for r in rows]
+                # Must contain at least one tool_call and one tool_result.
+                assert "tool_call" in types, (
+                    f"No tool_call persisted for {stmt}; got {types}"
+                )
+                assert "tool_result" in types, (
+                    f"No tool_result persisted for {stmt}; got {types}"
+                )
+                # Must contain the terminal complete row too, with the
+                # live payload shape (success: bool) — Phase 6.5.6.
+                complete_row = conn.execute(
+                    "SELECT payload_json FROM agent_events "
+                    "WHERE run_agent_id = ? AND event_type = 'complete' "
+                    "ORDER BY id DESC LIMIT 1",
+                    (agent_by_stmt[stmt],),
+                ).fetchone()
+                assert complete_row is not None
+                payload = json.loads(complete_row["payload_json"])
+                assert payload.get("success") is True, (
+                    f"complete event for {stmt} missing live-shape success flag; "
+                    f"got {payload}"
+                )
+        finally:
+            conn.close()

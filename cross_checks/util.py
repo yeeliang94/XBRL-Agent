@@ -5,7 +5,7 @@ up a cell value by its column-A label. This module centralises that logic.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 import openpyxl
 
@@ -62,7 +62,7 @@ def find_sheet(wb: openpyxl.Workbook, *candidates: str):
 
 def find_value_by_label(
     ws,
-    label_substr: str,
+    label_substr: Union[str, Sequence[str]],
     col: int = 2,
     wb: openpyxl.Workbook = None,
 ) -> Optional[float]:
@@ -75,52 +75,63 @@ def find_value_by_label(
 
     Args:
         ws: openpyxl worksheet.
-        label_substr: substring to match in column A (case-insensitive, stripped of leading *).
+        label_substr: substring to match in column A (case-insensitive, stripped of
+            leading *). May also be a sequence of candidate labels — each is tried
+            in order until one yields a value. Use this for fields whose wording
+            differs across template variants (e.g. SOFP cash row is "cash and cash
+            equivalents" in CuNonCu but "total cash and bank balances" in OrdOfLiq).
         col: which column to read the value from (2=B for CY, 3=C for PY, etc.).
         wb: the parent workbook — needed for formula evaluation.
 
     Returns:
-        The float value, or None if label not found or cell is empty.
+        The float value, or None if no candidate label was found or cells were empty.
     """
-    target = label_substr.strip().lower()
+    candidates: list[str]
+    if isinstance(label_substr, str):
+        candidates = [label_substr]
+    else:
+        candidates = list(label_substr)
 
-    # Collect all matching rows: exact matches first, then substring matches.
-    # Multiple rows can share the same label (e.g. SOCF has a data-entry row
-    # and a formula row both labelled "Cash and cash equivalents at end of period").
-    # We try each match in priority order, skipping rows with no value.
-    exact_rows: list[int] = []
-    substr_rows: list[int] = []
-    for row in ws.iter_rows(min_col=1, max_col=1):
-        cell = row[0]
-        if cell.value is None:
-            continue
-        normalized = str(cell.value).strip().lstrip("*").strip().lower()
-        if normalized == target:
-            exact_rows.append(cell.row)
-        elif target in normalized or normalized in target:
-            substr_rows.append(cell.row)
+    for candidate in candidates:
+        target = candidate.strip().lower()
 
-    # Try exact matches first, then substring matches
-    for match_row in exact_rows + substr_rows:
-        val_cell = ws.cell(row=match_row, column=col)
-        raw = val_cell.value
-        if raw is None:
-            continue
-
-        # Formula cell — evaluate it if we have the workbook
-        if isinstance(raw, str) and raw.startswith("="):
-            if wb is None:
+        # Collect all matching rows: exact matches first, then substring matches.
+        # Multiple rows can share the same label (e.g. SOCF has a data-entry row
+        # and a formula row both labelled "Cash and cash equivalents at end of period").
+        # We try each match in priority order, skipping rows with no value.
+        exact_rows: list[int] = []
+        substr_rows: list[int] = []
+        for row in ws.iter_rows(min_col=1, max_col=1):
+            cell = row[0]
+            if cell.value is None:
                 continue
-            from openpyxl.utils import get_column_letter
-            cell_ref = f"{get_column_letter(col)}{match_row}"
-            resolved = _resolve_cell_value(wb, ws.title, cell_ref)
-            if resolved is not None:
-                return resolved
-            continue
+            normalized = str(cell.value).strip().lstrip("*").strip().lower()
+            if normalized == target:
+                exact_rows.append(cell.row)
+            elif target in normalized or normalized in target:
+                substr_rows.append(cell.row)
 
-        try:
-            return float(raw)
-        except (ValueError, TypeError):
-            continue
+        # Try exact matches first, then substring matches
+        for match_row in exact_rows + substr_rows:
+            val_cell = ws.cell(row=match_row, column=col)
+            raw = val_cell.value
+            if raw is None:
+                continue
+
+            # Formula cell — evaluate it if we have the workbook
+            if isinstance(raw, str) and raw.startswith("="):
+                if wb is None:
+                    continue
+                from openpyxl.utils import get_column_letter
+                cell_ref = f"{get_column_letter(col)}{match_row}"
+                resolved = _resolve_cell_value(wb, ws.title, cell_ref)
+                if resolved is not None:
+                    return resolved
+                continue
+
+            try:
+                return float(raw)
+            except (ValueError, TypeError):
+                continue
 
     return None

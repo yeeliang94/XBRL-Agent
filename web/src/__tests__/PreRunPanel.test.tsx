@@ -293,10 +293,12 @@ describe("PreRunPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
-    // Tool names should appear in the progress area
+    // Phase 10: raw tool names are replaced with friendly labels from
+    // `toolLabels.ts`. The scout panel now reuses the standard ToolCallCard
+    // so the wording matches the live extract view.
     await waitFor(() => {
-      expect(screen.getByText(/find_toc/)).toBeInTheDocument();
-      expect(screen.getByText(/view_pages/)).toBeInTheDocument();
+      expect(screen.getByText(/Locating table of contents/i)).toBeInTheDocument();
+      expect(screen.getByText(/Checking PDF pages/i)).toBeInTheDocument();
     });
 
     fetchSpy.mockRestore();

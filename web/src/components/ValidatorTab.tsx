@@ -48,7 +48,6 @@ export function ValidatorTab({ crossChecks }: ValidatorTabProps) {
             <th style={{ ...styles.th, textAlign: "right" }}>Actual</th>
             <th style={{ ...styles.th, textAlign: "right" }}>Diff</th>
             <th style={styles.th}>Message</th>
-            <th style={styles.th}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -85,28 +84,6 @@ export function ValidatorTab({ crossChecks }: ValidatorTabProps) {
                 </td>
                 <td style={{ ...styles.td, fontSize: 13, color: pwc.grey700 }}>
                   {check.message}
-                </td>
-                <td style={styles.td}>
-                  {check.status === "pending" && (
-                    <div style={{ display: "flex", gap: pwc.space.xs }}>
-                      <button
-                        data-action="run"
-                        disabled
-                        title="Subset re-run not yet available"
-                        style={{ ...styles.runButton, ...styles.buttonDisabled }}
-                      >
-                        Run
-                      </button>
-                      <button
-                        data-action="skip"
-                        disabled
-                        title="Skip not yet available"
-                        style={{ ...styles.skipButton, ...styles.buttonDisabled }}
-                      >
-                        Skip
-                      </button>
-                    </div>
-                  )}
                 </td>
               </tr>
             );
@@ -169,30 +146,6 @@ const styles = {
     fontSize: 12,
     fontWeight: 600,
     lineHeight: 1.5,
-  } as React.CSSProperties,
-  runButton: {
-    padding: `2px ${pwc.space.sm}px`,
-    fontSize: 12,
-    fontWeight: 600,
-    color: pwc.white,
-    background: pwc.orange500,
-    border: "none",
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  skipButton: {
-    padding: `2px ${pwc.space.sm}px`,
-    fontSize: 12,
-    fontWeight: 500,
-    color: pwc.grey700,
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  buttonDisabled: {
-    opacity: 0.4,
-    cursor: "not-allowed",
   } as React.CSSProperties,
   empty: {
     padding: pwc.space.xl,

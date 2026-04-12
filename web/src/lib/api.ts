@@ -1,4 +1,13 @@
-import type { UploadResponse, SettingsResponse, ExtendedSettingsResponse } from "./types";
+import type {
+  UploadResponse,
+  SettingsResponse,
+  ExtendedSettingsResponse,
+  RunListResponse,
+  RunDetailJson,
+  RunAgentJson,
+  RunsFilterParams,
+  SSEEvent,
+} from "./types";
 
 // Shared fetch helper — parses JSON error bodies for useful messages
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -64,4 +73,62 @@ export async function abortAll(sessionId: string): Promise<{ cancelled: number }
 /** Cancel a single agent within a session. */
 export async function abortAgent(sessionId: string, agentId: string): Promise<{ cancelled: string }> {
   return apiFetch(`/api/abort/${sessionId}/${agentId}`, { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: History API
+//
+// Thin wrappers over the /api/runs endpoints. URL building lives here (not in
+// the components) so the query-string format stays consistent and testable.
+// ---------------------------------------------------------------------------
+
+/** Build the querystring for `GET /api/runs`. Empty/undefined filters are
+ *  dropped so the URL reads cleanly and the backend never sees `q=`. */
+function buildRunsQuery(params: RunsFilterParams): string {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set("q", params.q);
+  if (params.status) qs.set("status", params.status);
+  if (params.model) qs.set("model", params.model);
+  // Backend middleware remaps `from` / `to` -> `date_from` / `date_to`.
+  // Use the human-friendly names on the wire.
+  if (params.dateFrom) qs.set("from", params.dateFrom);
+  if (params.dateTo) qs.set("to", params.dateTo);
+  if (params.limit != null) qs.set("limit", String(params.limit));
+  if (params.offset != null) qs.set("offset", String(params.offset));
+  const str = qs.toString();
+  return str ? `?${str}` : "";
+}
+
+/** Fetch a page of past runs, optionally filtered. */
+export async function fetchRuns(params: RunsFilterParams): Promise<RunListResponse> {
+  const url = `/api/runs${buildRunsQuery(params)}`;
+  return apiFetch<RunListResponse>(url);
+}
+
+/** Fetch the hydrated detail view for a single run.
+ *
+ *  Legacy rows (pre-Phase-6.5) may omit the per-agent `events` array
+ *  entirely. We normalise missing/null values to `[]` here so UI
+ *  consumers (RunDetailView, AgentTimeline) can always spread the
+ *  field without a null check. */
+export async function fetchRunDetail(runId: number): Promise<RunDetailJson> {
+  const raw = await apiFetch<RunDetailJson>(`/api/runs/${runId}`);
+  const agents: RunAgentJson[] = (raw.agents ?? []).map((a) => ({
+    ...a,
+    events: Array.isArray(a.events) ? (a.events as SSEEvent[]) : [],
+  }));
+  return { ...raw, agents };
+}
+
+/** Hard-delete a run row (DB only — the on-disk output folder is left alone). */
+export async function deleteRun(runId: number): Promise<{ deleted: number }> {
+  return apiFetch(`/api/runs/${runId}`, { method: "DELETE" });
+}
+
+/** Build the download URL for a past run's merged workbook.
+ *  Returned as a plain string so the caller can hand it to an `<a href>` or
+ *  `window.location.href =` — streaming a file through fetch + Blob would
+ *  add complexity we don't need. */
+export function downloadFilledUrl(runId: number): string {
+  return `/api/runs/${runId}/download/filled`;
 }
