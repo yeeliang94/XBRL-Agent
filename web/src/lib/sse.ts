@@ -1,7 +1,6 @@
 import { type SSEEvent, type SSEEventType, type RunConfigPayload } from "./types";
 
-/** Event types for the legacy single-agent SSE stream. */
-const LEGACY_EVENT_TYPES: SSEEventType[] = [
+const MULTI_EVENT_TYPES: SSEEventType[] = [
   "status",
   "thinking_delta",
   "thinking_end",
@@ -11,49 +10,8 @@ const LEGACY_EVENT_TYPES: SSEEventType[] = [
   "token_update",
   "error",
   "complete",
-];
-
-/** Event types for the multi-agent SSE stream (includes per-agent + aggregate). */
-const MULTI_EVENT_TYPES: SSEEventType[] = [
-  ...LEGACY_EVENT_TYPES,
   "run_complete",
 ];
-
-/**
- * Open an SSE connection to the legacy single-agent extraction endpoint (GET).
- * Returns an AbortController to cancel the connection.
- */
-export function createSSE(
-  sessionId: string,
-  onEvent: (event: SSEEvent) => void,
-  onDone: () => void,
-  onError: (error: string) => void,
-): AbortController {
-  const controller = new AbortController();
-  const url = `/api/run/${sessionId}`;
-
-  const eventSource = new EventSource(url);
-
-  for (const eventType of LEGACY_EVENT_TYPES) {
-    eventSource.addEventListener(eventType, (e) => {
-      const data = JSON.parse((e as MessageEvent).data);
-      onEvent({ event: eventType, data, timestamp: Date.now() / 1000 });
-
-      if (eventType === "complete" || eventType === "error") {
-        eventSource.close();
-        onDone();
-      }
-    });
-  }
-
-  eventSource.onerror = () => {
-    eventSource.close();
-    onError("SSE connection lost");
-  };
-
-  controller.signal.addEventListener("abort", () => eventSource.close());
-  return controller;
-}
 
 /**
  * Open a POST-based SSE connection to the multi-agent extraction endpoint.

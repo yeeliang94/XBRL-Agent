@@ -21,7 +21,7 @@ class AlwaysPassCheck:
     def applies_to(self, run_config) -> bool:
         return True
 
-    def run(self, workbook_paths, tolerance) -> CrossCheckResult:
+    def run(self, workbook_paths, tolerance, filing_level="company") -> CrossCheckResult:
         return CrossCheckResult(
             name=self.name,
             status="passed",
@@ -41,7 +41,7 @@ class AlwaysFailCheck:
     def applies_to(self, run_config) -> bool:
         return True
 
-    def run(self, workbook_paths, tolerance) -> CrossCheckResult:
+    def run(self, workbook_paths, tolerance, filing_level="company") -> CrossCheckResult:
         return CrossCheckResult(
             name=self.name,
             status="failed",
@@ -61,7 +61,7 @@ class VariantSpecificCheck:
     def applies_to(self, run_config) -> bool:
         return run_config.get("variants", {}).get(StatementType.SOCF) == "Indirect"
 
-    def run(self, workbook_paths, tolerance) -> CrossCheckResult:
+    def run(self, workbook_paths, tolerance, filing_level="company") -> CrossCheckResult:
         return CrossCheckResult(
             name=self.name,
             status="passed",
@@ -164,14 +164,14 @@ class TestCrossCheckSelection:
             name = "check_a"
             required_statements = {StatementType.SOPL, StatementType.SOCIE}
             def applies_to(self, rc): return True
-            def run(self, wp, tol): return CrossCheckResult(
+            def run(self, wp, tol, filing_level="company"): return CrossCheckResult(
                 name=self.name, status="passed", message="OK")
 
         class CheckB:
             name = "check_b"
             required_statements = {StatementType.SOCI, StatementType.SOCIE}
             def applies_to(self, rc): return True
-            def run(self, wp, tol): return CrossCheckResult(
+            def run(self, wp, tol, filing_level="company"): return CrossCheckResult(
                 name=self.name, status="passed", message="OK")
 
         # Run without SOCIE
@@ -200,7 +200,7 @@ class TestCrossCheckSelection:
             name = "broken"
             required_statements = {StatementType.SOFP}
             def applies_to(self, rc): return True
-            def run(self, wp, tol): raise RuntimeError("boom")
+            def run(self, wp, tol, filing_level="company"): raise RuntimeError("boom")
 
         checks = [BrokenCheck()]
         run_config = {"statements_to_run": {StatementType.SOFP}}

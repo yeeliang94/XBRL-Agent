@@ -249,8 +249,7 @@ describe("PreRunPanel", () => {
     fetchSpy.mockRestore();
   });
 
-  test("scout tool calls are displayed in the progress area", async () => {
-    // Mock SSE stream that sends tool_call and tool_result events before completing
+  test("scout tool calls update progress and populate variants", async () => {
     const scoutPayload = {
       success: true,
       infopack: {
@@ -293,15 +292,54 @@ describe("PreRunPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
-    // Phase 10: raw tool names are replaced with friendly labels from
-    // `toolLabels.ts`. The scout panel now reuses the standard ToolCallCard
-    // so the wording matches the live extract view.
+    // After scout completes, the variant dropdown should be populated
     await waitFor(() => {
-      expect(screen.getByText(/Locating table of contents/i)).toBeInTheDocument();
-      expect(screen.getByText(/Checking PDF pages/i)).toBeInTheDocument();
+      const sofpSelect = screen.getAllByRole("combobox")[0];
+      expect(sofpSelect).toHaveValue("CuNonCu");
     });
 
     fetchSpy.mockRestore();
+  });
+
+  test("filing level defaults to company and can be toggled to group", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /company/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /group/i })).toBeInTheDocument();
+    });
+
+    // Click Group
+    fireEvent.click(screen.getByRole("button", { name: /group/i }));
+
+    // Trigger a run
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+
+    expect(onRun).toHaveBeenCalledWith(
+      expect.objectContaining({ filing_level: "group" }),
+    );
+  });
+
+  test("filing level defaults to company in payload", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+
+    expect(onRun).toHaveBeenCalledWith(
+      expect.objectContaining({ filing_level: "company" }),
+    );
   });
 
   test("disabling scout hides auto-detect button", async () => {

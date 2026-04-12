@@ -1,7 +1,16 @@
+import pytest
+from pathlib import Path
+
 from tools.pdf_viewer import (
     render_pages_to_images,
     render_pages_to_png_bytes,
     count_pdf_pages,
+)
+
+_SAMPLE_PDF = Path("data/FINCO-Audited-Financial-Statement-2021.pdf")
+pytestmark = pytest.mark.skipif(
+    not _SAMPLE_PDF.exists(),
+    reason="Sample PDF not in repo — run with local data only",
 )
 
 

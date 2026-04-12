@@ -6,6 +6,7 @@ import type {
   ModelEntry,
   RunConfigPayload,
   ToolTimelineEntry,
+  FilingLevel,
 } from "../lib/types";
 import { STATEMENT_TYPES } from "../lib/types";
 import { pwc } from "../lib/theme";
@@ -13,7 +14,6 @@ import { abortAgent } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { ScoutToggle } from "./ScoutToggle";
 import { StatementRunConfig } from "./StatementRunConfig";
-import { ToolCallCard } from "./ToolCallCard";
 import { humanToolName } from "../lib/toolLabels";
 
 interface Props {
@@ -152,15 +152,14 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const [isDetecting, setIsDetecting] = useState(false);
   const [infopack, setInfopack] = useState<Record<string, unknown> | null>(null);
 
+  const [filingLevel, setFilingLevel] = useState<FilingLevel>("company");
   const [variantSelections, setVariantSelections] = useState(makeEmptySelections);
   const [statementsEnabled, setStatementsEnabled] = useState(makeAllEnabled);
   const [modelOverrides, setModelOverrides] = useState<Record<StatementType, string>>(
     {} as Record<StatementType, string>,
   );
   const [availableModels, setAvailableModels] = useState<ModelEntry[]>([]);
-  // Phase 10: scout now feeds the same ToolCallCard used in the live
-  // extract timeline, so the row state is the shared ToolTimelineEntry.
-  const [scoutToolCalls, setScoutToolCalls] = useState<ToolTimelineEntry[]>([]);
+  const [, setScoutToolCalls] = useState<ToolTimelineEntry[]>([]);
 
   // Load settings on mount
   useEffect(() => {
@@ -441,8 +440,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
       models,
       infopack: scoutEnabled ? infopack : null,
       use_scout: scoutEnabled,
+      filing_level: filingLevel,
     });
-  }, [statementsEnabled, variantSelections, modelOverrides, infopack, scoutEnabled, onRun]);
+  }, [statementsEnabled, variantSelections, modelOverrides, infopack, scoutEnabled, filingLevel, onRun]);
 
   if (loading) {
     return (
@@ -465,6 +465,38 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   return (
     <div style={styles.container}>
       <h2 style={styles.heading}>Run Configuration</h2>
+
+      {/* Filing level: Company or Group */}
+      <div style={styles.section}>
+        <span style={styles.sectionLabel}>Filing Level</span>
+        <div style={{ display: "inline-flex", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+          {(["company", "group"] as const).map((level) => {
+            const active = filingLevel === level;
+            return (
+              <button
+                key={level}
+                type="button"
+                onClick={() => setFilingLevel(level)}
+                style={{
+                  fontFamily: pwc.fontHeading,
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 500,
+                  padding: "8px 24px",
+                  border: "none",
+                  borderRight: level === "company" ? `1px solid ${pwc.grey200}` : "none",
+                  borderRadius: 0,
+                  background: active ? pwc.orange500 : pwc.white,
+                  color: active ? pwc.white : pwc.grey700,
+                  cursor: "pointer",
+                  transition: "background 0.15s, color 0.15s",
+                }}
+              >
+                {level === "company" ? "Company" : "Group"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Scout toggle + auto-detect */}
       <div style={styles.section}>
@@ -507,9 +539,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
                 </button>
               </div>
             </div>
-            {scoutToolCalls.map((entry) => (
-              <ToolCallCard key={entry.tool_call_id} entry={entry} />
-            ))}
           </div>
         )}
         {scoutError && <p style={styles.errorText}>{scoutError}</p>}

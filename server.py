@@ -22,7 +22,7 @@ import time
 import traceback
 import uuid
 from pathlib import Path
-from typing import AsyncIterator, Dict, List, Optional, Set, Any
+from typing import AsyncIterator, Dict, List, Literal, Optional, Set, Any
 
 from dotenv import load_dotenv, set_key
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
@@ -242,6 +242,7 @@ class RunConfigRequest(BaseModel):
     models: Dict[str, str] = {}  # per-statement model overrides
     infopack: Optional[Dict] = None  # serialised Infopack JSON (nullable)
     use_scout: bool = False  # informational — actual infopack presence controls behaviour
+    filing_level: Literal["company", "group"] = "company"
 
 
 # --- Settings helpers ---
@@ -700,6 +701,7 @@ async def run_multi_agent_stream(
             statements_to_run=statements_to_run,
             variants=variants,
             models=models,
+            filing_level=run_config.filing_level,
         )
 
         yield {"event": "status", "data": {
@@ -893,6 +895,7 @@ async def run_multi_agent_stream(
         check_config = {
             "statements_to_run": statements_to_run,
             "variants": {stmt: v for stmt, v in variants.items()},
+            "filing_level": run_config.filing_level,
         }
         tolerance = float(os.environ.get("XBRL_TOLERANCE_RM", "1.0"))
         cross_check_results = run_cross_checks(
@@ -998,6 +1001,7 @@ async def run_multi_agent_stream(
                 "tolerance": cr.tolerance,
                 "message": cr.message,
             })
+        cross_checks_partial = False
 
         # Final run_complete event — success requires agents + merge + cross-checks all passing
         yield {"event": "run_complete", "data": {
@@ -1005,6 +1009,7 @@ async def run_multi_agent_stream(
             "merged_workbook": merged_path if merge_result.success else None,
             "merge_errors": merge_result.errors,
             "cross_checks": checks_data,
+            "cross_checks_partial": cross_checks_partial,
             "statements_completed": [r.statement_type.value for r in coordinator_result.agent_results
                                       if r.status == "succeeded"],
             "statements_failed": [r.statement_type.value for r in coordinator_result.agent_results
@@ -1235,6 +1240,7 @@ def _run_summary_to_dict(summary) -> dict:
         "duration_seconds": summary.duration_seconds,
         "scout_enabled": summary.scout_enabled,
         "has_merged_workbook": bool(summary.merged_workbook_path),
+        "filing_level": summary.filing_level,
     }
 
 
@@ -1394,6 +1400,7 @@ async def get_run_detail_endpoint(run_id: int):
         "started_at": run.started_at,
         "ended_at": run.ended_at,
         "config": run.config,
+        "filing_level": (run.config or {}).get("filing_level", "company"),
         "agents": [
             {
                 "id": a.id,

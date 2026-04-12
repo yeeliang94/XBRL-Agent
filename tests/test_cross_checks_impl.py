@@ -429,7 +429,7 @@ class TestSOCFToSOFPCash:
 from pathlib import Path
 from cross_checks.util import open_workbook, find_sheet, find_value_by_label
 
-TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "XBRL-template-MFRS"
+TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "XBRL-template-MFRS" / "Company"
 
 
 def _label_row_exists(ws, label_substr: str) -> bool:

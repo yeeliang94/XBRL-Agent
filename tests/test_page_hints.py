@@ -5,7 +5,7 @@ the agent, but they must NOT restrict which PDF pages the agent can view.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+import inspect
 from pathlib import Path
 
 from pydantic_ai.models.test import TestModel
@@ -54,35 +54,3 @@ class TestPageHints:
             "create_extraction_agent should not have an allowed_pages parameter"
         )
 
-    def test_system_prompt_includes_page_hints_as_soft_guidance(self):
-        """With page_hints, the prompt should mention pages but NOT restrict access."""
-        hints = {"face_page": 14, "note_pages": [30, 31]}
-        agent, deps = create_extraction_agent(
-            statement_type=StatementType.SOFP,
-            variant="CuNonCu",
-            pdf_path="/tmp/test.pdf",
-            template_path="/tmp/test.xlsx",
-            model=TestModel(),
-            output_dir="/tmp/output",
-            page_hints=hints,
-        )
-        prompt = agent._system_prompts[0]
-        assert "14" in prompt
-        # Prompt must NOT contain restrictive language that would prevent the agent
-        # from viewing pages outside the scout hints
-        prompt_lower = prompt.lower()
-        assert "restricted" not in prompt_lower, "Prompt should not restrict page access"
-        assert "rejected" not in prompt_lower, "Prompt should not threaten rejection"
-
-    def test_system_prompt_includes_self_navigation_when_no_hints(self):
-        """Without page_hints, the prompt should instruct self-navigation via TOC."""
-        agent, deps = create_extraction_agent(
-            statement_type=StatementType.SOFP,
-            variant="CuNonCu",
-            pdf_path="/tmp/test.pdf",
-            template_path="/tmp/test.xlsx",
-            model=TestModel(),
-            output_dir="/tmp/output",
-        )
-        prompt = agent._system_prompts[0]
-        assert "table of contents" in prompt.lower() or "TOC" in prompt

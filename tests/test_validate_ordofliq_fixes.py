@@ -6,7 +6,7 @@ from validate_ordofliq_fixes import categorize_reference, validate_template
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE_PATH = REPO_ROOT / "XBRL-template-MFRS" / "02-SOFP-OrderOfLiquidity.xlsx"
+TEMPLATE_PATH = REPO_ROOT / "XBRL-template-MFRS" / "Company" / "02-SOFP-OrderOfLiquidity.xlsx"
 
 
 def test_categorize_reference_handles_cash_and_borrowings() -> None:

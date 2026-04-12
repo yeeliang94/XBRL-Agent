@@ -58,6 +58,7 @@ class RunConfig:
     variants: Dict[StatementType, str] = field(default_factory=dict)
     models: Dict[StatementType, str] = field(default_factory=dict)
     scout_enabled: bool = True
+    filing_level: str = "company"
 
 
 class TestCoordinator:

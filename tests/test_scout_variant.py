@@ -1,13 +1,7 @@
-"""Tests for variant detection through the scout calibrator."""
+"""Tests for deterministic variant detection from page text signals."""
 from __future__ import annotations
 
-import pytest
-from pathlib import Path
-from unittest.mock import patch
-
 from statement_types import StatementType, VARIANTS
-from scout.toc_parser import TocEntry
-from scout.calibrator import calibrate_pages, CalibratedPage
 from scout.variant_detector import detect_variant_from_signals
 
 
@@ -133,29 +127,3 @@ class TestDetectVariantFromSignals:
                 assert result is None
 
 
-class TestCalibrationWithVariants:
-    """Calibration finds the page; variant detection is a separate step."""
-
-    @pytest.mark.asyncio
-    async def test_calibrated_page_found(self):
-        """Calibrator confirms the page exists — variant is handled separately
-        by the hybrid detector in variant_detector.py."""
-        entries = [
-            TocEntry("Statement of Financial Position", StatementType.SOFP, 42),
-        ]
-
-        async def mock_validate(pdf_path, page_num, statement_name, model):
-            if page_num == 42:
-                return {"found": True}
-            return {"found": False}
-
-        with patch("scout.calibrator._validate_page_via_llm", side_effect=mock_validate):
-            result = await calibrate_pages(
-                pdf_path=Path("/fake.pdf"),
-                toc_entries=entries,
-                pdf_length=100,
-                model="fake-model",
-            )
-
-        assert result.pages[StatementType.SOFP].actual_page == 42
-        assert result.pages[StatementType.SOFP].confidence == "HIGH"

@@ -133,6 +133,7 @@ export interface RunCompleteData {
   merged_workbook: string | null;
   merge_errors: string[];
   cross_checks: CrossCheckResult[];
+  cross_checks_partial?: boolean;
   statements_completed: string[];
   statements_failed: string[];
 }
@@ -206,6 +207,8 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   tolerance_rm: number;
 }
 
+export type FilingLevel = "company" | "group";
+
 /** Shape sent to POST /api/run/{session_id} */
 export interface RunConfigPayload {
   statements: StatementType[];
@@ -213,6 +216,7 @@ export interface RunConfigPayload {
   models: Record<string, string>;
   infopack: Record<string, unknown> | null;
   use_scout: boolean;
+  filing_level: FilingLevel;
 }
 
 // --- Phase 10: Per-agent state for tab-based UI ---
@@ -259,6 +263,7 @@ export interface RunSummaryJson {
   duration_seconds: number | null;
   scout_enabled: boolean;
   has_merged_workbook: boolean;
+  filing_level?: FilingLevel;
 }
 
 export interface RunListResponse {
@@ -306,6 +311,7 @@ export interface RunDetailJson {
   started_at: string | null;
   ended_at: string | null;
   config: Record<string, unknown> | null;
+  filing_level?: FilingLevel;
   agents: RunAgentJson[];
   cross_checks: RunCrossCheckJson[];
 }

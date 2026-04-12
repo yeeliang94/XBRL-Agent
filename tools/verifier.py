@@ -178,6 +178,7 @@ def _evaluate_formula(
 def verify_totals(
     path: str,
     pdf_values: Optional[dict[str, float]] = None,
+    filing_level: str = "company",
 ) -> VerificationResult:
     p = Path(path)
     if not p.exists():
@@ -212,6 +213,13 @@ def verify_totals(
                     computed_totals["total_assets_cy"] = val_b
                 if val_c is not None:
                     computed_totals["total_assets_py"] = val_c
+                if filing_level == "group":
+                    val_d = _get_cell_value(wb, ws, cell.row, 4, warnings=formula_warnings)
+                    val_e = _get_cell_value(wb, ws, cell.row, 5, warnings=formula_warnings)
+                    if val_d is not None:
+                        computed_totals["company_total_assets_cy"] = val_d
+                    if val_e is not None:
+                        computed_totals["company_total_assets_py"] = val_e
 
             elif label == _TOTAL_EQ_LIAB_LABEL or label == "total equity and liabilities":
                 val_b = _get_cell_value(wb, ws, cell.row, 2, warnings=formula_warnings)
@@ -220,6 +228,13 @@ def verify_totals(
                     computed_totals["total_equity_liabilities_cy"] = val_b
                 if val_c is not None:
                     computed_totals["total_equity_liabilities_py"] = val_c
+                if filing_level == "group":
+                    val_d = _get_cell_value(wb, ws, cell.row, 4, warnings=formula_warnings)
+                    val_e = _get_cell_value(wb, ws, cell.row, 5, warnings=formula_warnings)
+                    if val_d is not None:
+                        computed_totals["company_total_equity_liabilities_cy"] = val_d
+                    if val_e is not None:
+                        computed_totals["company_total_equity_liabilities_py"] = val_e
 
     # Surface formula resolution warnings as mismatches
     for w in dict.fromkeys(formula_warnings):  # deduplicate, preserve order
@@ -256,6 +271,33 @@ def verify_totals(
                 f"!= equity+liabilities={computed_totals['total_equity_liabilities_py']}"
             )
             feedback_lines.append(f"IMBALANCE (PY): assets - (equity+liabilities) = {diff}")
+
+    # Group filing: also check Company columns (D/E)
+    if filing_level == "group":
+        if (
+            "company_total_assets_cy" in computed_totals
+            and "company_total_equity_liabilities_cy" in computed_totals
+        ):
+            diff = computed_totals["company_total_assets_cy"] - computed_totals["company_total_equity_liabilities_cy"]
+            if abs(diff) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"Company CY: assets={computed_totals['company_total_assets_cy']} "
+                    f"!= equity+liabilities={computed_totals['company_total_equity_liabilities_cy']}"
+                )
+                feedback_lines.append(f"IMBALANCE (Company CY): assets - (equity+liabilities) = {diff}")
+        if (
+            "company_total_assets_py" in computed_totals
+            and "company_total_equity_liabilities_py" in computed_totals
+        ):
+            diff = computed_totals["company_total_assets_py"] - computed_totals["company_total_equity_liabilities_py"]
+            if abs(diff) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"Company PY: assets={computed_totals['company_total_assets_py']} "
+                    f"!= equity+liabilities={computed_totals['company_total_equity_liabilities_py']}"
+                )
+                feedback_lines.append(f"IMBALANCE (Company PY): assets - (equity+liabilities) = {diff}")
 
     if not computed_totals:
         is_balanced = False
@@ -322,11 +364,20 @@ def _get_cell_value(
 # the caller supply PDF reference values for cross-checking.
 # ---------------------------------------------------------------------------
 
+
+def _cy_columns(filing_level: str) -> list[tuple[int, str]]:
+    """Return (column_index, label_prefix) pairs for the CY data columns."""
+    if filing_level == "group":
+        return [(2, "Group"), (4, "Company")]
+    return [(2, "")]
+
+
 def verify_statement(
     path: str,
     statement_type: "object",  # statement_types.StatementType, duck-typed
     variant: str = "",
     pdf_values: Optional[dict[str, float]] = None,
+    filing_level: str = "company",
 ) -> VerificationResult:
     """Verify a filled workbook for a given statement type.
 
@@ -346,15 +397,15 @@ def verify_statement(
         raise FileNotFoundError(f"Template not found: {path}")
 
     if name == StatementType.SOFP.value:
-        return verify_totals(path, pdf_values=pdf_values)
+        return verify_totals(path, pdf_values=pdf_values, filing_level=filing_level)
     elif name == StatementType.SOCIE.value:
-        return _verify_socie(path, pdf_values=pdf_values)
+        return _verify_socie(path, pdf_values=pdf_values, filing_level=filing_level)
     elif name == StatementType.SOCF.value:
-        return _verify_socf(path, variant=variant, pdf_values=pdf_values)
+        return _verify_socf(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
     elif name == StatementType.SOPL.value:
-        return _verify_sopl(path, variant=variant, pdf_values=pdf_values)
+        return _verify_sopl(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
     elif name == StatementType.SOCI.value:
-        return _verify_soci(path, variant=variant, pdf_values=pdf_values)
+        return _verify_soci(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
 
     return VerificationResult(
         is_balanced=None,
@@ -373,6 +424,7 @@ def verify_statement(
 def _verify_socie(
     path: str,
     pdf_values: Optional[dict[str, float]] = None,
+    filing_level: str = "company",
 ) -> VerificationResult:
     wb = openpyxl.load_workbook(path, data_only=False)
     ws = wb["SOCIE"] if "SOCIE" in wb.sheetnames else wb.active
@@ -416,25 +468,30 @@ def _verify_socie(
     # Check each period block — the "Total" column is X (col 24)
     total_col = 24  # Column X = grand total
 
+    if filing_level == "group":
+        block_labels = ["group_cy", "group_py", "company_cy", "company_py"]
+    else:
+        block_labels = ["cy", "py"]
+
     for i, (rest_r, inc_r, close_r) in enumerate(
         zip(restated_rows, total_inc_rows, closing_rows)
     ):
-        period = "CY" if i == 0 else "PY"
+        label = block_labels[i] if i < len(block_labels) else f"block_{i}"
 
         restated = _get_cell_value(wb, ws, rest_r, total_col, warnings=formula_warnings) or 0.0
         increase = _get_cell_value(wb, ws, inc_r, total_col, warnings=formula_warnings) or 0.0
         closing = _get_cell_value(wb, ws, close_r, total_col, warnings=formula_warnings) or 0.0
 
-        computed_totals[f"restated_equity_{period.lower()}"] = restated
-        computed_totals[f"total_increase_{period.lower()}"] = increase
-        computed_totals[f"closing_equity_{period.lower()}"] = closing
+        computed_totals[f"restated_equity_{label}"] = restated
+        computed_totals[f"total_increase_{label}"] = increase
+        computed_totals[f"closing_equity_{label}"] = closing
 
         expected = restated + increase
         diff = closing - expected
         if abs(diff) > 0.01:
             is_balanced = False
             mismatches.append(
-                f"{period}: closing equity ({closing}) != "
+                f"{label}: closing equity ({closing}) != "
                 f"restated ({restated}) + total increase ({increase}) = {expected}"
             )
 
@@ -463,6 +520,7 @@ def _verify_socf(
     path: str,
     variant: str = "",
     pdf_values: Optional[dict[str, float]] = None,
+    filing_level: str = "company",
 ) -> VerificationResult:
     wb = openpyxl.load_workbook(path, data_only=False)
 
@@ -516,38 +574,45 @@ def _verify_socf(
             feedback=f"SOCF verification failed: missing rows {', '.join(missing)}",
         )
 
-    # Check: operating + investing + financing == net increase before FX
-    for key in ["net_operating", "net_investing", "net_financing", "net_increase_before_fx"]:
-        if key in rows_by_label:
-            computed_totals[key] = _get_cell_value(wb, ws, rows_by_label[key], 2, warnings=formula_warnings) or 0.0
+    for cy_col, prefix in _cy_columns(filing_level):
+        pfx = f"{prefix} " if prefix else ""
+        sfx = f"_{prefix.lower()}" if prefix else ""
 
-    if all(k in computed_totals for k in ["net_operating", "net_investing", "net_financing", "net_increase_before_fx"]):
-        expected = computed_totals["net_operating"] + computed_totals["net_investing"] + computed_totals["net_financing"]
-        actual = computed_totals["net_increase_before_fx"]
-        if abs(actual - expected) > 0.01:
-            is_balanced = False
-            mismatches.append(
-                f"Net increase before FX ({actual}) != "
-                f"Operating ({computed_totals['net_operating']}) + "
-                f"Investing ({computed_totals['net_investing']}) + "
-                f"Financing ({computed_totals['net_financing']}) = {expected}"
-            )
+        # Check: operating + investing + financing == net increase before FX
+        col_totals: dict[str, float] = {}
+        for key in ["net_operating", "net_investing", "net_financing", "net_increase_before_fx"]:
+            if key in rows_by_label:
+                col_totals[key] = _get_cell_value(wb, ws, rows_by_label[key], cy_col, warnings=formula_warnings) or 0.0
+                computed_totals[f"{key}{sfx}"] = col_totals[key]
 
-    # Check: cash at end == cash at beginning + net increase after FX
-    for key in ["cash_beginning", "cash_end", "net_increase_after_fx"]:
-        if key in rows_by_label:
-            computed_totals[key] = _get_cell_value(wb, ws, rows_by_label[key], 2, warnings=formula_warnings) or 0.0
+        if all(k in col_totals for k in ["net_operating", "net_investing", "net_financing", "net_increase_before_fx"]):
+            expected = col_totals["net_operating"] + col_totals["net_investing"] + col_totals["net_financing"]
+            actual = col_totals["net_increase_before_fx"]
+            if abs(actual - expected) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"{pfx}Net increase before FX ({actual}) != "
+                    f"Operating ({col_totals['net_operating']}) + "
+                    f"Investing ({col_totals['net_investing']}) + "
+                    f"Financing ({col_totals['net_financing']}) = {expected}"
+                )
 
-    if all(k in computed_totals for k in ["cash_beginning", "cash_end", "net_increase_after_fx"]):
-        expected = computed_totals["cash_beginning"] + computed_totals["net_increase_after_fx"]
-        actual = computed_totals["cash_end"]
-        if abs(actual - expected) > 0.01:
-            is_balanced = False
-            mismatches.append(
-                f"Cash at end ({actual}) != "
-                f"Cash at beginning ({computed_totals['cash_beginning']}) + "
-                f"Net increase after FX ({computed_totals['net_increase_after_fx']}) = {expected}"
-            )
+        # Check: cash at end == cash at beginning + net increase after FX
+        for key in ["cash_beginning", "cash_end", "net_increase_after_fx"]:
+            if key in rows_by_label:
+                col_totals[key] = _get_cell_value(wb, ws, rows_by_label[key], cy_col, warnings=formula_warnings) or 0.0
+                computed_totals[f"{key}{sfx}"] = col_totals[key]
+
+        if all(k in col_totals for k in ["cash_beginning", "cash_end", "net_increase_after_fx"]):
+            expected = col_totals["cash_beginning"] + col_totals["net_increase_after_fx"]
+            actual = col_totals["cash_end"]
+            if abs(actual - expected) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"{pfx}Cash at end ({actual}) != "
+                    f"Cash at beginning ({col_totals['cash_beginning']}) + "
+                    f"Net increase after FX ({col_totals['net_increase_after_fx']}) = {expected}"
+                )
 
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
@@ -574,6 +639,7 @@ def _verify_sopl(
     path: str,
     variant: str = "",
     pdf_values: Optional[dict[str, float]] = None,
+    filing_level: str = "company",
 ) -> VerificationResult:
     wb = openpyxl.load_workbook(path, data_only=False)
 
@@ -625,19 +691,22 @@ def _verify_sopl(
             feedback="SOPL verification failed: missing 'Profit (loss)' label",
         )
 
-    computed_totals["profit_loss_cy"] = _get_cell_value(wb, ws, profit_loss_row, 2, warnings=formula_warnings) or 0.0
-    if total_profit_row:
-        computed_totals["total_profit_attribution_cy"] = _get_cell_value(wb, ws, total_profit_row, 2, warnings=formula_warnings) or 0.0
+    for cy_col, prefix in _cy_columns(filing_level):
+        pfx = f"{prefix} " if prefix else ""
+        sfx = f"_{prefix.lower()}" if prefix else ""
 
-    # Attribution check: profit/loss should equal attribution total
-    if total_profit_row:
-        pl = computed_totals["profit_loss_cy"]
-        attr = computed_totals["total_profit_attribution_cy"]
-        if abs(pl - attr) > 0.01:
-            is_balanced = False
-            mismatches.append(
-                f"Profit/loss ({pl}) != attribution total ({attr})"
-            )
+        pl_val = _get_cell_value(wb, ws, profit_loss_row, cy_col, warnings=formula_warnings) or 0.0
+        computed_totals[f"profit_loss_cy{sfx}"] = pl_val
+
+        if total_profit_row:
+            attr_val = _get_cell_value(wb, ws, total_profit_row, cy_col, warnings=formula_warnings) or 0.0
+            computed_totals[f"total_profit_attribution_cy{sfx}"] = attr_val
+
+            if abs(pl_val - attr_val) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"{pfx}Profit/loss ({pl_val}) != attribution total ({attr_val})"
+                )
 
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
@@ -664,6 +733,7 @@ def _verify_soci(
     path: str,
     variant: str = "",
     pdf_values: Optional[dict[str, float]] = None,
+    filing_level: str = "company",
 ) -> VerificationResult:
     wb = openpyxl.load_workbook(path, data_only=False)
 
@@ -714,34 +784,40 @@ def _verify_soci(
             feedback=f"SOCI verification failed: missing labels {', '.join(missing)}",
         )
 
-    computed_totals["profit_loss_cy"] = _get_cell_value(wb, ws, pl_row, 2, warnings=formula_warnings) or 0.0
-    if total_oci_row:
-        computed_totals["total_oci_cy"] = _get_cell_value(wb, ws, total_oci_row, 2, warnings=formula_warnings) or 0.0
+    for cy_col, prefix in _cy_columns(filing_level):
+        pfx = f"{prefix} " if prefix else ""
+        sfx = f"_{prefix.lower()}" if prefix else ""
 
-    # First "Total comprehensive income" should be P&L + OCI
-    if total_ci_rows:
-        ci_val = _get_cell_value(wb, ws, total_ci_rows[0], 2, warnings=formula_warnings) or 0.0
-        computed_totals["total_comprehensive_income_cy"] = ci_val
+        pl_val = _get_cell_value(wb, ws, pl_row, cy_col, warnings=formula_warnings) or 0.0
+        computed_totals[f"profit_loss_cy{sfx}"] = pl_val
 
-        if pl_row and total_oci_row:
-            expected = computed_totals["profit_loss_cy"] + computed_totals["total_oci_cy"]
-            if abs(ci_val - expected) > 0.01:
+        oci_val = None
+        if total_oci_row:
+            oci_val = _get_cell_value(wb, ws, total_oci_row, cy_col, warnings=formula_warnings) or 0.0
+            computed_totals[f"total_oci_cy{sfx}"] = oci_val
+
+        if total_ci_rows:
+            ci_val = _get_cell_value(wb, ws, total_ci_rows[0], cy_col, warnings=formula_warnings) or 0.0
+            computed_totals[f"total_comprehensive_income_cy{sfx}"] = ci_val
+
+            if oci_val is not None:
+                expected = pl_val + oci_val
+                if abs(ci_val - expected) > 0.01:
+                    is_balanced = False
+                    mismatches.append(
+                        f"{pfx}Total CI ({ci_val}) != P&L ({pl_val}) "
+                        f"+ OCI ({oci_val}) = {expected}"
+                    )
+
+        if len(total_ci_rows) >= 2:
+            ci_main = _get_cell_value(wb, ws, total_ci_rows[0], cy_col, warnings=formula_warnings) or 0.0
+            ci_attr = _get_cell_value(wb, ws, total_ci_rows[1], cy_col, warnings=formula_warnings) or 0.0
+            computed_totals[f"total_ci_attribution_cy{sfx}"] = ci_attr
+            if abs(ci_main - ci_attr) > 0.01:
                 is_balanced = False
                 mismatches.append(
-                    f"Total CI ({ci_val}) != P&L ({computed_totals['profit_loss_cy']}) "
-                    f"+ OCI ({computed_totals['total_oci_cy']}) = {expected}"
+                    f"{pfx}Total CI ({ci_main}) != attribution total ({ci_attr})"
                 )
-
-    # Attribution check: second "Total comprehensive income" should match first
-    if len(total_ci_rows) >= 2:
-        ci_main = _get_cell_value(wb, ws, total_ci_rows[0], 2, warnings=formula_warnings) or 0.0
-        ci_attr = _get_cell_value(wb, ws, total_ci_rows[1], 2, warnings=formula_warnings) or 0.0
-        computed_totals["total_ci_attribution_cy"] = ci_attr
-        if abs(ci_main - ci_attr) > 0.01:
-            is_balanced = False
-            mismatches.append(
-                f"Total CI ({ci_main}) != attribution total ({ci_attr})"
-            )
 
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")

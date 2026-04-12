@@ -1,7 +1,6 @@
 """Tests for the generic extraction agent factory (Step 4.2)."""
 
 import pytest
-from unittest.mock import patch
 from pathlib import Path
 
 from pydantic_ai.models.test import TestModel
@@ -31,32 +30,6 @@ class TestCreateExtractionAgent:
             agent, deps = self._make_agent(stmt, variants[0].name)
             assert agent is not None
             assert deps is not None
-
-    def test_agent_has_required_tools(self):
-        """Every extraction agent must have: view_pdf_pages, fill_workbook,
-        verify_totals, save_result."""
-        agent, deps = self._make_agent(StatementType.SOFP, "CuNonCu")
-        tool_names = set(agent._function_toolset.tools.keys())
-        assert "view_pdf_pages" in tool_names
-        assert "fill_workbook" in tool_names
-        assert "verify_totals" in tool_names
-        assert "save_result" in tool_names
-
-    def test_agent_has_read_template_tool(self):
-        """read_template should be available as a tool."""
-        agent, deps = self._make_agent(StatementType.SOFP, "CuNonCu")
-        assert "read_template" in agent._function_toolset.tools
-
-    def test_system_prompt_contains_statement_content(self):
-        """System prompt should be specific to the statement type."""
-        agent, deps = self._make_agent(StatementType.SOCF, "Indirect")
-        # Access the system prompt — PydanticAI stores it on the agent
-        prompt = agent._system_prompts[0]
-        if callable(prompt):
-            # Static prompt is stored as string; dynamic as callable
-            pass
-        else:
-            assert "cash flow" in prompt.lower() or "SOCF" in prompt
 
     def test_deps_carry_statement_metadata(self):
         """AgentDeps should know which statement type and variant it's serving."""

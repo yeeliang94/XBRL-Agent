@@ -19,51 +19,50 @@ class SOCFToSOFPCashCheck:
     def applies_to(self, run_config: dict) -> bool:
         return True
 
-    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float) -> CrossCheckResult:
-        # Read SOCF closing cash (CY = col B)
+    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company") -> CrossCheckResult:
         socf_wb = open_workbook(workbook_paths[StatementType.SOCF])
         socf_ws = find_sheet(socf_wb, "SOCF-Indirect", "SOCF-Direct")
         socf_cash = None
+        co_socf_cash = None
         if socf_ws is not None:
-            socf_cash = find_value_by_label(
-                socf_ws, "cash and cash equivalents at end of period", col=2, wb=socf_wb,
-            )
+            socf_cash = find_value_by_label(socf_ws, "cash and cash equivalents at end of period", col=2, wb=socf_wb)
+            if filing_level == "group":
+                co_socf_cash = find_value_by_label(socf_ws, "cash and cash equivalents at end of period", col=4, wb=socf_wb)
         socf_wb.close()
 
-        # Read SOFP cash (CY = col B). Label differs between variants:
-        # CuNonCu uses "*Cash and cash equivalents"; OrdOfLiq uses
-        # "Total Cash and bank balances" for the same semantic row.
         sofp_wb = open_workbook(workbook_paths[StatementType.SOFP])
         sofp_ws = find_sheet(sofp_wb, "SOFP-CuNonCu", "SOFP-OrdOfLiq")
         sofp_cash = None
+        co_sofp_cash = None
         if sofp_ws is not None:
             sofp_cash = find_value_by_label(
-                sofp_ws,
-                ["cash and cash equivalents", "total cash and bank balances"],
-                col=2,
-                wb=sofp_wb,
+                sofp_ws, ["cash and cash equivalents", "total cash and bank balances"], col=2, wb=sofp_wb,
             )
+            if filing_level == "group":
+                co_sofp_cash = find_value_by_label(
+                    sofp_ws, ["cash and cash equivalents", "total cash and bank balances"], col=4, wb=sofp_wb,
+                )
         sofp_wb.close()
 
         if socf_cash is None or sofp_cash is None:
             return CrossCheckResult(
-                name=self.name,
-                status="failed",
+                name=self.name, status="failed",
                 message=f"Could not find cash values: SOCF={socf_cash}, SOFP={sofp_cash}",
             )
 
         diff = abs(socf_cash - sofp_cash)
-        passed = diff <= tolerance
+        group_passed = diff <= tolerance
+        parts = [f"Group: SOCF ({socf_cash}) vs SOFP ({sofp_cash}), diff={diff:.2f}"]
+
+        co_passed = True
+        if filing_level == "group" and co_socf_cash is not None and co_sofp_cash is not None:
+            co_diff = abs(co_socf_cash - co_sofp_cash)
+            co_passed = co_diff <= tolerance
+            parts.append(f"Company: SOCF ({co_socf_cash}) vs SOFP ({co_sofp_cash}), diff={co_diff:.2f}")
 
         return CrossCheckResult(
             name=self.name,
-            status="passed" if passed else "failed",
-            expected=socf_cash,
-            actual=sofp_cash,
-            diff=diff,
-            tolerance=tolerance,
-            message=(
-                f"SOCF closing cash ({socf_cash}) vs SOFP cash ({sofp_cash}), "
-                f"diff={diff:.2f}"
-            ),
+            status="passed" if group_passed and co_passed else "failed",
+            expected=socf_cash, actual=sofp_cash, diff=diff, tolerance=tolerance,
+            message="; ".join(parts),
         )

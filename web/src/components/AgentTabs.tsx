@@ -146,41 +146,41 @@ export function AgentTabs({
         const canAbort = agent.status === "running" && onAbortAgent;
         const canRerun = (agent.status === "failed" || agent.status === "cancelled") && onRerunAgent && !isRunning;
         return (
-          <div key={agentId} style={styles.tabWrapper}>
-            <button
-              role="tab"
-              aria-selected={isActive}
-              onClick={() => onTabClick(agentId)}
-              style={{
-                ...styles.tab,
-                ...(isActive ? styles.tabActive : {}),
-              }}
-            >
-              <StatusBadge status={agent.status} />
-              <span>{agent.label}</span>
-            </button>
-            {/* Per-agent action buttons */}
+          <button
+            key={agentId}
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => onTabClick(agentId)}
+            style={{
+              ...styles.tab,
+              ...(isActive ? styles.tabActive : {}),
+            }}
+          >
+            <StatusBadge status={agent.status} />
+            <span>{agent.label}</span>
             {canAbort && (
-              <button
+              <span
+                role="button"
                 onClick={(e) => { e.stopPropagation(); onAbortAgent(agentId); }}
                 style={styles.abortBtn}
                 title={`Stop ${agent.label}`}
                 aria-label={`Stop ${agent.label}`}
               >
                 &#10005;
-              </button>
+              </span>
             )}
             {canRerun && (
-              <button
+              <span
+                role="button"
                 onClick={(e) => { e.stopPropagation(); onRerunAgent!(agentId); }}
                 style={styles.rerunBtn}
                 title={`Rerun ${agent.label}`}
                 aria-label={`Rerun ${agent.label}`}
               >
                 &#8635;
-              </button>
+              </span>
             )}
-          </div>
+          </button>
         );
       })}
 
@@ -217,39 +217,36 @@ const styles = {
     padding: `${pwc.space.sm}px`,
     overflowX: "auto" as const,
   },
-  tabWrapper: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.xs,
-  },
   abortBtn: {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    width: 18,
-    height: 18,
-    fontSize: 10,
+    width: 16,
+    height: 16,
+    fontSize: 9,
     fontWeight: 700,
-    color: pwc.error,
+    color: pwc.grey500,
     background: "none",
-    border: `1px solid ${pwc.error}`,
+    border: "none",
     borderRadius: "50%",
     cursor: "pointer",
     lineHeight: 1,
+    marginLeft: 2,
   } as React.CSSProperties,
   rerunBtn: {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    width: 18,
-    height: 18,
-    fontSize: 13,
+    width: 16,
+    height: 16,
+    fontSize: 12,
     color: pwc.orange500,
     background: "none",
-    border: `1px solid ${pwc.orange500}`,
+    border: "none",
     borderRadius: "50%",
     cursor: "pointer",
     lineHeight: 1,
+    marginLeft: 2,
   } as React.CSSProperties,
   tab: {
     display: "flex",
@@ -260,8 +257,8 @@ const styles = {
     fontSize: 13,
     fontWeight: 500,
     color: pwc.grey700,
-    background: "transparent",
-    border: "1px solid transparent",
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
     borderRadius: 999,
     cursor: "pointer",
     whiteSpace: "nowrap" as const,
@@ -271,8 +268,7 @@ const styles = {
     color: pwc.orange700,
     fontWeight: 600,
     background: pwc.orange50,
-    borderColor: "#FBD3B7",
-    boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+    borderColor: pwc.orange400,
   },
   tabSkeleton: {
     color: pwc.grey300,

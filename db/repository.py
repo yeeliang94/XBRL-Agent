@@ -154,6 +154,7 @@ class RunSummary:
     duration_seconds: Optional[float] = None
     scout_enabled: bool = False
     merged_workbook_path: Optional[str] = None
+    filing_level: str = "company"
 
 
 @dataclass
@@ -633,6 +634,7 @@ def list_runs(
                     duration_seconds=_parse_iso_duration(started or "", ended or ""),
                     scout_enabled=run.scout_enabled,
                     merged_workbook_path=run.merged_workbook_path,
+                    filing_level=(run.config or {}).get("filing_level", "company"),
                 )
             )
         return summaries

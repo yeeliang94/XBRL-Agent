@@ -60,6 +60,7 @@ export interface AppState {
   agentTabOrder: string[];      // ordered agent IDs for tab rendering
   activeTab: string | null;     // currently selected tab
   crossChecks: CrossCheckResult[];
+  crossChecksPartial: boolean;
   statementsInRun: string[];    // which statements were requested (for skeleton tabs)
   lastRunConfig: RunConfigPayload | null;  // preserved for rerun with correct variant/model
   // Phase 4: top-nav SPA routing — 'extract' is the main run workspace,
@@ -107,6 +108,7 @@ export const initialState: AppState = {
   agentTabOrder: [],
   activeTab: null,
   crossChecks: [],
+  crossChecksPartial: false,
   statementsInRun: [],
   lastRunConfig: null,
   view: "extract",
@@ -405,6 +407,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           } as CompleteData;
           // Store cross-check results for the Validator tab
           updates.crossChecks = rc.cross_checks || [];
+          updates.crossChecksPartial = rc.cross_checks_partial || false;
           // Ensure validator tab exists after run completes
           if (rc.cross_checks && rc.cross_checks.length > 0) {
             const { agents, tabOrder } = ensureAgent(
@@ -461,6 +464,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         isComplete: false,
         complete: null,
         crossChecks: [],
+        crossChecksPartial: false,
         hasError: false,
         error: null,
         toast: null,
@@ -746,6 +750,7 @@ export default function App() {
       models: prev?.models[stmtKey] ? { [stmtKey]: prev.models[stmtKey] } : {},
       infopack: prev?.infopack || null,
       use_scout: false,
+      filing_level: prev?.filing_level || "company",
     };
     // Use the rerun endpoint so it doesn't conflict with active_runs guard
     sseControllerRef.current = createMultiAgentSSE(
@@ -942,7 +947,7 @@ function ExtractView({
                         {state.crossChecks.length} checks
                       </span>
                     </div>
-                    <ValidatorTab crossChecks={state.crossChecks} />
+                    <ValidatorTab crossChecks={state.crossChecks} partial={state.crossChecksPartial} />
                   </div>
                 );
               }

@@ -7,6 +7,7 @@ import type { CrossCheckResult } from "../lib/types";
 
 export interface ValidatorTabProps {
   crossChecks: CrossCheckResult[];
+  partial?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -27,7 +28,7 @@ const STATUS_DISPLAY: Record<
 // Component
 // ---------------------------------------------------------------------------
 
-export function ValidatorTab({ crossChecks }: ValidatorTabProps) {
+export function ValidatorTab({ crossChecks, partial }: ValidatorTabProps) {
   if (crossChecks.length === 0) {
     return (
       <div style={styles.empty}>
@@ -39,6 +40,11 @@ export function ValidatorTab({ crossChecks }: ValidatorTabProps) {
   return (
     <div style={styles.container}>
       <h3 style={styles.heading}>Cross-Check Results</h3>
+      {partial && (
+        <p style={{ fontFamily: pwc.fontBody, fontSize: 13, color: "#D97706", margin: `0 0 ${pwc.space.md}px 0` }}>
+          Group filing: cross-checks currently validate consolidated (Group) figures only. Standalone (Company) columns are not yet checked.
+        </p>
+      )}
       <table style={styles.table}>
         <thead>
           <tr>

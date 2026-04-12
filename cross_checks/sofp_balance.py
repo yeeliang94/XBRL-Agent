@@ -20,11 +20,10 @@ class SOFPBalanceCheck:
         # Always applies when SOFP is present — all variants have this identity.
         return True
 
-    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float) -> CrossCheckResult:
+    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company") -> CrossCheckResult:
         path = workbook_paths[StatementType.SOFP]
         wb = open_workbook(path)
 
-        # Try both CuNonCu and OrderOfLiquidity sheet names
         ws = find_sheet(wb, "SOFP-CuNonCu", "SOFP-OrdOfLiq")
         if ws is None:
             wb.close()
@@ -34,9 +33,15 @@ class SOFPBalanceCheck:
                 message="No SOFP main sheet found in workbook",
             )
 
-        # Check CY (col B = 2) — total rows are formulas, so pass wb for evaluation
         assets_cy = find_value_by_label(ws, "total assets", col=2, wb=wb)
         eq_liab_cy = find_value_by_label(ws, "total equity and liabilities", col=2, wb=wb)
+
+        # Group filing: also read Company columns (D=4)
+        co_assets_cy = None
+        co_eq_liab_cy = None
+        if filing_level == "group":
+            co_assets_cy = find_value_by_label(ws, "total assets", col=4, wb=wb)
+            co_eq_liab_cy = find_value_by_label(ws, "total equity and liabilities", col=4, wb=wb)
 
         wb.close()
 
@@ -48,7 +53,16 @@ class SOFPBalanceCheck:
             )
 
         diff = abs(assets_cy - eq_liab_cy)
-        passed = diff <= tolerance
+        group_passed = diff <= tolerance
+        parts = [f"Group CY: assets ({assets_cy}) vs equity+liab ({eq_liab_cy}), diff={diff:.2f}"]
+
+        co_passed = True
+        if filing_level == "group" and co_assets_cy is not None and co_eq_liab_cy is not None:
+            co_diff = abs(co_assets_cy - co_eq_liab_cy)
+            co_passed = co_diff <= tolerance
+            parts.append(f"Company CY: assets ({co_assets_cy}) vs equity+liab ({co_eq_liab_cy}), diff={co_diff:.2f}")
+
+        passed = group_passed and co_passed
 
         return CrossCheckResult(
             name=self.name,
@@ -57,8 +71,5 @@ class SOFPBalanceCheck:
             actual=eq_liab_cy,
             diff=diff,
             tolerance=tolerance,
-            message=(
-                f"CY: Total assets ({assets_cy}) vs Total equity+liabilities ({eq_liab_cy}), "
-                f"diff={diff:.2f}, tolerance={tolerance}"
-            ),
+            message="; ".join(parts),
         )

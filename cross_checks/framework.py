@@ -39,7 +39,7 @@ class CrossCheck(Protocol):
         """Return False to mark this check not_applicable (e.g. wrong variant)."""
         ...
 
-    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float) -> CrossCheckResult:
+    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company") -> CrossCheckResult:
         """Execute the check against filled workbooks. Only called when all
         required statements are present and applies_to returned True."""
         ...
@@ -56,14 +56,16 @@ def run_all(
     Args:
         checks: list of objects implementing the CrossCheck protocol.
         workbook_paths: {StatementType: path} for each extracted workbook.
-        run_config: dict with at least 'statements_to_run' (set of StatementType)
-                    and optionally 'variants' (dict of StatementType -> str).
+        run_config: dict with at least 'statements_to_run' (set of StatementType),
+                    optionally 'variants' (dict of StatementType -> str),
+                    and optionally 'filing_level' (str: "company" or "group", default "company").
         tolerance: absolute RM tolerance for numeric comparisons.
 
     Returns:
         One CrossCheckResult per check, in the same order as the input list.
     """
     statements_run = run_config.get("statements_to_run", set())
+    filing_level = run_config.get("filing_level", "company")
     results: list[CrossCheckResult] = []
 
     for check in checks:
@@ -108,7 +110,7 @@ def run_all(
         # 4. Run the actual check — catch exceptions so one broken check
         # doesn't abort the entire validation pass.
         try:
-            result = check.run(workbook_paths, tolerance)
+            result = check.run(workbook_paths, tolerance, filing_level=filing_level)
         except Exception as e:
             result = CrossCheckResult(
                 name=check.name,
