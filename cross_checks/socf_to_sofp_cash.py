@@ -54,11 +54,21 @@ class SOCFToSOFPCashCheck:
         group_passed = diff <= tolerance
         parts = [f"Group: SOCF ({socf_cash}) vs SOFP ({sofp_cash}), diff={diff:.2f}"]
 
+        # Group filings must carry Company totals — see sofp_balance.py for
+        # the peer-review background on the old silent-pass default.
         co_passed = True
-        if filing_level == "group" and co_socf_cash is not None and co_sofp_cash is not None:
-            co_diff = abs(co_socf_cash - co_sofp_cash)
-            co_passed = co_diff <= tolerance
-            parts.append(f"Company: SOCF ({co_socf_cash}) vs SOFP ({co_sofp_cash}), diff={co_diff:.2f}")
+        if filing_level == "group":
+            if co_socf_cash is None or co_sofp_cash is None:
+                co_passed = False
+                parts.append(
+                    f"Company: missing cash values (SOCF={co_socf_cash}, SOFP={co_sofp_cash})"
+                )
+            else:
+                co_diff = abs(co_socf_cash - co_sofp_cash)
+                co_passed = co_diff <= tolerance
+                parts.append(
+                    f"Company: SOCF ({co_socf_cash}) vs SOFP ({co_sofp_cash}), diff={co_diff:.2f}"
+                )
 
         return CrossCheckResult(
             name=self.name,

@@ -98,6 +98,20 @@ def test_list_runs_filter_by_filename_substring(db_path: Path) -> None:
     assert names == {"FINCO-2021.pdf", "finco-2022.pdf"}
 
 
+def test_list_runs_filter_escapes_like_wildcards(db_path: Path) -> None:
+    """Peer-review I9: a user search for literal `_` or `%` must not leak
+    into the SQL as a wildcard. Previously `_` matched any single char."""
+    with repo.db_session(db_path) as conn:
+        _seed_run(conn, session_id="a", pdf_filename="year_2021.pdf")
+        _seed_run(conn, session_id="b", pdf_filename="year-2021.pdf")
+
+    with repo.db_session(db_path) as conn:
+        # "year_2021" must match ONLY the underscore file, not the dash one.
+        rows = repo.list_runs(conn, filename_substring="year_2021")
+    names = {r.pdf_filename for r in rows}
+    assert names == {"year_2021.pdf"}
+
+
 def test_list_runs_filter_by_status(db_path: Path) -> None:
     with repo.db_session(db_path) as conn:
         _seed_run(conn, session_id="a", pdf_filename="a.pdf", status="completed")

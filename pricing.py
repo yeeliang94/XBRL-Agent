@@ -94,8 +94,14 @@ def estimate_cost(
     thinking_tokens: int,
     model,
 ) -> float:
-    """Calculate estimated cost in USD. Thinking tokens billed at input rate."""
+    """Calculate estimated cost in USD.
+
+    Thinking tokens (Claude extended-thinking, OpenAI reasoning) are billed
+    as OUTPUT by the provider, not input. Charging them at the input rate
+    materially undercounts cost for Claude/GPT-5 reasoning runs (fix for
+    peer-review finding C5).
+    """
     input_price, output_price = get_model_pricing(model)
-    input_cost = ((prompt_tokens + thinking_tokens) / 1_000_000) * input_price
-    output_cost = (completion_tokens / 1_000_000) * output_price
+    input_cost = (prompt_tokens / 1_000_000) * input_price
+    output_cost = ((completion_tokens + thinking_tokens) / 1_000_000) * output_price
     return input_cost + output_cost

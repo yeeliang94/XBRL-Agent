@@ -23,6 +23,7 @@ import time
 
 import fitz
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.messages import (
     BinaryContent,
     FunctionToolCallEvent,
@@ -356,10 +357,14 @@ def create_scout_agent(
         statements_section=_build_statements_section(statements_to_find),
     )
 
+    # CLAUDE.md gotcha #5: Gemini 3 through the enterprise proxy requires
+    # temperature=1.0. Pin it explicitly instead of relying on upstream
+    # defaults (peer-review I2).
     agent: Agent[ScoutDeps, str] = Agent(
         model,
         deps_type=ScoutDeps,
         system_prompt=system_prompt,
+        model_settings=ModelSettings(temperature=1.0),
     )
 
     # --- Tools ---

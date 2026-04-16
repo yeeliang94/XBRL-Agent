@@ -73,15 +73,43 @@ def _resolve_api_key() -> str:
     return os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
 
 
+# Provider-prefix forms that appear in config/models.json and PydanticAI
+# namespacing. Order matters — the longest match must come first so that
+# "bedrock.anthropic." is stripped before any prefix that shares its head.
+_PROVIDER_PREFIXES: tuple[str, ...] = (
+    "bedrock.anthropic.",
+    "vertex_ai.",
+    "openai.",
+    "google-gla:",
+    "google-vertex:",
+)
+
+
+def _strip_provider_prefix(model_name: str) -> str:
+    """Return the bare model id with any known registry prefix removed.
+
+    The registry IDs in config/models.json are fully qualified (e.g.
+    `openai.gpt-5.4`, `bedrock.anthropic.claude-sonnet-4-6`). Both provider
+    detection and direct-mode model construction need the bare name (e.g.
+    `gpt-5.4`), so this helper is the single source of truth.
+    """
+    for prefix in _PROVIDER_PREFIXES:
+        if model_name.startswith(prefix):
+            return model_name[len(prefix):]
+    return model_name
+
+
 def _detect_provider(model_name: str) -> str:
     """Infer the provider from a model name string.
 
-    Returns 'openai', 'anthropic', or 'google'.
+    Returns 'openai', 'anthropic', or 'google'. Handles both bare names
+    (`gpt-5.4`) and prefixed registry IDs (`openai.gpt-5.4`) by stripping
+    the prefix before matching.
     """
-    lower = model_name.lower()
-    if lower.startswith(("gpt-", "o1-", "o3-", "o4-")):
+    bare = _strip_provider_prefix(model_name).lower()
+    if bare.startswith(("gpt-", "o1-", "o3-", "o4-")):
         return "openai"
-    if lower.startswith("claude-"):
+    if bare.startswith("claude-"):
         return "anthropic"
     return "google"
 
@@ -125,7 +153,11 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
         provider = OpenAIProvider(base_url=proxy_url, api_key=api_key)
         return OpenAIChatModel(model_name, provider=provider)
 
-    # Direct API paths — route by provider
+    # Direct API paths — route by provider.
+    # The registry IDs carry a provider prefix (e.g. "openai.gpt-5.4"); the
+    # upstream SDKs expect bare names, so strip once up front and use the
+    # bare form for both detection and construction.
+    bare_name = _strip_provider_prefix(model_name)
     detected = _detect_provider(model_name)
 
     if detected == "openai":
@@ -138,7 +170,7 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
                 f"Model '{model_name}' requires OPENAI_API_KEY in .env but it is not set."
             )
         provider = OpenAIProvider(api_key=openai_key)
-        return OpenAIChatModel(model_name, provider=provider)
+        return OpenAIChatModel(bare_name, provider=provider)
 
     if detected == "anthropic":
         from pydantic_ai.models.anthropic import AnthropicModel
@@ -150,19 +182,15 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
                 f"Model '{model_name}' requires ANTHROPIC_API_KEY in .env but it is not set."
             )
         provider = AnthropicProvider(api_key=anthropic_key)
-        return AnthropicModel(model_name, provider=provider)
+        return AnthropicModel(bare_name, provider=provider)
 
-    # Google Gemini direct path
+    # Google Gemini direct path — GoogleModel expects bare names like
+    # "gemini-3-flash-preview".
     from pydantic_ai.models.google import GoogleModel
     from pydantic_ai.providers.google import GoogleProvider
 
-    # Strip any "vertex_ai." / "google-gla:" prefix from the model name,
-    # since GoogleModel expects bare names like "gemini-3-flash-preview".
-    bare = model_name.split(":", 1)[-1]
-    if bare.startswith("vertex_ai."):
-        bare = bare[len("vertex_ai."):]
     provider = GoogleProvider(api_key=api_key)
-    return GoogleModel(bare, provider=provider)
+    return GoogleModel(bare_name, provider=provider)
 
 
 
@@ -360,16 +388,48 @@ async def upload_pdf(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
-    # Read and check size
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_UPLOAD_SIZE // (1024*1024)}MB.")
-
-    # Create session directory and save the PDF
+    # Create session directory up front — we stream the upload straight to
+    # disk so the full file never lives in memory (peer-review I13). A
+    # running byte counter trips 413 as soon as the cap is exceeded.
     session_id = str(uuid.uuid4())
     session_dir = OUTPUT_DIR / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
-    (session_dir / "uploaded.pdf").write_bytes(content)
+    target = session_dir / "uploaded.pdf"
+
+    _CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB reads
+    total_bytes = 0
+    try:
+        with open(target, "wb") as out:
+            while True:
+                chunk = await file.read(_CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_SIZE:
+                    # Drain was already interrupted — discard the partial
+                    # file so a half-written PDF doesn't linger.
+                    out.close()
+                    try:
+                        target.unlink()
+                        session_dir.rmdir()
+                    except OSError:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Max size is {MAX_UPLOAD_SIZE // (1024*1024)}MB.",
+                    )
+                out.write(chunk)
+    except HTTPException:
+        raise
+    except Exception:
+        # Clean up partial files on any non-HTTP error.
+        try:
+            if target.exists():
+                target.unlink()
+            session_dir.rmdir()
+        except OSError:
+            pass
+        raise
 
     # Persist the ORIGINAL filename as a sidecar so History can show a
     # meaningful name later. The file on disk is always "uploaded.pdf" to
@@ -815,8 +875,16 @@ async def run_multi_agent_stream(
                 terminal_status = "aborted"
             return
         except Exception as e:
+            # Drain failure is unrecoverable: the queue contract is broken
+            # and we can't safely merge partial results. Cancel the
+            # coordinator, mark the run failed, and bail — previously the
+            # code fell through to merge, which could corrupt output.
             logger.exception("Event queue drain failed", extra={"session_id": session_id})
+            coordinator_task.cancel()
+            if _safe_mark_finished(db_conn, run_id, "failed"):
+                terminal_status = "failed"
             yield {"event": "error", "data": {"message": f"Stream error: {e}"}}
+            return
 
         # Await the coordinator task to get CoordinatorResult for post-processing
         try:
@@ -874,14 +942,19 @@ async def run_multi_agent_stream(
         # Merge workbooks (Phase 7.4)
         merge_result = merge_workbooks(all_workbook_paths, merged_path)
 
-        # Record the merged workbook path on the runs row IMMEDIATELY after
-        # a successful merge, before we tackle cross-checks and per-agent
-        # persistence. This is what History's download endpoint reads as
-        # the single source of truth — never derived from session_id.
+        # Record the merged workbook path on the runs row. History's download
+        # endpoint reads this as the single source of truth — never derived
+        # from session_id. Peer-review C6: we deliberately DO NOT commit
+        # here; the write stays in the pending transaction and is flushed
+        # alongside per-agent state (line below) so there is no moment
+        # between commits where `merged_workbook_path` is durable but the
+        # final status is not yet written. Hard-kill (SIGKILL/OOM) between
+        # the next commit and `mark_run_finished` can still leave
+        # `status='running'` — that corner needs startup recovery, which is
+        # explicitly out of scope for this round.
         if merge_result.success and db_conn is not None and run_id is not None:
             try:
                 repo.mark_run_merged(db_conn, run_id, merged_path)
-                db_conn.commit()
             except Exception:
                 logger.warning(
                     "Failed to mark run_merged on run %s", run_id, exc_info=True,
@@ -1051,38 +1124,55 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest):
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found. Upload first.")
 
+    # Reserve the session BEFORE returning StreamingResponse. If we only
+    # reserved inside the generator (as we did pre-fix for I4), two
+    # concurrent requests could both pass the `in active_runs` check
+    # before either generator started — allowing parallel extractions
+    # against the same session directory. The async generator's finally
+    # releases the reservation on every exit path (normal completion,
+    # exception, client disconnect, garbage-collection close), so the
+    # I4 leak on never-started streams is still covered.
     if session_id in active_runs:
         raise HTTPException(status_code=409, detail="Extraction already running for this session.")
-
-    load_dotenv(ENV_FILE, override=True)
-    api_key = _resolve_api_key()
-    proxy_url = os.environ.get("LLM_PROXY_URL", "")
-    model_name = os.environ.get("TEST_MODEL", "vertex_ai.gemini-3-flash-preview")
-
-    if not api_key:
-        raise HTTPException(status_code=400, detail="GEMINI_API_KEY (Mac) or GOOGLE_API_KEY (Windows proxy) must be set. Check Settings.")
-
     active_runs.add(session_id)
 
-    async def event_stream():
-        try:
-            async for evt in run_multi_agent_stream(
-                session_id=session_id,
-                session_dir=session_dir,
-                run_config=body,
-                api_key=api_key,
-                proxy_url=proxy_url,
-                model_name=model_name,
-            ):
-                yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
-        finally:
-            active_runs.discard(session_id)
+    try:
+        load_dotenv(ENV_FILE, override=True)
+        api_key = _resolve_api_key()
+        proxy_url = os.environ.get("LLM_PROXY_URL", "")
+        model_name = os.environ.get("TEST_MODEL", "vertex_ai.gemini-3-flash-preview")
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="GEMINI_API_KEY (Mac) or GOOGLE_API_KEY (Windows proxy) must be set. Check Settings.",
+            )
+
+        async def event_stream():
+            try:
+                async for evt in run_multi_agent_stream(
+                    session_id=session_id,
+                    session_dir=session_dir,
+                    run_config=body,
+                    api_key=api_key,
+                    proxy_url=proxy_url,
+                    model_name=model_name,
+                ):
+                    yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+            finally:
+                active_runs.discard(session_id)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+    except Exception:
+        # Anything that prevents the StreamingResponse from being returned
+        # (e.g. missing API key HTTPException) must release the reservation
+        # we just acquired, or the session would stay locked until restart.
+        active_runs.discard(session_id)
+        raise
 
 
 ## Legacy GET /api/run/{session_id} endpoint was removed in Phase 11.3.
@@ -1191,9 +1281,18 @@ async def test_connection(body: dict):
         result = await test_agent.run("Say OK")
         latency_ms = int((time.time() - start) * 1000)
         return {"status": "ok", "model": model_name, "latency_ms": latency_ms}
-    except Exception as e:
+    except Exception:
+        # LLM SDK exceptions frequently embed the Authorization header or
+        # bearer token in str(e). Log the full trace server-side only; the
+        # HTTP response stays generic so we never leak credentials to callers.
         logger.exception("Connection test failed", extra={"model": model_name})
-        return JSONResponse(status_code=502, content={"status": "error", "message": str(e)})
+        return JSONResponse(
+            status_code=502,
+            content={
+                "status": "error",
+                "message": "Connection test failed. See server logs for details.",
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1530,12 +1629,31 @@ _STMT_PREFIXES = ("SOFP_", "SOPL_", "SOCI_", "SOCF_", "SOCIE_")
 
 @app.get("/api/result/{session_id}/{filename}")
 async def download_result(session_id: str, filename: str):
+    # Reject path-traversal tokens in BOTH components. session_id is a
+    # UUID in practice (see /api/upload), so `..`, `/`, `\\` are never
+    # legitimate. Validating session_id matters: previously, session_id=".."
+    # made session_dir the parent of OUTPUT_DIR, and the relative_to()
+    # anchor below would have been computed against that malicious parent
+    # — escaping the output tree entirely.
+    for component in (session_id, filename):
+        if ".." in component or "/" in component or "\\" in component:
+            raise HTTPException(status_code=400, detail="Invalid path component.")
+
     # Allow per-statement files (e.g. SOFP_filled.xlsx, SOPL_result.json)
     is_stmt_file = any(filename.startswith(p) for p in _STMT_PREFIXES) and filename.endswith((".xlsx", ".json", ".txt"))
     if filename not in ALLOWED_DOWNLOADS and not is_stmt_file:
         raise HTTPException(status_code=400, detail=f"File not available. Allowed: {ALLOWED_DOWNLOADS}")
 
-    file_path = OUTPUT_DIR / session_id / filename
+    # Belt-and-braces: anchor the resolved path under OUTPUT_DIR itself,
+    # not under a session_id-derived path — otherwise a malicious
+    # session_id could relocate the anchor outside OUTPUT_DIR.
+    output_root = OUTPUT_DIR.resolve()
+    try:
+        file_path = (output_root / session_id / filename).resolve()
+        file_path.relative_to(output_root)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid path component.")
+
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found.")
 

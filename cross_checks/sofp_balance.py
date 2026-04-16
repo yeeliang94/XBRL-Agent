@@ -56,11 +56,21 @@ class SOFPBalanceCheck:
         group_passed = diff <= tolerance
         parts = [f"Group CY: assets ({assets_cy}) vs equity+liab ({eq_liab_cy}), diff={diff:.2f}"]
 
+        # Group filings must carry Company totals. Missing values used to
+        # default co_passed=True, silently hiding an incomplete extraction.
         co_passed = True
-        if filing_level == "group" and co_assets_cy is not None and co_eq_liab_cy is not None:
-            co_diff = abs(co_assets_cy - co_eq_liab_cy)
-            co_passed = co_diff <= tolerance
-            parts.append(f"Company CY: assets ({co_assets_cy}) vs equity+liab ({co_eq_liab_cy}), diff={co_diff:.2f}")
+        if filing_level == "group":
+            if co_assets_cy is None or co_eq_liab_cy is None:
+                co_passed = False
+                parts.append(
+                    f"Company CY: missing totals (assets={co_assets_cy}, equity+liab={co_eq_liab_cy})"
+                )
+            else:
+                co_diff = abs(co_assets_cy - co_eq_liab_cy)
+                co_passed = co_diff <= tolerance
+                parts.append(
+                    f"Company CY: assets ({co_assets_cy}) vs equity+liab ({co_eq_liab_cy}), diff={co_diff:.2f}"
+                )
 
         passed = group_passed and co_passed
 

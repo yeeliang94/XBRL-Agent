@@ -63,11 +63,21 @@ class SOCIToSOCIETCICheck:
         group_passed = diff <= tolerance
         parts = [f"Group: SOCI ({soci_tci}) vs SOCIE ({socie_tci}), diff={diff:.2f}"]
 
+        # Group filings must carry Company totals — see sofp_balance.py for
+        # the peer-review background on the old silent-pass default.
         co_passed = True
-        if filing_level == "group" and co_soci_tci is not None and co_socie_tci is not None:
-            co_diff = abs(co_soci_tci - co_socie_tci)
-            co_passed = co_diff <= tolerance
-            parts.append(f"Company: SOCI ({co_soci_tci}) vs SOCIE ({co_socie_tci}), diff={co_diff:.2f}")
+        if filing_level == "group":
+            if co_soci_tci is None or co_socie_tci is None:
+                co_passed = False
+                parts.append(
+                    f"Company: missing TCI values (SOCI={co_soci_tci}, SOCIE={co_socie_tci})"
+                )
+            else:
+                co_diff = abs(co_soci_tci - co_socie_tci)
+                co_passed = co_diff <= tolerance
+                parts.append(
+                    f"Company: SOCI ({co_soci_tci}) vs SOCIE ({co_socie_tci}), diff={co_diff:.2f}"
+                )
 
         return CrossCheckResult(
             name=self.name,
