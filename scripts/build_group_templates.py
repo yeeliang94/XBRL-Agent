@@ -20,8 +20,12 @@ import re
 import shutil
 from pathlib import Path
 
-SRC_DIR = Path("XBRL-template-MFRS")
-DST_DIR = Path("XBRL-template-MFRS/Group")
+# Anchor to the repo root, not the caller's cwd. Previously running this
+# from a different working directory would silently produce wrong output
+# (peer-review I14).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = _REPO_ROOT / "XBRL-template-MFRS"
+DST_DIR = _REPO_ROOT / "XBRL-template-MFRS" / "Group"
 
 # Templates that follow the standard 2-column (period-pair) layout
 STANDARD_TEMPLATES = [
@@ -146,6 +150,23 @@ def transform_sheet(ws):
     ws.column_dimensions["F"].width = max(ws.column_dimensions["F"].width or 0, 20)
 
 
+def _looks_already_group(src_path: Path) -> bool:
+    """Idempotency guard: if the *source* file already has the 6-column
+    Group layout (Company D/E columns present beyond row 2), running the
+    transform again would silently double-shift columns. Detect by
+    peeking at D3 / E3 — Company data cells that only exist post-build.
+    """
+    try:
+        wb = openpyxl.load_workbook(src_path, read_only=True, data_only=False)
+        ws = wb.active
+        d3 = ws["D3"].value
+        e3 = ws["E3"].value
+        wb.close()
+        return d3 is not None or e3 is not None
+    except Exception:
+        return False
+
+
 def transform_workbook(src_path: Path, dst_path: Path):
     wb = openpyxl.load_workbook(src_path)
     for sn in wb.sheetnames:
@@ -159,6 +180,9 @@ def main():
     for name in STANDARD_TEMPLATES:
         src = SRC_DIR / name
         dst = DST_DIR / name
+        if _looks_already_group(src):
+            print(f"Skipping {name} — source already has Group D/E columns")
+            continue
         print(f"Building Group/{name} from {src.name}")
         transform_workbook(src, dst)
     print("\nStandard templates done. SOCIE handled separately.")

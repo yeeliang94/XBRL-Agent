@@ -95,9 +95,12 @@ def test_integration_token_tracking(tmp_path):
         )
     )
 
-    assert report.grand_total == 35500
+    # grand_total now includes thinking tokens (peer-review I15):
+    # 33000 prompt + 2500 completion + 1000 thinking = 36500
+    assert report.grand_total == 36500
     assert report.total_prompt_tokens == 33000
     assert report.total_completion_tokens == 2500
+    assert report.total_thinking_tokens == 1000
     assert report.estimate_cost() > 0
     assert "view_pdf_pages" in report.format_table()
 

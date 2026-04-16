@@ -26,8 +26,10 @@ from copy import copy
 import re
 from pathlib import Path
 
-SRC = Path("XBRL-template-MFRS/09-SOCIE.xlsx")
-DST = Path("XBRL-template-MFRS/Group/09-SOCIE.xlsx")
+# Anchor to the repo root, not the caller's cwd (peer-review I14).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC = _REPO_ROOT / "XBRL-template-MFRS" / "09-SOCIE.xlsx"
+DST = _REPO_ROOT / "XBRL-template-MFRS" / "Group" / "09-SOCIE.xlsx"
 
 # Row shift between the existing 2-block template and the new 4-block layout
 BLOCK_STRIDE = 48  # Block 1 -> Block 3 (row 3 -> row 51), Block 2 -> Block 4
@@ -61,6 +63,20 @@ def _copy_cell(src_cell, dst_cell, row_delta: int = 0):
 
 
 def build_socie_group():
+    # Idempotency guard: the source is the 2-block company template. If a
+    # prior run already converted the source in place (e.g. someone ran
+    # this against an already-built artifact), rows 51+ will already
+    # contain data and re-running would double-shift. Refuse.
+    wb_probe = openpyxl.load_workbook(SRC, read_only=True, data_only=False)
+    ws_probe = wb_probe["SOCIE"]
+    max_row = ws_probe.max_row
+    wb_probe.close()
+    if max_row > 50:
+        raise RuntimeError(
+            f"Source SOCIE has {max_row} rows — looks like it was already "
+            "transformed into a 4-block Group layout. Refusing to re-run."
+        )
+
     wb = openpyxl.load_workbook(SRC)
     ws = wb["SOCIE"]
     max_col = ws.max_column  # should be 24 (X)

@@ -162,6 +162,14 @@ def init_db(path: str | Path) -> None:
 
     Idempotent: running init_db twice leaves the database in the same state.
     Called on server startup; safe to call from tests against a fresh file.
+
+    Concurrency (peer-review C7): when two processes start simultaneously
+    against a v1 DB, both could read version<2 and both try to ALTER TABLE
+    the same column. We serialize the migration with `BEGIN IMMEDIATE`
+    (acquires the write lock up front), re-check the version inside the
+    transaction, and tolerate `duplicate column` errors as idempotent
+    success (a racer beat us to the column). `busy_timeout` keeps the
+    second starter waiting briefly instead of failing instantly.
     """
     p = Path(path)
     # Make sure the parent directory exists so callers can pass paths like
@@ -172,6 +180,7 @@ def init_db(path: str | Path) -> None:
     try:
         # Foreign keys are off by default in SQLite — turn them on per-conn.
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
         for sql in _CREATE_STATEMENTS:
             conn.execute(sql)
 
@@ -182,30 +191,48 @@ def init_db(path: str | Path) -> None:
         existing = cur.fetchone()
         current_version = int(existing[0]) if existing is not None else None
 
-        # Migrate v1 → v2: ALTER TABLE in runs to add the new lifecycle
-        # columns. We only do this when the runs table exists AND is missing
-        # the new columns — idempotent on already-migrated DBs and on fresh
-        # databases where CREATE TABLE already included them.
+        # Migrate v1 → v2 inside an IMMEDIATE write transaction. Two
+        # concurrent init_db calls against a v1 DB will serialize here —
+        # the loser re-reads schema_version after the winner commits and
+        # finds v2, skipping the ALTER loop entirely.
         if current_version is not None and current_version < 2:
-            existing_cols = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(runs)").fetchall()
-            }
-            for col_name, col_ddl in _V2_MIGRATION_COLUMNS:
-                if col_name not in existing_cols:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                # Re-check inside the tx — the racer may have migrated while
+                # we waited on the busy_timeout.
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 2:
+                    existing_cols = {
+                        r[1]
+                        for r in conn.execute("PRAGMA table_info(runs)").fetchall()
+                    }
+                    for col_name, col_ddl in _V2_MIGRATION_COLUMNS:
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE runs ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                # "duplicate column name" — a racing process
+                                # added it in between our PRAGMA and ALTER.
+                                # Idempotent success.
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
                     conn.execute(
-                        f"ALTER TABLE runs ADD COLUMN {col_name} {col_ddl}"
+                        "UPDATE runs SET started_at = created_at "
+                        "WHERE (started_at IS NULL OR started_at = '')"
                     )
-            # Best-effort backfill: mirror created_at into started_at for
-            # legacy rows so downstream duration math doesn't explode.
-            conn.execute(
-                "UPDATE runs SET started_at = created_at "
-                "WHERE (started_at IS NULL OR started_at = '')"
-            )
-            conn.execute(
-                "UPDATE schema_version SET version = ?",
-                (CURRENT_SCHEMA_VERSION,),
-            )
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (CURRENT_SCHEMA_VERSION,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
         for sql in _CREATE_INDEXES:
             conn.execute(sql)

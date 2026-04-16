@@ -305,6 +305,120 @@ class TestSOCFToSOFPCashGroup:
         assert result.status == "passed"
 
 
+# ---------------------------------------------------------------------------
+# Peer-review C2 regression: in Group filings, missing Company totals must
+# FAIL the check — not silently pass. The previous default of co_passed=True
+# meant agents that skipped the Company columns entirely were never caught.
+# ---------------------------------------------------------------------------
+
+
+class TestGroupMissingCompanyTotalsFail:
+    """Each of the 5 cross-checks must fail a Group filing when Company
+    values are absent. Company-level filings are unaffected.
+    """
+
+    def test_sofp_balance_fails_when_company_missing(self, tmp_dir):
+        path = os.path.join(tmp_dir, "sofp.xlsx")
+        # Group CY balances; Company columns (D, E) left blank.
+        _make_workbook({
+            "SOFP-CuNonCu": [
+                ["*Total assets",                   1000.0, 800.0],
+                ["*Total equity and liabilities",   1000.0, 800.0],
+            ],
+        }, path)
+        result = SOFPBalanceCheck().run(
+            {StatementType.SOFP: path}, tolerance=1.0, filing_level="group",
+        )
+        assert result.status == "failed"
+        assert "company" in result.message.lower()
+
+    def test_sopl_to_socie_profit_fails_when_company_missing(self, tmp_dir):
+        sopl_path = os.path.join(tmp_dir, "sopl.xlsx")
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        # SOPL has only Group columns filled
+        _make_workbook({
+            "SOPL-Function": [
+                ["*Profit (loss)", 250000.0, 200000.0],
+            ],
+        }, sopl_path)
+        # SOCIE Group CY block matches; Company CY block (rows 51-73) empty
+        socie_rows = [[None] * 24 for _ in range(97)]
+        socie_rows[0] = [None, "Issued capital", "Retained earnings"] + [None] * 21
+        socie_rows[10] = ["*Profit (loss)", None, 250000.0] + [None] * 21
+        _make_workbook({"SOCIE": socie_rows}, socie_path)
+
+        result = SOPLToSOCIEProfitCheck().run(
+            {StatementType.SOPL: sopl_path, StatementType.SOCIE: socie_path},
+            tolerance=1.0, filing_level="group",
+        )
+        assert result.status == "failed"
+        assert "company" in result.message.lower()
+
+    def test_soci_to_socie_tci_fails_when_company_missing(self, tmp_dir):
+        soci_path = os.path.join(tmp_dir, "soci.xlsx")
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        _make_workbook({
+            "SOCI-BeforeOfTax": [
+                ["*Total comprehensive income", 300000.0, 240000.0],
+            ],
+        }, soci_path)
+        socie_rows = [[None] * 24 for _ in range(97)]
+        socie_rows[0] = [None, "Issued capital", "Retained earnings"] + [None] * 21
+        # Group CY TCI row in col X (24)
+        socie_rows[15] = ["*Total comprehensive income"] + [None] * 22 + [300000.0]
+        _make_workbook({"SOCIE": socie_rows}, socie_path)
+
+        result = SOCIToSOCIETCICheck().run(
+            {StatementType.SOCI: soci_path, StatementType.SOCIE: socie_path},
+            tolerance=1.0, filing_level="group",
+        )
+        assert result.status == "failed"
+        assert "company" in result.message.lower()
+
+    def test_socie_to_sofp_equity_fails_when_company_missing(self, tmp_dir):
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
+        socie_rows = [[None] * 24 for _ in range(97)]
+        socie_rows[0] = [None, "Issued capital", "Retained earnings"] + [None] * 21
+        # Only Group CY block 1 has equity; block 3 (Company CY) empty
+        socie_rows[24] = ["*Equity at end of period"] + [None] * 22 + [5000000.0]
+        _make_workbook({"SOCIE": socie_rows}, socie_path)
+        # SOFP has only Group cols B/C — no Company D/E
+        _make_workbook({
+            "SOFP-CuNonCu": [
+                ["*Total equity", 5000000.0, 4000000.0],
+            ],
+        }, sofp_path)
+
+        result = SOCIEToSOFPEquityCheck().run(
+            {StatementType.SOCIE: socie_path, StatementType.SOFP: sofp_path},
+            tolerance=1.0, filing_level="group",
+        )
+        assert result.status == "failed"
+        assert "company" in result.message.lower()
+
+    def test_socf_to_sofp_cash_fails_when_company_missing(self, tmp_dir):
+        socf_path = os.path.join(tmp_dir, "socf.xlsx")
+        sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
+        _make_workbook({
+            "SOCF-Indirect": [
+                ["*Cash and cash equivalents at end of period", 120000.0, 100000.0],
+            ],
+        }, socf_path)
+        _make_workbook({
+            "SOFP-CuNonCu": [
+                ["*Cash and cash equivalents", 120000.0, 100000.0],
+            ],
+        }, sofp_path)
+
+        result = SOCFToSOFPCashCheck().run(
+            {StatementType.SOCF: socf_path, StatementType.SOFP: sofp_path},
+            tolerance=1.0, filing_level="group",
+        )
+        assert result.status == "failed"
+        assert "company" in result.message.lower()
+
+
 class TestFrameworkFilingLevel:
     """Framework run_all passes filing_level to checks."""
 

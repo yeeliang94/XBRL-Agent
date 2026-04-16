@@ -13,6 +13,13 @@ from pathlib import Path
 from db.schema import CURRENT_SCHEMA_VERSION, init_db
 
 
+# Module-level worker for multiprocessing.spawn — inner functions aren't
+# picklable. Used only by test_concurrent_migration_from_v1.
+def _migration_worker(path: str) -> None:
+    from db.schema import init_db as _init
+    _init(path)
+
+
 def _columns(db_path: Path, table: str) -> dict[str, dict]:
     """Return {column_name: {notnull, default_value}} from PRAGMA table_info."""
     conn = sqlite3.connect(str(db_path))
@@ -154,6 +161,51 @@ def test_migration_is_idempotent(tmp_path: Path) -> None:
         conn.close()
     assert version == 2
     assert count == 1
+
+
+def test_concurrent_migration_from_v1(tmp_path: Path) -> None:
+    """Peer-review C7: two concurrent init_db against a v1 DB must both
+    succeed. Previously the second process could hit 'duplicate column'
+    when it ran ALTER TABLE after the first had already added it."""
+    import multiprocessing
+
+    db = tmp_path / "xbrl.db"
+    # Hand-create a v1 DB.
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            """CREATE TABLE runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                pdf_filename TEXT NOT NULL,
+                status TEXT NOT NULL,
+                notes TEXT
+            )"""
+        )
+        conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO schema_version(version) VALUES (1)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Spawn two workers that both try to migrate the same DB.
+    ctx = multiprocessing.get_context("spawn")
+    procs = [
+        ctx.Process(target=_migration_worker, args=(str(db),)) for _ in range(2)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=30)
+        assert p.exitcode == 0, f"init_db worker exited with {p.exitcode}"
+
+    # Both finished without error — confirm schema reached v2.
+    conn = sqlite3.connect(str(db))
+    try:
+        (version,) = conn.execute("SELECT version FROM schema_version").fetchone()
+    finally:
+        conn.close()
+    assert version == 2
 
 
 def test_runs_created_at_index_exists(tmp_path: Path) -> None:

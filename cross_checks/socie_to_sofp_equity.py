@@ -63,11 +63,21 @@ class SOCIEToSOFPEquityCheck:
         group_passed = diff <= tolerance
         parts = [f"Group: SOCIE ({socie_equity}) vs SOFP ({sofp_equity}), diff={diff:.2f}"]
 
+        # Group filings must carry Company totals — see sofp_balance.py for
+        # the peer-review background on the old silent-pass default.
         co_passed = True
-        if filing_level == "group" and co_socie_equity is not None and co_sofp_equity is not None:
-            co_diff = abs(co_socie_equity - co_sofp_equity)
-            co_passed = co_diff <= tolerance
-            parts.append(f"Company: SOCIE ({co_socie_equity}) vs SOFP ({co_sofp_equity}), diff={co_diff:.2f}")
+        if filing_level == "group":
+            if co_socie_equity is None or co_sofp_equity is None:
+                co_passed = False
+                parts.append(
+                    f"Company: missing equity values (SOCIE={co_socie_equity}, SOFP={co_sofp_equity})"
+                )
+            else:
+                co_diff = abs(co_socie_equity - co_sofp_equity)
+                co_passed = co_diff <= tolerance
+                parts.append(
+                    f"Company: SOCIE ({co_socie_equity}) vs SOFP ({co_sofp_equity}), diff={co_diff:.2f}"
+                )
 
         return CrossCheckResult(
             name=self.name,

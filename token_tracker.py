@@ -27,13 +27,24 @@ class TokenReport:
 
     @property
     def grand_total(self) -> int:
-        return self.total_prompt_tokens + self.total_completion_tokens
+        # Thinking tokens are part of total spend — excluding them here made
+        # the "Total" column inconsistent with `estimate_cost()`, which does
+        # include them (peer-review I15).
+        return (
+            self.total_prompt_tokens
+            + self.total_completion_tokens
+            + self.total_thinking_tokens
+        )
 
     def add_turn(self, record: TurnRecord) -> None:
         self.turns.append(record)
         self.total_prompt_tokens += record.prompt_tokens
         self.total_completion_tokens += record.completion_tokens
         self.total_thinking_tokens += record.thinking_tokens
+        # Populate cumulative_tokens from the running running totals so the
+        # display column shows a real monotonically-increasing number
+        # regardless of what the caller passed in.
+        record.cumulative_tokens = self.grand_total
 
     def format_table(self) -> str:
         lines = []

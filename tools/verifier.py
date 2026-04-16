@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import openpyxl
+from openpyxl.formula.tokenizer import Tokenizer
 
 # Forward reference: statement_types imports are kept local to the dispatch
 # function to avoid a circular import if verifier ever grows into a package.
@@ -104,6 +105,49 @@ def _expand_range(range_ref: str) -> list[str]:
     return cells
 
 
+def _parse_range_operand(value: str) -> tuple[Optional[str], str]:
+    """Split a Tokenizer RANGE operand into (sheet_name, cell_or_range).
+
+    Examples:
+        "'SOFP-Sub'!B39"  -> ("SOFP-Sub", "B39")
+        "Sheet!B39:B40"   -> ("Sheet", "B39:B40")
+        "B39"             -> (None, "B39")
+    """
+    if "!" not in value:
+        return None, value
+    sheet_part, cell_part = value.rsplit("!", 1)
+    sheet_part = sheet_part.strip()
+    # Excel wraps sheet names with spaces / punctuation in single quotes.
+    if sheet_part.startswith("'") and sheet_part.endswith("'"):
+        sheet_part = sheet_part[1:-1].replace("''", "'")
+    return sheet_part, cell_part
+
+
+def _sum_range_operand(
+    wb: openpyxl.Workbook,
+    default_sheet: str,
+    operand: str,
+    visited: set[str],
+    warnings: Optional[list[str]],
+) -> float:
+    """Resolve a RANGE operand (single cell, A1:C3 range, or sheet-qualified
+    form) and return the sum of the referenced cell values."""
+    sheet, cell_part = _parse_range_operand(operand)
+    sheet_name = sheet if sheet is not None else default_sheet
+    total = 0.0
+    if ":" in cell_part:
+        for c in _expand_range(cell_part):
+            total += _resolve_cell_value(wb, sheet_name, c, visited, warnings)
+    else:
+        total += _resolve_cell_value(wb, sheet_name, cell_part, visited, warnings)
+    return total
+
+
+# Functions the evaluator supports at the top level. Anything else produces
+# a formula warning and a sentinel value — we refuse to guess.
+_SUPPORTED_FUNCTIONS = {"SUM("}
+
+
 def _evaluate_formula(
     wb: openpyxl.Workbook,
     sheet_name: str,
@@ -111,67 +155,164 @@ def _evaluate_formula(
     visited: Optional[set[str]] = None,
     warnings: Optional[list[str]] = None,
 ) -> float:
-    """Parse and evaluate a cell formula, recursing into referenced cells.
+    """Evaluate a cell formula, recursing into referenced cells.
 
-    Handles patterns found in SSM MBRS templates:
-    - Cross-sheet references: ='SOFP-Sub-CuNonCu'!B39
-    - Weighted sums: =1*B139+1*B140+1*B141  (weights are always 1 or -1)
-    - SUM with ranges: =SUM(E6:L6)
+    Uses openpyxl's Tokenizer for a real tokenizer-driven walk (peer-review
+    fix for C3). Supported constructs:
+
+      * Cross-sheet cell/range references: ='SOFP-Sub'!B39, ='S'!A1:B2
+      * Signed sums of references, including with coefficient form:
+          =B139+B140-B141         → +B139 +B140 -B141
+          =1*B139+1*B140-1*B141   → same, accepted for template compatibility
+      * Top-level SUM(): =SUM(E6:L6) or =SUM(A1,B2,C3:C5)
+
+    Anything outside that grammar — other functions, `#REF!`, division,
+    array formulas — emits a warning and returns 0.0. Do NOT extend the
+    grammar by guessing; if a real template needs more, add the case
+    explicitly with a test.
     """
     if visited is None:
         visited = set()
 
-    if not formula or not formula.startswith("="):
+    if not formula or not isinstance(formula, str) or not formula.startswith("="):
         return 0.0
 
-    formula_body = formula[1:]  # strip leading =
+    try:
+        tokens = list(Tokenizer(formula).items)
+    except Exception as exc:
+        if warnings is not None:
+            warnings.append(f"Could not tokenize formula {formula!r}: {exc}")
+        return 0.0
 
-    # Cross-sheet reference: 'SheetName'!CellRef
-    cross_ref = re.match(r"'?([^'!]+)'?!([A-Z]+\d+)$", formula_body)
-    if cross_ref:
-        ref_sheet, ref_cell = cross_ref.groups()
-        return _resolve_cell_value(wb, ref_sheet, ref_cell, visited, warnings)
+    if not tokens:
+        return 0.0
 
-    # SUM function with range: =SUM(E6:L6) or =SUM(E6:L6,M6)
-    sum_match = re.match(r"SUM\((.+)\)$", formula_body, re.IGNORECASE)
-    if sum_match:
-        args = sum_match.group(1)
+    # Special case: a whole formula that is just SUM(args) at the top level.
+    # The body between SUM( and the matching ) is a comma-separated arg list.
+    first = tokens[0]
+    last = tokens[-1]
+    if (
+        first.type == "FUNC" and first.subtype == "OPEN"
+        and first.value.upper() == "SUM("
+        and last.type == "FUNC" and last.subtype == "CLOSE"
+    ):
         total = 0.0
-        for arg in args.split(","):
-            arg = arg.strip()
-            if ":" in arg:
-                for cell_ref in _expand_range(arg):
-                    total += _resolve_cell_value(wb, sheet_name, cell_ref, visited, warnings)
+        inner = tokens[1:-1]
+        # Walk args, split on SEP/ARG tokens at depth 0. We only accept pure
+        # range operands inside SUM; any nested call or operator is refused.
+        current_arg: list = []
+        depth = 0
+
+        def flush_arg(arg_tokens: list) -> Optional[float]:
+            if not arg_tokens:
+                return 0.0
+            if len(arg_tokens) != 1 or arg_tokens[0].type != "OPERAND" or arg_tokens[0].subtype != "RANGE":
+                if warnings is not None:
+                    warnings.append(
+                        f"SUM argument not a plain range: {[t.value for t in arg_tokens]!r}"
+                    )
+                return None
+            return _sum_range_operand(
+                wb, sheet_name, arg_tokens[0].value, visited, warnings
+            )
+
+        for tok in inner:
+            # Skip Tokenizer whitespace tokens — Excel allows spaces after
+            # commas in multi-arg SUM (e.g. `=SUM(A1, B2)`), and they
+            # would otherwise poison the arg shape check in flush_arg.
+            if tok.type == "WHITE-SPACE":
+                continue
+            if tok.type == "FUNC" and tok.subtype == "OPEN":
+                depth += 1
+                current_arg.append(tok)
+            elif tok.type == "FUNC" and tok.subtype == "CLOSE":
+                depth -= 1
+                current_arg.append(tok)
+            elif tok.type == "SEP" and tok.subtype == "ARG" and depth == 0:
+                val = flush_arg(current_arg)
+                if val is None:
+                    return 0.0
+                total += val
+                current_arg = []
             else:
-                # Single cell reference
-                total += _resolve_cell_value(wb, sheet_name, arg, visited, warnings)
+                current_arg.append(tok)
+        val = flush_arg(current_arg)
+        if val is None:
+            return 0.0
+        total += val
         return total
 
-    # Weighted sum: 1*B139+1*B140-1*B141+...
-    ws_name = sheet_name
-
-    # Normalize: ensure formula starts with a sign for uniform parsing
-    body = formula_body
-    if not body.startswith(("+", "-")):
-        body = "+" + body
-
-    # Match each term: sign, optional coefficient*, cell reference
-    terms = re.findall(r'([+-])\s*(\d*)\*?([A-Z]+\d+)', body)
-    if terms:
-        total = 0.0
-        for sign, coeff, cell_ref in terms:
-            val = _resolve_cell_value(wb, ws_name, cell_ref, visited, warnings)
-            weight = int(coeff) if coeff else 1
-            if sign == "-":
-                weight = -weight
-            total += weight * val
-        return total
-
-    # Fallback: sum all referenced cells
-    refs = re.findall(r'[A-Z]+\d+', formula_body)
+    # General case: signed sum of (coefficient × range) terms. Walk tokens
+    # with a small state machine. Any unsupported token produces a warning
+    # and a sentinel; we never silently ignore.
     total = 0.0
-    for ref in refs:
-        total += _resolve_cell_value(wb, ws_name, ref, visited, warnings)
+    sign = 1
+    pending_coeff: Optional[float] = None
+
+    for tok in tokens:
+        # Excel tokenizes whitespace as its own token; skip without warning.
+        # Formulas like `=B1 + B2` are otherwise valid.
+        if tok.type == "WHITE-SPACE":
+            continue
+        if tok.type == "OPERATOR-INFIX":
+            if tok.value == "+":
+                if pending_coeff is not None:
+                    # Standalone numeric term, e.g. =5+B1 — add it.
+                    total += sign * pending_coeff
+                    pending_coeff = None
+                sign = 1
+            elif tok.value == "-":
+                if pending_coeff is not None:
+                    total += sign * pending_coeff
+                    pending_coeff = None
+                sign = -1
+            elif tok.value == "*":
+                # Expect the next OPERAND to multiply pending_coeff by.
+                # pending_coeff must already be set from the previous NUMBER.
+                continue
+            else:
+                if warnings is not None:
+                    warnings.append(
+                        f"Unsupported operator {tok.value!r} in {formula!r}"
+                    )
+                return 0.0
+        elif tok.type == "OPERAND" and tok.subtype == "NUMBER":
+            try:
+                pending_coeff = float(tok.value)
+            except ValueError:
+                if warnings is not None:
+                    warnings.append(f"Unparseable number {tok.value!r} in {formula!r}")
+                return 0.0
+        elif tok.type == "OPERAND" and tok.subtype == "RANGE":
+            val = _sum_range_operand(wb, sheet_name, tok.value, visited, warnings)
+            coeff = pending_coeff if pending_coeff is not None else 1.0
+            total += sign * coeff * val
+            pending_coeff = None
+        elif tok.type == "OPERAND" and tok.subtype == "ERROR":
+            # Tokens like #REF!, #DIV/0! — refuse to evaluate.
+            if warnings is not None:
+                warnings.append(f"Error token {tok.value!r} in {formula!r}")
+            return 0.0
+        elif tok.type == "FUNC" and tok.subtype == "OPEN":
+            # A top-level SUM was handled above; any other function (or SUM
+            # embedded mid-expression) is out of scope.
+            if warnings is not None:
+                warnings.append(
+                    f"Unsupported function {tok.value!r} in {formula!r}"
+                )
+            return 0.0
+        else:
+            # Whitespace / parens / other — treat as unsupported to stay safe.
+            if warnings is not None:
+                warnings.append(
+                    f"Unsupported token {tok.type}/{tok.subtype} {tok.value!r} in {formula!r}"
+                )
+            return 0.0
+
+    # Flush any trailing standalone numeric term.
+    if pending_coeff is not None:
+        total += sign * pending_coeff
+
     return total
 
 

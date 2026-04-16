@@ -15,6 +15,7 @@ from typing import Optional, Union, List, Tuple, Set, Dict
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.messages import BinaryContent
+from pydantic_ai.settings import ModelSettings
 
 from statement_types import StatementType
 from token_tracker import TokenReport
@@ -156,10 +157,15 @@ def create_extraction_agent(
         filing_level=filing_level,
     )
 
+    # Pin temperature=1.0 explicitly. CLAUDE.md gotcha #5: Gemini 3 through
+    # the enterprise proxy requires T=1.0 — lower values cause failures or
+    # infinite loops. Relying on upstream defaults was fine in practice but
+    # brittle across provider/SDK versions (peer-review I2).
     agent = Agent(
         model,
         deps_type=ExtractionDeps,
         system_prompt=system_prompt,
+        model_settings=ModelSettings(temperature=1.0),
     )
 
     # --- Tools ---

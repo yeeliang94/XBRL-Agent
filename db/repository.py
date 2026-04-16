@@ -175,9 +175,19 @@ def db_session(path: str | Path) -> Iterator[sqlite3.Connection]:
 
     Callers typically don't open connections themselves — they wrap a block
     of repository calls in this context manager.
+
+    Pragmas match `SSEEventRecorder.start` in `db/recorder.py`:
+      * `journal_mode = WAL` — lets readers and the recorder writer coexist
+        without blocking. WAL is a DB-level setting (persists across
+        connections once set), so recording it here is belt-and-braces.
+      * `busy_timeout = 5000` — per-connection; without it, readers under
+        `db_session` would raise `SQLITE_BUSY` when the recorder is
+        mid-commit (peer-review finding I5).
     """
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -531,6 +541,14 @@ def _parse_iso_duration(start: str, end: str) -> Optional[float]:
         return None
 
 
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE metachars so users searching for literal `_` or `%`
+    in a filename get exact matches instead of wildcard behaviour
+    (peer-review I9). Pair the returned pattern with `ESCAPE '\\'` in SQL.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def list_runs(
     conn: sqlite3.Connection,
     *,
@@ -558,8 +576,8 @@ def list_runs(
     params: list[Any] = []
 
     if filename_substring:
-        clauses.append("LOWER(r.pdf_filename) LIKE ?")
-        params.append(f"%{filename_substring.lower()}%")
+        clauses.append("LOWER(r.pdf_filename) LIKE ? ESCAPE '\\'")
+        params.append(f"%{_escape_like(filename_substring.lower())}%")
     if status:
         clauses.append("r.status = ?")
         params.append(status)
@@ -657,8 +675,8 @@ def count_runs(
     clauses: list[str] = []
     params: list[Any] = []
     if filename_substring:
-        clauses.append("LOWER(r.pdf_filename) LIKE ?")
-        params.append(f"%{filename_substring.lower()}%")
+        clauses.append("LOWER(r.pdf_filename) LIKE ? ESCAPE '\\'")
+        params.append(f"%{_escape_like(filename_substring.lower())}%")
     if status:
         clauses.append("r.status = ?")
         params.append(status)
@@ -699,10 +717,31 @@ def get_run_detail(conn: sqlite3.Connection, run_id: int) -> Optional[RunDetail]
     if run is None:
         return None
     agents = fetch_run_agents(conn, run_id)
-    # Attach events to each agent. No cap — observed volumes are ~50-200
-    # events per agent, two orders of magnitude below anything alarming.
-    for agent in agents:
-        agent.events = fetch_events(conn, agent.id)
+
+    # Batch-fetch all events for this run's agents in one SQL round-trip
+    # (peer-review I7). The previous per-agent `fetch_events` loop was O(n)
+    # trips; for Group filings with 5+ agents and event-cap-sized payloads
+    # this added noticeable latency to the History detail page.
+    if agents:
+        agent_ids = [a.id for a in agents]
+        placeholders = ",".join("?" * len(agent_ids))
+        rows = conn.execute(
+            f"SELECT * FROM agent_events WHERE run_agent_id IN ({placeholders}) "
+            f"ORDER BY run_agent_id, id",
+            agent_ids,
+        ).fetchall()
+        events_by_agent: dict[int, list[AgentEvent]] = {aid: [] for aid in agent_ids}
+        for r in rows:
+            events_by_agent[r["run_agent_id"]].append(
+                AgentEvent(
+                    id=r["id"], run_agent_id=r["run_agent_id"], ts=r["ts"],
+                    event_type=r["event_type"], phase=r["phase"],
+                    payload=json.loads(r["payload_json"]) if r["payload_json"] else {},
+                )
+            )
+        for agent in agents:
+            agent.events = events_by_agent.get(agent.id, [])
+
     checks = fetch_cross_checks(conn, run_id)
     return RunDetail(run=run, agents=agents, cross_checks=checks)
 

@@ -65,11 +65,21 @@ class SOPLToSOCIEProfitCheck:
         group_passed = diff <= tolerance
         parts = [f"Group: SOPL ({sopl_profit}) vs SOCIE ({socie_profit}), diff={diff:.2f}"]
 
+        # Group filings must carry Company totals — see sofp_balance.py for
+        # the peer-review background on the old silent-pass default.
         co_passed = True
-        if filing_level == "group" and co_sopl_profit is not None and co_socie_profit is not None:
-            co_diff = abs(co_sopl_profit - co_socie_profit)
-            co_passed = co_diff <= tolerance
-            parts.append(f"Company: SOPL ({co_sopl_profit}) vs SOCIE ({co_socie_profit}), diff={co_diff:.2f}")
+        if filing_level == "group":
+            if co_sopl_profit is None or co_socie_profit is None:
+                co_passed = False
+                parts.append(
+                    f"Company: missing profit values (SOPL={co_sopl_profit}, SOCIE={co_socie_profit})"
+                )
+            else:
+                co_diff = abs(co_sopl_profit - co_socie_profit)
+                co_passed = co_diff <= tolerance
+                parts.append(
+                    f"Company: SOPL ({co_sopl_profit}) vs SOCIE ({co_socie_profit}), diff={co_diff:.2f}"
+                )
 
         passed = group_passed and co_passed
 
