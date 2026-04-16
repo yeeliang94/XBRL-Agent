@@ -271,6 +271,9 @@ class RunConfigRequest(BaseModel):
     infopack: Optional[Dict] = None  # serialised Infopack JSON (nullable)
     use_scout: bool = False  # informational — actual infopack presence controls behaviour
     filing_level: Literal["company", "group"] = "company"
+    # Notes templates to fill, as NotesTemplateType.value strings (e.g.
+    # ["CORP_INFO", "ISSUED_CAPITAL"]). Empty = face-only run.
+    notes_to_run: List[str] = []
 
 
 # --- Settings helpers ---
@@ -600,6 +603,12 @@ async def run_multi_agent_stream(
          pointer to filled.xlsx even if later persistence work crashes.
     """
     from coordinator import RunConfig, run_extraction as coordinator_run
+    from notes.coordinator import (
+        NotesRunConfig,
+        run_notes_extraction,
+        NotesCoordinatorResult,
+    )
+    from notes_types import NotesTemplateType
     from statement_types import StatementType, get_variant, variants_for
     from workbook_merger import merge as merge_workbooks
     from cross_checks.framework import run_all as run_cross_checks, DEFAULT_TOLERANCE_RM
@@ -850,10 +859,58 @@ async def run_multi_agent_stream(
         # and the SSE generator drains it in real time. None = all done.
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
-        # Launch coordinator as a background task so we can drain events while agents run
+        # Resolve notes-to-run from the request. Unknown values are yielded
+        # as errors like the statement-type path does above, so users see a
+        # clean failure in History.
+        notes_to_run: Set[NotesTemplateType] = set()
+        for n in run_config.notes_to_run:
+            try:
+                notes_to_run.add(NotesTemplateType(n))
+            except ValueError:
+                yield {"event": "error", "data": {"message": f"Unknown notes template: {n}"}}
+                yield {"event": "run_complete", "data": {"success": False, "message": f"Unknown notes template: {n}"}}
+                if _safe_mark_finished(db_conn, run_id, "failed"):
+                    terminal_status = "failed"
+                return
+
+        # Launch coordinator as a background task so we can drain events while agents run.
+        # push_sentinel=False: we're multiplexing face + notes into one queue;
+        # the orchestrator below pushes a single sentinel after BOTH complete.
         coordinator_task = asyncio.create_task(
-            coordinator_run(config, infopack=infopack, event_queue=event_queue, session_id=session_id)
+            coordinator_run(
+                config,
+                infopack=infopack,
+                event_queue=event_queue,
+                session_id=session_id,
+                push_sentinel=False,
+            )
         )
+
+        notes_config = NotesRunConfig(
+            pdf_path=str(session_dir / "uploaded.pdf"),
+            output_dir=output_dir,
+            model=model,
+            notes_to_run=notes_to_run,
+            filing_level=run_config.filing_level,
+        )
+        notes_task = asyncio.create_task(
+            run_notes_extraction(
+                notes_config,
+                infopack=infopack,
+                event_queue=event_queue,
+                session_id=session_id,
+            )
+        )
+
+        # Fan-in sentinel: push None onto the queue only after BOTH coords
+        # have finished so the drain loop doesn't exit prematurely.
+        async def _push_sentinel_when_done() -> None:
+            try:
+                await asyncio.gather(coordinator_task, notes_task, return_exceptions=True)
+            finally:
+                await event_queue.put(None)
+
+        sentinel_task = asyncio.create_task(_push_sentinel_when_done())
 
         # Drain events from the queue as they arrive from concurrent agents.
         # If the client disconnects (GeneratorExit), cancel the coordinator task
@@ -868,6 +925,7 @@ async def run_multi_agent_stream(
                 yield event
         except (asyncio.CancelledError, GeneratorExit):
             coordinator_task.cancel()
+            notes_task.cancel()
             logger.info("Client disconnected, cancelled coordinator", extra={"session_id": session_id})
             # Mark the row aborted before we return — the finally block will
             # see terminal_status set and leave it alone.
@@ -881,6 +939,7 @@ async def run_multi_agent_stream(
             # code fell through to merge, which could corrupt output.
             logger.exception("Event queue drain failed", extra={"session_id": session_id})
             coordinator_task.cancel()
+            notes_task.cancel()
             if _safe_mark_finished(db_conn, run_id, "failed"):
                 terminal_status = "failed"
             yield {"event": "error", "data": {"message": f"Stream error: {e}"}}
@@ -901,6 +960,17 @@ async def run_multi_agent_stream(
                 terminal_status = "failed"
             yield {"event": "error", "data": {"message": f"Coordinator error: {e}"}}
             return
+
+        # Notes coordinator is best-effort — a failure here doesn't fail
+        # the whole run. The per-template agent_result.status already
+        # captures individual failures; we just log and continue.
+        notes_result: Optional[NotesCoordinatorResult] = None
+        try:
+            notes_result = await notes_task
+        except asyncio.CancelledError:
+            logger.info("Notes coordinator cancelled", extra={"session_id": session_id})
+        except Exception:
+            logger.exception("Notes coordinator failed", extra={"session_id": session_id})
 
         # Generate merged result.json from per-statement files so the
         # preview tab can fetch a single file in both single- and multi-agent modes.
@@ -939,8 +1009,21 @@ async def run_multi_agent_stream(
         # Override with any just-completed workbooks from this run
         all_workbook_paths.update(coordinator_result.workbook_paths)
 
-        # Merge workbooks (Phase 7.4)
-        merge_result = merge_workbooks(all_workbook_paths, merged_path)
+        # Same pattern for notes workbooks — pick up prior partial runs + this run's output.
+        all_notes_workbook_paths: Dict[NotesTemplateType, str] = {}
+        for nt in NotesTemplateType:
+            wb_path = session_dir / f"NOTES_{nt.value}_filled.xlsx"
+            if wb_path.exists():
+                all_notes_workbook_paths[nt] = str(wb_path)
+        if notes_result is not None:
+            all_notes_workbook_paths.update(notes_result.workbook_paths)
+
+        # Merge workbooks (Phase 7.4). Notes sheets land after face sheets.
+        merge_result = merge_workbooks(
+            all_workbook_paths,
+            merged_path,
+            notes_workbook_paths=all_notes_workbook_paths,
+        )
 
         # Record the merged workbook path on the runs row. History's download
         # endpoint reads this as the single source of truth — never derived
@@ -1051,11 +1134,13 @@ async def run_multi_agent_stream(
         # Compute the final run-level status — include merge outcome AND
         # cross-check results — and stamp it on the runs row.
         any_check_failed = any(cr.status == "failed" for cr in cross_check_results)
-        if coordinator_result.all_succeeded and merge_result.success and not any_check_failed:
+        notes_all_succeeded = notes_result is None or notes_result.all_succeeded
+        all_agents_ok = coordinator_result.all_succeeded and notes_all_succeeded
+        if all_agents_ok and merge_result.success and not any_check_failed:
             overall_status = "completed"
-        elif coordinator_result.all_succeeded and not merge_result.success:
+        elif all_agents_ok and not merge_result.success:
             overall_status = "completed_with_errors"
-        elif coordinator_result.all_succeeded and any_check_failed:
+        elif all_agents_ok and any_check_failed:
             overall_status = "completed_with_errors"
         else:
             overall_status = "failed"
@@ -1077,8 +1162,16 @@ async def run_multi_agent_stream(
         cross_checks_partial = False
 
         # Final run_complete event — success requires agents + merge + cross-checks all passing
+        notes_completed = (
+            [r.template_type.value for r in notes_result.agent_results if r.status == "succeeded"]
+            if notes_result is not None else []
+        )
+        notes_failed = (
+            [r.template_type.value for r in notes_result.agent_results if r.status == "failed"]
+            if notes_result is not None else []
+        )
         yield {"event": "run_complete", "data": {
-            "success": coordinator_result.all_succeeded and merge_result.success and not any_check_failed,
+            "success": all_agents_ok and merge_result.success and not any_check_failed,
             "merged_workbook": merged_path if merge_result.success else None,
             "merge_errors": merge_result.errors,
             "cross_checks": checks_data,
@@ -1087,6 +1180,8 @@ async def run_multi_agent_stream(
                                       if r.status == "succeeded"],
             "statements_failed": [r.statement_type.value for r in coordinator_result.agent_results
                                    if r.status == "failed"],
+            "notes_completed": notes_completed,
+            "notes_failed": notes_failed,
         }}
     except BaseException:
         # Belt-and-braces: if we reach the outer except without having

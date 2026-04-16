@@ -17,11 +17,12 @@ import logging
 from copy import copy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import openpyxl
 from openpyxl.utils import get_column_letter
 
+from notes_types import NotesTemplateType
 from statement_types import StatementType
 
 logger = logging.getLogger(__name__)
@@ -38,17 +39,23 @@ class MergeResult:
 def merge(
     workbook_paths: Dict[StatementType, str],
     output_path: str,
+    notes_workbook_paths: Optional[Dict[NotesTemplateType, str]] = None,
 ) -> MergeResult:
-    """Merge per-statement workbooks into a single output file.
+    """Merge per-statement and per-notes workbooks into a single output file.
 
     Args:
         workbook_paths: mapping of statement type → path to filled workbook.
         output_path: where to write the merged workbook.
+        notes_workbook_paths: optional mapping of notes template type → path.
+            Notes sheets are appended AFTER face-statement sheets, in canonical
+            notes-template-type order (CORP_INFO → ACC_POLICIES → LIST_OF_NOTES
+            → ISSUED_CAPITAL → RELATED_PARTY).
 
     Returns:
         MergeResult with success flag and error details.
     """
-    if not workbook_paths:
+    notes_workbook_paths = notes_workbook_paths or {}
+    if not workbook_paths and not notes_workbook_paths:
         return MergeResult(success=False, errors=["No workbook paths provided"])
 
     errors: list[str] = []
@@ -84,6 +91,24 @@ def merge(
             _copy_sheet(src_ws, merged)
             sheets_copied += 1
 
+        src_wb.close()
+
+    # Notes workbooks appended AFTER face statements, in canonical enum order.
+    for notes_type in NotesTemplateType:
+        path = notes_workbook_paths.get(notes_type)
+        if path is None:
+            continue
+        if not Path(path).exists():
+            errors.append(f"{notes_type.value}: file not found: {path}")
+            continue
+        try:
+            src_wb = openpyxl.load_workbook(path, data_only=False)
+        except Exception as e:
+            errors.append(f"{notes_type.value}: failed to open: {e}")
+            continue
+        for src_ws in src_wb.worksheets:
+            _copy_sheet(src_ws, merged)
+            sheets_copied += 1
         src_wb.close()
 
     if sheets_copied == 0:
