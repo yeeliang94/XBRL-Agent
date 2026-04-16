@@ -95,7 +95,7 @@ class TestMultiAgentIntegration:
             "use_scout": False,
         }
 
-        async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None):
+        async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
             if event_queue is not None:
                 for idx, ar in enumerate(fake_coordinator_result.agent_results):
                     agent_id = ar.statement_type.value.lower()
@@ -193,7 +193,7 @@ class TestMultiAgentIntegration:
             "use_scout": False,
         }
 
-        async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None):
+        async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
             if event_queue is not None:
                 for idx, ar in enumerate(fake_coordinator_result.agent_results):
                     agent_id = ar.statement_type.value.lower()
@@ -266,7 +266,7 @@ class TestMultiAgentIntegration:
             "use_scout": False,
         }
 
-        async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None):
+        async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
             # Emit a realistic event burst per agent: status → tool_call →
             # tool_result → complete. Tool events are the ones Phase 6.5
             # must persist.

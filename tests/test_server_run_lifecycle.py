@@ -60,7 +60,7 @@ def _open_db(db_path: Path) -> sqlite3.Connection:
 def _happy_coordinator(agent_results):
     """Factory for a mock coordinator that publishes a per-agent event then
     the sentinel. Mirrors the real coordinator's contract."""
-    async def mock_run(config, infopack=None, event_queue=None, session_id=None):
+    async def mock_run(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
         if event_queue is not None:
             for ar in agent_results:
                 await event_queue.put({
@@ -95,7 +95,7 @@ def test_run_row_created_before_coordinator_runs(session_env):
 
     pause = asyncio.Event()
 
-    async def paused_coordinator(config, infopack=None, event_queue=None, session_id=None):
+    async def paused_coordinator(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
         # Snapshot DB while paused so the test can assert on the running row.
         assert db_path.exists(), "DB must be initialised before coordinator starts"
         conn = _open_db(db_path)
@@ -146,7 +146,7 @@ def test_run_row_marked_failed_when_coordinator_raises(session_env):
     client, session_id, out = session_env
     db_path = out / "xbrl_agent.db"
 
-    async def boom_coordinator(config, infopack=None, event_queue=None, session_id=None):
+    async def boom_coordinator(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
         if event_queue is not None:
             # Signal shutdown so the drain loop exits cleanly, then raise
             # from the task itself so the awaiter catches it.
@@ -187,7 +187,7 @@ def test_run_row_marked_aborted_on_cancel(session_env):
     client, session_id, out = session_env
     db_path = out / "xbrl_agent.db"
 
-    async def cancelled_coordinator(config, infopack=None, event_queue=None, session_id=None):
+    async def cancelled_coordinator(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
         if event_queue is not None:
             await event_queue.put(None)
         raise asyncio.CancelledError()
@@ -234,7 +234,7 @@ def test_client_disconnect_still_finalizes_row(session_env):
     client, session_id, out = session_env
     db_path = out / "xbrl_agent.db"
 
-    async def runaway_coordinator(config, infopack=None, event_queue=None, session_id=None):
+    async def runaway_coordinator(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
         # Queue is drained by the server; then server closes the drain loop
         # and awaits the task. Simulate an unexpected exit.
         if event_queue is not None:

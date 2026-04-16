@@ -129,7 +129,7 @@ def test_full_extraction_mocked(full_pipeline_env):
 
     # Mock coordinator to return immediately AND push None sentinel into event_queue
     # so the SSE generator's queue drain loop exits cleanly.
-    async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None):
+    async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
         if event_queue is not None:
             # Emit per-agent complete events like the real coordinator does
             for idx, ar in enumerate(fake_coordinator_result.agent_results):
@@ -286,7 +286,7 @@ def test_group_filing_e2e_mocked(full_pipeline_env):
         "filing_level": "group",
     }
 
-    async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None):
+    async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
         # Verify filing_level reached the coordinator
         assert config.filing_level == "group"
         if event_queue is not None:

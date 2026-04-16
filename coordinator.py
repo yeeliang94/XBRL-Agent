@@ -100,6 +100,7 @@ async def run_extraction(
     infopack=None,
     event_queue: Optional[asyncio.Queue] = None,
     session_id: Optional[str] = None,
+    push_sentinel: bool = True,
 ) -> CoordinatorResult:
     """Run extraction sub-agents concurrently for all selected statements.
 
@@ -109,6 +110,11 @@ async def run_extraction(
                   When None, sub-agents get full PDF access.
         session_id: Session identifier — used by task_registry so individual
                     agents can be cancelled from the abort API.
+        push_sentinel: When True (default) a None sentinel is pushed onto
+                    `event_queue` in the finally block so the SSE drain
+                    loop can exit. When multiplexing with another
+                    coordinator (notes), the outer orchestrator pushes the
+                    single shared sentinel and passes False here.
 
     Returns:
         CoordinatorResult with per-agent outcomes.
@@ -221,8 +227,10 @@ async def run_extraction(
         results = []
         raise  # Re-raise so the caller's CancelledError handler runs
     finally:
-        # Always push sentinel so the SSE generator's queue drain exits
-        if event_queue is not None:
+        # Push sentinel unless the caller is multiplexing us with another
+        # coordinator (in which case they push the single shared sentinel
+        # after all parallel runs complete).
+        if push_sentinel and event_queue is not None:
             await event_queue.put(None)
         # Clean up task references
         if session_id:

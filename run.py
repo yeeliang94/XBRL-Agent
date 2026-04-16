@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from token_tracker import TokenReport
 from statement_types import StatementType
+from notes_types import NotesTemplateType
 
 # Default output directory relative to this script, not the working directory
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -50,6 +51,7 @@ def run_agent(
     cache_template: bool = False,
     statements: Optional[Set[StatementType]] = None,
     filing_level: str = "company",
+    notes: Optional[Set[NotesTemplateType]] = None,
 ) -> AgentResult:
     """Run extraction via the coordinator for one or more statement types.
 
@@ -61,8 +63,11 @@ def run_agent(
         output_dir: base output directory (a numbered run_XXX subdir is created).
         cache_template: unused (kept for backward compat).
         statements: set of StatementType to extract. Defaults to all 5.
+        notes: optional set of NotesTemplateType to fill in parallel with the
+            face-statement extraction.
     """
     from coordinator import RunConfig, run_extraction
+    from notes.coordinator import NotesRunConfig, run_notes_extraction
     from server import _create_proxy_model
     from workbook_merger import merge as merge_workbooks
 
@@ -71,6 +76,7 @@ def run_agent(
 
     if statements is None:
         statements = set(StatementType)
+    notes = set(notes or set())
 
     # Resolve model through the same proxy/direct routing as the web server
     load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
@@ -86,20 +92,39 @@ def run_agent(
         statements_to_run=statements,
         filing_level=filing_level,
     )
+    notes_config = NotesRunConfig(
+        pdf_path=pdf_path,
+        output_dir=output_dir,
+        model=resolved_model,
+        notes_to_run=notes,
+        filing_level=filing_level,
+    )
 
-    # Run all agents concurrently
-    coordinator_result = asyncio.run(run_extraction(config))
+    async def _run_all():
+        # Face statements and notes run concurrently — no dependency between them.
+        face_task = asyncio.create_task(run_extraction(config))
+        notes_task = asyncio.create_task(run_notes_extraction(notes_config))
+        return await face_task, await notes_task
+
+    coordinator_result, notes_result = asyncio.run(_run_all())
 
     # Merge workbooks into a single file
     merged_path = str(Path(output_dir) / "filled.xlsx")
-    if coordinator_result.workbook_paths:
-        merge_workbooks(coordinator_result.workbook_paths, merged_path)
+    if coordinator_result.workbook_paths or notes_result.workbook_paths:
+        merge_workbooks(
+            coordinator_result.workbook_paths,
+            merged_path,
+            notes_workbook_paths=notes_result.workbook_paths,
+        )
 
-    # Determine success: all agents must succeed
-    success = coordinator_result.all_succeeded
+    success = coordinator_result.all_succeeded and notes_result.all_succeeded
     errors = [
         f"{r.statement_type.value}: {r.error}"
         for r in coordinator_result.agent_results
+        if r.status == "failed"
+    ] + [
+        f"NOTES {r.template_type.value}: {r.error}"
+        for r in notes_result.agent_results
         if r.status == "failed"
     ]
 
@@ -160,6 +185,14 @@ if __name__ == "__main__":
     import argparse
 
     all_stmt_names = [s.value for s in StatementType]
+    # CLI accepts notes by lowercase CLI names that match the spec (PLAN §4).
+    _NOTES_CLI_MAP: dict[str, NotesTemplateType] = {
+        "corporate_info": NotesTemplateType.CORP_INFO,
+        "accounting_policies": NotesTemplateType.ACC_POLICIES,
+        "list_of_notes": NotesTemplateType.LIST_OF_NOTES,
+        "issued_capital": NotesTemplateType.ISSUED_CAPITAL,
+        "related_party": NotesTemplateType.RELATED_PARTY,
+    }
 
     parser = argparse.ArgumentParser(description="XBRL Extraction Agent")
     parser.add_argument("pdf", nargs="?", default="data/FINCO-Audited-Financial-Statement-2021.pdf",
@@ -170,6 +203,11 @@ if __name__ == "__main__":
     parser.add_argument("--statements", nargs="+", default=all_stmt_names,
                         choices=all_stmt_names,
                         help="Statements to extract (default: all 5)")
+    parser.add_argument("--notes", nargs="*", default=[],
+                        choices=sorted(_NOTES_CLI_MAP.keys()),
+                        help="Notes templates to fill (default: none). "
+                             "Choices: corporate_info, accounting_policies, list_of_notes, "
+                             "issued_capital, related_party.")
     parser.add_argument("--output-dir", default=None,
                         help="Base output directory (default: output/ next to this script)")
     parser.add_argument("--level", default="company", choices=["company", "group"],
@@ -177,6 +215,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     stmts = {StatementType(s) for s in args.statements}
+    notes_set = {_NOTES_CLI_MAP[n] for n in args.notes}
 
     # Resolve model: CLI flag > TEST_MODEL env var > default
     load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
@@ -184,11 +223,14 @@ if __name__ == "__main__":
 
     print(f"Model: {model}")
     print(f"Statements: {', '.join(s.value for s in stmts)}")
+    if notes_set:
+        print(f"Notes: {', '.join(sorted(n.value for n in notes_set))}")
 
     kwargs: dict = dict(
         pdf_path=args.pdf,
         model=model,
         statements=stmts,
+        notes=notes_set,
         filing_level=args.level,
     )
     if args.output_dir:
