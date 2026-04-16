@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from statement_types import StatementType
+from scout.notes_discoverer import NoteInventoryEntry
 
 # Allowed confidence levels for page validation.
 Confidence = Literal["HIGH", "MEDIUM", "LOW"]
@@ -63,6 +64,10 @@ class Infopack:
     toc_page: int
     page_offset: int
     statements: dict[StatementType, StatementPageRef] = field(default_factory=dict)
+    # Notes inventory built by the scout (A.2). Each entry is a
+    # (note_num, title, page_range) triple describing one disclosure note
+    # in the PDF. Consumed by the notes agents / sub-coordinator.
+    notes_inventory: list[NoteInventoryEntry] = field(default_factory=list)
 
     # -- Serialisation ---------------------------------------------------------
 
@@ -80,6 +85,14 @@ class Infopack:
                 }
                 for st, ref in self.statements.items()
             },
+            "notes_inventory": [
+                {
+                    "note_num": e.note_num,
+                    "title": e.title,
+                    "page_range": list(e.page_range),
+                }
+                for e in self.notes_inventory
+            ],
         }, indent=2)
 
     @classmethod
@@ -95,10 +108,24 @@ class Infopack:
                 note_pages=ref_data.get("note_pages", []),
                 confidence=ref_data.get("confidence", "HIGH"),
             )
+        inventory: list[NoteInventoryEntry] = []
+        for raw in data.get("notes_inventory", []) or []:
+            pr = raw.get("page_range", [])
+            if isinstance(pr, list) and len(pr) == 2:
+                page_range = (int(pr[0]), int(pr[1]))
+            else:
+                page_range = (0, 0)
+            inventory.append(NoteInventoryEntry(
+                note_num=int(raw["note_num"]),
+                title=str(raw.get("title", "")),
+                page_range=page_range,
+            ))
+
         return cls(
             toc_page=data["toc_page"],
             page_offset=data["page_offset"],
             statements=statements,
+            notes_inventory=inventory,
         )
 
     # -- Validation ------------------------------------------------------------

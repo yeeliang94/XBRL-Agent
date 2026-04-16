@@ -39,7 +39,11 @@ from scout.infopack import Infopack, StatementPageRef
 from scout.toc_locator import find_toc_candidate_pages
 from scout.toc_parser import parse_toc_entries_from_text, TocEntry
 from scout.variant_detector import detect_variant_from_signals
-from scout.notes_discoverer import discover_note_pages
+from scout.notes_discoverer import (
+    discover_note_pages,
+    build_notes_inventory,
+    NoteInventoryEntry,
+)
 from tools.pdf_viewer import render_pages_to_png_bytes
 
 logger = logging.getLogger(__name__)
@@ -64,6 +68,9 @@ class ScoutDeps:
     infopack: Optional[Infopack] = None
     # Cache for TOC entries (populated by find_toc, reused by discover_notes)
     toc_entries: list[TocEntry] = field(default_factory=list)
+    # Cache for notes inventory (populated by discover_notes_inventory).
+    # Attached to the Infopack at save time if the agent didn't pass one.
+    notes_inventory: list[NoteInventoryEntry] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -312,10 +319,35 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
         for st in extra:
             del statements[st]
 
+    # Accept notes_inventory either in-band (from the LLM's save_infopack
+    # JSON) or fall back to the cached inventory built by
+    # discover_notes_inventory. If the agent passes malformed entries we
+    # skip them silently rather than failing the whole save.
+    inventory: list[NoteInventoryEntry] = []
+    raw_inventory = data.get("notes_inventory")
+    if isinstance(raw_inventory, list):
+        for raw in raw_inventory:
+            try:
+                pr = raw.get("page_range", [])
+                if isinstance(pr, (list, tuple)) and len(pr) == 2:
+                    page_range = (int(pr[0]), int(pr[1]))
+                else:
+                    continue
+                inventory.append(NoteInventoryEntry(
+                    note_num=int(raw["note_num"]),
+                    title=str(raw.get("title", "")),
+                    page_range=page_range,
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+    if not inventory:
+        inventory = list(deps.notes_inventory)
+
     infopack = Infopack(
         toc_page=data.get("toc_page", 1),
         page_offset=data.get("page_offset", 0),
         statements=statements,
+        notes_inventory=inventory,
     )
 
     # Validate page ranges
@@ -459,6 +491,39 @@ def create_scout_agent(
             toc_entries=ctx.deps.toc_entries,
         )
         return json.dumps(result)
+
+    @agent.tool
+    def discover_notes_inventory(
+        ctx: RunContext[ScoutDeps],
+        notes_start_page: int,
+    ) -> str:
+        """Walk the notes section of the PDF and return a structured inventory.
+
+        Call this AFTER you've identified the notes section's starting page
+        (usually via the TOC). Returns a JSON list of entries, one per note,
+        with its number, title, and inclusive page range.
+
+        For text-based PDFs this is deterministic and fast. For scanned PDFs
+        the result will be empty — in that case fall back to viewing pages
+        yourself and build the inventory via save_infopack's notes_inventory
+        field.
+
+        Args:
+            notes_start_page: 1-indexed PDF page where the Notes section begins.
+        """
+        _emit_progress(ctx.deps, f"Building notes inventory from page {notes_start_page}...")
+        inventory = build_notes_inventory(
+            pdf_path=str(ctx.deps.pdf_path),
+            notes_start_page=notes_start_page,
+            pdf_length=ctx.deps.pdf_length,
+        )
+        # Cache on deps so save_infopack can attach it without a second pass.
+        ctx.deps.notes_inventory = inventory
+        payload = [
+            {"note_num": e.note_num, "title": e.title, "page_range": list(e.page_range)}
+            for e in inventory
+        ]
+        return json.dumps(payload, indent=2)
 
     @agent.tool
     def save_infopack(ctx: RunContext[ScoutDeps], infopack_json: str) -> str:
