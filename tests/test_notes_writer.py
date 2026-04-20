@@ -265,3 +265,19 @@ def test_writer_refuses_to_overwrite_formula_cells(tmp_path: Path):
     # We can't easily hit that row by label — use a raw-row-index payload.
     # Skip if the public API doesn't support row overrides (that's OK).
     pytest.skip("row-override API not part of public writer contract; guard tested in integration")
+
+
+def test_empty_payloads_returns_failure(tmp_path: Path):
+    """PR A.1: zero-row writes must fail so Sheet-12's "all sub-agents lost
+    coverage" case can't ship a silent green tick on an untouched template."""
+    tpl = notes_template_path(NotesTemplateType.CORP_INFO, level="company")
+    out = tmp_path / "Notes-CI_empty.xlsx"
+    result = write_notes_workbook(
+        template_path=str(tpl),
+        payloads=[],
+        output_path=str(out),
+        filing_level="company",
+        sheet_name=CORP_INFO_SHEET,
+    )
+    assert result.success is False
+    assert result.rows_written == 0

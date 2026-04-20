@@ -67,7 +67,14 @@ def write_notes_workbook(
     filing_level: str,
     sheet_name: str,
 ) -> NotesWriteResult:
-    """Write NotesPayload entries to the given sheet of a notes template."""
+    """Write NotesPayload entries to the given sheet of a notes template.
+
+    Success is defined strictly as ``rows_written > 0``. Callers must
+    pre-check for empty payloads and skip the write themselves if they
+    want a no-op success — a zero-row write is treated as a failure so
+    Sheet-12's "no payloads = all sub-agents lost coverage" case can't
+    ship a silent green tick on an untouched template.
+    """
     tpl = Path(template_path)
     if not tpl.exists():
         return NotesWriteResult(
@@ -128,9 +135,9 @@ def write_notes_workbook(
     finally:
         wb.close()
 
-    # Success if we wrote anything OR if payloads was empty (caller asked
-    # for a no-op write — hand back an untouched copy of the template).
-    success = rows_written > 0 or not payloads
+    # Zero-row writes are failures — see docstring. Callers who want a
+    # no-op success must short-circuit before calling this function.
+    success = rows_written > 0
     return NotesWriteResult(
         success=success,
         rows_written=rows_written,
