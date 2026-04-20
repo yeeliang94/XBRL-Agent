@@ -210,12 +210,26 @@ def _resolve_row(
 def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
     """Merge multiple payloads targeting the same row.
 
-    Prose: concatenate content with blank line separators. Evidence is a
-    semicolon-joined list. Numeric: last-write-wins (multiple numeric
+    Prose: concatenate content with blank line separators, ordered by the
+    earliest PDF page each payload cited. Evidence is a semicolon-joined
+    list in the same page order. Numeric: last-write-wins (multiple numeric
     payloads for one row is a bug upstream — a warning is logged).
+
+    Ordering by ``min(source_pages)`` keeps row-112's concatenation
+    stable across re-runs — without it, input order is
+    ``asyncio.wait(ALL_COMPLETED)`` batch-completion order, which is
+    non-deterministic and would churn the output on every re-run.
     """
     if len(payloads) == 1:
         return payloads[0]
+
+    # Sort by the earliest PDF page each payload cited. Payloads with no
+    # source_pages sort to the front (key = 0) so they remain deterministic
+    # rather than getting a ``min([])`` crash.
+    payloads = sorted(
+        payloads,
+        key=lambda p: min(p.source_pages) if p.source_pages else 0,
+    )
 
     # Numeric: warn and take first set of values.
     numeric_values = None

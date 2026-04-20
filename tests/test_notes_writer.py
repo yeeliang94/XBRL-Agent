@@ -208,6 +208,41 @@ def test_writer_surfaces_fuzzy_matches_in_result(tmp_path: Path):
     assert 0.7 <= score < 1.0
 
 
+def test_combine_payloads_sorts_by_source_page(tmp_path: Path):
+    """PR A.3: _combine_payloads must order contributors by the earliest
+    PDF page each cited so row-112's concatenation is stable across
+    re-runs — input order from asyncio.wait(ALL_COMPLETED) is
+    batch-completion order and non-deterministic."""
+    from notes.writer import _combine_payloads
+
+    # Feed in reverse page order — later page first.
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Disclosure of other notes to accounts",
+            content="later note",
+            evidence="p.30",
+            source_pages=[30, 31],
+            sub_agent_id="subB",
+        ),
+        NotesPayload(
+            chosen_row_label="Disclosure of other notes to accounts",
+            content="earlier note",
+            evidence="p.10",
+            source_pages=[10, 11],
+            sub_agent_id="subA",
+        ),
+    ]
+    combined = _combine_payloads(payloads)
+    # Earlier-page payload must appear first in the concatenated content.
+    assert combined.content.index("earlier note") < combined.content.index("later note")
+    # Evidence joined in the same order.
+    assert combined.evidence.index("p.10") < combined.evidence.index("p.30")
+    # Aggregated pages ordered earliest-first.
+    assert combined.source_pages[0] == 10
+    # Sub-agent ids reflect the sorted order too.
+    assert combined.sub_agent_id == "subA,subB"
+
+
 def test_writer_combines_sub_agent_ids_on_row_collision(tmp_path: Path):
     """Review S6: when multiple sub-agents land on the same row the
     combined payload must preserve every contributing sub_agent_id."""
