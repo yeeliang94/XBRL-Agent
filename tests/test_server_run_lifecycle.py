@@ -678,6 +678,68 @@ def test_upload_endpoint_writes_original_filename_sidecar(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
+# PR B.6 — when the notes coordinator itself raises (not a per-sheet failure
+# but a coordinator-level crash), the final run_complete event must still
+# surface every requested template as "failed" so the UI / history doesn't
+# silently flip to success.
+# ---------------------------------------------------------------------------
+
+def test_notes_coordinator_crash_synthesizes_failed_result(session_env):
+    client, session_id, out = session_env
+
+    agent_results = [
+        AgentResult(
+            statement_type=StatementType.SOFP, variant="CuNonCu",
+            status="succeeded",
+            workbook_path=str(out / session_id / "SOFP_filled.xlsx"),
+        ),
+    ]
+
+    async def exploding_notes_coordinator(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
+        # A setup bug / unexpected asyncio error during the notes coordinator
+        # — NOT a per-template failure that would land in agent_results.
+        raise RuntimeError("notes coordinator blew up during setup")
+
+    run_config = {
+        "statements": ["SOFP"],
+        "variants": {"SOFP": "CuNonCu"},
+        "models": {},
+        "infopack": None,
+        "use_scout": False,
+        "notes_to_run": ["CORP_INFO", "ACC_POLICIES"],
+    }
+
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
+         patch("notes.coordinator.run_notes_extraction", side_effect=exploding_notes_coordinator), \
+         patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=1)), \
+         patch("cross_checks.framework.run_all", return_value=[]):
+        resp = client.post(f"/api/run/{session_id}", json=run_config)
+
+    assert resp.status_code == 200
+
+    # Parse the SSE response body and find the final run_complete event
+    # payload — identified by presence of the notes_failed key.
+    run_complete_data = None
+    for line in resp.text.splitlines():
+        if line.startswith("data:"):
+            try:
+                payload = json.loads(line[len("data:"):].strip())
+            except json.JSONDecodeError:
+                continue
+            if "notes_failed" in payload:
+                run_complete_data = payload
+
+    assert run_complete_data is not None, "no run_complete event observed"
+    assert run_complete_data["success"] is False, \
+        "notes coordinator crash must not silently succeed"
+    # Every requested template must appear in notes_failed — not just the
+    # first one, not empty. The synthesis at server.py builds one
+    # NotesAgentResult per requested template with status='failed'.
+    assert set(run_complete_data["notes_failed"]) == {"CORP_INFO", "ACC_POLICIES"}
+
+
+# ---------------------------------------------------------------------------
 # Rerun contract: a face-statement-only rerun of a session that previously
 # had successful notes must preserve those notes in the merged workbook.
 # Peer review caught an earlier over-aggressive fix (A.6 in the draft PR
