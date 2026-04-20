@@ -5,16 +5,22 @@ import type {
   ExtendedSettingsResponse,
   ModelEntry,
   RunConfigPayload,
-  ToolTimelineEntry,
   FilingLevel,
+  NotesTemplateType,
 } from "../lib/types";
-import { STATEMENT_TYPES } from "../lib/types";
+import {
+  STATEMENT_TYPES,
+  mapStatements,
+  NOTES_TEMPLATE_TYPES,
+} from "../lib/types";
 import { pwc } from "../lib/theme";
 import { abortAgent } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { ScoutToggle } from "./ScoutToggle";
 import { StatementRunConfig } from "./StatementRunConfig";
+import { NotesRunConfig } from "./NotesRunConfig";
 import { humanToolName } from "../lib/toolLabels";
+import { parseSSEStream } from "../lib/sse";
 
 interface Props {
   sessionId: string;
@@ -93,9 +99,9 @@ const styles = {
     fontSize: 14,
     color: pwc.error,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: "#FEF2F2",
+    background: pwc.errorBg,
     borderRadius: pwc.radius.sm,
-    border: `1px solid #FECACA`,
+    border: `1px solid ${pwc.errorBorder}`,
   } as React.CSSProperties,
   progressText: {
     fontFamily: pwc.fontBody,
@@ -126,21 +132,19 @@ const styles = {
   } as React.CSSProperties,
 };
 
-function makeEmptySelections(): Record<StatementType, VariantSelection> {
-  const sel = {} as Record<StatementType, VariantSelection>;
-  for (const stmt of STATEMENT_TYPES) {
-    sel[stmt] = { variant: "", confidence: null };
-  }
-  return sel;
-}
+const makeEmptySelections = (): Record<StatementType, VariantSelection> =>
+  mapStatements(() => ({ variant: "", confidence: null }));
 
-function makeAllEnabled(): Record<StatementType, boolean> {
-  const en = {} as Record<StatementType, boolean>;
-  for (const stmt of STATEMENT_TYPES) {
-    en[stmt] = true;
-  }
-  return en;
-}
+const makeAllEnabled = (): Record<StatementType, boolean> =>
+  mapStatements(() => true);
+
+// Notes templates start OFF by default — PLAN §4 Phase D.2: "5 new checkboxes
+// (default OFF)". Users opt in per run.
+const makeNotesDisabled = (): Record<NotesTemplateType, boolean> => {
+  const out = {} as Record<NotesTemplateType, boolean>;
+  for (const nt of NOTES_TEMPLATE_TYPES) out[nt] = false;
+  return out;
+};
 
 export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const [loading, setLoading] = useState(true);
@@ -155,11 +159,35 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const [filingLevel, setFilingLevel] = useState<FilingLevel>("company");
   const [variantSelections, setVariantSelections] = useState(makeEmptySelections);
   const [statementsEnabled, setStatementsEnabled] = useState(makeAllEnabled);
+  // Tracks statements the user has EXPLICITLY enabled. Scout will not
+  // silently disable these even if it failed to detect them (#18). Cleared
+  // entries mean "no explicit user preference" — scout is free to manage them.
+  const [userEnabledOverrides, setUserEnabledOverrides] = useState<Set<StatementType>>(
+    () => new Set<StatementType>(),
+  );
+  // Mirror the latest overrides into a ref so the scout handler — which
+  // runs asynchronously across many SSE events — sees mid-run toggles
+  // instead of the snapshot captured when `handleAutoDetect` was created.
+  // Without this, a user enabling a statement mid-scout could still have
+  // scout disable it when infopack arrives (peer-review finding #4).
+  const userEnabledOverridesRef = React.useRef(userEnabledOverrides);
+  useEffect(() => {
+    userEnabledOverridesRef.current = userEnabledOverrides;
+  }, [userEnabledOverrides]);
+  // Populated when scout would have disabled a statement but we respected
+  // the user's explicit enable instead. Drives the one-line notice in UI.
+  const [scoutOverrideNote, setScoutOverrideNote] = useState<string | null>(null);
   const [modelOverrides, setModelOverrides] = useState<Record<StatementType, string>>(
     {} as Record<StatementType, string>,
   );
   const [availableModels, setAvailableModels] = useState<ModelEntry[]>([]);
-  const [, setScoutToolCalls] = useState<ToolTimelineEntry[]>([]);
+  const [notesEnabled, setNotesEnabled] = useState(makeNotesDisabled);
+  // Per-note model overrides — mirrors `modelOverrides` for face statements.
+  // Initialized from the same defaults as the face-statement rows so every
+  // cell always has a concrete model id (required by <select value=...>).
+  const [notesModelOverrides, setNotesModelOverrides] = useState<
+    Record<NotesTemplateType, string>
+  >({} as Record<NotesTemplateType, string>);
 
   // Load settings on mount
   useEffect(() => {
@@ -175,6 +203,15 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
           overrides[stmt] = settings.default_models[stmt] || settings.model;
         }
         setModelOverrides(overrides);
+        // Notes use the same default-model fallback chain: per-template
+        // default_models entry → global `settings.model`. The backend
+        // accepts partial notes_models, so we only send explicit overrides
+        // at submit time — but every dropdown still needs a value at init.
+        const notesOverrides = {} as Record<NotesTemplateType, string>;
+        for (const nt of NOTES_TEMPLATE_TYPES) {
+          notesOverrides[nt] = settings.default_models[nt] || settings.model;
+        }
+        setNotesModelOverrides(notesOverrides);
         setLoading(false);
       })
       .catch((err) => {
@@ -196,6 +233,15 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const handleToggleStatement = useCallback(
     (stmt: StatementType, enabled: boolean) => {
       setStatementsEnabled((prev) => ({ ...prev, [stmt]: enabled }));
+      // Track explicit user intent so scout won't silently flip it back (#18).
+      // Enabling adds the override; disabling removes it (the user is fine
+      // with scout managing this statement from here on).
+      setUserEnabledOverrides((prev) => {
+        const next = new Set(prev);
+        if (enabled) next.add(stmt);
+        else next.delete(stmt);
+        return next;
+      });
     },
     [],
   );
@@ -234,7 +280,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     setIsDetecting(true);
     setScoutError(null);
     setScoutProgress(null);
-    setScoutToolCalls([]);
+    setScoutOverrideNote(null);
     setScoutStartTime(Date.now());
     try {
       // Call the scout endpoint via SSE
@@ -263,139 +309,118 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
         reader.cancel().catch(() => {});
       });
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let currentEventType = "";
+      // One dispatch function per scout event type. Keeping each handler
+      // small and local makes the loop body below just a switch statement.
+      const handleInfopack = (data: Record<string, unknown>) => {
+        const infopackValue = data.infopack as Record<string, unknown> | undefined;
+        if (!infopackValue) return;
+        setInfopack(infopackValue);
+        setScoutProgress("Auto-detect complete");
 
-      const processLine = (line: string) => {
-        if (cancelled) return;
-        if (line.startsWith("event:")) {
-          currentEventType = line.slice(6).trim();
-          return;
-        }
-        if (!line.startsWith("data: ")) return;
-        try {
-          const data = JSON.parse(line.slice(6));
-          const eventType = currentEventType;
-          currentEventType = ""; // reset for next event
+        const statements = (infopackValue.statements ?? {}) as Record<string, unknown>;
+        const scoutDetectedAnything = Object.keys(statements).length > 0;
 
-          // Structured tool events from streaming scout — pushed into
-          // the same ToolTimelineEntry shape the live extract view uses,
-          // so ToolCallCard can render them unchanged.
-          if (eventType === "tool_call") {
-            const startTime = Date.now();
-            setScoutToolCalls(prev => [
-              ...prev,
-              {
-                tool_call_id: data.tool_call_id,
-                tool_name: data.tool_name,
-                args: data.args ?? {},
-                result_summary: null,
-                duration_ms: null,
-                startTime,
-                endTime: null,
-                phase: null,
-              },
-            ]);
-            // Mirror the tool name into the header line so users see
-            // friendly progress text without duplicating the bullet list.
-            setScoutProgress(`${humanToolName(data.tool_name)}…`);
-            return;
-          }
-
-          if (eventType === "tool_result") {
-            setScoutToolCalls(prev => prev.map(tc =>
-              tc.tool_call_id === data.tool_call_id
-                ? {
-                    ...tc,
-                    result_summary: data.result_summary ?? "",
-                    duration_ms: data.duration_ms ?? null,
-                    endTime: Date.now(),
-                  }
-                : tc,
-            ));
-            return;
-          }
-
-          // Phase 10.3: the bullet list was removed, so status/phase
-          // events no longer feed a separate message buffer — header
-          // text is driven by the active tool instead. We still swallow
-          // the event type so it doesn't fall into the error branch.
-          if (data.phase && !data.traceback) {
-            return;
-          }
-
-          // Error events from server (have `traceback`)
-          if (data.traceback) {
-            setScoutError(data.message || "Scout failed");
-            setScoutStartTime(null);
-            return;
-          }
-
-          if (data.success && data.infopack) {
-            setInfopack(data.infopack);
-            setScoutProgress("Auto-detect complete");
-
-            // Populate variant selections from infopack.
-            // Scout sends variant_suggestion (not variant) and uppercase
-            // confidence (HIGH/MEDIUM/LOW) — normalize to our lowercase type.
-            const statements = data.infopack.statements || {};
-
-            // Auto-disable statements the scout didn't find — saves tokens
-            // by not running extraction on missing statements. User can
-            // re-enable manually if the scout was wrong.
-            setStatementsEnabled((prev) => {
-              const next = { ...prev };
-              for (const stmt of STATEMENT_TYPES) {
-                if (!(stmt in statements)) {
+        // Respect explicit user enables (#18): if the user manually turned on
+        // a statement that scout didn't detect, leave it on and surface a
+        // one-line notice so they know scout disagreed. Read from the ref
+        // (not the closure-captured state) so a mid-run user toggle is
+        // honoured (peer-review finding #4).
+        //
+        // Guard the "scout detected nothing" case (empty statements dict).
+        // Without this, handleInfopack silently unchecks every row and the
+        // Variants panel collapses — leaving the operator with no affordance
+        // to proceed. Treat it as a soft-failure: keep enabled rows enabled,
+        // surface a single notice explaining scout came up empty.
+        const protectedStmts: StatementType[] = [];
+        const latestOverrides = userEnabledOverridesRef.current;
+        if (scoutDetectedAnything) {
+          setStatementsEnabled((prev) => {
+            const next = { ...prev };
+            for (const stmt of STATEMENT_TYPES) {
+              if (!(stmt in statements)) {
+                if (latestOverrides.has(stmt) && prev[stmt]) {
+                  protectedStmts.push(stmt);
+                } else {
                   next[stmt] = false;
                 }
               }
-              return next;
-            });
+            }
+            return next;
+          });
+        }
+        setScoutOverrideNote(
+          !scoutDetectedAnything
+            ? "Scout didn't detect any statements in this PDF — keeping your current selection. Pick variants manually or try a different model."
+            : protectedStmts.length > 0
+              ? `Scout didn't detect ${protectedStmts.join(", ")} — kept enabled based on your selection.`
+              : null,
+        );
 
-            // Detected statements get their variant + confidence;
-            // missing ones get a "not_detected" marker.
-            setVariantSelections((prev) => {
-              const next = { ...prev };
-              for (const stmt of STATEMENT_TYPES) {
-                const info = statements[stmt] as Record<string, unknown> | undefined;
-                if (info) {
-                  const variant = info.variant_suggestion as string | undefined;
-                  if (variant) {
-                    const rawConf = String(info.confidence || "MEDIUM").toLowerCase();
-                    const confidence = (["high", "medium", "low"].includes(rawConf)
-                      ? rawConf
-                      : "medium") as "high" | "medium" | "low";
-                    next[stmt] = { variant, confidence };
-                  } else {
-                    next[stmt] = { variant: "", confidence: "low" };
-                  }
+        // Detected statements get their variant + confidence; missing ones
+        // get a "not_detected" marker.
+        //
+        // Peer-review finding #2: when scout comes up completely empty
+        // (zero statements detected), we must NOT overwrite any variant
+        // the operator picked manually — the notice above promised to
+        // "keep your current selection". Skip the reset loop entirely on
+        // the empty path so manual variants + confidences survive.
+        if (scoutDetectedAnything) {
+          setVariantSelections((prev) => {
+            const next = { ...prev };
+            for (const stmt of STATEMENT_TYPES) {
+              const info = statements[stmt] as Record<string, unknown> | undefined;
+              if (info) {
+                const variant = info.variant_suggestion as string | undefined;
+                if (variant) {
+                  const rawConf = String(info.confidence || "MEDIUM").toLowerCase();
+                  const confidence = (["high", "medium", "low"].includes(rawConf)
+                    ? rawConf
+                    : "medium") as "high" | "medium" | "low";
+                  next[stmt] = { variant, confidence };
                 } else {
-                  // Statement not in infopack — mark as not detected
                   next[stmt] = { variant: "", confidence: "low" };
                 }
+              } else {
+                next[stmt] = { variant: "", confidence: "low" };
               }
-              return next;
-            });
-          }
-        } catch {
-          // Non-JSON lines (e.g. empty lines, comments) — skip
+            }
+            return next;
+          });
         }
       };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+      for await (const evt of parseSSEStream(reader)) {
+        if (cancelled) break;
+        const data = (evt.data ?? {}) as Record<string, unknown>;
 
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) processLine(line);
+        switch (evt.event) {
+          case "tool_call":
+            setScoutProgress(`${humanToolName(String(data.tool_name ?? ""))}…`);
+            break;
+          case "tool_result":
+            // Tool results don't drive UI state (Phase 10.3 removed the
+            // bullet list); swallowed to keep the switch exhaustive.
+            break;
+          case "status":
+            // Phase/status events set no visible state today — the active
+            // tool name already drives the header line.
+            break;
+          case "scout_complete":
+            if (data.success) handleInfopack(data);
+            break;
+          case "scout_cancelled":
+            // Server-side cancellation. The abort handler already flipped
+            // isDetecting/startTime; nothing else to do.
+            break;
+          case "error":
+            setScoutError(typeof data.message === "string" ? data.message : "Scout failed");
+            setScoutStartTime(null);
+            break;
+          default:
+            // Unknown event type — ignore to stay forward-compatible.
+            break;
+        }
       }
-
-      // Process any remaining data left in the buffer after stream closes
-      if (buffer.trim()) processLine(buffer);
     } catch (err) {
       if (!cancelled) {
         const msg = err instanceof Error ? err.message : "Auto-detect failed";
@@ -409,6 +434,10 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
         setScoutStartTime(null);
       }
     }
+    // userEnabledOverrides intentionally excluded — the handler reads the
+    // latest value via userEnabledOverridesRef so recreating the callback
+    // every time the user toggles a statement isn't necessary (and would
+    // leak the stale-closure bug back in).
   }, [sessionId]);
 
   const handleStopScout = useCallback(() => {
@@ -422,6 +451,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     }
   }, [sessionId]);
 
+  const handleToggleNote = useCallback((nt: NotesTemplateType, enabled: boolean) => {
+    setNotesEnabled((prev) => ({ ...prev, [nt]: enabled }));
+  }, []);
+
+  const handleNotesModelChange = useCallback(
+    (nt: NotesTemplateType, modelId: string) => {
+      setNotesModelOverrides((prev) => ({ ...prev, [nt]: modelId }));
+    },
+    [],
+  );
+
   const handleRun = useCallback(() => {
     const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s]);
     const variants: Record<string, string> = {};
@@ -434,6 +474,15 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
       models[stmt] = modelOverrides[stmt];
     }
 
+    const notes_to_run = NOTES_TEMPLATE_TYPES.filter((nt) => notesEnabled[nt]);
+    // Only include model entries for notes the user actually enabled, so
+    // the backend doesn't spin up proxy-model objects for templates it
+    // won't run. Mirrors how `models` is populated for face statements.
+    const notes_models: Partial<Record<NotesTemplateType, string>> = {};
+    for (const nt of notes_to_run) {
+      notes_models[nt] = notesModelOverrides[nt];
+    }
+
     onRun({
       statements: enabledStmts,
       variants,
@@ -441,8 +490,10 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
       infopack: scoutEnabled ? infopack : null,
       use_scout: scoutEnabled,
       filing_level: filingLevel,
+      notes_to_run,
+      notes_models,
     });
-  }, [statementsEnabled, variantSelections, modelOverrides, infopack, scoutEnabled, filingLevel, onRun]);
+  }, [statementsEnabled, variantSelections, modelOverrides, infopack, scoutEnabled, filingLevel, notesEnabled, notesModelOverrides, onRun]);
 
   if (loading) {
     return (
@@ -461,6 +512,11 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   }
 
   const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s]);
+  const enabledNotes = NOTES_TEMPLATE_TYPES.filter((n) => notesEnabled[n]);
+  // PLAN §4 D.2: submitting with no notes selected still runs face-only
+  // (current behaviour). Notes-only runs are also allowed so an operator
+  // can refill just the notes sheets after an earlier face extraction.
+  const canRun = enabledStmts.length > 0 || enabledNotes.length > 0;
 
   return (
     <div style={styles.container}>
@@ -469,7 +525,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
       {/* Filing level: Company or Group */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Filing Level</span>
-        <div style={{ display: "inline-flex", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+        <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
           {(["company", "group"] as const).map((level) => {
             const active = filingLevel === level;
             return (
@@ -542,6 +598,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
           </div>
         )}
         {scoutError && <p style={styles.errorText}>{scoutError}</p>}
+        {scoutOverrideNote && (
+          <div style={styles.scoutProgressPanel} role="note">
+            <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey800 }}>
+              {scoutOverrideNote}
+            </span>
+          </div>
+        )}
       </div>
 
       <hr style={styles.divider} />
@@ -572,11 +635,28 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
 
       <hr style={styles.divider} />
 
-      {/* Run button */}
+      {/* Notes templates — independent of face statements. Default OFF.
+          Layout mirrors Statements & Models (checkbox + per-row model
+          picker) so users can opt in per template *and* pick the model
+          that fills it. */}
+      <div style={styles.section}>
+        <span style={styles.sectionLabel}>Notes & Models</span>
+        <NotesRunConfig
+          enabled={notesEnabled}
+          modelOverrides={notesModelOverrides}
+          availableModels={availableModels}
+          onToggleNote={handleToggleNote}
+          onModelChange={handleNotesModelChange}
+        />
+      </div>
+
+      <hr style={styles.divider} />
+
+      {/* Run button — enabled when at least one face or notes template is selected. */}
       <button
         onClick={handleRun}
-        disabled={enabledStmts.length === 0}
-        style={enabledStmts.length === 0 ? styles.runButtonDisabled : styles.runButton}
+        disabled={!canRun}
+        style={canRun ? styles.runButton : styles.runButtonDisabled}
       >
         Run Extraction
       </button>

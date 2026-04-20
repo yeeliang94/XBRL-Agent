@@ -64,6 +64,52 @@ describe("AgentTimeline", () => {
     expect(screen.getByText(/Completed/i)).toBeInTheDocument();
   });
 
+  test("successful complete event with warnings surfaces them below the row", () => {
+    // Peer-review finding #3: notes agents emit non-fatal diagnostics on
+    // success ("borderline fuzzy match", "writer: unresolvable label X",
+    // "3 of 5 sub-agent(s) failed — partial coverage only"). Previously
+    // these were dropped on the floor — the terminal row rendered a
+    // clean "Completed" badge so partial-success runs looked green.
+    const warnings = [
+      "writer: unresolvable label 'Foo'",
+      "borderline fuzzy match: 'Bar' -> 'Baz' (score 0.80)",
+    ];
+    const events = [
+      { event: "complete", data: { success: true, warnings }, timestamp: 1 },
+    ] as unknown as SSEEvent[];
+    const { container } = render(
+      <AgentTimeline events={events} toolTimeline={[]} isRunning={false} />,
+    );
+
+    // Row still signals "done" at the container level but with a warnings
+    // marker so CSS / selectors can distinguish the state.
+    const row = container.querySelector("[data-terminal='done-with-warnings']");
+    expect(row).toBeTruthy();
+
+    // Badge reflects the warning count so the signal is visible at a glance
+    // even before the operator expands the bullet list.
+    expect(screen.getByText(/Completed · 2 warnings/i)).toBeInTheDocument();
+    // Each warning renders as its own bullet in the warnings block.
+    expect(screen.getByRole("note", { name: /run warnings/i })).toBeInTheDocument();
+    for (const w of warnings) {
+      expect(screen.getByText(w)).toBeInTheDocument();
+    }
+  });
+
+  test("successful complete WITHOUT warnings keeps the clean green badge", () => {
+    // Face-statement complete events don't carry a warnings field — make
+    // sure the presence of the new code path doesn't regress them.
+    const events = [
+      { event: "complete", data: { success: true }, timestamp: 1 },
+    ] as unknown as SSEEvent[];
+    const { container } = render(
+      <AgentTimeline events={events} toolTimeline={[]} isRunning={false} />,
+    );
+    expect(container.querySelector("[data-terminal='done']")).toBeTruthy();
+    expect(container.querySelector("[data-terminal='done-with-warnings']")).toBeNull();
+    expect(screen.queryByRole("note", { name: /run warnings/i })).toBeNull();
+  });
+
   test("Step 3.5 — failed complete event shows the error in red", () => {
     const events = [
       { event: "complete", data: { success: false, error: "boom" }, timestamp: 1 },
@@ -104,6 +150,44 @@ describe("AgentTimeline", () => {
     );
     expect(screen.getByText(/Disk full/)).toBeInTheDocument();
     expect(container.querySelector("[data-terminal='error']")).toBeTruthy();
+  });
+
+  // Peer-review regression: the validation-fail paths in server.py emit
+  // `run_complete { success: false, message: "..." }` with no merge_errors
+  // field. Without this branch the terminal row fell back to a generic
+  // "Failed" and the actionable reason was dropped on the floor.
+  test("run_complete with success:false and message surfaces the message", () => {
+    const events = [
+      {
+        event: "run_complete",
+        data: { success: false, message: "Model setup failed: missing API key" },
+        timestamp: 1,
+      },
+    ] as unknown as SSEEvent[];
+    const { container } = render(
+      <AgentTimeline events={events} toolTimeline={[]} isRunning={false} />,
+    );
+    expect(screen.getByText(/Model setup failed: missing API key/)).toBeInTheDocument();
+    expect(container.querySelector("[data-terminal='error']")).toBeTruthy();
+  });
+
+  test("run_complete failed: message wins over merge_errors[0]", () => {
+    // Both fields present — the specific `message` should beat the generic
+    // rollup label. Covers the ordering in TerminalRow.
+    const events = [
+      {
+        event: "run_complete",
+        data: {
+          success: false,
+          message: "Unknown statement type: SOXX",
+          merge_errors: ["merge failed"],
+        },
+        timestamp: 1,
+      },
+    ] as unknown as SSEEvent[];
+    render(<AgentTimeline events={events} toolTimeline={[]} isRunning={false} />);
+    expect(screen.getByText(/Unknown statement type: SOXX/)).toBeInTheDocument();
+    expect(screen.queryByText(/merge failed/)).toBeNull();
   });
 
   test("Step 3.5 — plain error event shows the message in red", () => {

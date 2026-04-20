@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import type { CompleteData } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { formatElapsedMs } from "../lib/time";
 
 interface Props {
   complete: CompleteData;
@@ -13,10 +14,7 @@ type Tab = "summary" | "preview" | "downloads";
 
 function formatElapsed(startTime: number | null): string {
   if (!startTime) return "--:--";
-  const totalSeconds = Math.floor((Date.now() - startTime) / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return formatElapsedMs(Date.now() - startTime);
 }
 
 const styles = {
@@ -90,7 +88,7 @@ const styles = {
     fontSize: 13,
     fontWeight: 600,
     color: pwc.success,
-    background: "#F0FDF4",
+    background: pwc.successBg,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
     borderRadius: pwc.radius.md,
   } as React.CSSProperties,
@@ -110,7 +108,7 @@ const styles = {
     fontSize: 13,
     fontWeight: 600,
     color: pwc.error,
-    background: "#FEF2F2",
+    background: pwc.errorBg,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
     borderRadius: pwc.radius.md,
   } as React.CSSProperties,
@@ -435,7 +433,10 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
       a.href = URL.createObjectURL(blob);
       a.download = filename;
       a.click();
-      URL.revokeObjectURL(a.href);
+      // Delay the revoke so Firefox/Safari have time to start the download
+      // before the blob URL is freed (#19). Chromium tolerates immediate
+      // revoke but other engines occasionally cancel the download.
+      setTimeout(() => URL.revokeObjectURL(a.href), 100);
     } catch (e) {
       setError(`Failed to download ${filename}: ${e instanceof Error ? e.message : "network error"}`);
     }

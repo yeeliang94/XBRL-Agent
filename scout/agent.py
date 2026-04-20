@@ -34,6 +34,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 
+from agent_tracing import MAX_AGENT_ITERATIONS
 from statement_types import StatementType, variants_for, get_variant
 from scout.infopack import Infopack, StatementPageRef
 from scout.toc_locator import find_toc_candidate_pages
@@ -71,6 +72,12 @@ class ScoutDeps:
     # Cache for notes inventory (populated by discover_notes_inventory).
     # Attached to the Infopack at save time if the agent didn't pass one.
     notes_inventory: list[NoteInventoryEntry] = field(default_factory=list)
+    # The PydanticAI Model that drives this scout run. Plumbed through so
+    # discover_notes_inventory can fall back to a vision-based inventory
+    # build on scanned PDFs where PyMuPDF returns no text (see
+    # scout/notes_discoverer_vision.py). None disables the fallback —
+    # scanned PDFs then keep their today's behaviour of returning [].
+    vision_model: Optional[Model] = None
 
 
 # ---------------------------------------------------------------------------
@@ -324,22 +331,35 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
     # discover_notes_inventory. If the agent passes malformed entries we
     # skip them silently rather than failing the whole save.
     inventory: list[NoteInventoryEntry] = []
+    skipped = 0
     raw_inventory = data.get("notes_inventory")
     if isinstance(raw_inventory, list):
-        for raw in raw_inventory:
+        for idx, raw in enumerate(raw_inventory):
             try:
                 pr = raw.get("page_range", [])
                 if isinstance(pr, (list, tuple)) and len(pr) == 2:
                     page_range = (int(pr[0]), int(pr[1]))
                 else:
+                    logger.warning(
+                        "Scout inventory entry %d has malformed page_range %r; skipping",
+                        idx, pr,
+                    )
+                    skipped += 1
                     continue
                 inventory.append(NoteInventoryEntry(
                     note_num=int(raw["note_num"]),
                     title=str(raw.get("title", "")),
                     page_range=page_range,
                 ))
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning(
+                    "Scout inventory entry %d rejected (%s): %r",
+                    idx, e.__class__.__name__, raw,
+                )
+                skipped += 1
                 continue
+    if skipped:
+        logger.info("Scout inventory: %d entr(y/ies) skipped due to malformed data", skipped)
     if not inventory:
         inventory = list(deps.notes_inventory)
 
@@ -378,11 +398,27 @@ def create_scout_agent(
     pdf_length = len(doc)
     doc.close()
 
+    # Stash the Model on deps so discover_notes_inventory can reuse it for
+    # its vision fallback. For `model="test"` (or any other plain string),
+    # vision_model stays None — the fallback only fires when PyMuPDF
+    # returns empty and the model can actually drive an LLM call, so
+    # string-identifier modes naturally no-op. Log the degrade once so
+    # operators debugging an empty-inventory Sheet-12 failure on a
+    # scanned PDF can tell at a glance whether the fallback was even
+    # eligible to fire (peer-review suggestion).
+    resolved_vision_model = model if isinstance(model, Model) else None
+    if resolved_vision_model is None:
+        logger.info(
+            "Scout received a non-Model value for `model` (type=%s) — "
+            "vision fallback for notes_inventory is disabled for this run.",
+            type(model).__name__,
+        )
     deps = ScoutDeps(
         pdf_path=pdf_path,
         pdf_length=pdf_length,
         statements_to_find=statements_to_find,
         on_progress=on_progress,
+        vision_model=resolved_vision_model,
     )
 
     system_prompt = _SYSTEM_PROMPT.format(
@@ -493,7 +529,7 @@ def create_scout_agent(
         return json.dumps(result)
 
     @agent.tool
-    def discover_notes_inventory(
+    async def discover_notes_inventory(
         ctx: RunContext[ScoutDeps],
         notes_start_page: int,
     ) -> str:
@@ -503,20 +539,45 @@ def create_scout_agent(
         (usually via the TOC). Returns a JSON list of entries, one per note,
         with its number, title, and inclusive page range.
 
-        For text-based PDFs this is deterministic and fast. For scanned PDFs
-        the result will be empty — in that case fall back to viewing pages
-        yourself and build the inventory via save_infopack's notes_inventory
-        field.
+        For text-based PDFs this is deterministic and fast (PyMuPDF regex).
+        For scanned PDFs the fast path returns nothing and this tool
+        transparently falls back to a vision-based pass using the same
+        model you are running under — you do not need to build the
+        inventory manually.
+
+        If the fallback is unavailable (no vision model) the result will
+        still be empty; in that case Sheet-12 fan-out will fail loudly
+        downstream, which is the correct signal.
 
         Args:
             notes_start_page: 1-indexed PDF page where the Notes section begins.
         """
         _emit_progress(ctx.deps, f"Building notes inventory from page {notes_start_page}...")
-        inventory = build_notes_inventory(
+        # Use the async sibling because this tool already runs inside
+        # PydanticAI's event loop; the sync build_notes_inventory would
+        # raise on the running-loop guard when the vision fallback
+        # actually fires.
+        from scout.notes_discoverer import build_notes_inventory_async
+
+        inventory = await build_notes_inventory_async(
             pdf_path=str(ctx.deps.pdf_path),
             notes_start_page=notes_start_page,
             pdf_length=ctx.deps.pdf_length,
+            vision_model=ctx.deps.vision_model,
         )
+        if not inventory and ctx.deps.vision_model is not None:
+            # Operators want to know when the fallback ran and still
+            # came back empty — that's the loud signal the Sheet-12
+            # coordinator will act on.
+            _emit_progress(
+                ctx.deps,
+                "Vision fallback returned no notes — Sheet-12 fan-out will fail.",
+            )
+        elif not inventory:
+            _emit_progress(
+                ctx.deps,
+                "PyMuPDF found no note headers (scanned PDF and no vision model).",
+            )
         # Cache on deps so save_infopack can attach it without a second pass.
         ctx.deps.notes_inventory = inventory
         payload = [
@@ -636,7 +697,6 @@ async def run_scout_streaming(
 
     tool_start_times: dict[str, float] = {}
     thinking_counter = 0
-    MAX_ITERATIONS = 50
 
     async def _emit(event_type: str, data: dict) -> None:
         if on_event:
@@ -646,8 +706,8 @@ async def run_scout_streaming(
     async with agent.iter(prompt, deps=deps) as agent_run:
         async for node in agent_run:
             iteration_count += 1
-            if iteration_count > MAX_ITERATIONS:
-                raise RuntimeError(f"Scout hit iteration limit ({MAX_ITERATIONS}).")
+            if iteration_count > MAX_AGENT_ITERATIONS:
+                raise RuntimeError(f"Scout hit iteration limit ({MAX_AGENT_ITERATIONS}).")
 
             if Agent.is_call_tools_node(node):
                 async with node.stream(agent_run.ctx) as tool_stream:

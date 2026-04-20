@@ -295,4 +295,11 @@ describe("API client", () => {
   test("downloadFilledUrl builds the per-run download URL", () => {
     expect(downloadFilledUrl(42)).toBe("/api/runs/42/download/filled");
   });
+
+  test("downloadFilledUrl rejects non-integer runIds so bad state can't be injected into the path", () => {
+    expect(() => downloadFilledUrl(NaN)).toThrow(/positive integer/);
+    expect(() => downloadFilledUrl(1.5)).toThrow(/positive integer/);
+    expect(() => downloadFilledUrl(-1)).toThrow(/positive integer/);
+    expect(() => downloadFilledUrl(0)).toThrow(/positive integer/);
+  });
 });

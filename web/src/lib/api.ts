@@ -128,7 +128,11 @@ export async function deleteRun(runId: number): Promise<{ deleted: number }> {
 /** Build the download URL for a past run's merged workbook.
  *  Returned as a plain string so the caller can hand it to an `<a href>` or
  *  `window.location.href =` — streaming a file through fetch + Blob would
- *  add complexity we don't need. */
+ *  add complexity we don't need. Asserts an integer so callers can't
+ *  accidentally interpolate `NaN` / floats / injected strings into the path. */
 export function downloadFilledUrl(runId: number): string {
+  if (!Number.isInteger(runId) || runId <= 0) {
+    throw new Error(`downloadFilledUrl: runId must be a positive integer (got ${runId})`);
+  }
   return `/api/runs/${runId}/download/filled`;
 }

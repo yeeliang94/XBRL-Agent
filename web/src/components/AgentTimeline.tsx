@@ -25,7 +25,7 @@ interface Props {
 // for the global/fallback path (which gets state.events) we want to prefer
 // it over the last per-agent complete. For tab views fed by activeAgent.events,
 // run_complete never appears so the scan falls through to complete.
-function findTerminalEvent(events: SSEEvent[]): SSEEvent | null {
+function findTerminalEvent(events: SSEEvent[]): TerminalEvent | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (e.event === "complete" || e.event === "run_complete" || e.event === "error") {
@@ -34,6 +34,11 @@ function findTerminalEvent(events: SSEEvent[]): SSEEvent | null {
   }
   return null;
 }
+
+// The only three events findTerminalEvent returns. Narrowing the prop type
+// lets TS resolve `event.data` to the right payload in each branch instead of
+// the full SSEEvent union.
+type TerminalEvent = Extract<SSEEvent, { event: "complete" | "run_complete" | "error" }>;
 
 const styles = {
   scrollArea: {
@@ -93,56 +98,114 @@ const styles = {
     background: "#FCFFFD",
   } as React.CSSProperties,
   terminalError: {
-    borderColor: "#FECACA",
+    borderColor: pwc.errorBorder,
     background: "#FFF8F8",
   } as React.CSSProperties,
   terminalDoneBadge: {
-    background: "#F0FDF4",
-    color: "#166534",
+    background: pwc.successBg,
+    color: pwc.successText,
   } as React.CSSProperties,
   terminalErrorBadge: {
-    background: "#FEF2F2",
-    color: "#991B1B",
+    background: pwc.errorBg,
+    color: pwc.errorText,
+  } as React.CSSProperties,
+  // Partial-success styling — greenish frame (still "completed") with a
+  // tinted amber badge so the row reads as "done but read this". Borrowed
+  // from the standard warningBg/warningText tokens so dark-mode stays
+  // consistent with the rest of the UI.
+  terminalWarnBadge: {
+    background: pwc.warningBg,
+    color: pwc.warningText,
+  } as React.CSSProperties,
+  warningsBlock: {
+    marginTop: pwc.space.xs,
+    padding: "8px 10px",
+    borderRadius: pwc.radius.sm,
+    border: `1px solid ${pwc.warningBorder}`,
+    background: pwc.warningBg,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  warningsTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 12,
+    fontWeight: 600,
+    color: pwc.warningText,
+    marginBottom: 4,
+  } as React.CSSProperties,
+  warningsList: {
+    margin: 0,
+    paddingLeft: 16,
   } as React.CSSProperties,
 };
 
-function TerminalRow({ event }: { event: SSEEvent }) {
-  // Shape contract (post Phase 6.5 + Phase 7 normalization):
-  //   complete:     { success: bool, error?: string, ... }
-  //   run_complete: { success: bool, merge_errors: string[], ... }
-  //   error:        { message: string, ... }
-  //
-  // complete and run_complete share the `success` pass/fail signal; error
-  // uses a separate shape with `message`. Cast through unknown to a record
-  // since the SSE data union is discriminated by event type.
-  const data = (event.data ?? {}) as unknown as Record<string, unknown>;
+function TerminalRow({ event }: { event: TerminalEvent }) {
+  // Discriminated on event.event:
+  //   complete:     { success, error?, warnings?, ... }  (CompleteData | AgentCompleteData)
+  //   run_complete: { success, merge_errors, ... }       (RunCompleteData)
+  //   error:        { message, ... }                     (ErrorData)
   if (event.event === "complete" || event.event === "run_complete") {
+    const data = event.data;
     const success = data.success === true;
     if (success) {
+      // Non-fatal diagnostics from notes agents (writer skips, borderline
+      // fuzzy matches, partial sub-agent coverage). Present on CompleteData
+      // and AgentCompleteData for notes; face-statement complete events
+      // don't carry the field. Peer-review finding #3: without surfacing
+      // these, a partial-success notes run looks fully green.
+      const warnings: string[] | undefined =
+        event.event === "complete" ? (data as { warnings?: string[] }).warnings : undefined;
+      const hasWarnings = Array.isArray(warnings) && warnings.length > 0;
+      // Wrap in a column so the warning block can sit *below* the row
+      // (rather than inside the flex-aligned row) while still being part
+      // of the same terminal block visually.
       return (
-        <div
-          data-terminal="done"
-          style={{ ...styles.terminalRow, ...styles.terminalDone }}
-        >
-          <div style={styles.terminalMain}>
+        <div data-terminal={hasWarnings ? "done-with-warnings" : "done"}>
+          <div style={{ ...styles.terminalRow, ...styles.terminalDone }}>
+            <div style={styles.terminalMain}>
+              <span
+                aria-hidden="true"
+                style={{ ...styles.terminalDot, background: pwc.success, boxShadow: `0 0 0 3px ${pwc.successBg}` }}
+              />
+              <span style={styles.terminalLabel}>Run finished</span>
+            </div>
             <span
-              aria-hidden="true"
-              style={{ ...styles.terminalDot, background: pwc.success, boxShadow: "0 0 0 3px #F0FDF4" }}
-            />
-            <span style={styles.terminalLabel}>Run finished</span>
+              style={{
+                ...styles.terminalBadge,
+                ...(hasWarnings ? styles.terminalWarnBadge : styles.terminalDoneBadge),
+              }}
+            >
+              {hasWarnings ? `Completed · ${warnings!.length} warning${warnings!.length === 1 ? "" : "s"}` : "Completed"}
+            </span>
           </div>
-          <span style={{ ...styles.terminalBadge, ...styles.terminalDoneBadge }}>
-            Completed
-          </span>
+          {hasWarnings && (
+            <div role="note" aria-label="Run warnings" style={styles.warningsBlock}>
+              <div style={styles.warningsTitle}>Warnings</div>
+              <ul style={styles.warningsList}>
+                {warnings!.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       );
     }
-    // Failed path — prefer explicit `error`, fall back to merge_errors[0]
-    // (run_complete carries a list), then a generic label.
+    // Failed path. Three possible reason sources depending on which
+    // backend branch emitted the event:
+    //   - AgentCompleteData: `error` (per-agent failure)
+    //   - RunCompleteData validation-fail: `message` (pre-run rejection)
+    //   - RunCompleteData merge-fail: `merge_errors[0]` (post-run rollup)
+    // `message` is checked before `merge_errors` so a validation rejection's
+    // actionable reason ("Model setup failed: …") wins over the generic
+    // rollup label.
     let err: string | null = null;
-    if (typeof data.error === "string") {
+    if ("error" in data && typeof data.error === "string") {
       err = data.error;
-    } else if (Array.isArray(data.merge_errors) && data.merge_errors.length > 0) {
+    } else if ("message" in data && typeof data.message === "string" && data.message) {
+      err = data.message;
+    } else if ("merge_errors" in data && Array.isArray(data.merge_errors) && data.merge_errors.length > 0) {
       err = String(data.merge_errors[0]);
     }
     return (
@@ -153,7 +216,7 @@ function TerminalRow({ event }: { event: SSEEvent }) {
         <div style={styles.terminalMain}>
           <span
             aria-hidden="true"
-            style={{ ...styles.terminalDot, background: pwc.error, boxShadow: "0 0 0 3px #FEF2F2" }}
+            style={{ ...styles.terminalDot, background: pwc.error, boxShadow: `0 0 0 3px ${pwc.errorBg}` }}
           />
           <span style={styles.terminalLabel}>{err ?? "Failed"}</span>
         </div>
@@ -163,8 +226,8 @@ function TerminalRow({ event }: { event: SSEEvent }) {
       </div>
     );
   }
-  // event: "error"
-  const msg = typeof data.message === "string" ? data.message : "Error";
+  // event: "error" — ErrorData carries a typed `message`.
+  const msg = event.data.message || "Error";
   return (
     <div
       data-terminal="error"
@@ -173,7 +236,7 @@ function TerminalRow({ event }: { event: SSEEvent }) {
       <div style={styles.terminalMain}>
         <span
           aria-hidden="true"
-          style={{ ...styles.terminalDot, background: pwc.error, boxShadow: "0 0 0 3px #FEF2F2" }}
+          style={{ ...styles.terminalDot, background: pwc.error, boxShadow: `0 0 0 3px ${pwc.errorBg}` }}
         />
         <span style={styles.terminalLabel}>{msg}</span>
       </div>
@@ -184,7 +247,7 @@ function TerminalRow({ event }: { event: SSEEvent }) {
   );
 }
 
-export function AgentTimeline({ events, toolTimeline, isRunning }: Props) {
+export function AgentTimeline({ events, toolTimeline, isRunning: _isRunning }: Props) {
   // Auto-scroll — stick to bottom unless the user has scrolled up. Same
   // pattern ChatFeed used, so users get a consistent feel after the swap.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -210,10 +273,6 @@ export function AgentTimeline({ events, toolTimeline, isRunning }: Props) {
     }
   }, [toolTimeline.length, terminal]);
   const isEmpty = toolTimeline.length === 0 && terminal === null;
-
-  // Silence unused-prop warning — isRunning is part of the contract so callers
-  // can pass their existing state. Future density/animation tweaks may read it.
-  void isRunning;
 
   if (isEmpty) {
     return (

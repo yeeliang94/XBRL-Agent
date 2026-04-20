@@ -33,9 +33,9 @@ const FALLBACK: RunStatusDisplay = {
 
 const RUN_STATUS_MAP: Record<string, RunStatusDisplay> = {
   running:                { label: "Running",              color: pwc.orange500, bg: pwc.orange50 },
-  completed:              { label: "Completed",            color: pwc.success,   bg: "#F0FDF4" },
+  completed:              { label: "Completed",            color: pwc.success,   bg: pwc.successBg },
   completed_with_errors:  { label: "Completed with errors", color: "#D97706",    bg: "#FFFBEB" },
-  failed:                 { label: "Failed",               color: pwc.error,     bg: "#FEF2F2" },
+  failed:                 { label: "Failed",               color: pwc.error,     bg: pwc.errorBg },
   aborted:                { label: "Aborted",              color: pwc.grey700,   bg: pwc.grey100 },
 };
 
@@ -43,9 +43,9 @@ const AGENT_STATUS_MAP: Record<string, RunStatusDisplay> = {
   running:    { label: "Running",   color: pwc.orange500, bg: pwc.orange50 },
   // Coordinator-emitted "succeeded" is the per-agent equivalent of run-level
   // "completed" — render as Completed so the UI uses one consistent verb.
-  succeeded:  { label: "Completed", color: pwc.success,   bg: "#F0FDF4" },
-  completed:  { label: "Completed", color: pwc.success,   bg: "#F0FDF4" },
-  failed:     { label: "Failed",    color: pwc.error,     bg: "#FEF2F2" },
+  succeeded:  { label: "Completed", color: pwc.success,   bg: pwc.successBg },
+  completed:  { label: "Completed", color: pwc.success,   bg: pwc.successBg },
+  failed:     { label: "Failed",    color: pwc.error,     bg: pwc.errorBg },
   cancelled:  { label: "Cancelled", color: pwc.grey700,   bg: pwc.grey100 },
   aborted:    { label: "Aborted",   color: pwc.grey700,   bg: pwc.grey100 },
 };

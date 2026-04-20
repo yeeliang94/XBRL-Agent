@@ -19,9 +19,28 @@ export const pwc = {
   grey900: '#303236',     // Headings, primary text
 
   // Semantic
-  success: '#16A34A',     // Green — completed steps, success badges
-  error:   '#DC2626',     // Red — errors, failed states
-  thinking: '#7C3AED',    // Purple — agent thinking/reasoning blocks
+  success:      '#16A34A',  // Green — completed steps, success badges
+  error:        '#DC2626',  // Red — errors, failed states
+  thinking:     '#7C3AED',  // Purple — agent thinking/reasoning blocks
+
+  // Semantic surfaces (backgrounds/borders/text tints for success + error UI).
+  // Centralized so the error/success look-and-feel can be themed in one place
+  // instead of replicating the Tailwind-derived literals across components.
+  successBg:    '#F0FDF4',  // Tinted background for pass/success panels + badges
+  successText:  '#166534',  // Foreground text on successBg
+  errorBg:      '#FEF2F2',  // Tinted background for fail/error panels + badges
+  errorBorder:  '#FECACA',  // Border colour that pairs with errorBg
+  errorText:    '#991B1B',  // Strong error text (headings, badge labels)
+  errorTextAlt: '#B91C1C',  // Secondary error text (body copy, tracebacks)
+
+  // Warning surfaces — partial-success / non-fatal diagnostics. Used by the
+  // notes pipeline to surface writer skips, borderline fuzzy matches, and
+  // partial sub-agent coverage without flipping a run to "failed". Kept
+  // amber-tinted so it's visually distinct from success (green) and error
+  // (red) without claiming anything broke.
+  warningBg:     '#FFFBEB',
+  warningBorder: '#FDE68A',
+  warningText:   '#92400E',
 
   // Typography
   fontHeading: '"Arial", "Helvetica Neue", sans-serif',

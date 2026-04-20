@@ -1,8 +1,19 @@
 import { describe, test, expect } from "vitest";
-import { appReducer, agentReducer, initialState } from "../App";
+import { appReducer, agentReducer, initialState, notesTabLabel } from "../lib/appReducer";
 import type { SSEEvent } from "../lib/types";
 import { createAgentState } from "../lib/types";
 import { buildToolTimeline } from "../lib/buildToolTimeline";
+
+// Pinned shape for the stripped chat-feed fields — the tests below assert
+// they stay stripped. Typed as optional-unknown so `.toBeUndefined()` can
+// probe without reintroducing `as unknown as Record<string, unknown>`.
+type StrippedChatFields = {
+  thinkingBuffer?: unknown;
+  activeThinkingId?: unknown;
+  thinkingBlocks?: unknown;
+  streamingText?: unknown;
+  textSegments?: unknown;
+};
 
 // Helper: get to a "running" state
 function runningState() {
@@ -139,7 +150,7 @@ describe("appReducer", () => {
 
     expect(state.events).toHaveLength(2);
     // None of the old streaming fields should be on the state object.
-    const shape = state as unknown as Record<string, unknown>;
+    const shape = state as StrippedChatFields;
     expect(shape.thinkingBuffer).toBeUndefined();
     expect(shape.activeThinkingId).toBeUndefined();
     expect(shape.thinkingBlocks).toBeUndefined();
@@ -228,7 +239,7 @@ describe("appReducer", () => {
       } as SSEEvent,
     });
     expect(state.events).toHaveLength(2);
-    const shape = state as unknown as Record<string, unknown>;
+    const shape = state as StrippedChatFields;
     expect(shape.streamingText).toBeUndefined();
     expect(shape.textSegments).toBeUndefined();
   });
@@ -505,6 +516,63 @@ describe("appReducer", () => {
     expect(state.statementsInRun).toEqual(["SOFP", "SOPL"]);
   });
 
+  test("RUN_STARTED with notes records notesInRun (PLAN §4 D.3)", () => {
+    const withSession = appReducer(initialState, {
+      type: "UPLOADED",
+      payload: { sessionId: "abc", filename: "test.pdf" },
+    });
+    const state = appReducer(withSession, {
+      type: "RUN_STARTED",
+      payload: { statements: ["SOFP"], notes: ["CORP_INFO", "LIST_OF_NOTES"] },
+    });
+    expect(state.statementsInRun).toEqual(["SOFP"]);
+    expect(state.notesInRun).toEqual(["CORP_INFO", "LIST_OF_NOTES"]);
+  });
+
+  test("notesTabLabel normalizes every notes identifier shape to the same label", () => {
+    // Single source of truth for live tabs, skeletons, and history.
+    expect(notesTabLabel("CORP_INFO")).toBe("Notes 10: Corp Info");
+    expect(notesTabLabel("notes:CORP_INFO")).toBe("Notes 10: Corp Info");
+    expect(notesTabLabel("NOTES_CORP_INFO")).toBe("Notes 10: Corp Info");
+    expect(notesTabLabel("LIST_OF_NOTES")).toBe("Notes 12: List of Notes");
+    // Unknown key falls back without throwing — forward-compatible with
+    // templates that exist before the UI map is updated.
+    expect(notesTabLabel("FUTURE_TEMPLATE")).toBe("Notes: FUTURE_TEMPLATE");
+  });
+
+  test("notes agent slot gets the friendly tab label derived from role", () => {
+    // When a notes SSE event arrives, ensureAgent creates the slot using
+    // deriveAgentLabel(agentId, role). Verify the label is the short
+    // "Notes 10: Corp Info" form rather than the raw role string.
+    const running = appReducer(
+      appReducer(initialState, {
+        type: "UPLOADED",
+        payload: { sessionId: "s", filename: "x.pdf" },
+      }),
+      {
+        type: "RUN_STARTED",
+        payload: { statements: [], notes: ["CORP_INFO"] },
+      },
+    );
+    const after = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: {
+          phase: "reading_template",
+          message: "started",
+          agent_id: "notes:CORP_INFO",
+          agent_role: "CORP_INFO",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    const agent = after.agents["notes:CORP_INFO"];
+    expect(agent).toBeDefined();
+    expect(agent.label).toBe("Notes 10: Corp Info");
+    expect(agent.role).toBe("CORP_INFO");
+  });
+
   // Phase 6: the text-segmentation tests that lived here covered the
   // streamingText / textSegments flush logic, which was deleted when the
   // chat feed was replaced by the tool-call timeline.
@@ -580,6 +648,65 @@ describe("appReducer", () => {
       } as SSEEvent,
     });
     expect(withToast.toast).toBeNull();
+  });
+
+  // Peer-review regression: the backend's validation-fail paths emit
+  // `run_complete { success: false, message: "..." }` with no
+  // merge_errors / statements_* / agents. The reducer must preserve
+  // `message` into complete.error so the UI (ResultsView + TerminalRow)
+  // can render an actionable reason instead of a bare "Failed".
+  test("run_complete validation-fail preserves message into complete.error", () => {
+    const uploaded = appReducer(initialState, {
+      type: "UPLOADED",
+      payload: { sessionId: "abc", filename: "test.pdf" },
+    });
+    const started = appReducer(uploaded, {
+      type: "RUN_STARTED",
+      payload: { statements: ["SOFP"] },
+    });
+    const ended = appReducer(started, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: false,
+          message: "Model setup failed: missing API key",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(ended.isComplete).toBe(true);
+    expect(ended.isRunning).toBe(false);
+    expect(ended.complete).not.toBeNull();
+    expect(ended.complete!.success).toBe(false);
+    expect(ended.complete!.error).toBe("Model setup failed: missing API key");
+  });
+
+  test("run_complete success path leaves complete.error as null", () => {
+    const uploaded = appReducer(initialState, {
+      type: "UPLOADED",
+      payload: { sessionId: "abc", filename: "test.pdf" },
+    });
+    const started = appReducer(uploaded, {
+      type: "RUN_STARTED",
+      payload: { statements: ["SOFP"] },
+    });
+    const done = appReducer(started, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/tmp/out.xlsx",
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: ["SOFP"],
+          statements_failed: [],
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(done.complete!.error).toBeNull();
   });
 
   // Peer-review [HIGH] regression: starting a rerun used to leave stale
@@ -724,9 +851,10 @@ describe("agentReducer", () => {
     expect(agent.events).toHaveLength(1);
     // AgentState type no longer has thinkingBuffer / activeThinkingId etc.,
     // so we assert the fields are not present on the returned object.
-    expect((agent as unknown as Record<string, unknown>).thinkingBuffer).toBeUndefined();
-    expect((agent as unknown as Record<string, unknown>).activeThinkingId).toBeUndefined();
-    expect((agent as unknown as Record<string, unknown>).thinkingBlocks).toBeUndefined();
+    const shape = agent as StrippedChatFields;
+    expect(shape.thinkingBuffer).toBeUndefined();
+    expect(shape.activeThinkingId).toBeUndefined();
+    expect(shape.thinkingBlocks).toBeUndefined();
   });
 
   test("text_delta event does not create a streamingText field", () => {
@@ -737,8 +865,9 @@ describe("agentReducer", () => {
       timestamp: 1,
     } as SSEEvent);
     expect(agent.events).toHaveLength(1);
-    expect((agent as unknown as Record<string, unknown>).streamingText).toBeUndefined();
-    expect((agent as unknown as Record<string, unknown>).textSegments).toBeUndefined();
+    const shape = agent as StrippedChatFields;
+    expect(shape.streamingText).toBeUndefined();
+    expect(shape.textSegments).toBeUndefined();
   });
 
   // Phase 5.4 — the live reducer must produce exactly the same timeline as
@@ -766,5 +895,265 @@ describe("agentReducer", () => {
     ]);
     expect(agent.toolTimeline[0].result_summary).toBe("45 fields");
     expect(agent.toolTimeline[1].result_summary).toBe("rendered");
+  });
+
+  // Phase 4.1 — after the incremental-merge refactor, the per-event cost of
+  // tool_call / tool_result must be bounded by the number of tool calls
+  // accumulated so far (linear in M), not by the full event history (linear
+  // in N). We can't measure time reliably in CI, but we CAN assert that
+  // processing 1000 events completes quickly and produces the expected count.
+  //
+  // The old O(N²) implementation rebuilt the whole timeline from events on
+  // every tool event. At 1000 events this routinely blew past 500 ms on
+  // slower CI workers; the linear path should finish in well under 100 ms.
+  test("agentReducer processes 1000 tool events in bounded time (#7)", () => {
+    let agent = createAgentState("sofp_0", "SOFP", "SOFP");
+    const N = 1000;
+    const events: SSEEvent[] = [];
+    // Half tool_calls, half tool_results — realistic mix.
+    for (let i = 0; i < N / 2; i++) {
+      events.push({
+        event: "tool_call",
+        data: { tool_name: "view_pdf_pages", tool_call_id: `c${i}`, args: { pages: [i] } },
+        timestamp: i,
+      } as SSEEvent);
+    }
+    for (let i = 0; i < N / 2; i++) {
+      events.push({
+        event: "tool_result",
+        data: { tool_name: "view_pdf_pages", tool_call_id: `c${i}`, result_summary: "ok", duration_ms: 5 },
+        timestamp: N + i,
+      } as SSEEvent);
+    }
+    const start = performance.now();
+    for (const evt of events) agent = agentReducer(agent, evt);
+    const elapsed = performance.now() - start;
+    expect(agent.toolTimeline.length).toBe(N / 2);
+    // Budget is intentionally generous for CI noise. The old quadratic
+    // implementation routinely exceeded 500 ms at this size on slower
+    // runners; anything under 300 ms proves the rebuild is gone.
+    expect(elapsed).toBeLessThan(300);
+  });
+
+  // Phase 10.1 — back-to-back run regression. An UPLOAD after a completed
+  // run must wipe every completion field so the second run starts clean.
+  // Locks in the invariant behind #41 so future tweaks to UPLOADED can't
+  // leak stale ResultsView / cross-check state between runs.
+  test("UPLOADED after a completed run clears stale completion fields", () => {
+    // Run 1: upload → start → run_complete with cross-checks and success toast
+    let state = appReducer(initialState, {
+      type: "UPLOADED",
+      payload: { sessionId: "run1", filename: "first.pdf" },
+    });
+    state = appReducer(state, {
+      type: "RUN_STARTED",
+      payload: { statements: ["SOFP"] },
+    });
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/tmp/run1.xlsx",
+          merge_errors: [],
+          cross_checks: [
+            {
+              name: "SOFP balance",
+              status: "passed",
+              expected: 100,
+              actual: 100,
+              diff: 0,
+              tolerance: 1,
+              message: "",
+            },
+          ],
+          statements_completed: ["SOFP"],
+          statements_failed: [],
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    // Sanity: run 1 finished with toast, complete, crossChecks populated
+    expect(state.isComplete).toBe(true);
+    expect(state.complete).not.toBeNull();
+    expect(state.crossChecks.length).toBe(1);
+    expect(state.toast).not.toBeNull();
+
+    // Run 2: new upload — every completion signal should be wiped.
+    state = appReducer(state, {
+      type: "UPLOADED",
+      payload: { sessionId: "run2", filename: "second.pdf" },
+    });
+    expect(state.sessionId).toBe("run2");
+    expect(state.filename).toBe("second.pdf");
+    expect(state.isComplete).toBe(false);
+    expect(state.complete).toBeNull();
+    expect(state.crossChecks).toEqual([]);
+    expect(state.crossChecksPartial).toBe(false);
+    expect(state.hasError).toBe(false);
+    expect(state.error).toBeNull();
+    expect(state.toast).toBeNull();
+    expect(state.events).toEqual([]);
+    expect(state.agents).toEqual({});
+    expect(state.agentTabOrder).toEqual([]);
+    expect(state.activeTab).toBeNull();
+    expect(state.statementsInRun).toEqual([]);
+
+    state = appReducer(state, {
+      type: "RUN_STARTED",
+      payload: { statements: ["SOPL"] },
+    });
+    expect(state.isRunning).toBe(true);
+    expect(state.statementsInRun).toEqual(["SOPL"]);
+  });
+
+  // -------------------------------------------------------------------------
+  // run_complete notes-tab reconciliation (peer-review #3)
+  //
+  // When the notes coordinator crashes before per-agent `complete` events
+  // land, server.py still ships `notes_completed` / `notes_failed` arrays
+  // on the run_complete event. The reducer reconciles those into terminal
+  // tab states so pending skeletons don't stick forever.
+  // -------------------------------------------------------------------------
+
+  test("run_complete materializes missing notes tabs from notes_failed", () => {
+    // Simulate: notes coordinator crashed before emitting any per-agent
+    // events. The run_complete payload reports CORP_INFO as failed, but
+    // no "notes:CORP_INFO" tab exists in state yet.
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: false,
+          merged_workbook: null,
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: [],
+          statements_failed: [],
+          notes_completed: [],
+          notes_failed: ["CORP_INFO"],
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    // Tab must now exist, keyed under the live-event id scheme
+    // (`notes:<TEMPLATE>`), and land in a terminal state so the UI
+    // doesn't keep rendering a pending skeleton.
+    expect(state.agents).toHaveProperty("notes:CORP_INFO");
+    expect(state.agents["notes:CORP_INFO"].status).toBe("failed");
+    expect(state.agentTabOrder).toContain("notes:CORP_INFO");
+  });
+
+  test("run_complete does not overwrite a notes tab already terminal via its own complete event", () => {
+    // Live per-agent complete landed first (succeeded). The run_complete
+    // payload also lists it — reducer must NOT clobber the live status.
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "complete",
+        data: {
+          success: true,
+          agent_id: "notes:ACC_POLICIES",
+          agent_role: "ACC_POLICIES",
+          workbook_path: "/out/NOTES_ACC_POLICIES_filled.xlsx",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.agents["notes:ACC_POLICIES"].status).toBe("complete");
+
+    // Now the aggregate run_complete lands. Backend reports same template
+    // as completed — this must be a no-op for the already-terminal tab.
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/out/filled.xlsx",
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: [],
+          statements_failed: [],
+          notes_completed: ["ACC_POLICIES"],
+          notes_failed: [],
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+    expect(state.agents["notes:ACC_POLICIES"].status).toBe("complete");
+  });
+
+  test("run_complete without notes rollup arrays does not crash or alter notes tabs", () => {
+    // Back-compat: older backends / replays that omit the notes arrays
+    // must not blow up the reducer.
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: { phase: "reading_template", message: "Start", agent_id: "notes:CORP_INFO", agent_role: "CORP_INFO" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    const preStatus = state.agents["notes:CORP_INFO"].status;
+
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/out/filled.xlsx",
+          merge_errors: [],
+          cross_checks: [],
+          // notes_completed / notes_failed intentionally absent.
+          statements_completed: [],
+          statements_failed: [],
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+    // Existing notes tab untouched (status preserved).
+    expect(state.agents["notes:CORP_INFO"].status).toBe(preStatus);
+  });
+
+  test("run_complete flips running notes tab to terminal when rolled up as failed", () => {
+    // Tab exists and is mid-run (no per-agent complete landed). The
+    // coordinator-crash synthesis shows it as failed — reducer must
+    // flip it, otherwise the tab sits on "running" / "pending" forever.
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: { phase: "viewing_pdf", message: "Viewing", agent_id: "notes:RELATED_PARTY", agent_role: "RELATED_PARTY" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.agents["notes:RELATED_PARTY"].status).not.toBe("failed");
+
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: false,
+          merged_workbook: null,
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: [],
+          statements_failed: [],
+          notes_completed: [],
+          notes_failed: ["RELATED_PARTY"],
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+    expect(state.agents["notes:RELATED_PARTY"].status).toBe("failed");
   });
 });

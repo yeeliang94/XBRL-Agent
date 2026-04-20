@@ -178,6 +178,70 @@ def test_writer_skips_unknown_row_labels(tmp_path: Path):
     assert any("bogus label" in e.lower() for e in result.errors)
 
 
+def test_writer_surfaces_fuzzy_matches_in_result(tmp_path: Path):
+    """Review I1: non-exact row resolutions must surface on the result so
+    operators can review borderline matches instead of them being silent."""
+    tpl = notes_template_path(NotesTemplateType.CORP_INFO, level="company")
+    out = tmp_path / "Notes-CI_fuzzy.xlsx"
+    # Deliberately imperfect label — drops the final 's'. The writer's
+    # fuzzy fallback should still resolve it but report the match.
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Financial reporting statu",
+            content="The Group is a going concern.",
+            evidence="Page 14",
+            source_pages=[14],
+        ),
+    ]
+    result = write_notes_workbook(
+        template_path=str(tpl),
+        payloads=payloads,
+        output_path=str(out),
+        filing_level="company",
+        sheet_name=CORP_INFO_SHEET,
+    )
+    assert result.success
+    assert result.fuzzy_matches, "fuzzy fallback should have surfaced"
+    req, chosen, score = result.fuzzy_matches[0]
+    assert req == "Financial reporting statu"
+    assert "financial reporting status" in chosen.lower()
+    assert 0.7 <= score < 1.0
+
+
+def test_writer_combines_sub_agent_ids_on_row_collision(tmp_path: Path):
+    """Review S6: when multiple sub-agents land on the same row the
+    combined payload must preserve every contributing sub_agent_id."""
+    from notes.writer import _combine_payloads  # internal helper intentionally
+
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Disclosure of other notes to accounts",
+            content="note A",
+            evidence="p.10",
+            source_pages=[10],
+            sub_agent_id="sub0",
+        ),
+        NotesPayload(
+            chosen_row_label="Disclosure of other notes to accounts",
+            content="note B",
+            evidence="p.20",
+            source_pages=[20],
+            sub_agent_id="sub2",
+        ),
+        NotesPayload(
+            chosen_row_label="Disclosure of other notes to accounts",
+            content="note C",
+            evidence="p.30",
+            source_pages=[30],
+            sub_agent_id="sub0",  # duplicate — should dedupe
+        ),
+    ]
+    combined = _combine_payloads(payloads)
+    assert combined.sub_agent_id == "sub0,sub2"
+    assert "note A" in combined.content
+    assert "note C" in combined.content
+
+
 def test_writer_refuses_to_overwrite_formula_cells(tmp_path: Path):
     tpl = notes_template_path(NotesTemplateType.ISSUED_CAPITAL, level="company")
     # First, inspect the template to find any formula row we could target.

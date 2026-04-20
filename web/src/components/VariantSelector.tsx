@@ -1,9 +1,12 @@
 import type { StatementType, VariantSelection, ConfidenceLevel } from "../lib/types";
-import { VARIANTS, STATEMENT_LABELS } from "../lib/types";
+import { STATEMENT_TYPES, VARIANTS, STATEMENT_LABELS } from "../lib/types";
 import { pwc } from "../lib/theme";
 
 interface Props {
   selections: Record<StatementType, VariantSelection>;
+  /** Which statements are currently toggled on — dropdowns for disabled
+   *  statements still render but are visually dimmed and inert, so the
+   *  variant picker doesn't vanish when scout unchecks every row. */
   enabledStatements: StatementType[];
   onChange: (statement: StatementType, selection: VariantSelection) => void;
 }
@@ -45,6 +48,26 @@ const styles = {
     outline: "none",
     cursor: "pointer",
   } as React.CSSProperties,
+  selectDisabled: {
+    flex: 1,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    border: `1px solid ${pwc.grey100}`,
+    borderRadius: pwc.radius.md,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    color: pwc.grey300,
+    background: pwc.grey50,
+    outline: "none",
+    cursor: "not-allowed",
+  } as React.CSSProperties,
+  labelDisabled: {
+    fontFamily: pwc.fontHeading,
+    fontWeight: 500,
+    fontSize: 13,
+    color: pwc.grey300,
+    width: 60,
+    flexShrink: 0,
+  } as React.CSSProperties,
   confidenceDot: {
     width: 10,
     height: 10,
@@ -54,23 +77,29 @@ const styles = {
 };
 
 export function VariantSelector({ selections, enabledStatements, onChange }: Props) {
+  const enabledSet = new Set(enabledStatements);
   return (
     <div style={styles.container}>
-      {enabledStatements.map((stmt) => {
+      {STATEMENT_TYPES.map((stmt) => {
         const sel = selections[stmt];
         const variants = VARIANTS[stmt];
+        const isEnabled = enabledSet.has(stmt);
         return (
           <div key={stmt} style={styles.row}>
-            <span style={styles.label} title={STATEMENT_LABELS[stmt]}>
+            <span
+              style={isEnabled ? styles.label : styles.labelDisabled}
+              title={STATEMENT_LABELS[stmt]}
+            >
               {stmt}
             </span>
             <select
               role="combobox"
               value={sel.variant}
+              disabled={!isEnabled}
               onChange={(e) =>
                 onChange(stmt, { variant: e.target.value, confidence: null })
               }
-              style={styles.select}
+              style={isEnabled ? styles.select : styles.selectDisabled}
             >
               <option value="">Select variant...</option>
               {variants.map((v) => (

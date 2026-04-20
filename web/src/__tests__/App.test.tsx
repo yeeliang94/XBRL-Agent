@@ -100,7 +100,7 @@ describe("App — AgentTimeline integration", () => {
           message: "",
           agent_id: "sofp_0",
           agent_role: "SOFP",
-        } as unknown as SSEEvent["data"],
+        },
         timestamp: Date.now() / 1000,
       });
     });
@@ -112,7 +112,7 @@ describe("App — AgentTimeline integration", () => {
           tool_call_id: "tc_1",
           args: { path: "/x/01-SOFP-CuNonCu.xlsx" },
           agent_id: "sofp_0",
-        } as unknown as SSEEvent["data"],
+        },
         timestamp: Date.now() / 1000,
       });
     });

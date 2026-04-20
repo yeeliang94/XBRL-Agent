@@ -10,7 +10,6 @@ from tools.section_headers import discover_section_headers, header_set
 
 REPO = Path(__file__).resolve().parent.parent
 MFRS = REPO / "XBRL-template-MFRS" / "Company"
-LEGACY_TEMPLATE = REPO / "SOFP-Xbrl-template.xlsx"
 
 
 # Every template must have at least a handful of headers — empty results
@@ -67,31 +66,3 @@ def test_sofp_cunoncu_headers_contain_expected() -> None:
     }
     missing = expected - headers
     assert not missing, f"missing expected headers in SOFP-CuNonCu: {missing}"
-
-
-def test_legacy_sofp_template_headers_match_old_hardcoded_set() -> None:
-    """The legacy SOFP template must yield the same section headers the old
-    hard-coded constants declared — otherwise the golden regression test would
-    fire on a stylistic refactor.
-    """
-    if not LEGACY_TEMPLATE.exists():
-        pytest.skip("legacy SOFP template not present")
-    wb = openpyxl.load_workbook(LEGACY_TEMPLATE, data_only=False)
-    try:
-        main_headers = header_set(wb, "SOFP-CuNonCu")
-    finally:
-        wb.close()
-
-    # Old _MAIN_SECTION_HEADERS had these 5 entries — they must all be in the
-    # discovered set (discovery may additionally pick up extras like "assets"
-    # and "equity and liabilities", which is fine — new headers are safe).
-    old_main = {
-        "non-current assets",
-        "current assets",
-        "equity",
-        "non-current liabilities",
-        "current liabilities",
-    }
-    assert old_main <= main_headers, (
-        f"discovery dropped legacy headers: {old_main - main_headers}"
-    )

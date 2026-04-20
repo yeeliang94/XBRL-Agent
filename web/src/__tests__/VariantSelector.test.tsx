@@ -26,7 +26,7 @@ describe("VariantSelector", () => {
     expect(selects).toHaveLength(5);
   });
 
-  test("only renders dropdowns for enabled statements", () => {
+  test("always renders all 5 dropdowns; disables those not in enabledStatements", () => {
     render(
       <VariantSelector
         selections={emptySelections}
@@ -35,8 +35,16 @@ describe("VariantSelector", () => {
       />,
     );
 
-    const selects = screen.getAllByRole("combobox");
-    expect(selects).toHaveLength(2);
+    const selects = screen.getAllByRole("combobox") as HTMLSelectElement[];
+    // All 5 render so the picker stays visible even when scout unchecks
+    // everything — prevents the "Variants section collapses to nothing" bug.
+    expect(selects).toHaveLength(5);
+    // Enabled ones are interactive; disabled ones are inert.
+    expect(selects[0].disabled).toBe(false); // SOFP
+    expect(selects[1].disabled).toBe(false); // SOPL
+    expect(selects[2].disabled).toBe(true);  // SOCI
+    expect(selects[3].disabled).toBe(true);  // SOCF
+    expect(selects[4].disabled).toBe(true);  // SOCIE
   });
 
   test("onChange fires with correct statement and variant", () => {
@@ -107,7 +115,8 @@ describe("VariantSelector", () => {
       />,
     );
 
-    const select = screen.getByRole("combobox") as HTMLSelectElement;
-    expect(select.value).toBe("Nature");
+    const selects = screen.getAllByRole("combobox") as HTMLSelectElement[];
+    // SOPL is index 1 (order: SOFP, SOPL, SOCI, SOCF, SOCIE).
+    expect(selects[1].value).toBe("Nature");
   });
 });

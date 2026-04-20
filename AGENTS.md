@@ -23,6 +23,9 @@ python3 run.py data/FINCO-Audited-Financial-Statement-2021.pdf
 # Mac — CLI, specific model + statements
 python3 run.py data/FINCO.pdf --model gpt-5.4 --statements SOFP SOPL
 
+# Mac — CLI, group filing (consolidated + company figures)
+python3 run.py data/FINCO.pdf --level group --statements SOFP SOPL
+
 # Windows (enterprise proxy) — just double-click start.bat
 # Or: start.bat
 # Web UI at http://localhost:8002
@@ -34,10 +37,15 @@ python3 run.py data/FINCO.pdf --model gpt-5.4 --statements SOFP SOPL
 run.py              CLI entry point — runs coordinator for 1-5 statements
 server.py           FastAPI + SSE web server (POST /api/run/{session_id}, /api/runs history endpoints, SPA fallback)
 coordinator.py      Fans out N extraction agents concurrently via asyncio.gather
+agent_tracing.py    Shared trace-writing + `MAX_AGENT_ITERATIONS=50` cap used by face / notes coordinators and scout
 extraction/
   agent.py          Generic extraction agent factory (one per statement type)
-statement_types.py  StatementType enum, variant registry, template path resolver
+statement_types.py  StatementType enum, variant registry, template path resolver (routes to Company/ or Group/ by filing level)
 prompts/            Per-statement system prompt templates (sofp.md, sopl.md, etc.)
+  _group_overlay.md   Group extraction instructions for SOFP/SOPL/SOCI/SOCF (6-column layout)
+  _group_socie_overlay.md  Group SOCIE instructions (4 vertical row blocks)
+  _notes_base.md      Shared notes persona: output contract, 30K char limit, multi-page continuation
+  notes_*.md          Per-template notes prompts (corporate_info / accounting_policies / listofnotes / issued_capital / related_party)
 tools/
   template_reader.py   Read template structure
   pdf_viewer.py        Render PDF pages to images
@@ -50,7 +58,14 @@ cross_checks/
   soci_to_socie_tci.py      SOCI TCI = SOCIE TCI row
   socie_to_sofp_equity.py   SOCIE closing equity = SOFP total equity
   socf_to_sofp_cash.py      SOCF cash = SOFP cash movement
-workbook_merger.py  Merges per-statement workbooks into single output file
+notes_types.py      NotesTemplateType enum + registry + notes_template_path() routing Company/ vs Group/
+notes/
+  agent.py          Notes agent factory (one per notes template) with shared _notes_base.md prompt
+  coordinator.py    Fans out notes agents in parallel; max-1 retry per sheet + failure side-log
+  listofnotes_subcoordinator.py  Sheet-12 only: 5 parallel sub-agents, row-112 unmatched concatenation
+  payload.py        NotesPayload dataclass (chosen_row_label, content, evidence, numeric_values, …)
+  writer.py         Writes NotesPayloads to xlsx; 30K-char guard + evidence col D/F + Group/Company rules
+workbook_merger.py  Merges per-statement workbooks into single output file (face sheets first, notes after)
 db/
   schema.py         SQLite DDL + v1→v2 migration (runs lifecycle columns)
   repository.py     CRUD + history queries (list/filter/detail/delete, mark_run_finished/merged)
@@ -68,6 +83,7 @@ scout/
 web/                Vite + React frontend (inline styles, tab-based multi-agent UI)
   src/App.tsx         Router shell — /extract and /history views share TopNav and app state
   src/pages/
+    ExtractPage.tsx     Main extraction view — upload, PreRunPanel, agent tabs, results
     HistoryPage.tsx     Past-runs browser (filters + list + detail modal)
   src/components/
     TopNav.tsx          Extract / History nav bar
@@ -78,16 +94,22 @@ web/                Vite + React frontend (inline styles, tab-based multi-agent 
     RunDetailModal.tsx  Wraps RunDetailView in a modal for the history list
     RunDetailView.tsx   Replay a past run — agents, timeline, cross-checks, download
     SuccessToast.tsx    Ephemeral success notification after merge
+    icons.tsx           Shared icon primitives (CloseIcon, RerunIcon, settings gear) — replaces inline HTML entities
   src/lib/
     toolLabels.ts       humanToolName / argsPreview / resultSummary — shared label logic
     buildToolTimeline.ts SSEEvent[] → ToolTimelineEntry[] reducer (live + persisted)
     runStatus.ts        Run-status badge/color helpers
+    modelId.ts          `displayModelId` — strip PydanticAI repr() wrappers from persisted model ids for history UI
+    time.ts             `formatMMSS` / `formatElapsedMs` — shared elapsed-time formatters
+    appReducer.ts       `appReducer` / `agentReducer` / notes tab labels (extracted from App.tsx)
 config/
   models.json       Available models registry (id, provider, display name)
 litellm_config.yaml LiteLLM proxy config — routes models to correct provider APIs
 start.bat           Windows startup script (finds Python/Node, sets UTF-8)
 start.sh            Mac/Linux startup script (launches LiteLLM proxy + server)
-XBRL-template-MFRS/ Template Excel files (01-SOFP-CuNonCu.xlsx through 09-SOCIE.xlsx)
+XBRL-template-MFRS/ Template Excel files organized by filing level
+  Company/           Company-level templates (4 cols: label, CY, PY, source)
+  Group/             Group-level templates (6 cols: label, Group CY, Group PY, Company CY, Company PY, source)
 ```
 
 ## LLM Provider Setup
@@ -299,7 +321,28 @@ entry in `_V2_MIGRATION_COLUMNS` is either nullable or carries a safe default.
 The `status` column has no CHECK constraint on purpose: adding a new status
 enum value should not require a full-table migration.
 
-### 12. Scout Page Hints are Soft Guidance Only
+### 12. Filing Level — Company vs Group Templates
+
+Each run has a single `filing_level` (`"company"` or `"group"`, default `"company"`)
+that flows from the frontend toggle (or `--level` CLI flag) through the entire pipeline:
+`RunConfigRequest` → `RunConfig` → `template_path()` → agent prompts → verifier → cross-checks → history.
+
+`template_path()` in `statement_types.py` routes to `XBRL-template-MFRS/Company/` or
+`XBRL-template-MFRS/Group/` based on the level. Both directories contain identically
+named files — the column structure inside the Excel differs:
+
+- **Company templates:** 4 columns (A=label, B=CY, C=PY, D=source)
+- **Group templates:** 6 columns (A=label, B=Group CY, C=Group PY, D=Company CY, E=Company PY, F=source)
+- **Group SOCIE is special:** same 24 equity-component columns but 4 row blocks
+  (rows 3-25 Group CY, 27-49 Group PY, 51-73 Company CY, 75-97 Company PY)
+
+For Group filings, the agent extracts both consolidated and standalone figures.
+Cross-checks and the verifier run twice — once for Group columns, once for Company
+columns — and report results separately.
+
+Root-level template xlsx files no longer exist. All templates live in `Company/` or `Group/`.
+
+### 13. Scout Page Hints are Soft Guidance Only
 
 When scout is ON, extraction agents receive `page_hints` (face_page + note_pages) in their
 system prompt as recommended starting points. Agents can freely view **any** PDF page —
@@ -308,6 +351,52 @@ validates that requested pages are within the document's 1-N range.
 
 Do NOT re-introduce page restriction logic (no `allowed_pages`, no "disallowed" filtering).
 Tests in `test_page_hints.py` assert this contract with negative assertions.
+
+### 14. Notes Feature — Five Supplementary Templates (Sheets 10-14)
+
+The notes pipeline fills MBRS templates 10-14 in parallel with face statements.
+Discovery is PDF-first: scout extracts a `notes_inventory: list[NoteInventoryEntry]`
+from the PDF, then per-template agents read those notes and write content into the
+matching template rows. There is no deterministic matching, no OCR, no synonym
+dictionary — every matching decision is pure LLM judgement on the rendered PDF pages.
+
+The 5 templates and their runtime shape:
+
+| Template | Sheet | Runner |
+|---|---|---|
+| `10-Notes-CorporateInfo.xlsx` | `Notes-CI` | single agent |
+| `11-Notes-AccountingPolicies.xlsx` | `Notes-SummaryofAccPol` | single agent |
+| `12-Notes-ListOfNotes.xlsx` | `Notes-Listofnotes` | **5 parallel sub-agents** |
+| `13-Notes-IssuedCapital.xlsx` | `Notes-Issuedcapital` | single agent (numeric) |
+| `14-Notes-RelatedParty.xlsx` | `Notes-RelatedPartytran` | single agent (numeric) |
+
+Sheet 12 fans out because it has 138 target rows — one agent choosing among
+138 labels would be slow and error-prone. The sub-coordinator splits scout's
+inventory into 5 page-contiguous batches, runs 5 agents in parallel, then
+aggregates payloads for one final workbook write.
+
+**Retry budget (PLAN §4 E.1):** every single notes agent is retried at most
+once on non-cancellation errors. Sub-agents for Sheet 12 have the same
+max-1-retry budget. Exhausted budgets emit a side-log:
+
+- `notes_<TEMPLATE>_failures.json` — single sheet retry exhaustion
+- `notes12_failures.json` — Sheet 12 sub-agents that lost coverage
+- `notes12_unmatched.json` — notes funnelled into row 112 ("Disclosure of
+  other notes to accounts"); only written when non-empty
+
+**Cell format:** plain text, `\n\n` for paragraph breaks (Excel renders as
+Alt+Enter line breaks), ASCII-aligned tables. Cap is 30,000 chars
+(`notes.writer.CELL_CHAR_LIMIT`); longer content is truncated with a
+`[truncated -- see PDF pages N, M]` footer.
+
+**Group/Company rules:** prose rows write content to col B only (Company
+CY on company filings, Group CY on group filings) and leave the other
+value columns empty. Numeric rows (sheets 13, 14) fill all four value
+columns on group filings (B=Group-CY, C=Group-PY, D=Company-CY,
+E=Company-PY). Evidence always lands in col D (company) or col F (group).
+
+**Invocation:** `python3 run.py data/FINCO.pdf --notes corporate_info list_of_notes`
+or via the web UI (5 checkboxes in PreRunPanel, default OFF).
 
 ## Testing
 
@@ -351,7 +440,16 @@ Key test files:
 - `web/src/__tests__/RunDetailView.test.tsx` + `RunDetailModal.test.tsx` — past-run replay UI
 - `web/src/__tests__/TopNav.test.tsx` + `SuccessToast.test.tsx` — chrome components
 
-Note: `test_pdf_viewer.py` and `test_template_reader.py` fail without sample PDF data present. All server/API tests pass independently.
+- `tests/test_filing_level.py` — template path routing by level, RunConfig/API field, verifier + cross-checks with Group fixtures
+- `tests/test_notes_*.py` — notes pipeline unit + integration tests (coordinator, agent factory, writer, payload, types)
+- `tests/test_notes_e2e_*.py` — per-sheet (CORP_INFO / ACC_POLICIES / ISSUED_CAPITAL / RELATED_PARTY) + Sheet-12 (`test_notes12_e2e.py`) E2E with mocked agents
+- `tests/test_notes_e2e_full_pipeline.py` — full cross-sheet run covering all 5 notes templates in one coordinator call
+- `tests/test_notes_retry_budget.py` — PLAN §4 E.1 retry-once contract + per-sheet `notes_<TEMPLATE>_failures.json` side-log
+- `tests/test_notes_continuation.py` / `test_notes_char_limit.py` — multi-page continuation prompt pin + 30K char-limit truncation
+- `tests/test_server_notes_api.py` — `notes_to_run` request plumbing + SSE `run_complete.notes_completed` shape
+- `web/src/__tests__/PreRunPanel.test.tsx` — notes checkboxes default OFF + notes-only run enables Run button
+
+Note: `test_pdf_viewer.py` and `test_template_reader.py` auto-skip when sample data is absent (via `pytestmark`). All server/API tests pass independently.
 
 ## Files That Must Stay in Sync
 
@@ -361,7 +459,7 @@ Note: `test_pdf_viewer.py` and `test_template_reader.py` fail without sample PDF
 | .env variable names | `server.py` (settings endpoints), `run.py` (loads .env), `.env.example`, `start.bat`, `start.sh`, `litellm_config.yaml` (references env vars) |
 | Agent tool names | `server.py` (`PHASE_MAP`), `extraction/agent.py` (tool definitions) |
 | Excel template structure | `tools/fill_workbook.py` (section headers), `tools/verifier.py`, `cross_checks/util.py` (label lookups), `docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md` (formula audit trail) |
-| XBRL template formulas | `XBRL-template-MFRS/*.xlsx` (sub-sheet formulas), `SSMxT_2022v1.0/` (authoritative XBRL calc linkbase), `XBRL-template-MFRS/backup-originals/` (pre-fix backups) |
+| XBRL template formulas | `XBRL-template-MFRS/Company/*.xlsx` + `XBRL-template-MFRS/Group/*.xlsx` (sub-sheet formulas), `SSMxT_2022v1.0/` (authoritative XBRL calc linkbase), `XBRL-template-MFRS/backup-originals/` (pre-fix backups) |
 | Statement types / variants | `statement_types.py`, `coordinator.py`, `server.py` (`RunConfigRequest`), `prompts/` (per-variant files), `web/src/lib/types.ts` (`STATEMENT_TYPES`, `VARIANTS`) |
 | Cross-check implementations | `cross_checks/*.py`, `server.py` (`run_multi_agent_stream` check list), `cross_checks/util.py` |
 | Model wiring / proxy setup | `server.py` (`_create_proxy_model`, `_detect_provider`), `run.py` (also calls `_create_proxy_model`), `coordinator.py` (`RunConfig.model/models`), `litellm_config.yaml` (proxy model routing), `config/models.json` (UI model list) |
@@ -372,6 +470,12 @@ Note: `test_pdf_viewer.py` and `test_template_reader.py` fail without sample PDF
 | History API endpoints | `server.py` (`GET /api/runs`, `GET /api/runs/{id}`, `DELETE /api/runs/{id}`, `GET /api/runs/{id}/download/filled`, SPA fallback), `web/src/lib/api.ts` (fetch helpers), `web/src/lib/types.ts` (`RunSummaryJson`, `RunDetailJson`, `RunAgentJson`, `RunCrossCheckJson`, `RunsFilterParams`), `tests/test_history_api.py` |
 | Run lifecycle / terminal status | `server.py` (`run_multi_agent_stream` try/except/finally, `_safe_mark_finished`, pre-validation `create_run`), `db/repository.py` (`mark_run_finished` status enum), `tests/test_server_run_lifecycle.py` |
 | History UI / routing | `web/src/App.tsx` (`AppView`, popstate handling, `/history` hydration), `web/src/pages/HistoryPage.tsx`, `web/src/components/{HistoryList,HistoryFilters,RunDetailModal,RunDetailView,TopNav,SuccessToast}.tsx`, `web/src/lib/runStatus.ts` |
+| Filing level / templates | `statement_types.py` (`template_path` level param), `coordinator.py` (`RunConfig.filing_level`), `server.py` (`RunConfigRequest.filing_level`), `run.py` (`--level` flag), `extraction/agent.py` (passes to `render_prompt`), `prompts/__init__.py` (overlay injection), `prompts/_group_overlay.md`, `prompts/_group_socie_overlay.md`, `tools/verifier.py` (dual-column check), `cross_checks/framework.py` + all `cross_checks/*.py` (dual Group/Company validation), `web/src/lib/types.ts` (`RunConfigPayload.filing_level`), `web/src/components/PreRunPanel.tsx` (toggle), `web/src/components/HistoryList.tsx` (badge), `web/src/components/HistoryFilters.tsx` (filter) |
+| Notes template registry | `notes_types.py` (`NotesTemplateType` enum + `NOTES_REGISTRY` + `notes_template_path`), `server.py` (`_PUBLIC_NOTES_TEMPLATES` allowlist + `RunConfigRequest.notes_to_run`), `run.py` (`--notes` CLI flag + `_NOTES_CLI_MAP`), `web/src/lib/types.ts` (`NotesTemplateType`, `NOTES_TEMPLATE_TYPES`, `NOTES_TEMPLATE_LABELS`), `web/src/components/PreRunPanel.tsx` (5 checkboxes), `tests/test_server_notes_api.py` (allowlist drift check) |
+| Notes agent prompts | `prompts/_notes_base.md` (persona + output contract + 30K-char cap + multi-page continuation rule), `prompts/notes_{corporate_info,accounting_policies,listofnotes,issued_capital,related_party}.md`, `notes/agent.py` (`_TEMPLATE_PROMPT_FILES` map + `render_notes_prompt`), `tests/test_notes_continuation.py` (prompt-contract pin) |
+| Notes writer / column rules | `notes/writer.py` (`CELL_CHAR_LIMIT`, `evidence_col_letter`, `_EVIDENCE_COL`, Group/Company column rules, `_combine_payloads` for row concatenation), `prompts/_notes_base.md` (mirror of same rules for the LLM), `notes/agent.py` (`_render_column_rules` in system prompt), `tests/test_notes_writer.py`, `tests/test_notes_char_limit.py` |
+| Notes retry budget | `notes/coordinator.py` (`SINGLE_AGENT_MAX_RETRIES`, `_run_single_notes_agent`, `_invoke_single_notes_agent_once`, `_write_single_sheet_failure_log`), `notes/listofnotes_subcoordinator.py` (sub-agent `max_retries` + `_write_failures_side_log`), `tests/test_notes_retry_budget.py` |
+| Notes UI / tabs | `web/src/lib/appReducer.ts` (`notesInRun`, `deriveAgentLabel`, `NOTES_TAB_LABELS`), `web/src/App.tsx` (`RUN_STARTED` payload includes notes), `web/src/components/AgentTabs.tsx` (notes bucket between statements and scout/validator, `notesInRun` + `notesSkeletons` props), `web/src/pages/ExtractPage.tsx` (builds notes skeleton labels), `web/src/components/PreRunPanel.tsx` (5 checkboxes), `web/src/components/RunDetailView.tsx` (renders NOTES_* agents alongside face agents) |
 
 ## Porting Checklist (Mac -> Windows)
 

@@ -1,5 +1,5 @@
 import { pwc } from "../lib/theme";
-import type { AppView } from "../App";
+import type { AppView } from "../lib/appReducer";
 
 // ---------------------------------------------------------------------------
 // TopNav — SPA-style top navigation with two buttons: Extract and History.

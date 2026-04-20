@@ -12,11 +12,14 @@ inventory that downstream notes agents consume instead of raw page lists.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Optional
 
 from scout.toc_parser import TocEntry
+
+logger = logging.getLogger(__name__)
 
 # Pattern to match note references: "Note 4", "(Note 4)", "Notes 5", "note 6"
 _NOTE_REF_RE = re.compile(r"\bnotes?\s+(\d{1,3})\b", re.IGNORECASE)
@@ -135,10 +138,12 @@ class NoteInventoryEntry:
     page_range: tuple[int, int]
 
 
-# Numbered heading: "4. PROPERTY, PLANT AND EQUIPMENT" (must be at start of
-# a line; number + period + whitespace + uppercase-looking title).
+# Numbered heading: "4. PROPERTY, PLANT AND EQUIPMENT" or
+# "4. Property, plant and equipment". Matches at start of line; number +
+# period + whitespace + title that starts with a letter. Both ALL CAPS and
+# Title Case are accepted because Malaysian annual reports use both.
 _NUMBERED_HEADER_RE = re.compile(
-    r"^\s*(\d{1,3})\.\s+([A-Z][A-Z0-9 ,/&()\-']{3,})$",
+    r"^\s*(\d{1,3})\.\s+([A-Za-z][A-Za-z0-9 ,/&()\-']{3,})$",
     re.MULTILINE,
 )
 
@@ -207,32 +212,176 @@ def extract_inventory_from_pages(
     return entries
 
 
-def build_notes_inventory(
+def _resolve_vision_range(
     pdf_path: str,
     notes_start_page: int,
-    pdf_length: Optional[int] = None,
-) -> list[NoteInventoryEntry]:
-    """Walk the notes section of a PDF and return a structured inventory.
+    pdf_length: Optional[int],
+    notes_end_page: Optional[int],
+) -> tuple[Optional[tuple[int, int]], list[tuple[int, str]]]:
+    """Shared preamble for the sync + async entry points.
 
-    For text-based PDFs this is a deterministic pass over PyMuPDF-extracted
-    text. Scanned PDFs will yield an empty inventory here — the scout LLM
-    must fall back to vision to populate `notes_inventory` in that case.
-
-    Args:
-        pdf_path: filesystem path to the PDF.
-        notes_start_page: 1-indexed page where the Notes section begins.
-        pdf_length: total pages in the PDF (optional; inferred from PyMuPDF).
+    Returns:
+        - ``(start, end)`` for the vision fallback, or ``None`` if the
+          range is out-of-bounds and the caller should short-circuit to
+          ``[]``. The HIGH peer-review finding: a scout mis-offset that
+          pushes ``notes_start_page`` past the last PDF page must never
+          raise from ``_chunk`` — we turn it into a clean empty result
+          with a warning log.
+        - The PyMuPDF-extracted pages tuple-list ready for the regex
+          fast path.
     """
     import fitz  # local import — keeps test-only users off PyMuPDF
 
     doc = fitz.open(pdf_path)
     try:
-        last_page = pdf_length if pdf_length is not None else len(doc)
+        total = len(doc)
+        declared_end = pdf_length if pdf_length is not None else total
+        # notes_end_page caps the vision scan to the true end of the
+        # Notes section so the terminal note doesn't silently absorb
+        # Directors' Statement / auditor's report pages (MEDIUM peer
+        # review). If unset we fall back to declared_end = pdf_length,
+        # which matches today's behaviour.
+        vision_end = notes_end_page if notes_end_page is not None else declared_end
+        # Clamp to the PyMuPDF-derived document length so a caller
+        # passing an optimistic hint can't index past the PDF.
+        vision_end = min(vision_end, total)
+
+        # Bounds check FIRST — if the caller's start page is past the
+        # effective end we short-circuit without paying for any
+        # get_text() calls on pages we know we'll ignore. This matters
+        # most on very long filings where the scout passes a wrong TOC
+        # offset (peer-review perf finding).
+        if notes_start_page > vision_end:
+            logger.warning(
+                "notes_start_page=%d exceeds effective end=%d for %s — returning empty "
+                "inventory instead of crashing the vision fallback.",
+                notes_start_page, vision_end, pdf_path,
+            )
+            return None, []
+
         pages: list[tuple[int, str]] = []
-        for pn in range(notes_start_page, last_page + 1):
-            if 1 <= pn <= len(doc):
+        # Fast path still reads up to declared_end (pdf_length hint or
+        # document length) — it matters less because the regex pass
+        # silently ignores pages with no header matches, so an over-wide
+        # range is harmless. The vision range is the one that can burn
+        # tokens on non-notes pages, which is why it gets the tighter
+        # notes_end_page clamp.
+        for pn in range(notes_start_page, declared_end + 1):
+            if 1 <= pn <= total:
                 pages.append((pn, doc[pn - 1].get_text()))
     finally:
         doc.close()
 
-    return extract_inventory_from_pages(pages)
+    return (notes_start_page, vision_end), pages
+
+
+def build_notes_inventory(
+    pdf_path: str,
+    notes_start_page: int,
+    pdf_length: Optional[int] = None,
+    *,
+    notes_end_page: Optional[int] = None,
+    vision_model: Optional[object] = None,
+) -> list[NoteInventoryEntry]:
+    """Walk the notes section of a PDF and return a structured inventory.
+
+    Fast path: a deterministic PyMuPDF-text pass that matches note headers
+    with regex. Text-based PDFs always take this path — zero LLM cost.
+
+    Fallback: when the fast path yields `[]` AND `vision_model` is
+    provided, render the notes section to PNG and ask a PydanticAI
+    vision agent to enumerate the headers. This keeps Sheet-12 fan-out
+    working on scanned PDFs where PyMuPDF extracts no text. See
+    `scout.notes_discoverer_vision` for the implementation.
+
+    Passing `vision_model=None` (the default) preserves today's
+    behaviour exactly — scanned PDFs return `[]` and the Sheet-12
+    coordinator loud-fails, which is what every existing caller and
+    test expects.
+
+    Args:
+        pdf_path: filesystem path to the PDF.
+        notes_start_page: 1-indexed page where the Notes section begins.
+        pdf_length: total pages in the PDF (optional; inferred from PyMuPDF).
+        notes_end_page: optional 1-indexed last page of the Notes section.
+            When set, the vision fallback only scans up to this page and
+            the terminal note's last_page is clamped to it — preventing
+            Directors' Statement / auditor's report pages from being
+            absorbed into the final note. Callers that cannot compute
+            this (e.g. without a TOC walk) can leave it unset; the
+            stitcher then trusts the LLM's terminal last_page instead of
+            stretching to pdf_length.
+        vision_model: optional PydanticAI Model. Typed as `object` here
+            to avoid a hard import cycle on pydantic_ai when this module
+            is used from contexts that don't ship it.
+    """
+    vision_range, pages = _resolve_vision_range(
+        pdf_path, notes_start_page, pdf_length, notes_end_page,
+    )
+
+    inventory = extract_inventory_from_pages(pages)
+    if inventory or vision_model is None or vision_range is None:
+        return inventory
+
+    # Fast path found nothing and the caller supplied a vision model —
+    # fall back to the PNG-rendered vision pass. Imported lazily so the
+    # base module doesn't pull in pydantic_ai for pure text-PDF callers.
+    from scout.notes_discoverer_vision import _vision_inventory
+    import asyncio
+
+    start, end = vision_range
+
+    # If we're already inside an async caller, we cannot call asyncio.run.
+    # Expose a clear error in that case — the async caller should use the
+    # async entry point `build_notes_inventory_async` instead.
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is not None:
+        raise RuntimeError(
+            "build_notes_inventory called from a running event loop with "
+            "vision_model set. Call build_notes_inventory_async instead."
+        )
+
+    return asyncio.run(_vision_inventory(
+        pdf_path=pdf_path,
+        start=start,
+        end=end,
+        model=vision_model,
+    ))
+
+
+async def build_notes_inventory_async(
+    pdf_path: str,
+    notes_start_page: int,
+    pdf_length: Optional[int] = None,
+    *,
+    notes_end_page: Optional[int] = None,
+    vision_model: Optional[object] = None,
+) -> list[NoteInventoryEntry]:
+    """Async sibling of `build_notes_inventory` for use from inside an
+    event loop (e.g. PydanticAI tool callbacks, pytest-asyncio tests).
+
+    Same contract: fast PyMuPDF path first, vision fallback only when
+    the fast path is empty and `vision_model` is supplied. See the
+    sync sibling's docstring for argument semantics (including
+    ``notes_end_page``).
+    """
+    vision_range, pages = _resolve_vision_range(
+        pdf_path, notes_start_page, pdf_length, notes_end_page,
+    )
+
+    inventory = extract_inventory_from_pages(pages)
+    if inventory or vision_model is None or vision_range is None:
+        return inventory
+
+    from scout.notes_discoverer_vision import _vision_inventory
+
+    start, end = vision_range
+    return await _vision_inventory(
+        pdf_path=pdf_path,
+        start=start,
+        end=end,
+        model=vision_model,
+    )

@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { AgentTabs, type AgentTabState } from "../components/AgentTabs";
+import { AgentTabs, areAgentTabsPropsEqual, type AgentTabState } from "../components/AgentTabs";
+import type { AgentTabsProps } from "../components/AgentTabs";
 
 function makeAgentStates(): Record<string, AgentTabState> {
   return {
@@ -130,6 +131,119 @@ describe("AgentTabs", () => {
     expect(soplTab.getAttribute("aria-disabled")).toBe("true");
   });
 
+  // Peer-review fix #5: the custom memo comparator must treat two prop
+  // objects as equal when only non-tab fields differ — specifically, when
+  // `state.agents` has been rebuilt after a token_update but the 4
+  // tab-relevant fields (agentId/label/status/role) are unchanged. Without
+  // this, React.memo ref-compares and re-renders on every event.
+  describe("areAgentTabsPropsEqual", () => {
+    const baseAgent: AgentTabState = {
+      agentId: "sofp_0",
+      label: "SOFP",
+      status: "running",
+      role: "SOFP",
+    };
+    const baseProps: AgentTabsProps = {
+      agents: { sofp_0: baseAgent },
+      tabOrder: ["sofp_0"],
+      activeTab: "sofp_0",
+      onTabClick: () => {},
+    };
+
+    test("identical props (same refs) are equal", () => {
+      expect(areAgentTabsPropsEqual(baseProps, baseProps)).toBe(true);
+    });
+
+    test("tab-irrelevant rebuild (new refs, same content) is equal", () => {
+      // Simulates the ExtractView useMemo rebuild after a token_update:
+      // fresh object refs, but agent fields match the previous render.
+      const next: AgentTabsProps = {
+        ...baseProps,
+        agents: { sofp_0: { ...baseAgent } },
+        tabOrder: ["sofp_0"],
+      };
+      expect(areAgentTabsPropsEqual(baseProps, next)).toBe(true);
+    });
+
+    test("status change invalidates equality", () => {
+      const next: AgentTabsProps = {
+        ...baseProps,
+        agents: { sofp_0: { ...baseAgent, status: "complete" } },
+      };
+      expect(areAgentTabsPropsEqual(baseProps, next)).toBe(false);
+    });
+
+    test("label change invalidates equality", () => {
+      const next: AgentTabsProps = {
+        ...baseProps,
+        agents: { sofp_0: { ...baseAgent, label: "SOFP (renamed)" } },
+      };
+      expect(areAgentTabsPropsEqual(baseProps, next)).toBe(false);
+    });
+
+    test("adding an agent invalidates equality", () => {
+      const next: AgentTabsProps = {
+        ...baseProps,
+        agents: {
+          sofp_0: { ...baseAgent },
+          sopl_0: { agentId: "sopl_0", label: "SOPL", status: "pending", role: "SOPL" },
+        },
+        tabOrder: ["sofp_0", "sopl_0"],
+      };
+      expect(areAgentTabsPropsEqual(baseProps, next)).toBe(false);
+    });
+
+    test("activeTab change invalidates equality", () => {
+      const next: AgentTabsProps = { ...baseProps, activeTab: "other" };
+      expect(areAgentTabsPropsEqual(baseProps, next)).toBe(false);
+    });
+
+    test("tabOrder reorder invalidates equality", () => {
+      const a = { ...baseProps, tabOrder: ["a", "b"], agents: { a: baseAgent, b: baseAgent } };
+      const b = { ...baseProps, tabOrder: ["b", "a"], agents: { a: baseAgent, b: baseAgent } };
+      expect(areAgentTabsPropsEqual(a, b)).toBe(false);
+    });
+
+    // Peer-review regression: `areAgentTabsPropsEqual` compares callback
+    // identity, which means parents that pass fresh inline arrows per render
+    // neutralize the React.memo wrap. Encode the contract so reviewers see
+    // the expectation: callers MUST pass stable refs (useCallback / ref-
+    // shielded closures) for the three callback props.
+    test("fresh inline callback on next render invalidates equality (stable refs required)", () => {
+      const next: AgentTabsProps = {
+        ...baseProps,
+        // Same shape, different identity — simulates an inline arrow.
+        onTabClick: () => {},
+      };
+      expect(areAgentTabsPropsEqual(baseProps, next)).toBe(false);
+    });
+
+    test("same callback reference across renders keeps equality", () => {
+      const cb = () => {};
+      const a: AgentTabsProps = { ...baseProps, onTabClick: cb, onRerunAgent: cb };
+      const b: AgentTabsProps = { ...baseProps, onTabClick: cb, onRerunAgent: cb };
+      expect(areAgentTabsPropsEqual(a, b)).toBe(true);
+    });
+  });
+
+  test("skeleton tabs render in the order provided by the caller (#48)", () => {
+    // The caller (App.tsx) is responsible for ordering skeleton tabs to match
+    // the user-picked statement order. AgentTabs must preserve that order
+    // verbatim so users don't see their selection reshuffled.
+    render(
+      <AgentTabs
+        agents={{}}
+        tabOrder={[]}
+        activeTab=""
+        onTabClick={() => {}}
+        skeletonTabs={["SOPL", "SOFP", "SOCIE"]}
+      />,
+    );
+    const tabs = screen.getAllByRole("tab");
+    const labels = tabs.map((t) => t.textContent?.trim() ?? "");
+    expect(labels).toEqual(["SOPL", "SOFP", "SOCIE"]);
+  });
+
   // -------------------------------------------------------------------------
   // Phase 8: gate statement tabs before the run starts, but always preserve
   // scout/validator "special" tabs whose lifecycle is independent of the
@@ -211,6 +325,144 @@ describe("AgentTabs", () => {
     expect(screen.getByText("Scout")).toBeTruthy();
   });
 
+  // ---------------------------------------------------------------------
+  // Phase D.3: notes tabs — mirror of the statement-gating contract but
+  // keyed by agent_id prefix "notes:" and gated by `notesInRun`.
+  // ---------------------------------------------------------------------
+
+  test("notes tabs render after statement tabs and before validator", () => {
+    const agents: Record<string, AgentTabState> = {
+      sofp_0: { agentId: "sofp_0", label: "SOFP", status: "complete", role: "SOFP" },
+      "notes:CORP_INFO": {
+        agentId: "notes:CORP_INFO",
+        label: "Notes 10: Corp Info",
+        status: "running",
+        role: "CORP_INFO",
+      },
+      validator: {
+        agentId: "validator",
+        label: "Validator",
+        status: "complete",
+        role: "validator",
+      },
+    };
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={["validator", "sofp_0", "notes:CORP_INFO"]}
+        activeTab="sofp_0"
+        onTabClick={() => {}}
+        statementsInRun={["SOFP"]}
+        notesInRun={["CORP_INFO"]}
+      />,
+    );
+    const tabs = screen.getAllByRole("tab");
+    const labels = tabs.map((t) => t.textContent?.trim() ?? "");
+    // Expected order: [SOFP, Notes 10: Corp Info, Validator]
+    expect(labels[0]).toBe("SOFP");
+    expect(labels[1]).toContain("Notes 10");
+    expect(labels[labels.length - 1]).toContain("Validator");
+  });
+
+  test("notes tab is hidden when its role isn't in notesInRun", () => {
+    const agents: Record<string, AgentTabState> = {
+      "notes:CORP_INFO": {
+        agentId: "notes:CORP_INFO",
+        label: "Notes 10: Corp Info",
+        status: "running",
+        role: "CORP_INFO",
+      },
+    };
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={["notes:CORP_INFO"]}
+        activeTab="notes:CORP_INFO"
+        onTabClick={() => {}}
+        statementsInRun={[]}
+        notesInRun={[]}
+      />,
+    );
+    expect(screen.queryByText(/Notes 10/)).toBeNull();
+  });
+
+  test("notes skeleton tabs render for selected notes that haven't started", () => {
+    render(
+      <AgentTabs
+        agents={{}}
+        tabOrder={[]}
+        activeTab=""
+        onTabClick={() => {}}
+        statementsInRun={[]}
+        notesInRun={["CORP_INFO", "LIST_OF_NOTES"]}
+        notesSkeletons={["Notes 10: Corp Info", "Notes 12: List of Notes"]}
+      />,
+    );
+    expect(screen.getByText("Notes 10: Corp Info")).toBeTruthy();
+    expect(screen.getByText("Notes 12: List of Notes")).toBeTruthy();
+    // Skeleton tabs are disabled.
+    expect(
+      screen.getByRole("tab", { name: /Notes 10/ }).getAttribute("aria-disabled"),
+    ).toBe("true");
+  });
+
+  test("notes skeletons render with the notes bucket, BEFORE scout/validator (peer-review LOW)", () => {
+    // Before the fix, skeletons all landed in one trailing block after
+    // scout/validator. Pin the new rule: a selected-but-not-yet-started
+    // notes template must sit in the middle notes bucket, not at the
+    // right edge next to Validator.
+    const agents: Record<string, AgentTabState> = {
+      sofp_0: { agentId: "sofp_0", label: "SOFP", status: "complete", role: "SOFP" },
+      scout: { agentId: "scout", label: "Scout", status: "complete", role: "scout" },
+      validator: {
+        agentId: "validator",
+        label: "Validator",
+        status: "complete",
+        role: "validator",
+      },
+    };
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={["sofp_0", "scout", "validator"]}
+        activeTab="sofp_0"
+        onTabClick={() => {}}
+        statementsInRun={["SOFP"]}
+        notesInRun={["CORP_INFO"]}
+        notesSkeletons={["Notes 10: Corp Info"]}
+      />,
+    );
+    const tabs = screen.getAllByRole("tab");
+    const labels = tabs.map((t) => t.textContent?.trim() ?? "");
+    const notesIdx = labels.findIndex((l) => l.includes("Notes 10"));
+    const scoutIdx = labels.findIndex((l) => l === "Scout");
+    const validatorIdx = labels.findIndex((l) => l === "Validator");
+    expect(notesIdx).toBeGreaterThan(-1);
+    expect(notesIdx).toBeLessThan(scoutIdx);
+    expect(notesIdx).toBeLessThan(validatorIdx);
+  });
+
+  test("legacy callers (no notesInRun) still render notes tabs — backward compatible", () => {
+    const agents: Record<string, AgentTabState> = {
+      "notes:CORP_INFO": {
+        agentId: "notes:CORP_INFO",
+        label: "Notes 10: Corp Info",
+        status: "complete",
+        role: "CORP_INFO",
+      },
+    };
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={["notes:CORP_INFO"]}
+        activeTab="notes:CORP_INFO"
+        onTabClick={() => {}}
+        // No notesInRun / statementsInRun — legacy contract: show everything.
+      />,
+    );
+    expect(screen.getByText(/Notes 10/)).toBeTruthy();
+  });
+
   test("validator tab is rendered last in tab order when present with statement tabs", () => {
     // Construct a mixed state where the tabOrder intentionally has validator
     // BEFORE the statement tabs. The gating code should still push validator
@@ -238,5 +490,70 @@ describe("AgentTabs", () => {
     const labels = tabs.map((t) => t.textContent?.trim() ?? "");
     // Validator must be the last non-skeleton tab.
     expect(labels[labels.length - 1]).toContain("Validator");
+  });
+
+  test("rerun button visible on failed face-statement tab", () => {
+    const agents: Record<string, AgentTabState> = {
+      sofp_0: { agentId: "sofp_0", label: "SOFP", status: "failed", role: "SOFP" },
+    };
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={["sofp_0"]}
+        activeTab="sofp_0"
+        onTabClick={() => {}}
+        onRerunAgent={() => {}}
+        isRunning={false}
+      />,
+    );
+    // Rerun buttons use aria-label "Rerun {label}". Presence proves the gate.
+    expect(screen.getByRole("button", { name: /rerun sofp/i })).toBeInTheDocument();
+  });
+
+  test("rerun button visible on failed notes tab (Phase D.3 symmetry)", () => {
+    const agents: Record<string, AgentTabState> = {
+      "notes:CORP_INFO": {
+        agentId: "notes:CORP_INFO",
+        label: "Corporate Information",
+        status: "failed",
+        role: "CORP_INFO",
+      },
+    };
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={["notes:CORP_INFO"]}
+        activeTab="notes:CORP_INFO"
+        onTabClick={() => {}}
+        onRerunAgent={() => {}}
+        notesInRun={["CORP_INFO"]}
+        isRunning={false}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /rerun corporate information/i }),
+    ).toBeInTheDocument();
+  });
+
+  test("rerun button hidden on scout and validator tabs even when failed", () => {
+    // Peer-review finding #1: handleRerunAgent always built face-statement
+    // payloads, so rerunning scout/validator produced guaranteed-fail POSTs.
+    // The fix hides the button for those tabs entirely.
+    const agents: Record<string, AgentTabState> = {
+      scout: { agentId: "scout", label: "Scout", status: "failed", role: "scout" },
+      validator: { agentId: "validator", label: "Validator", status: "failed", role: "validator" },
+    };
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={["scout", "validator"]}
+        activeTab="scout"
+        onTabClick={() => {}}
+        onRerunAgent={() => {}}
+        isRunning={false}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /rerun scout/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /rerun validator/i })).not.toBeInTheDocument();
   });
 });

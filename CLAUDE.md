@@ -37,12 +37,15 @@ python3 run.py data/FINCO.pdf --level group --statements SOFP SOPL
 run.py              CLI entry point — runs coordinator for 1-5 statements
 server.py           FastAPI + SSE web server (POST /api/run/{session_id}, /api/runs history endpoints, SPA fallback)
 coordinator.py      Fans out N extraction agents concurrently via asyncio.gather
+agent_tracing.py    Shared trace-writing + `MAX_AGENT_ITERATIONS=50` cap used by face / notes coordinators and scout
 extraction/
   agent.py          Generic extraction agent factory (one per statement type)
 statement_types.py  StatementType enum, variant registry, template path resolver (routes to Company/ or Group/ by filing level)
 prompts/            Per-statement system prompt templates (sofp.md, sopl.md, etc.)
   _group_overlay.md   Group extraction instructions for SOFP/SOPL/SOCI/SOCF (6-column layout)
   _group_socie_overlay.md  Group SOCIE instructions (4 vertical row blocks)
+  _notes_base.md      Shared notes persona: output contract, 30K char limit, multi-page continuation
+  notes_*.md          Per-template notes prompts (corporate_info / accounting_policies / listofnotes / issued_capital / related_party)
 tools/
   template_reader.py   Read template structure
   pdf_viewer.py        Render PDF pages to images
@@ -55,7 +58,14 @@ cross_checks/
   soci_to_socie_tci.py      SOCI TCI = SOCIE TCI row
   socie_to_sofp_equity.py   SOCIE closing equity = SOFP total equity
   socf_to_sofp_cash.py      SOCF cash = SOFP cash movement
-workbook_merger.py  Merges per-statement workbooks into single output file
+notes_types.py      NotesTemplateType enum + registry + notes_template_path() routing Company/ vs Group/
+notes/
+  agent.py          Notes agent factory (one per notes template) with shared _notes_base.md prompt
+  coordinator.py    Fans out notes agents in parallel; max-1 retry per sheet + failure side-log
+  listofnotes_subcoordinator.py  Sheet-12 only: 5 parallel sub-agents, row-112 unmatched concatenation
+  payload.py        NotesPayload dataclass (chosen_row_label, content, evidence, numeric_values, …)
+  writer.py         Writes NotesPayloads to xlsx; 30K-char guard + evidence col D/F + Group/Company rules
+workbook_merger.py  Merges per-statement workbooks into single output file (face sheets first, notes after)
 db/
   schema.py         SQLite DDL + v1→v2 migration (runs lifecycle columns)
   repository.py     CRUD + history queries (list/filter/detail/delete, mark_run_finished/merged)
@@ -73,6 +83,7 @@ scout/
 web/                Vite + React frontend (inline styles, tab-based multi-agent UI)
   src/App.tsx         Router shell — /extract and /history views share TopNav and app state
   src/pages/
+    ExtractPage.tsx     Main extraction view — upload, PreRunPanel, agent tabs, results
     HistoryPage.tsx     Past-runs browser (filters + list + detail modal)
   src/components/
     TopNav.tsx          Extract / History nav bar
@@ -83,10 +94,14 @@ web/                Vite + React frontend (inline styles, tab-based multi-agent 
     RunDetailModal.tsx  Wraps RunDetailView in a modal for the history list
     RunDetailView.tsx   Replay a past run — agents, timeline, cross-checks, download
     SuccessToast.tsx    Ephemeral success notification after merge
+    icons.tsx           Shared icon primitives (CloseIcon, RerunIcon, settings gear) — replaces inline HTML entities
   src/lib/
     toolLabels.ts       humanToolName / argsPreview / resultSummary — shared label logic
     buildToolTimeline.ts SSEEvent[] → ToolTimelineEntry[] reducer (live + persisted)
     runStatus.ts        Run-status badge/color helpers
+    modelId.ts          `displayModelId` — strip PydanticAI repr() wrappers from persisted model ids for history UI
+    time.ts             `formatMMSS` / `formatElapsedMs` — shared elapsed-time formatters
+    appReducer.ts       `appReducer` / `agentReducer` / notes tab labels (extracted from App.tsx)
 config/
   models.json       Available models registry (id, provider, display name)
 litellm_config.yaml LiteLLM proxy config — routes models to correct provider APIs
@@ -337,6 +352,73 @@ validates that requested pages are within the document's 1-N range.
 Do NOT re-introduce page restriction logic (no `allowed_pages`, no "disallowed" filtering).
 Tests in `test_page_hints.py` assert this contract with negative assertions.
 
+### 14. Notes Feature — Five Supplementary Templates (Sheets 10-14)
+
+The notes pipeline fills MBRS templates 10-14 in parallel with face statements.
+Discovery is PDF-first: scout extracts a `notes_inventory: list[NoteInventoryEntry]`
+from the PDF, then per-template agents read those notes and write content into the
+matching template rows. There is no deterministic matching, no OCR, no synonym
+dictionary — every matching decision is pure LLM judgement on the rendered PDF pages.
+
+The 5 templates and their runtime shape:
+
+| Template | Sheet | Runner |
+|---|---|---|
+| `10-Notes-CorporateInfo.xlsx` | `Notes-CI` | single agent |
+| `11-Notes-AccountingPolicies.xlsx` | `Notes-SummaryofAccPol` | single agent |
+| `12-Notes-ListOfNotes.xlsx` | `Notes-Listofnotes` | **5 parallel sub-agents** |
+| `13-Notes-IssuedCapital.xlsx` | `Notes-Issuedcapital` | single agent (numeric) |
+| `14-Notes-RelatedParty.xlsx` | `Notes-RelatedPartytran` | single agent (numeric) |
+
+Sheet 12 fans out because it has 138 target rows — one agent choosing among
+138 labels would be slow and error-prone. The sub-coordinator splits scout's
+inventory into 5 page-contiguous batches, runs 5 agents in parallel, then
+aggregates payloads for one final workbook write.
+
+**Retry budget (PLAN §4 E.1):** every single notes agent is retried at most
+once on non-cancellation errors. Sub-agents for Sheet 12 have the same
+max-1-retry budget. Exhausted budgets emit a side-log:
+
+- `notes_<TEMPLATE>_failures.json` — single sheet retry exhaustion
+- `notes12_failures.json` — Sheet 12 sub-agents that lost coverage
+- `notes12_unmatched.json` — notes funnelled into row 112 ("Disclosure of
+  other notes to accounts"); only written when non-empty
+
+**Cell format:** plain text, `\n\n` for paragraph breaks (Excel renders as
+Alt+Enter line breaks), ASCII-aligned tables. Cap is 30,000 chars
+(`notes.writer.CELL_CHAR_LIMIT`); longer content is truncated with a
+`[truncated -- see PDF pages N, M]` footer.
+
+**Group/Company rules:** prose rows write content to col B only (Company
+CY on company filings, Group CY on group filings) and leave the other
+value columns empty. Numeric rows (sheets 13, 14) fill all four value
+columns on group filings (B=Group-CY, C=Group-PY, D=Company-CY,
+E=Company-PY). Evidence always lands in col D (company) or col F (group).
+
+**Invocation:** `python3 run.py data/FINCO.pdf --notes corporate_info list_of_notes`
+or via the web UI (5 checkboxes in PreRunPanel, default OFF).
+
+**Scanned-PDF fallback for `notes_inventory`:** `scout.notes_discoverer.build_notes_inventory`
+runs a fast PyMuPDF-regex pass by default. On image-only (scanned) PDFs PyMuPDF
+returns empty text and the regex finds nothing — in that case, if the caller
+passed a `vision_model` (the scout always does; it's the same PydanticAI
+`Model` driving the scout run), the function falls back to
+`scout.notes_discoverer_vision._vision_inventory`. That path renders the notes
+section to PNG in 8-page batches with a 1-page overlap, runs up to 5 batches in
+parallel through a dedicated one-shot `_VisionBatch`-schemad agent, and stitches
+the batches back together: non-terminal notes get `last_page = next_note.first_page - 1`
+(LLM's end is ignored), while the terminal note uses `min(LLM-last_page, notes_end)`
+so it can't silently absorb Directors' Statement / auditor's report pages (peer-
+review MEDIUM fix, 2026-04-20). Callers who know the true notes-section end
+(e.g. scout walking the TOC for "Statement by Directors" / "Independent Auditors' Report")
+can pass `notes_end_page=N` to tighten the vision scan range and the terminal
+clamp. Scout mis-offsets that push `notes_start_page` past `pdf_length` short-
+circuit to `[]` with a warning rather than raising. Per-batch failures log and
+skip; all-batch failure returns `[]`, preserving the existing loud-fail contract
+in `notes/coordinator.py` for Sheet 12. Temperature is pinned at 1.0 per
+gotcha #5. Look for `vision inventory tokens: input=X output=Y across N/M batches`
+in the logs to see what the fallback cost on a given run.
+
 ## Testing
 
 ```bash
@@ -380,6 +462,13 @@ Key test files:
 - `web/src/__tests__/TopNav.test.tsx` + `SuccessToast.test.tsx` — chrome components
 
 - `tests/test_filing_level.py` — template path routing by level, RunConfig/API field, verifier + cross-checks with Group fixtures
+- `tests/test_notes_*.py` — notes pipeline unit + integration tests (coordinator, agent factory, writer, payload, types)
+- `tests/test_notes_e2e_*.py` — per-sheet (CORP_INFO / ACC_POLICIES / ISSUED_CAPITAL / RELATED_PARTY) + Sheet-12 (`test_notes12_e2e.py`) E2E with mocked agents
+- `tests/test_notes_e2e_full_pipeline.py` — full cross-sheet run covering all 5 notes templates in one coordinator call
+- `tests/test_notes_retry_budget.py` — PLAN §4 E.1 retry-once contract + per-sheet `notes_<TEMPLATE>_failures.json` side-log
+- `tests/test_notes_continuation.py` / `test_notes_char_limit.py` — multi-page continuation prompt pin + 30K char-limit truncation
+- `tests/test_server_notes_api.py` — `notes_to_run` request plumbing + SSE `run_complete.notes_completed` shape
+- `web/src/__tests__/PreRunPanel.test.tsx` — notes checkboxes default OFF + notes-only run enables Run button
 
 Note: `test_pdf_viewer.py` and `test_template_reader.py` auto-skip when sample data is absent (via `pytestmark`). All server/API tests pass independently.
 
@@ -403,6 +492,12 @@ Note: `test_pdf_viewer.py` and `test_template_reader.py` auto-skip when sample d
 | Run lifecycle / terminal status | `server.py` (`run_multi_agent_stream` try/except/finally, `_safe_mark_finished`, pre-validation `create_run`), `db/repository.py` (`mark_run_finished` status enum), `tests/test_server_run_lifecycle.py` |
 | History UI / routing | `web/src/App.tsx` (`AppView`, popstate handling, `/history` hydration), `web/src/pages/HistoryPage.tsx`, `web/src/components/{HistoryList,HistoryFilters,RunDetailModal,RunDetailView,TopNav,SuccessToast}.tsx`, `web/src/lib/runStatus.ts` |
 | Filing level / templates | `statement_types.py` (`template_path` level param), `coordinator.py` (`RunConfig.filing_level`), `server.py` (`RunConfigRequest.filing_level`), `run.py` (`--level` flag), `extraction/agent.py` (passes to `render_prompt`), `prompts/__init__.py` (overlay injection), `prompts/_group_overlay.md`, `prompts/_group_socie_overlay.md`, `tools/verifier.py` (dual-column check), `cross_checks/framework.py` + all `cross_checks/*.py` (dual Group/Company validation), `web/src/lib/types.ts` (`RunConfigPayload.filing_level`), `web/src/components/PreRunPanel.tsx` (toggle), `web/src/components/HistoryList.tsx` (badge), `web/src/components/HistoryFilters.tsx` (filter) |
+| Notes template registry | `notes_types.py` (`NotesTemplateType` enum + `NOTES_REGISTRY` + `notes_template_path`), `server.py` (`_PUBLIC_NOTES_TEMPLATES` allowlist + `RunConfigRequest.notes_to_run`), `run.py` (`--notes` CLI flag + `_NOTES_CLI_MAP`), `web/src/lib/types.ts` (`NotesTemplateType`, `NOTES_TEMPLATE_TYPES`, `NOTES_TEMPLATE_LABELS`), `web/src/components/PreRunPanel.tsx` (5 checkboxes), `tests/test_server_notes_api.py` (allowlist drift check) |
+| Notes inventory discovery | `scout/notes_discoverer.py` (`build_notes_inventory` + `build_notes_inventory_async` — fast PyMuPDF pass + optional vision fallback via `vision_model` kwarg), `scout/notes_discoverer_vision.py` (`_chunk`, `_merge_and_stitch`, `_build_vision_agent`, `_scan_batch`, `_vision_inventory` — batched parallel vision pass with stitched trailing page ranges), `scout/agent.py` (`ScoutDeps.vision_model`, `discover_notes_inventory` async tool passing it through), `tests/test_scout_notes_inventory.py` (text-PDF regressions + scanned-PDF wiring), `tests/test_notes_discoverer_vision.py` (unit tests for chunker/stitcher/scan/orchestrator), `tests/test_scout_notes_inventory_vision_live.py` (live integration test — `pytest -m live`) |
+| Notes agent prompts | `prompts/_notes_base.md` (persona + output contract + 30K-char cap + multi-page continuation rule), `prompts/notes_{corporate_info,accounting_policies,listofnotes,issued_capital,related_party}.md`, `notes/agent.py` (`_TEMPLATE_PROMPT_FILES` map + `render_notes_prompt`), `tests/test_notes_continuation.py` (prompt-contract pin) |
+| Notes writer / column rules | `notes/writer.py` (`CELL_CHAR_LIMIT`, `evidence_col_letter`, `_EVIDENCE_COL`, Group/Company column rules, `_combine_payloads` for row concatenation), `prompts/_notes_base.md` (mirror of same rules for the LLM), `notes/agent.py` (`_render_column_rules` in system prompt), `tests/test_notes_writer.py`, `tests/test_notes_char_limit.py` |
+| Notes retry budget | `notes/coordinator.py` (`SINGLE_AGENT_MAX_RETRIES`, `_run_single_notes_agent`, `_invoke_single_notes_agent_once`, `_write_single_sheet_failure_log`), `notes/listofnotes_subcoordinator.py` (sub-agent `max_retries` + `_write_failures_side_log`), `tests/test_notes_retry_budget.py` |
+| Notes UI / tabs | `web/src/lib/appReducer.ts` (`notesInRun`, `deriveAgentLabel`, `NOTES_TAB_LABELS`), `web/src/App.tsx` (`RUN_STARTED` payload includes notes), `web/src/components/AgentTabs.tsx` (notes bucket between statements and scout/validator, `notesInRun` + `notesSkeletons` props), `web/src/pages/ExtractPage.tsx` (builds notes skeleton labels), `web/src/components/PreRunPanel.tsx` (5 checkboxes), `web/src/components/RunDetailView.tsx` (renders NOTES_* agents alongside face agents) |
 
 ## Porting Checklist (Mac -> Windows)
 

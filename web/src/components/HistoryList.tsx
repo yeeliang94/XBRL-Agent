@@ -317,10 +317,10 @@ const styles = {
   } as React.CSSProperties,
   errorBanner: {
     padding: pwc.space.lg,
-    background: "#FEF2F2",
-    color: "#B91C1C",
+    background: pwc.errorBg,
+    color: pwc.errorTextAlt,
     fontFamily: pwc.fontBody,
     fontSize: 14,
-    borderBottom: `1px solid #FECACA`,
+    borderBottom: `1px solid ${pwc.errorBorder}`,
   } as React.CSSProperties,
 } as const;

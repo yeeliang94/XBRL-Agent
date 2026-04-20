@@ -10,6 +10,12 @@ interface Props {
   startTime: number | null;
 }
 
+// Client-side upload cap — mirrors the backend body limit. Kept here rather
+// than a shared constants module so the friendly MB label can be built from
+// the same number without risking drift between value and copy.
+const MAX_UPLOAD_MB = 100;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+
 const styles = {
   container: {
     background: pwc.white,
@@ -128,8 +134,21 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
 
   const handleFile = useCallback(
     async (file: File) => {
+      // Extension + MIME check — belt-and-braces: the backend filter catches
+      // mismatches too, but rejecting here saves an upload round-trip.
+      // Some browsers leave file.type empty on drag-and-drop, so the empty
+      // string is treated as "unknown" and the extension check carries us.
       if (!file.name.toLowerCase().endsWith(".pdf")) {
         setError("Only PDF files are accepted.");
+        return;
+      }
+      if (file.type && file.type !== "application/pdf") {
+        setError("Only PDF files are accepted.");
+        return;
+      }
+      // Client-side size cap — matches the backend request-body limit.
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setError(`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is ${MAX_UPLOAD_MB} MB.`);
         return;
       }
       setError(null);

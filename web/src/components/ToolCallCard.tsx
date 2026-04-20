@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import type { ToolTimelineEntry } from "../lib/types";
 import { pwc } from "../lib/theme";
 import {
@@ -29,43 +29,40 @@ function getGlyphState(entry: ToolTimelineEntry): GlyphState {
   return entry.result_summary === null ? "active" : "done";
 }
 
-function glyphStyleFor(state: GlyphState): React.CSSProperties {
-  const base: React.CSSProperties = {
-    width: 12,
-    height: 12,
-    borderRadius: "50%",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  };
-  if (state === "active") {
-    return {
-      ...base,
-      background: pwc.orange400,
-      boxShadow: `0 0 0 3px ${pwc.orange50}`,
-      animation: "glyph-pulse 1s ease-in-out infinite",
-    };
-  }
-  if (state === "done") {
-    return {
-      ...base,
-      background: pwc.success,
-      boxShadow: "0 0 0 3px #F0FDF4",
-    };
-  }
-  if (state === "failed") {
-    return {
-      ...base,
-      background: pwc.error,
-      boxShadow: "0 0 0 3px #FEF2F2",
-    };
-  }
-  return {
-    ...base,
+// Per-state glyph chrome. `base` is shared; the table supplies the status-
+// specific overlay (tint + animation). TS requires every GlyphState key.
+const GLYPH_BASE: React.CSSProperties = {
+  width: 12,
+  height: 12,
+  borderRadius: "50%",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexShrink: 0,
+};
+
+const GLYPH_STYLES: Record<GlyphState, React.CSSProperties> = {
+  active: {
+    background: pwc.orange400,
+    boxShadow: `0 0 0 3px ${pwc.orange50}`,
+    animation: "glyph-pulse 1s ease-in-out infinite",
+  },
+  done: {
+    background: pwc.success,
+    boxShadow: `0 0 0 3px ${pwc.successBg}`,
+  },
+  failed: {
+    background: pwc.error,
+    boxShadow: `0 0 0 3px ${pwc.errorBg}`,
+  },
+  cancelled: {
     background: pwc.grey500,
     boxShadow: `0 0 0 3px ${pwc.grey50}`,
-  };
+  },
+};
+
+function glyphStyleFor(state: GlyphState): React.CSSProperties {
+  return { ...GLYPH_BASE, ...GLYPH_STYLES[state] };
 }
 
 /** Format a number with commas (1000000 → "1,000,000"). */
@@ -89,40 +86,34 @@ function fieldDisplayLabel(f: FillField): string {
 // items inside the activity container.
 const CARD_PADDING = "10px 12px";
 
-function cardStyleFor(state: GlyphState): React.CSSProperties {
-  const base: React.CSSProperties = {
-    borderRadius: pwc.radius.sm,
-    padding: CARD_PADDING,
-    border: `1px solid ${pwc.grey200}`,
-  };
-  if (state === "active") {
-    return {
-      ...base,
-      background: pwc.orange50,
-      border: "1px solid #FED7AA",
-      borderLeft: `3px solid ${pwc.orange500}`,
-      animation: "fade-in 0.2s ease-out",
-    };
-  }
-  if (state === "failed") {
-    return {
-      ...base,
-      background: "#FFF8F8",
-      borderLeft: "3px solid #DC2626",
-    };
-  }
-  if (state === "cancelled") {
-    return {
-      ...base,
-      background: pwc.grey50,
-      borderLeft: `3px solid ${pwc.grey500}`,
-    };
-  }
-  // done
-  return {
-    ...base,
+const CARD_BASE: React.CSSProperties = {
+  borderRadius: pwc.radius.sm,
+  padding: CARD_PADDING,
+  border: `1px solid ${pwc.grey200}`,
+};
+
+const CARD_STYLES: Record<GlyphState, React.CSSProperties> = {
+  active: {
+    background: pwc.orange50,
+    border: "1px solid #FED7AA",
+    borderLeft: `3px solid ${pwc.orange500}`,
+    animation: "fade-in 0.2s ease-out",
+  },
+  done: {
     background: pwc.white,
-  };
+  },
+  failed: {
+    background: "#FFF8F8",
+    borderLeft: `3px solid ${pwc.error}`,
+  },
+  cancelled: {
+    background: pwc.grey50,
+    borderLeft: `3px solid ${pwc.grey500}`,
+  },
+};
+
+function cardStyleFor(state: GlyphState): React.CSSProperties {
+  return { ...CARD_BASE, ...CARD_STYLES[state] };
 }
 
 const styles = {
@@ -188,7 +179,7 @@ const styles = {
 
 // Badge background/foreground colour pairs per tone.
 const BADGE_TONE: Record<ResultTone, { bg: string; fg: string }> = {
-  success: { bg: "#F0FDF4", fg: pwc.success },
+  success: { bg: pwc.successBg, fg: pwc.success },
   warn: { bg: "#FEF3C7", fg: "#92400E" },
 };
 
@@ -239,8 +230,8 @@ function renderResult(toolName: string, summary: string): React.ReactNode {
               fontFamily: pwc.fontMono,
               padding: "4px 8px",
               borderRadius: 4,
-              background: isPass ? "#F0FDF4" : (isFail || isMismatch) ? "#FEF2F2" : pwc.grey50,
-              color: isPass ? "#166534" : (isFail || isMismatch) ? "#991B1B" : pwc.grey800,
+              background: isPass ? pwc.successBg : (isFail || isMismatch) ? pwc.errorBg : pwc.grey50,
+              color: isPass ? pwc.successText : (isFail || isMismatch) ? pwc.errorText : pwc.grey800,
             }}>
               {line}
             </div>
@@ -252,7 +243,7 @@ function renderResult(toolName: string, summary: string): React.ReactNode {
   return <div style={styles.detailValue}>{summary}</div>;
 }
 
-export function ToolCallCard({ entry }: Props) {
+function ToolCallCardImpl({ entry }: Props) {
   const [expanded, setExpanded] = useState(false);
   const glyphState = getGlyphState(entry);
   const isActive = glyphState === "active";
@@ -285,7 +276,7 @@ export function ToolCallCard({ entry }: Props) {
       data-state={glyphState}
       style={cardStyleFor(glyphState)}
     >
-      <button onClick={() => setExpanded(!expanded)} style={styles.header} role="button">
+      <button onClick={() => setExpanded(!expanded)} style={styles.header}>
         <div style={styles.headerLeft}>
           <span
             data-glyph={glyphState}
@@ -316,3 +307,9 @@ export function ToolCallCard({ entry }: Props) {
     </div>
   );
 }
+
+// Memoized export (#34). After the Phase 4.1 incremental-merge refactor the
+// entry reference stays stable across unrelated events (token deltas, etc.),
+// so React.memo on shallow-equal props now actually prevents re-renders for
+// every existing card when a new tool_call lands.
+export const ToolCallCard = React.memo(ToolCallCardImpl);

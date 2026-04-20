@@ -206,8 +206,8 @@ if __name__ == "__main__":
     parser.add_argument("--notes", nargs="*", default=[],
                         choices=sorted(_NOTES_CLI_MAP.keys()),
                         help="Notes templates to fill (default: none). "
-                             "Choices: corporate_info, accounting_policies, list_of_notes, "
-                             "issued_capital, related_party.")
+                             "Choices: corporate_info, accounting_policies, "
+                             "list_of_notes, issued_capital, related_party.")
     parser.add_argument("--output-dir", default=None,
                         help="Base output directory (default: output/ next to this script)")
     parser.add_argument("--level", default="company", choices=["company", "group"],

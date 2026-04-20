@@ -59,6 +59,24 @@ PHASE_MAP = {
     "save_result": "complete",
 }
 
+# Notes templates that are safe to expose over the public API / CLI.
+# Kept separate from NotesTemplateType so the enum stays a superset (new
+# template types can be drafted and tested before being exposed). A
+# tests/test_server_notes_api.py assertion catches accidental drift
+# between this allowlist and the enum.
+def _public_notes_templates() -> frozenset:
+    from notes_types import NotesTemplateType as _NT
+    return frozenset({
+        _NT.CORP_INFO,
+        _NT.ACC_POLICIES,
+        _NT.LIST_OF_NOTES,
+        _NT.ISSUED_CAPITAL,
+        _NT.RELATED_PARTY,
+    })
+
+
+_PUBLIC_NOTES_TEMPLATES = _public_notes_templates()
+
 # Lazy imports for multi-agent pipeline — done at call sites to keep startup fast.
 # scout.runner.run_scout, coordinator.run_extraction, workbook_merger.merge,
 # cross_checks.framework.run_all, etc.
@@ -274,6 +292,10 @@ class RunConfigRequest(BaseModel):
     # Notes templates to fill, as NotesTemplateType.value strings (e.g.
     # ["CORP_INFO", "ISSUED_CAPITAL"]). Empty = face-only run.
     notes_to_run: List[str] = []
+    # Per-notes-template model overrides, keyed by NotesTemplateType.value.
+    # Unspecified templates fall back to the run's default model. Mirrors
+    # ``models`` for face statements.
+    notes_models: Dict[str, str] = {}
 
 
 # --- Settings helpers ---
@@ -708,6 +730,30 @@ async def run_multi_agent_stream(
                     terminal_status = "failed"
                 return
 
+        # Parse notes templates up-front (before pre-creating run_agents rows),
+        # so DB rows and live events line up one-to-one. LIST_OF_NOTES is
+        # rejected until Phase C (Sheet-12 sub-coordinator + row-112 unmatched
+        # logic) lands — without it the generic agent would run with a
+        # placeholder prompt.
+        notes_to_run: Set[NotesTemplateType] = set()
+        for n in run_config.notes_to_run:
+            try:
+                parsed_note = NotesTemplateType(n)
+            except ValueError:
+                yield {"event": "error", "data": {"message": f"Unknown notes template: {n}"}}
+                yield {"event": "run_complete", "data": {"success": False, "message": f"Unknown notes template: {n}"}}
+                if _safe_mark_finished(db_conn, run_id, "failed"):
+                    terminal_status = "failed"
+                return
+            if parsed_note not in _PUBLIC_NOTES_TEMPLATES:
+                msg = f"Notes template not available yet: {n}"
+                yield {"event": "error", "data": {"message": msg}}
+                yield {"event": "run_complete", "data": {"success": False, "message": msg}}
+                if _safe_mark_finished(db_conn, run_id, "failed"):
+                    terminal_status = "failed"
+                return
+            notes_to_run.add(parsed_note)
+
         # Build variant map — fall back to first registered variant if not specified
         for stmt in statements_to_run:
             if stmt.value in run_config.variants:
@@ -718,11 +764,24 @@ async def run_multi_agent_stream(
         # per-agent overrides use the same proxy/direct wiring as the default.
         # Wrap in try/except so a broken override key also produces a clean
         # failed-row rather than bubbling out of the generator.
+        notes_models: Dict[NotesTemplateType, Any] = {}
         try:
             for stmt in statements_to_run:
                 if stmt.value in run_config.models:
                     override_name = run_config.models[stmt.value]
                     models[stmt] = _create_proxy_model(override_name, proxy_url, api_key)
+            # Same treatment for per-notes-template overrides. Silently ignore
+            # entries whose key isn't a known NotesTemplateType — they won't
+            # match any requested template and we don't want a typo in the
+            # frontend payload to fail the whole run.
+            for nt_key, nt_model_name in run_config.notes_models.items():
+                try:
+                    nt_parsed = NotesTemplateType(nt_key)
+                except ValueError:
+                    continue
+                notes_models[nt_parsed] = _create_proxy_model(
+                    nt_model_name, proxy_url, api_key,
+                )
         except Exception as e:
             logger.exception(
                 "Override model construction failed for session %s", session_id,
@@ -790,6 +849,9 @@ async def run_multi_agent_stream(
         # We also keep a parallel map keyed by StatementType for the
         # post-run finish_run_agent / save_extracted_field loop.
         run_agent_ids_by_stmt: Dict[StatementType, int] = {}
+        # Same idea for notes — keyed by NotesTemplateType so the post-run
+        # loop can find the row to finalize.
+        run_agent_ids_by_notes: Dict[NotesTemplateType, int] = {}
         if db_conn is not None and run_id is not None:
             try:
                 # Iterate in sorted order so run_agents row IDs are
@@ -805,6 +867,23 @@ async def run_multi_agent_stream(
                     )
                     run_agent_ids_by_agent_id[stmt.value.lower()] = rai
                     run_agent_ids_by_stmt[stmt] = rai
+                # Notes templates — statement_type is prefixed "NOTES_" so the
+                # column is unambiguous vs. face statements, and the agent_id
+                # key matches notes/coordinator.py's f"notes:{template.value}"
+                # emission (lowercased to match persist_event's lookup).
+                for nt in sorted(notes_to_run, key=lambda n: n.value):
+                    # Resolve the per-template model the coordinator will
+                    # actually use so History shows the right model id for
+                    # each notes agent (falls back to the run-wide default).
+                    nt_model = notes_models.get(nt, config.model)
+                    rai = repo.create_run_agent(
+                        db_conn, run_id,
+                        statement_type=f"NOTES_{nt.value}",
+                        variant=None,
+                        model=_model_id(nt_model),
+                    )
+                    run_agent_ids_by_agent_id[f"notes:{nt.value}".lower()] = rai
+                    run_agent_ids_by_notes[nt] = rai
                 db_conn.commit()
             except Exception:
                 logger.warning("Failed to pre-create run_agents rows for %s",
@@ -859,20 +938,6 @@ async def run_multi_agent_stream(
         # and the SSE generator drains it in real time. None = all done.
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
-        # Resolve notes-to-run from the request. Unknown values are yielded
-        # as errors like the statement-type path does above, so users see a
-        # clean failure in History.
-        notes_to_run: Set[NotesTemplateType] = set()
-        for n in run_config.notes_to_run:
-            try:
-                notes_to_run.add(NotesTemplateType(n))
-            except ValueError:
-                yield {"event": "error", "data": {"message": f"Unknown notes template: {n}"}}
-                yield {"event": "run_complete", "data": {"success": False, "message": f"Unknown notes template: {n}"}}
-                if _safe_mark_finished(db_conn, run_id, "failed"):
-                    terminal_status = "failed"
-                return
-
         # Launch coordinator as a background task so we can drain events while agents run.
         # push_sentinel=False: we're multiplexing face + notes into one queue;
         # the orchestrator below pushes a single sentinel after BOTH complete.
@@ -886,12 +951,32 @@ async def run_multi_agent_stream(
             )
         )
 
+        # Derive a union of note-bearing pages across every face statement
+        # scout scored. Gives the notes agents a tight starting viewport on
+        # scanned PDFs where scout's deterministic notes_inventory is empty
+        # (observed in real FINCO runs: NOTES_ACC_POLICIES rendered 33 pages
+        # for 15 output rows, consuming the majority of total run time).
+        # If scout was off or failed, hints stay empty and the notes agents
+        # fall back to their previous any-page exploration behaviour.
+        notes_page_hints: List[int] = []
+        if infopack is not None:
+            try:
+                notes_page_hints = infopack.notes_page_hints()
+            except Exception:  # noqa: BLE001 — advisory only, never block the run
+                logger.warning(
+                    "Failed to derive notes_page_hints from infopack",
+                    extra={"session_id": session_id},
+                    exc_info=True,
+                )
+
         notes_config = NotesRunConfig(
             pdf_path=str(session_dir / "uploaded.pdf"),
             output_dir=output_dir,
             model=model,
             notes_to_run=notes_to_run,
             filing_level=run_config.filing_level,
+            models=notes_models,
+            page_hints=notes_page_hints,
         )
         notes_task = asyncio.create_task(
             run_notes_extraction(
@@ -961,16 +1046,38 @@ async def run_multi_agent_stream(
             yield {"event": "error", "data": {"message": f"Coordinator error: {e}"}}
             return
 
-        # Notes coordinator is best-effort — a failure here doesn't fail
-        # the whole run. The per-template agent_result.status already
-        # captures individual failures; we just log and continue.
+        # Notes coordinator: per-agent failures are already captured in each
+        # NotesAgentResult.status and don't raise here. If the coordinator
+        # ITSELF raises (setup bug, unexpected asyncio error, etc.) we must
+        # NOT silently drop the failure — otherwise run_complete.success
+        # flips to True even though the user asked for notes and got none.
+        # Synthesize a failed NotesCoordinatorResult with one entry per
+        # requested template so overall-status logic and the finalization
+        # loop above both see the failure.
+        from notes.coordinator import NotesAgentResult as _NotesAgentResult
         notes_result: Optional[NotesCoordinatorResult] = None
         try:
             notes_result = await notes_task
         except asyncio.CancelledError:
             logger.info("Notes coordinator cancelled", extra={"session_id": session_id})
-        except Exception:
+            if notes_to_run:
+                notes_result = NotesCoordinatorResult(agent_results=[
+                    _NotesAgentResult(
+                        template_type=nt,
+                        status="cancelled",
+                        error="Cancelled by user",
+                    ) for nt in sorted(notes_to_run, key=lambda n: n.value)
+                ])
+        except Exception as e:
             logger.exception("Notes coordinator failed", extra={"session_id": session_id})
+            if notes_to_run:
+                notes_result = NotesCoordinatorResult(agent_results=[
+                    _NotesAgentResult(
+                        template_type=nt,
+                        status="failed",
+                        error=f"Notes coordinator crashed: {e}",
+                    ) for nt in sorted(notes_to_run, key=lambda n: n.value)
+                ])
 
         # Generate merged result.json from per-statement files so the
         # preview tab can fetch a single file in both single- and multi-agent modes.
@@ -1115,6 +1222,30 @@ async def run_multi_agent_stream(
                             logger.warning("Failed to persist fields for %s: %s",
                                            agent_result.statement_type.value, e)
 
+                # Finalize notes agent rows so History can show their status,
+                # workbook path, and model for this run. Mirrors the face
+                # loop above. `notes_result` may be None if the coordinator
+                # itself crashed — the overall-status block below synthesizes
+                # a failed result in that case, so we handle None defensively.
+                notes_agent_results = (
+                    notes_result.agent_results if notes_result is not None else []
+                )
+                for notes_agent_result in notes_agent_results:
+                    run_agent_id = run_agent_ids_by_notes.get(notes_agent_result.template_type)
+                    if run_agent_id is None:
+                        # Pre-create didn't happen (DB was unhappy earlier).
+                        run_agent_id = repo.create_run_agent(
+                            db_conn, run_id,
+                            statement_type=f"NOTES_{notes_agent_result.template_type.value}",
+                            variant=None,
+                            model=_model_id(config.model),
+                        )
+                    repo.finish_run_agent(
+                        db_conn, run_agent_id,
+                        status=notes_agent_result.status,
+                        workbook_path=notes_agent_result.workbook_path,
+                    )
+
                 # Persist cross-check results
                 for check_result in cross_check_results:
                     repo.save_cross_check(
@@ -1198,6 +1329,18 @@ async def run_multi_agent_stream(
         # call it aborted. Idempotent for rows that were already finalized.
         if terminal_status is None:
             _safe_mark_finished(db_conn, run_id, "aborted")
+        # Session-wide task_registry cleanup used to live in coordinator.py's
+        # finally block, but that erased notes tasks mid-flight whenever face
+        # finished before notes. Now the outer orchestrator owns it — one
+        # remove_session call covers scout + face + notes after every run.
+        try:
+            import task_registry
+            task_registry.remove_session(session_id)
+        except Exception:
+            logger.warning(
+                "task_registry.remove_session failed for %s", session_id,
+                exc_info=True,
+            )
         if db_conn is not None:
             try:
                 db_conn.close()
@@ -1303,14 +1446,21 @@ async def abort_agent(session_id: str, agent_id: str):
 
 @app.post("/api/rerun/{session_id}")
 async def rerun_agent(session_id: str, body: RunConfigRequest):
-    """Re-run extraction for a single statement within an existing session.
+    """Re-run extraction for a single agent within an existing session.
 
-    Reuses the same output directory so the new workbook overwrites the old one.
-    After the agent finishes, merge + cross-checks run against all workbooks
-    in the session (both old successful ones and the new one).
+    Accepts either exactly one face statement OR exactly one notes template,
+    never both — rerun is a targeted retry for one failed/cancelled agent.
+    Reuses the same output directory so the new workbook overwrites the old
+    one. After the agent finishes, merge + cross-checks run against all
+    workbooks in the session (both old successful ones and the new one).
     """
-    if len(body.statements) != 1:
-        raise HTTPException(status_code=400, detail="Rerun expects exactly one statement.")
+    n_stmts = len(body.statements)
+    n_notes = len(body.notes_to_run)
+    if n_stmts + n_notes != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Rerun expects exactly one statement or one notes template.",
+        )
 
     # Block rerun while an extraction is already running for this session
     if session_id in active_runs:

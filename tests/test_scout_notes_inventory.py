@@ -6,10 +6,15 @@ template rows is done by the LLM — this helper is navigation only.
 """
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 
 from scout.notes_discoverer import (
     NoteInventoryEntry,
+    build_notes_inventory,
     extract_inventory_from_pages,
 )
 
@@ -38,6 +43,19 @@ def test_extract_inventory_from_bare_numbered_headings():
     assert inv[1].page_range == (22, 23)
     assert inv[2].note_num == 6
     assert inv[2].page_range == (24, 24)
+
+
+def test_extract_inventory_matches_title_case_headings():
+    # Review I3: the regex used to require ALL CAPS titles; many Malaysian
+    # filings use Title Case ("4. Property, plant and equipment"). The
+    # splitter should handle both.
+    pages = [
+        (60, "4. Property, plant and equipment\n\nThe Group...\n"),
+        (61, "5. Trade receivables\n\nAged analysis...\n"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    assert [(e.note_num, e.page_range) for e in inv] == [(4, (60, 60)), (5, (61, 61))]
+    assert "property" in inv[0].title.lower()
 
 
 def test_extract_inventory_handles_note_prefix_style():
@@ -127,3 +145,135 @@ def test_infopack_default_notes_inventory_is_empty_list():
 
     pack = Infopack(toc_page=1, page_offset=0)
     assert pack.notes_inventory == []
+
+
+# ---------------------------------------------------------------------------
+# Vision fallback wiring (Plan Phase 3 Step 3.1)
+# These exercise the public build_notes_inventory signature — the actual
+# vision logic is tested in test_notes_discoverer_vision.py.
+# ---------------------------------------------------------------------------
+
+
+def _make_scanned_pdf(tmp_path: Path) -> Path:
+    """Create a tiny image-only PDF for scanned-PDF behaviour tests.
+
+    fitz.Document.insert_page creates a blank text layer, but calling
+    get_text on such pages still returns '' — good enough to exercise
+    the "PyMuPDF returned nothing, fall back" branch without shipping a
+    real scanned binary into the repo.
+    """
+    import fitz
+
+    out = tmp_path / "scanned.pdf"
+    doc = fitz.open()
+    for _ in range(5):
+        doc.new_page(width=612, height=792)
+    doc.save(str(out))
+    doc.close()
+    return out
+
+
+def test_build_notes_inventory_empty_pdf_no_model_returns_empty(tmp_path):
+    """Scanned PDF + no vision model → same behaviour as today: []."""
+    pdf = _make_scanned_pdf(tmp_path)
+    out = build_notes_inventory(str(pdf), notes_start_page=1)
+    assert out == []
+
+
+def test_build_notes_inventory_empty_pdf_with_model_calls_vision(tmp_path):
+    """Scanned PDF + vision_model → vision path is invoked and its result returned.
+
+    We patch the async orchestrator so we don't need a real LLM; the point
+    is that wiring passes the kwarg through.
+    """
+    pdf = _make_scanned_pdf(tmp_path)
+
+    captured: dict = {}
+
+    async def fake_vision(*, pdf_path, start, end, model):
+        captured.update(pdf_path=pdf_path, start=start, end=end, model=model)
+        return [NoteInventoryEntry(note_num=1, title="fake", page_range=(1, 3))]
+
+    with patch("scout.notes_discoverer_vision._vision_inventory", side_effect=fake_vision):
+        out = build_notes_inventory(
+            str(pdf), notes_start_page=1, vision_model=object(),
+        )
+
+    assert [(e.note_num, e.page_range) for e in out] == [(1, (1, 3))]
+    assert captured["pdf_path"] == str(pdf)
+    assert captured["start"] == 1
+    assert captured["end"] == 5
+
+
+def test_build_notes_inventory_text_pdf_skips_vision(tmp_path):
+    """Text-based PDF: vision must NOT fire even when vision_model is set."""
+    import fitz
+
+    pdf = tmp_path / "text.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((50, 50), "4. Property, plant and equipment\n\nThe Group...")
+    page2 = doc.new_page(width=612, height=792)
+    page2.insert_text((50, 50), "5. Trade receivables\n\n...aged analysis...")
+    doc.save(str(pdf))
+    doc.close()
+
+    vision_called = False
+
+    async def _would_fail(*, pdf_path, start, end, model):
+        nonlocal vision_called
+        vision_called = True
+        return []
+
+    with patch("scout.notes_discoverer_vision._vision_inventory", side_effect=_would_fail):
+        out = build_notes_inventory(
+            str(pdf), notes_start_page=1, vision_model=object(),
+        )
+
+    assert vision_called is False
+    assert {e.note_num for e in out} == {4, 5}
+
+
+def test_build_notes_inventory_start_past_end_returns_empty(tmp_path, caplog):
+    """HIGH-peer-review regression: a scout hint with notes_start_page past
+    the last PDF page used to raise ValueError from `_chunk` inside the
+    vision fallback. It must now short-circuit cleanly to [] with a
+    warning log, because scout TOC offsets are occasionally wrong and
+    "bad hint" should never be fatal.
+    """
+    pdf = _make_scanned_pdf(tmp_path)  # 5-page scan
+    # vision_model is set (so the old code would have entered the
+    # fallback); notes_start_page=50 is well past the 5-page end.
+    with caplog.at_level("WARNING", logger="scout.notes_discoverer"):
+        out = build_notes_inventory(
+            str(pdf), notes_start_page=50, vision_model=object(),
+        )
+    assert out == []
+    assert any(
+        "exceeds effective end" in r.message for r in caplog.records
+    ), f"expected out-of-bounds warning; got {[r.message for r in caplog.records]}"
+
+
+def test_build_notes_inventory_notes_end_page_caps_vision_range(tmp_path):
+    """MEDIUM-peer-review plumbing: passing notes_end_page narrows the
+    vision fallback's scan range so the terminal note can't absorb
+    post-notes pages like Directors' Statement.
+    """
+    pdf = _make_scanned_pdf(tmp_path)  # 5-page scan, PDF length = 5
+
+    captured: dict = {}
+
+    async def fake_vision(*, pdf_path, start, end, model):
+        captured.update(start=start, end=end)
+        return [NoteInventoryEntry(note_num=1, title="x", page_range=(1, 2))]
+
+    with patch("scout.notes_discoverer_vision._vision_inventory", side_effect=fake_vision):
+        build_notes_inventory(
+            str(pdf), notes_start_page=1,
+            notes_end_page=3,  # notes really end at page 3
+            vision_model=object(),
+        )
+    # Without notes_end_page we would have scanned to pdf_length=5.
+    assert captured["end"] == 3, (
+        f"vision scan range end must be clamped to notes_end_page=3, got {captured['end']}"
+    )

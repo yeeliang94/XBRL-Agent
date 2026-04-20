@@ -272,9 +272,9 @@ const styles = {
   loadMoreError: {
     marginTop: pwc.space.sm,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: "#FEF2F2",
-    color: "#B91C1C",
-    border: "1px solid #FECACA",
+    background: pwc.errorBg,
+    color: pwc.errorTextAlt,
+    border: `1px solid ${pwc.errorBorder}`,
     borderRadius: pwc.radius.md,
     fontFamily: pwc.fontBody,
     fontSize: 13,
