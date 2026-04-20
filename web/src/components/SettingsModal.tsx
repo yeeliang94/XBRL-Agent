@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import type { SettingsResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
 
@@ -219,6 +219,19 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
 
   const hasErrors = hasAnyError(errors);
 
+  // Track the "Saved!" toast timer so we can clear it on unmount or on a
+  // subsequent save, preventing a stale setState call against an unmounted
+  // component and overlapping timers racing each other (#28).
+  const savedToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (savedToastTimerRef.current !== null) {
+        clearTimeout(savedToastTimerRef.current);
+        savedToastTimerRef.current = null;
+      }
+    };
+  }, []);
+
   // Load current settings when the modal opens
   useEffect(() => {
     if (!isOpen) return;
@@ -268,7 +281,13 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
         ...(apiKey ? { api_key: apiKey } : {}),
       });
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      if (savedToastTimerRef.current !== null) {
+        clearTimeout(savedToastTimerRef.current);
+      }
+      savedToastTimerRef.current = setTimeout(() => {
+        setSaved(false);
+        savedToastTimerRef.current = null;
+      }, 2000);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Failed to save settings");
     } finally {
@@ -348,6 +367,9 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
             onChange={(e) => setProxyUrl(e.target.value)}
             onBlur={() => validateField("proxyUrl")}
             placeholder="https://genai-sharedservice-emea.pwc.com"
+            // Focus the first field when the modal opens so keyboard users
+            // land inside the dialog, not on the element underneath it.
+            autoFocus
             style={{
               ...styles.input,
               ...(errors.proxyUrl ? styles.inputError : {}),

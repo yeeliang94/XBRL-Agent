@@ -33,22 +33,42 @@ export type SSEEventType =
   | "complete"         // Single-agent run finished (legacy) OR per-agent completion (multi-agent)
   | "run_complete";    // Final aggregate event for multi-agent runs
 
-export interface SSEEvent {
-  event: SSEEventType;
-  data:
-    | StatusData
-    | ThinkingDeltaData
-    | ThinkingEndData
-    | TextDeltaData
-    | ToolCallData
-    | ToolResultData
-    | TokenData
-    | ErrorData
-    | CompleteData
-    | AgentCompleteData
-    | RunCompleteData;
-  timestamp: number;
+// Every multi-agent event carries these routing fields inside `data` (the
+// backend stamps them in coordinator._build_event). We keep them in `data`
+// rather than hoisting to the event root so the runtime shape matches the
+// wire format for both live SSE and persisted history — no parse-time
+// transform is needed.
+export interface AgentRouting {
+  agent_id?: string;
+  agent_role?: string;
 }
+
+// Phase 6 decision: Option A (discriminated union) with the routing fields
+// placed per-data interface instead of hoisted to the event root. Narrowing
+// on `event.event` yields a typed `event.data`, and every `event.data`
+// includes the optional `agent_id`/`agent_role` pair, which eliminates the
+// `as unknown as Record<string, unknown>` casts the earlier single-shape
+// type required.
+interface SSEEventDataMap {
+  status: StatusData & AgentRouting;
+  thinking_delta: ThinkingDeltaData & AgentRouting;
+  thinking_end: ThinkingEndData & AgentRouting;
+  text_delta: TextDeltaData & AgentRouting;
+  tool_call: ToolCallData & AgentRouting;
+  tool_result: ToolResultData & AgentRouting;
+  token_update: TokenData & AgentRouting;
+  error: ErrorData & AgentRouting;
+  complete: (CompleteData | AgentCompleteData) & AgentRouting;
+  run_complete: RunCompleteData & AgentRouting;
+}
+
+export type SSEEvent = {
+  [K in SSEEventType]: {
+    event: K;
+    data: SSEEventDataMap[K];
+    timestamp: number;
+  };
+}[SSEEventType];
 
 export interface StatusData {
   phase: EventPhase;
@@ -105,6 +125,17 @@ export interface CompleteData {
   total_tokens: number;
   cost: number;
   statementsCompleted?: string[];
+  // Actionable failure reason carried over from RunCompleteData.message
+  // when the backend rejects a run before any agent starts (unknown
+  // statement, invalid infopack, model setup failure, …). Null on success.
+  error?: string | null;
+  // Non-fatal diagnostics from a successful run — writer skips, borderline
+  // fuzzy label matches, partial sub-agent coverage. Emitted by the notes
+  // coordinator on success and surfaced in the terminal timeline row so
+  // operators see partial-success signals instead of a false-green
+  // "Completed" badge. Optional for backward compatibility — older events
+  // (and face-statement agents) don't carry it.
+  warnings?: string[];
 }
 
 /** Per-agent completion event emitted by multi-agent runs. */
@@ -114,6 +145,8 @@ export interface AgentCompleteData {
   agent_role: string;
   workbook_path: string | null;
   error: string | null;
+  // Mirror of CompleteData.warnings for per-agent completion events.
+  warnings?: string[];
 }
 
 /** Cross-check result as emitted in run_complete SSE event. */
@@ -130,12 +163,23 @@ export interface CrossCheckResult {
 /** Final aggregate event for multi-agent runs. */
 export interface RunCompleteData {
   success: boolean;
-  merged_workbook: string | null;
-  merge_errors: string[];
-  cross_checks: CrossCheckResult[];
+  // Present when the backend rejects a run before any agent starts
+  // (unknown statement, invalid infopack, model setup failure, …). The
+  // happy-path success event and per-agent-failure rollups don't carry it.
+  message?: string;
+  merged_workbook?: string | null;
+  merge_errors?: string[];
+  cross_checks?: CrossCheckResult[];
   cross_checks_partial?: boolean;
-  statements_completed: string[];
-  statements_failed: string[];
+  statements_completed?: string[];
+  statements_failed?: string[];
+  // Notes-agent rollups. The backend emits these even when the notes
+  // coordinator crashed before per-agent `complete` events landed — so
+  // the reducer reconciles notes tabs from these arrays to avoid pending
+  // skeletons sticking forever (peer-review #3). Template values match
+  // NotesTemplateType enum (CORP_INFO, ACC_POLICIES, …).
+  notes_completed?: string[];
+  notes_failed?: string[];
 }
 
 export interface ToolTimelineEntry {
@@ -174,6 +218,19 @@ export type StatementType = "SOFP" | "SOPL" | "SOCI" | "SOCF" | "SOCIE";
 
 export const STATEMENT_TYPES: StatementType[] = ["SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"];
 
+/**
+ * Build a `Record<StatementType, V>` by calling `fn` once per statement type.
+ * Shared by `PreRunPanel`'s `makeEmptySelections` / `makeAllEnabled` style
+ * initialisers so the iteration + typed-object scaffolding isn't re-implemented.
+ */
+export function mapStatements<V>(fn: (st: StatementType) => V): Record<StatementType, V> {
+  const out = {} as Record<StatementType, V>;
+  for (const stmt of STATEMENT_TYPES) {
+    out[stmt] = fn(stmt);
+  }
+  return out;
+}
+
 export const STATEMENT_LABELS: Record<StatementType, string> = {
   SOFP: "Statement of Financial Position",
   SOPL: "Statement of Profit or Loss",
@@ -209,6 +266,30 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
 
 export type FilingLevel = "company" | "group";
 
+/** Notes templates — mirror of NotesTemplateType in notes_types.py. */
+export type NotesTemplateType =
+  | "CORP_INFO"
+  | "ACC_POLICIES"
+  | "LIST_OF_NOTES"
+  | "ISSUED_CAPITAL"
+  | "RELATED_PARTY";
+
+export const NOTES_TEMPLATE_TYPES: NotesTemplateType[] = [
+  "CORP_INFO",
+  "ACC_POLICIES",
+  "LIST_OF_NOTES",
+  "ISSUED_CAPITAL",
+  "RELATED_PARTY",
+];
+
+export const NOTES_TEMPLATE_LABELS: Record<NotesTemplateType, string> = {
+  CORP_INFO: "Corporate Information (Note 10)",
+  ACC_POLICIES: "Accounting Policies (Note 11)",
+  LIST_OF_NOTES: "List of Notes (Note 12)",
+  ISSUED_CAPITAL: "Issued Capital (Note 13)",
+  RELATED_PARTY: "Related Party Transactions (Note 14)",
+};
+
 /** Shape sent to POST /api/run/{session_id} */
 export interface RunConfigPayload {
   statements: StatementType[];
@@ -217,6 +298,12 @@ export interface RunConfigPayload {
   infopack: Record<string, unknown> | null;
   use_scout: boolean;
   filing_level: FilingLevel;
+  notes_to_run?: NotesTemplateType[];
+  /** Per-notes-template model overrides. Unspecified templates fall back
+   *  to the run's default model on the backend. Sent only when the user
+   *  explicitly selects notes templates; matches the face-statement
+   *  ``models`` field shape for consistency. */
+  notes_models?: Partial<Record<NotesTemplateType, string>>;
 }
 
 // --- Phase 10: Per-agent state for tab-based UI ---

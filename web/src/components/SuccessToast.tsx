@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { pwc } from "../lib/theme";
-import type { ToastState } from "../App";
+import type { ToastState } from "../lib/appReducer";
+import { CloseIcon } from "./icons";
 
 // ---------------------------------------------------------------------------
 // SuccessToast — a small transient banner rendered in the top-right corner
@@ -21,14 +22,15 @@ const AUTO_DISMISS_MS = 4000;
 
 const TONE_STYLES: Record<ToastState["tone"], { background: string; border: string; color: string }> = {
   success: {
-    background: "#F0FDF4",
+    background: pwc.successBg,
+    // Lighter green border — kept inline since no other component uses it.
     border: `1px solid #BBF7D0`,
-    color: "#166534",
+    color: pwc.successText,
   },
   error: {
-    background: "#FEF2F2",
-    border: `1px solid #FECACA`,
-    color: "#991B1B",
+    background: pwc.errorBg,
+    border: `1px solid ${pwc.errorBorder}`,
+    color: pwc.errorText,
   },
 };
 
@@ -77,7 +79,7 @@ export function SuccessToast({ toast, onDismiss }: SuccessToastProps) {
         aria-label="Dismiss notification"
         style={{ ...styles.closeBtn, color: palette.color }}
       >
-        &#10005;
+        <CloseIcon />
       </button>
     </div>
   );

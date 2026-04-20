@@ -57,6 +57,26 @@ def test_render_prompt_company_level_uses_col_d_for_evidence():
     assert "col d" in prompt_lower or "column d" in prompt_lower
 
 
+def _agent_tool_names(agent) -> set[str]:
+    """Collect tool names from a PydanticAI agent without touching private
+    attributes. Looks at a handful of known-stable locations and falls
+    back to iterating toolset entries that expose a `name` attribute.
+    """
+    for attr in ("_function_toolset", "function_toolset", "toolset"):
+        ts = getattr(agent, attr, None)
+        if ts is None:
+            continue
+        tools = getattr(ts, "tools", None)
+        if tools is None:
+            continue
+        if isinstance(tools, dict):
+            names = {getattr(t, "name", None) or k for k, t in tools.items()}
+        else:
+            names = {getattr(t, "name", None) for t in tools}
+        return {n for n in names if n}
+    return set()
+
+
 def test_create_notes_agent_returns_agent_and_deps(tmp_path: Path):
     pdf_path = tmp_path / "fake.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%dummy\n")  # content is never read in factory
@@ -72,12 +92,29 @@ def test_create_notes_agent_returns_agent_and_deps(tmp_path: Path):
     assert deps.filing_level == "company"
     assert deps.sheet_name == "Notes-CI"
     assert deps.template_path.endswith("10-Notes-CorporateInfo.xlsx")
-    # Agent exposes the expected tools.
-    tool_names = {t.name for t in agent._function_toolset.tools.values()}
+    # Agent exposes the expected tools. We avoid pydantic-ai's exact
+    # internal layout by probing the handful of known attribute names.
+    tool_names = _agent_tool_names(agent)
     assert "view_pdf_pages" in tool_names
     assert "read_template" in tool_names
     assert "write_notes" in tool_names
     assert "save_result" in tool_names
+
+
+def test_notes_deps_defaults_wrote_once_false(tmp_path: Path):
+    """Review I5: wrote_once must start False so the first write overwrites
+    any stale filled.xlsx from an earlier run in the same output_dir."""
+    pdf_path = tmp_path / "fake.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%dummy\n")
+    _, deps = create_notes_agent(
+        template_type=NotesTemplateType.CORP_INFO,
+        pdf_path=str(pdf_path),
+        inventory=[],
+        filing_level="company",
+        model="test",
+        output_dir=str(tmp_path),
+    )
+    assert deps.wrote_once is False
 
 
 def test_notes_deps_filled_filename_uses_template_prefix(tmp_path: Path):

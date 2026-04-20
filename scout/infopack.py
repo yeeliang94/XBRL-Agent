@@ -7,11 +7,14 @@ extraction sub-agent exactly which pages to read.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Literal
 
 from statement_types import StatementType
 from scout.notes_discoverer import NoteInventoryEntry
+
+logger = logging.getLogger(__name__)
 
 # Allowed confidence levels for page validation.
 Confidence = Literal["HIGH", "MEDIUM", "LOW"]
@@ -109,11 +112,17 @@ class Infopack:
                 confidence=ref_data.get("confidence", "HIGH"),
             )
         inventory: list[NoteInventoryEntry] = []
-        for raw in data.get("notes_inventory", []) or []:
+        for idx, raw in enumerate(data.get("notes_inventory", []) or []):
             pr = raw.get("page_range", [])
             if isinstance(pr, list) and len(pr) == 2:
                 page_range = (int(pr[0]), int(pr[1]))
             else:
+                # Preserve the index so operators can correlate with source;
+                # entries with malformed page_range are accepted but flagged.
+                logger.warning(
+                    "Infopack notes_inventory[%d] has malformed page_range %r; "
+                    "defaulting to (0, 0)", idx, pr,
+                )
                 page_range = (0, 0)
             inventory.append(NoteInventoryEntry(
                 note_num=int(raw["note_num"]),
@@ -127,6 +136,28 @@ class Infopack:
             statements=statements,
             notes_inventory=inventory,
         )
+
+    # -- Notes page hints ------------------------------------------------------
+
+    def notes_page_hints(self) -> list[int]:
+        """Union of every face-statement's face_page + note_pages, sorted unique.
+
+        Scout's `notes_inventory` is empty on scanned PDFs (no extractable
+        text for the header regex to bite on). Without hints the notes
+        agents default to scanning the entire PDF, which on a typical
+        Malaysian filing means rendering 30+ pages through the LLM just
+        to find where Note 1 begins. This method surfaces the pages that
+        face-statement scout scoring already identified as note-bearing,
+        giving the notes agents a tight starting viewport even when the
+        inventory is empty.
+
+        Returns an empty list when no statement refs exist.
+        """
+        pages: set[int] = set()
+        for ref in self.statements.values():
+            pages.add(ref.face_page)
+            pages.update(ref.note_pages)
+        return sorted(p for p in pages if p >= 1)
 
     # -- Validation ------------------------------------------------------------
 

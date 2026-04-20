@@ -345,6 +345,71 @@ describe("RunDetailView", () => {
     expect(screen.getByText(/No agents were recorded/i)).toBeTruthy();
   });
 
+  // PLAN §4 D.3: history detail renders notes agents alongside face
+  // agents. Backend persists notes rows with statement_type prefixed
+  // "NOTES_<TEMPLATE>"; the view normalises this to the same friendly
+  // chip the live UI uses (peer-review MEDIUM).
+  test("notes agents render with friendly labels, not raw DB enum values", () => {
+    const detail = makeDetail({
+      agents: [
+        makeAgent(),
+        makeAgent({
+          id: 3,
+          statement_type: "NOTES_CORP_INFO",
+          variant: null,
+          status: "succeeded",
+        }),
+        makeAgent({
+          id: 4,
+          statement_type: "NOTES_LIST_OF_NOTES",
+          variant: null,
+          status: "succeeded",
+        }),
+      ],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    expect(screen.getByText("Notes 10: Corp Info")).toBeTruthy();
+    expect(screen.getByText("Notes 12: List of Notes")).toBeTruthy();
+    // Ensure the raw enum isn't leaking through anywhere.
+    expect(screen.queryByText("NOTES_CORP_INFO")).toBeNull();
+  });
+
+  test("ConfigBlock surfaces notes_to_run when the run requested any notes", () => {
+    const detail = makeDetail({
+      config: {
+        statements: ["SOFP"],
+        variants: {},
+        models: {},
+        use_scout: false,
+        filing_level: "company",
+        notes_to_run: ["CORP_INFO", "LIST_OF_NOTES"],
+      },
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    // dt label present
+    expect(screen.getByText("Notes")).toBeTruthy();
+    // values rendered as the friendly labels, joined
+    expect(
+      screen.getByText(/Notes 10: Corp Info.*Notes 12: List of Notes/),
+    ).toBeTruthy();
+  });
+
+  test("ConfigBlock omits Notes row when no notes were selected (face-only)", () => {
+    const detail = makeDetail({
+      config: {
+        statements: ["SOFP"],
+        variants: {},
+        models: {},
+        use_scout: false,
+        filing_level: "company",
+        notes_to_run: [],
+      },
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    // No dt "Notes" row added for empty arrays — avoids "Notes: —" noise.
+    expect(screen.queryByText(/^Notes$/)).toBeNull();
+  });
+
   test("Delete button is enabled for terminal statuses", () => {
     // Sanity check: the disable must NOT bleed into completed / failed /
     // aborted statuses. Each of these represents a terminal run and

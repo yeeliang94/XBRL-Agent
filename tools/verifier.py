@@ -276,6 +276,27 @@ def _evaluate_formula(
                         f"Unsupported operator {tok.value!r} in {formula!r}"
                     )
                 return 0.0
+        elif tok.type == "OPERATOR-PREFIX":
+            # Unary prefix operators appear in two situations we care about:
+            # (1) at the start of a formula like `=-1*B1+B2`,
+            # (2) right after a binary `+`/`-`, as in `=1*B7+-1*B11` —
+            # Excel's tokenizer splits `+-1` into INFIX `+` followed by
+            # PREFIX `-` rather than a single negative-coefficient token.
+            # The XBRL cashflow linkbase emits exactly this pattern, so
+            # without this branch every statement with a negative-signed
+            # coefficient row (SOCF, SOCIE, SOPL, SOFP equity) silently
+            # evaluated to 0 and masked real imbalances.
+            if tok.value == "-":
+                sign = -sign
+            elif tok.value == "+":
+                # No-op: `+-1*B3` == `-1*B3`, `++B3` == `+B3`.
+                pass
+            else:
+                if warnings is not None:
+                    warnings.append(
+                        f"Unsupported prefix operator {tok.value!r} in {formula!r}"
+                    )
+                return 0.0
         elif tok.type == "OPERAND" and tok.subtype == "NUMBER":
             try:
                 pending_coeff = float(tok.value)

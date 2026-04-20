@@ -40,8 +40,8 @@ describe("PreRunPanel", () => {
 
     // Wait for settings to load
     await waitFor(() => {
-      // Scout toggle + 5 statement checkboxes = 6
-      expect(screen.getAllByRole("checkbox")).toHaveLength(6);
+      // Scout toggle + 5 statement checkboxes + 5 notes checkboxes = 11
+      expect(screen.getAllByRole("checkbox")).toHaveLength(11);
     });
   });
 
@@ -119,10 +119,10 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getAllByRole("checkbox")).toHaveLength(6);
+      expect(screen.getAllByRole("checkbox")).toHaveLength(11);
     });
 
-    // Uncheck SOCIE (6th checkbox, index 5)
+    // Uncheck SOCIE (6th checkbox, index 5 — scout toggle + 5 statement checkboxes)
     const checkboxes = screen.getAllByRole("checkbox");
     fireEvent.click(checkboxes[5]); // SOCIE
 
@@ -301,6 +301,111 @@ describe("PreRunPanel", () => {
     fetchSpy.mockRestore();
   });
 
+  test("scout returning zero detected statements keeps rows enabled + shows notice", async () => {
+    // Covers the "scout succeeded but found nothing" path. Previously this
+    // silently unchecked every statement, which collapsed the Variants UI
+    // and left the user with no affordance to continue.
+    const scoutPayload = {
+      success: true,
+      infopack: {
+        toc_page: 3,
+        page_offset: 0,
+        statements: {}, // empty dict — scout couldn't identify any statements
+      },
+    };
+
+    const sseText = `event: scout_complete\ndata: ${JSON.stringify(scoutPayload)}\n\n`;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseText));
+        controller.close();
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const getSettingsFn = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettingsFn} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+
+    // Statements all start enabled (makeAllEnabled).
+    const checkboxesBefore = screen.getAllByRole("checkbox") as HTMLInputElement[];
+    // Indices 1..5 are the 5 statement checkboxes.
+    for (let i = 1; i <= 5; i++) expect(checkboxesBefore[i].checked).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    // After scout returns empty: statements must stay checked (no silent
+    // unchecking) and a notice must surface explaining what happened.
+    await waitFor(() => {
+      expect(screen.getByText(/didn't detect any statements/i)).toBeInTheDocument();
+    });
+    const checkboxesAfter = screen.getAllByRole("checkbox") as HTMLInputElement[];
+    for (let i = 1; i <= 5; i++) expect(checkboxesAfter[i].checked).toBe(true);
+
+    fetchSpy.mockRestore();
+  });
+
+  test("empty scout preserves manually-picked variants (peer-review finding #2)", async () => {
+    // Regression for the case where the empty-scout guard preserved
+    // checkboxes but still overwrote every variant selection — the notice
+    // claimed "keeping your current selection" while we silently reset the
+    // dropdowns to "".
+    const scoutPayload = {
+      success: true,
+      infopack: {
+        toc_page: 3,
+        page_offset: 0,
+        statements: {}, // zero detections
+      },
+    };
+    const sseText = `event: scout_complete\ndata: ${JSON.stringify(scoutPayload)}\n\n`;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseText));
+        controller.close();
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const getSettingsFn = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettingsFn} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+
+    // Manually pick a SOFP variant BEFORE running scout. The variant
+    // selector always renders all 5 dropdowns (Fix B); the first combobox
+    // corresponds to SOFP.
+    const sofpVariant = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
+    fireEvent.change(sofpVariant, { target: { value: "CuNonCu" } });
+    expect(sofpVariant.value).toBe("CuNonCu");
+
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/didn't detect any statements/i)).toBeInTheDocument();
+    });
+    // After the empty-scout return, the manual variant must still be set.
+    const sofpVariantAfter = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
+    expect(sofpVariantAfter.value).toBe("CuNonCu");
+
+    fetchSpy.mockRestore();
+  });
+
   test("filing level defaults to company and can be toggled to group", async () => {
     const onRun = vi.fn();
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
@@ -339,6 +444,145 @@ describe("PreRunPanel", () => {
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ filing_level: "company" }),
+    );
+  });
+
+  test("renders 5 notes checkboxes, all off by default", async () => {
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      // Each notes checkbox uses its full label as aria-label.
+      expect(
+        screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i }),
+      ).toBeInTheDocument();
+    });
+
+    // All 5 notes labels present + all unchecked.
+    const noteLabels = [
+      /corporate information \(note 10\)/i,
+      /accounting policies \(note 11\)/i,
+      /list of notes \(note 12\)/i,
+      /issued capital \(note 13\)/i,
+      /related party transactions \(note 14\)/i,
+    ];
+    for (const label of noteLabels) {
+      const cb = screen.getByRole("checkbox", { name: label }) as HTMLInputElement;
+      expect(cb.checked).toBe(false);
+    }
+  });
+
+  test("ticking a notes checkbox populates notes_to_run on submit", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+    });
+
+    // Enable Notes 10 and Notes 13
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /issued capital \(note 13\)/i }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+
+    expect(onRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notes_to_run: ["CORP_INFO", "ISSUED_CAPITAL"],
+      }),
+    );
+  });
+
+  test("notes model picker lands on notes_models for enabled templates only", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+    });
+
+    // Enable Notes 11 only, then pick a non-default model for it.
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /accounting policies \(note 11\)/i }),
+    );
+
+    // Notes model dropdowns use explicit aria-labels to stay unambiguous
+    // against the five statement model dropdowns and five variant pickers.
+    const notes11ModelSelect = screen.getByRole("combobox", {
+      name: /model for accounting policies \(note 11\)/i,
+    }) as HTMLSelectElement;
+    fireEvent.change(notes11ModelSelect, { target: { value: "claude-opus-4-6" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+
+    // notes_models must include the enabled template with the override, and
+    // NOT include templates the user left unchecked (mirrors `models`).
+    const payload = onRun.mock.calls[0][0];
+    expect(payload.notes_to_run).toEqual(["ACC_POLICIES"]);
+    expect(payload.notes_models).toEqual({ ACC_POLICIES: "claude-opus-4-6" });
+  });
+
+  test("no notes selected → notes_to_run is empty (face-only run, no regression)", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+
+    expect(onRun).toHaveBeenCalledWith(
+      expect.objectContaining({ notes_to_run: [] }),
+    );
+  });
+
+  test("notes-only run is allowed when every statement is unchecked", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("checkbox").length).toBeGreaterThan(0);
+    });
+
+    // Uncheck all 5 statement checkboxes (indices 1-5; index 0 is scout toggle).
+    const checkboxes = screen.getAllByRole("checkbox");
+    for (let i = 1; i <= 5; i++) fireEvent.click(checkboxes[i]);
+
+    // With no face statements and no notes, Run must be disabled.
+    const runBtn = screen.getByRole("button", { name: /run extraction/i }) as HTMLButtonElement;
+    expect(runBtn.disabled).toBe(true);
+
+    // Enable a single notes checkbox → Run must re-enable.
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /list of notes \(note 12\)/i }),
+    );
+    expect(runBtn.disabled).toBe(false);
+
+    fireEvent.click(runBtn);
+    expect(onRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statements: [],
+        notes_to_run: ["LIST_OF_NOTES"],
+      }),
     );
   });
 

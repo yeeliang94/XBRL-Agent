@@ -4,9 +4,6 @@
 import type {
   EventPhase,
   SSEEvent,
-  StatusData,
-  ToolCallData,
-  ToolResultData,
   ToolTimelineEntry,
 } from "./types";
 
@@ -30,15 +27,15 @@ export function buildToolTimeline(events: SSEEvent[]): ToolTimelineEntry[] {
 
   for (const evt of events) {
     if (evt.event === "status") {
-      const data = evt.data as StatusData;
+      const data = evt.data;
       if (data && typeof data.phase === "string") {
-        currentPhase = data.phase as EventPhase;
+        currentPhase = data.phase;
       }
       continue;
     }
 
     if (evt.event === "tool_call") {
-      const data = evt.data as ToolCallData;
+      const data = evt.data;
       if (!data || !data.tool_call_id) continue;
       // Use the event's timestamp (seconds) as startTime in ms, or Date.now()
       // as a safe fallback when the server didn't stamp one.
@@ -61,7 +58,7 @@ export function buildToolTimeline(events: SSEEvent[]): ToolTimelineEntry[] {
     }
 
     if (evt.event === "tool_result") {
-      const data = evt.data as ToolResultData;
+      const data = evt.data;
       if (!data || !data.tool_call_id) continue;
       const existing = byId.get(data.tool_call_id);
       // Drop orphan results: without a matching call we have no args, no

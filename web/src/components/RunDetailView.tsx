@@ -5,6 +5,8 @@ import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types
 import { ValidatorTab } from "./ValidatorTab";
 import { AgentTimeline } from "./AgentTimeline";
 import { buildToolTimeline } from "../lib/buildToolTimeline";
+import { displayModelId } from "../lib/modelId";
+import { notesTabLabel } from "../lib/appReducer";
 
 // ---------------------------------------------------------------------------
 // RunDetailView — hydrated detail panel for a single past run.
@@ -19,24 +21,6 @@ export interface RunDetailViewProps {
   detail: RunDetailJson;
   onDownload: (runId: number) => void;
   onDelete: (runId: number) => void;
-}
-
-/** Strip a PydanticAI `Model(...)` repr wrapper if one leaked into storage.
- *  Legacy runs (pre-v2 schema) sometimes recorded the raw repr of the model
- *  object — e.g. "GoogleModel(model_name='gemini-3-flash-preview', ...)" —
- *  instead of a clean id. For display purposes we extract the inner
- *  `model_name=...` if present, else fall back to the raw string. New runs
- *  already store a clean id via `_model_id()` server-side, so this is a
- *  defensive no-op for them. */
-function displayModelId(raw: string | null | undefined): string {
-  if (!raw) return "—";
-  const reprMatch = /^[A-Za-z_][A-Za-z0-9_]*\(.*model_name=['"]([^'"]+)['"]/.exec(raw);
-  if (reprMatch) return reprMatch[1];
-  // Some older rows stored just "GoogleModel(gemini-3-flash-preview)" — pull
-  // the first positional arg out of the parens if it looks like an id.
-  const positional = /^[A-Za-z_][A-Za-z0-9_]*\(([A-Za-z0-9_\-.:/]+)[,)]/.exec(raw);
-  if (positional) return positional[1];
-  return raw;
 }
 
 /** Render a status badge from a precomputed display. Caller picks
@@ -93,6 +77,17 @@ function ConfigBlock({ config }: { config: Record<string, unknown> | null }) {
     label: "Filing level",
     value: (config.filing_level === "group" ? "Group" : "Company"),
   });
+  // Notes — only surface when the run actually selected any. Empty lists
+  // would render as "Notes: —" for every face-only run, which is noise.
+  const notesToRun = Array.isArray(config.notes_to_run)
+    ? (config.notes_to_run as string[])
+    : [];
+  if (notesToRun.length > 0) {
+    entries.push({
+      label: "Notes",
+      value: notesToRun.map((n) => notesTabLabel(n)).join(", "),
+    });
+  }
   return (
     <dl style={styles.dl}>
       {entries.map((e) => (
@@ -130,18 +125,24 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
   // buildToolTimeline is pure and cheap relative to the event list sizes
   // we ship (~50-200 events per agent), so a per-render call is fine.
   const toolTimeline = buildToolTimeline(agent.events);
+  // Notes agents are persisted with statement_type = "NOTES_<TEMPLATE>"
+  // — render with the same friendly chip the live UI uses so history
+  // doesn't fall back to the raw DB enum value (peer-review MEDIUM).
+  const displayName = agent.statement_type.startsWith("NOTES_")
+    ? notesTabLabel(agent.statement_type)
+    : agent.statement_type;
   return (
     <article data-testid="run-detail-agent" style={styles.agentCard}>
       <header style={styles.agentHeader}>
         <div style={styles.agentTitleRow}>
-          <span style={styles.agentStatement}>{agent.statement_type}</span>
+          <span style={styles.agentStatement}>{displayName}</span>
           {agent.variant && (
             <span style={styles.agentVariant}>({agent.variant})</span>
           )}
           {statusBadge(agentStatusDisplay(agent.status))}
         </div>
         <div style={styles.agentMetaRow}>
-          <span style={styles.agentModel}>{displayModelId(agent.model)}</span>
+          <span>{displayModelId(agent.model)}</span>
           <span style={styles.agentTokens}>
             {agent.total_tokens != null
               ? `${agent.total_tokens.toLocaleString()} tokens`
@@ -438,9 +439,6 @@ const styles = {
     fontFamily: pwc.fontMono,
     fontSize: 12,
     color: pwc.grey700,
-  } as React.CSSProperties,
-  agentModel: {
-    // empty — placeholder in case we later want to style model differently
   } as React.CSSProperties,
   agentTokens: {
     marginLeft: "auto",

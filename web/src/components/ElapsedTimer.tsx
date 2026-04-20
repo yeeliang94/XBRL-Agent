@@ -1,16 +1,10 @@
 import { useState, useEffect } from "react";
 import { pwc } from "../lib/theme";
+import { formatElapsedMs } from "../lib/time";
 
 interface Props {
   startTime: number;
   isRunning: boolean;
-}
-
-function formatElapsed(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 export function ElapsedTimer({ startTime, isRunning }: Props) {
@@ -37,7 +31,7 @@ export function ElapsedTimer({ startTime, isRunning }: Props) {
         color: pwc.grey700,
       }}
     >
-      {formatElapsed(elapsed)}
+      {formatElapsedMs(elapsed)}
     </span>
   );
 }

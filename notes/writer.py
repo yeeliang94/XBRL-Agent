@@ -47,6 +47,17 @@ class NotesWriteResult:
     rows_written: int = 0
     output_path: str = ""
     errors: list[str] = field(default_factory=list)
+    # Labels resolved via fuzzy fallback rather than exact match. Populated
+    # only for non-exact hits; each entry is (requested, chosen, score).
+    # Surfaced so operators can review borderline matches that would
+    # otherwise silently misroute payloads.
+    fuzzy_matches: list[tuple[str, str, float]] = field(default_factory=list)
+
+
+# Scores below this threshold are logged at WARNING as "borderline". The
+# writer still accepts them (the row was resolved), but the operator gets
+# a visible nudge to review the match in the output.
+_BORDERLINE_FUZZY_SCORE = 0.85
 
 
 def write_notes_workbook(
@@ -84,14 +95,24 @@ def write_notes_workbook(
     # can collect multiple unmatched notes into a single cell.
     rows_consumed: dict[int, list[NotesPayload]] = {}
     errors: list[str] = []
+    fuzzy_matches: list[tuple[str, str, float]] = []
 
     for payload in payloads:
-        row = _resolve_row(label_index, payload.chosen_row_label)
-        if row is None:
+        resolution = _resolve_row(label_index, payload.chosen_row_label)
+        if resolution is None:
             errors.append(
                 f"No matching row for label '{payload.chosen_row_label}' in sheet '{sheet_name}'"
             )
             continue
+        row, chosen_label, score = resolution
+        if score < 1.0:
+            fuzzy_matches.append((payload.chosen_row_label, chosen_label, score))
+            level = logging.WARNING if score < _BORDERLINE_FUZZY_SCORE else logging.DEBUG
+            logger.log(
+                level,
+                "Fuzzy row match in %s: %r -> %r (score %.2f)",
+                sheet_name, payload.chosen_row_label, chosen_label, score,
+            )
         rows_consumed.setdefault(row, []).append(payload)
 
     evidence_col = _evidence_col(filing_level)
@@ -115,6 +136,7 @@ def write_notes_workbook(
         rows_written=rows_written,
         output_path=output_path,
         errors=errors,
+        fuzzy_matches=fuzzy_matches,
     )
 
 
@@ -126,6 +148,7 @@ def write_notes_workbook(
 class _LabelEntry:
     normalized: str
     row: int
+    original: str
 
 
 def _build_label_index(ws) -> list[_LabelEntry]:
@@ -134,7 +157,12 @@ def _build_label_index(ws) -> list[_LabelEntry]:
         v = ws.cell(row=row, column=1).value
         if v is None:
             continue
-        entries.append(_LabelEntry(normalized=_normalize(str(v)), row=row))
+        text = str(v)
+        entries.append(_LabelEntry(
+            normalized=_normalize(text),
+            row=row,
+            original=text,
+        ))
     return entries
 
 
@@ -142,21 +170,29 @@ def _normalize(s: str) -> str:
     return s.strip().lstrip("*").strip().lower()
 
 
-def _resolve_row(entries: list[_LabelEntry], label: str) -> Optional[int]:
+def _resolve_row(
+    entries: list[_LabelEntry], label: str,
+) -> Optional[tuple[int, str, float]]:
+    """Resolve a requested label to a template row.
+
+    Returns `(row, chosen_label, score)` where `score == 1.0` for exact
+    hits and in `[_FUZZY_THRESHOLD, 1.0)` for fuzzy fallbacks. Returns
+    None when no label scored at or above the threshold.
+    """
     target = _normalize(label)
     for e in entries:
         if e.normalized == target:
-            return e.row
+            return e.row, e.original, 1.0
     # Fuzzy fallback
     best_score = 0.0
-    best_row: Optional[int] = None
+    best: Optional[_LabelEntry] = None
     for e in entries:
         score = SequenceMatcher(None, target, e.normalized).ratio()
         if score > best_score:
             best_score = score
-            best_row = e.row
-    if best_score >= _FUZZY_THRESHOLD:
-        return best_row
+            best = e
+    if best is not None and best_score >= _FUZZY_THRESHOLD:
+        return best.row, best.original, best_score
     return None
 
 
@@ -181,7 +217,7 @@ def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
         numeric_values = numeric_payloads[0].numeric_values
         if len(numeric_payloads) > 1:
             logger.warning(
-                "Multiple numeric payloads for row '%s' — using first",
+                "Multiple numeric payloads for row '%s' -- using first",
                 payloads[0].chosen_row_label,
             )
 
@@ -199,19 +235,45 @@ def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
                 seen.add(pg)
                 all_pages.append(pg)
 
+    # Preserve every contributing sub_agent_id so audit tooling can tell
+    # which sub-agents wrote each chunk of a row-112 catch-all. Unique
+    # entries, in first-seen order; stringified (comma-joined) because
+    # the dataclass carries a single Optional[str].
+    sub_ids: list[str] = []
+    for p in payloads:
+        if p.sub_agent_id and p.sub_agent_id not in sub_ids:
+            sub_ids.append(p.sub_agent_id)
+    combined_sub_id = ",".join(sub_ids) if sub_ids else None
+
     return NotesPayload(
         chosen_row_label=payloads[0].chosen_row_label,
         content=content,
         evidence=evidence,
         source_pages=all_pages,
         numeric_values=numeric_values,
-        sub_agent_id=payloads[0].sub_agent_id,
+        sub_agent_id=combined_sub_id,
     )
 
 
+# Canonical evidence-column map. Importers (e.g. notes/agent.py's prompt
+# renderer) use `evidence_col_letter` to keep the model-facing instructions
+# aligned with the writer's cell placement — no more silent drift between
+# the docstring and the actual write target.
+_EVIDENCE_COL = {"company": 4, "group": 6}
+
+
+def evidence_col_for(filing_level: str) -> int:
+    """Return the 1-indexed column for the evidence/source cell."""
+    return _EVIDENCE_COL.get(filing_level, _EVIDENCE_COL["company"])
+
+
+def evidence_col_letter(filing_level: str) -> str:
+    """Return the Excel letter for the evidence column (e.g. 'D', 'F')."""
+    return chr(ord("A") + evidence_col_for(filing_level) - 1)
+
+
 def _evidence_col(filing_level: str) -> int:
-    # Company: D=4; Group: F=6.
-    return 6 if filing_level == "group" else 4
+    return evidence_col_for(filing_level)
 
 
 def _write_row(
@@ -273,7 +335,7 @@ def _write_row(
 def _truncate_with_footer(text: str, source_pages: list[int]) -> str:
     if len(text) <= CELL_CHAR_LIMIT:
         return text
-    pages_str = ", ".join(str(p) for p in source_pages) if source_pages else "—"
-    footer = f"\n\n[truncated — see PDF pages {pages_str}]"
+    pages_str = ", ".join(str(p) for p in source_pages) if source_pages else "n/a"
+    footer = f"\n\n[truncated -- see PDF pages {pages_str}]"
     head_len = CELL_CHAR_LIMIT - len(footer)
     return text[:head_len] + footer

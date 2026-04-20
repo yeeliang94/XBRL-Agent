@@ -1,8 +1,3 @@
-/* Tailwind still needed for un-migrated components (LiveFeed, TokenDashboard,
-   SettingsModal, ResultsPanel). Will be removed when P2-P4 convert them to
-   inline styles. */
-@import "tailwindcss";
-
 /* Keyframe animations for P0+ components */
 @keyframes pulse-subtle {
   0%, 100% { opacity: 1; }

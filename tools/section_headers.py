@@ -25,14 +25,22 @@ import openpyxl
 from openpyxl.worksheet.worksheet import Worksheet
 
 
-# ARGB fill codes used to paint section-header rows. Two template families:
-#   FFC0C0C0 — legacy grey (SOFP-Xbrl-template.xlsx)
-#   FFD6E4F0 — new blue   (XBRL-template-MFRS/*.xlsx)
-_HEADER_FILL_RGB = frozenset({"FFC0C0C0", "FFD6E4F0"})
+# ARGB fill codes used to paint section-header rows. openpyxl reports the
+# leading alpha byte as "00" when the colour is saved with a zero alpha and
+# "FF" when saved opaque — we accept both variants of each hue.
+#   1F3864 — dark navy, main section headers in Company + Group templates
+#   305496 — mid blue, Group SOCIE block dividers ("Group - Current period", …)
+_HEADER_FILL_RGB = frozenset({
+    "001F3864", "FF1F3864",
+    "00305496", "FF305496",
+})
 
 # ARGB fill codes used to paint Total rows. We exclude these so totals don't
 # get mistaken for section headers.
-_TOTAL_FILL_RGB = frozenset({"FF99CCFF", "FFE2EFDA"})
+#   EEF2F8 — pale blue, Total rows in Company + Group templates
+_TOTAL_FILL_RGB = frozenset({
+    "00EEF2F8", "FFEEF2F8",
+})
 
 
 @dataclass(frozen=True)

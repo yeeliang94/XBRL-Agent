@@ -147,3 +147,56 @@ def test_sum_with_whitespace_and_range(wb):
     # E6..L6 = 1+2+3+4+5+6+7+8 = 36; + B139 (10) = 46
     assert result == 46.0
     assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# OPERATOR-PREFIX handling — the XBRL calculation linkbase emits negative
+# coefficients as `+-1*Bxx` (plus-infix followed by minus-prefix). Before
+# this fix the state machine hit the catch-all `else` branch and returned
+# 0 for the whole formula, which made SOCF/SOCIE/SOPL/SOFP verifiers
+# silently report zeroed totals and hid real imbalances from the agents.
+# ---------------------------------------------------------------------------
+
+
+def test_embedded_negative_coefficient(wb):
+    """Matches the real SOPL row-15 formula shape: `+1*Bi+-1*Bj`."""
+    warnings: list[str] = []
+    # B139=10, B140=20, B141=5 → 10 + 20 - 5 = 25
+    result = _evaluate_formula(
+        wb, "Main", "=1*B139+1*B140+-1*B141", warnings=warnings
+    )
+    assert result == 25.0
+    assert warnings == []
+
+
+def test_leading_prefix_minus(wb):
+    """Formulas that open with a unary minus, e.g. `=-1*B1+B2`."""
+    warnings: list[str] = []
+    # -B139 + B140 = -10 + 20 = 10
+    result = _evaluate_formula(wb, "Main", "=-1*B139+B140", warnings=warnings)
+    assert result == 10.0
+    assert warnings == []
+
+
+def test_double_prefix_minus_cancels(wb):
+    """`=B1--B2` — Excel tokenizes as INFIX `-` then PREFIX `-`; the two
+    minuses cancel and the term is added, not subtracted."""
+    warnings: list[str] = []
+    # B139 - (-B140) = 10 + 20 = 30
+    result = _evaluate_formula(wb, "Main", "=B139--B140", warnings=warnings)
+    assert result == 30.0
+    assert warnings == []
+
+
+def test_real_socf_linkbase_shape(wb):
+    """Concrete shape from the SOCF template that used to evaluate to 0.
+    Mixes positive and negative coefficient terms across many cells."""
+    warnings: list[str] = []
+    # Build a coefficient-tagged formula using our fixture cells:
+    #   +B139 +B140 -B141  (10 + 20 - 5 = 25)
+    # written in the exact `1*` / `+-1*` form the XBRL tooling produces.
+    result = _evaluate_formula(
+        wb, "Main", "=1*B139+1*B140+-1*B141", warnings=warnings
+    )
+    assert result == 25.0
+    assert warnings == []

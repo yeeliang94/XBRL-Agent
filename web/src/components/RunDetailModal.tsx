@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { pwc } from "../lib/theme";
 import { RunDetailView } from "./RunDetailView";
+import { CloseIcon } from "./icons";
 import type { RunDetailJson } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -67,7 +68,7 @@ export function RunDetailModal({
           style={styles.closeButton}
           aria-label="Close run details"
         >
-          ×
+          <CloseIcon />
         </button>
         <div style={styles.scrollArea}>
           {isLoading && <p style={styles.state}>Loading run details…</p>}
@@ -146,10 +147,10 @@ const styles = {
   } as React.CSSProperties,
   errorBanner: {
     padding: pwc.space.lg,
-    background: "#FEF2F2",
-    color: "#B91C1C",
+    background: pwc.errorBg,
+    color: pwc.errorTextAlt,
     borderRadius: pwc.radius.md,
-    border: "1px solid #FECACA",
+    border: `1px solid ${pwc.errorBorder}`,
     fontFamily: pwc.fontBody,
     fontSize: 14,
   } as React.CSSProperties,

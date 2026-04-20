@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Dict, Set, List, Union
 
-import dataclasses
 import json
 
 from pydantic_ai import Agent
@@ -27,6 +26,7 @@ from pydantic_ai.messages import (
     ThinkingPartDelta,
 )
 
+from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace
 from statement_types import StatementType, get_variant, template_path as get_template_path
 from extraction.agent import create_extraction_agent
 
@@ -232,48 +232,16 @@ async def run_extraction(
         # after all parallel runs complete).
         if push_sentinel and event_queue is not None:
             await event_queue.put(None)
-        # Clean up task references
-        if session_id:
-            task_registry.remove_session(session_id)
+        # NOTE: task_registry cleanup used to live here
+        # (remove_session(session_id)), but that erased notes-agent task
+        # references mid-flight whenever face finished before notes. The
+        # outer orchestrator now owns session cleanup — see
+        # server.run_multi_agent_stream's finally block. When this
+        # coordinator runs standalone (push_sentinel=True, no notes
+        # multiplex), the caller is still responsible for calling
+        # task_registry.remove_session.
 
     return CoordinatorResult(agent_results=results)
-
-
-def _save_agent_trace(result, output_dir: str, stmt_prefix: str) -> None:
-    """Save per-statement conversation trace (minus binary data) for debugging."""
-    try:
-        messages = []
-        for msg in result.all_messages():
-            if hasattr(msg, "model_dump"):
-                msg_dict = msg.model_dump(mode="json")
-            elif dataclasses.is_dataclass(msg):
-                msg_dict = dataclasses.asdict(msg)
-            else:
-                msg_dict = {"raw": str(msg)}
-            # Strip binary image data to keep traces readable
-            _strip_binary(msg_dict)
-            messages.append(msg_dict)
-
-        trace_path = Path(output_dir) / f"{stmt_prefix}_conversation_trace.json"
-        trace_path.write_text(
-            json.dumps({"messages": messages}, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
-    except Exception as e:
-        logger.warning("Failed to save trace for %s: %s", stmt_prefix, e)
-
-
-def _strip_binary(obj: Any) -> None:
-    """Recursively remove binary content from dicts/lists for trace readability."""
-    if isinstance(obj, dict):
-        for key in list(obj.keys()):
-            if key in ("data", "content") and isinstance(obj[key], (bytes, str)) and len(str(obj[key])) > 500:
-                obj[key] = f"<{len(str(obj[key]))} bytes stripped>"
-            else:
-                _strip_binary(obj[key])
-    elif isinstance(obj, list):
-        for item in obj:
-            _strip_binary(item)
 
 
 async def _run_single_agent(
@@ -318,16 +286,15 @@ async def _run_single_agent(
         # Track tool call durations and thinking block IDs
         _tool_start_times: dict[str, float] = {}
         _thinking_counter = 0
-        MAX_ITERATIONS = 50  # Safety cap to prevent infinite loops
         _iteration_count = 0
 
         # Use agent.iter() for granular streaming instead of agent.run()
         async with agent.iter(prompt, deps=deps) as agent_run:
             async for node in agent_run:
                 _iteration_count += 1
-                if _iteration_count > MAX_ITERATIONS:
+                if _iteration_count > MAX_AGENT_ITERATIONS:
                     raise RuntimeError(
-                        f"Hit iteration limit ({MAX_ITERATIONS}). "
+                        f"Hit iteration limit ({MAX_AGENT_ITERATIONS}). "
                         f"Agent appears stuck in a loop."
                     )
                 if Agent.is_call_tools_node(node):
@@ -428,7 +395,7 @@ async def _run_single_agent(
         result = agent_run.result
 
         # Save per-statement conversation trace for debugging/audit
-        _save_agent_trace(result, output_dir, statement_type.value)
+        save_agent_trace(result, output_dir, statement_type.value)
 
         await _emit("complete", {
             "success": True,

@@ -18,8 +18,8 @@ const STATUS_DISPLAY: Record<
   CrossCheckResult["status"],
   { label: string; color: string; bg: string }
 > = {
-  passed: { label: "Passed", color: pwc.success, bg: "#F0FDF4" },
-  failed: { label: "Failed", color: pwc.error, bg: "#FEF2F2" },
+  passed: { label: "Passed", color: pwc.success, bg: pwc.successBg },
+  failed: { label: "Failed", color: pwc.error, bg: pwc.errorBg },
   pending: { label: "Pending", color: "#D97706", bg: "#FFFBEB" },
   not_applicable: { label: "N/A", color: pwc.grey500, bg: pwc.grey100 },
 };

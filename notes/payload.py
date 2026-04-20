@@ -9,8 +9,43 @@ fuzzy label resolution — see `notes/writer.py`).
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
+
+
+# Recognised keys for NotesPayload.numeric_values. Wrong keys used to fall
+# through `dict.get` in the writer and land as silently-empty cells — so
+# the payload now validates up front. `cy`/`py` are accepted as company
+# aliases for single-filing templates.
+_NUMERIC_KEYS = frozenset({
+    "group_cy", "group_py", "company_cy", "company_py", "cy", "py",
+})
+
+
+def _coerce_numeric(key: str, value: object) -> float:
+    """Return a finite float, or raise ValueError describing the failure.
+
+    Strings, bools, NaN, and +/-inf are rejected so malformed model output
+    can't land as literal text or error values in the Issued Capital /
+    Related Party movement tables (whose totals depend on numeric cells).
+    """
+    # bool is a subclass of int — reject it first so True/False don't slip
+    # through the numeric check.
+    if isinstance(value, bool):
+        raise ValueError(f"numeric_values[{key!r}] is a bool, expected number")
+    if not isinstance(value, (int, float)):
+        raise ValueError(
+            f"numeric_values[{key!r}] is {type(value).__name__} "
+            f"({value!r}), expected int or float"
+        )
+    f = float(value)
+    if math.isnan(f) or math.isinf(f):
+        raise ValueError(
+            f"numeric_values[{key!r}] is non-finite ({value!r}); "
+            f"Excel would render it as #NUM!"
+        )
+    return f
 
 
 @dataclass
@@ -39,3 +74,15 @@ class NotesPayload:
                 "evidence is required for any payload with content or "
                 "numeric_values (PLAN Section 2 #11)"
             )
+        if self.numeric_values:
+            bad = sorted(set(self.numeric_values) - _NUMERIC_KEYS)
+            if bad:
+                raise ValueError(
+                    f"numeric_values contains unknown key(s) {bad} — "
+                    f"accepted keys: {sorted(_NUMERIC_KEYS)}"
+                )
+            # Coerce-and-validate each value. Rebuilds the dict so downstream
+            # consumers see canonical floats (not ints, not the raw input).
+            self.numeric_values = {
+                k: _coerce_numeric(k, v) for k, v in self.numeric_values.items()
+            }

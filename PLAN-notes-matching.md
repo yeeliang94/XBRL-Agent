@@ -605,17 +605,17 @@ Will not block planning, but worth answering before/during Phase A:
 [ ] B.3 — Notes 14 (Related Party)
 🔵 CHECKPOINT B — human review
 
-[ ] C.1 — Notes-12 sub-coordinator skeleton + batch splitter
-[ ] C.2 — Notes-12 prompt + end-to-end
+🟩 C.1 — Notes-12 sub-coordinator skeleton + batch splitter (done — 13 tests green)
+🟩 C.2 — Notes-12 prompt + end-to-end (done — 6 tests green)
 🔵 CHECKPOINT C — human review
 
-[ ] D.1 — backend API + types
-[ ] D.2 — pre-run panel checkboxes
-[ ] D.3 — live timeline + history rendering
+🟩 D.1 — backend API + types (notes_to_run already wired server-side; frontend RunConfigPayload + NotesTemplateType types added)
+🟩 D.2 — pre-run panel checkboxes (5 notes checkboxes, default OFF; notes-only runs allowed)
+🟩 D.3 — live timeline + history rendering (AgentTabs notes bucket + notesInRun gate + NOTES_TAB_LABELS)
 🔵 CHECKPOINT D — human review
 
-[ ] E.1 — retry-budget enforcement
-[ ] E.2 — multi-page continuation prompt tuning + char-limit guard
-[ ] E.3 — final E2E + CLAUDE.md docs
+🟩 E.1 — retry-budget enforcement (SINGLE_AGENT_MAX_RETRIES + notes_<TEMPLATE>_failures.json side-log)
+🟩 E.2 — multi-page continuation prompt tuning + char-limit guard (test_notes_continuation.py + test_notes_char_limit.py)
+🟩 E.3 — final E2E + CLAUDE.md docs (test_notes_e2e_full_pipeline.py + §14 Notes Feature + Files-to-sync rows)
 🔵 CHECKPOINT E — final sign-off → merge worktree
 ```
