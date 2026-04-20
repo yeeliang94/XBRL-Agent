@@ -642,11 +642,18 @@ async def _run_list_of_notes_fanout(
         # Fail the sheet explicitly so the run shows "Notes-12 failed:
         # empty inventory" in History instead of a silent green tick.
         if not inventory:
-            err = (
-                "Notes-12 has no inventory to fan out. Scout's notes-inventory "
-                "builder found no note headers (common on scanned PDFs where "
-                "PyMuPDF cannot extract text). Nothing to extract — "
-                "failing the sheet loudly instead of shipping an untouched template."
+            # Short one-sentence message for UI toasts + history. The full
+            # diagnostic (operator-facing: scanned-PDF hint, PyMuPDF context,
+            # the "fail loud" rationale) lands in the structured log
+            # identified by session_id — SSE/history doesn't have room for
+            # a wall of text (PR B.4).
+            err = "Notes-12: no inventory to fan out (scout found no note headers)"
+            logger.error(
+                "Notes-12 empty inventory for session=%s: scout's deterministic "
+                "PyMuPDF-regex pass found no note headers (common on scanned "
+                "PDFs where PyMuPDF cannot extract text). Failing the sheet "
+                "loudly instead of shipping an untouched template.",
+                session_id,
             )
             await _emit("error", {"message": err})
             await _emit("complete", {"success": False, "error": err})
