@@ -313,6 +313,36 @@ class TestRetryAndIsolation:
         assert result.retry_count == 1
         assert len(result.payloads) == 1
 
+    @pytest.mark.asyncio
+    async def test_retry_count_is_zero_on_first_try_success(self, tmp_path: Path):
+        """PR A.4: retry_count is the number of retries performed; first-try
+        success must report 0 (not 1) so operators can distinguish a clean
+        run from one that required a retry."""
+        from notes.listofnotes_subcoordinator import (
+            _run_list_of_notes_sub_agent,
+        )
+
+        pdf_path = tmp_path / "dummy.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+        batch = _make_inventory(2)
+
+        async def fake_invoke(**_):
+            return [_make_payload("Disclosure of revenue")]
+
+        with patch("notes.listofnotes_subcoordinator._invoke_sub_agent_once",
+                   side_effect=fake_invoke):
+            result = await _run_list_of_notes_sub_agent(
+                sub_agent_id="notes:LIST_OF_NOTES:sub0",
+                batch=batch,
+                pdf_path=str(pdf_path),
+                filing_level="company",
+                model="test",
+                output_dir=str(tmp_path),
+                max_retries=1,
+            )
+        assert result.status == "succeeded"
+        assert result.retry_count == 0
+
 
 # ---------------------------------------------------------------------------
 # Unmatched-row-112 side-logging
