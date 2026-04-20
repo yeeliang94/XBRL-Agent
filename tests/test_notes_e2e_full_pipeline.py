@@ -200,7 +200,10 @@ async def test_all_five_notes_sheets_run_end_to_end(tmp_path: Path):
 
     with patch("notes.coordinator._run_single_notes_agent", side_effect=fake_single_agent), \
          patch(
-             "notes.listofnotes_subcoordinator.run_listofnotes_subcoordinator",
+             # Patch at the coordinator's lookup site — B.2 moved the import
+             # from function scope to module top, so the coordinator captures
+             # its own reference to this function at import time.
+             "notes.coordinator.run_listofnotes_subcoordinator",
              side_effect=fake_sub_coordinator,
          ):
         result = await run_notes_extraction(config, infopack=infopack)
