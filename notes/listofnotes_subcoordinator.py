@@ -183,10 +183,21 @@ async def run_listofnotes_subcoordinator(
     # handling) can still be surfaced as a failed SubAgentRunResult instead
     # of silently vanishing from the failure log.
     task_metadata: list[tuple[asyncio.Task, str, list[NoteInventoryEntry]]] = []
-    for i, batch in enumerate(batches):
-        sub_id = f"{agent_id}:sub{i}"
-        task = asyncio.create_task(
-            _run_list_of_notes_sub_agent(
+
+    async def _run_sub_with_cleanup(
+        sub_id: str,
+        batch: list[NoteInventoryEntry],
+    ) -> SubAgentRunResult:
+        """Run a sub-agent and guarantee task_registry unregistration on exit.
+
+        PR A.5: task_registry.register was never paired with an unregister
+        call, so sub-agent task refs lingered past completion. The outer
+        abort path's remove_session() eventually caught them, but standalone
+        cancellations and the window between abort and cleanup leaked.
+        This finally fires on success, failure, AND CancelledError.
+        """
+        try:
+            return await _run_list_of_notes_sub_agent(
                 sub_agent_id=sub_id,
                 batch=batch,
                 pdf_path=pdf_path,
@@ -197,7 +208,15 @@ async def run_listofnotes_subcoordinator(
                 parent_agent_id=agent_id,
                 max_retries=max_retries,
                 page_hints=page_hints,
-            ),
+            )
+        finally:
+            if session_id:
+                task_registry.unregister(session_id, sub_id)
+
+    for i, batch in enumerate(batches):
+        sub_id = f"{agent_id}:sub{i}"
+        task = asyncio.create_task(
+            _run_sub_with_cleanup(sub_id, batch),
             name=sub_id,
         )
         task_metadata.append((task, sub_id, batch))
