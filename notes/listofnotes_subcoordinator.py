@@ -40,6 +40,7 @@ from pydantic_ai.messages import (
 
 from agent_tracing import MAX_AGENT_ITERATIONS
 from notes.agent import create_notes_agent
+from notes.constants import NOTES_PHASE_MAP as _PHASE_MAP
 from notes.payload import NotesPayload
 from notes_types import NotesTemplateType
 from pricing import estimate_cost
@@ -51,11 +52,6 @@ logger = logging.getLogger(__name__)
 # land per PLAN section 2 edge-cases. Kept here as the single source of
 # truth so the prompt and the side-log filter agree on spelling.
 ROW_112_LABEL = "Disclosure of other notes to accounts"
-
-# Shared source of truth for tool-name → phase mapping. Peer-review #2:
-# was duplicated between notes.coordinator.NOTES_PHASE_MAP and a local
-# _PHASE_MAP here; any new notes-only tool would need both updated.
-from notes.coordinator import NOTES_PHASE_MAP as _PHASE_MAP  # noqa: E402
 
 # Per-note iteration overhead (view_pdf_pages + write_notes + an optional
 # continuation view) plus a fixed bootstrap (read_template + save_result).

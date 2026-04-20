@@ -24,6 +24,8 @@ from pydantic_ai.messages import (
 
 from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace
 from notes.agent import create_notes_agent
+from notes.constants import NOTES_PHASE_MAP
+from notes.listofnotes_subcoordinator import run_listofnotes_subcoordinator
 from notes.writer import BORDERLINE_FUZZY_SCORE
 from notes_types import NotesTemplateType
 from pricing import estimate_cost
@@ -31,15 +33,10 @@ from scout.notes_discoverer import NoteInventoryEntry
 
 logger = logging.getLogger(__name__)
 
-
-# Tool-name → phase mapping. Mirrors coordinator.PHASE_MAP so the frontend
-# timeline can colour-code notes-agent phases identically to face agents.
-NOTES_PHASE_MAP = {
-    "read_template": "reading_template",
-    "view_pdf_pages": "viewing_pdf",
-    "write_notes": "writing_notes",
-    "save_result": "complete",
-}
+# Re-exported for backwards compatibility — any caller that imports
+# NOTES_PHASE_MAP from notes.coordinator continues to work. Prefer
+# ``from notes.constants import NOTES_PHASE_MAP`` in new code.
+__all__ = ("NOTES_PHASE_MAP",)
 
 
 @dataclass
@@ -612,7 +609,6 @@ async def _run_list_of_notes_fanout(
     Returns a NotesAgentResult shaped the same as single-agent runs so the
     coordinator result list is homogeneous and the merger doesn't care.
     """
-    from notes.listofnotes_subcoordinator import run_listofnotes_subcoordinator
     from notes.writer import write_notes_workbook
     from notes_types import NOTES_REGISTRY, notes_template_path
 
