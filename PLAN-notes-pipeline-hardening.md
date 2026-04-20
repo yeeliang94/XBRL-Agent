@@ -1,6 +1,6 @@
 # Implementation Plan: Notes Pipeline Hardening (PR A + PR B)
 
-**Overall Progress:** `0%`
+**Overall Progress:** `35%` (PR A complete locally, 6/6 correctness fixes landed with regression tests; awaiting push/open-PR approval)
 **Context doc:** peer-review findings (2026-04-20). See the review message in the `vision-fallback` thread for source quotes. Items in this plan are the **pre-existing** findings from A.1 / A.2 / A.3 prior commits — none were introduced by the vision-fallback PR.
 **Last Updated:** 2026-04-20
 
@@ -23,9 +23,9 @@ Security gaps (path traversal, no auth, etc.) are intentionally **not** in scope
 - **Row-112 ordering key is `min(source_pages)`.** The first PDF page a sub-agent cited for a row is a stable ordering signal that survives re-runs.
 
 ## Pre-Implementation Checklist
-- [ ] 🟥 `main` branch clean and 609 backend + 346 frontend tests green on the current working tree
-- [ ] 🟥 Live test (`pytest -m live`) passes against FINCO fixture before starting
-- [ ] 🟥 Open one short-lived branch per PR (`hardening/pr-a-correctness`, `hardening/pr-b-cleanup`)
+- [x] 🟩 `main` branch clean and 609 backend + 346 frontend tests green on the current working tree (done 2026-04-20 after committing in-flight vision-fallback work as one prep commit)
+- [ ] 🟥 Live test (`pytest -m live`) passes against FINCO fixture before starting (skipped — costs real API spend, not auto-run)
+- [x] 🟩 Open one short-lived branch per PR (`hardening/pr-a-correctness` created; PR B branch to follow)
 
 ---
 
@@ -35,18 +35,18 @@ Six bugs, each in its own commit on the `hardening/pr-a-correctness` branch so a
 
 ### Phase 1: `notes/writer.py` — three writer correctness fixes
 
-- [ ] 🟥 **Step A1: Empty-payload no-op success flag** — `notes/writer.py:131-133`. Today `success = rows_written > 0 or not payloads` returns `True` on an untouched template; combined with Sheet-12's "no payloads = all sub-agents lost coverage", a silent green tick can ship.
+- [x] 🟩 **Step A1: Empty-payload no-op success flag** — `notes/writer.py:131-133`. Today `success = rows_written > 0 or not payloads` returns `True` on an untouched template; combined with Sheet-12's "no payloads = all sub-agents lost coverage", a silent green tick can ship.
   - [ ] 🟥 Change to `success = rows_written > 0`
   - [ ] 🟥 Update the docstring to note "callers must pre-check for empty payloads and skip the write if they want a no-op success"
   - [ ] 🟥 Audit call sites: `notes/coordinator.py:_write_template_workbook`, `notes/listofnotes_subcoordinator.py`. Confirm each one already has a short-circuit for `len(payloads) == 0`; add one if missing.
   - **Verify:** new `tests/test_notes_writer.py::test_empty_payloads_returns_failure` — `write_notes_workbook(template=X, payloads=[])` returns `success=False`, `rows_written=0`. Existing tests still pass.
 
-- [ ] 🟥 **Step A2: Evidence ghost-row fix** — `notes/writer.py:310-332`. If every value column is empty but `payload.evidence` is non-empty, the evidence cell still gets written → a row with citation text but no values.
+- [x] 🟩 **Step A2: Evidence ghost-row fix** — `notes/writer.py:310-332`. If every value column is empty but `payload.evidence` is non-empty, the evidence cell still gets written → a row with citation text but no values.
   - [ ] 🟥 Gate the evidence-write block on `wrote_anything or payload.numeric_values`
   - [ ] 🟥 Add a comment explaining why a value-less row must not carry evidence
   - **Verify:** new `tests/test_notes_writer.py::test_evidence_not_written_without_values` — payload with `content=""`, `numeric_values=None`, `evidence="foo"` → evidence cell stays unchanged in the written workbook.
 
-- [ ] 🟥 **Step A3: Row-112 deterministic ordering** — `notes/writer.py:_combine_payloads` at :203-255. Concatenation iterates `payloads` in input order, which is batch-completion order from `asyncio.wait(ALL_COMPLETED)` — non-deterministic across runs.
+- [x] 🟩 **Step A3: Row-112 deterministic ordering** — `notes/writer.py:_combine_payloads` at :203-255. Concatenation iterates `payloads` in input order, which is batch-completion order from `asyncio.wait(ALL_COMPLETED)` — non-deterministic across runs.
   - [ ] 🟥 Sort `payloads` by `min(p.source_pages)` (fallback to 0 if empty) at the start of `_combine_payloads`
   - [ ] 🟥 Do the same to the `all_pages`, `evidence_parts`, and `sub_ids` accumulators if they aren't already ordered by that same key
   - [ ] 🟥 Update the "Prose: concatenate content with blank line separators" docstring to mention the PDF-page order
@@ -54,20 +54,20 @@ Six bugs, each in its own commit on the `hardening/pr-a-correctness` branch so a
 
 ### Phase 2: `notes/listofnotes_subcoordinator.py` — two sub-coordinator fixes
 
-- [ ] 🟥 **Step A4: Unify `retry_count` accounting** — `:320-344`. Success path uses `retry_count=attempt`; failure path flips between `attempt+1` and `attempt`. Docstring at `:97-98` doesn't match either.
+- [x] 🟩 **Step A4: Unify `retry_count` accounting** (test landed in `tests/test_notes12_subcoordinator.py` instead of `tests/test_notes_retry_budget.py` — the latter covers the single-agent path which has no `retry_count` field) — `:320-344`. Success path uses `retry_count=attempt`; failure path flips between `attempt+1` and `attempt`. Docstring at `:97-98` doesn't match either.
   - [ ] 🟥 Unify on `retry_count = attempt` in both the success and failure paths (number of retries performed; 0 = first-try success)
   - [ ] 🟥 Rewrite docstring at `:97-98` to describe this semantics in one sentence
   - [ ] 🟥 Delete the dead `retry_count = attempt + 1 if attempt < max_retries else attempt` branch
   - **Verify:** extend `tests/test_notes_retry_budget.py` with a case that confirms `retry_count` equals the number of retries performed (0 on first-try success, 1 on retried success, 1 on retried failure). Sweep existing assertions for the old convention.
 
-- [ ] 🟥 **Step A5: Sub-agent task-registry leak** — `:200-217`. `task_registry.register(session_id, sub_id, task)` is never paired with a `remove` call. On abort the outer `task_registry.remove_session(session_id)` catches most of it, but between abort and cleanup the refs linger, and standalone-cancellation paths leak.
+- [x] 🟩 **Step A5: Sub-agent task-registry leak** (used existing `task_registry.unregister` instead of adding a new `remove` method — same semantics, no new API surface) — `:200-217`. `task_registry.register(session_id, sub_id, task)` is never paired with a `remove` call. On abort the outer `task_registry.remove_session(session_id)` catches most of it, but between abort and cleanup the refs linger, and standalone-cancellation paths leak.
   - [ ] 🟥 Wrap each `register` call in a `try/finally` that calls `task_registry.remove(session_id, sub_id)` once the sub-agent completes (success, failure, OR cancellation)
   - [ ] 🟥 If no `remove` method exists on `task_registry`, add one (lookup by `(session_id, task_id)`); verify with the existing `task_registry` unit tests
   - **Verify:** new `tests/test_notes12_subcoordinator.py::test_task_registry_cleared_on_completion` — register 5 sub-agents, run to completion, assert `task_registry._sessions[session_id]` is empty afterward. Mirror test for cancellation mid-run.
 
 ### Phase 3: `server.py` — one merge-scan fix
 
-- [ ] 🟥 **Step A6: Don't merge stale notes workbooks** — `server.py:1119-1126`. The final merge scans the session directory for `NOTES_*.xlsx`. Re-running the same session (same UUID isn't possible via the UI, but CLI `--output-dir` can reuse) picks up prior-run artefacts.
+- [x] 🟩 **Step A6: Don't merge stale notes workbooks** (used preferred option — iterate `notes_result.workbook_paths` only) — `server.py:1119-1126`. The final merge scans the session directory for `NOTES_*.xlsx`. Re-running the same session (same UUID isn't possible via the UI, but CLI `--output-dir` can reuse) picks up prior-run artefacts.
   - [ ] 🟥 Replace the `for nt in NotesTemplateType: if wb_path.exists(): …` loop with one of:
     - (preferred) iterate `notes_result.workbook_paths` only — the coordinator has already tracked what this run wrote
     - (fallback) gate `wb_path.exists()` on `wb_path.stat().st_mtime > run_started_at`
@@ -76,8 +76,8 @@ Six bugs, each in its own commit on the `hardening/pr-a-correctness` branch so a
 
 ### Phase 4: PR A wrap-up
 
-- [ ] 🟥 **Step A7: Full regression** — `pytest tests/ -q` green (expect +6 tests vs main baseline). `pytest -m live` green. Frontend `cd web && npx vitest run` untouched.
-- [ ] 🟥 **Step A8: Open PR A** — branch `hardening/pr-a-correctness`; title "notes pipeline: correctness hardening (PR A)"; PR body lists the six steps, cites the peer-review finding for each.
+- [x] 🟩 **Step A7: Full regression** — `pytest tests/ -q` → **616 passed** (baseline 609 + **7** new tests; +1 over plan's +6 because A.5 naturally split into completion + cancellation coverage per the plan's own "Mirror test for cancellation mid-run" instruction). Frontend 346 passed, untouched. Live test skipped — not auto-run.
+- [ ] 🟥 **Step A8: Open PR A** — branch `hardening/pr-a-correctness` exists locally with 6 commits; awaiting push/gh-pr-create approval.
 
 ---
 
