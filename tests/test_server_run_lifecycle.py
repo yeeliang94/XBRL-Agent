@@ -678,20 +678,26 @@ def test_upload_endpoint_writes_original_filename_sidecar(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# PR A.6 — stale NOTES_*_filled.xlsx files in the session directory must NOT
-# be merged back into the final workbook when this run didn't ask for notes.
+# Rerun contract: a face-statement-only rerun of a session that previously
+# had successful notes must preserve those notes in the merged workbook.
+# Peer review caught an earlier over-aggressive fix (A.6 in the draft PR
+# that was later reverted) which dropped the dir-scan for notes and broke
+# this contract. This test pins it so it can't regress.
 # ---------------------------------------------------------------------------
 
-def test_merge_ignores_stale_notes_files(session_env):
+def test_face_rerun_preserves_prior_successful_notes(session_env):
     client, session_id, out = session_env
     session_dir = out / session_id
 
-    # Pre-populate a stale NOTES_CORP_INFO_filled.xlsx — the kind of
-    # artefact left behind when a prior run (or CLI --output-dir reuse)
-    # wrote notes for CORP_INFO but this run is not extracting notes.
-    stale_path = session_dir / "NOTES_CORP_INFO_filled.xlsx"
-    stale_path.write_bytes(b"stale-fake-xlsx")
+    # Simulate a prior successful run by leaving both a face workbook and
+    # a notes workbook in the session_dir.
+    prior_sopl = session_dir / "SOPL_filled.xlsx"
+    prior_sopl.write_bytes(b"prior-sopl")
+    prior_corp_info = session_dir / "NOTES_CORP_INFO_filled.xlsx"
+    prior_corp_info.write_bytes(b"prior-corp-info")
 
+    # Rerun just SOFP. notes_to_run is empty — user is NOT re-extracting
+    # notes this time.
     agent_results = [
         AgentResult(
             statement_type=StatementType.SOFP, variant="CuNonCu",
@@ -703,6 +709,7 @@ def test_merge_ignores_stale_notes_files(session_env):
     captured_kwargs: dict = {}
 
     def spy_merge(workbook_paths, output_path, **kwargs):
+        captured_kwargs["workbook_paths"] = dict(workbook_paths)
         captured_kwargs["notes_workbook_paths"] = kwargs.get("notes_workbook_paths")
         return MergeResult(success=True, output_path=output_path, sheets_copied=1)
 
@@ -712,18 +719,27 @@ def test_merge_ignores_stale_notes_files(session_env):
         "models": {},
         "infopack": None,
         "use_scout": False,
-        # No notes_to_run — this is a face-only run, so nothing should
-        # flow into notes_workbook_paths at the merger layer.
+        "notes_to_run": [],
     }
 
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
          patch("workbook_merger.merge", side_effect=spy_merge), \
          patch("cross_checks.framework.run_all", return_value=[]):
+        # Use the regular /api/run path since TestClient doesn't easily
+        # differentiate rerun from run — they share the same stream handler
+        # and the contract we're pinning (session_dir scan picks up prior
+        # notes) applies to both.
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
-    # Merger must have received an EMPTY notes_workbook_paths dict —
-    # the stale NOTES_CORP_INFO_filled.xlsx must not be smuggled in.
-    assert "notes_workbook_paths" in captured_kwargs
-    assert captured_kwargs["notes_workbook_paths"] == {}
+    # Face scan picked up SOPL from the prior run + SOFP from this run.
+    face_paths = captured_kwargs["workbook_paths"]
+    assert StatementType.SOFP in face_paths
+    assert StatementType.SOPL in face_paths
+    # Prior notes must flow into the merger — otherwise the face-only
+    # rerun would silently drop them.
+    from notes_types import NotesTemplateType
+    notes_paths = captured_kwargs["notes_workbook_paths"]
+    assert NotesTemplateType.CORP_INFO in notes_paths
+    assert notes_paths[NotesTemplateType.CORP_INFO] == str(prior_corp_info)
