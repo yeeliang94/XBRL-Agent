@@ -94,8 +94,8 @@ class _SubAgentNoWriteError(RuntimeError):
 
 @dataclass
 class SubAgentRunResult:
-    """One sub-agent's outcome. Retry count is 0 on first-try success,
-    1 after one retry (regardless of whether that retry succeeded)."""
+    """One sub-agent's outcome. ``retry_count`` is the number of retries
+    performed (0 = first-try success; 1 = one retry, success or failure)."""
     sub_agent_id: str
     batch: list[NoteInventoryEntry]
     payloads: list[NotesPayload]
@@ -287,7 +287,10 @@ async def _run_list_of_notes_sub_agent(
     on any exception; after ``max_retries`` consecutive failures, marks
     the sub-agent as failed and returns an empty payload list."""
     last_error: Optional[str] = None
-    retry_count = 0
+    attempt = 0  # the for loop will clobber this; initialised for the
+                 # ``max_retries=-1``-style edge case where the loop body
+                 # never executes (shouldn't happen but keeps the post-loop
+                 # `retry_count=attempt` well-defined).
 
     for attempt in range(max_retries + 1):
         try:
@@ -325,7 +328,6 @@ async def _run_list_of_notes_sub_agent(
             raise
         except Exception as e:
             last_error = str(e)
-            retry_count = attempt + 1 if attempt < max_retries else attempt
             if attempt >= max_retries:
                 break
             logger.warning(
@@ -340,7 +342,7 @@ async def _run_list_of_notes_sub_agent(
         payloads=[],
         status="failed",
         error=last_error,
-        retry_count=retry_count,
+        retry_count=attempt,
     )
 
 
