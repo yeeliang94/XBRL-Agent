@@ -680,3 +680,100 @@ class TestZeroPayloadRetryThenFail:
         assert result.status == "succeeded"
         assert result.payloads == good
         assert result.retry_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Task-registry cleanup (PR A.5)
+# ---------------------------------------------------------------------------
+
+class TestTaskRegistryCleanup:
+    @pytest.mark.asyncio
+    async def test_task_registry_cleared_on_completion(self, tmp_path: Path):
+        """PR A.5: every sub-agent task registered with task_registry must be
+        unregistered on completion so refs don't linger past the run."""
+        import task_registry
+        from notes.listofnotes_subcoordinator import (
+            SubAgentRunResult,
+            run_listofnotes_subcoordinator,
+        )
+
+        session_id = "test-session-a5-completion"
+        # Pre-condition: registry has nothing for this session.
+        task_registry.remove_session(session_id)
+
+        pdf_path = tmp_path / "dummy.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+        inv = _make_inventory(5)
+
+        async def fake_sub(sub_agent_id, batch, **_):
+            return SubAgentRunResult(
+                sub_agent_id=sub_agent_id,
+                batch=batch,
+                payloads=[_make_payload("Disclosure of revenue")],
+                status="succeeded",
+            )
+
+        with patch("notes.listofnotes_subcoordinator._run_list_of_notes_sub_agent",
+                   side_effect=fake_sub):
+            await run_listofnotes_subcoordinator(
+                pdf_path=str(pdf_path),
+                inventory=inv,
+                filing_level="company",
+                model="test",
+                output_dir=str(tmp_path),
+                parallel=5,
+                session_id=session_id,
+            )
+        # After completion, every registered sub-agent ref must be gone.
+        # task_registry drops the empty session dict once all entries are
+        # removed, so _tasks should have no key for session_id at all.
+        assert session_id not in task_registry._tasks
+
+    @pytest.mark.asyncio
+    async def test_task_registry_cleared_on_cancellation(self, tmp_path: Path):
+        """PR A.5: cancellation mid-run must still unregister sub-agent refs
+        (the finally block covers success, failure, AND CancelledError)."""
+        import asyncio as _asyncio
+        import task_registry
+        from notes.listofnotes_subcoordinator import (
+            run_listofnotes_subcoordinator,
+        )
+
+        session_id = "test-session-a5-cancel"
+        task_registry.remove_session(session_id)
+
+        pdf_path = tmp_path / "dummy.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+        inv = _make_inventory(5)
+
+        async def fake_sub(sub_agent_id, batch, **_):
+            # Long-running sub-agent so we have time to cancel.
+            await _asyncio.sleep(10)
+            raise AssertionError("should have been cancelled before sleep completed")
+
+        async def _run_then_cancel():
+            task = _asyncio.create_task(
+                run_listofnotes_subcoordinator(
+                    pdf_path=str(pdf_path),
+                    inventory=inv,
+                    filing_level="company",
+                    model="test",
+                    output_dir=str(tmp_path),
+                    parallel=5,
+                    session_id=session_id,
+                )
+            )
+            # Give the sub-coordinator time to register sub-agent tasks.
+            await _asyncio.sleep(0.05)
+            assert session_id in task_registry._tasks
+            task.cancel()
+            with pytest.raises(_asyncio.CancelledError):
+                await task
+
+        with patch("notes.listofnotes_subcoordinator._run_list_of_notes_sub_agent",
+                   side_effect=fake_sub):
+            await _run_then_cancel()
+
+        # After cancellation propagates, the finally in _run_sub_with_cleanup
+        # must have unregistered every sub-agent ref.
+        assert session_id not in task_registry._tasks
