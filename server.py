@@ -600,6 +600,40 @@ def _safe_mark_finished(
         return False
 
 
+def _fail_run(db_conn: "Optional[Any]", run_id: Optional[int], msg: str):
+    """Build the error + run_complete SSE events and mark the run row failed.
+
+    Extracted to dedupe the five-line failure quartet
+    (error → run_complete → mark_run_finished → terminal_status → return)
+    that appeared in six input-validation paths inside
+    ``run_multi_agent_stream`` (PR B.5).
+
+    Returns a ``(events, new_terminal_status)`` tuple. ``events`` is a list
+    of SSE events the caller must yield in order. ``new_terminal_status``
+    is ``"failed"`` when the DB write succeeded, ``None`` otherwise — the
+    caller updates its own ``terminal_status`` book-keeping accordingly so
+    the try/finally block still retries the mark if we couldn't write it.
+
+    Not a generator because the caller is an ``async def`` generator and
+    ``yield from`` is a syntax error in that context — see
+    https://docs.python.org/3/reference/expressions.html#yieldexpr.
+
+    Usage::
+
+        events, new_status = _fail_run(db_conn, run_id, msg)
+        for ev in events:
+            yield ev
+        terminal_status = new_status or terminal_status
+        return
+    """
+    events = [
+        {"event": "error", "data": {"message": msg}},
+        {"event": "run_complete", "data": {"success": False, "message": msg}},
+    ]
+    new_status = "failed" if _safe_mark_finished(db_conn, run_id, "failed") else None
+    return events, new_status
+
+
 async def run_multi_agent_stream(
     session_id: str,
     session_dir: Path,
@@ -626,6 +660,7 @@ async def run_multi_agent_stream(
     """
     from coordinator import RunConfig, run_extraction as coordinator_run
     from notes.coordinator import (
+        NotesAgentResult,
         NotesRunConfig,
         run_notes_extraction,
         NotesCoordinatorResult,
@@ -724,10 +759,10 @@ async def run_multi_agent_stream(
             try:
                 statements_to_run.add(StatementType(s))
             except ValueError:
-                yield {"event": "error", "data": {"message": f"Unknown statement type: {s}"}}
-                yield {"event": "run_complete", "data": {"success": False, "message": f"Unknown statement type: {s}"}}
-                if _safe_mark_finished(db_conn, run_id, "failed"):
-                    terminal_status = "failed"
+                events, new_status = _fail_run(db_conn, run_id, f"Unknown statement type: {s}")
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
                 return
 
         # Parse notes templates up-front (before pre-creating run_agents rows),
@@ -740,17 +775,16 @@ async def run_multi_agent_stream(
             try:
                 parsed_note = NotesTemplateType(n)
             except ValueError:
-                yield {"event": "error", "data": {"message": f"Unknown notes template: {n}"}}
-                yield {"event": "run_complete", "data": {"success": False, "message": f"Unknown notes template: {n}"}}
-                if _safe_mark_finished(db_conn, run_id, "failed"):
-                    terminal_status = "failed"
+                events, new_status = _fail_run(db_conn, run_id, f"Unknown notes template: {n}")
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
                 return
             if parsed_note not in _PUBLIC_NOTES_TEMPLATES:
-                msg = f"Notes template not available yet: {n}"
-                yield {"event": "error", "data": {"message": msg}}
-                yield {"event": "run_complete", "data": {"success": False, "message": msg}}
-                if _safe_mark_finished(db_conn, run_id, "failed"):
-                    terminal_status = "failed"
+                events, new_status = _fail_run(db_conn, run_id, f"Notes template not available yet: {n}")
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
                 return
             notes_to_run.add(parsed_note)
 
@@ -786,10 +820,10 @@ async def run_multi_agent_stream(
             logger.exception(
                 "Override model construction failed for session %s", session_id,
             )
-            yield {"event": "error", "data": {"message": f"Model override failed: {e}"}}
-            yield {"event": "run_complete", "data": {"success": False, "message": f"Model override failed: {e}"}}
-            if _safe_mark_finished(db_conn, run_id, "failed"):
-                terminal_status = "failed"
+            events, new_status = _fail_run(db_conn, run_id, f"Model override failed: {e}")
+            for ev in events:
+                yield ev
+            terminal_status = new_status or terminal_status
             return
 
         # Resolve infopack
@@ -800,10 +834,10 @@ async def run_multi_agent_stream(
                 # from_json expects a JSON string; request body gives us a dict
                 infopack = Infopack.from_json(json.dumps(run_config.infopack))
             except Exception as e:
-                yield {"event": "error", "data": {"message": f"Invalid infopack: {e}"}}
-                yield {"event": "run_complete", "data": {"success": False, "message": f"Invalid infopack: {e}"}}
-                if _safe_mark_finished(db_conn, run_id, "failed"):
-                    terminal_status = "failed"
+                events, new_status = _fail_run(db_conn, run_id, f"Invalid infopack: {e}")
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
                 return
 
         # Create the model object for the coordinator. May raise if the
@@ -816,10 +850,10 @@ async def run_multi_agent_stream(
             logger.exception(
                 "Model construction failed for session %s", session_id,
             )
-            yield {"event": "error", "data": {"message": f"Model setup failed: {e}"}}
-            yield {"event": "run_complete", "data": {"success": False, "message": f"Model setup failed: {e}"}}
-            if _safe_mark_finished(db_conn, run_id, "failed"):
-                terminal_status = "failed"
+            events, new_status = _fail_run(db_conn, run_id, f"Model setup failed: {e}")
+            for ev in events:
+                yield ev
+            terminal_status = new_status or terminal_status
             return
 
         config = RunConfig(
@@ -1054,7 +1088,6 @@ async def run_multi_agent_stream(
         # Synthesize a failed NotesCoordinatorResult with one entry per
         # requested template so overall-status logic and the finalization
         # loop above both see the failure.
-        from notes.coordinator import NotesAgentResult as _NotesAgentResult
         notes_result: Optional[NotesCoordinatorResult] = None
         try:
             notes_result = await notes_task
@@ -1062,7 +1095,7 @@ async def run_multi_agent_stream(
             logger.info("Notes coordinator cancelled", extra={"session_id": session_id})
             if notes_to_run:
                 notes_result = NotesCoordinatorResult(agent_results=[
-                    _NotesAgentResult(
+                    NotesAgentResult(
                         template_type=nt,
                         status="cancelled",
                         error="Cancelled by user",
@@ -1072,7 +1105,7 @@ async def run_multi_agent_stream(
             logger.exception("Notes coordinator failed", extra={"session_id": session_id})
             if notes_to_run:
                 notes_result = NotesCoordinatorResult(agent_results=[
-                    _NotesAgentResult(
+                    NotesAgentResult(
                         template_type=nt,
                         status="failed",
                         error=f"Notes coordinator crashed: {e}",
