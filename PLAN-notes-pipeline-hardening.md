@@ -1,6 +1,6 @@
 # Implementation Plan: Notes Pipeline Hardening (PR A + PR B)
 
-**Overall Progress:** `35%` (PR A complete locally, 6/6 correctness fixes landed with regression tests; awaiting push/open-PR approval)
+**Overall Progress:** `100%` — PR A (#1), PR B (#2), PR C (#3) all opened on GitHub. Test suite: 619 backend / 346 frontend passing at PR B tip. PR B is stacked on PR A; PR C is doc-only and independent.
 **Context doc:** peer-review findings (2026-04-20). See the review message in the `vision-fallback` thread for source quotes. Items in this plan are the **pre-existing** findings from A.1 / A.2 / A.3 prior commits — none were introduced by the vision-fallback PR.
 **Last Updated:** 2026-04-20
 
@@ -77,7 +77,7 @@ Six bugs, each in its own commit on the `hardening/pr-a-correctness` branch so a
 ### Phase 4: PR A wrap-up
 
 - [x] 🟩 **Step A7: Full regression** — `pytest tests/ -q` → **616 passed** (baseline 609 + **7** new tests; +1 over plan's +6 because A.5 naturally split into completion + cancellation coverage per the plan's own "Mirror test for cancellation mid-run" instruction). Frontend 346 passed, untouched. Live test skipped — not auto-run.
-- [ ] 🟥 **Step A8: Open PR A** — branch `hardening/pr-a-correctness` exists locally with 6 commits; awaiting push/gh-pr-create approval.
+- [x] 🟩 **Step A8: Open PR A** — https://github.com/yeeliang94/XBRL-Agent/pull/1
 
 ---
 
@@ -87,12 +87,12 @@ Pure refactor — zero behavioural change, zero test edits except import adjustm
 
 ### Phase 5: Constants / imports
 
-- [ ] 🟥 **Step B1: Dedupe `_BORDERLINE_FUZZY` / `_BORDERLINE_FUZZY_SCORE`** — `notes/coordinator.py:789` duplicates `notes/writer.py:60` with a "known duplicate" comment. Constant drift risk.
+- [x] 🟩 **Step B1: Dedupe `_BORDERLINE_FUZZY` / `_BORDERLINE_FUZZY_SCORE`** — `notes/coordinator.py:789` duplicates `notes/writer.py:60` with a "known duplicate" comment. Constant drift risk.
   - [ ] 🟥 Export `BORDERLINE_FUZZY_SCORE` as a public constant from `notes/writer.py` (one name, drop the underscore on one of them)
   - [ ] 🟥 Import in `notes/coordinator.py`; delete the local copy + "known duplicate" comment
   - **Verify:** `pytest tests/test_notes_writer.py tests/test_notes_coordinator.py -q` green; grep for the old private names returns 0 matches.
 
-- [ ] 🟥 **Step B2: Break `NOTES_PHASE_MAP` circular import** — `notes/listofnotes_subcoordinator.py:58` imports `NOTES_PHASE_MAP` from `notes.coordinator`, but `notes.coordinator.py:534` (inside a function) imports from `listofnotes_subcoordinator`. Today's workaround: function-scoped import. Cleaner: move the constant.
+- [x] 🟩 **Step B2: Break `NOTES_PHASE_MAP` circular import** (one test patch target updated — see PR description) — `notes/listofnotes_subcoordinator.py:58` imports `NOTES_PHASE_MAP` from `notes.coordinator`, but `notes.coordinator.py:534` (inside a function) imports from `listofnotes_subcoordinator`. Today's workaround: function-scoped import. Cleaner: move the constant.
   - [ ] 🟥 Create `notes/constants.py` holding `NOTES_PHASE_MAP`
   - [ ] 🟥 Update both importers to read from there
   - [ ] 🟥 Drop the function-scoped import in `notes/coordinator.py`
@@ -100,18 +100,18 @@ Pure refactor — zero behavioural change, zero test edits except import adjustm
 
 ### Phase 6: Readability
 
-- [ ] 🟥 **Step B3: Type `Infopack.notes_page_hints` properly** — `notes/coordinator.py:121-145` uses a three-layer `getattr` / `callable` / `try/except` defence for what is a typed method on `Infopack`.
+- [x] 🟩 **Step B3: Type `Infopack.notes_page_hints` properly** — `notes/coordinator.py:121-145` uses a three-layer `getattr` / `callable` / `try/except` defence for what is a typed method on `Infopack`.
   - [ ] 🟥 Confirm `Infopack.notes_page_hints()` is defined on all code paths (check `scout/infopack.py`)
   - [ ] 🟥 Replace the defensive block with a direct call
   - [ ] 🟥 Update the type hint on the calling function to reflect the non-optional return
   - **Verify:** `pytest tests/test_notes_coordinator.py -q` green. Static check: `python3 -c "from scout.infopack import Infopack; Infopack(toc_page=1, page_offset=0).notes_page_hints()"` returns `[]` without error.
 
-- [ ] 🟥 **Step B4: Trim SSE error prose** — `notes/coordinator.py:578-595` emits a ~70-word error prose block straight into the SSE `run_complete` payload. UI renders it verbatim → wall of text in the toast.
+- [x] 🟩 **Step B4: Trim SSE error prose** — `notes/coordinator.py:578-595` emits a ~70-word error prose block straight into the SSE `run_complete` payload. UI renders it verbatim → wall of text in the toast.
   - [ ] 🟥 Keep UI-facing message to one sentence (≤ 120 chars); land the full diagnostic via `logger.error(...)` with the run's session_id
   - [ ] 🟥 Verify frontend rendering (`SuccessToast.tsx`, `RunDetailView.tsx`) wraps gracefully regardless — no change expected
   - **Verify:** read the SSE payload in a browser devtools trace on a forced-failure run; error field ≤ 120 chars. `grep -r "notes coordinator failed" logs/` shows the long form.
 
-- [ ] 🟥 **Step B5: `_fail_run` helper in `server.py`** — the notes fail path in `run_multi_agent_stream` repeats the `error + run_complete(success=False) + mark_run_finished('failed') + return` quartet in three places (:739-755, :1057, and one more).
+- [x] 🟩 **Step B5: `_fail_run` helper in `server.py`** (applied to all 6 fail quartets, not just 3; returns `(events, new_status)` tuple because async generators can't use `yield from`) — the notes fail path in `run_multi_agent_stream` repeats the `error + run_complete(success=False) + mark_run_finished('failed') + return` quartet in three places (:739-755, :1057, and one more).
   - [ ] 🟥 Extract a `_fail_run(session_id, error_msg, …)` helper at module level
   - [ ] 🟥 Hoist the late `from notes.coordinator import NotesAgentResult` at `:1057` to a top-level lazy block
   - [ ] 🟥 Call sites collapse to one line each
@@ -119,22 +119,22 @@ Pure refactor — zero behavioural change, zero test edits except import adjustm
 
 ### Phase 7: Test coverage gaps (identified by reviewer; ship in PR B to close the loop)
 
-- [ ] 🟥 **Step B6: Notes-coordinator-crash E2E** — peer-review: no test covers `server.py:1071-1080`, the "notes coordinator raises → synthesized failed result" path.
+- [x] 🟩 **Step B6: Notes-coordinator-crash E2E** — peer-review: no test covers `server.py:1071-1080`, the "notes coordinator raises → synthesized failed result" path.
   - [ ] 🟥 Add `tests/test_server_run_lifecycle.py::test_notes_coordinator_crash_synthesizes_failed_result` — patch `run_notes_extraction` to raise; assert `run_complete.success is False` AND every requested template in `run_complete.notes_failed`.
   - **Verify:** test passes; same test with the synthesis code deleted fails.
 
-- [ ] 🟥 **Step B7: Sheet-12 fan-out cancel-after-raise** — mirror of `tests/test_notes_retry_budget.py:258-287` but for Sheet-12 sub-coordinator's `_safe_emit`.
+- [x] 🟩 **Step B7: Sheet-12 fan-out cancel-after-raise** — mirror of `tests/test_notes_retry_budget.py:258-287` but for Sheet-12 sub-coordinator's `_safe_emit`.
   - [ ] 🟥 Add `tests/test_notes12_subcoordinator.py::test_safe_emit_swallows_queue_closed_on_cancel` — cancel mid-run after queue close; assert no exception bubbles past the sub-coordinator boundary.
   - **Verify:** test passes; reverting the `_safe_emit` safety catch fails it.
 
-- [ ] 🟥 **Step B8: Verifier SOCF double-sign edge patterns** — peer-review suggestion.
+- [x] 🟩 **Step B8: Verifier SOCF double-sign edge patterns** — peer-review suggestion.
   - [ ] 🟥 Add `tests/test_verifier_formula.py::test_resolves_double_prefix_coefficients` with inputs `=++1*B7` and `=--1*B7` → resolve to `+B7` and `+B7` respectively.
   - **Verify:** both cases green; removing the sign-normalising branch in `tools/verifier.py:279-296` fails them.
 
 ### Phase 8: PR B wrap-up
 
-- [ ] 🟥 **Step B9: Full regression** — `pytest tests/ -q` green; `pytest -m live` green; frontend unchanged. Diff review: confirm no behavioural code is altered (only moves + helper extractions).
-- [ ] 🟥 **Step B10: Open PR B** — branch `hardening/pr-b-cleanup`; title "notes pipeline: cleanup refactor (PR B)"; body lists the eight steps.
+- [x] 🟩 **Step B9: Full regression** — backend 619 passed (PR A tip 616 + B.6/B.7/B.8 = +3 tests); frontend 346 unchanged. Live test skipped (not auto-run).
+- [x] 🟩 **Step B10: Open PR B** — https://github.com/yeeliang94/XBRL-Agent/pull/2 (based on `hardening/pr-a-correctness`).
 
 ---
 
@@ -144,7 +144,7 @@ This is a doc-only change with a distinct blast radius (no code touched), shippi
 
 ### Phase 9: Document known security gaps
 
-- [ ] 🟥 **Step C1: New `Known Security Gaps` section in `CLAUDE.md`** — positioned after the "Known Issues & Gotchas" list (after gotcha #14). Title: **`### 15. Known Security Gaps (local-dev tool only)`**. Body enumerates:
+- [x] 🟩 **Step C1: New `Known Security Gaps` section in `CLAUDE.md`** — positioned after the "Known Issues & Gotchas" list (after gotcha #14). Title: **`### 15. Known Security Gaps (local-dev tool only)`**. Body enumerates:
   1. **Path traversal on session-id path params** (`/api/scout`, `/api/run`, `/api/rerun`, `/api/download/{session_id}`) — only `/api/result/{session_id}/{filename}` validates. Accept: arbitrary strings. Risk on localhost: low; on a hosted surface: high. Fix: shared `_validate_session_id()` helper (reject `..`, `/`, `\\`; prefer UUID4 regex), call at every endpoint.
   2. **No auth on `/api/settings`** — writes `GOOGLE_API_KEY` into `.env` on any localhost request. Fix: shared-secret header on `settings`, `run`, `abort`, `delete`.
   3. **No CORS config** — implicit allow-all. Fix: explicit `CORSMiddleware` with an allowed-origins list.
@@ -153,10 +153,10 @@ This is a doc-only change with a distinct blast radius (no code touched), shippi
   - Close with one paragraph: **"These gaps assume an internet-facing deployment. The current app is bound to `localhost:8002` via `./start.sh` and is not intended for hosting. The day the deployment model changes, every item in this list becomes a release blocker."**
   - **Verify:** `grep "Known Security Gaps" CLAUDE.md` returns one match; section renders cleanly in GitHub markdown preview.
 
-- [ ] 🟥 **Step C2: Mirror in `AGENTS.md`** — one-paragraph summary plus a link back to the `CLAUDE.md` section. Don't duplicate the full detail; the goal is that an agent reading `AGENTS.md` hits the constraint early and follows the link for specifics. Position near the top of the "Known Issues" equivalent in `AGENTS.md`.
+- [x] 🟩 **Step C2: Mirror in `AGENTS.md`** — one-paragraph summary plus a link back to the `CLAUDE.md` section. Don't duplicate the full detail; the goal is that an agent reading `AGENTS.md` hits the constraint early and follows the link for specifics. Position near the top of the "Known Issues" equivalent in `AGENTS.md`.
   - **Verify:** `grep "Known Security Gaps" AGENTS.md` returns one match; link resolves.
 
-- [ ] 🟥 **Step C3: Open PR C** — branch `hardening/pr-c-security-disclosure`; title "docs: record known security gaps (localhost-only constraint)"; one-line body.
+- [x] 🟩 **Step C3: Open PR C** — https://github.com/yeeliang94/XBRL-Agent/pull/3 — branch `hardening/pr-c-security-disclosure`; title "docs: record known security gaps (localhost-only constraint)"; one-line body.
 
 ---
 
