@@ -29,6 +29,7 @@ from notes.listofnotes_subcoordinator import run_listofnotes_subcoordinator
 from notes.writer import BORDERLINE_FUZZY_SCORE
 from notes_types import NotesTemplateType
 from pricing import estimate_cost
+from scout.infopack import Infopack
 from scout.notes_discoverer import NoteInventoryEntry
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ class NotesCoordinatorResult:
 
 async def run_notes_extraction(
     config: NotesRunConfig,
-    infopack: Any = None,
+    infopack: Optional[Infopack] = None,
     event_queue: Optional[asyncio.Queue] = None,
     session_id: Optional[str] = None,
 ) -> NotesCoordinatorResult:
@@ -126,7 +127,7 @@ async def run_notes_extraction(
     import task_registry
 
     inventory: list[NoteInventoryEntry] = []
-    if infopack is not None and getattr(infopack, "notes_inventory", None):
+    if infopack is not None and infopack.notes_inventory:
         inventory = list(infopack.notes_inventory)
 
     # Fall back to the infopack's derived page hints when the caller
@@ -135,16 +136,7 @@ async def run_notes_extraction(
     # the server pre-compute and pass them in if it prefers.
     page_hints: list[int] = list(config.page_hints)
     if not page_hints and infopack is not None:
-        derive = getattr(infopack, "notes_page_hints", None)
-        if callable(derive):
-            try:
-                page_hints = list(derive())
-            except Exception:  # noqa: BLE001 — hints are advisory; never block a run
-                logger.warning(
-                    "Failed to derive notes_page_hints from infopack; proceeding without hints",
-                    exc_info=True,
-                )
-                page_hints = []
+        page_hints = list(infopack.notes_page_hints())
 
     # Launch one task per template.
     ordered = sorted(config.notes_to_run, key=lambda t: list(NotesTemplateType).index(t))
