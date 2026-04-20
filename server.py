@@ -1116,15 +1116,12 @@ async def run_multi_agent_stream(
         # Override with any just-completed workbooks from this run
         all_workbook_paths.update(coordinator_result.workbook_paths)
 
-        # Notes workbook merge is restricted to what THIS run produced —
-        # the coordinator already tracks every template it wrote in
-        # notes_result.workbook_paths. The face-agent scan above is
-        # deliberate (per-statement reruns merge with prior successful
-        # workbooks), but reusing it for notes would silently ship stale
-        # NOTES_*_filled.xlsx files that CLI --output-dir reuse left
-        # behind — a prior run with CORP_INFO would bleed into a fresh
-        # run that only asked for ISSUED_CAPITAL (PR A.6).
+        # Same pattern for notes workbooks — pick up prior partial runs + this run's output.
         all_notes_workbook_paths: Dict[NotesTemplateType, str] = {}
+        for nt in NotesTemplateType:
+            wb_path = session_dir / f"NOTES_{nt.value}_filled.xlsx"
+            if wb_path.exists():
+                all_notes_workbook_paths[nt] = str(wb_path)
         if notes_result is not None:
             all_notes_workbook_paths.update(notes_result.workbook_paths)
 
