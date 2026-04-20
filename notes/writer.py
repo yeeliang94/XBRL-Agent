@@ -327,7 +327,11 @@ def _write_row(
         cell.value = value
         wrote_anything = True
 
-    if payload.evidence:
+    # Only write evidence when we actually wrote a value (or numeric block)
+    # to the row. An evidence-only cell would be a "ghost row" — citation
+    # text with nothing to cite against — and is almost always an upstream
+    # bug in the payload (LLM produced evidence for a row it didn't fill).
+    if payload.evidence and (wrote_anything or payload.numeric_values):
         ev_cell = ws.cell(row=row, column=evidence_col)
         if isinstance(ev_cell.value, str) and ev_cell.value.startswith("="):
             errors.append(

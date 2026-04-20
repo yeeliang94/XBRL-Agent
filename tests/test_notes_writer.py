@@ -267,6 +267,45 @@ def test_writer_refuses_to_overwrite_formula_cells(tmp_path: Path):
     pytest.skip("row-override API not part of public writer contract; guard tested in integration")
 
 
+def test_evidence_not_written_without_values(tmp_path: Path):
+    """PR A.2: a payload with no content and no numeric_values must NOT
+    leave its evidence text behind as a ghost citation. Previously the
+    writer still wrote evidence to col D even when no value column was
+    filled, producing a row with citation text but nothing to cite."""
+    tpl = notes_template_path(NotesTemplateType.CORP_INFO, level="company")
+    out = tmp_path / "Notes-CI_ghost.xlsx"
+
+    wb0 = openpyxl.load_workbook(str(tpl))
+    ws0 = wb0[CORP_INFO_SHEET]
+    target_row = _first_matching_row(ws0, "Financial reporting status")
+    baseline_evidence = ws0.cell(row=target_row, column=4).value
+    wb0.close()
+
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Financial reporting status",
+            content="",
+            evidence="Page 14, Note 2(a)",
+            source_pages=[14],
+            numeric_values=None,
+        ),
+    ]
+    result = write_notes_workbook(
+        template_path=str(tpl),
+        payloads=payloads,
+        output_path=str(out),
+        filing_level="company",
+        sheet_name=CORP_INFO_SHEET,
+    )
+    assert result.rows_written == 0
+    assert result.success is False
+
+    wb = openpyxl.load_workbook(out)
+    ws = wb[CORP_INFO_SHEET]
+    assert ws.cell(row=target_row, column=4).value == baseline_evidence
+    wb.close()
+
+
 def test_empty_payloads_returns_failure(tmp_path: Path):
     """PR A.1: zero-row writes must fail so Sheet-12's "all sub-agents lost
     coverage" case can't ship a silent green tick on an untouched template."""
