@@ -56,8 +56,9 @@ class NotesWriteResult:
 
 # Scores below this threshold are logged at WARNING as "borderline". The
 # writer still accepts them (the row was resolved), but the operator gets
-# a visible nudge to review the match in the output.
-_BORDERLINE_FUZZY_SCORE = 0.85
+# a visible nudge to review the match in the output. Public so the
+# coordinator's warning-builder imports rather than duplicates this value.
+BORDERLINE_FUZZY_SCORE = 0.85
 
 
 def write_notes_workbook(
@@ -114,7 +115,7 @@ def write_notes_workbook(
         row, chosen_label, score = resolution
         if score < 1.0:
             fuzzy_matches.append((payload.chosen_row_label, chosen_label, score))
-            level = logging.WARNING if score < _BORDERLINE_FUZZY_SCORE else logging.DEBUG
+            level = logging.WARNING if score < BORDERLINE_FUZZY_SCORE else logging.DEBUG
             logger.log(
                 level,
                 "Fuzzy row match in %s: %r -> %r (score %.2f)",
