@@ -675,3 +675,55 @@ def test_upload_endpoint_writes_original_filename_sidecar(tmp_path, monkeypatch)
     assert sidecar.read_text(encoding="utf-8").strip() == "My Report 2024.pdf"
     # And the regular uploaded.pdf file still exists
     assert (out / session_id / "uploaded.pdf").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR A.6 — stale NOTES_*_filled.xlsx files in the session directory must NOT
+# be merged back into the final workbook when this run didn't ask for notes.
+# ---------------------------------------------------------------------------
+
+def test_merge_ignores_stale_notes_files(session_env):
+    client, session_id, out = session_env
+    session_dir = out / session_id
+
+    # Pre-populate a stale NOTES_CORP_INFO_filled.xlsx — the kind of
+    # artefact left behind when a prior run (or CLI --output-dir reuse)
+    # wrote notes for CORP_INFO but this run is not extracting notes.
+    stale_path = session_dir / "NOTES_CORP_INFO_filled.xlsx"
+    stale_path.write_bytes(b"stale-fake-xlsx")
+
+    agent_results = [
+        AgentResult(
+            statement_type=StatementType.SOFP, variant="CuNonCu",
+            status="succeeded",
+            workbook_path=str(session_dir / "SOFP_filled.xlsx"),
+        ),
+    ]
+
+    captured_kwargs: dict = {}
+
+    def spy_merge(workbook_paths, output_path, **kwargs):
+        captured_kwargs["notes_workbook_paths"] = kwargs.get("notes_workbook_paths")
+        return MergeResult(success=True, output_path=output_path, sheets_copied=1)
+
+    run_config = {
+        "statements": ["SOFP"],
+        "variants": {"SOFP": "CuNonCu"},
+        "models": {},
+        "infopack": None,
+        "use_scout": False,
+        # No notes_to_run — this is a face-only run, so nothing should
+        # flow into notes_workbook_paths at the merger layer.
+    }
+
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
+         patch("workbook_merger.merge", side_effect=spy_merge), \
+         patch("cross_checks.framework.run_all", return_value=[]):
+        resp = client.post(f"/api/run/{session_id}", json=run_config)
+
+    assert resp.status_code == 200
+    # Merger must have received an EMPTY notes_workbook_paths dict —
+    # the stale NOTES_CORP_INFO_filled.xlsx must not be smuggled in.
+    assert "notes_workbook_paths" in captured_kwargs
+    assert captured_kwargs["notes_workbook_paths"] == {}
