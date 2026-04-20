@@ -24,6 +24,7 @@ from pydantic_ai.messages import (
 
 from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace
 from notes.agent import create_notes_agent
+from notes.writer import BORDERLINE_FUZZY_SCORE
 from notes_types import NotesTemplateType
 from pricing import estimate_cost
 from scout.notes_discoverer import NoteInventoryEntry
@@ -544,7 +545,7 @@ def _build_single_sheet_warnings(outcome: _SingleAgentOutcome) -> list[str]:
     for err in outcome.write_errors:
         warnings.append(f"writer: {err}")
     for requested, chosen, score in outcome.fuzzy_matches:
-        if score < _BORDERLINE_FUZZY:
+        if score < BORDERLINE_FUZZY_SCORE:
             warnings.append(
                 f"borderline fuzzy match: '{requested}' -> '{chosen}' "
                 f"(score {score:.2f})"
@@ -783,12 +784,6 @@ async def _run_list_of_notes_fanout(
         )
 
 
-# Below this similarity score, fuzzy matches become warnings. Mirrors
-# notes.writer._BORDERLINE_FUZZY_SCORE but is duplicated here to avoid a
-# cross-module import just for a constant.
-_BORDERLINE_FUZZY = 0.85
-
-
 def _build_write_warnings(write_result: Any, sub_result: Any) -> List[str]:
     """Compose user-facing warning strings from a writer result + sub-agent result.
 
@@ -800,7 +795,7 @@ def _build_write_warnings(write_result: Any, sub_result: Any) -> List[str]:
     for err in write_result.errors:
         warnings.append(f"writer: {err}")
     for requested, chosen, score in write_result.fuzzy_matches:
-        if score < _BORDERLINE_FUZZY:
+        if score < BORDERLINE_FUZZY_SCORE:
             warnings.append(
                 f"borderline fuzzy match: '{requested}' -> '{chosen}' "
                 f"(score {score:.2f})"
