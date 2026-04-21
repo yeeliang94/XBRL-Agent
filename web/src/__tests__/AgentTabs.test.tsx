@@ -224,6 +224,40 @@ describe("AgentTabs", () => {
       const b: AgentTabsProps = { ...baseProps, onTabClick: cb, onRerunAgent: cb };
       expect(areAgentTabsPropsEqual(a, b)).toBe(true);
     });
+
+    test("subLabel-only change invalidates equality (peer-review fan-out progress)", () => {
+      // Notes-12 fan-out progresses sub-agent by sub-agent. Each completion
+      // flips `subLabel` from e.g. "1/5 done" to "2/5 done" while status
+      // stays "running" and label/role/agentId don't move. Without subLabel
+      // in the comparator the memo would skip the re-render, leaving the
+      // progress chip stale until the final status flip.
+      const a: AgentTabsProps = {
+        ...baseProps,
+        agents: { sofp_0: { ...baseAgent, subLabel: "1/5 done" } },
+      };
+      const b: AgentTabsProps = {
+        ...baseProps,
+        agents: { sofp_0: { ...baseAgent, subLabel: "2/5 done" } },
+      };
+      expect(areAgentTabsPropsEqual(a, b)).toBe(false);
+    });
+
+    test("same subLabel (including undefined ↔ undefined) preserves equality", () => {
+      // Most agents never populate subLabel. Comparator must tolerate
+      // undefined on both sides and treat matching values as equal.
+      const a: AgentTabsProps = {
+        ...baseProps,
+        agents: { sofp_0: { ...baseAgent, subLabel: "1/5 done" } },
+      };
+      const b: AgentTabsProps = {
+        ...baseProps,
+        agents: { sofp_0: { ...baseAgent, subLabel: "1/5 done" } },
+      };
+      expect(areAgentTabsPropsEqual(a, b)).toBe(true);
+
+      const noSub: AgentTabsProps = { ...baseProps, agents: { sofp_0: { ...baseAgent } } };
+      expect(areAgentTabsPropsEqual(noSub, noSub)).toBe(true);
+    });
   });
 
   test("skeleton tabs render in the order provided by the caller (#48)", () => {
