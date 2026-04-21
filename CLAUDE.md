@@ -76,7 +76,8 @@ scout/
   toc_locator.py    Deterministic TOC page finder
   toc_parser.py     TOC text parser (English + Malay, combined titles)
   variant_detector.py  Deterministic variant signal scorer (cross-check tool)
-  notes_discoverer.py  Note page discovery from face-page references
+  notes_discoverer.py  Fast PyMuPDF-regex pass for notes inventory (+ async entry)
+  notes_discoverer_vision.py  Batched vision fallback for scanned PDFs (used when regex pass is empty)
   calibrator.py     Legacy page calibrator (kept for reference, not used by agent)
   vision.py         LLM vision helpers (TOC extraction for scanned PDFs)
   infopack.py       Typed output: page refs, variants, confidence per statement
@@ -110,6 +111,8 @@ start.sh            Mac/Linux startup script (launches LiteLLM proxy + server)
 XBRL-template-MFRS/ Template Excel files organized by filing level
   Company/           Company-level templates (4 cols: label, CY, PY, source)
   Group/             Group-level templates (6 cols: label, Group CY, Group PY, Company CY, Company PY, source)
+  backup-originals/  Pre-formula-fix snapshots (see gotcha #3)
+  backup/            Earlier backup snapshots (pre-format variants)
 ```
 
 ## LLM Provider Setup
@@ -214,8 +217,7 @@ All `write_text()` calls also have `encoding="utf-8"` as a safety net.
 
 The project uses pydantic-ai 1.77+ API. Key differences from older versions:
 - `Agent._function_tools` **does not exist** — cannot monkey-patch tools
-- Model creation uses `OpenAIModel(name, provider=OpenAIProvider(...))` 
-- `OpenAIModel` is deprecated in favor of `OpenAIChatModel` (but still works)
+- Model creation uses `OpenAIChatModel(name, provider=OpenAIProvider(...))` — see the "PydanticAI Model Creation" section above. `OpenAIModel` is the deprecated alias; prefer `OpenAIChatModel` in new code
 - Tool event streaming uses `agent.iter()` + `node.stream()` — no `event_callback` or monkey-patching
 
 ### 3. Template Formula Fixes (2026-04-07) — SOFP Sub-Sheets
@@ -245,18 +247,14 @@ but **missed same-sheet cross-section subtotal references**, leaving them +20 ro
 See `docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md` for full details, broken formula table,
 and XBRL linkbase verification methodology.
 
-### 4. fill_workbook Row Matching — Off-by-One with Reference File
+### 4. fill_workbook vs Reference File — Row Numbering Differs
 
-The reference file (`SOFP-Xbrl-reference-FINCO-filled.xlsx`) has a different row layout than the template (`SOFP-Xbrl-template.xlsx`) — an extra blank row near the top shifts all sub-sheet rows down by 1. The agent writes to correct rows **per the template**, but comparisons against the reference show everything off by 1.
-
-This is NOT a bug in fill_workbook — it's a template/reference mismatch. When comparing results, always compare against the template row layout, not the reference.
-
-**Verified (2026-04-03):** Label matching in fill_workbook.py is correct. "Retained earnings" matches to row 40 (*Retained earnings) properly. The compare_results.py script shows false "EXTRA"/"MISSING" because it compares row-by-row against a reference with different row numbering. To properly validate results, open the filled Excel in Excel (not openpyxl) so formulas evaluate, then check totals balance.
-
-**Actual extraction quality gaps:**
-- Agent extracts ~24 fields but FINCO SOFP has ~35+ data-entry cells
-- "Deferred income" on sub-sheet not filled (agent puts it in "Contract liabilities" on main sheet only)
-- Coverage could be improved by enhancing the system prompt to emphasize sub-sheet breakdowns
+`compare_results.py` compares row-by-row against a reference file
+(`SOFP-Xbrl-reference-FINCO-filled.xlsx`) whose sub-sheet rows are shifted +1
+from the current template. False "EXTRA"/"MISSING" diffs from that script are
+the template/reference mismatch, not a bug in `fill_workbook`. Validate by
+opening the filled workbook in Excel so formulas evaluate and checking the
+balance totals, not by diffing against the reference.
 
 ### 5. LiteLLM SSL Warning is Safe to Ignore
 
@@ -372,8 +370,18 @@ The 5 templates and their runtime shape:
 
 Sheet 12 fans out because it has 138 target rows — one agent choosing among
 138 labels would be slow and error-prone. The sub-coordinator splits scout's
-inventory into 5 page-contiguous batches, runs 5 agents in parallel, then
+inventory into page-contiguous batches, runs N agents in parallel, then
 aggregates payloads for one final workbook write.
+
+**Fan-out width is model-aware.** `pricing.resolve_notes_parallel(model)` reads
+the `notes_parallel` field from `config/models.json`: cheap/fast models
+(`gpt-5.4-mini`, `gemini-*-flash-*`, `claude-haiku-4-5`) drop to 2-way because
+they ship requests through the provider's TPM bucket fast enough to trigger
+HTTP 429 at 5-way; heavy/slow models (`gpt-5.4`, `claude-sonnet-4-6`,
+`claude-opus-4-6`, `gemini-3.1-pro-preview`) stay at 5. Unknown model ids fall
+back to `DEFAULT_NOTES_PARALLEL = 5` (the pre-existing retry path still
+catches TPM overruns). The 429 retry infrastructure in `notes/_rate_limit.py`
+is unchanged — this just reduces how often the retry path triggers.
 
 **Retry budget (PLAN §4 E.1):** every single notes agent is retried at most
 once on non-cancellation errors. Sub-agents for Sheet 12 have the same
@@ -415,8 +423,8 @@ can pass `notes_end_page=N` to tighten the vision scan range and the terminal
 clamp. Scout mis-offsets that push `notes_start_page` past `pdf_length` short-
 circuit to `[]` with a warning rather than raising. Per-batch failures log and
 skip; all-batch failure returns `[]`, preserving the existing loud-fail contract
-in `notes/coordinator.py` for Sheet 12. Temperature is pinned at 1.0 per
-gotcha #5. Look for `vision inventory tokens: input=X output=Y across N/M batches`
+in `notes/coordinator.py` for Sheet 12. Temperature is pinned at 1.0 per the
+"Temperature Constraint" subsection above. Look for `vision inventory tokens: input=X output=Y across N/M batches`
 in the logs to see what the fallback cost on a given run.
 
 ## Testing
@@ -497,6 +505,10 @@ Note: `test_pdf_viewer.py` and `test_template_reader.py` auto-skip when sample d
 | Notes agent prompts | `prompts/_notes_base.md` (persona + output contract + 30K-char cap + multi-page continuation rule), `prompts/notes_{corporate_info,accounting_policies,listofnotes,issued_capital,related_party}.md`, `notes/agent.py` (`_TEMPLATE_PROMPT_FILES` map + `render_notes_prompt`), `tests/test_notes_continuation.py` (prompt-contract pin) |
 | Notes writer / column rules | `notes/writer.py` (`CELL_CHAR_LIMIT`, `evidence_col_letter`, `_EVIDENCE_COL`, Group/Company column rules, `_combine_payloads` for row concatenation), `prompts/_notes_base.md` (mirror of same rules for the LLM), `notes/agent.py` (`_render_column_rules` in system prompt), `tests/test_notes_writer.py`, `tests/test_notes_char_limit.py` |
 | Notes retry budget | `notes/coordinator.py` (`SINGLE_AGENT_MAX_RETRIES`, `_run_single_notes_agent`, `_invoke_single_notes_agent_once`, `_write_single_sheet_failure_log`), `notes/listofnotes_subcoordinator.py` (sub-agent `max_retries` + `_write_failures_side_log`), `tests/test_notes_retry_budget.py` |
+| Notes-12 parallelism (model-aware) | `config/models.json` (`notes_parallel` field per model), `pricing.py` (`resolve_notes_parallel`, `DEFAULT_NOTES_PARALLEL`, `_normalize` prefix tuple), `notes/coordinator.py` (`_run_list_of_notes_fanout` call site — pass `parallel=` into `run_listofnotes_subcoordinator`), `notes/listofnotes_subcoordinator.py` (`run_listofnotes_subcoordinator(..., parallel=...)` param), `tests/test_notes_parallel_resolver.py`, `tests/test_notes12_parallel_wiring.py` |
+| Provider-prefix stripping | `server.py` (`_PROVIDER_PREFIXES` — **source of truth** for provider routing) and `pricing.py` (`_normalize` — must strip the same set so registry-id / bare-name lookups round-trip for both pricing and `resolve_notes_parallel`). Direct-mode OpenAI / Anthropic models reach PydanticAI as bare names (`gpt-5.4-mini`, `claude-haiku-4-5`) per `_create_proxy_model`, so a missing prefix here silently defaults the cost + parallelism lookups. |
+| Scout UI / inline model picker | `web/src/components/ScoutToggle.tsx` (dropdown props), `web/src/components/PreRunPanel.tsx` (state + `handleScoutModelChange` persists via `updateSettings`, collapsible `AgentTimeline` fed by `scoutEvents`), `web/src/lib/api.ts` (`updateSettings` accepts `default_models`), `web/src/__tests__/ScoutToggle.test.tsx`, `web/src/__tests__/PreRunPanel.test.tsx` (scout model + event log tests), `tests/test_settings.py` (round-trip pin), `tests/test_server_scout.py` (fresh-read pin). Scout model persists to `XBRL_DEFAULT_MODELS.scout` via `POST /api/settings`; `/api/scout/{session_id}` re-reads the env file on every call. |
+| Notes-12 sub-tabs (nested) | `web/src/components/NotesSubTabBar.tsx` (chip bar rendered inside the Notes-12 content pane), `web/src/lib/buildToolTimeline.ts` (`filterEventsBySubAgent` + `deriveSubAgentRangesFromEvents` — pure helpers shared by live + replay), `web/src/pages/ExtractPage.tsx` (`ActiveTabPanel` + `NOTES_12_AGENT_ID` gate), `web/src/components/RunDetailView.tsx` (`AgentCard` mirrors the live gate for `NOTES_LIST_OF_NOTES` DB rows), `web/src/__tests__/NotesSubTabBar.test.tsx`, `web/src/__tests__/ActiveTabPanel.test.tsx`, `web/src/__tests__/buildToolTimeline.test.ts`, `web/src/__tests__/RunDetailView.test.tsx`. SSE contract unchanged: sub-agents still emit under `agent_id="notes:LIST_OF_NOTES"` with `sub_agent_id` + namespaced `tool_call_id`. |
 | Notes UI / tabs | `web/src/lib/appReducer.ts` (`notesInRun`, `deriveAgentLabel`, `NOTES_TAB_LABELS`), `web/src/App.tsx` (`RUN_STARTED` payload includes notes), `web/src/components/AgentTabs.tsx` (notes bucket between statements and scout/validator, `notesInRun` + `notesSkeletons` props), `web/src/pages/ExtractPage.tsx` (builds notes skeleton labels), `web/src/components/PreRunPanel.tsx` (5 checkboxes), `web/src/components/RunDetailView.tsx` (renders NOTES_* agents alongside face agents) |
 
 ## Porting Checklist (Mac -> Windows)
