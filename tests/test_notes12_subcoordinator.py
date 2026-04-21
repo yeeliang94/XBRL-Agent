@@ -296,7 +296,8 @@ class TestRetryAndIsolation:
             attempts["n"] += 1
             if attempts["n"] == 1:
                 raise RuntimeError("transient")
-            return [_make_payload("Disclosure of revenue")]
+            # Phase 5 return shape: (payloads, prompt_tokens, completion_tokens).
+            return [_make_payload("Disclosure of revenue")], 0, 0, None
 
         with patch("notes.listofnotes_subcoordinator._invoke_sub_agent_once",
                    side_effect=fake_invoke):
@@ -327,7 +328,7 @@ class TestRetryAndIsolation:
         batch = _make_inventory(2)
 
         async def fake_invoke(**_):
-            return [_make_payload("Disclosure of revenue")]
+            return [_make_payload("Disclosure of revenue")], 0, 0, None
 
         with patch("notes.listofnotes_subcoordinator._invoke_sub_agent_once",
                    side_effect=fake_invoke):
@@ -585,7 +586,9 @@ class TestZeroPayloadRetryThenFail:
 
         async def always_empty(*, batch, **_: Any):
             call_count["n"] += 1
-            return []  # non-empty batch in, empty payloads out — the bug
+            # non-empty batch in, empty payloads out — the bug. Phase 5:
+            # the invoke signature returns a 3-tuple; usage is 0 here.
+            return [], 0, 0, None
 
         batch = _make_inventory(3)
         with patch(
@@ -626,7 +629,7 @@ class TestZeroPayloadRetryThenFail:
 
         async def empty_for_empty_batch(*, batch, **_: Any):
             call_count["n"] += 1
-            return []
+            return [], 0, 0, None
 
         with patch(
             "notes.listofnotes_subcoordinator._invoke_sub_agent_once",
@@ -660,7 +663,8 @@ class TestZeroPayloadRetryThenFail:
 
         async def first_empty_then_ok(*, batch, **kwargs: Any):
             attempts.append(kwargs.get("attempt", -1))
-            return [] if len(attempts) == 1 else list(good)
+            # Phase 5: 3-tuple return shape.
+            return ([] if len(attempts) == 1 else list(good)), 0, 0, None
 
         batch = _make_inventory(2)
         with patch(

@@ -78,7 +78,8 @@ async def test_coordinator_dispatches_list_of_notes_through_subcoordinator(tmp_p
         captured_invocations.append(kwargs)
         # Return one matched + one unmatched payload per sub-agent.
         batch = kwargs["batch"]
-        return [
+        # Phase 5: invoke returns (payloads, prompt_tokens, completion_tokens).
+        payloads = [
             NotesPayload(
                 chosen_row_label="Disclosure of borrowings",
                 content=f"Revenue for notes {[e.note_num for e in batch]}",
@@ -86,6 +87,7 @@ async def test_coordinator_dispatches_list_of_notes_through_subcoordinator(tmp_p
                 source_pages=[batch[0].page_range[0]],
             ),
         ]
+        return payloads, 0, 0, None
 
     async def fake_single(*_args, **_kwargs):
         raise AssertionError(
@@ -132,7 +134,7 @@ async def test_list_of_notes_writes_merged_workbook_and_populates_rows(tmp_path:
     async def fake_invoke(**kwargs):
         batch = kwargs["batch"]
         # Emit one canonical label per note in the batch.
-        return [
+        payloads = [
             NotesPayload(
                 chosen_row_label="Disclosure of borrowings",
                 content=f"note {e.note_num} borrowings",
@@ -141,6 +143,7 @@ async def test_list_of_notes_writes_merged_workbook_and_populates_rows(tmp_path:
             )
             for e in batch
         ]
+        return payloads, 0, 0, None
 
     with patch(
         "notes.listofnotes_subcoordinator._invoke_sub_agent_once",
@@ -195,7 +198,7 @@ async def test_list_of_notes_writes_unmatched_side_log(tmp_path: Path):
     async def fake_invoke(**kwargs):
         batch = kwargs["batch"]
         # Every payload lands in row 112 — all unmatched.
-        return [
+        payloads = [
             NotesPayload(
                 chosen_row_label="Disclosure of other notes to accounts",
                 content=f"note {e.note_num} weird",
@@ -204,6 +207,7 @@ async def test_list_of_notes_writes_unmatched_side_log(tmp_path: Path):
             )
             for e in batch
         ]
+        return payloads, 0, 0, None
 
     with patch(
         "notes.listofnotes_subcoordinator._invoke_sub_agent_once",
@@ -286,7 +290,7 @@ async def test_list_of_notes_surfaces_writer_warnings_on_success(tmp_path: Path)
                 evidence=f"p.{e.page_range[0]}",
                 source_pages=[e.page_range[0]],
             ))
-        return payloads
+        return payloads, 0, 0, None
 
     emitted_events: list[dict] = []
     queue: asyncio.Queue = asyncio.Queue()
@@ -397,7 +401,7 @@ async def test_partial_coverage_still_succeeds(tmp_path: Path):
         # First invocation fails on both attempts; rest succeed.
         if call_count["n"] <= 2:  # 1 initial + 1 retry from first sub-agent
             raise RuntimeError("one sub-agent is flaky")
-        return [
+        payloads = [
             NotesPayload(
                 chosen_row_label="Disclosure of borrowings",
                 content=f"note {e.note_num}",
@@ -406,6 +410,7 @@ async def test_partial_coverage_still_succeeds(tmp_path: Path):
             )
             for e in batch
         ]
+        return payloads, 0, 0, None
 
     with patch(
         "notes.listofnotes_subcoordinator._invoke_sub_agent_once",

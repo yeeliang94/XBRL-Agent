@@ -61,6 +61,14 @@ class NotesPayload:
     # Sheets 13/14 carry structured numeric values keyed by column role
     # (group_cy / group_py / company_cy / company_py). None for prose rows.
     numeric_values: Optional[dict[str, float]] = None
+    # Sheet-12 sub-agent mode only: the batch note number this payload
+    # came from. Powers the per-note provenance check in
+    # CoverageReceipt.validate (peer-review MEDIUM #1) — without it the
+    # validator could only assert "this label appears somewhere in the
+    # sink", letting a receipt falsely claim Note 2 wrote to a row
+    # actually written by Note 1. None for single-sheet templates
+    # (10/11/13/14) which don't have a batch concept.
+    note_num: Optional[int] = None
 
     def __post_init__(self) -> None:
         if not self.chosen_row_label or not self.chosen_row_label.strip():
