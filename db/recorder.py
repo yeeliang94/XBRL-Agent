@@ -13,6 +13,7 @@ and would cause lock contention once Phase 4 adds concurrent agents.
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from pathlib import Path
@@ -34,6 +35,13 @@ _COARSE_EVENT_TYPES = frozenset({
 # rows with multi-KB payloads and blow up the audit DB. See peer-review I6.
 _MAX_PAYLOAD_BYTES = 16 * 1024          # 16 KB per event
 _MAX_EVENTS_PER_AGENT = 10_000          # stop recording after this many
+
+
+# Peer-review C2: sanitisation logic moved to `utils/sanitize.py` so the
+# same helpers can guard side-log JSON files (notes12_*.json) which
+# previously bypassed this step. The aliases below preserve the
+# pre-existing call sites in this module.
+from utils.sanitize import sanitize as _sanitize, sanitize_str as _sanitize_str  # noqa: E402, F401
 
 
 class SSEEventRecorder:
@@ -148,16 +156,30 @@ class SSEEventRecorder:
             if not isinstance(data, dict):
                 data = {"value": data}
 
+            # Peer-review I-4: strip ANSI/control chars from every string
+            # leaf *before* size-checking or persisting. Sanitisation first
+            # keeps the size guard honest (a 16KB cap must apply to the
+            # value we'll actually write) and means every downstream path
+            # — SQLite, SSE replay, side-logs built from the same dict —
+            # sees terminal-safe content.
+            data = _sanitize(data)
+
             # Rough size guard: serialize, check, replace with a small
             # marker + the event type if it blows the cap. We don't try to
             # preserve partial payloads — downstream UIs already handle
             # "_truncated" explicitly.
-            import json as _json
-            serialized = _json.dumps(data)
-            if len(serialized.encode("utf-8")) > _MAX_PAYLOAD_BYTES:
+            #
+            # Peer-review C4: cache the encoded bytes once so the
+            # over-cap branch doesn't re-encode the same string.
+            # Hundred-event runs spent measurable time on the redundant
+            # encode; module-level json import (top of file) replaces
+            # the prior per-call `import json as _json`.
+            serialized = json.dumps(data)
+            encoded_len = len(serialized.encode("utf-8"))
+            if encoded_len > _MAX_PAYLOAD_BYTES:
                 data = {
                     "_truncated": True,
-                    "_original_bytes": len(serialized.encode("utf-8")),
+                    "_original_bytes": encoded_len,
                     "event": event_type,
                 }
 

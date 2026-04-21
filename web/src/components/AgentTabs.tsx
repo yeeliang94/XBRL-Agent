@@ -14,6 +14,12 @@ export interface AgentTabState {
   label: string;
   status: AgentTabStatus;
   role: string;
+  // Phase 5.2 / peer-review [M1]: when present, renders beneath the
+  // main tab label as a secondary chip. Only Notes-12 populates this
+  // today (via `agentSubAgentSummary`); other agents pass undefined.
+  // Kept as a plain string so AgentTabs has no runtime dep on the
+  // reducer module.
+  subLabel?: string | null;
 }
 
 export interface AgentTabsProps {
@@ -178,7 +184,12 @@ function AgentTabsImpl({
           style={{ ...styles.tab, ...(isActive ? styles.tabActive : {}) }}
         >
           <StatusBadge status={agent.status} />
-          <span>{agent.label}</span>
+          <span style={styles.tabLabelStack}>
+            <span>{agent.label}</span>
+            {agent.subLabel && (
+              <span style={styles.tabSubLabel}>{agent.subLabel}</span>
+            )}
+          </span>
         </button>
         {canAbort && (
           <button
@@ -279,7 +290,12 @@ export function areAgentTabsPropsEqual(
       a.agentId !== b.agentId ||
       a.label !== b.label ||
       a.status !== b.status ||
-      a.role !== b.role
+      a.role !== b.role ||
+      // subLabel renders a secondary chip beneath the main label (Notes-12
+      // fan-out progress). Missing this let progress chips go stale until
+      // the parent status flipped (peer review [MEDIUM]). Normalise null
+      // and undefined so "absent ↔ absent" stays equal.
+      (a.subLabel ?? null) !== (b.subLabel ?? null)
     ) {
       return false;
     }
@@ -378,6 +394,21 @@ const styles = {
     cursor: "default",
     opacity: 0.5,
     background: pwc.grey50,
+  },
+  // Stack the main label and sub-label (when present) vertically inside
+  // the tab. Most tabs have no subLabel so the render falls back to a
+  // single-line appearance automatically.
+  tabLabelStack: {
+    display: "inline-flex",
+    flexDirection: "column" as const,
+    alignItems: "flex-start" as const,
+    lineHeight: 1.15,
+  },
+  tabSubLabel: {
+    fontSize: 11,
+    fontWeight: 400,
+    color: pwc.grey500,
+    fontFamily: pwc.fontBody,
   },
 } as const;
 

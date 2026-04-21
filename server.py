@@ -390,10 +390,52 @@ async def update_settings(body: dict):
 
     # Extended fields (Phase 8)
     if "default_models" in body:
-        # Merge incoming overrides with existing defaults
+        # Validate the submitted dict BEFORE merging anything. The peer
+        # review flagged that an unvalidated payload could land arbitrary
+        # data in .env (e.g. {"x": {"nested": [...]}} would be json-dumped
+        # verbatim). Constrain keys to the known agent roles + notes
+        # templates, and values to short strings matching an id in
+        # config/models.json. Reject everything else with 400 so a
+        # misconfigured client fails loudly instead of polluting the env
+        # file the whole run pipeline reads from.
+        raw_models = body["default_models"]
+        if not isinstance(raw_models, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="default_models must be an object keyed by agent role.",
+            )
+        from notes_types import NotesTemplateType as _NT
+        allowed_keys = set(_AGENT_ROLES) | {nt.value for nt in _NT}
+        known_model_ids = {m["id"] for m in _load_available_models() if "id" in m}
+        for key, value in raw_models.items():
+            if key not in allowed_keys:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown default_models key: {key!r}. Allowed: {sorted(allowed_keys)}.",
+                )
+            if not isinstance(value, str) or not value:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"default_models[{key!r}] must be a non-empty string model id.",
+                )
+            if len(value) > 128:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"default_models[{key!r}] value too long (max 128 chars).",
+                )
+            # An unknown model id is a soft warning, not an error — the
+            # config file may have been edited without a server restart,
+            # or a new model may be in the registry file but not yet
+            # loaded. The guard above already capped length + type.
+            if known_model_ids and value not in known_model_ids:
+                logger.warning(
+                    "default_models[%s]=%s not in config/models.json", key, value,
+                )
+
+        # Merge incoming (now-validated) overrides with existing defaults
         load_dotenv(ENV_FILE, override=True)
         existing = _load_extended_settings()["default_models"]
-        existing.update(body["default_models"])
+        existing.update(raw_models)
         set_key(str(ENV_FILE), "XBRL_DEFAULT_MODELS", json.dumps(existing))
     if "scout_enabled_default" in body:
         set_key(str(ENV_FILE), "XBRL_SCOUT_ENABLED_DEFAULT",
@@ -472,17 +514,33 @@ async def upload_pdf(file: UploadFile = File(...)):
 # --- Scout endpoint (Phase 7.1) ---
 
 @app.post("/api/scout/{session_id}")
-async def scout_pdf(session_id: str):
+async def scout_pdf(session_id: str, request: Request):
     """Run the scout agent on an uploaded PDF and stream progress via SSE.
 
     Returns an SSE stream with status events during processing, then a
     final 'scout_complete' event containing the full infopack JSON.
+
+    Accepts an optional JSON body ``{"scanned_pdf": bool}`` — when true,
+    the scout's notes-inventory tool skips the PyMuPDF-regex fast path
+    and runs the vision pass directly. Use this when the operator knows
+    the uploaded PDF is image-only.
     """
     session_dir = OUTPUT_DIR / session_id
     pdf_path = session_dir / "uploaded.pdf"
 
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found. Upload first.")
+
+    # Body is optional — absent/empty/non-JSON all mean "default behaviour".
+    # We don't fail the request on malformed JSON because the old callers
+    # (Phase 7.1 UI) post no body at all.
+    force_vision_inventory = False
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = None
+    if isinstance(body, dict) and body.get("scanned_pdf") is True:
+        force_vision_inventory = True
 
     load_dotenv(ENV_FILE, override=True)
     api_key = _resolve_api_key()
@@ -520,6 +578,7 @@ async def scout_pdf(session_id: str):
                 pdf_path=pdf_path,
                 model=scout_model,
                 on_event=on_event,
+                force_vision_inventory=force_vision_inventory,
             ))
 
             # Register so abort endpoints can cancel it
@@ -600,6 +659,40 @@ def _safe_mark_finished(
         return False
 
 
+def _fail_run(db_conn: "Optional[Any]", run_id: Optional[int], msg: str):
+    """Build the error + run_complete SSE events and mark the run row failed.
+
+    Extracted to dedupe the five-line failure quartet
+    (error → run_complete → mark_run_finished → terminal_status → return)
+    that appeared in six input-validation paths inside
+    ``run_multi_agent_stream`` (PR B.5).
+
+    Returns a ``(events, new_terminal_status)`` tuple. ``events`` is a list
+    of SSE events the caller must yield in order. ``new_terminal_status``
+    is ``"failed"`` when the DB write succeeded, ``None`` otherwise — the
+    caller updates its own ``terminal_status`` book-keeping accordingly so
+    the try/finally block still retries the mark if we couldn't write it.
+
+    Not a generator because the caller is an ``async def`` generator and
+    ``yield from`` is a syntax error in that context — see
+    https://docs.python.org/3/reference/expressions.html#yieldexpr.
+
+    Usage::
+
+        events, new_status = _fail_run(db_conn, run_id, msg)
+        for ev in events:
+            yield ev
+        terminal_status = new_status or terminal_status
+        return
+    """
+    events = [
+        {"event": "error", "data": {"message": msg}},
+        {"event": "run_complete", "data": {"success": False, "message": msg}},
+    ]
+    new_status = "failed" if _safe_mark_finished(db_conn, run_id, "failed") else None
+    return events, new_status
+
+
 async def run_multi_agent_stream(
     session_id: str,
     session_dir: Path,
@@ -626,6 +719,7 @@ async def run_multi_agent_stream(
     """
     from coordinator import RunConfig, run_extraction as coordinator_run
     from notes.coordinator import (
+        NotesAgentResult,
         NotesRunConfig,
         run_notes_extraction,
         NotesCoordinatorResult,
@@ -639,6 +733,7 @@ async def run_multi_agent_stream(
     from cross_checks.soci_to_socie_tci import SOCIToSOCIETCICheck
     from cross_checks.socie_to_sofp_equity import SOCIEToSOFPEquityCheck
     from cross_checks.socf_to_sofp_cash import SOCFToSOFPCashCheck
+    from cross_checks.notes_consistency import check_notes_consistency
     from db.schema import init_db
     from db import repository as repo
     import sqlite3
@@ -724,10 +819,10 @@ async def run_multi_agent_stream(
             try:
                 statements_to_run.add(StatementType(s))
             except ValueError:
-                yield {"event": "error", "data": {"message": f"Unknown statement type: {s}"}}
-                yield {"event": "run_complete", "data": {"success": False, "message": f"Unknown statement type: {s}"}}
-                if _safe_mark_finished(db_conn, run_id, "failed"):
-                    terminal_status = "failed"
+                events, new_status = _fail_run(db_conn, run_id, f"Unknown statement type: {s}")
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
                 return
 
         # Parse notes templates up-front (before pre-creating run_agents rows),
@@ -740,17 +835,16 @@ async def run_multi_agent_stream(
             try:
                 parsed_note = NotesTemplateType(n)
             except ValueError:
-                yield {"event": "error", "data": {"message": f"Unknown notes template: {n}"}}
-                yield {"event": "run_complete", "data": {"success": False, "message": f"Unknown notes template: {n}"}}
-                if _safe_mark_finished(db_conn, run_id, "failed"):
-                    terminal_status = "failed"
+                events, new_status = _fail_run(db_conn, run_id, f"Unknown notes template: {n}")
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
                 return
             if parsed_note not in _PUBLIC_NOTES_TEMPLATES:
-                msg = f"Notes template not available yet: {n}"
-                yield {"event": "error", "data": {"message": msg}}
-                yield {"event": "run_complete", "data": {"success": False, "message": msg}}
-                if _safe_mark_finished(db_conn, run_id, "failed"):
-                    terminal_status = "failed"
+                events, new_status = _fail_run(db_conn, run_id, f"Notes template not available yet: {n}")
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
                 return
             notes_to_run.add(parsed_note)
 
@@ -786,10 +880,10 @@ async def run_multi_agent_stream(
             logger.exception(
                 "Override model construction failed for session %s", session_id,
             )
-            yield {"event": "error", "data": {"message": f"Model override failed: {e}"}}
-            yield {"event": "run_complete", "data": {"success": False, "message": f"Model override failed: {e}"}}
-            if _safe_mark_finished(db_conn, run_id, "failed"):
-                terminal_status = "failed"
+            events, new_status = _fail_run(db_conn, run_id, f"Model override failed: {e}")
+            for ev in events:
+                yield ev
+            terminal_status = new_status or terminal_status
             return
 
         # Resolve infopack
@@ -800,10 +894,10 @@ async def run_multi_agent_stream(
                 # from_json expects a JSON string; request body gives us a dict
                 infopack = Infopack.from_json(json.dumps(run_config.infopack))
             except Exception as e:
-                yield {"event": "error", "data": {"message": f"Invalid infopack: {e}"}}
-                yield {"event": "run_complete", "data": {"success": False, "message": f"Invalid infopack: {e}"}}
-                if _safe_mark_finished(db_conn, run_id, "failed"):
-                    terminal_status = "failed"
+                events, new_status = _fail_run(db_conn, run_id, f"Invalid infopack: {e}")
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
                 return
 
         # Create the model object for the coordinator. May raise if the
@@ -816,10 +910,10 @@ async def run_multi_agent_stream(
             logger.exception(
                 "Model construction failed for session %s", session_id,
             )
-            yield {"event": "error", "data": {"message": f"Model setup failed: {e}"}}
-            yield {"event": "run_complete", "data": {"success": False, "message": f"Model setup failed: {e}"}}
-            if _safe_mark_finished(db_conn, run_id, "failed"):
-                terminal_status = "failed"
+            events, new_status = _fail_run(db_conn, run_id, f"Model setup failed: {e}")
+            for ev in events:
+                yield ev
+            terminal_status = new_status or terminal_status
             return
 
         config = RunConfig(
@@ -1054,7 +1148,6 @@ async def run_multi_agent_stream(
         # Synthesize a failed NotesCoordinatorResult with one entry per
         # requested template so overall-status logic and the finalization
         # loop above both see the failure.
-        from notes.coordinator import NotesAgentResult as _NotesAgentResult
         notes_result: Optional[NotesCoordinatorResult] = None
         try:
             notes_result = await notes_task
@@ -1062,7 +1155,7 @@ async def run_multi_agent_stream(
             logger.info("Notes coordinator cancelled", extra={"session_id": session_id})
             if notes_to_run:
                 notes_result = NotesCoordinatorResult(agent_results=[
-                    _NotesAgentResult(
+                    NotesAgentResult(
                         template_type=nt,
                         status="cancelled",
                         error="Cancelled by user",
@@ -1072,7 +1165,7 @@ async def run_multi_agent_stream(
             logger.exception("Notes coordinator failed", extra={"session_id": session_id})
             if notes_to_run:
                 notes_result = NotesCoordinatorResult(agent_results=[
-                    _NotesAgentResult(
+                    NotesAgentResult(
                         template_type=nt,
                         status="failed",
                         error=f"Notes coordinator crashed: {e}",
@@ -1165,6 +1258,35 @@ async def run_multi_agent_stream(
             all_checks, all_workbook_paths, check_config,
             tolerance=tolerance,
         )
+
+        # Phase 6.1: advisory cross-sheet notes-consistency check. Warns
+        # when Sheet 11 and Sheet 12 disagree on the PDF page for the same
+        # topic (usually one side cited the printed folio instead of the
+        # PDF page). Advisory only — never fails the merge; returns [] on
+        # any read error so this block can't break a run.
+        #
+        # We fold warnings into ``cross_check_results`` with status
+        # ``"warning"`` so they ride the same persistence + SSE + UI path
+        # as real cross-checks. Deliberately SKIPPED when the merge
+        # failed — a missing workbook means there's nothing to compare.
+        if merge_result.success:
+            try:
+                consistency_warnings = check_notes_consistency(merged_path)
+            except Exception:
+                # The check has its own broad except but defence-in-depth
+                # is cheap here: never let an advisory check fail a run.
+                logger.warning(
+                    "notes-consistency check raised unexpectedly on run %s",
+                    run_id, exc_info=True,
+                )
+                consistency_warnings = []
+            from cross_checks.framework import CrossCheckResult
+            for w in consistency_warnings:
+                cross_check_results.append(CrossCheckResult(
+                    name=f"Notes consistency: {w.sheet_11_label} ↔ {w.sheet_12_label}",
+                    status="warning",
+                    message=w.message,
+                ))
 
         # Persist per-agent FINAL state + extracted fields + cross-checks.
         # Phase 6.5 moved create_run_agent() UP FRONT so tool events could
@@ -1339,6 +1461,20 @@ async def run_multi_agent_stream(
         except Exception:
             logger.warning(
                 "task_registry.remove_session failed for %s", session_id,
+                exc_info=True,
+            )
+        # Peer-review C3: page_cache is a process-global LRU and was
+        # previously only reset by tests. On a long-running server it
+        # accumulates renders across runs and pays LRU eviction churn
+        # at the cap. Bound memory to one in-flight run by clearing
+        # at the same teardown point as task_registry. Tests reset
+        # the cache themselves so this doesn't disturb them.
+        try:
+            from tools import page_cache
+            page_cache.reset()
+        except Exception:
+            logger.warning(
+                "page_cache.reset failed for %s", session_id,
                 exc_info=True,
             )
         if db_conn is not None:
