@@ -37,8 +37,22 @@ logger = logging.getLogger(__name__)
 # Excel's hard limit is 32,767 chars; we keep ~2K of headroom for a footer.
 CELL_CHAR_LIMIT = 30_000
 
-# Fuzzy-match threshold for label resolution (mirrors tools/fill_workbook.py).
-_FUZZY_THRESHOLD = 0.7
+# Fuzzy-match threshold for label resolution.
+#
+# Raised from 0.70 to 0.85 after a production run silently force-inserted
+# payloads into wrong rows (e.g. "Disclosure of taxation" scored 0.78
+# against "Disclosure of bonds" and landed income-tax prose in the bonds
+# row). Legitimate near-matches from real traces all score >=0.90
+# (leading `*`, case/whitespace, minor typos); the 0.70–0.85 band was
+# almost entirely wrong-label cases. Kept equal to `BORDERLINE_FUZZY_SCORE`
+# below so anything the writer accepts is, by definition, not borderline
+# — the coordinator's "borderline warning" logic is dormant but harmless
+# and the two constants cannot drift.
+#
+# Regression cases that protect this value live in
+# tests/test_notes_writer_fuzzy_threshold.py — lowering the floor re-
+# admits them.
+_FUZZY_THRESHOLD = 0.85
 
 
 @dataclass
@@ -56,8 +70,9 @@ class NotesWriteResult:
 
 # Scores below this threshold are logged at WARNING as "borderline". The
 # writer still accepts them (the row was resolved), but the operator gets
-# a visible nudge to review the match in the output.
-_BORDERLINE_FUZZY_SCORE = 0.85
+# a visible nudge to review the match in the output. Public so the
+# coordinator's warning-builder imports rather than duplicates this value.
+BORDERLINE_FUZZY_SCORE = 0.85
 
 
 def write_notes_workbook(
@@ -67,7 +82,14 @@ def write_notes_workbook(
     filing_level: str,
     sheet_name: str,
 ) -> NotesWriteResult:
-    """Write NotesPayload entries to the given sheet of a notes template."""
+    """Write NotesPayload entries to the given sheet of a notes template.
+
+    Success is defined strictly as ``rows_written > 0``. Callers must
+    pre-check for empty payloads and skip the write themselves if they
+    want a no-op success — a zero-row write is treated as a failure so
+    Sheet-12's "no payloads = all sub-agents lost coverage" case can't
+    ship a silent green tick on an untouched template.
+    """
     tpl = Path(template_path)
     if not tpl.exists():
         return NotesWriteResult(
@@ -107,7 +129,7 @@ def write_notes_workbook(
         row, chosen_label, score = resolution
         if score < 1.0:
             fuzzy_matches.append((payload.chosen_row_label, chosen_label, score))
-            level = logging.WARNING if score < _BORDERLINE_FUZZY_SCORE else logging.DEBUG
+            level = logging.WARNING if score < BORDERLINE_FUZZY_SCORE else logging.DEBUG
             logger.log(
                 level,
                 "Fuzzy row match in %s: %r -> %r (score %.2f)",
@@ -128,9 +150,9 @@ def write_notes_workbook(
     finally:
         wb.close()
 
-    # Success if we wrote anything OR if payloads was empty (caller asked
-    # for a no-op write — hand back an untouched copy of the template).
-    success = rows_written > 0 or not payloads
+    # Zero-row writes are failures — see docstring. Callers who want a
+    # no-op success must short-circuit before calling this function.
+    success = rows_written > 0
     return NotesWriteResult(
         success=success,
         rows_written=rows_written,
@@ -178,22 +200,95 @@ def _resolve_row(
     Returns `(row, chosen_label, score)` where `score == 1.0` for exact
     hits and in `[_FUZZY_THRESHOLD, 1.0)` for fuzzy fallbacks. Returns
     None when no label scored at or above the threshold.
+
+    Peer-review S4: exact lookup is O(N) by design — the entries list is
+    typically <200 rows and re-walking it is cheaper than building a
+    dict per call. The fuzzy pass uses SequenceMatcher's quick_ratio /
+    real_quick_ratio prefilters, both cheap upper bounds, to skip the
+    full ratio() computation on obviously-distant labels.
     """
     target = _normalize(label)
     for e in entries:
         if e.normalized == target:
             return e.row, e.original, 1.0
-    # Fuzzy fallback
+    # Fuzzy fallback with cheap prefilter — see docstring.
     best_score = 0.0
     best: Optional[_LabelEntry] = None
     for e in entries:
-        score = SequenceMatcher(None, target, e.normalized).ratio()
+        sm = SequenceMatcher(None, target, e.normalized)
+        # real_quick_ratio is an O(1) length-based upper bound; skip
+        # entries that can't possibly beat the threshold.
+        if sm.real_quick_ratio() < _FUZZY_THRESHOLD:
+            continue
+        if sm.quick_ratio() < _FUZZY_THRESHOLD:
+            continue
+        score = sm.ratio()
         if score > best_score:
             best_score = score
             best = e
     if best is not None and best_score >= _FUZZY_THRESHOLD:
         return best.row, best.original, best_score
     return None
+
+
+def top_candidates(
+    entries: list[_LabelEntry], label: str, n: int = 3,
+) -> list[tuple[str, float]]:
+    """Return the top-`n` closest labels for a rejected match.
+
+    When `_resolve_row` returns None the writer still knows which labels
+    came closest — this helper surfaces them so the sub-agent branch of
+    `write_notes` can ship them back as a retry hint. Without the hint
+    the agent tends to fabricate another bad label on the next turn;
+    with a short "did you mean" list it tends to pick one of the real
+    options or legitimately skip the note.
+
+    Scores are the same SequenceMatcher ratios used in `_resolve_row`
+    so the hint is consistent with what the writer would have accepted.
+
+    Peer-review S4: this path runs ONLY on the rejection path, so the
+    full ratio() pass over every entry is cheap (rare). No prefilter
+    here because we want a meaningful score for every entry to rank
+    candidates — `quick_ratio` would lose ordering information.
+    """
+    target = _normalize(label)
+    scored = [
+        (e.original, SequenceMatcher(None, target, e.normalized).ratio())
+        for e in entries
+    ]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[:n]
+
+
+def resolve_payload_labels(
+    entries: list[_LabelEntry],
+    payloads: list[NotesPayload],
+) -> tuple[list[NotesPayload], list[tuple[str, list[tuple[str, float]]]]]:
+    """Partition a payload list into accepted vs rejected.
+
+    - Accepted: every payload whose label resolves via `_resolve_row`
+      (exact or fuzzy at/above `_FUZZY_THRESHOLD`). Returned in original
+      input order — sub-coordinator row-112 concatenation and audit logs
+      depend on a stable order.
+    - Rejected: `(requested_label, top_3_candidates)` so the caller can
+      ship a retry hint back to the agent. The actual row write is not
+      attempted — this is pure triage.
+
+    Used by the `write_notes` sub-agent branch in `notes/agent.py` so
+    bad labels don't silently land in `payload_sink` (where they would
+    only be discovered at the final write pass, long after the sub-
+    agent has exited and can no longer retry).
+    """
+    accepted: list[NotesPayload] = []
+    rejections: list[tuple[str, list[tuple[str, float]]]] = []
+    for p in payloads:
+        if _resolve_row(entries, p.chosen_row_label) is not None:
+            accepted.append(p)
+        else:
+            rejections.append(
+                (p.chosen_row_label, top_candidates(entries, p.chosen_row_label, n=3))
+            )
+    return accepted, rejections
 
 
 # ---------------------------------------------------------------------------
@@ -203,12 +298,43 @@ def _resolve_row(
 def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
     """Merge multiple payloads targeting the same row.
 
-    Prose: concatenate content with blank line separators. Evidence is a
-    semicolon-joined list. Numeric: last-write-wins (multiple numeric
+    Prose: concatenate content with blank line separators, ordered by the
+    earliest PDF page each payload cited. Evidence is a semicolon-joined
+    list in the same page order. Numeric: last-write-wins (multiple numeric
     payloads for one row is a bug upstream — a warning is logged).
+
+    Ordering by ``min(source_pages)`` keeps row-112's concatenation
+    stable across re-runs — without it, input order is
+    ``asyncio.wait(ALL_COMPLETED)`` batch-completion order, which is
+    non-deterministic and would churn the output on every re-run.
+
+    Evidence fragments use ``;`` as a RESERVED separator. The dedup
+    logic splits on ``;``, strips, and case-insensitively de-duplicates.
+    Legitimate prose should not contain ``;`` inside a single citation
+    (e.g. prefer "Page 14 Note 2(a)" over "Note 5; sub-note (b)");
+    doing so would cause a fragment to be silently shredded.
+
+    Single-payload inputs (peer-review #5): we still dedup even with
+    one payload, because a sub-agent may emit an already-joined
+    "Page 18; Page 18" within a single payload. Skipping dedup on len
+    == 1 preserved exactly that duplicate in the filled workbook on
+    the FINCO 2021 run. Short-circuit reserved for trivially-clean
+    cases only.
     """
     if len(payloads) == 1:
-        return payloads[0]
+        p = payloads[0]
+        # Fast path only when there's nothing to dedup. `;` in evidence
+        # means we need the full dedup loop below.
+        if p.evidence is None or ";" not in (p.evidence or ""):
+            return p
+
+    # Sort by the earliest PDF page each payload cited. Payloads with no
+    # source_pages sort to the front (key = 0) so they remain deterministic
+    # rather than getting a ``min([])`` crash.
+    payloads = sorted(
+        payloads,
+        key=lambda p: min(p.source_pages) if p.source_pages else 0,
+    )
 
     # Numeric: warn and take first set of values.
     numeric_values = None
@@ -224,7 +350,27 @@ def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
     contents = [p.content.strip() for p in payloads if p.content.strip()]
     content = "\n\n".join(contents)
 
-    evidence_parts = [p.evidence.strip() for p in payloads if p.evidence.strip()]
+    # Phase 2.1: flatten + dedup evidence fragments across payloads.
+    # Sub-agents frequently emit the same citation twice (e.g. two halves
+    # of Note 13 Credit risk both citing "Pages 34-36, Note 13 (Credit
+    # risk)"), and `_combine_payloads` used to concatenate them verbatim
+    # which showed up in col D as "X; X". We split each payload's
+    # evidence on ";" so ALREADY-joined strings get split back apart,
+    # trim, and dedup case-insensitively while preserving first-seen
+    # order (stable across re-runs because the outer payload list is
+    # sorted above by min(source_pages)).
+    seen_evidence: set[str] = set()
+    evidence_parts: list[str] = []
+    for p in payloads:
+        for frag in p.evidence.split(";"):
+            s = frag.strip()
+            if not s:
+                continue
+            key = s.lower()
+            if key in seen_evidence:
+                continue
+            seen_evidence.add(key)
+            evidence_parts.append(s)
     evidence = "; ".join(evidence_parts)
 
     all_pages: list[int] = []
@@ -320,7 +466,11 @@ def _write_row(
         cell.value = value
         wrote_anything = True
 
-    if payload.evidence:
+    # Only write evidence when we actually wrote a value (or numeric block)
+    # to the row. An evidence-only cell would be a "ghost row" — citation
+    # text with nothing to cite against — and is almost always an upstream
+    # bug in the payload (LLM produced evidence for a row it didn't fill).
+    if payload.evidence and (wrote_anything or payload.numeric_values):
         ev_cell = ws.cell(row=row, column=evidence_col)
         if isinstance(ev_cell.value, str) and ev_cell.value.startswith("="):
             errors.append(

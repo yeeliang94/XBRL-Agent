@@ -1,8 +1,8 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { RunConfigPayload } from "../lib/types";
 import { pwc } from "../lib/theme";
 import type { AppState, AppAction } from "../lib/appReducer";
-import { notesTabLabel } from "../lib/appReducer";
+import { notesTabLabel, agentSubAgentSummary } from "../lib/appReducer";
 import { getResultJson, getExtendedSettings } from "../lib/api";
 import { UploadPanel } from "../components/UploadPanel";
 import { PreRunPanel } from "../components/PreRunPanel";
@@ -13,6 +13,14 @@ import { ResultsView } from "../components/ResultsView";
 import { AgentTabs } from "../components/AgentTabs";
 import type { AgentTabState } from "../components/AgentTabs";
 import { ValidatorTab } from "../components/ValidatorTab";
+import { NotesSubTabBar } from "../components/NotesSubTabBar";
+import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
+import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
+
+// Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
+// from ExtractPage keep working. The single source of truth lives in
+// lib/notes.ts — this module just gates with it.
+export { NOTES_12_AGENT_ID };
 
 // ---------------------------------------------------------------------------
 // ExtractPage — the extraction workspace. Split out from App so the header
@@ -52,7 +60,17 @@ export function ExtractPage({
       Object.fromEntries(
         Object.entries(state.agents).map(([id, a]) => [
           id,
-          { agentId: a.agentId, label: a.label, status: a.status, role: a.role } as AgentTabState,
+          {
+            agentId: a.agentId,
+            label: a.label,
+            status: a.status,
+            role: a.role,
+            // Phase 5.2 / peer-review [M1]: only Notes-12's fan-out
+            // populates sub-agent batch metadata today; for every other
+            // agent `agentSubAgentSummary` returns null and the tab
+            // renders as a single-line label as before.
+            subLabel: agentSubAgentSummary(a),
+          } as AgentTabState,
         ]),
       ),
     [state.agents],
@@ -206,7 +224,15 @@ export function ExtractPage({
 // readable top-to-bottom and the component can be tested independently.
 // ---------------------------------------------------------------------------
 
-function ActiveTabPanel({ state }: { state: AppState }) {
+export function ActiveTabPanel({ state }: { state: AppState }) {
+  // Sheet-12 sub-agent selection. null === "All" (the current/legacy view
+  // that lumps every sub-agent's events together). Selection persists
+  // across tab switches — flipping to SOFP and back keeps the same sub
+  // highlighted, which matches the "preserve context" feel of the main
+  // tab bar. The state lives here (not on AppState) because it's purely a
+  // UI detail that doesn't need to survive navigation away from /extract.
+  const [notes12SubId, setNotes12SubId] = useState<string | null>(null);
+
   if (state.activeTab === "validator") {
     return (
       <div style={styles.activityCardAttached}>
@@ -220,10 +246,35 @@ function ActiveTabPanel({ state }: { state: AppState }) {
       </div>
     );
   }
+
   const activeAgent = state.activeTab ? state.agents[state.activeTab] : null;
-  const events = activeAgent ? activeAgent.events : state.events;
-  const toolTimeline = activeAgent ? activeAgent.toolTimeline : state.toolTimeline;
+
+  // Sheet-12 branch: show the nested sub-tab bar and route the AgentTimeline
+  // through the filter when a specific sub is selected. Gated on the
+  // sub-agent list being non-empty so a Notes-12 tab that hasn't split yet
+  // (pre-first-`started` event) still renders a flat timeline.
+  const subAgents =
+    isNotes12AgentId(state.activeTab) && activeAgent?.subAgentBatchRanges
+      ? activeAgent.subAgentBatchRanges
+      : [];
+  const showSubTabs = subAgents.length > 0;
+
+  const rawEvents = activeAgent ? activeAgent.events : state.events;
   const running = activeAgent ? activeAgent.status === "running" : state.isRunning;
+  const aggregateTimeline = activeAgent ? activeAgent.toolTimeline : state.toolTimeline;
+
+  // Memoised sub-agent filter — avoids redoing O(N) filter + timeline
+  // rebuild on unrelated rerenders (e.g. token-delta churn from other
+  // agents). For the "All" view we reuse the pre-computed aggregate
+  // timeline and skip the rebuild entirely.
+  const { events, toolTimeline } = useMemo(() => {
+    if (showSubTabs && notes12SubId !== null) {
+      const filtered = filterEventsBySubAgent(rawEvents, notes12SubId);
+      return { events: filtered, toolTimeline: buildToolTimeline(filtered) };
+    }
+    return { events: rawEvents, toolTimeline: aggregateTimeline };
+  }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline]);
+
   return (
     <div style={styles.activityCardAttached}>
       <div style={styles.activityHeader}>
@@ -232,6 +283,13 @@ function ActiveTabPanel({ state }: { state: AppState }) {
           {events.length} {events.length === 1 ? "event" : "events"}
         </span>
       </div>
+      {showSubTabs && (
+        <NotesSubTabBar
+          subAgents={subAgents}
+          activeSubId={notes12SubId}
+          onSelect={setNotes12SubId}
+        />
+      )}
       <AgentTimeline
         events={events}
         toolTimeline={toolTimeline}

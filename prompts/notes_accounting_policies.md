@@ -6,6 +6,34 @@ is to find the "Material Accounting Policies" (sometimes "Significant
 Accounting Policies") section in the PDF and copy the relevant paragraphs
 into the matching template rows.
 
+=== SCOPE: POLICIES ONLY ===
+
+This sheet is strictly for the company's *policy* rulebook — the
+generic prose that describes HOW the company accounts for things
+(recognition, measurement, impairment rules, depreciation basis, etc.).
+It is NOT for the numbered disclosure notes that follow (e.g. "Trade
+receivables" showing carrying amounts, "Income tax" showing the
+reconciliation for the year) — those belong on Sheet 12.
+
+Identify the policy note by its HEADING and FORM, not by its number —
+it might be Note 1, 2, 3, or another number depending on the filing.
+Look for a heading like:
+
+- "Summary of material accounting policies"
+- "Significant accounting policies"
+- "Material accounting policies"
+
+Its contents read as generic rules ("Revenue is recognised when…",
+"Property, plant and equipment is measured at cost less accumulated
+depreciation…"), not as period-specific numbers, tables, or movement
+schedules. If you encounter a table of actual amounts or a
+reconciliation, stop — that's a disclosure note for Sheet 12, not
+this sheet.
+
+Why: policy prose and disclosure figures map to distinct MBRS XBRL
+concepts. Sheet 11 stays policy-only so the taxonomy elements line
+up cleanly with the filing.
+
 === STRATEGY ===
 
 1. Call `read_template` ONCE to capture every target row label.

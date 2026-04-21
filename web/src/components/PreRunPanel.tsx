@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import type {
   StatementType,
   VariantSelection,
@@ -7,6 +7,7 @@ import type {
   RunConfigPayload,
   FilingLevel,
   NotesTemplateType,
+  SSEEvent,
 } from "../lib/types";
 import {
   STATEMENT_TYPES,
@@ -14,13 +15,15 @@ import {
   NOTES_TEMPLATE_TYPES,
 } from "../lib/types";
 import { pwc } from "../lib/theme";
-import { abortAgent } from "../lib/api";
+import { abortAgent, updateSettings } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { ScoutToggle } from "./ScoutToggle";
 import { StatementRunConfig } from "./StatementRunConfig";
 import { NotesRunConfig } from "./NotesRunConfig";
+import { AgentTimeline } from "./AgentTimeline";
 import { humanToolName } from "../lib/toolLabels";
 import { parseSSEStream } from "../lib/sse";
+import { buildToolTimeline, isScoutTimelineEvent } from "../lib/buildToolTimeline";
 
 interface Props {
   sessionId: string;
@@ -153,6 +156,36 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const [scoutProgress, setScoutProgress] = useState<string | null>(null);
   const [scoutStartTime, setScoutStartTime] = useState<number | null>(null);
   const [scoutEnabled, setScoutEnabled] = useState(true);
+  // Operator override for scanned (image-only) PDFs. When ticked, the scout
+  // endpoint is told to skip the PyMuPDF-regex notes-inventory path and go
+  // straight to the vision fallback. Default off — the LLM scout still
+  // handles text PDFs fine and vision-only is more expensive.
+  const [scannedPdf, setScannedPdf] = useState(false);
+  // Persisted scout model lives in XBRL_DEFAULT_MODELS.scout server-side
+  // (see server.py `_load_extended_settings`). We hydrate this from the
+  // /api/settings call so the dropdown shows the last-selected model; on
+  // change we fire updateSettings() to write through, matching how the
+  // Settings page has always done it.
+  const [scoutModel, setScoutModel] = useState<string>("");
+  // Tracks the in-flight POST /api/settings from a dropdown change. Peer-
+  // review [HIGH]: without this, a fast change-then-click flow lets the
+  // scout endpoint read the stale .env because the browser fired the scout
+  // POST before the settings POST flushed. handleAutoDetect awaits this
+  // ref so the scout call is always serialised after the persist. Held as
+  // a ref (not state) to avoid an extra render on each save, and because
+  // handleAutoDetect needs the *current* pending promise at click time.
+  const scoutModelSaveRef = React.useRef<Promise<unknown> | null>(null);
+  // Non-fatal error surface for persist failures. Previously a console.warn;
+  // surfacing inline gives operators visible feedback that their choice
+  // didn't persist so they can retry or fall back to the Settings page.
+  const [scoutModelSaveError, setScoutModelSaveError] = useState<string | null>(null);
+  // Accumulated SSE events for the current / most recent scout run. Reused
+  // by AgentTimeline so the scout's tool-call feed renders identically to
+  // extraction agents. Reset to [] when Auto-detect fires so previous runs
+  // don't bleed into a fresh one. Collapsed UI state (scoutLogOpen) lives
+  // alongside so the log auto-opens during detect and collapses after.
+  const [scoutEvents, setScoutEvents] = useState<SSEEvent[]>([]);
+  const [scoutLogOpen, setScoutLogOpen] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
   const [infopack, setInfopack] = useState<Record<string, unknown> | null>(null);
 
@@ -197,6 +230,25 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
         if (cancelled) return;
         setScoutEnabled(settings.scout_enabled_default);
         setAvailableModels(settings.available_models);
+        // Peer-review #7 defensive fallback: if the persisted scout model
+        // has been removed from config/models.json between sessions, a
+        // bare-value assignment would make <select value> point to a
+        // non-existent <option> and React warns + renders blank. Prefer
+        // persisted → global → first available, so the dropdown always
+        // has a matching option.
+        const persistedScout = settings.default_models.scout || settings.model;
+        const knownIds = new Set(settings.available_models.map((m) => m.id));
+        if (knownIds.has(persistedScout)) {
+          setScoutModel(persistedScout);
+        } else if (knownIds.has(settings.model)) {
+          setScoutModel(settings.model);
+        } else if (settings.available_models.length > 0) {
+          setScoutModel(settings.available_models[0].id);
+        } else {
+          // No models at all — leave empty; the <select> will render zero
+          // options and the Auto-detect call will fail informatively.
+          setScoutModel(persistedScout);
+        }
         // Initialize model overrides from defaults
         const overrides = {} as Record<StatementType, string>;
         for (const stmt of STATEMENT_TYPES) {
@@ -271,6 +323,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   }, []);
 
   const handleAutoDetect = useCallback(async () => {
+    // Peer-review [HIGH] race guard: await any pending scout-model persist
+    // so the scout endpoint reads the up-to-date .env. updateSettings's
+    // rejection is swallowed here — the handler already surfaced the error
+    // via scoutModelSaveError, and the scout call will fall back to the
+    // previously-persisted model which is the sensible default for a
+    // transient /api/settings outage.
+    const pending = scoutModelSaveRef.current;
+    if (pending) {
+      try { await pending; } catch { /* error already surfaced */ }
+    }
+
     // Abort any previous in-flight scout request
     scoutAbortRef.current?.abort();
     const abortController = new AbortController();
@@ -282,11 +345,22 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     setScoutProgress(null);
     setScoutOverrideNote(null);
     setScoutStartTime(Date.now());
+    // Reset timeline state for a fresh Auto-detect run and auto-expand the
+    // log so users see the work happening. Collapsing back happens on
+    // scout_complete / scout_cancelled / error (see the switch below).
+    setScoutEvents([]);
+    setScoutLogOpen(true);
     try {
-      // Call the scout endpoint via SSE
+      // Call the scout endpoint via SSE. When the user flagged the upload
+      // as scanned, pass scanned_pdf so the server forces the vision path
+      // for notes inventory (skipping the PyMuPDF regex that returns [] on
+      // image-only PDFs). Body is only sent when the flag is set so the
+      // default request shape is unchanged for text PDFs.
       const response = await fetch(`/api/scout/${sessionId}`, {
         method: "POST",
         signal: abortController.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scanned_pdf: scannedPdf }),
       });
       if (!response.ok) {
         let detail = `Scout failed (${response.status})`;
@@ -393,6 +467,14 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
         if (cancelled) break;
         const data = (evt.data ?? {}) as Record<string, unknown>;
 
+        // Mirror every timeline-relevant event into scoutEvents so
+        // AgentTimeline can render the tool-call feed. `isScoutTimelineEvent`
+        // is the single source of truth for which events matter; routing
+        // envelopes (scout_complete, scout_cancelled) stay out of the log.
+        if (isScoutTimelineEvent(evt)) {
+          setScoutEvents((prev) => [...prev, evt as unknown as SSEEvent]);
+        }
+
         switch (evt.event) {
           case "tool_call":
             setScoutProgress(`${humanToolName(String(data.tool_name ?? ""))}…`);
@@ -407,14 +489,20 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
             break;
           case "scout_complete":
             if (data.success) handleInfopack(data);
+            // Auto-collapse the log once the work is done. The operator
+            // can re-expand to inspect what scout did after the fact.
+            setScoutLogOpen(false);
             break;
           case "scout_cancelled":
             // Server-side cancellation. The abort handler already flipped
             // isDetecting/startTime; nothing else to do.
+            setScoutLogOpen(false);
             break;
           case "error":
             setScoutError(typeof data.message === "string" ? data.message : "Scout failed");
             setScoutStartTime(null);
+            // Keep the log open on error — the timeline is diagnostic
+            // evidence for what went wrong.
             break;
           default:
             // Unknown event type — ignore to stay forward-compatible.
@@ -438,7 +526,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     // latest value via userEnabledOverridesRef so recreating the callback
     // every time the user toggles a statement isn't necessary (and would
     // leak the stale-closure bug back in).
-  }, [sessionId]);
+  }, [sessionId, scannedPdf]);
 
   const handleStopScout = useCallback(() => {
     scoutAbortRef.current?.abort();
@@ -450,6 +538,45 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
       abortAgent(sessionId, "scout").catch(() => {});
     }
   }, [sessionId]);
+
+  // Derive the tool timeline once per scoutEvents change — buildToolTimeline
+  // is O(N) but re-running it on every render (e.g. an unrelated checkbox
+  // toggle) is wasted work when the event list hasn't changed. Declared here
+  // alongside the other hooks so the hook-call order stays constant across
+  // renders (React throws "Rendered more hooks than during the previous
+  // render" if a hook sits after a conditional early-return).
+  const scoutToolTimeline = useMemo(() => buildToolTimeline(scoutEvents), [scoutEvents]);
+
+  const handleScoutModelChange = useCallback((modelId: string) => {
+    // Optimistic local update so the dropdown reflects the choice instantly,
+    // then persist through the existing settings endpoint. The promise is
+    // tracked on scoutModelSaveRef so handleAutoDetect can await it before
+    // kicking off the scout call — closes the race the peer-review flagged.
+    // Failure surfaces via scoutModelSaveError; the current session still
+    // uses the locally-picked model on the next persist that succeeds.
+    setScoutModel(modelId);
+    setScoutModelSaveError(null);
+    const p: Promise<unknown> = updateSettings({ default_models: { scout: modelId } })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : "Failed to persist scout model selection";
+        setScoutModelSaveError(msg);
+        // Re-throw so awaiters (handleAutoDetect) see the failure and can
+        // decide whether to proceed. We still start the scout run — running
+        // the scout on the old persisted model is a better default than
+        // blocking the user indefinitely on a transient /api/settings
+        // outage.
+        throw err;
+      })
+      .finally(() => {
+        // Only clear the ref if THIS promise is still the active one; a
+        // second rapid-fire change would have replaced the ref and we
+        // don't want to clobber the newer save.
+        if (scoutModelSaveRef.current === p) {
+          scoutModelSaveRef.current = null;
+        }
+      });
+    scoutModelSaveRef.current = p;
+  }, []);
 
   const handleToggleNote = useCallback((nt: NotesTemplateType, enabled: boolean) => {
     setNotesEnabled((prev) => ({ ...prev, [nt]: enabled }));
@@ -563,7 +690,46 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
           onAutoDetect={handleAutoDetect}
           isDetecting={isDetecting}
           canAutoDetect={!!sessionId}
+          availableModels={availableModels}
+          scoutModel={scoutModel}
+          onScoutModelChange={handleScoutModelChange}
         />
+        {scoutEnabled && (
+          <label
+            style={{
+              display: "flex", alignItems: "center", gap: pwc.space.sm,
+              fontFamily: pwc.fontBody, fontSize: 13, color: pwc.grey800,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={scannedPdf}
+              onChange={(e) => setScannedPdf(e.target.checked)}
+              disabled={isDetecting}
+            />
+            <span>
+              Scanned PDF
+              <span style={{ color: pwc.grey300, marginLeft: 6, fontSize: 12 }}>
+                (skip text extraction, use vision)
+              </span>
+            </span>
+          </label>
+        )}
+        {scoutModelSaveError && (
+          <p
+            role="status"
+            style={{
+              fontFamily: pwc.fontBody,
+              fontSize: 12,
+              color: pwc.error,
+              margin: 0,
+            }}
+          >
+            Couldn't save scout model selection: {scoutModelSaveError}. The
+            next Auto-detect will use the previously persisted model.
+          </p>
+        )}
         {isDetecting && (
           <div style={styles.scoutProgressPanel}>
             <div style={styles.scoutProgressHeader}>
@@ -597,6 +763,46 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
             </div>
           </div>
         )}
+        {scoutEvents.length > 0 && (
+          // Collapsible tool-call timeline. Mirrors the AgentTimeline used by
+          // extraction agents so the scout pane gets the same level of detail
+          // once the log is expanded. Kept below the progress strip so the
+          // one-line summary stays the primary status signal.
+          <div>
+            <button
+              type="button"
+              onClick={() => setScoutLogOpen((v) => !v)}
+              aria-expanded={scoutLogOpen}
+              aria-controls="scout-log-region"
+              style={{
+                padding: "4px 10px",
+                fontSize: 12,
+                fontFamily: pwc.fontBody,
+                background: pwc.white,
+                color: pwc.grey700,
+                border: `1px solid ${pwc.grey200}`,
+                borderRadius: pwc.radius.sm,
+                cursor: "pointer",
+              }}
+            >
+              {scoutLogOpen ? "▾ Hide scout log" : `▸ Show scout log (${scoutToolTimeline.length})`}
+            </button>
+            {scoutLogOpen && (
+              <div
+                id="scout-log-region"
+                role="region"
+                aria-label="Scout tool-call timeline"
+                style={{ marginTop: pwc.space.sm }}
+              >
+                <AgentTimeline
+                  events={scoutEvents}
+                  toolTimeline={scoutToolTimeline}
+                  isRunning={isDetecting}
+                />
+              </div>
+            )}
+          </div>
+        )}
         {scoutError && <p style={styles.errorText}>{scoutError}</p>}
         {scoutOverrideNote && (
           <div style={styles.scoutProgressPanel} role="note">
@@ -605,6 +811,29 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
             </span>
           </div>
         )}
+        {infopack && Array.isArray(infopack.notes_inventory) && (() => {
+          const count = (infopack.notes_inventory as unknown[]).length;
+          const notesRequested = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
+          const hintVisible = count === 0 && notesRequested;
+          return (
+            <div
+              style={{
+                fontFamily: pwc.fontBody, fontSize: 12,
+                color: hintVisible ? pwc.error : pwc.grey800,
+                display: "flex", flexDirection: "column", gap: 2,
+              }}
+              role="status"
+            >
+              <span>Inventory: {count} note{count === 1 ? "" : "s"}</span>
+              {hintVisible && (
+                <span>
+                  Scout couldn't read any notes from this PDF. Enable "Scanned PDF"
+                  above and re-run Auto-detect to force the vision path.
+                </span>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       <hr style={styles.divider} />

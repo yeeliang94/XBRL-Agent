@@ -1,4 +1,5 @@
 import { pwc } from "../lib/theme";
+import type { ModelEntry } from "../lib/types";
 
 interface Props {
   enabled: boolean;
@@ -6,6 +7,12 @@ interface Props {
   onAutoDetect: () => void;
   isDetecting: boolean;
   canAutoDetect: boolean;  // false until a PDF is uploaded
+  // Inline scout model picker. Optional so callers that don't care about
+  // model selection (history replay, older tests) keep working unchanged.
+  // When availableModels is a non-empty array, the dropdown renders.
+  availableModels?: ModelEntry[];
+  scoutModel?: string;
+  onScoutModelChange?: (modelId: string) => void;
 }
 
 const styles = {
@@ -80,6 +87,17 @@ const styles = {
     animation: "spin 0.8s linear infinite",
     display: "inline-block",
   } as React.CSSProperties,
+  modelSelect: {
+    padding: "6px 10px",
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey900,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    cursor: "pointer",
+    minWidth: 160,
+  } as React.CSSProperties,
 };
 
 export function ScoutToggle({
@@ -88,7 +106,18 @@ export function ScoutToggle({
   onAutoDetect,
   isDetecting,
   canAutoDetect,
+  availableModels,
+  scoutModel,
+  onScoutModelChange,
 }: Props) {
+  // Render the inline model picker only when the caller supplied the data
+  // and handler. History replay / tests that don't care about model choice
+  // can omit these props and get the original two-control layout.
+  const showModelPicker =
+    Array.isArray(availableModels) &&
+    availableModels.length > 0 &&
+    typeof onScoutModelChange === "function";
+
   return (
     <div style={styles.container}>
       <label style={styles.label}>
@@ -119,6 +148,22 @@ export function ScoutToggle({
         </span>
         Scout
       </label>
+
+      {enabled && showModelPicker && (
+        <select
+          aria-label="Scout model"
+          value={scoutModel ?? ""}
+          disabled={isDetecting}
+          onChange={(e) => onScoutModelChange!(e.target.value)}
+          style={styles.modelSelect}
+        >
+          {availableModels!.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.display_name || m.id}
+            </option>
+          ))}
+        </select>
+      )}
 
       {enabled && (
         <button

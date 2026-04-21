@@ -2,7 +2,11 @@
 // event stream into a ToolTimelineEntry[]. Used by history replay (and from
 // Phase 5.4, also by the live reducer) so there's one merge implementation.
 import { describe, test, expect } from "vitest";
-import { buildToolTimeline } from "../lib/buildToolTimeline";
+import {
+  buildToolTimeline,
+  filterEventsBySubAgent,
+  isScoutTimelineEvent,
+} from "../lib/buildToolTimeline";
 import type { SSEEvent } from "../lib/types";
 
 function call(id: string, name: string, args: Record<string, unknown> = {}, ts = 0): SSEEvent {
@@ -130,5 +134,126 @@ describe("buildToolTimeline", () => {
     const timeline = buildToolTimeline(events);
     expect(timeline).toHaveLength(1);
     expect(timeline[0].tool_call_id).toBe("a");
+  });
+});
+
+// Helpers for the sub-agent filter tests — tack a sub_agent_id onto the
+// payload and (for tool events) the namespaced tool_call_id that
+// listofnotes_subcoordinator._emit uses on the wire. Cast through `unknown`
+// so we can add the sub_agent_id field that rides on the event but isn't
+// declared on each data interface (matches the pattern other tests use
+// for extra routing fields).
+function subCall(subId: string, callId: string, name: string, ts = 0): SSEEvent {
+  return {
+    event: "tool_call",
+    data: {
+      tool_call_id: `${subId}:${callId}`,
+      tool_name: name,
+      args: {},
+      sub_agent_id: subId,
+    },
+    timestamp: ts,
+  } as unknown as SSEEvent;
+}
+
+function subResult(subId: string, callId: string, name: string, ts = 0): SSEEvent {
+  return {
+    event: "tool_result",
+    data: {
+      tool_call_id: `${subId}:${callId}`,
+      tool_name: name,
+      result_summary: "ok",
+      duration_ms: 50,
+      sub_agent_id: subId,
+    },
+    timestamp: ts,
+  } as unknown as SSEEvent;
+}
+
+function subStatus(subId: string, phase: string, ts = 0): SSEEvent {
+  return {
+    event: "status",
+    data: {
+      phase,
+      message: "",
+      sub_agent_id: subId,
+    },
+    timestamp: ts,
+  } as unknown as SSEEvent;
+}
+
+describe("isScoutTimelineEvent", () => {
+  // Pins the set of events that flow into the scout log. Without this,
+  // a PreRunPanel refactor could accidentally include scout_complete
+  // in the log (noisy) or drop tool_call (broken) without warning.
+  test.each([
+    ["status", true],
+    ["tool_call", true],
+    ["tool_result", true],
+    ["thinking_delta", true],
+    ["thinking_end", true],
+    ["text_delta", true],
+    ["error", true],
+    ["scout_complete", false],
+    ["scout_cancelled", false],
+    ["complete", false],
+    ["run_complete", false],
+    ["token_update", false],
+  ] as [string, boolean][])("%s -> %s", (eventName, expected) => {
+    expect(isScoutTimelineEvent({ event: eventName })).toBe(expected);
+  });
+});
+
+describe("filterEventsBySubAgent", () => {
+  // Locks the sheet-12 sub-tab contract: events routed by sub_agent_id or
+  // by namespaced tool_call_id survive the filter for their own sub, and
+  // coordinator-level events (no sub_agent_id, no namespaced id) drop out
+  // of any specific sub-view. The nested-Notes-12 UI depends on this exact
+  // shape — see ExtractPage + RunDetailView sub-tab wiring.
+  test("null subAgentId is identity (All tab)", () => {
+    const events: SSEEvent[] = [
+      subCall("sub0", "x1", "find_toc", 1),
+      subCall("sub1", "y1", "view_pages", 2),
+    ];
+    expect(filterEventsBySubAgent(events, null)).toEqual(events);
+  });
+
+  test("sub id selects only events carrying sub_agent_id=<id>", () => {
+    const events: SSEEvent[] = [
+      subStatus("sub0", "started", 1),
+      subCall("sub0", "x1", "find_toc", 2),
+      subResult("sub0", "x1", "find_toc", 3),
+      subCall("sub1", "y1", "view_pages", 4),
+      subResult("sub1", "y1", "view_pages", 5),
+    ];
+    const sub0 = filterEventsBySubAgent(events, "sub0");
+    expect(sub0).toHaveLength(3);
+    expect(sub0.every((e) =>
+      (e.data as unknown as Record<string, unknown>).sub_agent_id === "sub0"
+    )).toBe(true);
+  });
+
+  test("namespaced tool_call_id prefix matches even when sub_agent_id is absent", () => {
+    // Legacy / history replay path: persisted events may have been stripped
+    // of their sub_agent_id routing field but keep the namespaced id.
+    const events = [
+      {
+        event: "tool_call",
+        data: { tool_call_id: "sub2:xyz", tool_name: "view_pages", args: {} },
+        timestamp: 1,
+      },
+    ] as unknown as SSEEvent[];
+    const filtered = filterEventsBySubAgent(events, "sub2");
+    expect(filtered).toHaveLength(1);
+  });
+
+  test("coordinator-level events (no sub_agent_id, no namespaced id) excluded from sub views", () => {
+    const events = [
+      { event: "status", data: { phase: "starting", message: "" }, timestamp: 1 },
+      subCall("sub0", "x1", "find_toc", 2),
+    ] as unknown as SSEEvent[];
+    expect(filterEventsBySubAgent(events, "sub0")).toHaveLength(1);
+    // And the All view keeps everything.
+    expect(filterEventsBySubAgent(events, null)).toHaveLength(2);
   });
 });

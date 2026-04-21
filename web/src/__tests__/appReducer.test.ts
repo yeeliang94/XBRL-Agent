@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
-import { appReducer, agentReducer, initialState, notesTabLabel } from "../lib/appReducer";
+import { appReducer, agentReducer, agentSubAgentSummary, initialState, notesTabLabel } from "../lib/appReducer";
 import type { SSEEvent } from "../lib/types";
-import { createAgentState } from "../lib/types";
+import { createAgentState, type AgentState } from "../lib/types";
 import { buildToolTimeline } from "../lib/buildToolTimeline";
 
 // Pinned shape for the stripped chat-feed fields — the tests below assert
@@ -1155,5 +1155,124 @@ describe("agentReducer", () => {
       } as SSEEvent,
     });
     expect(state.agents["notes:RELATED_PARTY"].status).toBe("failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5.2 / peer-review [M1] — Sheet-12 sub-agent batch-range metadata
+// ---------------------------------------------------------------------------
+
+describe("Sheet-12 sub-agent batch ranges", () => {
+  test("status:started with batch_note_range + batch_page_range lands on AgentState", () => {
+    let agent = createAgentState("notes:LIST_OF_NOTES", "LIST_OF_NOTES", "Notes 12");
+    agent = agentReducer(agent, {
+      event: "status",
+      data: {
+        phase: "started",
+        message: "notes:LIST_OF_NOTES:sub0 starting (Notes 1-3, pp 18-30, 3 notes)...",
+        sub_agent_id: "notes:LIST_OF_NOTES:sub0",
+        batch_note_range: [1, 3],
+        batch_page_range: [18, 30],
+      },
+      timestamp: 1,
+    } as SSEEvent);
+    expect(agent.subAgentBatchRanges).toHaveLength(1);
+    expect(agent.subAgentBatchRanges?.[0]).toEqual({
+      subAgentId: "notes:LIST_OF_NOTES:sub0",
+      notes: [1, 3],
+      pages: [18, 30],
+    });
+  });
+
+  test("multiple sub-agent starts accumulate in first-seen order", () => {
+    let agent = createAgentState("notes:LIST_OF_NOTES", "LIST_OF_NOTES", "Notes 12");
+    const bases = [
+      { id: "sub0", notes: [1, 3], pages: [18, 30] },
+      { id: "sub1", notes: [4, 6], pages: [30, 32] },
+      { id: "sub2", notes: [7, 9], pages: [32, 33] },
+      { id: "sub3", notes: [10, 12], pages: [33, 34] },
+      { id: "sub4", notes: [13, 15], pages: [34, 37] },
+    ];
+    for (let i = 0; i < bases.length; i++) {
+      const b = bases[i];
+      agent = agentReducer(agent, {
+        event: "status",
+        data: {
+          phase: "started",
+          message: `${b.id} starting (${b.notes[0]}-${b.notes[1]})`,
+          sub_agent_id: b.id,
+          batch_note_range: b.notes,
+          batch_page_range: b.pages,
+        },
+        timestamp: i + 1,
+      } as SSEEvent);
+    }
+    expect(agent.subAgentBatchRanges).toHaveLength(5);
+    expect(agent.subAgentBatchRanges?.map(r => r.subAgentId)).toEqual(
+      ["sub0", "sub1", "sub2", "sub3", "sub4"]
+    );
+  });
+
+  test("retry of same sub-agent replaces prior entry rather than duplicating", () => {
+    let agent = createAgentState("notes:LIST_OF_NOTES", "LIST_OF_NOTES", "Notes 12");
+    agent = agentReducer(agent, {
+      event: "status",
+      data: {
+        phase: "started", message: "first start",
+        sub_agent_id: "sub0",
+        batch_note_range: [1, 3], batch_page_range: [18, 30],
+      },
+      timestamp: 1,
+    } as SSEEvent);
+    // Second "started" — retry scenario.
+    agent = agentReducer(agent, {
+      event: "status",
+      data: {
+        phase: "started", message: "retry start",
+        sub_agent_id: "sub0",
+        batch_note_range: [1, 3], batch_page_range: [18, 30],
+      },
+      timestamp: 2,
+    } as SSEEvent);
+    expect(agent.subAgentBatchRanges).toHaveLength(1);
+  });
+
+  test("status events without batch range are ignored for sub-agent tracking", () => {
+    let agent = createAgentState("notes:LIST_OF_NOTES", "LIST_OF_NOTES", "Notes 12");
+    agent = agentReducer(agent, {
+      event: "status",
+      data: { phase: "viewing_pdf", message: "no batch info" },
+      timestamp: 1,
+    } as SSEEvent);
+    // Either undefined or empty — both acceptable, assert nothing leaked.
+    const ranges = agent.subAgentBatchRanges ?? [];
+    expect(ranges).toHaveLength(0);
+  });
+
+  test("agentSubAgentSummary produces terse tab-level label", () => {
+    const agent: AgentState = {
+      ...createAgentState("notes:LIST_OF_NOTES", "LIST_OF_NOTES", "Notes 12"),
+      subAgentBatchRanges: [
+        { subAgentId: "sub0", notes: [1, 3], pages: [18, 30] },
+        { subAgentId: "sub1", notes: [4, 6], pages: [30, 32] },
+        { subAgentId: "sub4", notes: [13, 15], pages: [34, 37] },
+      ],
+    };
+    expect(agentSubAgentSummary(agent)).toBe("Notes 1-15, pp 18-37");
+  });
+
+  test("agentSubAgentSummary returns null when no sub-agents have reported", () => {
+    const agent = createAgentState("notes:LIST_OF_NOTES", "LIST_OF_NOTES", "Notes 12");
+    expect(agentSubAgentSummary(agent)).toBeNull();
+  });
+
+  test("agentSubAgentSummary collapses single-note/single-page batches", () => {
+    const agent: AgentState = {
+      ...createAgentState("notes:LIST_OF_NOTES", "LIST_OF_NOTES", "Notes 12"),
+      subAgentBatchRanges: [
+        { subAgentId: "sub0", notes: [5, 5], pages: [22, 22] },
+      ],
+    };
+    expect(agentSubAgentSummary(agent)).toBe("Note 5, p 22");
   });
 });

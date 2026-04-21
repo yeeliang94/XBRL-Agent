@@ -34,7 +34,18 @@ export async function getSettings(): Promise<SettingsResponse> {
 }
 
 export async function updateSettings(
-  body: Partial<{ api_key: string; model: string; proxy_url: string }>,
+  body: Partial<{
+    api_key: string;
+    model: string;
+    proxy_url: string;
+    // Extended fields already accepted server-side by POST /api/settings.
+    // Adding them to the public signature lets the inline scout model
+    // dropdown (and any future per-agent-model controls) persist through
+    // the same helper instead of re-implementing the fetch.
+    default_models: Record<string, string>;
+    scout_enabled_default: boolean;
+    tolerance_rm: number;
+  }>,
 ): Promise<{ status: string }> {
   return apiFetch<{ status: string }>("/api/settings", {
     method: "POST",

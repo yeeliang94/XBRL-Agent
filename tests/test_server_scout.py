@@ -93,19 +93,24 @@ class TestScoutEndpoint:
         resp = client.post(f"/api/scout/nonexistent-session")
         assert resp.status_code == 404
 
-    def test_scout_uses_per_agent_model_setting(self, app_client, monkeypatch):
+    def test_scout_uses_per_agent_model_setting(self, app_client, tmp_path, monkeypatch):
         """Scout resolves its model from default_models.scout, not just TEST_MODEL."""
         client, session_id = app_client
         infopack = _fake_infopack()
 
-        # Set a scout-specific model override via env
-        monkeypatch.setenv("XBRL_DEFAULT_MODELS", json.dumps({"scout": "custom-scout-model"}))
+        # The scout endpoint calls `load_dotenv(ENV_FILE, override=True)` on
+        # every invocation, which would clobber `monkeypatch.setenv` with the
+        # real .env. Point ENV_FILE at a tmp file so the override is honoured.
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            'TEST_MODEL=test-model\n'
+            'GOOGLE_API_KEY=test-key-12345\n'
+            'XBRL_DEFAULT_MODELS={"scout":"custom-scout-model"}\n'
+        )
+        import server
+        monkeypatch.setattr(server, "ENV_FILE", env_file)
 
         captured_model_name = {}
-
-        # Intercept _create_proxy_model to capture the model name it receives
-        original_create = None
-        import server
         original_create = server._create_proxy_model
 
         def spy_create(model_name, proxy_url, api_key):
@@ -120,6 +125,101 @@ class TestScoutEndpoint:
         assert resp.status_code == 200
         # The scout should have used the per-agent model, not TEST_MODEL
         assert captured_model_name.get("value") == "custom-scout-model"
+
+    def test_scout_reads_persisted_scout_model_fresh_each_call(
+        self, app_client, tmp_path, monkeypatch,
+    ):
+        # Pins the "inline scout model dropdown writes to /api/settings and
+        # the next Auto-detect picks it up without a restart" contract
+        # (PLAN-ui-visibility-improvements Step 1.2). The scout endpoint
+        # calls `load_dotenv(ENV_FILE, override=True)` on every invocation;
+        # this test proves that mutation of the env file between two calls
+        # flips the model the scout is built with.
+        client, session_id = app_client
+        infopack = _fake_infopack()
+
+        # Point server.ENV_FILE at a writable tmp file. Required because the
+        # real .env would otherwise be mutated by load_dotenv's override.
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            'TEST_MODEL=test-model\n'
+            'GOOGLE_API_KEY=test-key-12345\n'
+            'XBRL_DEFAULT_MODELS={"scout":"first-model"}\n'
+        )
+        import server
+        monkeypatch.setattr(server, "ENV_FILE", env_file)
+
+        captured: list[str] = []
+        original_create = server._create_proxy_model
+
+        def spy_create(model_name, proxy_url, api_key):
+            captured.append(model_name)
+            return original_create(model_name, proxy_url, api_key)
+
+        monkeypatch.setattr(server, "_create_proxy_model", spy_create)
+
+        with patch(
+            "scout.runner.run_scout_streaming",
+            new_callable=AsyncMock,
+            return_value=infopack,
+        ):
+            resp1 = client.post(f"/api/scout/{session_id}")
+            assert resp1.status_code == 200
+            assert captured, "scout never constructed a model on first call"
+            assert captured[-1] == "first-model"
+
+            # Simulate the inline dropdown's POST /api/settings: overwrite
+            # the .env file with a new scout value. The next scout call must
+            # see it without a server restart.
+            env_file.write_text(
+                'TEST_MODEL=test-model\n'
+                'GOOGLE_API_KEY=test-key-12345\n'
+                'XBRL_DEFAULT_MODELS={"scout":"second-model"}\n'
+            )
+
+            resp2 = client.post(f"/api/scout/{session_id}")
+            assert resp2.status_code == 200
+            assert captured[-1] == "second-model", (
+                f"scout did not re-read XBRL_DEFAULT_MODELS.scout; captured={captured}"
+            )
+
+    def test_scout_scanned_pdf_flag_forwards_force_vision(self, app_client):
+        """POST body {"scanned_pdf": true} must forward force_vision_inventory=True
+        to run_scout_streaming so the discoverer skips the regex fast path."""
+        client, session_id = app_client
+        infopack = _fake_infopack()
+
+        captured: dict = {}
+
+        async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False):
+            captured["force_vision_inventory"] = force_vision_inventory
+            return infopack
+
+        with patch("scout.runner.run_scout_streaming", side_effect=fake_streaming):
+            resp = client.post(
+                f"/api/scout/{session_id}",
+                json={"scanned_pdf": True},
+            )
+
+        assert resp.status_code == 200
+        assert captured.get("force_vision_inventory") is True
+
+    def test_scout_default_body_leaves_force_vision_off(self, app_client):
+        """No body → force_vision_inventory stays False (today's behaviour)."""
+        client, session_id = app_client
+        infopack = _fake_infopack()
+
+        captured: dict = {}
+
+        async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False):
+            captured["force_vision_inventory"] = force_vision_inventory
+            return infopack
+
+        with patch("scout.runner.run_scout_streaming", side_effect=fake_streaming):
+            resp = client.post(f"/api/scout/{session_id}")
+
+        assert resp.status_code == 200
+        assert captured.get("force_vision_inventory") is False
 
     def test_scout_endpoint_error_handling(self, app_client):
         """Scout failure emits an error event, not a crash."""
@@ -166,7 +266,7 @@ class TestScoutEndpoint:
         infopack = _fake_infopack()
 
         # Mock run_scout_streaming to yield structured events
-        async def fake_streaming(pdf_path, model, on_event=None):
+        async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False):
             if on_event:
                 await on_event("tool_call", {
                     "tool_name": "find_toc",

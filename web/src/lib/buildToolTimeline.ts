@@ -7,6 +7,110 @@ import type {
   ToolTimelineEntry,
 } from "./types";
 
+// Events whose shape AgentTimeline / buildToolTimeline / ToolCallCard
+// actually consume. Anything outside this set (notably `scout_complete`,
+// `scout_cancelled`, `complete`, `run_complete`) is routing metadata the
+// parent UI handles directly and doesn't need in the timeline's event
+// buffer. Extracted so handleAutoDetect stays short and so tests can
+// assert the set without scraping the PreRunPanel switch.
+const _TIMELINE_EVENT_TYPES: ReadonlySet<SSEEvent["event"]> = new Set<SSEEvent["event"]>([
+  "status",
+  "tool_call",
+  "tool_result",
+  "thinking_delta",
+  "thinking_end",
+  "text_delta",
+  "error",
+]);
+
+/** True if the SSE event is one AgentTimeline renders; false for routing
+ *  envelopes (scout_complete, run_complete, …). Safe to call on any event. */
+export function isScoutTimelineEvent(evt: { event: string }): boolean {
+  return _TIMELINE_EVENT_TYPES.has(evt.event as SSEEvent["event"]);
+}
+
+/**
+ * Walk an event stream and pull out the Sheet-12 sub-agent batch metadata.
+ *
+ * The live reducer (agentReducer) populates `AgentState.subAgentBatchRanges`
+ * from `status` events carrying phase="started" + batch_note_range +
+ * batch_page_range + sub_agent_id. History replay doesn't use that reducer,
+ * so this helper gives the RunDetailView the same list by inspecting the
+ * persisted events directly. Keeping the derivation pure also means unit
+ * tests can lock the live/replay equivalence contract in one place.
+ *
+ * Order = first-seen sub_agent_id (matches live behaviour). Retries that
+ * re-emit the same sub_agent_id replace the prior entry so the ranges
+ * reflect the final successful attempt.
+ */
+export interface DerivedSubAgentRange {
+  subAgentId: string;
+  notes: [number, number];
+  pages: [number, number];
+}
+
+export function deriveSubAgentRangesFromEvents(
+  events: SSEEvent[],
+): DerivedSubAgentRange[] {
+  const byId = new Map<string, DerivedSubAgentRange>();
+  const order: string[] = [];
+  for (const evt of events) {
+    if (evt.event !== "status") continue;
+    const d = evt.data as unknown as Record<string, unknown>;
+    if (d.phase !== "started") continue;
+    if (!Array.isArray(d.batch_note_range) || !Array.isArray(d.batch_page_range)) continue;
+    const noteRange = d.batch_note_range as number[];
+    const pageRange = d.batch_page_range as number[];
+    if (noteRange.length !== 2 || pageRange.length !== 2) continue;
+    const subId = typeof d.sub_agent_id === "string" ? d.sub_agent_id : "unknown";
+    if (!byId.has(subId)) order.push(subId);
+    byId.set(subId, {
+      subAgentId: subId,
+      notes: [noteRange[0], noteRange[1]],
+      pages: [pageRange[0], pageRange[1]],
+    });
+  }
+  return order.map((id) => byId.get(id)!).filter(Boolean);
+}
+
+/**
+ * Filter an SSE event stream down to events originating from a single
+ * Sheet-12 sub-agent (or the coordinator itself when sub_agent_id === null).
+ *
+ * Sheet 12 fans out to N sub-agents but emits every event under the parent
+ * `agent_id="notes:LIST_OF_NOTES"`, with sub-agent provenance carried as:
+ *   - `data.sub_agent_id` on all sub-agent events, and
+ *   - `tool_call_id` prefixed with `"<sub_agent_id>:"` on tool_call /
+ *     tool_result events (namespaced so parallel sub-agents never collide
+ *     in the frontend timeline Map — see listofnotes_subcoordinator._emit).
+ *
+ * When `subAgentId === null` the helper is the identity (all events). When
+ * set to a specific sub id, only events that carry that id in either the
+ * payload field or the namespaced tool_call_id survive. Coordinator-level
+ * events (no sub_agent_id, no namespaced id) are excluded from sub-id
+ * views — the "All" bucket is how the operator sees those.
+ */
+export function filterEventsBySubAgent(
+  events: SSEEvent[],
+  subAgentId: string | null,
+): SSEEvent[] {
+  if (subAgentId === null) return events;
+  return events.filter((evt) => {
+    const d = evt.data as unknown as Record<string, unknown>;
+    if (typeof d?.sub_agent_id === "string" && d.sub_agent_id === subAgentId) {
+      return true;
+    }
+    // tool_call / tool_result may have been re-serialised without the
+    // sub_agent_id routing field (e.g. legacy persisted runs); fall back
+    // to the namespaced tool_call_id prefix which is always present.
+    const tcid = d?.tool_call_id;
+    if (typeof tcid === "string" && tcid.startsWith(`${subAgentId}:`)) {
+      return true;
+    }
+    return false;
+  });
+}
+
 /**
  * Rebuild a tool timeline from an SSE event list. Events without a
  * tool_call_id (status, thinking_delta, complete, ...) are ignored.

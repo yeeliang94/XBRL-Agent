@@ -410,6 +410,104 @@ describe("RunDetailView", () => {
     expect(screen.queryByText(/^Notes$/)).toBeNull();
   });
 
+  test("Notes-12 replay renders sub-tab bar derived from persisted events + filters", () => {
+    // Live path gets sub-agent ranges from the reducer; replay must derive
+    // them from the persisted `started` status events carrying
+    // batch_note_range + batch_page_range + sub_agent_id. This locks the
+    // live/replay parity contract for sheet-12 sub-tabs.
+    const note12Events: SSEEvent[] = [
+      {
+        event: "status",
+        data: {
+          phase: "started",
+          message: "sub0 starting",
+          sub_agent_id: "notes:LIST_OF_NOTES:sub0",
+          batch_note_range: [1, 3],
+          batch_page_range: [18, 22],
+        },
+        timestamp: 1,
+      } as unknown as SSEEvent,
+      {
+        event: "status",
+        data: {
+          phase: "started",
+          message: "sub1 starting",
+          sub_agent_id: "notes:LIST_OF_NOTES:sub1",
+          batch_note_range: [4, 6],
+          batch_page_range: [23, 27],
+        },
+        timestamp: 2,
+      } as unknown as SSEEvent,
+      {
+        event: "tool_call",
+        data: {
+          tool_name: "find_toc",
+          tool_call_id: "notes:LIST_OF_NOTES:sub0:a",
+          args: {},
+          sub_agent_id: "notes:LIST_OF_NOTES:sub0",
+        },
+        timestamp: 3,
+      } as unknown as SSEEvent,
+      {
+        event: "tool_call",
+        data: {
+          tool_name: "view_pages",
+          tool_call_id: "notes:LIST_OF_NOTES:sub1:b",
+          args: {},
+          sub_agent_id: "notes:LIST_OF_NOTES:sub1",
+        },
+        timestamp: 4,
+      } as unknown as SSEEvent,
+    ];
+    const detail = makeDetail({
+      agents: [
+        makeAgent({
+          id: 9,
+          statement_type: "NOTES_LIST_OF_NOTES",
+          variant: null,
+          events: note12Events,
+        }),
+      ],
+    });
+
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+
+    // Sub-tab bar appears: "All" chip + one chip per sub-agent (2).
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(3);
+    expect(tabs[0]).toHaveTextContent(/all/i);
+
+    // All view shows both sub-agents' tool rows.
+    expect(screen.getByText(/locating table of contents/i)).toBeInTheDocument();
+    expect(screen.getByText(/checking pdf pages/i)).toBeInTheDocument();
+
+    // Click Sub 1 → only sub0's row remains (ranges are ordered first-seen).
+    fireEvent.click(tabs[1]);
+    expect(screen.getByText(/locating table of contents/i)).toBeInTheDocument();
+    expect(screen.queryByText(/checking pdf pages/i)).not.toBeInTheDocument();
+  });
+
+  test("Notes-12 replay without started events renders flat timeline (no sub-tab bar)", () => {
+    // Guard: a Notes-12 persisted row without sub_agent_id metadata (e.g.
+    // coordinator crashed before fan-out) must still render — the sub-tab
+    // bar is gated on sub-agent list being non-empty.
+    const flatEvents = sampleEvents;
+    const detail = makeDetail({
+      agents: [
+        makeAgent({
+          id: 9,
+          statement_type: "NOTES_LIST_OF_NOTES",
+          variant: null,
+          events: flatEvents,
+        }),
+      ],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+
+    // No sub-tab bar rendered for this agent.
+    expect(screen.queryByRole("tablist", { name: /sheet-12/i })).not.toBeInTheDocument();
+  });
+
   test("Delete button is enabled for terminal statuses", () => {
     // Sanity check: the disable must NOT bleed into completed / failed /
     // aborted statuses. Each of these represents a terminal run and

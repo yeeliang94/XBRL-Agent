@@ -13,8 +13,10 @@ export interface SettingsResponse {
 export type EventPhase =
   | "starting"           // Multi-agent run initializing
   | "scouting"           // Scout analyzing PDF structure
+  | "started"            // Notes agent / sub-agent first status event
   | "reading_template"
   | "viewing_pdf"
+  | "writing_notes"      // Notes agent payload emission phase
   | "filling_workbook"
   | "verifying"
   | "cancelled"          // Agent was aborted by user
@@ -149,10 +151,15 @@ export interface AgentCompleteData {
   warnings?: string[];
 }
 
-/** Cross-check result as emitted in run_complete SSE event. */
+/** Cross-check result as emitted in run_complete SSE event.
+ *
+ * ``"warning"`` is advisory (Phase 6.1 notes-consistency check). It
+ * doesn't affect the overall run status but surfaces in the Validator
+ * tab so operators can eyeball the disagreement.
+ */
 export interface CrossCheckResult {
   name: string;
-  status: "passed" | "failed" | "not_applicable" | "pending";
+  status: "passed" | "failed" | "warning" | "not_applicable" | "pending";
   expected: number | null;
   actual: number | null;
   diff: number | null;
@@ -329,6 +336,17 @@ export interface AgentState {
   tokens: TokenData | null;
   error: ErrorData | null;
   workbookPath: string | null;
+  // Phase 5.2 / peer-review [M1]: when the backend emits a Sheet-12
+  // sub-agent `started` event it carries structured batch metadata.
+  // We aggregate the ranges across all sub-agents so the Notes-12 tab
+  // label can show "Notes 1-15, pp 18-37" at a glance without parsing
+  // individual message strings. Empty arrays = no sub-agent metadata
+  // seen yet (pre-start or non-fan-out sheets).
+  subAgentBatchRanges?: Array<{
+    subAgentId: string;
+    notes: [number, number];   // inclusive note-number range for the batch
+    pages: [number, number];   // inclusive PDF page range for the batch
+  }>;
 }
 
 // ---------------------------------------------------------------------------
