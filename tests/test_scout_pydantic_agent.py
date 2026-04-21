@@ -146,6 +146,246 @@ class TestCreateScoutAgent:
         _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
         assert deps.statements_to_find is None  # None means all 5
 
+    def test_force_vision_inventory_defaults_false(self, synthetic_pdf: Path):
+        """Scanned-PDF override is off unless the caller opts in."""
+        from scout.agent import create_scout_agent
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        assert deps.force_vision_inventory is False
+
+    def test_force_vision_inventory_accepts_true(self, synthetic_pdf: Path):
+        """Caller can flag this run as a scanned PDF; deps record the intent."""
+        from scout.agent import create_scout_agent
+
+        _, deps = create_scout_agent(
+            pdf_path=synthetic_pdf, model="test", force_vision_inventory=True,
+        )
+        assert deps.force_vision_inventory is True
+
+    def test_derive_notes_start_page_prefers_smallest_note_page(self, synthetic_pdf: Path):
+        """When statements have note_pages, notes section begins at the
+        smallest note_page across all statements — that's the earliest
+        page any statement references."""
+        from scout.agent import _derive_notes_start_page
+        from scout.infopack import Infopack, StatementPageRef
+
+        infopack = Infopack(
+            toc_page=1, page_offset=0,
+            statements={
+                StatementType.SOFP: StatementPageRef(
+                    variant_suggestion="CuNonCu", face_page=10, note_pages=[20, 21, 25],
+                ),
+                StatementType.SOCF: StatementPageRef(
+                    variant_suggestion="Indirect", face_page=13, note_pages=[18, 19],
+                ),
+            },
+        )
+        assert _derive_notes_start_page(infopack) == 18
+
+    def test_derive_notes_start_page_falls_back_to_max_face_plus_one(self, synthetic_pdf: Path):
+        """When no note_pages are populated, notes are assumed to begin
+        right after the last face page."""
+        from scout.agent import _derive_notes_start_page
+        from scout.infopack import Infopack, StatementPageRef
+
+        infopack = Infopack(
+            toc_page=1, page_offset=0,
+            statements={
+                StatementType.SOFP: StatementPageRef(
+                    variant_suggestion="CuNonCu", face_page=12, note_pages=[],
+                ),
+                StatementType.SOCF: StatementPageRef(
+                    variant_suggestion="Indirect", face_page=15, note_pages=[],
+                ),
+            },
+        )
+        assert _derive_notes_start_page(infopack) == 16
+
+    def test_derive_notes_start_page_returns_none_when_empty(self, synthetic_pdf: Path):
+        """Empty statements dict → no way to infer; callers must not crash."""
+        from scout.agent import _derive_notes_start_page
+        from scout.infopack import Infopack
+
+        assert _derive_notes_start_page(Infopack(toc_page=1, page_offset=0)) is None
+
+
+class TestPopulateInventoryFallback:
+    """Post-scout safety net: if the LLM never called
+    ``discover_notes_inventory`` on a scanned PDF the operator flagged,
+    run the vision pass ourselves before returning. Tests target the
+    helper directly so we don't have to stand up a PydanticAI agent."""
+
+    def _make_deps(self, pdf_path: Path, *, force: bool, has_model: bool):
+        from scout.agent import ScoutDeps
+
+        class _FakeModel:
+            """Placeholder — deps treats any truthy vision_model as valid."""
+        return ScoutDeps(
+            pdf_path=pdf_path,
+            pdf_length=12,
+            statements_to_find=None,
+            on_progress=None,
+            vision_model=_FakeModel() if has_model else None,
+            force_vision_inventory=force,
+        )
+
+    @pytest.mark.asyncio
+    async def test_fires_when_inventory_empty_and_flag_and_model_present(
+        self, synthetic_pdf: Path,
+    ):
+        from unittest.mock import patch
+        from scout.agent import _populate_inventory_via_vision
+        from scout.infopack import Infopack, StatementPageRef
+        from scout.notes_discoverer import NoteInventoryEntry
+
+        deps = self._make_deps(synthetic_pdf, force=True, has_model=True)
+        infopack = Infopack(
+            toc_page=1, page_offset=0,
+            statements={
+                StatementType.SOFP: StatementPageRef(
+                    variant_suggestion="CuNonCu", face_page=10, note_pages=[20, 21],
+                ),
+            },
+        )
+        captured: dict = {}
+
+        async def fake_build(**kwargs):
+            captured.update(kwargs)
+            return [NoteInventoryEntry(note_num=1, title="fallback", page_range=(20, 22))]
+
+        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=fake_build):
+            await _populate_inventory_via_vision(infopack, deps)
+
+        assert captured.get("force_vision") is True
+        assert captured.get("notes_start_page") == 20
+        assert [e.note_num for e in infopack.notes_inventory] == [1]
+
+    @pytest.mark.asyncio
+    async def test_noop_without_force_vision(self, synthetic_pdf: Path):
+        from unittest.mock import patch
+        from scout.agent import _populate_inventory_via_vision
+        from scout.infopack import Infopack
+
+        deps = self._make_deps(synthetic_pdf, force=False, has_model=True)
+        infopack = Infopack(toc_page=1, page_offset=0)
+
+        called = {"vision": False}
+
+        async def _would_fail(**kwargs):
+            called["vision"] = True
+            return []
+
+        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=_would_fail):
+            await _populate_inventory_via_vision(infopack, deps)
+
+        assert called["vision"] is False
+        assert infopack.notes_inventory == []
+
+    @pytest.mark.asyncio
+    async def test_noop_without_vision_model(self, synthetic_pdf: Path):
+        """No Model available (e.g. scout invoked with a plain string for
+        testing) — fallback must short-circuit, not crash."""
+        from unittest.mock import patch
+        from scout.agent import _populate_inventory_via_vision
+        from scout.infopack import Infopack
+
+        deps = self._make_deps(synthetic_pdf, force=True, has_model=False)
+        infopack = Infopack(toc_page=1, page_offset=0)
+
+        called = {"vision": False}
+
+        async def _would_fail(**kwargs):
+            called["vision"] = True
+            return []
+
+        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=_would_fail):
+            await _populate_inventory_via_vision(infopack, deps)
+
+        assert called["vision"] is False
+
+    @pytest.mark.asyncio
+    async def test_noop_when_inventory_already_populated(self, synthetic_pdf: Path):
+        from unittest.mock import patch
+        from scout.agent import _populate_inventory_via_vision
+        from scout.infopack import Infopack
+        from scout.notes_discoverer import NoteInventoryEntry
+
+        deps = self._make_deps(synthetic_pdf, force=True, has_model=True)
+        infopack = Infopack(
+            toc_page=1, page_offset=0,
+            notes_inventory=[
+                NoteInventoryEntry(note_num=1, title="already there", page_range=(10, 10)),
+            ],
+        )
+
+        called = {"vision": False}
+
+        async def _would_fail(**kwargs):
+            called["vision"] = True
+            return []
+
+        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=_would_fail):
+            await _populate_inventory_via_vision(infopack, deps)
+
+        assert called["vision"] is False
+        assert [e.note_num for e in infopack.notes_inventory] == [1]
+
+    def test_system_prompt_teaches_discover_notes_inventory(self):
+        """The LLM must be told `discover_notes_inventory` exists and when to
+        call it — otherwise scanned-PDF runs silently skip the tool and
+        Sheet-12 fan-out fails with an empty inventory. Guard the prompt
+        contract so prompt edits can't regress this."""
+        from scout.agent import _SYSTEM_PROMPT
+
+        assert "discover_notes_inventory" in _SYSTEM_PROMPT, (
+            "system prompt must mention discover_notes_inventory so the LLM "
+            "knows to call it; otherwise Sheet-12 runs with an empty inventory "
+            "on scanned PDFs"
+        )
+
+
+class TestDiscoverNotesInventoryTool:
+    """The tool must forward ScoutDeps.force_vision_inventory into the
+    discoverer so an operator flag reaches PyMuPDF/vision logic."""
+
+    def test_forwards_force_vision_flag(self, synthetic_pdf: Path):
+        import asyncio
+        from unittest.mock import patch
+        from scout.agent import create_scout_agent, _discover_notes_inventory_impl
+
+        _, deps = create_scout_agent(
+            pdf_path=synthetic_pdf, model="test", force_vision_inventory=True,
+        )
+
+        captured: dict = {}
+
+        async def fake_build(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=fake_build):
+            asyncio.run(_discover_notes_inventory_impl(deps, notes_start_page=10))
+
+        assert captured.get("force_vision") is True
+
+    def test_default_force_vision_false(self, synthetic_pdf: Path):
+        import asyncio
+        from unittest.mock import patch
+        from scout.agent import create_scout_agent, _discover_notes_inventory_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+
+        captured: dict = {}
+
+        async def fake_build(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=fake_build):
+            asyncio.run(_discover_notes_inventory_impl(deps, notes_start_page=10))
+
+        assert captured.get("force_vision") is False
+
 
 # ---------------------------------------------------------------------------
 # Phase 2: Deterministic tool tests

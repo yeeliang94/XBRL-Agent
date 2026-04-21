@@ -78,6 +78,12 @@ class ScoutDeps:
     # scout/notes_discoverer_vision.py). None disables the fallback —
     # scanned PDFs then keep their today's behaviour of returning [].
     vision_model: Optional[Model] = None
+    # Operator escape hatch: when True, discover_notes_inventory skips the
+    # PyMuPDF-regex fast path and goes straight to the vision fallback.
+    # Used when the user has explicitly flagged the upload as a scanned PDF
+    # in the UI — avoids relying on the LLM to detect and retry after the
+    # regex pass silently returns [].
+    force_vision_inventory: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -115,8 +121,15 @@ the presentation variant, and discover related note pages.
       assessment. If they disagree, trust your visual judgment but note the
       discrepancy.
    d. Call `discover_notes` with the face page text to find related note pages.
-4. When you have all statements mapped, call `save_infopack` with the complete
-   result.
+4. Identify the PDF page where the Notes-to-the-Financial-Statements section
+   begins (from the TOC or by inspecting pages right after the last face
+   statement) and call `discover_notes_inventory` with it. **This step is
+   mandatory** — downstream Sheet-12 fan-out depends on a populated inventory.
+   For text-based PDFs the tool is fast and deterministic. For scanned PDFs
+   it transparently falls back to a vision pass using your own model, so
+   you do not need to build the inventory manually — just call the tool.
+5. When you have all statements mapped AND the inventory built, call
+   `save_infopack` with the complete result.
 
 ## Important
 - Page numbers in the TOC may not match actual PDF pages — there is often an
@@ -124,6 +137,8 @@ the presentation variant, and discover related note pages.
 - Only look at pages near the TOC-stated page (±10 pages).
 - If a statement cannot be found, omit it from the infopack — do NOT guess.
 - Be efficient: view only the pages you need.
+- Never skip `discover_notes_inventory`. An empty notes_inventory makes
+  Sheet-12 fail loud — always call the tool at least once.
 """
 
 
@@ -224,6 +239,132 @@ def _discover_notes_impl(
         pdf_length=pdf_length,
         notes_start_page=notes_start_page,
     )
+
+
+def _derive_notes_start_page(infopack: "Infopack") -> Optional[int]:
+    """Infer the 1-indexed page where the Notes section begins.
+
+    Priority:
+    1. Smallest ``note_page`` across all statement refs (the earliest
+       page any statement references a note from).
+    2. ``max(face_page) + 1`` when no statement has populated note_pages.
+    3. ``None`` when neither signal is available — caller must short-circuit.
+
+    Used by the post-scout vision fallback: the LLM reliably finds face
+    pages but sometimes skips ``discover_notes_inventory``, leaving us
+    without a notes_start_page. This helper recovers one from the
+    structural evidence the LLM did produce.
+    """
+    note_pages: list[int] = []
+    face_pages: list[int] = []
+    for ref in infopack.statements.values():
+        if ref.note_pages:
+            note_pages.extend(ref.note_pages)
+        face_pages.append(ref.face_page)
+
+    if note_pages:
+        return min(note_pages)
+    if face_pages:
+        return max(face_pages) + 1
+    return None
+
+
+async def _populate_inventory_via_vision(
+    infopack: "Infopack", deps: ScoutDeps,
+) -> None:
+    """Post-scout fallback: if the LLM never called ``discover_notes_inventory``
+    but the operator flagged the PDF as scanned, run the vision pass
+    ourselves and attach the result to the infopack.
+
+    No-op unless all four conditions hold:
+      - ``infopack.notes_inventory`` is empty (LLM didn't build one).
+      - ``deps.force_vision_inventory`` is True (operator asked for it).
+      - ``deps.vision_model`` is set (a real Model — not the "test" string).
+      - We can derive ``notes_start_page`` from the infopack.
+    """
+    if infopack.notes_inventory:
+        return
+    if not deps.force_vision_inventory:
+        return
+    if deps.vision_model is None:
+        return
+
+    start = _derive_notes_start_page(infopack)
+    if start is None:
+        logger.warning(
+            "force_vision_inventory=True but could not derive notes_start_page "
+            "from the infopack — skipping fallback. Inventory stays empty."
+        )
+        return
+
+    from scout import notes_discoverer
+
+    logger.info(
+        "Post-scout vision fallback: LLM produced empty inventory; running "
+        "build_notes_inventory_async(notes_start_page=%d) directly.", start,
+    )
+    inventory = await notes_discoverer.build_notes_inventory_async(
+        pdf_path=str(deps.pdf_path),
+        notes_start_page=start,
+        pdf_length=deps.pdf_length,
+        vision_model=deps.vision_model,
+        force_vision=True,
+    )
+    infopack.notes_inventory = inventory
+
+
+async def _discover_notes_inventory_impl(
+    deps: ScoutDeps,
+    notes_start_page: int,
+) -> list[dict]:
+    """Build a note inventory from a PDF, returning a JSON-serialisable list.
+
+    Extracted to module scope so tests can drive it without standing up a
+    full PydanticAI agent run. Also the body of the agent's
+    ``discover_notes_inventory`` tool.
+    """
+    from scout import notes_discoverer
+
+    _emit_progress_deps(deps, f"Building notes inventory from page {notes_start_page}...")
+    inventory = await notes_discoverer.build_notes_inventory_async(
+        pdf_path=str(deps.pdf_path),
+        notes_start_page=notes_start_page,
+        pdf_length=deps.pdf_length,
+        vision_model=deps.vision_model,
+        force_vision=deps.force_vision_inventory,
+    )
+    if not inventory and deps.vision_model is not None:
+        _emit_progress_deps(
+            deps,
+            "Vision fallback returned no notes — Sheet-12 fan-out will fail.",
+        )
+    elif not inventory:
+        _emit_progress_deps(
+            deps,
+            "PyMuPDF found no note headers (scanned PDF and no vision model).",
+        )
+    deps.notes_inventory = inventory
+    return [
+        {"note_num": e.note_num, "title": e.title, "page_range": list(e.page_range)}
+        for e in inventory
+    ]
+
+
+def _emit_progress_deps(deps: ScoutDeps, msg: str) -> None:
+    """Fire-and-forget progress emitter usable from the module-level impl.
+
+    Mirrors ``_emit_progress`` defined inside ``create_scout_agent`` — we
+    can't reach that inner helper from module scope without importing
+    asyncio in two places, so duplicate the three-line body."""
+    import asyncio
+
+    if deps.on_progress is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(deps.on_progress(msg))
 
 
 def _view_pages_impl(
@@ -388,10 +529,18 @@ def create_scout_agent(
     model: Union[str, Model] = "test",
     statements_to_find: Optional[Set[StatementType]] = None,
     on_progress: Optional[Any] = None,
+    *,
+    force_vision_inventory: bool = False,
 ) -> tuple[Agent[ScoutDeps, str], ScoutDeps]:
     """Create a scout agent with tools for PDF scouting.
 
     Returns (agent, deps) — caller runs agent.run() or agent.iter().
+
+    Set ``force_vision_inventory=True`` when the caller knows the PDF is
+    scanned — ``discover_notes_inventory`` then bypasses the PyMuPDF-regex
+    fast path (which always returns [] on scanned PDFs) and runs the
+    vision pass directly, saving a round-trip and the LLM-skip failure
+    mode where scout never invokes the tool at all.
     """
     pdf_path = Path(pdf_path)
     doc = fitz.open(str(pdf_path))
@@ -419,6 +568,7 @@ def create_scout_agent(
         statements_to_find=statements_to_find,
         on_progress=on_progress,
         vision_model=resolved_vision_model,
+        force_vision_inventory=force_vision_inventory,
     )
 
     system_prompt = _SYSTEM_PROMPT.format(
@@ -552,38 +702,7 @@ def create_scout_agent(
         Args:
             notes_start_page: 1-indexed PDF page where the Notes section begins.
         """
-        _emit_progress(ctx.deps, f"Building notes inventory from page {notes_start_page}...")
-        # Use the async sibling because this tool already runs inside
-        # PydanticAI's event loop; the sync build_notes_inventory would
-        # raise on the running-loop guard when the vision fallback
-        # actually fires.
-        from scout.notes_discoverer import build_notes_inventory_async
-
-        inventory = await build_notes_inventory_async(
-            pdf_path=str(ctx.deps.pdf_path),
-            notes_start_page=notes_start_page,
-            pdf_length=ctx.deps.pdf_length,
-            vision_model=ctx.deps.vision_model,
-        )
-        if not inventory and ctx.deps.vision_model is not None:
-            # Operators want to know when the fallback ran and still
-            # came back empty — that's the loud signal the Sheet-12
-            # coordinator will act on.
-            _emit_progress(
-                ctx.deps,
-                "Vision fallback returned no notes — Sheet-12 fan-out will fail.",
-            )
-        elif not inventory:
-            _emit_progress(
-                ctx.deps,
-                "PyMuPDF found no note headers (scanned PDF and no vision model).",
-            )
-        # Cache on deps so save_infopack can attach it without a second pass.
-        ctx.deps.notes_inventory = inventory
-        payload = [
-            {"note_num": e.note_num, "title": e.title, "page_range": list(e.page_range)}
-            for e in inventory
-        ]
+        payload = await _discover_notes_inventory_impl(ctx.deps, notes_start_page)
         return json.dumps(payload, indent=2)
 
     @agent.tool
@@ -621,6 +740,8 @@ async def run_scout(
     model: Union[str, Model] = "google-gla:gemini-3-flash-preview",
     statements_to_find: Optional[Set[StatementType]] = None,
     on_progress: Optional[Any] = None,
+    *,
+    force_vision_inventory: bool = False,
 ) -> Infopack:
     """Run the scout agent on a PDF and return an Infopack.
 
@@ -632,6 +753,7 @@ async def run_scout(
         model=model,
         statements_to_find=statements_to_find,
         on_progress=on_progress,
+        force_vision_inventory=force_vision_inventory,
     )
 
     if on_progress:
@@ -655,6 +777,11 @@ async def run_scout(
         await on_progress("Scout complete.")
 
     if deps.infopack is not None:
+        # Safety net: if the LLM skipped discover_notes_inventory on a
+        # scanned PDF the operator flagged, run it ourselves before
+        # returning. See _populate_inventory_via_vision for the no-op
+        # conditions that preserve today's behaviour for text PDFs.
+        await _populate_inventory_via_vision(deps.infopack, deps)
         return deps.infopack
 
     # Agent finished without saving a valid infopack.  This is an error —
@@ -670,6 +797,8 @@ async def run_scout_streaming(
     model: Union[str, Model] = "google-gla:gemini-3-flash-preview",
     statements_to_find: Optional[Set[StatementType]] = None,
     on_event: Optional[Any] = None,
+    *,
+    force_vision_inventory: bool = False,
 ) -> Infopack:
     """Run the scout agent with structured event streaming.
 
@@ -678,11 +807,15 @@ async def run_scout_streaming(
 
     Args:
         on_event: async callback(event_type: str, data: dict) for SSE events.
+        force_vision_inventory: when True, discover_notes_inventory skips
+            the PyMuPDF-regex fast path — use when the caller knows the
+            PDF is scanned.
     """
     agent, deps = create_scout_agent(
         pdf_path=pdf_path,
         model=model,
         statements_to_find=statements_to_find,
+        force_vision_inventory=force_vision_inventory,
     )
 
     stmt_desc = "all 5 statements"
@@ -781,6 +914,8 @@ async def run_scout_streaming(
                     thinking_counter += 1
 
     if deps.infopack is not None:
+        # Same safety net as run_scout — see _populate_inventory_via_vision.
+        await _populate_inventory_via_vision(deps.infopack, deps)
         return deps.infopack
 
     raise RuntimeError(

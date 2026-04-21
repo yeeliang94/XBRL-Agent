@@ -277,3 +277,97 @@ def test_build_notes_inventory_notes_end_page_caps_vision_range(tmp_path):
     assert captured["end"] == 3, (
         f"vision scan range end must be clamped to notes_end_page=3, got {captured['end']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# force_vision — explicit "this is a scanned PDF" override
+# ---------------------------------------------------------------------------
+
+
+def test_build_notes_inventory_force_vision_skips_regex_on_text_pdf(tmp_path):
+    """Operator explicitly marked PDF as scanned: regex must NOT run — the
+    vision path runs unconditionally when vision_model is set."""
+    import fitz
+
+    pdf = tmp_path / "text.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((50, 50), "4. Property, plant and equipment\n\nThe Group...")
+    doc.save(str(pdf))
+    doc.close()
+
+    captured: dict = {}
+
+    async def fake_vision(*, pdf_path, start, end, model):
+        captured["called"] = True
+        return [NoteInventoryEntry(note_num=99, title="from-vision", page_range=(1, 1))]
+
+    with patch("scout.notes_discoverer_vision._vision_inventory", side_effect=fake_vision):
+        out = build_notes_inventory(
+            str(pdf),
+            notes_start_page=1,
+            vision_model=object(),
+            force_vision=True,
+        )
+
+    assert captured.get("called") is True
+    assert [(e.note_num, e.title) for e in out] == [(99, "from-vision")]
+
+
+def test_build_notes_inventory_force_vision_without_model_falls_back_to_regex(
+    tmp_path, caplog,
+):
+    """force_vision=True but no vision_model → log a warning and use the
+    regex path (today's behaviour). Skipping regex with nothing to replace
+    it would silently return [] which defeats the point of the flag."""
+    import fitz
+
+    pdf = tmp_path / "text.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((50, 50), "4. Revenue\n\n...")
+    doc.save(str(pdf))
+    doc.close()
+
+    with caplog.at_level("WARNING", logger="scout.notes_discoverer"):
+        out = build_notes_inventory(
+            str(pdf), notes_start_page=1, force_vision=True,  # no vision_model
+        )
+
+    assert [e.note_num for e in out] == [4]
+    assert any("force_vision" in r.message for r in caplog.records), (
+        f"expected a warning when force_vision has no model; got {[r.message for r in caplog.records]}"
+    )
+
+
+def test_build_notes_inventory_async_force_vision_skips_regex(tmp_path):
+    """Async sibling honours force_vision the same way."""
+    import fitz
+
+    pdf = tmp_path / "text.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((50, 50), "4. Property, plant and equipment\n\n...")
+    doc.save(str(pdf))
+    doc.close()
+
+    from scout.notes_discoverer import build_notes_inventory_async
+
+    called = {"vision": False}
+
+    async def fake_vision(*, pdf_path, start, end, model):
+        called["vision"] = True
+        return [NoteInventoryEntry(note_num=7, title="v", page_range=(1, 1))]
+
+    async def _run():
+        with patch("scout.notes_discoverer_vision._vision_inventory", side_effect=fake_vision):
+            return await build_notes_inventory_async(
+                str(pdf),
+                notes_start_page=1,
+                vision_model=object(),
+                force_vision=True,
+            )
+
+    out = asyncio.run(_run())
+    assert called["vision"] is True
+    assert [e.note_num for e in out] == [7]
