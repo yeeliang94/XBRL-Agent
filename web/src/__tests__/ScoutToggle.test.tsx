@@ -1,6 +1,12 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ScoutToggle } from "../components/ScoutToggle";
+import type { ModelEntry } from "../lib/types";
+
+const mockModels: ModelEntry[] = [
+  { id: "gemini-3-flash", display_name: "Gemini 3 Flash", provider: "google", supports_vision: true, notes: "" },
+  { id: "claude-haiku-4-5", display_name: "Claude Haiku 4.5", provider: "anthropic", supports_vision: true, notes: "" },
+];
 
 describe("ScoutToggle", () => {
   test("renders toggle switch", () => {
@@ -119,5 +125,83 @@ describe("ScoutToggle", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
     expect(onAutoDetect).toHaveBeenCalledTimes(1);
+  });
+
+  test("renders model dropdown when availableModels provided", () => {
+    // Pins the inline scout model picker contract: dropdown is visible,
+    // populated from availableModels, and reflects the scoutModel prop.
+    render(
+      <ScoutToggle
+        enabled={true}
+        onToggle={vi.fn()}
+        onAutoDetect={vi.fn()}
+        isDetecting={false}
+        canAutoDetect={true}
+        availableModels={mockModels}
+        scoutModel="gemini-3-flash"
+        onScoutModelChange={vi.fn()}
+      />,
+    );
+
+    const select = screen.getByRole("combobox", { name: /scout model/i }) as HTMLSelectElement;
+    expect(select).toBeInTheDocument();
+    expect(select.value).toBe("gemini-3-flash");
+    expect(select.querySelectorAll("option")).toHaveLength(mockModels.length);
+  });
+
+  test("changing the scout model dropdown fires onScoutModelChange once", () => {
+    const onScoutModelChange = vi.fn();
+    render(
+      <ScoutToggle
+        enabled={true}
+        onToggle={vi.fn()}
+        onAutoDetect={vi.fn()}
+        isDetecting={false}
+        canAutoDetect={true}
+        availableModels={mockModels}
+        scoutModel="gemini-3-flash"
+        onScoutModelChange={onScoutModelChange}
+      />,
+    );
+
+    const select = screen.getByRole("combobox", { name: /scout model/i });
+    fireEvent.change(select, { target: { value: "claude-haiku-4-5" } });
+    expect(onScoutModelChange).toHaveBeenCalledTimes(1);
+    expect(onScoutModelChange).toHaveBeenCalledWith("claude-haiku-4-5");
+  });
+
+  test("scout model dropdown is disabled while detecting", () => {
+    // Guard: the user can't accidentally switch models mid-Auto-detect.
+    render(
+      <ScoutToggle
+        enabled={true}
+        onToggle={vi.fn()}
+        onAutoDetect={vi.fn()}
+        isDetecting={true}
+        canAutoDetect={true}
+        availableModels={mockModels}
+        scoutModel="gemini-3-flash"
+        onScoutModelChange={vi.fn()}
+      />,
+    );
+
+    const select = screen.getByRole("combobox", { name: /scout model/i }) as HTMLSelectElement;
+    expect(select.disabled).toBe(true);
+  });
+
+  test("dropdown absent when availableModels prop is empty or undefined", () => {
+    // Back-compat: existing callers (tests, historical stories) that don't
+    // pass model props should render just the toggle + button, same as before.
+    render(
+      <ScoutToggle
+        enabled={true}
+        onToggle={vi.fn()}
+        onAutoDetect={vi.fn()}
+        isDetecting={false}
+        canAutoDetect={true}
+      />,
+    );
+
+    expect(screen.queryByRole("combobox", { name: /scout model/i })).not.toBeInTheDocument();
   });
 });

@@ -3,6 +3,16 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { PreRunPanel } from "../components/PreRunPanel";
 import type { ModelEntry, ExtendedSettingsResponse } from "../lib/types";
 
+// The inline scout model picker persists through lib/api.updateSettings.
+// Mocked here so tests can assert the call shape without hitting the network.
+vi.mock("../lib/api", async () => {
+  const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
+  return {
+    ...actual,
+    updateSettings: vi.fn().mockResolvedValue({ status: "ok" }),
+  };
+});
+
 const mockModels: ModelEntry[] = [
   { id: "gemini-3-flash", display_name: "Gemini 3 Flash", provider: "google", supports_vision: true, notes: "" },
   { id: "claude-opus-4-6", display_name: "Claude Opus 4.6", provider: "anthropic", supports_vision: true, notes: "" },
@@ -40,8 +50,8 @@ describe("PreRunPanel", () => {
 
     // Wait for settings to load
     await waitFor(() => {
-      // Scout toggle + 5 statement checkboxes + 5 notes checkboxes = 11
-      expect(screen.getAllByRole("checkbox")).toHaveLength(11);
+      // Scout toggle + Scanned PDF + 5 statement checkboxes + 5 notes checkboxes = 12
+      expect(screen.getAllByRole("checkbox")).toHaveLength(12);
     });
   });
 
@@ -119,12 +129,13 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getAllByRole("checkbox")).toHaveLength(11);
+      expect(screen.getAllByRole("checkbox")).toHaveLength(12);
     });
 
-    // Uncheck SOCIE (6th checkbox, index 5 — scout toggle + 5 statement checkboxes)
+    // Uncheck SOCIE. Layout: [scout, scanned, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5]
+    // → SOCIE is the 7th checkbox (index 6).
     const checkboxes = screen.getAllByRole("checkbox");
-    fireEvent.click(checkboxes[5]); // SOCIE
+    fireEvent.click(checkboxes[6]); // SOCIE
 
     // Select variants for remaining 4
     const variantSelects = screen.getAllByRole("combobox").filter(
@@ -192,9 +203,14 @@ describe("PreRunPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
-    // Check variant dropdowns were populated from scout infopack
+    // Check variant dropdowns were populated from scout infopack.
+    // Can't use index 0 anymore — the inline scout model dropdown now renders
+    // first. Filter by variant-specific options (same pattern the Run test
+    // uses) to pin the first SOFP variant dropdown.
     await waitFor(() => {
-      const sofpSelect = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
+      const sofpSelect = screen.getAllByRole("combobox").find(
+        (el) => el.querySelector("option[value='CuNonCu']"),
+      ) as HTMLSelectElement;
       expect(sofpSelect.value).toBe("CuNonCu");
     });
 
@@ -292,9 +308,13 @@ describe("PreRunPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
-    // After scout completes, the variant dropdown should be populated
+    // After scout completes, the variant dropdown should be populated.
+    // Same filter-by-variant-option trick as the auto-detect test — index 0
+    // now belongs to the inline scout model dropdown.
     await waitFor(() => {
-      const sofpSelect = screen.getAllByRole("combobox")[0];
+      const sofpSelect = screen.getAllByRole("combobox").find(
+        (el) => el.querySelector("option[value='CuNonCu']"),
+      ) as HTMLSelectElement;
       expect(sofpSelect).toHaveValue("CuNonCu");
     });
 
@@ -337,8 +357,9 @@ describe("PreRunPanel", () => {
 
     // Statements all start enabled (makeAllEnabled).
     const checkboxesBefore = screen.getAllByRole("checkbox") as HTMLInputElement[];
-    // Indices 1..5 are the 5 statement checkboxes.
-    for (let i = 1; i <= 5; i++) expect(checkboxesBefore[i].checked).toBe(true);
+    // Layout: [scout, scanned, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5]
+    // → statement checkboxes are indices 2..6.
+    for (let i = 2; i <= 6; i++) expect(checkboxesBefore[i].checked).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
@@ -348,7 +369,7 @@ describe("PreRunPanel", () => {
       expect(screen.getByText(/didn't detect any statements/i)).toBeInTheDocument();
     });
     const checkboxesAfter = screen.getAllByRole("checkbox") as HTMLInputElement[];
-    for (let i = 1; i <= 5; i++) expect(checkboxesAfter[i].checked).toBe(true);
+    for (let i = 2; i <= 6; i++) expect(checkboxesAfter[i].checked).toBe(true);
 
     fetchSpy.mockRestore();
   });
@@ -388,9 +409,12 @@ describe("PreRunPanel", () => {
     });
 
     // Manually pick a SOFP variant BEFORE running scout. The variant
-    // selector always renders all 5 dropdowns (Fix B); the first combobox
-    // corresponds to SOFP.
-    const sofpVariant = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
+    // selector always renders all 5 dropdowns (Fix B). Identify SOFP by
+    // its variant-specific option (CuNonCu is unique to SOFP) — the inline
+    // scout model dropdown now occupies index 0.
+    const sofpVariant = screen.getAllByRole("combobox").find(
+      (el) => el.querySelector("option[value='CuNonCu']"),
+    ) as HTMLSelectElement;
     fireEvent.change(sofpVariant, { target: { value: "CuNonCu" } });
     expect(sofpVariant.value).toBe("CuNonCu");
 
@@ -400,7 +424,9 @@ describe("PreRunPanel", () => {
       expect(screen.getByText(/didn't detect any statements/i)).toBeInTheDocument();
     });
     // After the empty-scout return, the manual variant must still be set.
-    const sofpVariantAfter = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
+    const sofpVariantAfter = screen.getAllByRole("combobox").find(
+      (el) => el.querySelector("option[value='CuNonCu']"),
+    ) as HTMLSelectElement;
     expect(sofpVariantAfter.value).toBe("CuNonCu");
 
     fetchSpy.mockRestore();
@@ -563,9 +589,10 @@ describe("PreRunPanel", () => {
       expect(screen.getAllByRole("checkbox").length).toBeGreaterThan(0);
     });
 
-    // Uncheck all 5 statement checkboxes (indices 1-5; index 0 is scout toggle).
+    // Uncheck all 5 statement checkboxes. Layout after Scanned PDF shipped:
+    // [scout, scanned, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5] → indices 2..6.
     const checkboxes = screen.getAllByRole("checkbox");
-    for (let i = 1; i <= 5; i++) fireEvent.click(checkboxes[i]);
+    for (let i = 2; i <= 6; i++) fireEvent.click(checkboxes[i]);
 
     // With no face statements and no notes, Run must be disabled.
     const runBtn = screen.getByRole("button", { name: /run extraction/i }) as HTMLButtonElement;
@@ -584,6 +611,358 @@ describe("PreRunPanel", () => {
         notes_to_run: ["LIST_OF_NOTES"],
       }),
     );
+  });
+
+  test("scout model dropdown initializes from settings.default_models.scout", async () => {
+    // Pins the "inline scout model picker shows persisted default" contract
+    // from PLAN-ui-visibility-improvements Step 2.3.
+    const settings = {
+      ...mockSettings,
+      default_models: {
+        ...mockSettings.default_models,
+        scout: "claude-opus-4-6",
+      },
+    };
+    const getSettings = vi.fn().mockResolvedValue(settings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      const select = screen.getByRole("combobox", { name: /scout model/i }) as HTMLSelectElement;
+      expect(select.value).toBe("claude-opus-4-6");
+    });
+  });
+
+  test("changing scout model persists via updateSettings and updates local value", async () => {
+    const { updateSettings } = await import("../lib/api");
+    (updateSettings as ReturnType<typeof vi.fn>).mockClear();
+
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: /scout model/i })).toBeInTheDocument();
+    });
+
+    const select = screen.getByRole("combobox", { name: /scout model/i }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "claude-opus-4-6" } });
+
+    // Local state reflects the new selection without a refetch.
+    expect(select.value).toBe("claude-opus-4-6");
+    // The persisted path is hit with only the scout key, matching how the
+    // server merges default_models entries (no accidental overwrite of
+    // other roles' persisted model choices).
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith({
+      default_models: { scout: "claude-opus-4-6" },
+    });
+  });
+
+  test("clicking Auto-detect before updateSettings resolves awaits the save first", async () => {
+    // Peer-review [HIGH]: without this guard, a change-then-detect flow lets
+    // the scout endpoint read the stale .env because the browser fired the
+    // scout POST before the settings POST flushed. We fix it by awaiting any
+    // in-flight persist in handleAutoDetect, and disabling the button while
+    // the save is in flight for clear UI feedback.
+    const { updateSettings } = await import("../lib/api");
+
+    let resolveSave: ((v: { status: string }) => void) | null = null;
+    const savePromise = new Promise<{ status: string }>((res) => {
+      resolveSave = res;
+    });
+    (updateSettings as ReturnType<typeof vi.fn>).mockReset();
+    (updateSettings as ReturnType<typeof vi.fn>).mockReturnValue(savePromise);
+
+    // The scout fetch should NOT happen until after the save resolves.
+    // Spy on fetch so we can assert the ordering.
+    const scoutPayload = {
+      success: true,
+      infopack: { toc_page: 1, page_offset: 0, statements: {} },
+    };
+    const sseText = `event: scout_complete\ndata: ${JSON.stringify(scoutPayload)}\n\n`;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(sseText));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: /scout model/i })).toBeInTheDocument();
+    });
+
+    // 1. Change model — save starts but does NOT resolve yet.
+    const select = screen.getByRole("combobox", { name: /scout model/i }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "claude-opus-4-6" } });
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+
+    // 2. Click Auto-detect immediately. Button should reflect the save state
+    //    (disabled), and fetch must NOT have been called yet.
+    const detectBtn = screen.getByRole("button", { name: /auto-detect/i });
+    fireEvent.click(detectBtn);
+    // Give React a tick to flush state updates.
+    await Promise.resolve();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // 3. Resolve the pending save — the scout fetch must now fire.
+    resolveSave!({ status: "ok" });
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/scout/abc-123",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    fetchSpy.mockRestore();
+  });
+
+  test("scout event log stays hidden until the first tool_call arrives", async () => {
+    // Pre-run: no events means no log toggle button. Keeps the pre-detect
+    // UI identical to how it looked before this feature landed.
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: /scout log/i })).not.toBeInTheDocument();
+  });
+
+  test("scout event log auto-expands during detect, collapses after complete, renders tool rows", async () => {
+    // Single integration test covering: (1) events accumulate, (2) log
+    // auto-expands while detecting, (3) tool_call rows render via
+    // ToolCallCard, (4) log auto-collapses on scout_complete.
+    const scoutPayload = {
+      success: true,
+      infopack: {
+        toc_page: 3,
+        page_offset: 0,
+        statements: {
+          SOFP: { variant_suggestion: "CuNonCu", face_page: 10, note_pages: [], confidence: "HIGH" },
+        },
+      },
+    };
+    const sseText = [
+      `event: status\ndata: ${JSON.stringify({ phase: "scouting", message: "Starting..." })}\n\n`,
+      `event: tool_call\ndata: ${JSON.stringify({ tool_name: "find_toc", tool_call_id: "tc_a", args: {} })}\n\n`,
+      `event: tool_result\ndata: ${JSON.stringify({ tool_name: "find_toc", tool_call_id: "tc_a", result_summary: "ok", duration_ms: 50 })}\n\n`,
+      `event: tool_call\ndata: ${JSON.stringify({ tool_name: "view_pages", tool_call_id: "tc_b", args: { pages: [10] } })}\n\n`,
+      `event: tool_result\ndata: ${JSON.stringify({ tool_name: "view_pages", tool_call_id: "tc_b", result_summary: "rendered", duration_ms: 80 })}\n\n`,
+      `event: scout_complete\ndata: ${JSON.stringify(scoutPayload)}\n\n`,
+    ].join("");
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseText));
+        controller.close();
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const getSettingsFn = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettingsFn} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    // During + after the run, a log toggle button must exist. Once auto-detect
+    // finishes, the log collapses (aria-expanded=false) but the toggle stays
+    // visible so the operator can re-open it to inspect what scout did.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /scout log/i })).toBeInTheDocument();
+    });
+    const toggleAfter = screen.getByRole("button", { name: /scout log/i });
+    expect(toggleAfter.getAttribute("aria-expanded")).toBe("false");
+
+    // Expand it and assert both tool rows are rendered. ToolCallCard uses
+    // the humanised tool name (see toolLabels.ts TOOL_LABELS) — for scout
+    // that's "Locating table of contents" + "Checking PDF pages".
+    fireEvent.click(toggleAfter);
+    await waitFor(() => {
+      expect(toggleAfter.getAttribute("aria-expanded")).toBe("true");
+    });
+    expect(screen.getByText(/locating table of contents/i)).toBeInTheDocument();
+    expect(screen.getByText(/checking pdf pages/i)).toBeInTheDocument();
+
+    fetchSpy.mockRestore();
+  });
+
+  test("Scanned PDF checkbox exists and is unchecked by default", async () => {
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+    const cb = screen.getByRole("checkbox", { name: /scanned pdf/i }) as HTMLInputElement;
+    expect(cb.checked).toBe(false);
+  });
+
+  test("enabling Scanned PDF sends scanned_pdf:true in scout POST body", async () => {
+    const sseText = `event: scout_complete\ndata: ${JSON.stringify({
+      success: true,
+      infopack: {
+        toc_page: 1,
+        page_offset: 0,
+        statements: {},
+        notes_inventory: [],
+      },
+    })}\n\n`;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseText));
+        controller.close();
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox", { name: /scanned pdf/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /scanned pdf/i }));
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/scout/abc-123",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ scanned_pdf: true }),
+        }),
+      );
+    });
+
+    // Sanity check: the Content-Type header should tell the server a JSON body follows.
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(headers.get("content-type")).toMatch(/application\/json/i);
+
+    fetchSpy.mockRestore();
+  });
+
+  test("shows inventory count after scout; red hint appears when empty and a notes sheet is selected", async () => {
+    // Scout returns an empty inventory on this scanned PDF. The panel
+    // should surface the count ("Inventory: 0 notes") and, because the
+    // user has a notes sheet selected, a red hint telling them to flip
+    // "Scanned PDF" and retry.
+    const scoutPayload = {
+      success: true,
+      infopack: {
+        toc_page: 1,
+        page_offset: 0,
+        statements: {},
+        notes_inventory: [],
+      },
+    };
+    const sseText = `event: scout_complete\ndata: ${JSON.stringify(scoutPayload)}\n\n`;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseText));
+        controller.close();
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+
+    // Turn on at least one notes template so the "enable Scanned PDF" hint fires.
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /list of notes \(note 12\)/i }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/inventory:\s*0\s*notes/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/enable.*scanned pdf/i)).toBeInTheDocument();
+
+    fetchSpy.mockRestore();
+  });
+
+  test("non-empty inventory shows count but no hint even with notes selected", async () => {
+    const scoutPayload = {
+      success: true,
+      infopack: {
+        toc_page: 1,
+        page_offset: 0,
+        statements: {},
+        notes_inventory: [
+          { note_num: 1, title: "Corporate information", page_range: [10, 10] },
+          { note_num: 2, title: "Summary of significant accounting policies", page_range: [10, 15] },
+        ],
+      },
+    };
+    const sseText = `event: scout_complete\ndata: ${JSON.stringify(scoutPayload)}\n\n`;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseText));
+        controller.close();
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /list of notes \(note 12\)/i }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/inventory:\s*2\s*notes/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/enable.*scanned pdf/i)).not.toBeInTheDocument();
+
+    fetchSpy.mockRestore();
   });
 
   test("disabling scout hides auto-detect button", async () => {
