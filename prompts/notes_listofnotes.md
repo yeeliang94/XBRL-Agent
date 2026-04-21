@@ -24,7 +24,11 @@ the whole PDF.
       instruments" disclosure may populate rows for "Disclosure of trade
       receivables" AND "Disclosure of financial risk management").
    c. Emit a payload per matched row. Copy the PDF content verbatim
-      (light formatting clean-up only).
+      (light formatting clean-up only). **Tag every payload with
+      `note_num`** matching the batch note it came from — the coverage
+      validator uses this tag to confirm each receipt entry's row
+      labels came from that note's own writes (and not from another
+      note's writes by accident).
 3. UNMATCHED NOTES: if a note's topic genuinely fits none of the 138
    labels, land it on the catch-all row
    **"Disclosure of other notes to accounts"** — that is the designated
@@ -34,6 +38,93 @@ the whole PDF.
 4. Call `write_notes` with the full batch of payloads. The
    sub-coordinator intercepts the write — it collects your payloads and
    performs one final workbook write after all sub-agents finish.
+5. Call `submit_batch_coverage` as your **LAST** tool call — see the
+   COVERAGE RECEIPT section below.
+
+=== COVERAGE RECEIPT (MANDATORY TERMINAL CALL) ===
+
+Before finishing, you must submit a JSON receipt that accounts for
+EVERY note in your batch. This is how the system detects silent skips:
+forgetting a note is impossible if you've submitted a receipt for it.
+
+Format — a JSON list of entries, one per batch note:
+
+- For a note you wrote to one or more template rows:
+  `{"note_num": <int>, "action": "written", "row_labels": ["<label>", ...]}`
+  The `row_labels` must match the labels you passed to `write_notes`
+  (verbatim). A single note may have several row_labels — that's
+  expected for notes that legitimately split across rows (e.g. a
+  combined risk-management note that writes to "Disclosure of financial
+  instruments", "Disclosure of credit risk", and "Disclosure of
+  liquidity risk").
+- For a note you deliberately did NOT write:
+  `{"note_num": <int>, "action": "skipped", "reason": "<one sentence>"}`
+  Valid reasons include: the note is the Summary of Accounting Policies
+  (belongs on Sheet 11); the note is Corporate Information (belongs on
+  Sheet 10); the note is Related Party Transactions (belongs on Sheet
+  14); no Sheet-12 row fits and it isn't important enough for the
+  catch-all row.
+
+Every note number in your batch must appear in the receipt exactly
+once. The tool returns errors if anything is missing, duplicated,
+references a note you weren't assigned, or claims a row you didn't
+write — when that happens, fix the listed issues and resubmit.
+
+Worked example for a 3-note batch (notes 4, 5, 6):
+
+    [
+      {"note_num": 4, "action": "written",
+       "row_labels": ["Disclosure of financial instruments at fair value through profit or loss"]},
+      {"note_num": 5, "action": "written",
+       "row_labels": ["Disclosure of trade and other payables"]},
+      {"note_num": 6, "action": "skipped",
+       "reason": "Share capital disclosure handled by Notes-13"}
+    ]
+
+Do NOT force a "written" entry when no Sheet-12 row genuinely fits —
+a truthful "skipped" is always better than a guess.
+
+=== SCOPE BOUNDARY: SKIP THE ACCOUNTING-POLICIES NOTE ===
+
+Sheet 12 is for DISCLOSURE notes only — the numbered notes that show
+actual figures, breakdowns, reconciliations, and movement tables. It
+is NOT for the Summary of Material Accounting Policies note. That
+policy content belongs on Sheet 11 exclusively.
+
+Identify the policies note by FORM, not by its number (it could be
+Note 1, 2, 3, or elsewhere depending on the filing):
+
+- Its PDF heading reads "Summary of material accounting policies",
+  "Significant accounting policies", "Material accounting policies", or
+  similar wording.
+- It is a long note with many alphabetised sub-sections: "(a) Basis of
+  preparation", "(b) Financial instruments", "(f) Fair value
+  measurement", etc.
+- Its prose is generic and period-independent — "Revenue is recognised
+  when…", "Deferred tax is provided for using the liability method…" —
+  not specific amounts or reconciliations for the current year.
+
+If a PDF note in your batch is that policies note (or one of its
+sub-sections), SKIP it entirely — do not emit any payload. Even if a
+policy sub-section's topic matches a Sheet-12 label like "Disclosure
+of fair value measurement" or "Disclosure of income tax expense", the
+real disclosure for that topic lives in a separate, later note (the
+one with the actual numbers). Another agent owns Sheet 11; your job
+is to wait for the disclosure note itself.
+
+Why: policy paragraphs and disclosure tables map to distinct MBRS
+XBRL concepts. Sheet 12 and Sheet 11 are separate taxonomy buckets.
+Concatenating a policy paragraph and a disclosure table into one
+Sheet-12 cell contaminates the filing and fails validation — even
+though the content would look "complete" in Excel.
+
+=== PROSE vs BARE NUMBERS ===
+
+Every Sheet-12 row expects disclosure content — prose, a supporting
+schedule, or both. Do NOT write a bare single number (e.g. "5,023")
+into a row whose label expects prose. If a note contains only a
+balance with no breakdown or explanation, that balance belongs on the
+face statement, not here — skip the row.
 
 === MATCHING HEURISTICS ===
 
@@ -41,9 +132,15 @@ the whole PDF.
 - Label matching is fuzzy — "Property, plant and equipment" in your
   payload will resolve to "*Disclosure of property, plant and
   equipment*" in the template. Don't fret about exact punctuation.
-- A PDF note that lists multiple sub-topics may legitimately produce
-  two or three payloads. Better to over-split than to dump a mixed
-  paragraph into one row.
+- A PDF note that lists multiple sub-topics should produce multiple
+  payloads, one per row, with ONLY the relevant lines in each.
+  For example, a combined "Other operating expenses" note breaking out
+  auditors' remuneration, shared-service charges, and miscellaneous
+  expenses must produce: one payload for "Disclosure of auditors'
+  remuneration" (just the auditor lines) and a SEPARATE payload for
+  "Disclosure of other operating expenses" (the remaining lines).
+  Do not dump the whole mixed table into every matching row — each
+  row should contain only the figures that actually belong to it.
 
 === FAITHFULNESS ===
 
@@ -51,6 +148,8 @@ the whole PDF.
   boilerplate, skip it — don't invent content to fill a row.
 - Every payload must cite its PDF page(s) in `evidence` and
   `source_pages`. The writer refuses rows with content but no evidence.
+  Use the PDF page number you passed to `view_pdf_pages` (NOT the printed
+  folio in the page footer — those differ by the TOC offset).
 - Keep content under 30,000 chars per cell; the writer truncates with
   a footer pointing back at the source pages.
 
