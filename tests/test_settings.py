@@ -128,6 +128,73 @@ class TestUpdateSettings:
         resp2 = client.get("/api/settings")
         assert resp2.json()["model"] == "gpt-5.4"
 
+    def test_default_models_rejects_unknown_keys(self, client):
+        # Peer-review #2 hardening: accept only known agent roles + notes
+        # template values. Unknown keys would otherwise land in .env via
+        # set_key and persist across restarts until someone hand-edits the
+        # file out.
+        resp = client.post("/api/settings", json={
+            "default_models": {"totally_made_up_role": "gemini-3-flash"},
+        })
+        assert resp.status_code == 400
+        assert "Unknown default_models key" in resp.json()["detail"]
+
+    def test_default_models_rejects_non_string_values(self, client):
+        # Client could currently POST nested structures that json.dumps()
+        # happily writes to .env; reject with 400.
+        resp = client.post("/api/settings", json={
+            "default_models": {"scout": {"nested": [1, 2, 3]}},
+        })
+        assert resp.status_code == 400
+        assert "non-empty string" in resp.json()["detail"]
+
+    def test_default_models_rejects_overlong_string(self, client):
+        resp = client.post("/api/settings", json={
+            "default_models": {"scout": "x" * 200},
+        })
+        assert resp.status_code == 400
+        assert "too long" in resp.json()["detail"]
+
+    def test_default_models_accepts_all_known_agent_roles(self, client):
+        # Guard against over-constraining the validator — every role
+        # _load_extended_settings fills must be writable via POST.
+        resp = client.post("/api/settings", json={
+            "default_models": {
+                "scout": "gemini-3-flash",
+                "SOFP": "gemini-3-flash",
+                "SOPL": "gemini-3-flash",
+                "SOCI": "gemini-3-flash",
+                "SOCF": "gemini-3-flash",
+                "SOCIE": "gemini-3-flash",
+                "CORP_INFO": "gemini-3-flash",
+                "ACC_POLICIES": "gemini-3-flash",
+                "LIST_OF_NOTES": "gemini-3-flash",
+                "ISSUED_CAPITAL": "gemini-3-flash",
+                "RELATED_PARTY": "gemini-3-flash",
+            },
+        })
+        assert resp.status_code == 200
+
+    def test_scout_model_round_trip_reaches_load_extended_settings(self, client):
+        # Pins the three-link chain the inline scout model dropdown (PreRunPanel)
+        # relies on: POST writes → env-file reload → both GET /api/settings AND
+        # _load_extended_settings (what /api/scout reads at run time) see the
+        # new value. Without this guard, a refactor of the settings writer
+        # could silently decouple the persisted value from the scout code path.
+        from server import _load_extended_settings
+
+        resp = client.post("/api/settings", json={
+            "default_models": {"scout": "claude-haiku-4-5"},
+        })
+        assert resp.status_code == 200
+
+        data = client.get("/api/settings").json()
+        assert data["default_models"]["scout"] == "claude-haiku-4-5"
+
+        # The server code that actually builds the scout model reads this
+        # helper — not the HTTP GET — so pin both ends are in sync.
+        assert _load_extended_settings()["default_models"]["scout"] == "claude-haiku-4-5"
+
 
 class TestModelsConfig:
     """config/models.json is the source of truth for available models."""
