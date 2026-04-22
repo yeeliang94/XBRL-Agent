@@ -192,17 +192,37 @@ export function HistoryPage() {
     window.location.href = downloadFilledUrl(runId);
   }, []);
 
+  // Client-side filing-standard filter. The server doesn't filter on this
+  // today (per the plan: launch volumes are low and the JSON1 predicate
+  // isn't guaranteed across SQLite builds). We still paginate server-side,
+  // so on a mostly-MFRS history an MPERS-only filter may show fewer rows
+  // than the Load-more counter suggests — that's acceptable for launch
+  // but surfaced to the operator via `filterNote` below (peer-review I5).
+  const standardFilterActive = !!filters.standard;
+  const visibleRuns = standardFilterActive
+    ? runs.filter((r) => (r.filing_standard ?? "mfrs") === filters.standard)
+    : runs;
+  const filterNote = standardFilterActive && runs.length > 0
+    ? `Showing ${visibleRuns.length} of ${runs.length} loaded run${runs.length === 1 ? "" : "s"} (${filters.standard!.toUpperCase()}). Load more to scan earlier rows.`
+    : null;
+
   return (
     <div style={styles.container}>
       <h2 style={styles.heading}>Run history</h2>
       <HistoryFilters value={filters} onChange={setFilters} />
       <HistoryList
-        runs={runs}
+        runs={visibleRuns}
         isLoading={isLoading}
         error={error}
         selectedId={selectedId}
         onRunSelected={handleRunSelected}
       />
+      {filterNote && (
+        // Client-side filter transparency: this footnote explains why
+        // Load-more can show "n remaining" while the visible list is
+        // shorter — filtered-out rows are still counted in `total`.
+        <p role="note" style={styles.filterNote}>{filterNote}</p>
+      )}
       {/* Pagination control — only shown when more rows exist on the
           server than we've loaded so far. Suppressed during the very
           first load so users don't see a "Load more" flash before the
@@ -278,5 +298,14 @@ const styles = {
     borderRadius: pwc.radius.md,
     fontFamily: pwc.fontBody,
     fontSize: 13,
+  } as React.CSSProperties,
+  filterNote: {
+    marginTop: pwc.space.xs,
+    marginBottom: 0,
+    padding: 0,
+    color: pwc.grey500,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    fontStyle: "italic" as const,
   } as React.CSSProperties,
 } as const;

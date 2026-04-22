@@ -11,7 +11,7 @@ from statement_types import StatementType
 from cross_checks.framework import CrossCheckResult
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label,
-    find_value_in_block, SOCIE_GROUP_BLOCKS,
+    find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
 )
 
 
@@ -20,7 +20,8 @@ class SOCIToSOCIETCICheck:
     required_statements = {StatementType.SOCI, StatementType.SOCIE}
 
     def applies_to(self, run_config: dict) -> bool:
-        return True
+        # Same reasoning as sopl_to_socie_profit — SoRE has no TCI row.
+        return not is_sore_run(run_config)
 
     def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company") -> CrossCheckResult:
         soci_wb = open_workbook(workbook_paths[StatementType.SOCI])

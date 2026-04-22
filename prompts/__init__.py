@@ -18,6 +18,7 @@ def render_prompt(
     template_summary: Optional[str] = None,
     page_hints: Optional[dict] = None,
     filing_level: str = "company",
+    filing_standard: str = "mfrs",
 ) -> str:
     """Build the full system prompt for a given statement type and variant.
 
@@ -28,6 +29,14 @@ def render_prompt(
         page_hints: Dict with face_page and note_pages from scout infopack.
                     When None, prompt includes self-navigation instructions.
         filing_level: 'company' (4-col template) or 'group' (6-col / 4-block SOCIE).
+        filing_standard: 'mfrs' (default) or 'mpers'. Reserved for the
+                        optional `_mpers_overlay.md` injection (Phase 6.2 of
+                        the MPERS wiring plan) — kept in the signature so
+                        adding the overlay later doesn't require touching
+                        every caller. Today's variant-file lookup
+                        (`{stmt}_{variant}.md`) already handles the only
+                        MPERS-specific prompt (`socie_sore.md`) without
+                        needing this axis.
     """
     # Load base persona (shared across all statements)
     base = _load_prompt("_base.md")

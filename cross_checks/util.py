@@ -27,6 +27,22 @@ SOCIE_GROUP_BLOCKS = {
 }
 
 
+def is_sore_run(run_config: dict) -> bool:
+    """True when the run's SOCIE slot is filled by the MPERS SoRE variant.
+
+    Lives here so the three SOCIE-consuming cross-checks
+    (sopl_to_socie_profit, soci_to_socie_tci, socie_to_sofp_equity) can all
+    read the SOCIE→SoRE contract from one place (peer-review S4). SoRE
+    replaces the matrix SOCIE on MPERS filings, so those three checks have
+    nothing to reconcile against and must gate themselves out.
+    """
+    # Local import to avoid a circular dependency if util.py is later
+    # imported from statement_types (today it only goes the other direction).
+    from statement_types import StatementType
+    variants = run_config.get("variants", {}) or {}
+    return variants.get(StatementType.SOCIE) == "SoRE"
+
+
 def has_nci_data(ws, start_row: int = 1, end_row: Optional[int] = None) -> bool:
     """Check whether the SOCIE sheet has actual NCI data filled in.
 

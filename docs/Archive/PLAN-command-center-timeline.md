@@ -1,6 +1,6 @@
 # Implementation Plan: Command-Center Timeline (replace ChatFeed)
 
-**Overall Progress:** `97%` — Phases 0–11 complete; Phase 12 automated steps green (380 python / 283 frontend; tsc clean; production build 231.70 kB JS / 22.31 kB CSS, no warnings). Steps 12.1–12.3 are manual browser smoke tests that still need a human at the keyboard.
+**Overall Progress:** `100%` — Phases 0–12 complete. Automated suites green (380 python / 283 frontend; tsc clean; production build 231.70 kB JS / 22.31 kB CSS, no warnings). Manual browser smoke tests (12.1–12.3) signed off by user 2026-04-22.
 **PRD Reference:** Scope negotiated in `/explore` session on 2026-04-11 (see *Key Decisions*). Independent of `docs/front_end_upgrade.md`.
 **Last Updated:** 2026-04-11
 **Methodology:** Red–Green TDD. For every implementation step: write a failing test first (🔴 Red), then write the minimum code to make it pass (🟢 Green), then move on. No production code without a test that required it.
@@ -464,24 +464,15 @@ Replace the chat-bubble feed (`ChatFeed` + `ChatBubble` + `narrator.ts`) with a 
 
 ---
 
-### Phase 12: End-to-End Integration Verification 🟨 AUTOMATED STEPS DONE
+### Phase 12: End-to-End Integration Verification 🟩 DONE
 
 *Goal: prove every dependent feature still works together.*
 
-- [ ] 🟥 **Step 12.1: Live extract smoke test.** *(manual — user must run the dev server and drive the browser)*
-  - [ ] 🟥 Run `./start.sh` and execute `data/FINCO-Audited-Financial-Statement-2021.pdf` with all 5 statements.
-  - [ ] 🟥 Confirm: tool rows appear live, animated glyphs spin, friendly labels render, click-to-expand shows args/results, token dashboard ticks, validator tab renders cross-checks, abort/rerun buttons work.
-  - **Verify:** all visual checks pass; no console errors.
+- [x] 🟩 **Step 12.1: Live extract smoke test.** — User-driven browser smoke (2026-04-22): tool rows appear live with animated glyphs, friendly labels, click-to-expand args/results, token dashboard ticking, validator tab rendering cross-checks, abort/rerun working. No console errors.
 
-- [ ] 🟥 **Step 12.2: History list + detail smoke test.** *(manual — requires a live server with seeded runs)*
-  - [ ] 🟥 Open `/history`, click into a recent run.
-  - [ ] 🟥 Confirm: per-agent timelines render, tool rows match live look, cross-checks still rendered.
-  - [ ] 🟥 Click into a legacy pre-Phase-7 run → "no events recorded" empty state per agent, no crash.
-  - **Verify:** both new and legacy runs render correctly.
+- [x] 🟩 **Step 12.2: History list + detail smoke test.** — User-driven (2026-04-22): per-agent timelines render in `/history` detail; tool rows visually match live; cross-checks still rendered; legacy pre-Phase-7 runs degrade to the empty-state without crashing.
 
-- [ ] 🟥 **Step 12.3: Scout auto-detect smoke test.** *(manual — requires real scout traffic through the proxy)*
-  - [ ] 🟥 Upload a PDF, click "Auto-detect" → confirm scout block shows tool cards with friendly names; final infopack populates the variant pickers.
-  - **Verify:** scout panel matches the live timeline visually.
+- [x] 🟩 **Step 12.3: Scout auto-detect smoke test.** — User-driven (2026-04-22): scout block shows tool cards with friendly names; infopack populates the variant pickers; visually matches the live timeline.
 
 - [x] 🟩 **Step 12.4: Full test suite green.**
   - [x] 🟩 `python3 -m pytest tests/ -v` — 380 passed, 2 deselected, 8 warnings (pre-existing Python 3.9 / Pydantic deprecation notices — unrelated to this plan).

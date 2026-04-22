@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type {
   StatementType,
   VariantSelection,
@@ -6,6 +6,8 @@ import type {
   ModelEntry,
   RunConfigPayload,
   FilingLevel,
+  FilingStandard,
+  DetectedStandard,
   NotesTemplateType,
   SSEEvent,
 } from "../lib/types";
@@ -13,6 +15,7 @@ import {
   STATEMENT_TYPES,
   mapStatements,
   NOTES_TEMPLATE_TYPES,
+  variantsFor,
 } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { abortAgent, updateSettings } from "../lib/api";
@@ -174,7 +177,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   // ref so the scout call is always serialised after the persist. Held as
   // a ref (not state) to avoid an extra render on each save, and because
   // handleAutoDetect needs the *current* pending promise at click time.
-  const scoutModelSaveRef = React.useRef<Promise<unknown> | null>(null);
+  const scoutModelSaveRef = useRef<Promise<unknown> | null>(null);
   // Non-fatal error surface for persist failures. Previously a console.warn;
   // surfacing inline gives operators visible feedback that their choice
   // didn't persist so they can retry or fall back to the Settings page.
@@ -190,6 +193,24 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const [infopack, setInfopack] = useState<Record<string, unknown> | null>(null);
 
   const [filingLevel, setFilingLevel] = useState<FilingLevel>("company");
+  // Phase 7 MPERS wiring: filing-standard toggle. MFRS is the default so every
+  // pre-existing flow keeps working. Scout's detected_standard preselects
+  // this on infopack arrival only if the user hasn't already touched the
+  // toggle — operator intent wins over detection.
+  const [filingStandard, setFilingStandard] = useState<FilingStandard>("mfrs");
+  const filingStandardTouchedRef = useRef(false);
+  // Mirror filingStandard into a ref so the scout callback (whose deps
+  // deliberately exclude filingStandard) can read the current value without
+  // a stale closure. Needed for the per-variant validity check when scout
+  // returns detected_standard="unknown" — see peer-review HIGH.
+  const filingStandardRef = useRef(filingStandard);
+  useEffect(() => {
+    filingStandardRef.current = filingStandard;
+  }, [filingStandard]);
+  const handleFilingStandardChange = useCallback((next: FilingStandard) => {
+    filingStandardTouchedRef.current = true;
+    setFilingStandard(next);
+  }, []);
   const [variantSelections, setVariantSelections] = useState(makeEmptySelections);
   const [statementsEnabled, setStatementsEnabled] = useState(makeAllEnabled);
   // Tracks statements the user has EXPLICITLY enabled. Scout will not
@@ -203,7 +224,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   // instead of the snapshot captured when `handleAutoDetect` was created.
   // Without this, a user enabling a statement mid-scout could still have
   // scout disable it when infopack arrives (peer-review finding #4).
-  const userEnabledOverridesRef = React.useRef(userEnabledOverrides);
+  const userEnabledOverridesRef = useRef(userEnabledOverrides);
   useEffect(() => {
     userEnabledOverridesRef.current = userEnabledOverrides;
   }, [userEnabledOverrides]);
@@ -282,6 +303,31 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     [],
   );
 
+  // Standard switch → reset any variant selections that aren't valid on the
+  // new standard. Practically only SOCIE/SoRE is affected today (MPERS-only),
+  // but iterating every statement makes this robust if MFRS-only variants
+  // are introduced later. When the cleared variant has a "Default" entry in
+  // the new standard's list we pick it explicitly instead of blanking — the
+  // backend coordinator falls back to Default on its own, so blanking would
+  // make the visible config and executed config diverge (peer-review MEDIUM).
+  useEffect(() => {
+    setVariantSelections((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const stmt of STATEMENT_TYPES) {
+        const current = prev[stmt]?.variant;
+        if (!current) continue;
+        const allowed = variantsFor(stmt, filingStandard);
+        if (!allowed.includes(current)) {
+          const fallback = allowed.includes("Default") ? "Default" : "";
+          next[stmt] = { variant: fallback, confidence: null };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [filingStandard]);
+
   const handleToggleStatement = useCallback(
     (stmt: StatementType, enabled: boolean) => {
       setStatementsEnabled((prev) => ({ ...prev, [stmt]: enabled }));
@@ -315,7 +361,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const elapsedText = elapsed > 0 ? `${elapsed}s` : "";
 
   // AbortController ref for cancelling in-flight scout requests on unmount
-  const scoutAbortRef = React.useRef<AbortController | null>(null);
+  const scoutAbortRef = useRef<AbortController | null>(null);
 
   // Cleanup on unmount: abort any in-flight scout request
   useEffect(() => {
@@ -391,6 +437,20 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
         setInfopack(infopackValue);
         setScoutProgress("Auto-detect complete");
 
+        // Preselect the filing-standard toggle from scout's deterministic
+        // guess, but only if the operator hasn't already flipped it. User
+        // intent always wins (the toggle is the source of truth for the
+        // subsequent run).
+        const detected = infopackValue.detected_standard as
+          | DetectedStandard
+          | undefined;
+        if (
+          !filingStandardTouchedRef.current
+          && (detected === "mfrs" || detected === "mpers")
+        ) {
+          setFilingStandard(detected);
+        }
+
         const statements = (infopackValue.statements ?? {}) as Record<string, unknown>;
         const scoutDetectedAnything = Object.keys(statements).length > 0;
 
@@ -439,19 +499,38 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
         // "keep your current selection". Skip the reset loop entirely on
         // the empty path so manual variants + confidences survive.
         if (scoutDetectedAnything) {
+          // Peer-review HIGH: validate each scout suggestion against the
+          // filing standard the toggle will hold AFTER this event settles.
+          // Scout can return SoRE with detected_standard="unknown" (the LLM
+          // isn't forced to respect the gate), and the preselect above only
+          // fires for mfrs/mpers — so an unknown-detection path could leave
+          // the toggle on MFRS while variantSelections carries SoRE, which
+          // the server then rejects at run time.
+          const effectiveStandard: FilingStandard =
+            !filingStandardTouchedRef.current
+              && (detected === "mfrs" || detected === "mpers")
+              ? detected
+              : filingStandardRef.current;
+
           setVariantSelections((prev) => {
             const next = { ...prev };
             for (const stmt of STATEMENT_TYPES) {
               const info = statements[stmt] as Record<string, unknown> | undefined;
               if (info) {
-                const variant = info.variant_suggestion as string | undefined;
-                if (variant) {
+                const suggested = info.variant_suggestion as string | undefined;
+                const allowed = variantsFor(stmt, effectiveStandard);
+                const variantValid = !!suggested && allowed.includes(suggested);
+                if (variantValid) {
                   const rawConf = String(info.confidence || "MEDIUM").toLowerCase();
                   const confidence = (["high", "medium", "low"].includes(rawConf)
                     ? rawConf
                     : "medium") as "high" | "medium" | "low";
-                  next[stmt] = { variant, confidence };
+                  next[stmt] = { variant: suggested!, confidence };
                 } else {
+                  // Suggestion missing, unknown, or not valid on this
+                  // standard (e.g. SoRE when the toggle is settling on
+                  // MFRS) — blank it and mark low confidence so the
+                  // operator sees scout didn't land a usable variant.
                   next[stmt] = { variant: "", confidence: "low" };
                 }
               } else {
@@ -617,10 +696,11 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
       infopack: scoutEnabled ? infopack : null,
       use_scout: scoutEnabled,
       filing_level: filingLevel,
+      filing_standard: filingStandard,
       notes_to_run,
       notes_models,
     });
-  }, [statementsEnabled, variantSelections, modelOverrides, infopack, scoutEnabled, filingLevel, notesEnabled, notesModelOverrides, onRun]);
+  }, [statementsEnabled, variantSelections, modelOverrides, infopack, scoutEnabled, filingLevel, filingStandard, notesEnabled, notesModelOverrides, onRun]);
 
   if (loading) {
     return (
@@ -648,6 +728,39 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   return (
     <div style={styles.container}>
       <h2 style={styles.heading}>Run Configuration</h2>
+
+      {/* Filing standard: MFRS (default) or MPERS. Mirrors the Filing Level
+          styling below so the two toggles read as a pair. */}
+      <div style={styles.section}>
+        <span style={styles.sectionLabel}>Filing Standard</span>
+        <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+          {(["mfrs", "mpers"] as const).map((standard) => {
+            const active = filingStandard === standard;
+            return (
+              <button
+                key={standard}
+                type="button"
+                onClick={() => handleFilingStandardChange(standard)}
+                style={{
+                  fontFamily: pwc.fontHeading,
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 500,
+                  padding: "8px 24px",
+                  border: "none",
+                  borderRight: standard === "mfrs" ? `1px solid ${pwc.grey200}` : "none",
+                  borderRadius: 0,
+                  background: active ? pwc.orange500 : pwc.white,
+                  color: active ? pwc.white : pwc.grey700,
+                  cursor: "pointer",
+                  transition: "background 0.15s, color 0.15s",
+                }}
+              >
+                {standard === "mfrs" ? "MFRS" : "MPERS"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Filing level: Company or Group */}
       <div style={styles.section}>
@@ -845,6 +958,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
           selections={variantSelections}
           enabledStatements={enabledStmts}
           onChange={handleVariantChange}
+          filingStandard={filingStandard}
         />
       </div>
 

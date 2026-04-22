@@ -42,12 +42,18 @@ class TestTemplatePathFilingLevel:
         assert path.exists(), f"Expected {path} to exist"
 
     def test_all_variants_exist_company(self):
-        """Every variant with a template_filename resolves to a real file at Company level."""
+        """Every variant with a template_filename resolves to a real file at Company level.
+
+        For MPERS-only variants (e.g. SoRE) we resolve against the MPERS
+        directory tree since the MFRS path is correctly rejected by
+        applies_to_standard.
+        """
         from statement_types import VARIANTS
         for (stmt, vname), v in VARIANTS.items():
             if not v.template_filename:
                 continue
-            path = template_path(stmt, vname, level="company")
+            standard = "mpers" if "mfrs" not in v.applies_to_standard else "mfrs"
+            path = template_path(stmt, vname, level="company", standard=standard)
             assert path.exists(), f"Missing Company template: {path}"
 
     def test_all_variants_exist_group(self):
@@ -56,7 +62,8 @@ class TestTemplatePathFilingLevel:
         for (stmt, vname), v in VARIANTS.items():
             if not v.template_filename:
                 continue
-            path = template_path(stmt, vname, level="group")
+            standard = "mpers" if "mfrs" not in v.applies_to_standard else "mfrs"
+            path = template_path(stmt, vname, level="group", standard=standard)
             assert path.exists(), f"Missing Group template: {path}"
 
     def test_invalid_level_raises(self):

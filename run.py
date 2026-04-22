@@ -52,6 +52,7 @@ def run_agent(
     statements: Optional[Set[StatementType]] = None,
     filing_level: str = "company",
     notes: Optional[Set[NotesTemplateType]] = None,
+    filing_standard: str = "mfrs",
 ) -> AgentResult:
     """Run extraction via the coordinator for one or more statement types.
 
@@ -91,6 +92,7 @@ def run_agent(
         model=resolved_model,
         statements_to_run=statements,
         filing_level=filing_level,
+        filing_standard=filing_standard,
     )
     notes_config = NotesRunConfig(
         pdf_path=pdf_path,
@@ -98,6 +100,7 @@ def run_agent(
         model=resolved_model,
         notes_to_run=notes,
         filing_level=filing_level,
+        filing_standard=filing_standard,
     )
 
     async def _run_all():
@@ -181,19 +184,24 @@ def _strip_binary(obj):
             _strip_binary(item)
 
 
-if __name__ == "__main__":
+# CLI accepts notes by lowercase CLI names that match the spec (PLAN §4).
+_NOTES_CLI_MAP: dict[str, NotesTemplateType] = {
+    "corporate_info": NotesTemplateType.CORP_INFO,
+    "accounting_policies": NotesTemplateType.ACC_POLICIES,
+    "list_of_notes": NotesTemplateType.LIST_OF_NOTES,
+    "issued_capital": NotesTemplateType.ISSUED_CAPITAL,
+    "related_party": NotesTemplateType.RELATED_PARTY,
+}
+
+
+def build_parser():
+    """Construct the CLI argparse parser. Extracted so tests can exercise
+    the real parser (peer-review LOW: the earlier test built its own
+    parser, so a regression that removed --standard from run.py would have
+    slipped through)."""
     import argparse
 
     all_stmt_names = [s.value for s in StatementType]
-    # CLI accepts notes by lowercase CLI names that match the spec (PLAN §4).
-    _NOTES_CLI_MAP: dict[str, NotesTemplateType] = {
-        "corporate_info": NotesTemplateType.CORP_INFO,
-        "accounting_policies": NotesTemplateType.ACC_POLICIES,
-        "list_of_notes": NotesTemplateType.LIST_OF_NOTES,
-        "issued_capital": NotesTemplateType.ISSUED_CAPITAL,
-        "related_party": NotesTemplateType.RELATED_PARTY,
-    }
-
     parser = argparse.ArgumentParser(description="XBRL Extraction Agent")
     parser.add_argument("pdf", nargs="?", default="data/FINCO-Audited-Financial-Statement-2021.pdf",
                         help="Path to the PDF to extract from")
@@ -212,6 +220,15 @@ if __name__ == "__main__":
                         help="Base output directory (default: output/ next to this script)")
     parser.add_argument("--level", default="company", choices=["company", "group"],
                         help="Filing level: company (standalone) or group (consolidated + company)")
+    parser.add_argument("--standard", default="mfrs", choices=["mfrs", "mpers"],
+                        help="Filing standard: mfrs (default, routes to "
+                             "XBRL-template-MFRS/) or mpers (routes to "
+                             "XBRL-template-MPERS/ and enables SoRE).")
+    return parser
+
+
+if __name__ == "__main__":
+    parser = build_parser()
     args = parser.parse_args()
 
     stmts = {StatementType(s) for s in args.statements}
@@ -222,6 +239,7 @@ if __name__ == "__main__":
     model = args.model or os.environ.get("TEST_MODEL", "google-gla:gemini-3-flash-preview")
 
     print(f"Model: {model}")
+    print(f"Standard: {args.standard}   Level: {args.level}")
     print(f"Statements: {', '.join(s.value for s in stmts)}")
     if notes_set:
         print(f"Notes: {', '.join(sorted(n.value for n in notes_set))}")
@@ -232,6 +250,7 @@ if __name__ == "__main__":
         statements=stmts,
         notes=notes_set,
         filing_level=args.level,
+        filing_standard=args.standard,
     )
     if args.output_dir:
         kwargs["output_dir"] = args.output_dir

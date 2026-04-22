@@ -119,4 +119,36 @@ describe("VariantSelector", () => {
     // SOPL is index 1 (order: SOFP, SOPL, SOCI, SOCF, SOCIE).
     expect(selects[1].value).toBe("Nature");
   });
+
+  test("socie picker includes SoRE only on MPERS", () => {
+    // Default filing standard (MFRS): SOCIE has Default only.
+    const { rerender } = render(
+      <VariantSelector
+        selections={emptySelections}
+        enabledStatements={["SOCIE"]}
+        onChange={vi.fn()}
+        filingStandard="mfrs"
+      />,
+    );
+    let selects = screen.getAllByRole("combobox") as HTMLSelectElement[];
+    let socieSelect = selects[4];
+    let options = Array.from(socieSelect.options).map((o) => o.value);
+    expect(options).toContain("Default");
+    expect(options).not.toContain("SoRE");
+
+    // Switch to MPERS — SoRE becomes available.
+    rerender(
+      <VariantSelector
+        selections={emptySelections}
+        enabledStatements={["SOCIE"]}
+        onChange={vi.fn()}
+        filingStandard="mpers"
+      />,
+    );
+    selects = screen.getAllByRole("combobox") as HTMLSelectElement[];
+    socieSelect = selects[4];
+    options = Array.from(socieSelect.options).map((o) => o.value);
+    expect(options).toContain("Default");
+    expect(options).toContain("SoRE");
+  });
 });

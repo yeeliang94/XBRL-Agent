@@ -77,6 +77,34 @@ def _public_notes_templates() -> frozenset:
 
 _PUBLIC_NOTES_TEMPLATES = _public_notes_templates()
 
+
+def _build_default_cross_checks() -> list:
+    """Return a fresh list of the cross-checks the server runs on every merge.
+
+    Instantiated per call so callers can't accidentally share check state
+    across runs. Promoted to module scope (vs. inlined in
+    `run_multi_agent_stream`) so the MPERS wiring tests can import it
+    directly to pin the registry — a silent drop of SoRE's check would
+    otherwise slip through until a live MPERS filing exposed it.
+    """
+    from cross_checks.sofp_balance import SOFPBalanceCheck
+    from cross_checks.sopl_to_socie_profit import SOPLToSOCIEProfitCheck
+    from cross_checks.soci_to_socie_tci import SOCIToSOCIETCICheck
+    from cross_checks.socie_to_sofp_equity import SOCIEToSOFPEquityCheck
+    from cross_checks.socf_to_sofp_cash import SOCFToSOFPCashCheck
+    from cross_checks.sore_to_sofp_retained_earnings import (
+        SoREToSOFPRetainedEarningsCheck,
+    )
+    return [
+        SOFPBalanceCheck(),
+        SOPLToSOCIEProfitCheck(),
+        SOCIToSOCIETCICheck(),
+        SOCIEToSOFPEquityCheck(),
+        SOCFToSOFPCashCheck(),
+        SoREToSOFPRetainedEarningsCheck(),
+    ]
+
+
 # Lazy imports for multi-agent pipeline — done at call sites to keep startup fast.
 # scout.runner.run_scout, coordinator.run_extraction, workbook_merger.merge,
 # cross_checks.framework.run_all, etc.
@@ -289,6 +317,12 @@ class RunConfigRequest(BaseModel):
     infopack: Optional[Dict] = None  # serialised Infopack JSON (nullable)
     use_scout: bool = False  # informational — actual infopack presence controls behaviour
     filing_level: Literal["company", "group"] = "company"
+    # Filing standard axis, orthogonal to filing_level. Defaults to "mfrs"
+    # so existing frontends (and persisted `run_config_json` blobs on
+    # legacy rows) continue to resolve to the MFRS template tree without
+    # changes. `"mpers"` routes through XBRL-template-MPERS/ and enables
+    # the SoRE variant on SOCIE.
+    filing_standard: Literal["mfrs", "mpers"] = "mfrs"
     # Notes templates to fill, as NotesTemplateType.value strings (e.g.
     # ["CORP_INFO", "ISSUED_CAPITAL"]). Empty = face-only run.
     notes_to_run: List[str] = []
@@ -728,11 +762,6 @@ async def run_multi_agent_stream(
     from statement_types import StatementType, get_variant, variants_for
     from workbook_merger import merge as merge_workbooks
     from cross_checks.framework import run_all as run_cross_checks, DEFAULT_TOLERANCE_RM
-    from cross_checks.sofp_balance import SOFPBalanceCheck
-    from cross_checks.sopl_to_socie_profit import SOPLToSOCIEProfitCheck
-    from cross_checks.soci_to_socie_tci import SOCIToSOCIETCICheck
-    from cross_checks.socie_to_sofp_equity import SOCIEToSOFPEquityCheck
-    from cross_checks.socf_to_sofp_cash import SOCFToSOFPCashCheck
     from cross_checks.notes_consistency import check_notes_consistency
     from db.schema import init_db
     from db import repository as repo
@@ -854,6 +883,38 @@ async def run_multi_agent_stream(
                 variants[stmt] = run_config.variants[stmt.value]
             # else: coordinator will resolve from infopack / registry default.
 
+        # Reject variant/standard mismatches BEFORE launching the coordinator.
+        # Without this, the run would progress through row creation, model
+        # construction, and task launch before a FileNotFoundError bubbles up
+        # mid-extraction, leaving a confusing run_agents trail. Caught here,
+        # the user sees a single crisp error naming the offending variant and
+        # the standard in play (e.g. "SoRE is not available on MFRS — ...").
+        for stmt, variant_name in variants.items():
+            try:
+                v = get_variant(stmt, variant_name)
+            except KeyError as e:
+                events, new_status = _fail_run(
+                    db_conn, run_id, f"Unknown variant for {stmt.value}: {e}",
+                )
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
+                return
+            if run_config.filing_standard not in v.applies_to_standard:
+                allowed = (
+                    ", ".join(sorted(v.applies_to_standard)).upper() or "(none)"
+                )
+                events, new_status = _fail_run(
+                    db_conn, run_id,
+                    f"{stmt.value}/{variant_name} is not available on "
+                    f"{run_config.filing_standard.upper()} filings — "
+                    f"only {allowed}.",
+                )
+                for ev in events:
+                    yield ev
+                terminal_status = new_status or terminal_status
+                return
+
         # Build model overrides — resolve each through _create_proxy_model so
         # per-agent overrides use the same proxy/direct wiring as the default.
         # Wrap in try/except so a broken override key also produces a clean
@@ -924,6 +985,7 @@ async def run_multi_agent_stream(
             variants=variants,
             models=models,
             filing_level=run_config.filing_level,
+            filing_standard=run_config.filing_standard,
         )
 
         yield {"event": "status", "data": {
@@ -1069,6 +1131,7 @@ async def run_multi_agent_stream(
             model=model,
             notes_to_run=notes_to_run,
             filing_level=run_config.filing_level,
+            filing_standard=run_config.filing_standard,
             models=notes_models,
             page_hints=notes_page_hints,
         )
@@ -1092,8 +1155,26 @@ async def run_multi_agent_stream(
         sentinel_task = asyncio.create_task(_push_sentinel_when_done())
 
         # Drain events from the queue as they arrive from concurrent agents.
-        # If the client disconnects (GeneratorExit), cancel the coordinator task
-        # so we don't leave agents running in the background.
+        #
+        # Client-disconnect contract (Option B, April 2026): if the SSE
+        # client drops mid-stream we do NOT kill the coordinator. The
+        # agents may have already written their workbooks (the real-world
+        # trigger was a rerun where save_result had completed on disk but
+        # the post-save LLM wrap-up call stalled long enough for the
+        # browser to close the stream). Throwing away that work — and
+        # leaving the runs row as 'aborted' with run_agents frozen at
+        # 'running' — was the original bug.
+        #
+        # Instead we:
+        #   1. Swallow GeneratorExit / CancelledError at the yield point,
+        #      flip ``client_connected`` to False, and keep draining so the
+        #      coordinator isn't blocked pushing into a full queue.
+        #   2. Fall through to the post-pipeline (merge + cross-checks +
+        #      DB finalization) as if nothing happened.
+        #   3. Skip the trailing ``yield`` of run_complete — once a
+        #      generator has caught GeneratorExit it can never yield again
+        #      without raising RuntimeError, and there's no one listening.
+        client_connected = True
         try:
             while True:
                 event = await event_queue.get()
@@ -1101,16 +1182,15 @@ async def run_multi_agent_stream(
                     # Sentinel: all agents finished
                     break
                 persist_event(event)
-                yield event
-        except (asyncio.CancelledError, GeneratorExit):
-            coordinator_task.cancel()
-            notes_task.cancel()
-            logger.info("Client disconnected, cancelled coordinator", extra={"session_id": session_id})
-            # Mark the row aborted before we return — the finally block will
-            # see terminal_status set and leave it alone.
-            if _safe_mark_finished(db_conn, run_id, "aborted"):
-                terminal_status = "aborted"
-            return
+                if client_connected:
+                    try:
+                        yield event
+                    except (asyncio.CancelledError, GeneratorExit):
+                        client_connected = False
+                        logger.info(
+                            "Client disconnected; continuing post-pipeline",
+                            extra={"session_id": session_id},
+                        )
         except Exception as e:
             # Drain failure is unrecoverable: the queue contract is broken
             # and we can't safely merge partial results. Cancel the
@@ -1121,7 +1201,8 @@ async def run_multi_agent_stream(
             notes_task.cancel()
             if _safe_mark_finished(db_conn, run_id, "failed"):
                 terminal_status = "failed"
-            yield {"event": "error", "data": {"message": f"Stream error: {e}"}}
+            if client_connected:
+                yield {"event": "error", "data": {"message": f"Stream error: {e}"}}
             return
 
         # Await the coordinator task to get CoordinatorResult for post-processing
@@ -1131,13 +1212,15 @@ async def run_multi_agent_stream(
             logger.info("Coordinator cancelled", extra={"session_id": session_id})
             if _safe_mark_finished(db_conn, run_id, "aborted"):
                 terminal_status = "aborted"
-            yield {"event": "error", "data": {"message": "Run cancelled"}}
+            if client_connected:
+                yield {"event": "error", "data": {"message": "Run cancelled"}}
             return
         except Exception as e:
             logger.exception("Coordinator failed", extra={"session_id": session_id})
             if _safe_mark_finished(db_conn, run_id, "failed"):
                 terminal_status = "failed"
-            yield {"event": "error", "data": {"message": f"Coordinator error: {e}"}}
+            if client_connected:
+                yield {"event": "error", "data": {"message": f"Coordinator error: {e}"}}
             return
 
         # Notes coordinator: per-agent failures are already captured in each
@@ -1243,15 +1326,15 @@ async def run_multi_agent_stream(
                     "Failed to mark run_merged on run %s", run_id, exc_info=True,
                 )
 
-        # Run cross-checks (Phase 5 wiring)
-        all_checks = [
-            SOFPBalanceCheck(), SOPLToSOCIEProfitCheck(), SOCIToSOCIETCICheck(),
-            SOCIEToSOFPEquityCheck(), SOCFToSOFPCashCheck(),
-        ]
+        # Run cross-checks (Phase 5 wiring). See `_build_default_cross_checks`
+        # at module scope for the canonical registry the MPERS wiring tests
+        # pin against.
+        all_checks = _build_default_cross_checks()
         check_config = {
             "statements_to_run": statements_to_run,
             "variants": {stmt: v for stmt, v in variants.items()},
             "filing_level": run_config.filing_level,
+            "filing_standard": run_config.filing_standard,
         }
         tolerance = float(os.environ.get("XBRL_TOLERANCE_RM", "1.0"))
         cross_check_results = run_cross_checks(
@@ -1423,19 +1506,25 @@ async def run_multi_agent_stream(
             [r.template_type.value for r in notes_result.agent_results if r.status == "failed"]
             if notes_result is not None else []
         )
-        yield {"event": "run_complete", "data": {
-            "success": all_agents_ok and merge_result.success and not any_check_failed,
-            "merged_workbook": merged_path if merge_result.success else None,
-            "merge_errors": merge_result.errors,
-            "cross_checks": checks_data,
-            "cross_checks_partial": cross_checks_partial,
-            "statements_completed": [r.statement_type.value for r in coordinator_result.agent_results
-                                      if r.status == "succeeded"],
-            "statements_failed": [r.statement_type.value for r in coordinator_result.agent_results
-                                   if r.status == "failed"],
-            "notes_completed": notes_completed,
-            "notes_failed": notes_failed,
-        }}
+        # If the client disconnected mid-stream we cannot yield anymore —
+        # a generator that caught GeneratorExit is allowed to run to
+        # completion, but any further ``yield`` raises RuntimeError. The
+        # run is already fully persisted in the DB (History will show it
+        # correctly on reload); the client just won't see this event.
+        if client_connected:
+            yield {"event": "run_complete", "data": {
+                "success": all_agents_ok and merge_result.success and not any_check_failed,
+                "merged_workbook": merged_path if merge_result.success else None,
+                "merge_errors": merge_result.errors,
+                "cross_checks": checks_data,
+                "cross_checks_partial": cross_checks_partial,
+                "statements_completed": [r.statement_type.value for r in coordinator_result.agent_results
+                                          if r.status == "succeeded"],
+                "statements_failed": [r.statement_type.value for r in coordinator_result.agent_results
+                                       if r.status == "failed"],
+                "notes_completed": notes_completed,
+                "notes_failed": notes_failed,
+            }}
     except BaseException:
         # Belt-and-braces: if we reach the outer except without having
         # already recorded a terminal state, mark the run failed so History
@@ -1721,6 +1810,7 @@ def _run_summary_to_dict(summary) -> dict:
         "scout_enabled": summary.scout_enabled,
         "has_merged_workbook": bool(summary.merged_workbook_path),
         "filing_level": summary.filing_level,
+        "filing_standard": summary.filing_standard,
     }
 
 
@@ -1881,6 +1971,7 @@ async def get_run_detail_endpoint(run_id: int):
         "ended_at": run.ended_at,
         "config": run.config,
         "filing_level": (run.config or {}).get("filing_level", "company"),
+        "filing_standard": (run.config or {}).get("filing_standard", "mfrs"),
         "agents": [
             {
                 "id": a.id,

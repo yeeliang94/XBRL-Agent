@@ -59,6 +59,11 @@ class RunConfig:
     models: Dict[StatementType, str] = field(default_factory=dict)
     scout_enabled: bool = True
     filing_level: str = "company"
+    # Phase 2.1 of docs/PLAN-mpers-pipeline-wiring.md: coordinator reads
+    # RunConfig.filing_standard. Mirror it on the test stub so existing
+    # coordinator tests keep passing without leaking the axis into every
+    # assertion.
+    filing_standard: str = "mfrs"
 
 
 class TestCoordinator:

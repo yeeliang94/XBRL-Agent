@@ -162,6 +162,7 @@ def test_failed_subagent_retains_last_known_token_usage(monkeypatch):
         page_hints,
         page_offset,
         usage_out,
+        filing_standard="mfrs",
     ):
         # Simulate real iterations: update the accumulator with partial
         # counts, then raise as if the next model call errored out.

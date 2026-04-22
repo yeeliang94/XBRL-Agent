@@ -113,6 +113,11 @@ XBRL-template-MFRS/ Template Excel files organized by filing level
   Group/             Group-level templates (6 cols: label, Group CY, Group PY, Company CY, Company PY, source)
   backup-originals/  Pre-formula-fix snapshots (see gotcha #3)
   backup/            Earlier backup snapshots (pre-format variants)
+XBRL-template-MPERS/ MPERS variant templates (15 per level) — first-class filing standard (wired via `filing_standard`)
+  Company/           15 Company-level templates (01..10 face, 10-SoRE MPERS-only, 11..15 notes)
+  Group/             15 Group-level templates (09-SOCIE 4-block layout, 10-SoRE standard 6-col)
+  backup-originals/  Generation-1 snapshot — diff against this when re-running the generator
+scripts/generate_mpers_templates.py  CLI that emits all 30 MPERS xlsx files from the SSM linkbase
 ```
 
 ## LLM Provider Setup
@@ -427,6 +432,80 @@ in `notes/coordinator.py` for Sheet 12. Temperature is pinned at 1.0 per the
 "Temperature Constraint" subsection above. Look for `vision inventory tokens: input=X output=Y across N/M batches`
 in the logs to see what the fallback cost on a given run.
 
+### 15. MPERS Templates — First-Class Filing Standard
+
+Parallel to the MFRS template bundle, `XBRL-template-MPERS/{Company,Group}/`
+contains 15 MPERS variant templates per filing level, generated deterministically
+from the SSM MPERS linkbase (`SSMxT_2022v1.0/rep/ssm/ca-2016/fs/mpers/`) by
+`scripts/generate_mpers_templates.py`.
+
+**Status:** MPERS is a first-class filing standard alongside MFRS. A second
+axis — `filing_standard: "mfrs" | "mpers"` — threads through the whole
+pipeline (registry → coordinator → agent factories → server API → cross-
+checks → scout → frontend toggle → history persistence). MFRS is the
+default everywhere so pre-MPERS callers / rows / payloads keep working.
+
+**Pipeline entry points:**
+
+- CLI: `python3 run.py data/foo.pdf --standard mpers --level group --statements SOFP SOCIE`
+- API: `RunConfigRequest.filing_standard` (defaults `"mfrs"`), rejects
+  variant/standard mismatches (e.g. `SOCIE/SoRE` on MFRS) before launching
+  any agent.
+- UI: `PreRunPanel` renders an MFRS/MPERS toggle above the Filing Level
+  toggle; scout's `detected_standard` preselects it (user toggle always
+  wins). `VariantSelector` exposes `SOCIE/SoRE` only on MPERS via
+  `variantsFor(stmt, standard)` in `web/src/lib/types.ts`.
+- History: `filing_standard` rides `run_config_json`, surfaces in
+  `GET /api/runs` and `/api/runs/{id}`, renders a teal `MPERS` badge in
+  `HistoryList`, and feeds an `All / MFRS / MPERS` filter in
+  `HistoryFilters` (client-side filter at launch volume).
+
+**Cross-checks:** the framework honours `applies_to_standard` on each
+check (defaults to `frozenset({"mfrs", "mpers"})`, narrows per check).
+`sore_to_sofp_retained_earnings` is MPERS-only and fires only when the
+SOCIE variant is `SoRE`; `sopl_to_socie_profit`,
+`soci_to_socie_tci`, and `socie_to_sofp_equity` gate themselves out on
+SoRE runs because SoRE has no per-component matrix.
+
+**Scout:** `scout/standard_detector.py` (pure, presence-based keyword
+scorer) populates `Infopack.detected_standard` from TOC text during
+`_find_toc_impl` / `_parse_toc_text_impl`. `scout/variant_detector.py`
+takes an optional `standard=` filter so MPERS SOCIE pages can score
+`SoRE` over `Default`.
+
+**Numbering convention (15 slots per level, shifted from MFRS's 14):**
+
+| Slot | File | Purpose |
+|---|---|---|
+| 01..09 | `01-SOFP-CuNonCu` .. `09-SOCIE` | Same face statements as MFRS |
+| 10 | `10-SoRE.xlsx` | **MPERS-only** Statement of Retained Earnings (simplified SOCIE variant) |
+| 11..15 | `11-Notes-CorporateInfo` .. `15-Notes-RelatedParty` | Notes (shifted from 10..14 in MFRS) |
+
+**Usage:**
+
+```bash
+# Regenerate Company templates (15 files) + snapshot backup
+python3 scripts/generate_mpers_templates.py --level company --snapshot
+
+# Regenerate Group templates (15 files; SOCIE uses 4-block layout)
+python3 scripts/generate_mpers_templates.py --level group --snapshot
+
+# Run only MPERS regression tests
+python3 -m pytest tests/test_mpers_generator.py -v
+# Or phase-by-phase:
+python3 -m pytest -m mpers_inventory -v        # Phase 1 (inventory + format pins)
+python3 -m pytest -m mpers_generator_core -v   # Phase 2 (walker + emitter)
+python3 -m pytest -m mpers_company -v          # Phase 3 (Company xlsx on disk)
+python3 -m pytest -m mpers_formulas -v         # Phase 4 (calc linkbase + SUM)
+python3 -m pytest -m mpers_group -v            # Phase 5 (Group layout + SOCIE blocks)
+python3 -m pytest -m mpers_snapshot -v         # Phase 6 (backup-originals)
+```
+
+**Taxonomy updates:** when SSM ships a new MPERS taxonomy version (e.g. 2024
+vs 2022), drop the new files into `SSMxT_YYYYvN.N/rep/ssm/ca-2016/fs/mpers/`,
+re-run the generator, and compare the re-emitted bundle against
+`XBRL-template-MPERS/backup-originals/` for schema drift before accepting.
+
 ## Testing
 
 ```bash
@@ -489,6 +568,7 @@ Note: `test_pdf_viewer.py` and `test_template_reader.py` auto-skip when sample d
 | Agent tool names | `server.py` (`PHASE_MAP`), `extraction/agent.py` (tool definitions) |
 | Excel template structure | `tools/fill_workbook.py` (section headers), `tools/verifier.py`, `cross_checks/util.py` (label lookups), `docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md` (formula audit trail) |
 | XBRL template formulas | `XBRL-template-MFRS/Company/*.xlsx` + `XBRL-template-MFRS/Group/*.xlsx` (sub-sheet formulas), `SSMxT_2022v1.0/` (authoritative XBRL calc linkbase), `XBRL-template-MFRS/backup-originals/` (pre-fix backups) |
+| MPERS templates + generator | `scripts/generate_mpers_templates.py` (walker / label resolver / emitter / calc parser / CLI), `XBRL-template-MPERS/{Company,Group}/*.xlsx` (15 generated templates per level), `XBRL-template-MPERS/backup-originals/` (generation-1 snapshot — diff here after re-runs), `SSMxT_2022v1.0/rep/ssm/ca-2016/fs/mpers/` (authoritative pre_/lab_/cal_ linkbases), `tests/test_mpers_generator.py` (regression suite, one marker per phase). Re-run `python3 scripts/generate_mpers_templates.py --level company --snapshot` + `--level group --snapshot` after taxonomy updates. |
 | Statement types / variants | `statement_types.py`, `coordinator.py`, `server.py` (`RunConfigRequest`), `prompts/` (per-variant files), `web/src/lib/types.ts` (`STATEMENT_TYPES`, `VARIANTS`) |
 | Cross-check implementations | `cross_checks/*.py`, `server.py` (`run_multi_agent_stream` check list), `cross_checks/util.py` |
 | Model wiring / proxy setup | `server.py` (`_create_proxy_model`, `_detect_provider`), `run.py` (also calls `_create_proxy_model`), `coordinator.py` (`RunConfig.model/models`), `litellm_config.yaml` (proxy model routing), `config/models.json` (UI model list) |
@@ -510,6 +590,7 @@ Note: `test_pdf_viewer.py` and `test_template_reader.py` auto-skip when sample d
 | Scout UI / inline model picker | `web/src/components/ScoutToggle.tsx` (dropdown props), `web/src/components/PreRunPanel.tsx` (state + `handleScoutModelChange` persists via `updateSettings`, collapsible `AgentTimeline` fed by `scoutEvents`), `web/src/lib/api.ts` (`updateSettings` accepts `default_models`), `web/src/__tests__/ScoutToggle.test.tsx`, `web/src/__tests__/PreRunPanel.test.tsx` (scout model + event log tests), `tests/test_settings.py` (round-trip pin), `tests/test_server_scout.py` (fresh-read pin). Scout model persists to `XBRL_DEFAULT_MODELS.scout` via `POST /api/settings`; `/api/scout/{session_id}` re-reads the env file on every call. |
 | Notes-12 sub-tabs (nested) | `web/src/components/NotesSubTabBar.tsx` (chip bar rendered inside the Notes-12 content pane), `web/src/lib/buildToolTimeline.ts` (`filterEventsBySubAgent` + `deriveSubAgentRangesFromEvents` — pure helpers shared by live + replay), `web/src/pages/ExtractPage.tsx` (`ActiveTabPanel` + `NOTES_12_AGENT_ID` gate), `web/src/components/RunDetailView.tsx` (`AgentCard` mirrors the live gate for `NOTES_LIST_OF_NOTES` DB rows), `web/src/__tests__/NotesSubTabBar.test.tsx`, `web/src/__tests__/ActiveTabPanel.test.tsx`, `web/src/__tests__/buildToolTimeline.test.ts`, `web/src/__tests__/RunDetailView.test.tsx`. SSE contract unchanged: sub-agents still emit under `agent_id="notes:LIST_OF_NOTES"` with `sub_agent_id` + namespaced `tool_call_id`. |
 | Notes UI / tabs | `web/src/lib/appReducer.ts` (`notesInRun`, `deriveAgentLabel`, `NOTES_TAB_LABELS`), `web/src/App.tsx` (`RUN_STARTED` payload includes notes), `web/src/components/AgentTabs.tsx` (notes bucket between statements and scout/validator, `notesInRun` + `notesSkeletons` props), `web/src/pages/ExtractPage.tsx` (builds notes skeleton labels), `web/src/components/PreRunPanel.tsx` (5 checkboxes), `web/src/components/RunDetailView.tsx` (renders NOTES_* agents alongside face agents) |
+| Filing standard / MPERS wiring | `statement_types.py` (`FilingStandard`, `TEMPLATE_DIRS`, `Variant.applies_to_standard`, `variants_for_standard`, `template_path(..., standard=)`), `notes_types.py` (`notes_template_path(..., standard=)`), `coordinator.py` (`RunConfig.filing_standard`), `notes/coordinator.py` (`NotesRunConfig.filing_standard`), `extraction/agent.py` (`ExtractionDeps.filing_standard`), `notes/agent.py` (`NotesAgentDeps.filing_standard`), `server.py` (`RunConfigRequest.filing_standard` + variant/standard early validation + `_build_default_cross_checks`), `run.py` (`--standard` flag), `cross_checks/framework.py` (`applies_to_standard` gate), `cross_checks/sore_to_sofp_retained_earnings.py` (new MPERS-only check), `cross_checks/{sopl_to_socie_profit,soci_to_socie_tci,socie_to_sofp_equity}.py` (SoRE variant gate), `scout/infopack.py` (`Infopack.detected_standard`), `scout/standard_detector.py`, `scout/agent.py` (populates `deps.detected_standard`, plumbs standard into `check_variant_signals`), `scout/variant_detector.py` (`standard=` filter), `prompts/socie_sore.md`, `db/repository.py` (`RunSummary.filing_standard`), `web/src/lib/types.ts` (`FilingStandard`, `DetectedStandard`, `variantsFor`, `RunConfigPayload.filing_standard`, `RunSummaryJson.filing_standard`, `RunsFilterParams.standard`), `web/src/components/PreRunPanel.tsx` (MFRS/MPERS toggle + scout preselect + standard-switch variant reset), `web/src/components/VariantSelector.tsx` (`filingStandard` prop → `variantsFor(stmt, standard)`), `web/src/components/HistoryList.tsx` (MPERS badge), `web/src/components/HistoryFilters.tsx` (standard dropdown), `web/src/pages/HistoryPage.tsx` (client-side filter), `tests/test_mpers_wiring.py` (one marker per phase), `tests/test_cross_checks.py` (Phase-4 crosschecks). |
 
 ## Porting Checklist (Mac -> Windows)
 

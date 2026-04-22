@@ -27,7 +27,12 @@ from pydantic_ai.messages import (
 )
 
 from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace
-from statement_types import StatementType, get_variant, template_path as get_template_path
+from statement_types import (
+    StatementType,
+    get_variant,
+    template_path as get_template_path,
+    variants_for_standard,
+)
 from extraction.agent import create_extraction_agent
 
 logger = logging.getLogger(__name__)
@@ -65,6 +70,11 @@ class RunConfig:
     models: Dict[StatementType, Any] = field(default_factory=dict)
     scout_enabled: bool = True
     filing_level: str = "company"
+    # Filing standard axis, orthogonal to filing_level. Defaults to "mfrs"
+    # so every pre-existing caller, CLI one-liner, and fixture keeps
+    # routing through the MFRS template tree unchanged. Set to "mpers"
+    # to route through XBRL-template-MPERS/ and enable the SoRE variant.
+    filing_standard: str = "mfrs"
 
 
 @dataclass
@@ -129,14 +139,42 @@ async def run_extraction(
     # so agent_ids and tab order are stable across runs.
     ordered_statements = sorted(config.statements_to_run, key=lambda s: list(StatementType).index(s))
     for idx, stmt_type in enumerate(ordered_statements):
-        # Variant resolution: explicit config > scout suggestion > registry default
+        # Variant resolution: explicit config > scout suggestion > registry default.
+        # The scout suggestion is ADVISORY and gets filtered through
+        # applies_to_standard — a scout that reads an SoRE-shaped SOCIE on
+        # an MFRS run silently falls back to Default rather than crashing
+        # the coordinator at template_path() time (peer-review HIGH).
+        # Explicit config is NOT filtered here because the server's
+        # pre-launch guard already rejected any mismatch; CLI / direct
+        # callers that pass a bad explicit variant deserve the clear
+        # ValueError from template_path() rather than a silent override.
+
+        dropped_suggestion: Optional[str] = None
         variant = config.variants.get(stmt_type)
         if not variant and infopack is not None and stmt_type in infopack.statements:
-            variant = infopack.statements[stmt_type].variant_suggestion or None
+            suggested = infopack.statements[stmt_type].variant_suggestion or None
+            if suggested:
+                try:
+                    sv = get_variant(stmt_type, suggested)
+                except KeyError:
+                    suggested = None
+                else:
+                    if config.filing_standard not in sv.applies_to_standard:
+                        logger.info(
+                            "Dropping scout suggestion %s/%s — not applicable "
+                            "to standard %s; falling back to registry default",
+                            stmt_type.value, suggested, config.filing_standard,
+                        )
+                        # Capture so a status event can be emitted under the
+                        # real agent_id once it's computed below (peer-review
+                        # I1: logger.info is invisible to the UI).
+                        dropped_suggestion = suggested
+                        suggested = None
+            variant = suggested
         if not variant:
-            from statement_types import variants_for
-            detectable = [v for v in variants_for(stmt_type) if v.detection_signals]
-            variant = detectable[0].name if detectable else variants_for(stmt_type)[0].name
+            applicable = variants_for_standard(stmt_type, config.filing_standard)
+            detectable = [v for v in applicable if v.detection_signals]
+            variant = (detectable[0].name if detectable else applicable[0].name)
 
         # Skip NotPrepared variants — no template to fill
         if variant == "NotPrepared":
@@ -154,13 +192,41 @@ async def run_extraction(
                 "note_pages": ref.note_pages,
             }
 
-        # Resolve template path for this variant
-        tpl_path = str(get_template_path(stmt_type, variant, level=config.filing_level))
+        # Resolve template path for this variant against the requested
+        # standard so MPERS runs land on XBRL-template-MPERS/ and SoRE on
+        # an MFRS run is rejected at the registry layer rather than silently
+        # resolving to a bogus MFRS file.
+        tpl_path = str(get_template_path(
+            stmt_type,
+            variant,
+            level=config.filing_level,
+            standard=config.filing_standard,
+        ))
 
         # agent_id is the lowercase statement name (e.g. "sofp", "sopl").
         # This is stable across reruns — a single-statement rerun produces
         # the same ID as the original multi-statement run.
         agent_id = stmt_type.value.lower()
+
+        # Surface dropped scout suggestions to the UI so the operator sees
+        # why the agent is running Default instead of the scout's suggested
+        # variant (peer-review I1). Fire-and-forget — if there's no queue
+        # (CLI path) the logger.info above is the only record.
+        if dropped_suggestion is not None and event_queue is not None:
+            await event_queue.put(_build_event(
+                "status",
+                agent_id,
+                stmt_type.value,
+                {
+                    "phase": "starting",
+                    "message": (
+                        f"Scout suggested {stmt_type.value}/{dropped_suggestion} "
+                        f"but that variant isn't available on "
+                        f"{config.filing_standard.upper()} — "
+                        f"running {variant} instead."
+                    ),
+                },
+            ))
 
         # Create individual tasks so they can be cancelled independently
         task = asyncio.create_task(
@@ -175,6 +241,7 @@ async def run_extraction(
                 event_queue=event_queue,
                 agent_id=agent_id,
                 filing_level=config.filing_level,
+                filing_standard=config.filing_standard,
             ),
             name=agent_id,
         )
@@ -255,6 +322,7 @@ async def _run_single_agent(
     event_queue: Optional[asyncio.Queue] = None,
     agent_id: str = "",
     filing_level: str = "company",
+    filing_standard: str = "mfrs",
 ) -> AgentResult:
     """Run a single extraction agent, streaming events into event_queue if provided."""
     agent_role = statement_type.value
@@ -274,6 +342,7 @@ async def _run_single_agent(
             output_dir=output_dir,
             page_hints=page_hints,
             filing_level=filing_level,
+            filing_standard=filing_standard,
         )
 
         prompt = (
