@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,22 +24,48 @@ from pydantic_ai.messages import (
 )
 
 from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace
+from notes._rate_limit import (
+    RATE_LIMIT_MAX_RETRIES,
+    compute_backoff_delay,
+    is_rate_limit_error,
+)
 from notes.agent import create_notes_agent
+from notes.constants import NOTES_PHASE_MAP
+from notes.listofnotes_subcoordinator import run_listofnotes_subcoordinator
+from notes.writer import BORDERLINE_FUZZY_SCORE
 from notes_types import NotesTemplateType
 from pricing import estimate_cost
+from scout.infopack import Infopack
 from scout.notes_discoverer import NoteInventoryEntry
 
 logger = logging.getLogger(__name__)
 
+# Re-exported for backwards compatibility — any caller that imports
+# NOTES_PHASE_MAP from notes.coordinator continues to work. Prefer
+# ``from notes.constants import NOTES_PHASE_MAP`` in new code.
+__all__ = ("NOTES_PHASE_MAP",)
 
-# Tool-name → phase mapping. Mirrors coordinator.PHASE_MAP so the frontend
-# timeline can colour-code notes-agent phases identically to face agents.
-NOTES_PHASE_MAP = {
-    "read_template": "reading_template",
-    "view_pdf_pages": "viewing_pdf",
-    "write_notes": "writing_notes",
-    "save_result": "complete",
-}
+
+def _backfill_token_report(token_report, usage_callable, template_label: str) -> None:
+    """Fold the agent's end-of-run usage into the TokenReport totals.
+
+    ``usage_callable`` is typically ``agent_run.usage`` (callable); we
+    accept the callable rather than the value so tests can stub it
+    without constructing a real usage object. Per CLAUDE.md gotcha #6
+    per-turn counts stay at zero (PydanticAI does counting internally)
+    — only the end-of-run aggregate is accurate. The try/except is the
+    last line of defence against a surprise usage shape; any failure
+    is logged rather than crashing the run because cost telemetry is
+    strictly advisory.
+    """
+    try:
+        usage = usage_callable()
+        token_report.total_prompt_tokens += int(getattr(usage, "request_tokens", 0) or 0)
+        token_report.total_completion_tokens += int(getattr(usage, "response_tokens", 0) or 0)
+        # Thinking tokens aren't separately tracked by the OpenAI-compat
+        # proxy — leaving at 0 keeps the report internally consistent.
+    except Exception:  # noqa: BLE001 — cost telemetry is best-effort
+        logger.debug("notes cost backfill skipped for %s", template_label)
 
 
 @dataclass
@@ -61,6 +88,12 @@ class NotesRunConfig:
     # inventory is empty — don't trigger a page 1-N sweep. Empty list =
     # no hints available (CLI invocation without scout, or scout failure).
     page_hints: List[int] = field(default_factory=list)
+    # Scout-measured gap between PDF page index and the printed folio
+    # visible in the page image footer. Passed through to each notes
+    # agent's system prompt so citations stay on the PDF-page scale
+    # (Phase 4). 0 = no offset (cover/TOC-free PDF); caller sets this
+    # from `Infopack.page_offset` when an infopack is available.
+    page_offset: int = 0
 
     def model_for(self, template_type: NotesTemplateType) -> Any:
         """Resolve the model instance to use for a given notes template.
@@ -69,6 +102,38 @@ class NotesRunConfig:
         ``config.models.get(nt, config.model)`` with a fallback every time.
         """
         return self.models.get(template_type, self.model)
+
+
+# Per-turn LLM timeout for notes agents. If ``agent.iter`` doesn't
+# produce the next node within this many seconds the runner aborts.
+# Observed failure: after a successful ``write_notes`` call the LLM's
+# follow-up turn sometimes stalls for minutes, keeping the agent
+# alive and blocking ``run_notes_extraction``'s ``wait(ALL_COMPLETED)``
+# — siblings finish their work but the whole run hangs waiting on a
+# model that won't speak. 180s is well above the healthy p99 for a
+# model-request turn on gpt-5.4 / gemini-3 while still catching the
+# minutes-long stalls that triggered the fix.
+NOTES_TURN_TIMEOUT: float = 180.0
+
+
+async def _iter_with_turn_timeout(async_iterable, timeout: float):
+    """Yield nodes from ``async_iterable`` with a per-step timeout.
+
+    Each call to ``__anext__`` is wrapped in ``asyncio.wait_for`` — if
+    it takes longer than ``timeout`` seconds, ``asyncio.TimeoutError``
+    propagates out and the iterator's pending coroutine is cancelled
+    by ``wait_for`` itself (so we don't leak a background task).
+
+    Exists as a module-level helper so the behaviour can be pinned by
+    unit tests without standing up a real PydanticAI agent run.
+    """
+    iterator = async_iterable.__aiter__()
+    while True:
+        try:
+            node = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
+        except StopAsyncIteration:
+            return
+        yield node
 
 
 @dataclass
@@ -108,7 +173,7 @@ class NotesCoordinatorResult:
 
 async def run_notes_extraction(
     config: NotesRunConfig,
-    infopack: Any = None,
+    infopack: Optional[Infopack] = None,
     event_queue: Optional[asyncio.Queue] = None,
     session_id: Optional[str] = None,
 ) -> NotesCoordinatorResult:
@@ -125,10 +190,19 @@ async def run_notes_extraction(
     if not config.notes_to_run:
         return NotesCoordinatorResult(agent_results=[])
 
+    # Peer-review C1: defence-in-depth on output_dir. Today only trusted
+    # server/CLI paths flow in (UUID-based session dirs under PROJECT_ROOT/
+    # output), but a single upstream bug could escalate into path traversal
+    # + blind directory creation against /etc, /tmp, etc. Resolve once
+    # here and reject anything outside the project root.
+    from utils.paths import assert_writable_output_dir
+
+    assert_writable_output_dir(config.output_dir, label="notes output_dir")
+
     import task_registry
 
     inventory: list[NoteInventoryEntry] = []
-    if infopack is not None and getattr(infopack, "notes_inventory", None):
+    if infopack is not None and infopack.notes_inventory:
         inventory = list(infopack.notes_inventory)
 
     # Fall back to the infopack's derived page hints when the caller
@@ -137,24 +211,30 @@ async def run_notes_extraction(
     # the server pre-compute and pass them in if it prefers.
     page_hints: list[int] = list(config.page_hints)
     if not page_hints and infopack is not None:
-        derive = getattr(infopack, "notes_page_hints", None)
-        if callable(derive):
-            try:
-                page_hints = list(derive())
-            except Exception:  # noqa: BLE001 — hints are advisory; never block a run
-                logger.warning(
-                    "Failed to derive notes_page_hints from infopack; proceeding without hints",
-                    exc_info=True,
-                )
-                page_hints = []
+        page_hints = list(infopack.notes_page_hints())
+
+    # Same fallback rule for page_offset: prefer caller-supplied value,
+    # otherwise read off the infopack. Either can be 0 — the notes
+    # agent simply omits the prompt block when the offset is not
+    # positive, so we don't need a separate "present?" flag.
+    page_offset: int = config.page_offset
+    if page_offset == 0 and infopack is not None:
+        page_offset = infopack.page_offset
 
     # Launch one task per template.
     ordered = sorted(config.notes_to_run, key=lambda t: list(NotesTemplateType).index(t))
 
     tasks: dict[NotesTemplateType, asyncio.Task] = {}
-    for template_type in ordered:
+    for index, template_type in enumerate(ordered):
         agent_id = f"notes:{template_type.value}"
         template_model = config.model_for(template_type)
+        # Stagger parallel notes-agent launches by NOTES_LAUNCH_STAGGER_SECS
+        # per index so 5 concurrent tasks don't burst requests into the
+        # provider's TPM bucket at the same millisecond — OpenAI
+        # gpt-5.4-mini's 200k TPM limit is easy to saturate when 5 PDF-page
+        # requests all fire inside the same second. The first agent starts
+        # immediately; later ones sleep briefly at the top of their runner.
+        stagger = index * NOTES_LAUNCH_STAGGER_SECS
         # Sheet 12 goes through the sub-agent fan-out runner; others run
         # as a single agent.
         if template_type == NotesTemplateType.LIST_OF_NOTES:
@@ -168,6 +248,8 @@ async def run_notes_extraction(
                 agent_id=agent_id,
                 session_id=session_id,
                 page_hints=page_hints,
+                page_offset=page_offset,
+                launch_delay=stagger,
             )
         else:
             runner = _run_single_notes_agent(
@@ -180,6 +262,8 @@ async def run_notes_extraction(
                 event_queue=event_queue,
                 agent_id=agent_id,
                 page_hints=page_hints,
+                page_offset=page_offset,
+                launch_delay=stagger,
             )
         task = asyncio.create_task(runner, name=agent_id)
         tasks[template_type] = task
@@ -225,6 +309,15 @@ async def run_notes_extraction(
 # constant so failure-injection tests can patch it per-invocation.
 SINGLE_AGENT_MAX_RETRIES = 1
 
+# Seconds of stagger between parallel notes-template launches. With 5
+# templates, this spreads first-turn requests across ~4 seconds so a
+# single TPM burst doesn't knock out all 5 on the first attempt. Small
+# enough to be invisible next to the dominant PDF-extraction latency
+# (~15-30s per agent) but big enough to decouple their initial bursts.
+# Set to 0 to disable staggering (e.g. in unit tests that assert
+# ordering without real sleeps).
+NOTES_LAUNCH_STAGGER_SECS = 0.8
+
 
 class _NoWriteError(RuntimeError):
     """Raised when an attempt finishes cleanly but wrote no payloads.
@@ -257,13 +350,24 @@ async def _run_single_notes_agent(
     agent_id: str = "",
     max_retries: int = SINGLE_AGENT_MAX_RETRIES,
     page_hints: Optional[List[int]] = None,
+    page_offset: int = 0,
+    launch_delay: float = 0.0,
 ) -> NotesAgentResult:
     """Run one notes agent end-to-end with PLAN §4 E.1 retry budget.
 
     Any non-cancellation exception is retried at most ``max_retries`` times
-    (default 1). When the retry budget is exhausted the sheet is marked
-    failed and a ``notes_<TEMPLATE>_failures.json`` side-log is written so
-    operators have a durable record of what blew up and why.
+    (default 1). Rate-limit (HTTP 429) failures get a separate, larger
+    budget (``RATE_LIMIT_MAX_RETRIES``) with honoured retry-after hints and
+    jittered backoff — a TPM throttle isn't a real failure and shouldn't
+    burn the generic-error budget. When either budget is exhausted the
+    sheet is marked failed and a ``notes_<TEMPLATE>_failures.json``
+    side-log is written so operators have a durable record of what blew
+    up and why.
+
+    ``launch_delay`` staggers the start of parallel notes agents so 5
+    concurrent tasks don't burst requests into the provider's TPM bucket
+    at the same millisecond. The coordinator sets this per task index;
+    callers that run a single agent leave it at 0.
     """
 
     async def _emit(event_type: str, data: dict) -> None:
@@ -288,27 +392,52 @@ async def _run_single_notes_agent(
                 event_type, agent_id or template_type.value,
             )
 
+    # Stagger parallel agent launches so 5 concurrent notes agents don't
+    # burst requests into the provider's TPM bucket at the same instant.
+    # CancelledError from the sleep propagates naturally — the outer
+    # coordinator's task.result() branch maps it to status="cancelled".
+    if launch_delay > 0:
+        await asyncio.sleep(launch_delay)
+
     attempts: list[dict[str, Any]] = []
     last_error: Optional[str] = None
     filled_path: Optional[str] = None
 
-    for attempt in range(max_retries + 1):
+    # Two retry budgets: generic errors use ``max_retries`` (default 1);
+    # rate-limit 429s use ``RATE_LIMIT_MAX_RETRIES`` (default 3). Each is
+    # consumed independently so a flaky TPM bucket doesn't burn the
+    # generic budget and a real code error doesn't masquerade as rate
+    # limiting forever. ``total_attempts`` is purely for log/UX display.
+    generic_retries = 0
+    rl_retries = 0
+    total_attempts = 0
+    # Backoff between attempts is scheduled on the *previous* iteration
+    # and consumed at the top of the next one — keeps the sleep inside
+    # the try/except so a user abort during backoff lands on the
+    # CancelledError branch (and returns a structured cancelled result)
+    # instead of bubbling out of the retry loop raw.
+    pending_backoff: float = 0.0
+
+    while True:
+        total_attempts += 1
         try:
-            if attempt > 0:
+            if pending_backoff > 0:
+                await asyncio.sleep(pending_backoff)
+                pending_backoff = 0.0
+            if total_attempts > 1:
                 # Emit a visible retry marker so operators see the second
                 # attempt in the live UI / History timeline instead of
                 # guessing from the tool-event duplication. Reuses the
                 # existing ``reading_template`` phase so the PipelineStages
                 # indicator already has a pulse state for it — a dedicated
                 # ``retrying`` phase would need frontend plumbing for one
-                # edge-case message (peer-review #4 / #5 follow-up). The
-                # message text carries the attempt count so the UI can
-                # still surface the retry explicitly.
+                # edge-case message. The message text carries the attempt
+                # count so the UI can still surface the retry explicitly.
                 await _emit("status", {
                     "phase": "reading_template",
                     "message": (
                         f"{template_type.value}: retrying "
-                        f"(attempt {attempt + 1}/{max_retries + 1}) — last error: "
+                        f"(attempt {total_attempts}) — last error: "
                         f"{last_error or 'unknown'}"
                     ),
                 })
@@ -323,11 +452,12 @@ async def _run_single_notes_agent(
                 agent_id=agent_id,
                 emit=_emit,
                 page_hints=page_hints,
+                page_offset=page_offset,
             )
             # Success — stop retrying.
-            if attempt > 0:
-                logger.info("Notes agent %s recovered on retry %d",
-                            template_type.value, attempt)
+            if total_attempts > 1:
+                logger.info("Notes agent %s recovered on attempt %d",
+                            template_type.value, total_attempts)
             warnings = _build_single_sheet_warnings(outcome)
             if warnings:
                 logger.info(
@@ -360,18 +490,43 @@ async def _run_single_notes_agent(
         except Exception as e:  # noqa: BLE001 — we explicitly want broad catch
             last_error = str(e)
             attempts.append({
-                "attempt": attempt + 1,
+                "attempt": total_attempts,
                 "error_type": type(e).__name__,
                 "error": last_error,
+                "rate_limited": is_rate_limit_error(e),
             })
-            if attempt < max_retries:
+            if is_rate_limit_error(e):
+                # 429s don't count against the generic budget. Honour the
+                # upstream retry-after hint with a floor + jitter; schedule
+                # the sleep for the top of the next iteration so user
+                # aborts during backoff land on the CancelledError branch.
+                if rl_retries >= RATE_LIMIT_MAX_RETRIES:
+                    logger.warning(
+                        "Notes agent %s rate-limit retries exhausted (%d) — giving up",
+                        template_type.value, RATE_LIMIT_MAX_RETRIES,
+                    )
+                    break
+                pending_backoff = compute_backoff_delay(e, rl_retries)
+                rl_retries += 1
                 logger.warning(
-                    "Notes agent %s failed on attempt %d/%d: %s — retrying",
-                    template_type.value, attempt + 1, max_retries + 1, e,
+                    "Notes agent %s hit 429 (rl-retry %d/%d) — sleeping %.2fs: %s",
+                    template_type.value, rl_retries, RATE_LIMIT_MAX_RETRIES,
+                    pending_backoff, e,
                 )
                 continue
-            logger.exception("Notes agent %s failed after %d attempt(s)",
-                             template_type.value, attempt + 1)
+            # Generic (non-429) error — use the existing max-1 budget and
+            # skip the backoff sleep to preserve prior latency behaviour.
+            if generic_retries >= max_retries:
+                logger.exception(
+                    "Notes agent %s failed after %d attempt(s)",
+                    template_type.value, total_attempts,
+                )
+                break
+            generic_retries += 1
+            logger.warning(
+                "Notes agent %s failed on attempt %d: %s — retrying",
+                template_type.value, total_attempts, e,
+            )
 
     # Retries exhausted — persist the failure log and return a terminal result.
     failures_path = _write_single_sheet_failure_log(
@@ -406,6 +561,7 @@ async def _invoke_single_notes_agent_once(
     agent_id: str,
     emit,
     page_hints: Optional[List[int]] = None,
+    page_offset: int = 0,
 ) -> _SingleAgentOutcome:
     """One invocation of a single-sheet notes agent.
 
@@ -423,6 +579,7 @@ async def _invoke_single_notes_agent_once(
         model=model,
         output_dir=output_dir,
         page_hints=page_hints,
+        page_offset=page_offset,
     )
 
     prompt = (
@@ -437,92 +594,130 @@ async def _invoke_single_notes_agent_once(
     thinking_counter = 0
 
     async with agent.iter(prompt, deps=deps) as agent_run:
-        async for node in agent_run:
-            iteration += 1
-            if iteration > MAX_AGENT_ITERATIONS:
-                raise RuntimeError(
-                    f"Hit iteration limit ({MAX_AGENT_ITERATIONS}) — agent may be stuck."
-                )
-            if Agent.is_call_tools_node(node):
-                async with node.stream(agent_run.ctx) as tool_stream:
-                    async for event in tool_stream:
-                        if isinstance(event, FunctionToolCallEvent):
-                            phase = NOTES_PHASE_MAP.get(event.part.tool_name)
-                            if phase:
-                                await emit("status", {
-                                    "phase": phase,
-                                    "message": f"{template_type.value}: {phase.replace('_', ' ')}",
-                                })
-                            raw_args = event.part.args
-                            if isinstance(raw_args, str):
-                                try:
-                                    parsed = json.loads(raw_args)
-                                except (json.JSONDecodeError, TypeError):
-                                    parsed = {}
-                            elif isinstance(raw_args, dict):
-                                parsed = raw_args
-                            else:
-                                parsed = {}
-                            await emit("tool_call", {
-                                "tool_name": event.part.tool_name,
-                                "tool_call_id": event.part.tool_call_id,
-                                "args": parsed,
-                            })
-                            tool_start[event.part.tool_call_id] = time.monotonic()
-                        elif isinstance(event, FunctionToolResultEvent):
-                            content = event.result.content
-                            summary = str(content)[:800] if content else ""
-                            cid = event.result.tool_call_id
-                            start_t = tool_start.pop(cid, None)
-                            duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
-                            await emit("tool_result", {
-                                "tool_name": event.result.tool_name,
-                                "tool_call_id": cid,
-                                "result_summary": summary,
-                                "duration_ms": duration_ms,
-                            })
-            elif Agent.is_model_request_node(node):
-                tid = f"{agent_id}_think_{thinking_counter}"
-                active = False
-                async with node.stream(agent_run.ctx) as model_stream:
-                    async for event in model_stream:
-                        if isinstance(event, PartDeltaEvent):
-                            delta = event.delta
-                            if isinstance(delta, TextPartDelta):
-                                if active:
-                                    await emit("thinking_end", {
-                                        "thinking_id": tid, "summary": "", "full_length": 0,
+        try:
+            # Per-turn timeout guard: if the LLM's next turn stalls past
+            # NOTES_TURN_TIMEOUT, TimeoutError bubbles out to the handler
+            # below. We convert it based on whether the agent already
+            # wrote rows — a stall after a successful write is
+            # "close enough to done" and we keep the workbook; an early
+            # stall (no write yet) is a real failure and re-raises.
+            async for node in _iter_with_turn_timeout(agent_run, NOTES_TURN_TIMEOUT):
+                iteration += 1
+                if iteration > MAX_AGENT_ITERATIONS:
+                    raise RuntimeError(
+                        f"Hit iteration limit ({MAX_AGENT_ITERATIONS}) — agent may be stuck."
+                    )
+                if Agent.is_call_tools_node(node):
+                    async with node.stream(agent_run.ctx) as tool_stream:
+                        async for event in tool_stream:
+                            if isinstance(event, FunctionToolCallEvent):
+                                phase = NOTES_PHASE_MAP.get(event.part.tool_name)
+                                if phase:
+                                    await emit("status", {
+                                        "phase": phase,
+                                        "message": f"{template_type.value}: {phase.replace('_', ' ')}",
                                     })
-                                    active = False
-                                    thinking_counter += 1
-                                    tid = f"{agent_id}_think_{thinking_counter}"
-                                await emit("text_delta", {"content": delta.content_delta})
-                            elif isinstance(delta, ThinkingPartDelta):
-                                active = True
-                                await emit("thinking_delta", {
-                                    "content": delta.content_delta or "",
-                                    "thinking_id": tid,
+                                raw_args = event.part.args
+                                if isinstance(raw_args, str):
+                                    try:
+                                        parsed = json.loads(raw_args)
+                                    except (json.JSONDecodeError, TypeError):
+                                        parsed = {}
+                                elif isinstance(raw_args, dict):
+                                    parsed = raw_args
+                                else:
+                                    parsed = {}
+                                await emit("tool_call", {
+                                    "tool_name": event.part.tool_name,
+                                    "tool_call_id": event.part.tool_call_id,
+                                    "args": parsed,
                                 })
-                if active:
-                    await emit("thinking_end", {
-                        "thinking_id": tid, "summary": "", "full_length": 0,
-                    })
-                    thinking_counter += 1
+                                tool_start[event.part.tool_call_id] = time.monotonic()
+                            elif isinstance(event, FunctionToolResultEvent):
+                                content = event.result.content
+                                summary = str(content)[:800] if content else ""
+                                cid = event.result.tool_call_id
+                                start_t = tool_start.pop(cid, None)
+                                duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
+                                await emit("tool_result", {
+                                    "tool_name": event.result.tool_name,
+                                    "tool_call_id": cid,
+                                    "result_summary": summary,
+                                    "duration_ms": duration_ms,
+                                })
+                elif Agent.is_model_request_node(node):
+                    tid = f"{agent_id}_think_{thinking_counter}"
+                    active = False
+                    async with node.stream(agent_run.ctx) as model_stream:
+                        async for event in model_stream:
+                            if isinstance(event, PartDeltaEvent):
+                                delta = event.delta
+                                if isinstance(delta, TextPartDelta):
+                                    if active:
+                                        await emit("thinking_end", {
+                                            "thinking_id": tid, "summary": "", "full_length": 0,
+                                        })
+                                        active = False
+                                        thinking_counter += 1
+                                        tid = f"{agent_id}_think_{thinking_counter}"
+                                    await emit("text_delta", {"content": delta.content_delta})
+                                elif isinstance(delta, ThinkingPartDelta):
+                                    active = True
+                                    await emit("thinking_delta", {
+                                        "content": delta.content_delta or "",
+                                        "thinking_id": tid,
+                                    })
+                    if active:
+                        await emit("thinking_end", {
+                            "thinking_id": tid, "summary": "", "full_length": 0,
+                        })
+                        thinking_counter += 1
 
-            usage = agent_run.usage()
-            total = usage.total_tokens or 0
-            prompt_t = usage.request_tokens or 0
-            completion_t = usage.response_tokens or 0
-            await emit("token_update", {
-                "prompt_tokens": prompt_t,
-                "completion_tokens": completion_t,
-                "thinking_tokens": 0,
-                "cumulative": total,
-                "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
-            })
+                usage = agent_run.usage()
+                total = usage.total_tokens or 0
+                prompt_t = usage.request_tokens or 0
+                completion_t = usage.response_tokens or 0
+                await emit("token_update", {
+                    "prompt_tokens": prompt_t,
+                    "completion_tokens": completion_t,
+                    "thinking_tokens": 0,
+                    "cumulative": total,
+                    "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
+                })
+        except asyncio.TimeoutError:
+            # LLM stalled past NOTES_TURN_TIMEOUT. If the agent already
+            # wrote a workbook, the rows are on disk — treat as done so
+            # the sibling notes agents aren't stuck on ALL_COMPLETED.
+            # If nothing was written yet, the agent never produced
+            # usable output and the outer retry loop / caller must see
+            # a failure.
+            if deps.wrote_once and deps.filled_path:
+                logger.warning(
+                    "%s: LLM stalled past %ss after write — treating as done "
+                    "(rows already on disk at %s).",
+                    template_type.value, NOTES_TURN_TIMEOUT, deps.filled_path,
+                )
+                # Short-circuit: skip trace save / token backfill (the
+                # agent_run.result may be unreachable after a mid-turn
+                # timeout) and return what we have.
+                return _SingleAgentOutcome(
+                    filled_path=deps.filled_path,
+                    write_errors=list(deps.write_skip_errors),
+                    fuzzy_matches=list(deps.write_fuzzy_matches),
+                )
+            raise RuntimeError(
+                f"{template_type.value}: LLM stalled past {NOTES_TURN_TIMEOUT}s "
+                "without writing any payloads"
+            )
 
     result = agent_run.result
     save_agent_trace(result, output_dir, f"NOTES_{template_type.value}")
+
+    # Phase 5.1 + peer-review #2: backfill the cost report totals from
+    # the final aggregate usage. Extracted into a helper so it can be
+    # unit-tested without standing up the full agent-iter harness —
+    # otherwise the wrapped try/except silently hides regressions.
+    _backfill_token_report(deps.token_report, agent_run.usage, template_type.value)
 
     # Guard against silent no-op success — retryable per PLAN §4 E.1.
     if not deps.wrote_once or not deps.filled_path:
@@ -544,7 +739,7 @@ def _build_single_sheet_warnings(outcome: _SingleAgentOutcome) -> list[str]:
     for err in outcome.write_errors:
         warnings.append(f"writer: {err}")
     for requested, chosen, score in outcome.fuzzy_matches:
-        if score < _BORDERLINE_FUZZY:
+        if score < BORDERLINE_FUZZY_SCORE:
             warnings.append(
                 f"borderline fuzzy match: '{requested}' -> '{chosen}' "
                 f"(score {score:.2f})"
@@ -567,18 +762,18 @@ def _write_single_sheet_failure_log(
         return None
     try:
         from pathlib import Path as _Path
+        from utils.sanitize import sanitize as _sanitize_for_log
 
         path = _Path(output_dir) / f"notes_{template_type.value}_failures.json"
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Peer-review C2: attempt errors echo LLM/provider strings —
+        # sanitise before writing so a terminal cat is safe.
+        payload = _sanitize_for_log({
+            "template": template_type.value,
+            "attempts": attempts,
+        })
         path.write_text(
-            json.dumps(
-                {
-                    "template": template_type.value,
-                    "attempts": attempts,
-                },
-                indent=2,
-                ensure_ascii=False,
-            ),
+            json.dumps(payload, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
         return str(path)
@@ -605,15 +800,27 @@ async def _run_list_of_notes_fanout(
     agent_id: str = "notes:LIST_OF_NOTES",
     session_id: Optional[str] = None,
     page_hints: Optional[List[int]] = None,
+    page_offset: int = 0,
+    launch_delay: float = 0.0,
 ) -> NotesAgentResult:
     """Drive the Sheet-12 sub-agent fan-out and write the final workbook.
 
     Returns a NotesAgentResult shaped the same as single-agent runs so the
     coordinator result list is homogeneous and the merger doesn't care.
+
+    ``launch_delay`` staggers this template's start relative to the other
+    notes templates. The sub-agents fanned out *inside* the subcoordinator
+    have their own launch stagger applied there (see
+    ``run_listofnotes_subcoordinator``).
     """
-    from notes.listofnotes_subcoordinator import run_listofnotes_subcoordinator
+    # Stagger start relative to sibling notes templates so the first
+    # request doesn't land simultaneously with 4 other sheets. See the
+    # single-agent runner for the same pattern.
+    if launch_delay > 0:
+        await asyncio.sleep(launch_delay)
     from notes.writer import write_notes_workbook
     from notes_types import NOTES_REGISTRY, notes_template_path
+    from pricing import resolve_notes_parallel
 
     async def _emit(event_type: str, data: dict) -> None:
         if event_queue is None:
@@ -653,11 +860,18 @@ async def _run_list_of_notes_fanout(
         # Fail the sheet explicitly so the run shows "Notes-12 failed:
         # empty inventory" in History instead of a silent green tick.
         if not inventory:
-            err = (
-                "Notes-12 has no inventory to fan out. Scout's notes-inventory "
-                "builder found no note headers (common on scanned PDFs where "
-                "PyMuPDF cannot extract text). Nothing to extract — "
-                "failing the sheet loudly instead of shipping an untouched template."
+            # Short one-sentence message for UI toasts + history. The full
+            # diagnostic (operator-facing: scanned-PDF hint, PyMuPDF context,
+            # the "fail loud" rationale) lands in the structured log
+            # identified by session_id — SSE/history doesn't have room for
+            # a wall of text (PR B.4).
+            err = "Notes-12: no inventory to fan out (scout found no note headers)"
+            logger.error(
+                "Notes-12 empty inventory for session=%s: scout's deterministic "
+                "PyMuPDF-regex pass found no note headers (common on scanned "
+                "PDFs where PyMuPDF cannot extract text). Failing the sheet "
+                "loudly instead of shipping an untouched template.",
+                session_id,
             )
             await _emit("error", {"message": err})
             await _emit("complete", {"success": False, "error": err})
@@ -666,6 +880,19 @@ async def _run_list_of_notes_fanout(
                 status="failed",
                 error=err,
             )
+
+        # Model-aware fan-out width. Cheap/fast models (gpt-5.4-mini,
+        # gemini-*-flash-*, haiku) saturate the provider's TPM bucket
+        # faster than heavy/slow models and hit HTTP 429 at parallel=5;
+        # the registry in config/models.json drops them to 2. Unknown
+        # models fall back to the previous hardcoded default (5) so
+        # operators can drop in new model ids without a registry edit.
+        parallel = resolve_notes_parallel(model)
+        logger.info(
+            "Notes-12 fan-out: %d-way (model=%s)",
+            parallel,
+            getattr(model, "model_name", str(model)),
+        )
 
         sub_result = await run_listofnotes_subcoordinator(
             pdf_path=pdf_path,
@@ -676,7 +903,9 @@ async def _run_list_of_notes_fanout(
             event_queue=event_queue,
             session_id=session_id,
             agent_id=agent_id,
+            parallel=parallel,
             page_hints=page_hints,
+            page_offset=page_offset,
         )
 
         # Total-failure guard: an empty aggregated payload list coming out
@@ -685,7 +914,79 @@ async def _run_list_of_notes_fanout(
         # check the sheet would silently report succeeded with an untouched
         # xlsx. Partial coverage (some payloads present) remains a success
         # per PLAN §4 Checkpoint C.
+        #
+        # Coverage-receipt carve-out (peer-review [HIGH]): if every
+        # succeeded sub-agent submitted a valid receipt that fully
+        # accounts for its batch — and every entry is `skipped` — then
+        # zero payloads is a legitimate outcome ("everything in this
+        # sheet belongs elsewhere"), not a failure. This mirrors the
+        # same carve-out at the sub-agent layer
+        # (_SubAgentNoWriteError). Failure is still the default for
+        # any sub-agent missing a receipt, for any uncovered notes,
+        # or for a hard sub-agent failure.
         if not sub_result.aggregated_payloads:
+            def _fully_accounts_for_skips(sub_results: list) -> bool:
+                """True iff every succeeded sub-agent has a receipt
+                covering its full batch with ONLY skipped entries.
+                Sub-agents with status='failed' are not receipt-
+                carrying and break the carve-out — partial coverage
+                is still a failure."""
+                if not sub_results:
+                    return False
+                for r in sub_results:
+                    if r.status != "succeeded":
+                        return False
+                    if r.coverage is None:
+                        return False
+                    batch_nums = {e.note_num for e in r.batch}
+                    receipt_nums = {e.note_num for e in r.coverage.entries}
+                    if receipt_nums != batch_nums:
+                        return False
+                    if not all(
+                        e.action == "skipped" for e in r.coverage.entries
+                    ):
+                        return False
+                return True
+
+            if _fully_accounts_for_skips(sub_result.sub_agent_results):
+                # Deliberately blank sheet — every sub-agent submitted a
+                # receipt saying "this note belongs elsewhere". The writer
+                # treats `rows_written == 0` as failure, so we don't call
+                # it. We still need a workbook on disk for the merger —
+                # peer-review [HIGH]: without it, a user-requested
+                # Notes-Listofnotes silently disappears from the final
+                # filled.xlsx. Copy the template verbatim so the merged
+                # workbook contains an untouched Sheet-12 page. Warnings
+                # from the coordinator's warning builder will still carry
+                # every "Note N skipped: ..." line.
+                template = str(notes_template_path(
+                    NotesTemplateType.LIST_OF_NOTES, level=filing_level,
+                ))
+                output_path = str(
+                    Path(output_dir)
+                    / f"NOTES_{NotesTemplateType.LIST_OF_NOTES.value}_filled.xlsx"
+                )
+                await asyncio.to_thread(shutil.copy, template, output_path)
+
+                warnings_only = _build_write_warnings(
+                    _EmptyWriteResult(), sub_result,
+                )
+                logger.info(
+                    "Notes-12: empty aggregate covered by skip receipts "
+                    "— treating as success with %d warning(s)",
+                    len(warnings_only),
+                )
+                await _emit("complete", {
+                    "success": True,
+                    "warnings": warnings_only,
+                })
+                return NotesAgentResult(
+                    template_type=NotesTemplateType.LIST_OF_NOTES,
+                    status="succeeded",
+                    workbook_path=output_path,
+                    warnings=warnings_only,
+                )
+
             failed = [r for r in sub_result.sub_agent_results if r.status == "failed"]
             errors_joined = "; ".join(
                 f"{r.sub_agent_id}: {r.error or 'unknown error'}" for r in failed
@@ -724,6 +1025,41 @@ async def _run_list_of_notes_fanout(
                 status="failed",
                 error=err,
             )
+
+        # Phase 5.1: write the parent Sheet-12 cost report by summing each
+        # sub-agent's captured usage. Without this the operator has no
+        # idea what Sheet-12 cost without hand-aggregating SSE events
+        # from the DB. Best-effort: a write failure here must not fail
+        # the sheet, so we log and continue.
+        try:
+            total_prompt = sum(r.prompt_tokens for r in sub_result.sub_agent_results)
+            total_completion = sum(r.completion_tokens for r in sub_result.sub_agent_results)
+            cost = estimate_cost(total_prompt, total_completion, 0, model)
+            report_lines = [
+                f"Sheet 12 (List of Notes) — aggregate across {len(sub_result.sub_agent_results)} sub-agent(s)",
+                "─" * 80,
+                f"{'Sub-agent':<30} {'Status':<10} {'Prompt':>10} {'Complete':>10}",
+                "─" * 80,
+            ]
+            for r in sub_result.sub_agent_results:
+                report_lines.append(
+                    f"{r.sub_agent_id:<30} {r.status:<10} "
+                    f"{r.prompt_tokens:>10} {r.completion_tokens:>10}"
+                )
+            report_lines.append("─" * 80)
+            report_lines.append(
+                f"{'Total':<30} {'':<10} {total_prompt:>10} {total_completion:>10}"
+            )
+            report_lines.append("")
+            report_lines.append(f"Estimated cost: ${cost:.4f}")
+            report_path = Path(output_dir) / (
+                f"NOTES_{NotesTemplateType.LIST_OF_NOTES.value}_cost_report.txt"
+            )
+            await asyncio.to_thread(
+                report_path.write_text, "\n".join(report_lines), encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("Notes-12 cost report write skipped", exc_info=True)
 
         # Peer-review finding: writer may succeed with `success=True`
         # while also emitting skip errors (e.g. unresolvable labels) and
@@ -783,10 +1119,20 @@ async def _run_list_of_notes_fanout(
         )
 
 
-# Below this similarity score, fuzzy matches become warnings. Mirrors
-# notes.writer._BORDERLINE_FUZZY_SCORE but is duplicated here to avoid a
-# cross-module import just for a constant.
-_BORDERLINE_FUZZY = 0.85
+class _EmptyWriteResult:
+    """Stand-in for a real `NotesWriteResult` on the all-skipped success
+    path where no write was performed.
+
+    `_build_write_warnings` reads `errors` and `fuzzy_matches` off the
+    write result. On the all-skipped carve-out we never call the writer
+    (zero-row writes return success=False which would otherwise tip the
+    sheet back into failure), so the warnings come exclusively from the
+    sub-agent receipts. This class supplies the fields the warning
+    builder needs without pulling in the heavier dataclass.
+    """
+
+    errors: list[str] = []
+    fuzzy_matches: list[tuple[str, str, float]] = []
 
 
 def _build_write_warnings(write_result: Any, sub_result: Any) -> List[str]:
@@ -800,7 +1146,7 @@ def _build_write_warnings(write_result: Any, sub_result: Any) -> List[str]:
     for err in write_result.errors:
         warnings.append(f"writer: {err}")
     for requested, chosen, score in write_result.fuzzy_matches:
-        if score < _BORDERLINE_FUZZY:
+        if score < BORDERLINE_FUZZY_SCORE:
             warnings.append(
                 f"borderline fuzzy match: '{requested}' -> '{chosen}' "
                 f"(score {score:.2f})"
@@ -811,4 +1157,29 @@ def _build_write_warnings(write_result: Any, sub_result: Any) -> List[str]:
             f"{len(failed_subs)} of {len(sub_result.sub_agent_results)} "
             f"sub-agent(s) failed — partial coverage only"
         )
+    # Slice 6: surface coverage-receipt outcomes through the same warning
+    # channel. Skipped entries are one line per skip so operators can
+    # judge whether each skip was legitimate (cross-sheet) or a missed
+    # disclosure. Uncovered notes (no receipt submitted) are one line
+    # per note — more explicit than a collapsed "N notes uncovered"
+    # summary because the user needs to know WHICH notes to manually
+    # re-check.
+    for sub in sub_result.sub_agent_results:
+        if sub.coverage is None:
+            # No receipt — every batch note is uncovered. Only emit a
+            # warning for sub-agents that actually succeeded at writing
+            # but skipped the handshake; for hard failures the existing
+            # "N of M sub-agent(s) failed" line already tells the story.
+            if sub.status == "succeeded":
+                for entry in sub.batch:
+                    warnings.append(
+                        f"Note {entry.note_num} uncovered — sub-agent did "
+                        f"not submit a coverage receipt."
+                    )
+            continue
+        for entry in sub.coverage.entries:
+            if entry.action == "skipped":
+                warnings.append(
+                    f"Note {entry.note_num} skipped: {entry.reason}"
+                )
     return warnings

@@ -217,6 +217,36 @@ export function agentReducer(agent: AgentState, event: SSEEvent): AgentState {
     }
   }
 
+  // Phase 5.2 / peer-review [M1]: Sheet-12 sub-agents emit `started`
+  // status events with `batch_note_range` + `batch_page_range`. We
+  // accumulate them on AgentState so the Notes-12 tab label can render
+  // a live summary ("Notes 1-15, pp 18-37") instead of a bare title.
+  // The double-cast through `unknown` is because StatusData is a
+  // closed shape in types.ts — the extra fields ride on the SSE event
+  // payload without being declared there.
+  if (event.event === "status") {
+    const d = event.data as unknown as Record<string, unknown>;
+    if (d.phase === "started" && Array.isArray(d.batch_note_range) && Array.isArray(d.batch_page_range)) {
+      const noteRange = d.batch_note_range as number[];
+      const pageRange = d.batch_page_range as number[];
+      const subId = typeof d.sub_agent_id === "string" ? d.sub_agent_id : "unknown";
+      if (noteRange.length === 2 && pageRange.length === 2) {
+        const existing = agent.subAgentBatchRanges ?? [];
+        // Replace any prior entry for the same sub_agent_id (retry-safe)
+        // and append new ones in first-seen order.
+        const filtered = existing.filter(e => e.subAgentId !== subId);
+        updates.subAgentBatchRanges = [
+          ...filtered,
+          {
+            subAgentId: subId,
+            notes: [noteRange[0], noteRange[1]],
+            pages: [pageRange[0], pageRange[1]],
+          },
+        ];
+      }
+    }
+  }
+
   // Agent-specific event handling
   switch (event.event) {
     case "token_update":
@@ -295,6 +325,28 @@ export function notesTabLabel(identifier: string): string {
   if (key.startsWith("notes:")) key = key.slice("notes:".length);
   else if (key.startsWith("NOTES_")) key = key.slice("NOTES_".length);
   return NOTES_TAB_LABELS[key] ?? `Notes: ${key}`;
+}
+
+
+/**
+ * Phase 5.2 / peer-review [M1]: compose a tab-level sub-title for an
+ * agent that carries sub-agent batch metadata (currently only
+ * Sheet-12's LIST_OF_NOTES fan-out). Returns null when there are no
+ * sub-agents recorded — the caller renders only the main label.
+ *
+ * Output is terse by design: tabs are narrow. A 5-way fan-out over
+ * notes 1-15 on pp 18-37 renders as "Notes 1-15, pp 18-37".
+ */
+export function agentSubAgentSummary(agent: AgentState): string | null {
+  const ranges = agent.subAgentBatchRanges ?? [];
+  if (ranges.length === 0) return null;
+  const minNote = Math.min(...ranges.map(r => r.notes[0]));
+  const maxNote = Math.max(...ranges.map(r => r.notes[1]));
+  const minPage = Math.min(...ranges.map(r => r.pages[0]));
+  const maxPage = Math.max(...ranges.map(r => r.pages[1]));
+  const noteSpan = minNote === maxNote ? `Note ${minNote}` : `Notes ${minNote}-${maxNote}`;
+  const pageSpan = minPage === maxPage ? `p ${minPage}` : `pp ${minPage}-${maxPage}`;
+  return `${noteSpan}, ${pageSpan}`;
 }
 
 /** Derive the display label for a newly created agent slot. */

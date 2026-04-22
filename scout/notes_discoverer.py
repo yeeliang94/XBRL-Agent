@@ -132,10 +132,19 @@ class NoteInventoryEntry:
     """One note as discovered by walking the notes section of a PDF.
 
     `page_range` is inclusive on both ends (first-page, last-page).
+
+    ``suggested_row_label`` (Phase 6.2) is an optional hint scout MAY
+    populate with the Sheet-12 template row label this note most likely
+    matches (e.g. note title "Cash and bank balances" → "Disclosure of
+    cash and cash equivalents"). The LLM still makes the final match
+    decision — the hint is purely soft guidance. Left as None by the
+    current deterministic PyMuPDF-regex discoverer; future phases may
+    populate it without changing the schema.
     """
     note_num: int
     title: str
     page_range: tuple[int, int]
+    suggested_row_label: Optional[str] = None
 
 
 # Numbered heading: "4. PROPERTY, PLANT AND EQUIPMENT" or
@@ -282,6 +291,7 @@ def build_notes_inventory(
     *,
     notes_end_page: Optional[int] = None,
     vision_model: Optional[object] = None,
+    force_vision: bool = False,
 ) -> list[NoteInventoryEntry]:
     """Walk the notes section of a PDF and return a structured inventory.
 
@@ -314,18 +324,33 @@ def build_notes_inventory(
         vision_model: optional PydanticAI Model. Typed as `object` here
             to avoid a hard import cycle on pydantic_ai when this module
             is used from contexts that don't ship it.
+        force_vision: operator escape hatch for scanned PDFs whose PyMuPDF
+            output is not empty but is garbage (rare) — or simply to skip
+            the regex pass when the caller knows the PDF has no usable
+            text layer. Requires ``vision_model``; without it we log and
+            fall back to the regex pass so a misconfigured run still
+            returns the same result as today rather than silently empty.
     """
     vision_range, pages = _resolve_vision_range(
         pdf_path, notes_start_page, pdf_length, notes_end_page,
     )
 
-    inventory = extract_inventory_from_pages(pages)
+    if force_vision and vision_model is None:
+        logger.warning(
+            "force_vision=True but no vision_model supplied — falling back "
+            "to the regex pass for %s. Pass vision_model to actually skip regex.",
+            pdf_path,
+        )
+
+    use_vision_directly = force_vision and vision_model is not None and vision_range is not None
+    inventory = [] if use_vision_directly else extract_inventory_from_pages(pages)
     if inventory or vision_model is None or vision_range is None:
         return inventory
 
-    # Fast path found nothing and the caller supplied a vision model —
-    # fall back to the PNG-rendered vision pass. Imported lazily so the
-    # base module doesn't pull in pydantic_ai for pure text-PDF callers.
+    # Fast path found nothing (or was skipped) and the caller supplied a
+    # vision model — fall back to the PNG-rendered vision pass. Imported
+    # lazily so the base module doesn't pull in pydantic_ai for pure
+    # text-PDF callers.
     from scout.notes_discoverer_vision import _vision_inventory
     import asyncio
 
@@ -359,6 +384,7 @@ async def build_notes_inventory_async(
     *,
     notes_end_page: Optional[int] = None,
     vision_model: Optional[object] = None,
+    force_vision: bool = False,
 ) -> list[NoteInventoryEntry]:
     """Async sibling of `build_notes_inventory` for use from inside an
     event loop (e.g. PydanticAI tool callbacks, pytest-asyncio tests).
@@ -366,13 +392,21 @@ async def build_notes_inventory_async(
     Same contract: fast PyMuPDF path first, vision fallback only when
     the fast path is empty and `vision_model` is supplied. See the
     sync sibling's docstring for argument semantics (including
-    ``notes_end_page``).
+    ``notes_end_page`` and ``force_vision``).
     """
     vision_range, pages = _resolve_vision_range(
         pdf_path, notes_start_page, pdf_length, notes_end_page,
     )
 
-    inventory = extract_inventory_from_pages(pages)
+    if force_vision and vision_model is None:
+        logger.warning(
+            "force_vision=True but no vision_model supplied — falling back "
+            "to the regex pass for %s. Pass vision_model to actually skip regex.",
+            pdf_path,
+        )
+
+    use_vision_directly = force_vision and vision_model is not None and vision_range is not None
+    inventory = [] if use_vision_directly else extract_inventory_from_pages(pages)
     if inventory or vision_model is None or vision_range is None:
         return inventory
 

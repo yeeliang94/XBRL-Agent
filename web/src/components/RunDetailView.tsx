@@ -1,12 +1,19 @@
+import { useMemo, useState } from "react";
 import { pwc } from "../lib/theme";
 import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
 import { ValidatorTab } from "./ValidatorTab";
 import { AgentTimeline } from "./AgentTimeline";
-import { buildToolTimeline } from "../lib/buildToolTimeline";
+import { NotesSubTabBar } from "./NotesSubTabBar";
+import {
+  buildToolTimeline,
+  filterEventsBySubAgent,
+  deriveSubAgentRangesFromEvents,
+} from "../lib/buildToolTimeline";
 import { displayModelId } from "../lib/modelId";
 import { notesTabLabel } from "../lib/appReducer";
+import { isNotes12StatementType } from "../lib/notes";
 
 // ---------------------------------------------------------------------------
 // RunDetailView — hydrated detail panel for a single past run.
@@ -122,15 +129,41 @@ function crossChecksForValidator(
 // total tokens; body is an AgentTimeline fed by the persisted events so
 // past runs replay the same ToolCallCard rows as a live run.
 function AgentCard({ agent }: { agent: RunAgentJson }) {
-  // buildToolTimeline is pure and cheap relative to the event list sizes
-  // we ship (~50-200 events per agent), so a per-render call is fine.
-  const toolTimeline = buildToolTimeline(agent.events);
+  // Sheet-12 sub-tab selection — mirrors the live ExtractPage path so
+  // replay looks identical to live once the operator picks a sub. null =
+  // "All" (every sub-agent merged, same as pre-sub-tab behaviour).
+  const [notes12SubId, setNotes12SubId] = useState<string | null>(null);
+
   // Notes agents are persisted with statement_type = "NOTES_<TEMPLATE>"
   // — render with the same friendly chip the live UI uses so history
   // doesn't fall back to the raw DB enum value (peer-review MEDIUM).
   const displayName = agent.statement_type.startsWith("NOTES_")
     ? notesTabLabel(agent.statement_type)
     : agent.statement_type;
+
+  // Notes-12 branch: derive the sub-agent list from the persisted events
+  // (live path gets this for free from the reducer). Only render the
+  // sub-tab bar when at least one sub-agent was recorded. Memoised so
+  // the O(N) walk doesn't re-run on unrelated parent rerenders (e.g.
+  // paging through the history list with this card still mounted).
+  const isNotes12 = isNotes12StatementType(agent.statement_type);
+  const subAgents = useMemo(
+    () => (isNotes12 ? deriveSubAgentRangesFromEvents(agent.events) : []),
+    [isNotes12, agent.events],
+  );
+  const showSubTabs = subAgents.length > 0;
+
+  // Filter + rebuild when a specific sub is selected, otherwise use the
+  // full event list. Memoised on the same keys as the filter so switching
+  // subs is the only trigger that rebuilds the timeline.
+  const { events, toolTimeline } = useMemo(() => {
+    if (showSubTabs && notes12SubId !== null) {
+      const filtered = filterEventsBySubAgent(agent.events, notes12SubId);
+      return { events: filtered, toolTimeline: buildToolTimeline(filtered) };
+    }
+    return { events: agent.events, toolTimeline: buildToolTimeline(agent.events) };
+  }, [agent.events, notes12SubId, showSubTabs]);
+
   return (
     <article data-testid="run-detail-agent" style={styles.agentCard}>
       <header style={styles.agentHeader}>
@@ -150,8 +183,15 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
           </span>
         </div>
       </header>
+      {showSubTabs && (
+        <NotesSubTabBar
+          subAgents={subAgents}
+          activeSubId={notes12SubId}
+          onSelect={setNotes12SubId}
+        />
+      )}
       <AgentTimeline
-        events={agent.events}
+        events={events}
         toolTimeline={toolTimeline}
         isRunning={false}
       />

@@ -18,9 +18,19 @@ DEFAULT_TOLERANCE_RM = 1.0
 
 @dataclass
 class CrossCheckResult:
-    """Outcome of a single cross-check."""
+    """Outcome of a single cross-check.
+
+    ``status`` values:
+    - ``"passed"`` / ``"failed"`` — hard numeric pass/fail.
+    - ``"pending"`` — a required statement is missing; run again after
+      the missing sheet ships.
+    - ``"not_applicable"`` — the check's gating condition excludes this
+      run (e.g. wrong variant).
+    - ``"warning"`` — advisory signal (Phase 6.1 notes-consistency
+      check). Never affects the overall run status; surfaces in the
+      Validator tab so operators can eyeball the disagreement.
+    """
     name: str
-    # "passed" | "failed" | "not_applicable" | "pending"
     status: str
     expected: Optional[float] = None
     actual: Optional[float] = None

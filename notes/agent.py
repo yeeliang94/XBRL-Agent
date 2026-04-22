@@ -18,8 +18,14 @@ from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
+from notes.coverage import CoverageReceipt
 from notes.payload import NotesPayload
-from notes.writer import evidence_col_letter, write_notes_workbook
+from notes.writer import (
+    _build_label_index,
+    evidence_col_letter,
+    resolve_payload_labels,
+    write_notes_workbook,
+)
 from notes_types import (
     NOTES_REGISTRY,
     NotesTemplateType,
@@ -27,6 +33,7 @@ from notes_types import (
 )
 from scout.notes_discoverer import NoteInventoryEntry
 from token_tracker import TokenReport
+from tools import page_cache
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from tools.template_reader import TemplateField, read_template as _read_template_impl
 
@@ -76,6 +83,36 @@ def _render_inventory_preview(inventory: list[NoteInventoryEntry]) -> str:
         pages = f"p.{start}" if start == end else f"pp.{start}-{end}"
         lines.append(f"  Note {e.note_num}: {e.title} ({pages})")
     return "\n".join(lines)
+
+
+def _render_page_offset_block(page_offset: int) -> Optional[str]:
+    """Render the PDF↔printed-folio offset hint.
+
+    Scout measures how the TOC-stated page numbers differ from the
+    actual PDF page index (cover + TOC + blank pages push things). A
+    positive offset means **printed folio N = PDF page N − offset** —
+    equivalently, PDF page N = printed folio N + offset. Example:
+    offset = 2 means "PDF page 25 shows '23' in the footer". We surface
+    this so the agent can cross-walk between the two numbers — the
+    prompt text emitted below uses the folio-from-PDF form because
+    that's the direction a vision agent actually sees ("I viewed
+    PDF page 25, the footer reads 23"), preventing the Phase 1.1
+    citation drift from resurfacing under pressure.
+    """
+    # 0 is the happy case (no cover/TOC pages) and a negative offset is
+    # nonsensical — in both cases we skip the block to avoid adding
+    # noise to the prompt.
+    if page_offset <= 0:
+        return None
+    return (
+        "=== PDF vs PRINTED PAGE OFFSET ===\n"
+        f"Scout detected a TOC-page-number offset of +{page_offset}: "
+        f"the printed folio at the bottom of a page image is PDF page "
+        f"MINUS {page_offset}. Example: if you viewed PDF page "
+        f"{page_offset + 10} and the footer reads '10', cite "
+        f"'Page {page_offset + 10}' in `evidence` — always the PDF "
+        f"page, never the folio."
+    )
 
 
 def _render_page_hints_block(page_hints: list[int]) -> Optional[str]:
@@ -130,6 +167,7 @@ def render_notes_prompt(
     filing_level: str,
     inventory: list[NoteInventoryEntry],
     page_hints: Optional[list[int]] = None,
+    page_offset: int = 0,
 ) -> str:
     """Compose the system prompt for a notes agent.
 
@@ -137,6 +175,11 @@ def render_notes_prompt(
     scout already identified as note-bearing. When the inventory is empty
     (scanned PDFs), these hints are the agent's only signal for where to
     start looking — without them it falls back to scanning page 1 onward.
+
+    ``page_offset`` is the scout-measured gap between the printed folio
+    and the PDF page index. When positive, the prompt includes a block
+    telling the agent how to cross-walk between the two without citing
+    the wrong number in `evidence`.
     """
     try:
         base = _load_prompt("_notes_base.md")
@@ -171,6 +214,12 @@ def render_notes_prompt(
     hints_block = _render_page_hints_block(page_hints or [])
     if hints_block is not None:
         parts.append(hints_block)
+    # Offset block is emitted after hints but before the closing part
+    # because it's a rule (always applies) rather than a page list.
+    # Kept late in the prompt so it's close to the agent's output.
+    offset_block = _render_page_offset_block(page_offset)
+    if offset_block is not None:
+        parts.append(offset_block)
     return "\n\n".join(parts)
 
 
@@ -213,6 +262,25 @@ class NotesDeps:
     write_skip_errors: list[str] = field(default_factory=list)
     # (requested_label, chosen_label, score) — only entries where score < 1.0
     write_fuzzy_matches: list[tuple[str, str, float]] = field(default_factory=list)
+    # Lazily built on first sub-agent write — the label index is only
+    # needed in sub-agent mode (pre-validation before sink append) and
+    # opening the workbook every tool call would be wasteful. `Any` here
+    # rather than `list[_LabelEntry]` to avoid leaking a writer-internal
+    # type into the NotesDeps public signature.
+    label_index_cache: Optional[list] = None
+    # Sheet-12 coverage receipt handshake. Populated by
+    # `listofnotes_subcoordinator._invoke_sub_agent_once` alongside
+    # `payload_sink` — the sub-agent runner then hands the same list to
+    # the `submit_batch_coverage` tool (which is only registered when
+    # this is non-None). Kept on deps rather than passed as a prompt
+    # variable so the tool validator has the authoritative batch list
+    # for comparison against the agent's receipt.
+    batch_note_nums: Optional[list[int]] = None
+    # Set by `submit_batch_coverage` after the agent submits a valid
+    # receipt. The sub-coordinator reads it back after agent.iter()
+    # finishes to build the aggregated coverage warnings + side-log.
+    # Typed `Any` to avoid importing CoverageReceipt here (cycle).
+    coverage_receipt: Any = None
 
 
 def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
@@ -220,21 +288,294 @@ def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[i
     return page_num, images[0]
 
 
-async def _render_pages_async(pdf_path: str, pages: list[int]) -> dict[int, bytes]:
-    """Render pages concurrently without blocking the event loop.
+def _ensure_label_index(deps: "NotesDeps") -> list:
+    """Build (and cache) the template label index for sub-agent
+    pre-validation.
 
-    Uses `asyncio.to_thread` (default thread pool) instead of a per-call
-    `ThreadPoolExecutor`, which both avoids the per-call thread spin-up
-    and keeps the rendering truly non-blocking from the coordinator's
-    perspective.
+    Opens the workbook once per sub-agent lifetime — repeated write_notes
+    calls on the same sub-agent share the cached index rather than re-
+    reading openpyxl each turn. The writer's single-sheet path doesn't
+    need this cache because it loads the workbook at write time anyway.
     """
-    async def _one(pn: int) -> tuple[int, bytes]:
-        return await asyncio.to_thread(_render_single_page, pdf_path, pn)
+    if deps.label_index_cache is not None:
+        return deps.label_index_cache
+    import openpyxl
 
+    wb = openpyxl.load_workbook(deps.template_path)
+    try:
+        ws = wb[deps.sheet_name]
+        deps.label_index_cache = _build_label_index(ws)
+    finally:
+        wb.close()
+    return deps.label_index_cache
+
+
+def _sub_agent_sink_write(
+    deps: "NotesDeps",
+    payloads: list[NotesPayload],
+    parse_errors: list[str],
+) -> str:
+    """Sub-agent branch of `write_notes`: pre-validate labels, then sink.
+
+    Why this exists as a module-level helper rather than a closure inside
+    `create_notes_agent`: it has branching logic worth testing directly
+    (accepted vs rejected vs mixed), and building a PydanticAI RunContext
+    in a unit test is more friction than it's worth.
+
+    Payloads whose labels fail to resolve (below `_FUZZY_THRESHOLD`) are
+    NOT appended to the sink — the final write pass would have rejected
+    them anyway, but by that point the sub-agent has exited and cannot
+    retry. Rejecting up-front turns a silent drop into a visible retry
+    opportunity.
+
+    The return message layers three independent concerns, each optional:
+      - accepted count (always)
+      - rejection summary with closest candidates (when any rejected)
+      - parse errors (when any upstream JSON parse failed)
+    """
+    entries = _ensure_label_index(deps)
+    accepted, rejections = resolve_payload_labels(entries, payloads)
+    deps.payload_sink.extend(accepted)
+
+    msg = f"Collected {len(accepted)} payload(s) for sub-coordinator."
+    if rejections:
+        # Show up to the 3 closest candidates per rejection so the agent
+        # can pick from real labels on its next turn. Longer hint lists
+        # noise up the context without adding signal.
+        lines = [f"Rejected {len(rejections)} payload(s) (label not in template):"]
+        for requested, candidates in rejections:
+            cand_str = ", ".join(
+                f"'{lbl}' ({score:.2f})" for lbl, score in candidates
+            )
+            lines.append(f"  - '{requested}' — closest: {cand_str}")
+        lines.append(
+            "Pick one of the listed labels verbatim on your next write_notes "
+            "call, or skip this note if none fit."
+        )
+        msg += "\n" + "\n".join(lines)
+    if parse_errors:
+        msg += "\nParse errors: " + "; ".join(parse_errors)
+    return msg
+
+
+def _submit_coverage_impl(deps: "NotesDeps", receipt_json: str) -> str:
+    """Implementation of the `submit_batch_coverage` tool.
+
+    Lives at module scope (rather than as a closure inside
+    `create_notes_agent`) for the same reason as `_sub_agent_sink_write`:
+    branching logic worth testing directly without constructing a
+    PydanticAI RunContext.
+
+    Two-stage contract:
+    1. Parse the JSON receipt into a CoverageReceipt. Malformed JSON or
+       shape errors come back as a single-line error string the agent
+       reads and fixes on its next turn.
+    2. Validate the receipt against the actual batch (deps.batch_note_nums)
+       and the labels landed in deps.payload_sink. Any structural
+       mismatch — missing note, extra note, claimed row with no payload,
+       duplicate note_num — is returned as an error string so the agent
+       retries. Valid receipts are stashed on deps.coverage_receipt for
+       the sub-coordinator to read back after agent.iter() finishes.
+
+    The tool must NEVER leave a partially-valid receipt on deps — the
+    sub-coordinator reads `deps.coverage_receipt is None` as "agent
+    didn't complete the handshake" and the retry/failure path depends
+    on that signal being accurate.
+    """
+    if deps.batch_note_nums is None:
+        # Defence in depth. The factory only registers this tool when
+        # batch_note_nums is set, but if someone wires the tool by hand
+        # (or a future refactor blows through that guard) we want a
+        # clear configuration error rather than a confusing AttributeError
+        # further down.
+        return (
+            "submit_batch_coverage is only available in sub-agent mode "
+            "(deps.batch_note_nums not set). This tool should not be "
+            "called from a non-Sheet-12 agent."
+        )
+
+    # Peer-review S9: cap input size before json.loads to prevent a
+    # runaway model emitting a multi-MB receipt that blows the worker
+    # process memory. 256 KB is generous — even a 138-row Sheet-12
+    # batch with full row_labels per entry rarely exceeds 4 KB.
+    _MAX_RECEIPT_BYTES = 256 * 1024
+    if len(receipt_json.encode("utf-8")) > _MAX_RECEIPT_BYTES:
+        return (
+            f"Coverage receipt rejected: payload exceeds "
+            f"{_MAX_RECEIPT_BYTES // 1024} KB. A normal receipt is "
+            f"a JSON list of one short object per batch note — strip "
+            f"long content and resubmit."
+        )
+
+    try:
+        receipt = CoverageReceipt.from_json(receipt_json)
+    except (json.JSONDecodeError, ValueError) as e:
+        # JSON parse errors and shape errors both surface as
+        # human-readable strings — the agent fixes whichever applies.
+        return f"Invalid receipt JSON: {e}"
+    except Exception as e:  # noqa: BLE001
+        # Belt-and-braces — a corrupt input shouldn't crash the tool
+        # and take the whole run down.
+        return f"Could not parse receipt: {e}"
+
+    # Build per-note label index (peer-review MEDIUM #1): instead of
+    # a flat set "labels seen anywhere", maintain a `note_num ->
+    # {labels}` map so the validator can catch cross-note attribution
+    # confusion (receipt claims Note 2 wrote a row only Note 1
+    # actually wrote). NotesPayload.note_num is populated by the
+    # write_notes sub-agent branch when the agent supplies it; payloads
+    # without note_num degrade gracefully into a None-key bucket so
+    # the validator at least knows they exist (in the all-None case
+    # we fall back to the old flat-set semantics — see below).
+    sink_by_note: dict[int, set[str]] = {}
+    untagged_labels: set[str] = set()
+    if deps.payload_sink is not None:
+        for p in deps.payload_sink:
+            if p.note_num is None:
+                untagged_labels.add(p.chosen_row_label)
+            else:
+                sink_by_note.setdefault(p.note_num, set()).add(p.chosen_row_label)
+    # If every payload was tagged, validate per-note (preferred path).
+    # If any payloads are untagged we can't reliably attribute, so
+    # fall back to the looser flat-set check — better to keep the
+    # weaker check than refuse legitimate receipts because of an
+    # untagged payload from an older code path.
+    sink_labels: Any
+    if sink_by_note and not untagged_labels:
+        sink_labels = sink_by_note
+    else:
+        flat: set[str] = set(untagged_labels)
+        for labels in sink_by_note.values():
+            flat |= labels
+        sink_labels = flat
+
+    errors = receipt.validate(
+        batch_note_nums=deps.batch_note_nums,
+        written_row_labels=sink_labels,
+    )
+    if errors:
+        # Numbered bullet list so the model can address each error on
+        # its retry without losing track of which one it's fixing. Close
+        # with a one-line instruction so the retry target is explicit.
+        body = "\n".join(f"  {i + 1}. {e}" for i, e in enumerate(errors))
+        return (
+            "Coverage receipt rejected — please fix and resubmit:\n"
+            f"{body}\n"
+            "Resubmit the whole receipt (not just the fixes)."
+        )
+
+    deps.coverage_receipt = receipt
+    n_written = sum(1 for e in receipt.entries if e.action == "written")
+    n_skipped = sum(1 for e in receipt.entries if e.action == "skipped")
+    return (
+        f"Coverage receipt accepted: {n_written} written, "
+        f"{n_skipped} skipped."
+    )
+
+
+# Render DPI used for notes-agent vision calls. Pinned here so the cache
+# key (which includes DPI) stays aligned with the actual render. If this
+# changes, cache hits will go to zero until the new DPI warms up.
+_NOTES_RENDER_DPI = 200
+
+
+# In-flight render coalescing: 5 parallel sub-agents commonly race on
+# the same page; without this, every racer sees the cache miss, renders
+# independently, and pays the upload-to-vision cost. The Future map
+# means exactly one render per (path, page); secondary requests await
+# the same Future. The try/finally + fut.exception() retrieval is the
+# load-bearing contract — a crashed render propagates uniformly to
+# every awaiter, then the key is cleared so retries work cleanly.
+_inflight: dict[tuple[str, int, int], "asyncio.Future[bytes]"] = {}
+
+
+def _reset_inflight_for_tests() -> None:
+    """Test-only helper: clear any leftover in-flight futures between
+    tests so an earlier test's failure can't bleed into the next one."""
+    _inflight.clear()
+
+
+async def _render_one_page_single_flight(
+    pdf_path: str, page_num: int, dpi: int,
+) -> bytes:
+    """Cache-aware render with in-flight coalescing.
+
+    Order of operations:
+    1. Fast path: byte cache hit → return.
+    2. Check in-flight map. If another coroutine is already rendering
+       this same key, await its Future (we both get the same bytes,
+       only one upload-to-vision cost is paid).
+    3. Otherwise: install our Future, render in a worker thread,
+       populate the cache on success, set the Future result, remove
+       the in-flight entry.
+
+    Failures propagate via ``fut.set_exception`` so all awaiters raise
+    identically. The in-flight entry is always removed in ``finally``.
+    """
+    cached = page_cache.get(pdf_path, page_num, dpi)
+    if cached is not None:
+        return cached
+
+    key = (pdf_path, page_num, dpi)
+    inflight = _inflight.get(key)
+    if inflight is not None:
+        # Someone else is already rendering this page — ride along.
+        return await inflight
+
+    # Use get_running_loop (not get_event_loop) — the call sites are
+    # always inside a coroutine, and get_event_loop is deprecated in
+    # 3.10+ for the no-running-loop case (and warns on 3.9).
+    fut: "asyncio.Future[bytes]" = asyncio.get_running_loop().create_future()
+    _inflight[key] = fut
+    try:
+        _, png = await asyncio.to_thread(_render_single_page, pdf_path, page_num, dpi)
+        page_cache.put(pdf_path, page_num, dpi, png)
+        # Only set the result once the cache is populated, so any
+        # awaiter that wakes up and subsequently calls back through
+        # `_render_one_page_single_flight` gets a straight cache hit
+        # rather than falling into the in-flight path a second time.
+        fut.set_result(png)
+        return png
+    except Exception as e:  # noqa: BLE001 — propagate to every awaiter
+        fut.set_exception(e)
+        # Peer-review MEDIUM: when there are no secondary waiters (the
+        # common case — batches rarely overlap at page granularity),
+        # the Future is GC'd with an unretrieved exception and asyncio
+        # logs "Future exception was never retrieved", which drowns
+        # real errors in the log. Reading `.exception()` here marks
+        # the exception as retrieved. Secondary waiters that went down
+        # the `await inflight` branch above consume the exception via
+        # their own `await`, so this doesn't hide anything from them.
+        fut.exception()
+        raise
+    finally:
+        # Always remove so the next request can retry cleanly after a
+        # transient render error.
+        _inflight.pop(key, None)
+
+
+async def _render_pages_async(pdf_path: str, pages: list[int]) -> dict[int, bytes]:
+    """Render pages concurrently with shared cache + single-flight.
+
+    Uses `asyncio.to_thread` under the hood via
+    `_render_one_page_single_flight`, which keeps each page render off
+    the event loop. Duplicate page numbers within the request list are
+    deduplicated up front — the caller may pass [32, 32, 33] and we'll
+    still only schedule two futures.
+    """
     rendered: dict[int, bytes] = {}
-    for coro in asyncio.as_completed([_one(pn) for pn in pages]):
+    unique_pages = list(dict.fromkeys(pages))  # preserve order, drop dupes
+    if not unique_pages:
+        return rendered
+
+    async def _one(pn: int) -> tuple[int, bytes]:
+        png = await _render_one_page_single_flight(pdf_path, pn, _NOTES_RENDER_DPI)
+        return pn, png
+
+    for coro in asyncio.as_completed([_one(pn) for pn in unique_pages]):
         pn, png = await coro
         rendered[pn] = png
+
     return rendered
 
 
@@ -250,6 +591,8 @@ def create_notes_agent(
     model: Union[str, Model],
     output_dir: Optional[str] = None,
     page_hints: Optional[list[int]] = None,
+    page_offset: int = 0,
+    batch_note_nums: Optional[list[int]] = None,
 ) -> tuple[Agent[NotesDeps, str], NotesDeps]:
     """Create a notes agent for a single template type.
 
@@ -258,6 +601,19 @@ def create_notes_agent(
     the agent starts looking near the relevant pages instead of sweeping
     the whole document, which is especially important on scanned PDFs
     where scout's deterministic inventory builder yields nothing.
+
+    ``page_offset`` — scout's measured PDF↔printed-folio offset. Surfaced
+    to the agent in a dedicated prompt block so citations stay on the
+    PDF-page scale (Phase 4; complements the Phase 1.1 rule in the base
+    prompt).
+
+    ``batch_note_nums`` — Sheet-12 sub-agent mode only. When set, opts
+    the agent into the coverage-receipt handshake: the
+    `submit_batch_coverage` tool is registered and must be called before
+    the sub-agent finishes. Non-None also flips the read path for the
+    prompt so the sub-agent sees an enumerated list of its batch note
+    numbers (Slice 4). None keeps the factory producing the classic
+    single-sheet agent used by Sheets 10/11/13/14.
     """
     if output_dir is None:
         output_dir = str(Path(__file__).resolve().parent.parent / "output")
@@ -277,6 +633,11 @@ def create_notes_agent(
         filing_level=filing_level,
         inventory=list(inventory),
         filled_filename=filled_filename,
+        # Pre-populate the batch list here so the tool-registration
+        # check below sees it at factory time. The sub-coordinator also
+        # sets this field post-construction (belt-and-braces) so the
+        # deps object carries the same value either way.
+        batch_note_nums=list(batch_note_nums) if batch_note_nums is not None else None,
     )
 
     system_prompt = render_notes_prompt(
@@ -284,6 +645,7 @@ def create_notes_agent(
         filing_level=filing_level,
         inventory=inventory,
         page_hints=page_hints,
+        page_offset=page_offset,
     )
 
     # Pin temperature=1.0 (CLAUDE.md gotcha #5).
@@ -374,6 +736,14 @@ def create_notes_agent(
                 errors.append(f"Invalid payload (expected object, got {type(raw).__name__}): {raw!r}")
                 continue
             try:
+                # Sub-agent mode: each payload should carry note_num so
+                # the coverage validator can attribute writes to specific
+                # notes (peer-review MEDIUM #1). Optional in the raw
+                # JSON for backwards compat — if the agent omits it the
+                # coverage validator falls back to the looser flat-set
+                # check rather than failing the write here.
+                raw_note_num = raw.get("note_num")
+                note_num = int(raw_note_num) if raw_note_num is not None else None
                 payloads.append(NotesPayload(
                     chosen_row_label=raw["chosen_row_label"],
                     content=raw.get("content", "") or "",
@@ -381,6 +751,7 @@ def create_notes_agent(
                     source_pages=[int(p) for p in raw.get("source_pages", []) or []],
                     numeric_values=raw.get("numeric_values"),
                     sub_agent_id=ctx.deps.sub_agent_id,
+                    note_num=note_num,
                 ))
             except (KeyError, ValueError, TypeError, AttributeError) as e:
                 errors.append(f"Invalid payload {raw!r}: {e}")
@@ -389,12 +760,16 @@ def create_notes_agent(
         # workbook write. The sub-coordinator aggregates across sub-agents
         # (including row-112 unmatched concatenation) and does one final
         # write through notes.writer.write_notes_workbook.
+        #
+        # Labels are pre-validated against the template here rather than
+        # deferred to the final write pass: a bad label discovered at
+        # final-write time is unrecoverable (the sub-agent has exited),
+        # but a bad label rejected at tool-call time shows up in the
+        # return message and the agent retries with one of the surfaced
+        # candidates. Fixes the "silent force-insert" failure mode seen
+        # on real runs (e.g. "Disclosure of taxation" → "bonds").
         if ctx.deps.payload_sink is not None:
-            ctx.deps.payload_sink.extend(payloads)
-            msg = f"Collected {len(payloads)} payload(s) for sub-coordinator."
-            if errors:
-                msg += "\nParse errors: " + "; ".join(errors)
-            return msg
+            return _sub_agent_sink_write(ctx.deps, payloads, parse_errors=errors)
 
         output_path = str(Path(ctx.deps.output_dir) / ctx.deps.filled_filename)
         # Use already-filled workbook if we've written once in THIS run;
@@ -468,5 +843,34 @@ def create_notes_agent(
         )
         await asyncio.to_thread(report_path.write_text, report, encoding="utf-8")
         return f"Saved {json_path.name}\n{report}"
+
+    # Sheet-12 sub-agent mode only: the coverage-receipt tool. Registered
+    # conditionally so Sheets 10/11/13/14 don't expose it (their agents
+    # aren't given a batch to account for, and an optional tool would
+    # confuse the model into fabricating a receipt).
+    if deps.batch_note_nums is not None:
+        @agent.tool
+        async def submit_batch_coverage(
+            ctx: RunContext[NotesDeps], receipt_json: str,
+        ) -> str:
+            """Submit the end-of-batch coverage receipt.
+
+            Call this as your LAST tool call, after all `write_notes`
+            calls. Pass a JSON list where each entry is:
+
+              - {"note_num": <int>, "action": "written",
+                 "row_labels": ["<template label>", ...]}
+                for notes you wrote to the template.
+              - {"note_num": <int>, "action": "skipped",
+                 "reason": "<one sentence>"}
+                for notes that don't fit any Sheet-12 row or belong on
+                a different sheet.
+
+            Every note in your batch must appear exactly once. The tool
+            validates against the batch and your written payloads — if
+            it returns an error message, fix the listed issues and
+            resubmit the whole receipt.
+            """
+            return _submit_coverage_impl(ctx.deps, receipt_json)
 
     return agent, deps

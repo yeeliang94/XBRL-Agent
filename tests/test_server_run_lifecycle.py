@@ -272,6 +272,95 @@ def test_client_disconnect_still_finalizes_row(session_env):
 # 5. Happy path persists merged_workbook_path.
 # ---------------------------------------------------------------------------
 
+def test_notes_consistency_warnings_flow_through_sse_and_db(session_env):
+    """Phase 6.1 wire-up: warnings from `check_notes_consistency` land on
+    the cross_checks table with status='warning', ride through to the
+    `run_complete` SSE event, and do NOT flip overall run status to
+    failed/completed_with_errors.
+
+    The check itself is exhaustively unit-tested in
+    test_notes_consistency.py — here we're pinning the server plumbing,
+    not the check's logic.
+    """
+    from cross_checks.notes_consistency import ConsistencyWarning
+
+    client, session_id, out = session_env
+    db_path = out / "xbrl_agent.db"
+    merged_path = str(out / session_id / "filled.xlsx")
+
+    agent_results = [
+        AgentResult(
+            statement_type=StatementType.SOFP, variant="CuNonCu",
+            status="succeeded",
+            workbook_path=str(out / session_id / "SOFP_filled.xlsx"),
+        ),
+    ]
+    run_config = {
+        "statements": ["SOFP"],
+        "variants": {"SOFP": "CuNonCu"},
+        "models": {},
+        "infopack": None,
+        "use_scout": False,
+    }
+
+    fake_warning = ConsistencyWarning(
+        status="warning",
+        sheet_11_label="Description of accounting policy for income tax",
+        sheet_12_label="Disclosure of income tax expense",
+        sheet_11_evidence="Page 21, Note 2(g)",
+        sheet_12_evidence="Page 19, Note 10",
+        sheet_11_pages=[21],
+        sheet_12_pages=[19],
+        message="Sheet 11 cites [21]; Sheet 12 cites [19]. No overlap.",
+    )
+
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
+         patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=merged_path, sheets_copied=1)), \
+         patch("cross_checks.framework.run_all", return_value=[]), \
+         patch("cross_checks.notes_consistency.check_notes_consistency",
+               return_value=[fake_warning]):
+        resp = client.post(f"/api/run/{session_id}", json=run_config)
+
+    assert resp.status_code == 200
+
+    # SSE stream: each event is `event: NAME\ndata: {...}\n\n`. Parse the
+    # event/data pairs into a dict form that matches the in-stream shape.
+    events: list[dict] = []
+    current_event: str | None = None
+    for line in resp.text.splitlines():
+        if line.startswith("event: "):
+            current_event = line[len("event: "):].strip()
+        elif line.startswith("data: ") and current_event is not None:
+            events.append({"event": current_event, "data": json.loads(line[len("data: "):])})
+            current_event = None
+    run_complete = next(e for e in events if e["event"] == "run_complete")
+    checks = run_complete["data"]["cross_checks"]
+    warning_rows = [c for c in checks if c["status"] == "warning"]
+    assert len(warning_rows) == 1, f"expected 1 warning, got {warning_rows}"
+    assert "income tax" in warning_rows[0]["name"]
+    assert "No overlap" in warning_rows[0]["message"]
+
+    # run_complete success stays True — warnings do not fail a run.
+    assert run_complete["data"]["success"] is True
+
+    # DB mirrors the SSE shape: warning row persisted with the right status.
+    conn = _open_db(db_path)
+    try:
+        db_checks = conn.execute(
+            "SELECT check_name, status, message FROM cross_checks"
+        ).fetchall()
+        run_row = conn.execute("SELECT status FROM runs").fetchone()
+    finally:
+        conn.close()
+
+    warning_dbs = [c for c in db_checks if c["status"] == "warning"]
+    assert len(warning_dbs) == 1
+    assert "income tax" in warning_dbs[0]["check_name"]
+    # Overall run is still "completed" — advisory warnings don't degrade status.
+    assert run_row["status"] == "completed"
+
+
 def test_merged_workbook_path_persisted_on_success_path(session_env):
     client, session_id, out = session_env
     db_path = out / "xbrl_agent.db"
@@ -675,6 +764,68 @@ def test_upload_endpoint_writes_original_filename_sidecar(tmp_path, monkeypatch)
     assert sidecar.read_text(encoding="utf-8").strip() == "My Report 2024.pdf"
     # And the regular uploaded.pdf file still exists
     assert (out / session_id / "uploaded.pdf").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR B.6 — when the notes coordinator itself raises (not a per-sheet failure
+# but a coordinator-level crash), the final run_complete event must still
+# surface every requested template as "failed" so the UI / history doesn't
+# silently flip to success.
+# ---------------------------------------------------------------------------
+
+def test_notes_coordinator_crash_synthesizes_failed_result(session_env):
+    client, session_id, out = session_env
+
+    agent_results = [
+        AgentResult(
+            statement_type=StatementType.SOFP, variant="CuNonCu",
+            status="succeeded",
+            workbook_path=str(out / session_id / "SOFP_filled.xlsx"),
+        ),
+    ]
+
+    async def exploding_notes_coordinator(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
+        # A setup bug / unexpected asyncio error during the notes coordinator
+        # — NOT a per-template failure that would land in agent_results.
+        raise RuntimeError("notes coordinator blew up during setup")
+
+    run_config = {
+        "statements": ["SOFP"],
+        "variants": {"SOFP": "CuNonCu"},
+        "models": {},
+        "infopack": None,
+        "use_scout": False,
+        "notes_to_run": ["CORP_INFO", "ACC_POLICIES"],
+    }
+
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
+         patch("notes.coordinator.run_notes_extraction", side_effect=exploding_notes_coordinator), \
+         patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=1)), \
+         patch("cross_checks.framework.run_all", return_value=[]):
+        resp = client.post(f"/api/run/{session_id}", json=run_config)
+
+    assert resp.status_code == 200
+
+    # Parse the SSE response body and find the final run_complete event
+    # payload — identified by presence of the notes_failed key.
+    run_complete_data = None
+    for line in resp.text.splitlines():
+        if line.startswith("data:"):
+            try:
+                payload = json.loads(line[len("data:"):].strip())
+            except json.JSONDecodeError:
+                continue
+            if "notes_failed" in payload:
+                run_complete_data = payload
+
+    assert run_complete_data is not None, "no run_complete event observed"
+    assert run_complete_data["success"] is False, \
+        "notes coordinator crash must not silently succeed"
+    # Every requested template must appear in notes_failed — not just the
+    # first one, not empty. The synthesis at server.py builds one
+    # NotesAgentResult per requested template with status='failed'.
+    assert set(run_complete_data["notes_failed"]) == {"CORP_INFO", "ACC_POLICIES"}
 
 
 # ---------------------------------------------------------------------------

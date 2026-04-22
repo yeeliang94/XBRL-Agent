@@ -296,7 +296,8 @@ class TestRetryAndIsolation:
             attempts["n"] += 1
             if attempts["n"] == 1:
                 raise RuntimeError("transient")
-            return [_make_payload("Disclosure of revenue")]
+            # Phase 5 return shape: (payloads, prompt_tokens, completion_tokens).
+            return [_make_payload("Disclosure of revenue")], 0, 0, None
 
         with patch("notes.listofnotes_subcoordinator._invoke_sub_agent_once",
                    side_effect=fake_invoke):
@@ -327,7 +328,7 @@ class TestRetryAndIsolation:
         batch = _make_inventory(2)
 
         async def fake_invoke(**_):
-            return [_make_payload("Disclosure of revenue")]
+            return [_make_payload("Disclosure of revenue")], 0, 0, None
 
         with patch("notes.listofnotes_subcoordinator._invoke_sub_agent_once",
                    side_effect=fake_invoke):
@@ -585,7 +586,9 @@ class TestZeroPayloadRetryThenFail:
 
         async def always_empty(*, batch, **_: Any):
             call_count["n"] += 1
-            return []  # non-empty batch in, empty payloads out — the bug
+            # non-empty batch in, empty payloads out — the bug. Phase 5:
+            # the invoke signature returns a 3-tuple; usage is 0 here.
+            return [], 0, 0, None
 
         batch = _make_inventory(3)
         with patch(
@@ -626,7 +629,7 @@ class TestZeroPayloadRetryThenFail:
 
         async def empty_for_empty_batch(*, batch, **_: Any):
             call_count["n"] += 1
-            return []
+            return [], 0, 0, None
 
         with patch(
             "notes.listofnotes_subcoordinator._invoke_sub_agent_once",
@@ -660,7 +663,8 @@ class TestZeroPayloadRetryThenFail:
 
         async def first_empty_then_ok(*, batch, **kwargs: Any):
             attempts.append(kwargs.get("attempt", -1))
-            return [] if len(attempts) == 1 else list(good)
+            # Phase 5: 3-tuple return shape.
+            return ([] if len(attempts) == 1 else list(good)), 0, 0, None
 
         batch = _make_inventory(2)
         with patch(
@@ -777,3 +781,63 @@ class TestTaskRegistryCleanup:
         # After cancellation propagates, the finally in _run_sub_with_cleanup
         # must have unregistered every sub-agent ref.
         assert session_id not in task_registry._tasks
+
+
+# ---------------------------------------------------------------------------
+# Sheet-12 fan-out cancellation robustness (PR B.7)
+# ---------------------------------------------------------------------------
+
+class TestFanOutCancellationIsSafeAgainstQueueTeardown:
+    @pytest.mark.asyncio
+    async def test_safe_emit_swallows_queue_closed_on_cancel(self, tmp_path: Path):
+        """PR B.7 — mirror of test_notes_retry_budget.py:258 but for the
+        Sheet-12 fan-out runner's _safe_emit.
+
+        If the sub-coordinator raises CancelledError while the surrounding
+        event queue is being torn down, the cancellation handler's
+        ``await _emit("complete", ...)`` would itself raise and the fan-out
+        would never return a structured cancelled result. ``_safe_emit``
+        must swallow the inner put() failure so the caller always sees
+        ``status="cancelled"``.
+        """
+        import asyncio as _asyncio
+        from notes.coordinator import _run_list_of_notes_fanout
+
+        pdf_path = tmp_path / "dummy.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+        inv = _make_inventory(3)
+
+        class _TeardownQueue:
+            """Queue that works once then fails — simulates an event-queue
+            teardown that happens between the opening `started` emit and
+            the cancellation handler's `complete` emit."""
+
+            def __init__(self) -> None:
+                self._count = 0
+
+            async def put(self, _item):
+                self._count += 1
+                if self._count > 1:
+                    raise RuntimeError("queue closed during teardown")
+
+        async def cancel_now(**_kwargs):
+            raise _asyncio.CancelledError()
+
+        with patch(
+            "notes.coordinator.run_listofnotes_subcoordinator",
+            side_effect=cancel_now,
+        ):
+            result = await _run_list_of_notes_fanout(
+                pdf_path=str(pdf_path),
+                inventory=inv,
+                filing_level="company",
+                model="test",
+                output_dir=str(tmp_path),
+                event_queue=_TeardownQueue(),
+            )
+
+        # Without _safe_emit, the teardown queue's put() failure would
+        # bubble past the cancellation handler and the caller would get
+        # a non-cancelled Exception path instead of a cancelled result.
+        assert result.status == "cancelled"
+        assert result.error == "Cancelled by user"

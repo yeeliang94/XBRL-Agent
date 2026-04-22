@@ -200,3 +200,21 @@ def test_real_socf_linkbase_shape(wb):
     )
     assert result == 25.0
     assert warnings == []
+
+
+def test_resolves_double_prefix_coefficients(wb):
+    """PR B.8: Excel's tokenizer splits `++1` and `--1` into two PREFIX
+    operators followed by a NUMBER. The sign-normalising branch in
+    tools/verifier.py must collapse both forms back to +1 (two negatives
+    cancel; two plusses are a no-op). Without this branch, formulas
+    emitted by the XBRL linkbase on SOCF / SOCIE / SOPL rows evaluate
+    to 0 and mask real imbalances."""
+    warnings_pp: list[str] = []
+    # ++1 * B139 = +10
+    assert _evaluate_formula(wb, "Main", "=++1*B139", warnings=warnings_pp) == 10.0
+    assert warnings_pp == []
+
+    warnings_mm: list[str] = []
+    # --1 * B139 = +10 (two negatives cancel)
+    assert _evaluate_formula(wb, "Main", "=--1*B139", warnings=warnings_mm) == 10.0
+    assert warnings_mm == []

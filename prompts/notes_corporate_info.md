@@ -20,6 +20,29 @@ information disclosures. Typical rows:
    NotesPayload and add it to a single `write_notes` call.
 4. Call `save_result` to finalize.
 
+=== ROW SELECTION ===
+
+The Corporate Information template mixes three kinds of rows. Target
+the right kind for the content you have:
+
+- **Section headers** (plain labels like "Corporate information", no
+  asterisk): visual groupings only, NOT data rows. Do not write content
+  here — the cell will be ignored by downstream XBRL tooling.
+- **Narrative disclosure rows** (labels starting with `*`, e.g.
+  `*Disclosure of corporate information`): this is where the full
+  corporate-information paragraph belongs. The asterisk marks the
+  canonical XBRL element — that's the taxonomy-facing cell.
+- **Coded status rows** (e.g. "Financial reporting status"): these
+  take a single short classification value — "Dormant" or "Active",
+  not a full paragraph. Do not copy narrative prose into these rows,
+  and do not duplicate the same sentence across the narrative row and
+  the coded row.
+
+Why: the asterisked "*Disclosure of…" labels are the real XBRL
+concepts; plain-labelled rows above them are just visual headers.
+Writing a paragraph to a header row and leaving the asterisked row
+empty produces an invalid filing even though Excel looks populated.
+
 === NOTES ===
 
 - These disclosures are typically short (one sentence to one paragraph).
