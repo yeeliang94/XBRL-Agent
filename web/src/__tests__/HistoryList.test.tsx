@@ -188,4 +188,30 @@ describe("HistoryList", () => {
     fireEvent.keyDown(row1, { key: "ArrowDown" });
     expect(onRunSelected).not.toHaveBeenCalled();
   });
+
+  // Phase 8 MPERS wiring: MPERS badge on the filename cell.
+  test("renders MPERS badge when filing_standard is mpers", () => {
+    const runs: RunSummaryJson[] = [
+      { ...makeRuns()[0], filing_standard: "mpers" },
+    ];
+    render(<HistoryList runs={runs} onRunSelected={() => {}} />);
+    const row = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
+    expect(row.textContent).toContain("MPERS");
+  });
+
+  test("no MPERS badge when filing_standard is mfrs", () => {
+    const runs: RunSummaryJson[] = [
+      { ...makeRuns()[0], filing_standard: "mfrs" },
+    ];
+    render(<HistoryList runs={runs} onRunSelected={() => {}} />);
+    const row = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
+    expect(row.textContent).not.toContain("MPERS");
+  });
+
+  test("no MPERS badge on legacy runs without filing_standard field", () => {
+    // Legacy payload — field missing entirely. Defaults to MFRS, so no badge.
+    render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
+    const row = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
+    expect(row.textContent).not.toContain("MPERS");
+  });
 });

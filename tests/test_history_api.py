@@ -479,3 +479,53 @@ def test_list_runs_defaults_filing_level_for_legacy(api_env):
     )
     body = client.get("/api/runs").json()
     assert body["runs"][0]["filing_level"] == "company"
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 MPERS wiring — filing_standard on list + detail
+# ---------------------------------------------------------------------------
+
+@pytest.mark.mpers_wiring_history
+def test_get_runs_lists_filing_standard_field(api_env):
+    """GET /api/runs surfaces filing_standard from run_config_json."""
+    client, db_path, _ = api_env
+    _seed_run(
+        db_path, session_id="fs-mfrs", pdf_filename="mfrs.pdf",
+        output_dir="/tmp/fs-mfrs",
+        config={"statements": ["SOFP"], "filing_standard": "mfrs"},
+    )
+    _seed_run(
+        db_path, session_id="fs-mpers", pdf_filename="mpers.pdf",
+        output_dir="/tmp/fs-mpers",
+        config={"statements": ["SOFP"], "filing_standard": "mpers"},
+    )
+    body = client.get("/api/runs").json()
+    stds = {r["pdf_filename"]: r["filing_standard"] for r in body["runs"]}
+    assert stds["mfrs.pdf"] == "mfrs"
+    assert stds["mpers.pdf"] == "mpers"
+
+
+@pytest.mark.mpers_wiring_history
+def test_list_runs_defaults_filing_standard_for_legacy(api_env):
+    """Legacy rows (no field in run_config_json) default to mfrs."""
+    client, db_path, _ = api_env
+    _seed_run(
+        db_path, session_id="legacy-fs", pdf_filename="legacy.pdf",
+        output_dir="/tmp/legacy-fs",
+        config={"statements": ["SOFP"]},
+    )
+    body = client.get("/api/runs").json()
+    assert body["runs"][0]["filing_standard"] == "mfrs"
+
+
+@pytest.mark.mpers_wiring_history
+def test_detail_includes_filing_standard(api_env):
+    """GET /api/runs/{id} surfaces filing_standard too."""
+    client, db_path, _ = api_env
+    run_id = _seed_run(
+        db_path, session_id="fs-detail", pdf_filename="detail.pdf",
+        output_dir="/tmp/fs-detail",
+        config={"statements": ["SOFP"], "filing_standard": "mpers"},
+    )
+    body = client.get(f"/api/runs/{run_id}").json()
+    assert body["filing_standard"] == "mpers"

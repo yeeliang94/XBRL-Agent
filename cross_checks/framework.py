@@ -15,6 +15,13 @@ from statement_types import StatementType
 # Default tolerance for numeric comparisons (RM 1 absolute).
 DEFAULT_TOLERANCE_RM = 1.0
 
+# Default `applies_to_standard` for checks that don't narrow themselves —
+# the vast majority of cross-checks run on both taxonomies. MPERS-only
+# checks (e.g. SoRE → SOFP retained-earnings) override this on the class.
+# Hoisted to module scope so the contract is visible without reading
+# `run_all` (peer-review S10).
+DEFAULT_APPLIES_TO_STANDARD: frozenset[str] = frozenset({"mfrs", "mpers"})
+
 
 @dataclass
 class CrossCheckResult:
@@ -76,6 +83,7 @@ def run_all(
     """
     statements_run = run_config.get("statements_to_run", set())
     filing_level = run_config.get("filing_level", "company")
+    filing_standard = run_config.get("filing_standard", "mfrs")
     results: list[CrossCheckResult] = []
 
     for check in checks:
@@ -108,7 +116,26 @@ def run_all(
             ))
             continue
 
-        # 3. Does this check apply to the current variant configuration?
+        # 3. Is this check defined for the current filing standard?
+        #    MPERS-only checks (e.g. sore_to_sofp_retained_earnings) carry a
+        #    narrowed set; gate them out on MFRS runs so they don't fire on
+        #    filings that don't produce the necessary sheet.
+        check_standards = getattr(
+            check, "applies_to_standard", DEFAULT_APPLIES_TO_STANDARD,
+        )
+        if filing_standard not in check_standards:
+            allowed = ", ".join(sorted(check_standards)).upper() or "(none)"
+            results.append(CrossCheckResult(
+                name=check.name,
+                status="not_applicable",
+                message=(
+                    f"{check.name} only applies to {allowed} filings "
+                    f"(this run is {filing_standard.upper()})"
+                ),
+            ))
+            continue
+
+        # 4. Does this check apply to the current variant configuration?
         if not check.applies_to(run_config):
             results.append(CrossCheckResult(
                 name=check.name,
@@ -117,7 +144,7 @@ def run_all(
             ))
             continue
 
-        # 4. Run the actual check — catch exceptions so one broken check
+        # 5. Run the actual check — catch exceptions so one broken check
         # doesn't abort the entire validation pass.
         try:
             result = check.run(workbook_paths, tolerance, filing_level=filing_level)

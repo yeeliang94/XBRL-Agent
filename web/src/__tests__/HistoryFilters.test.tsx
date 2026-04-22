@@ -112,4 +112,27 @@ describe("HistoryFilters", () => {
     expect(lastCall.q).toBe("F");
     expect(lastCall.status).toBe("completed");
   });
+
+  // Phase 8 MPERS wiring: filing-standard dropdown (All / MFRS / MPERS).
+  test("standard dropdown change fires onChange with the selected standard", () => {
+    const onChange = vi.fn<(next: RunsFilterParams) => void>();
+    render(<HistoryFilters value={{}} onChange={onChange} />);
+
+    const select = screen.getByLabelText(/filter by filing standard/i) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "mpers" } });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ standard: "mpers" }));
+
+    fireEvent.change(select, { target: { value: "mfrs" } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ standard: "mfrs" }));
+  });
+
+  test("standard 'All' option clears the filter", () => {
+    const onChange = vi.fn<(next: RunsFilterParams) => void>();
+    render(<HistoryFilters value={{ standard: "mpers" }} onChange={onChange} />);
+
+    const select = screen.getByLabelText(/filter by filing standard/i) as HTMLSelectElement;
+    expect(select.value).toBe("mpers");
+    fireEvent.change(select, { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ standard: undefined }));
+  });
 });

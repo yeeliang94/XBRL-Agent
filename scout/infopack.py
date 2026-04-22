@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 Confidence = Literal["HIGH", "MEDIUM", "LOW"]
 _VALID_CONFIDENCE: set[str] = {"HIGH", "MEDIUM", "LOW"}
 
+# Scout's MFRS-vs-MPERS guess. "unknown" when the signals are ambiguous or
+# absent — the UI falls back to the user toggle default (MFRS) without
+# prompting. Narrowed to these three strings by `detect_filing_standard`.
+DetectedStandard = Literal["mfrs", "mpers", "unknown"]
+_VALID_DETECTED_STANDARD: set[str] = {"mfrs", "mpers", "unknown"}
+
 
 @dataclass
 class StatementPageRef:
@@ -71,6 +77,11 @@ class Infopack:
     # (note_num, title, page_range) triple describing one disclosure note
     # in the PDF. Consumed by the notes agents / sub-coordinator.
     notes_inventory: list[NoteInventoryEntry] = field(default_factory=list)
+    # Scout's MFRS-vs-MPERS guess from the TOC / front-matter text. The UI
+    # uses this to preselect the filing-standard toggle; the user always
+    # wins. "unknown" when the signals are ambiguous (e.g. both MFRS and
+    # MPERS keywords appear).
+    detected_standard: DetectedStandard = "unknown"
 
     # -- Serialisation ---------------------------------------------------------
 
@@ -79,6 +90,7 @@ class Infopack:
         return json.dumps({
             "toc_page": self.toc_page,
             "page_offset": self.page_offset,
+            "detected_standard": self.detected_standard,
             "statements": {
                 st.value: {
                     "variant_suggestion": ref.variant_suggestion,
@@ -130,11 +142,17 @@ class Infopack:
                 page_range=page_range,
             ))
 
+        detected = data.get("detected_standard", "unknown")
+        # Defensive — any unexpected value from an upstream change should
+        # fall back to "unknown" rather than crash Infopack reconstruction.
+        if detected not in _VALID_DETECTED_STANDARD:
+            detected = "unknown"
         return cls(
             toc_page=data["toc_page"],
             page_offset=data["page_offset"],
             statements=statements,
             notes_inventory=inventory,
+            detected_standard=detected,
         )
 
     # -- Notes page hints ------------------------------------------------------

@@ -470,3 +470,42 @@ def test_delete_run_returns_false_for_missing_id(db_path: Path) -> None:
     with repo.db_session(db_path) as conn:
         result = repo.delete_run(conn, 99999)
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 MPERS wiring — filing_standard on RunSummary / RunDetail
+# ---------------------------------------------------------------------------
+
+@pytest.mark.mpers_wiring_history
+def test_list_runs_surfaces_filing_standard_from_config(db_path: Path) -> None:
+    """RunSummary carries filing_standard off run_config_json. Legacy rows
+    (no field) fall back to 'mfrs' so pre-MPERS history keeps rendering."""
+    with repo.db_session(db_path) as conn:
+        _seed_run(
+            conn, session_id="mpers-run", pdf_filename="mpers.pdf",
+            config={"filing_level": "company", "filing_standard": "mpers"},
+        )
+        _seed_run(
+            conn, session_id="legacy-run", pdf_filename="legacy.pdf",
+            config={"filing_level": "company"},  # pre-MPERS row
+        )
+        summaries = repo.list_runs(conn)
+
+    by_name = {s.pdf_filename: s for s in summaries}
+    assert by_name["mpers.pdf"].filing_standard == "mpers"
+    assert by_name["legacy.pdf"].filing_standard == "mfrs"
+
+
+@pytest.mark.mpers_wiring_history
+def test_get_run_detail_config_carries_filing_standard(db_path: Path) -> None:
+    """fetch_run's config blob round-trips filing_standard through
+    run_config_json — the API layer reads it from here."""
+    with repo.db_session(db_path) as conn:
+        _seed_run(
+            conn, session_id="mpers-detail", pdf_filename="mpers.pdf",
+            config={"filing_level": "group", "filing_standard": "mpers"},
+        )
+        run = repo.fetch_run(conn, 1)
+    assert run is not None
+    assert run.config is not None
+    assert run.config["filing_standard"] == "mpers"

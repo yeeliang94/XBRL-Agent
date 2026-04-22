@@ -1,5 +1,14 @@
-import type { StatementType, VariantSelection, ConfidenceLevel } from "../lib/types";
-import { STATEMENT_TYPES, VARIANTS, STATEMENT_LABELS } from "../lib/types";
+import type {
+  StatementType,
+  VariantSelection,
+  ConfidenceLevel,
+  FilingStandard,
+} from "../lib/types";
+import {
+  STATEMENT_TYPES,
+  STATEMENT_LABELS,
+  variantsFor,
+} from "../lib/types";
 import { pwc } from "../lib/theme";
 
 interface Props {
@@ -9,6 +18,10 @@ interface Props {
    *  variant picker doesn't vanish when scout unchecks every row. */
   enabledStatements: StatementType[];
   onChange: (statement: StatementType, selection: VariantSelection) => void;
+  /** Filing standard — MFRS (default) or MPERS. Controls which variants
+   *  appear in each dropdown. SOCIE on MPERS picks up SoRE; everything else
+   *  is unchanged. */
+  filingStandard?: FilingStandard;
 }
 
 const CONFIDENCE_COLORS: Record<ConfidenceLevel, string> = {
@@ -76,13 +89,18 @@ const styles = {
   } as React.CSSProperties,
 };
 
-export function VariantSelector({ selections, enabledStatements, onChange }: Props) {
+export function VariantSelector({
+  selections,
+  enabledStatements,
+  onChange,
+  filingStandard = "mfrs",
+}: Props) {
   const enabledSet = new Set(enabledStatements);
   return (
     <div style={styles.container}>
       {STATEMENT_TYPES.map((stmt) => {
         const sel = selections[stmt];
-        const variants = VARIANTS[stmt];
+        const variants = variantsFor(stmt, filingStandard);
         const isEnabled = enabledSet.has(stmt);
         return (
           <div key={stmt} style={styles.row}>

@@ -136,6 +136,24 @@ export function HistoryList({
                       Group
                     </span>
                   )}
+                  {run.filing_standard === "mpers" && (
+                    // MPERS-only badge. Default (mfrs) is implied — showing a
+                    // badge on every row would be noise. Teal tint to avoid
+                    // colliding with the purple Group badge right next to it.
+                    <span style={{
+                      display: "inline-block",
+                      marginLeft: 6,
+                      padding: "1px 6px",
+                      borderRadius: 3,
+                      fontSize: 10,
+                      fontWeight: 600,
+                      background: "#CCFBF1",
+                      color: "#0F766E",
+                      verticalAlign: "middle",
+                    }}>
+                      MPERS
+                    </span>
+                  )}
                 </td>
                 <td style={styles.td}>
                   <span style={styles.dim}>{formatDate(run.created_at)}</span>

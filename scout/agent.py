@@ -45,6 +45,7 @@ from scout.notes_discoverer import (
     build_notes_inventory,
     NoteInventoryEntry,
 )
+from scout.standard_detector import detect_filing_standard
 from tools.pdf_viewer import render_pages_to_png_bytes
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,10 @@ class ScoutDeps:
     # in the UI — avoids relying on the LLM to detect and retry after the
     # regex pass silently returns [].
     force_vision_inventory: bool = False
+    # Scout's MFRS-vs-MPERS guess from the TOC text (Phase 5 MPERS wiring).
+    # Populated by _find_toc_impl and attached to the Infopack at save time.
+    # "unknown" when the signals are ambiguous or absent.
+    detected_standard: str = "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +179,11 @@ def _find_toc_impl(deps: ScoutDeps) -> dict:
     # Cache for later use by discover_notes
     deps.toc_entries = entries
 
+    # MFRS vs MPERS detection. The TOC text already in hand is the cheapest
+    # place to call this — no extra PDF reads, no extra LLM turns. Cached on
+    # deps and written onto the Infopack at save time (Phase 5.3 MPERS wiring).
+    deps.detected_standard = detect_filing_standard(toc_text)
+
     return {
         "toc_page": toc_page,
         "candidate_pages": candidate_page_nums,
@@ -193,6 +203,9 @@ def _parse_toc_text_impl(deps: ScoutDeps, text: str) -> list[dict]:
     entries = parse_toc_entries_from_text(text)
     # Cache so discover_notes has TOC context even on scanned PDFs
     deps.toc_entries = entries
+    # Same detection hook as _find_toc_impl — covers the scanned-PDF path
+    # where scout feeds us vision-extracted TOC text.
+    deps.detected_standard = detect_filing_standard(text)
     return [
         {
             "name": e.statement_name,
@@ -203,10 +216,24 @@ def _parse_toc_text_impl(deps: ScoutDeps, text: str) -> list[dict]:
     ]
 
 
-def _check_variant_signals_impl(statement_type_str: str, page_text: str) -> dict:
-    """Run deterministic variant signal scorer."""
+def _check_variant_signals_impl(
+    statement_type_str: str,
+    page_text: str,
+    standard: str = "unknown",
+) -> dict:
+    """Run deterministic variant signal scorer.
+
+    ``standard`` narrows the candidate set on MPERS SOCIE pages — without it
+    SoRE never wins over Default because the scorer doesn't know when SoRE is
+    in play. Default "unknown" preserves pre-Phase-5 behaviour.
+    """
     st = StatementType(statement_type_str)
-    variant = detect_variant_from_signals(st, page_text)
+    # Only narrow when we actually know the standard; "unknown" keeps the
+    # original full-candidate scoring.
+    variant = detect_variant_from_signals(
+        st, page_text,
+        standard=standard if standard in ("mfrs", "mpers") else None,
+    )
     return {
         "statement_type": statement_type_str,
         "variant": variant,
@@ -509,6 +536,9 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
         page_offset=data.get("page_offset", 0),
         statements=statements,
         notes_inventory=inventory,
+        # Agent can override (rarely useful); otherwise carry the cached
+        # deterministic guess built during find_toc / parse_toc_text.
+        detected_standard=data.get("detected_standard", deps.detected_standard),
     )
 
     # Validate page ranges
@@ -640,8 +670,12 @@ def create_scout_agent(
         _emit_progress(ctx.deps, f"Viewing pages {pages}...")
         return _view_pages_impl(ctx.deps, pages)
 
-    @agent.tool_plain
-    def check_variant_signals(statement_type: str, page_text: str) -> str:
+    @agent.tool
+    def check_variant_signals(
+        ctx: RunContext[ScoutDeps],
+        statement_type: str,
+        page_text: str,
+    ) -> str:
         """Cross-check a variant classification using deterministic signal matching.
 
         Pass the statement type (e.g. "SOFP") and the page text. Returns the
@@ -652,7 +686,11 @@ def create_scout_agent(
             statement_type: Statement type string (SOFP, SOPL, SOCI, SOCF, SOCIE).
             page_text: Text from the statement's face page.
         """
-        result = _check_variant_signals_impl(statement_type, page_text)
+        # Pass the cached detected_standard so MPERS SOCIE pages can score
+        # SoRE when the signals warrant it, while MFRS runs stay on Default.
+        result = _check_variant_signals_impl(
+            statement_type, page_text, standard=ctx.deps.detected_standard,
+        )
         return json.dumps(result)
 
     @agent.tool

@@ -986,4 +986,242 @@ describe("PreRunPanel", () => {
 
     expect(screen.queryByRole("button", { name: /auto-detect/i })).not.toBeInTheDocument();
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 7 MPERS wiring — filing-standard toggle + SoRE picker
+  // -------------------------------------------------------------------------
+
+  test("filing standard toggle renders with MFRS default active", async () => {
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^MFRS$/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^MPERS$/ })).toBeInTheDocument();
+    });
+
+    // MFRS button has the orange active background; MPERS is inactive.
+    const mfrsBtn = screen.getByRole("button", { name: /^MFRS$/ }) as HTMLButtonElement;
+    const mpersBtn = screen.getByRole("button", { name: /^MPERS$/ }) as HTMLButtonElement;
+    expect(mfrsBtn.style.background).not.toBe(mpersBtn.style.background);
+    // The active one uses the orange500 theme color (same background family as
+    // the active Filing Level toggle). Testing exact pixel values is brittle —
+    // the asymmetry above is what we actually care about.
+  });
+
+  test("run payload carries filing_standard from toggle", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^MPERS$/ })).toBeInTheDocument();
+    });
+
+    // Click MPERS then Run.
+    fireEvent.click(screen.getByRole("button", { name: /^MPERS$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+
+    expect(onRun).toHaveBeenCalledWith(
+      expect.objectContaining({ filing_standard: "mpers" }),
+    );
+  });
+
+  test("filing_standard defaults to mfrs in payload when toggle is untouched", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+
+    expect(onRun).toHaveBeenCalledWith(
+      expect.objectContaining({ filing_standard: "mfrs" }),
+    );
+  });
+
+  test("scout detected_standard preselects the toggle", async () => {
+    // Scout reports MPERS → toggle should flip to MPERS automatically.
+    const scoutPayload = {
+      success: true,
+      infopack: {
+        toc_page: 3,
+        page_offset: 6,
+        detected_standard: "mpers",
+        statements: {
+          SOFP: { variant_suggestion: "CuNonCu", face_page: 10, note_pages: [], confidence: "HIGH" },
+        },
+      },
+    };
+    const sseText = `event: scout_complete\ndata: ${JSON.stringify(scoutPayload)}\n\n`;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseText));
+        controller.close();
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    // After scout completes, clicking Run must send filing_standard=mpers
+    // even though the user never touched the toggle.
+    await waitFor(() => {
+      // Toggle state is reflected through the payload to keep the test
+      // independent of style-based active-button detection.
+      fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+      expect(onRun).toHaveBeenCalledWith(
+        expect.objectContaining({ filing_standard: "mpers" }),
+      );
+    });
+
+    fetchSpy.mockRestore();
+  });
+
+  test("switching standard MFRS resets SoRE back to Default", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^MPERS$/ })).toBeInTheDocument();
+    });
+
+    // Switch to MPERS, then pick SoRE on the SOCIE variant dropdown.
+    fireEvent.click(screen.getByRole("button", { name: /^MPERS$/ }));
+
+    const socieSelect = screen.getAllByRole("combobox").find(
+      (el) => el.querySelector("option[value='SoRE']"),
+    ) as HTMLSelectElement;
+    fireEvent.change(socieSelect, { target: { value: "SoRE" } });
+    expect(socieSelect.value).toBe("SoRE");
+
+    // Flip back to MFRS — SOCIE must fall back to Default explicitly, not
+    // blank (peer-review MEDIUM: blanking makes visible UI diverge from
+    // what the coordinator actually runs).
+    fireEvent.click(screen.getByRole("button", { name: /^MFRS$/ }));
+
+    await waitFor(() => {
+      const socieAfter = screen.getAllByRole("combobox").find(
+        (el) => {
+          // SOCIE dropdown on MFRS has Default only — not SoRE.
+          const opts = Array.from((el as HTMLSelectElement).options).map((o) => o.value);
+          return opts.includes("Default") && !opts.includes("SoRE")
+            && !opts.includes("CuNonCu") && !opts.includes("Function")
+            && !opts.includes("BeforeTax") && !opts.includes("Indirect");
+        },
+      ) as HTMLSelectElement;
+      expect(socieAfter).toBeDefined();
+      expect(socieAfter.value).toBe("Default");
+    });
+
+    // Pin the payload shape too: running after the switch-back must send
+    // SOCIE=Default (not blank), matching what the user sees.
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    expect(onRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filing_standard: "mfrs",
+        variants: expect.objectContaining({ SOCIE: "Default" }),
+      }),
+    );
+  });
+
+  test("scout SoRE suggestion with detected_standard=unknown is rejected on MFRS", async () => {
+    // Peer-review HIGH: the LLM scout can return variant_suggestion="SoRE"
+    // with detected_standard="unknown". Our preselect only fires for
+    // mfrs/mpers, so the toggle stays on MFRS — and the server's Phase-3
+    // guard would reject SOCIE/SoRE on an MFRS run. The UI must sanitise
+    // the suggestion here instead of shipping an invalid config.
+    const scoutPayload = {
+      success: true,
+      infopack: {
+        toc_page: 3,
+        page_offset: 6,
+        detected_standard: "unknown",
+        statements: {
+          SOCIE: {
+            variant_suggestion: "SoRE",
+            face_page: 22,
+            note_pages: [],
+            confidence: "MEDIUM",
+          },
+          SOFP: {
+            variant_suggestion: "CuNonCu",
+            face_page: 10,
+            note_pages: [],
+            confidence: "HIGH",
+          },
+        },
+      },
+    };
+    const sseText = `event: scout_complete\ndata: ${JSON.stringify(scoutPayload)}\n\n`;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseText));
+        controller.close();
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
+
+    // Wait for scout to settle. SOFP suggestion is valid and should land;
+    // SOCIE=SoRE is not valid on MFRS and must be blanked.
+    await waitFor(() => {
+      const sofpSelect = screen.getAllByRole("combobox").find(
+        (el) => el.querySelector("option[value='CuNonCu']"),
+      ) as HTMLSelectElement;
+      expect(sofpSelect.value).toBe("CuNonCu");
+    });
+
+    const socieSelect = screen.getAllByRole("combobox").find(
+      (el) => {
+        const opts = Array.from((el as HTMLSelectElement).options).map((o) => o.value);
+        return opts.includes("Default") && !opts.includes("SoRE")
+          && !opts.includes("CuNonCu") && !opts.includes("Function")
+          && !opts.includes("BeforeTax") && !opts.includes("Indirect");
+      },
+    ) as HTMLSelectElement;
+    expect(socieSelect.value).toBe("");
+
+    // Runtime payload must not carry the invalid SoRE variant.
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    const payload = onRun.mock.calls[0][0];
+    expect(payload.filing_standard).toBe("mfrs");
+    expect(payload.variants.SOCIE).not.toBe("SoRE");
+
+    fetchSpy.mockRestore();
+  });
 });

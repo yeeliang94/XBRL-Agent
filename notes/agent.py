@@ -237,6 +237,12 @@ class NotesDeps:
     template_type: NotesTemplateType
     sheet_name: str
     filing_level: str
+    # Filing standard axis (mfrs | mpers). Kept on deps for symmetry with
+    # ExtractionDeps so prompt-rendering + tool call sites that need to
+    # branch on the standard have a single place to read it from. Phase 2
+    # is wiring-only; Phase 6 uses it to inject MPERS overlays into the
+    # notes prompts if the smoke run surfaces label mismatches.
+    filing_standard: str = "mfrs"
     inventory: list[NoteInventoryEntry] = field(default_factory=list)
     # Mutable runtime state
     template_fields: list[TemplateField] = field(default_factory=list)
@@ -593,6 +599,7 @@ def create_notes_agent(
     page_hints: Optional[list[int]] = None,
     page_offset: int = 0,
     batch_note_nums: Optional[list[int]] = None,
+    filing_standard: str = "mfrs",
 ) -> tuple[Agent[NotesDeps, str], NotesDeps]:
     """Create a notes agent for a single template type.
 
@@ -619,7 +626,9 @@ def create_notes_agent(
         output_dir = str(Path(__file__).resolve().parent.parent / "output")
 
     entry = NOTES_REGISTRY[template_type]
-    template_path_str = str(notes_template_path(template_type, level=filing_level))
+    template_path_str = str(notes_template_path(
+        template_type, level=filing_level, standard=filing_standard,
+    ))
     filled_filename = f"NOTES_{template_type.value}_filled.xlsx"
 
     deps = NotesDeps(
@@ -631,6 +640,7 @@ def create_notes_agent(
         template_type=template_type,
         sheet_name=entry.sheet_name,
         filing_level=filing_level,
+        filing_standard=filing_standard,
         inventory=list(inventory),
         filled_filename=filled_filename,
         # Pre-populate the batch list here so the tool-registration

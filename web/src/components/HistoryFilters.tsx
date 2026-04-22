@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import { RUN_STATUS_FILTER_OPTIONS } from "../lib/runStatus";
-import type { RunsFilterParams } from "../lib/types";
+import type { FilingStandard, RunsFilterParams } from "../lib/types";
 
 // ---------------------------------------------------------------------------
 // HistoryFilters — filename search + status dropdown + date range.
@@ -105,6 +105,27 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
               {opt.label}
             </option>
           ))}
+        </select>
+      </label>
+
+      <label style={styles.label}>
+        <span style={styles.labelText}>Standard</span>
+        <select
+          value={value.standard ?? ""}
+          onChange={(e) => {
+            const v = e.target.value;
+            onChange({
+              ...value,
+              // Empty option clears the filter so "All" returns every row.
+              standard: v === "mfrs" || v === "mpers" ? (v as FilingStandard) : undefined,
+            });
+          }}
+          style={styles.select}
+          aria-label="Filter by filing standard"
+        >
+          <option value="">All</option>
+          <option value="mfrs">MFRS</option>
+          <option value="mpers">MPERS</option>
         </select>
       </label>
 

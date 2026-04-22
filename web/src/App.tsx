@@ -230,6 +230,7 @@ export default function App() {
         infopack: prev?.infopack || null,
         use_scout: false,
         filing_level: prev?.filing_level || "company",
+        filing_standard: prev?.filing_standard || "mfrs",
       };
     } else {
       const nt = role as NotesTemplateType;
@@ -241,6 +242,7 @@ export default function App() {
         infopack: prev?.infopack || null,
         use_scout: false,
         filing_level: prev?.filing_level || "company",
+        filing_standard: prev?.filing_standard || "mfrs",
         notes_to_run: [nt],
         notes_models: prevNotesModel ? { [nt]: prevNotesModel } : {},
       };

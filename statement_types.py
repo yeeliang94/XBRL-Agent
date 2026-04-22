@@ -9,6 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Literal
+
+
+# Axis orthogonal to `filing_level`. MFRS remains the implicit default for
+# every pre-existing caller; MPERS templates live in a parallel directory
+# tree with the same filenames (except for the MPERS-only 10-SoRE.xlsx).
+FilingStandard = Literal["mfrs", "mpers"]
 
 
 class StatementType(str, Enum):
@@ -29,15 +36,29 @@ class Variant:
     """
     statement: StatementType
     name: str                # e.g. "CuNonCu", "Function", "Indirect"
-    template_filename: str   # file under XBRL-template-MFRS/
+    template_filename: str   # file under XBRL-template-MFRS/ or XBRL-template-MPERS/
     # Section-header phrases the scout can look for on the face page to confirm
     # the variant. Lowercase, substring match.
     detection_signals: tuple[str, ...] = field(default_factory=tuple)
+    # Filing standards this variant is valid for. The default covers both so
+    # every existing variant keeps working on MFRS and MPERS runs; MPERS-only
+    # variants (SoRE) narrow this to frozenset({"mpers"}) and the template
+    # resolver + framework gate rejects mismatched (variant, standard) pairs.
+    applies_to_standard: frozenset[str] = field(
+        default_factory=lambda: frozenset({"mfrs", "mpers"})
+    )
 
 
 # Absolute path to the template directory — resolved once so callers don't
 # need to know about working-directory quirks.
 TEMPLATE_DIR = Path(__file__).resolve().parent / "XBRL-template-MFRS"
+
+# Template-root lookup keyed by filing standard. Keeps `TEMPLATE_DIR` as the
+# pre-existing MFRS alias for any caller that still reads it directly.
+TEMPLATE_DIRS: dict[str, Path] = {
+    "mfrs": TEMPLATE_DIR,
+    "mpers": Path(__file__).resolve().parent / "XBRL-template-MPERS",
+}
 
 
 # Starter registry. Detection signals are the minimal evidence a human would
@@ -117,6 +138,20 @@ VARIANTS: dict[tuple[StatementType, str], Variant] = {
         template_filename="09-SOCIE.xlsx",
         detection_signals=("share capital", "retained earnings", "total equity"),
     ),
+    # MPERS-only Statement of Retained Earnings — a simplified SOCIE variant
+    # with just the retained-earnings movement. Gated by `applies_to_standard`
+    # so MFRS requests can't reach its template.
+    (StatementType.SOCIE, "SoRE"): Variant(
+        statement=StatementType.SOCIE,
+        name="SoRE",
+        template_filename="10-SoRE.xlsx",
+        detection_signals=(
+            "statement of retained earnings",
+            "retained earnings at beginning",
+            "retained earnings at end",
+        ),
+        applies_to_standard=frozenset({"mpers"}),
+    ),
 }
 
 
@@ -139,16 +174,24 @@ def template_path(
     statement: StatementType,
     variant_name: str,
     level: str = "company",
+    standard: str = "mfrs",
 ) -> Path:
-    """Absolute filesystem path to the template for a given (statement, variant, level).
+    """Absolute filesystem path to the template for a given (statement, variant, level, standard).
 
-    Templates live under XBRL-template-MFRS/Company/ or XBRL-template-MFRS/Group/.
-    Raises ValueError for meta-variants like NotPrepared that have no template,
-    or for an unrecognised filing level.
+    Templates live under XBRL-template-MFRS/{Company,Group}/ or
+    XBRL-template-MPERS/{Company,Group}/. Raises ValueError for meta-variants
+    like NotPrepared that have no template, for an unrecognised filing level,
+    or when the variant is not registered for the requested standard (e.g.
+    SoRE on MFRS).
     """
     if level not in _VALID_LEVELS:
         raise ValueError(
             f"Invalid filing level {level!r} — must be one of {_VALID_LEVELS}"
+        )
+    if standard not in TEMPLATE_DIRS:
+        raise ValueError(
+            f"Invalid filing standard {standard!r} — "
+            f"must be one of {tuple(TEMPLATE_DIRS)}"
         )
     v = get_variant(statement, variant_name)
     if not v.template_filename:
@@ -156,9 +199,36 @@ def template_path(
             f"{statement.value}/{variant_name} has no template — "
             f"extraction should be skipped for this variant"
         )
-    return TEMPLATE_DIR / level.capitalize() / v.template_filename
+    # Gate MPERS-only variants (e.g. SoRE) so an MFRS run can't silently
+    # resolve to a non-existent MFRS file — surfaces the misconfiguration
+    # at the registry layer rather than as a FileNotFoundError deeper in.
+    if standard not in v.applies_to_standard:
+        allowed = ", ".join(sorted(v.applies_to_standard)).upper() or "(none)"
+        raise ValueError(
+            f"{statement.value}/{variant_name} is not available on "
+            f"{standard.upper()} — only {allowed}."
+        )
+    return TEMPLATE_DIRS[standard] / level.capitalize() / v.template_filename
 
 
 def variants_for(statement: StatementType) -> list[Variant]:
     """All registered variants for a statement type, in insertion order."""
     return [v for (s, _), v in VARIANTS.items() if s == statement]
+
+
+def variants_for_standard(
+    statement: StatementType, standard: str
+) -> list[Variant]:
+    """Variants registered for a statement filtered to those valid on the
+    given filing standard.
+
+    The coordinator's variant-fallback path uses this to pick a default
+    without reaching for a variant that doesn't apply to the requested
+    standard (e.g. the fallback must not land on SoRE for an MFRS run).
+    Insertion order is preserved so the first detectable variant stays the
+    coordinator's default.
+    """
+    return [
+        v for v in variants_for(statement)
+        if standard in v.applies_to_standard
+    ]

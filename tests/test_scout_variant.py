@@ -117,13 +117,17 @@ class TestDetectVariantFromSignals:
         assert result == "OrderOfLiquidity"
 
     def test_empty_text_returns_none(self):
-        """Empty text should return None (no evidence to pick a variant)."""
+        """Empty text should return None (no evidence to pick a variant).
+
+        Every statement now has at least two detectable variants — SOCIE
+        gained the MPERS-only SoRE alongside Default, so there is no
+        single-candidate shortcut anywhere. The scout's standard-aware
+        selector (Phase 5.4 in docs/PLAN-mpers-pipeline-wiring.md) is the
+        layer that will pick Default vs SoRE based on the detected filing
+        standard; `detect_variant_from_signals` itself remains signal-driven.
+        """
         for st in StatementType:
             result = detect_variant_from_signals(st, "")
-            # SOCIE has only one detectable variant, so it returns that
-            if st == StatementType.SOCIE:
-                assert result == "Default"
-            else:
-                assert result is None
+            assert result is None, f"{st.value}: expected None, got {result!r}"
 
 

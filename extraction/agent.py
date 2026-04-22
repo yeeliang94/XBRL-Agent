@@ -42,6 +42,7 @@ class ExtractionDeps:
         variant: str,
         page_hints: Optional[dict] = None,
         filing_level: str = "company",
+        filing_standard: str = "mfrs",
     ):
         self.pdf_path = pdf_path
         self.template_path = template_path
@@ -52,6 +53,10 @@ class ExtractionDeps:
         self.variant = variant
         self.page_hints = page_hints
         self.filing_level = filing_level
+        # Filing standard axis — surfaced to prompts so MPERS-specific
+        # overlays (Phase 6.2) can inject MPERS-vs-MFRS labelling. Not used
+        # for behaviour changes in Phase 2; this is wiring-only.
+        self.filing_standard = filing_standard
         # Per-statement output filename for workbook isolation
         self.filled_filename = f"{statement_type.value}_filled.xlsx"
         # Mutable state
@@ -113,6 +118,7 @@ def create_extraction_agent(
     cache_template: bool = False,
     page_hints: Optional[dict] = None,
     filing_level: str = "company",
+    filing_standard: str = "mfrs",
 ) -> tuple[Agent[ExtractionDeps, str], ExtractionDeps]:
     """Create an extraction agent for any statement type.
 
@@ -140,6 +146,7 @@ def create_extraction_agent(
         variant=variant,
         page_hints=page_hints,
         filing_level=filing_level,
+        filing_standard=filing_standard,
     )
 
     # Optionally embed template in system prompt for caching
@@ -155,6 +162,7 @@ def create_extraction_agent(
         template_summary=template_summary,
         page_hints=page_hints,
         filing_level=filing_level,
+        filing_standard=filing_standard,
     )
 
     # Pin temperature=1.0 explicitly. CLAUDE.md gotcha #5: Gemini 3 through

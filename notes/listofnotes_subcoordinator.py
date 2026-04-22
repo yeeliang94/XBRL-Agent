@@ -205,6 +205,7 @@ async def run_listofnotes_subcoordinator(
     max_retries: int = 1,
     page_hints: Optional[list[int]] = None,
     page_offset: int = 0,
+    filing_standard: str = "mfrs",
 ) -> ListOfNotesSubResult:
     """Fan out the LIST_OF_NOTES work across `parallel` sub-agents."""
     import task_registry
@@ -244,6 +245,7 @@ async def run_listofnotes_subcoordinator(
                 page_hints=page_hints,
                 page_offset=page_offset,
                 launch_delay=launch_delay,
+                filing_standard=filing_standard,
             )
         finally:
             if session_id:
@@ -351,6 +353,7 @@ async def _run_list_of_notes_sub_agent(
     page_hints: Optional[list[int]] = None,
     page_offset: int = 0,
     launch_delay: float = 0.0,
+    filing_standard: str = "mfrs",
 ) -> SubAgentRunResult:
     """Run one sub-agent over its batch.
 
@@ -421,6 +424,7 @@ async def _run_list_of_notes_sub_agent(
                 page_hints=page_hints,
                 page_offset=page_offset,
                 usage_out=usage_accumulator,
+                filing_standard=filing_standard,
             )
             last_prompt_tokens = prompt_t
             last_completion_tokens = completion_t
@@ -519,6 +523,7 @@ async def _invoke_sub_agent_once(
     page_hints: Optional[list[int]] = None,
     page_offset: int = 0,
     usage_out: Optional[dict[str, int]] = None,
+    filing_standard: str = "mfrs",
 ) -> tuple[list[NotesPayload], int, int, Optional[CoverageReceipt]]:
     """Single attempt at a sub-agent run.
 
@@ -564,6 +569,7 @@ async def _invoke_sub_agent_once(
         page_offset=page_offset,
         output_dir=output_dir,
         batch_note_nums=batch_note_nums,
+        filing_standard=filing_standard,
     )
     deps.payload_sink = payload_sink
     deps.sub_agent_id = sub_agent_id

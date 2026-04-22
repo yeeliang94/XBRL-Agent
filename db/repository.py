@@ -155,6 +155,9 @@ class RunSummary:
     scout_enabled: bool = False
     merged_workbook_path: Optional[str] = None
     filing_level: str = "company"
+    # Which taxonomy the templates came from. Stored on runs.run_config_json
+    # under the same key; legacy rows (pre-MPERS wiring) default to MFRS.
+    filing_standard: str = "mfrs"
 
 
 @dataclass
@@ -653,6 +656,7 @@ def list_runs(
                     scout_enabled=run.scout_enabled,
                     merged_workbook_path=run.merged_workbook_path,
                     filing_level=(run.config or {}).get("filing_level", "company"),
+                    filing_standard=(run.config or {}).get("filing_standard", "mfrs"),
                 )
             )
         return summaries

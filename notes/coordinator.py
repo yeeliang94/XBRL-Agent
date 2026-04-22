@@ -78,6 +78,11 @@ class NotesRunConfig:
     model: Any
     notes_to_run: Set[NotesTemplateType] = field(default_factory=set)
     filing_level: str = "company"
+    # Filing standard axis, orthogonal to filing_level. Threaded into each
+    # `notes_template_path()` resolution so MPERS runs route through
+    # XBRL-template-MPERS/{Company,Group}/ with the shifted 11..15 numbering.
+    # Defaults to "mfrs" so existing CLI / test callers keep working.
+    filing_standard: str = "mfrs"
     # Optional per-template model overrides. When present, the coordinator
     # passes ``models[template_type]`` into the agent factory instead of
     # ``model``; templates missing from this dict fall back to ``model``.
@@ -250,6 +255,7 @@ async def run_notes_extraction(
                 page_hints=page_hints,
                 page_offset=page_offset,
                 launch_delay=stagger,
+                filing_standard=config.filing_standard,
             )
         else:
             runner = _run_single_notes_agent(
@@ -264,6 +270,7 @@ async def run_notes_extraction(
                 page_hints=page_hints,
                 page_offset=page_offset,
                 launch_delay=stagger,
+                filing_standard=config.filing_standard,
             )
         task = asyncio.create_task(runner, name=agent_id)
         tasks[template_type] = task
@@ -352,6 +359,7 @@ async def _run_single_notes_agent(
     page_hints: Optional[List[int]] = None,
     page_offset: int = 0,
     launch_delay: float = 0.0,
+    filing_standard: str = "mfrs",
 ) -> NotesAgentResult:
     """Run one notes agent end-to-end with PLAN §4 E.1 retry budget.
 
@@ -453,6 +461,7 @@ async def _run_single_notes_agent(
                 emit=_emit,
                 page_hints=page_hints,
                 page_offset=page_offset,
+                filing_standard=filing_standard,
             )
             # Success — stop retrying.
             if total_attempts > 1:
@@ -562,6 +571,7 @@ async def _invoke_single_notes_agent_once(
     emit,
     page_hints: Optional[List[int]] = None,
     page_offset: int = 0,
+    filing_standard: str = "mfrs",
 ) -> _SingleAgentOutcome:
     """One invocation of a single-sheet notes agent.
 
@@ -580,6 +590,7 @@ async def _invoke_single_notes_agent_once(
         output_dir=output_dir,
         page_hints=page_hints,
         page_offset=page_offset,
+        filing_standard=filing_standard,
     )
 
     prompt = (
@@ -802,6 +813,7 @@ async def _run_list_of_notes_fanout(
     page_hints: Optional[List[int]] = None,
     page_offset: int = 0,
     launch_delay: float = 0.0,
+    filing_standard: str = "mfrs",
 ) -> NotesAgentResult:
     """Drive the Sheet-12 sub-agent fan-out and write the final workbook.
 
@@ -960,7 +972,9 @@ async def _run_list_of_notes_fanout(
                 # from the coordinator's warning builder will still carry
                 # every "Note N skipped: ..." line.
                 template = str(notes_template_path(
-                    NotesTemplateType.LIST_OF_NOTES, level=filing_level,
+                    NotesTemplateType.LIST_OF_NOTES,
+                    level=filing_level,
+                    standard=filing_standard,
                 ))
                 output_path = str(
                     Path(output_dir)
@@ -1004,7 +1018,11 @@ async def _run_list_of_notes_fanout(
         # The writer handles row-concatenation (including row 112) and
         # evidence-column placement based on filing_level.
         entry = NOTES_REGISTRY[NotesTemplateType.LIST_OF_NOTES]
-        template = str(notes_template_path(NotesTemplateType.LIST_OF_NOTES, level=filing_level))
+        template = str(notes_template_path(
+            NotesTemplateType.LIST_OF_NOTES,
+            level=filing_level,
+            standard=filing_standard,
+        ))
         output_path = str(Path(output_dir) / f"NOTES_{NotesTemplateType.LIST_OF_NOTES.value}_filled.xlsx")
 
         write_result = await asyncio.to_thread(

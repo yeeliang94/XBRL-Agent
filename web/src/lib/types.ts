@@ -273,6 +273,27 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
 
 export type FilingLevel = "company" | "group";
 
+/** Parallel to `FilingLevel` — which taxonomy the templates come from.
+ *  Default is MFRS so every pre-existing caller keeps working. */
+export type FilingStandard = "mfrs" | "mpers";
+
+/** Scout's auto-detected standard from TOC / front-matter text. The UI
+ *  preselects the toggle from this; the user toggle always wins. */
+export type DetectedStandard = FilingStandard | "unknown";
+
+/** Registered variant names per (statement, filing_standard). Mirrors the
+ *  backend `variants_for_standard` — SoRE is MPERS-only, everything else
+ *  is available on both. NotPrepared is a meta-variant for SOCI only. */
+export function variantsFor(
+  statement: StatementType,
+  standard: FilingStandard,
+): string[] {
+  if (statement === "SOCIE") {
+    return standard === "mpers" ? ["Default", "SoRE"] : ["Default"];
+  }
+  return VARIANTS[statement];
+}
+
 /** Notes templates — mirror of NotesTemplateType in notes_types.py. */
 export type NotesTemplateType =
   | "CORP_INFO"
@@ -305,6 +326,9 @@ export interface RunConfigPayload {
   infopack: Record<string, unknown> | null;
   use_scout: boolean;
   filing_level: FilingLevel;
+  /** Filing standard — MFRS or MPERS. Defaults to MFRS server-side; the
+   *  UI always sends it explicitly so history carries the toggle state. */
+  filing_standard: FilingStandard;
   notes_to_run?: NotesTemplateType[];
   /** Per-notes-template model overrides. Unspecified templates fall back
    *  to the run's default model on the backend. Sent only when the user
@@ -369,6 +393,7 @@ export interface RunSummaryJson {
   scout_enabled: boolean;
   has_merged_workbook: boolean;
   filing_level?: FilingLevel;
+  filing_standard?: FilingStandard;
 }
 
 export interface RunListResponse {
@@ -417,6 +442,7 @@ export interface RunDetailJson {
   ended_at: string | null;
   config: Record<string, unknown> | null;
   filing_level?: FilingLevel;
+  filing_standard?: FilingStandard;
   agents: RunAgentJson[];
   cross_checks: RunCrossCheckJson[];
 }
@@ -425,6 +451,7 @@ export interface RunsFilterParams {
   q?: string;
   status?: string;
   model?: string;
+  standard?: FilingStandard;
   dateFrom?: string;
   dateTo?: string;
   limit?: number;
