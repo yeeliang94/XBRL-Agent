@@ -961,3 +961,205 @@ def test_backup_originals_group_has_15_files():
         "15-Notes-RelatedParty.xlsx",
     ])
     assert files == expected, f"missing: {set(expected) - set(files)}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4+ — calc-link grouping fix (2026-04-23 hardening side-quest)
+#
+# XBRL calc linkbases declare multiple independent summation-consistency
+# rules per concept using separate <calculationLink role=...> blocks. The
+# original MPERS generator flattened them into one formula, which:
+#   (a) doubled children when two calc-links share an identical (parent,
+#       child) pair (e.g. AuditorsRemuneration in SOPL-Analysis sub-sheet,
+#       producing =1*B96+1*B96+1*B97+1*B97);
+#   (b) merged distinct-axis decompositions (e.g. on SOPL, ProfitLoss has
+#       a vertical calc `ContinuingOps+DiscontinuedOps` AND an attribution
+#       calc `Owners+EquityOther+NCI`; flattening produced a 5-term sum
+#       that double-counts ProfitLoss).
+#
+# The fix introduces link-role-aware parsing + per-presentation-occurrence
+# formula assignment. These tests pin the expected behaviour. They must fail
+# against the pre-fix generator and pass after regeneration.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.mpers_formulas
+def test_parse_calc_linkbase_grouped_splits_link_roles():
+    """Red: the grouped parser returns distinct calc blocks per <calculationLink>.
+
+    SOPL calc file `role-300100.xml` carries four calc-link blocks (300100,
+    300100a, 300100b, 300100c). The grouped parser must keep them as separate
+    entries so downstream code can decide how to assign them to presentation
+    rows.
+    """
+    from scripts.generate_mpers_templates import (
+        parse_calc_linkbase_grouped_for_pre_role,
+    )
+
+    blocks = parse_calc_linkbase_grouped_for_pre_role("310000")
+    assert isinstance(blocks, list)
+    assert len(blocks) >= 2, (
+        f"SOPL calc should have at least two distinct link-role blocks "
+        f"(vertical + attribution), got {len(blocks)}"
+    )
+
+    # Exactly one block should define ProfitLoss = ContinuingOps + DiscontinuedOps
+    # and a separate block should define ProfitLoss = attribution trio.
+    vertical_blocks = []
+    attribution_blocks = []
+    for _role, calc_map in blocks:
+        pl_children = calc_map.get("ifrs-smes_ProfitLoss", [])
+        names = {child for child, _w in pl_children}
+        if not names:
+            continue
+        if "ifrs-smes_ProfitLossFromContinuingOperations" in names:
+            vertical_blocks.append(pl_children)
+        if "ifrs-smes_ProfitLossAttributableToOwnersOfParent" in names:
+            attribution_blocks.append(pl_children)
+
+    assert len(vertical_blocks) == 1, (
+        f"expected 1 vertical ProfitLoss calc block, got {len(vertical_blocks)}"
+    )
+    assert len(attribution_blocks) == 1, (
+        f"expected 1 attribution ProfitLoss calc block, got {len(attribution_blocks)}"
+    )
+    # The vertical and attribution blocks must be DISTINCT list objects
+    # (i.e. not the same merged flattened list).
+    assert vertical_blocks[0] is not attribution_blocks[0], (
+        "vertical and attribution blocks were merged — must be kept separate"
+    )
+
+
+@pytest.mark.mpers_formulas
+def test_mpers_sopl_profitloss_splits_across_row29_and_row34():
+    """Red: MPERS SOPL-Function has `ProfitLoss` at both rows 29 and 34
+    (vertical position + attribution position). Each row must get the calc
+    block that semantically matches its position in the presentation:
+
+      * Row 29 ("Profit (loss)") — children {ContinuingOps, DiscontinuedOps}.
+      * Row 34 ("*Total Profit (Loss)") — children {Owners, EquityOther, NCI}.
+
+    Pre-fix bug: row 34 carried a 5-term sum merging both decompositions
+    (=1*B26+1*B31+1*B28+1*B32+1*B33), and row 29 had no formula at all.
+    """
+    import openpyxl
+
+    path = MPERS_COMPANY_DIR / "03-SOPL-Function.xlsx"
+    wb = openpyxl.load_workbook(path, data_only=False)
+    ws = wb["SOPL-Function"]
+
+    row29_formula = ws.cell(row=29, column=2).value
+    row34_formula = ws.cell(row=34, column=2).value
+    wb.close()
+
+    # Row 29 (vertical) must reference continuing (B26) and discontinued (B28).
+    assert isinstance(row29_formula, str) and row29_formula.startswith("="), (
+        f"row 29 (Profit (loss)) missing formula: {row29_formula!r}"
+    )
+    assert "B26" in row29_formula and "B28" in row29_formula, (
+        f"row 29 formula must reference continuing (B26) + discontinued (B28), "
+        f"got {row29_formula!r}"
+    )
+    assert "B31" not in row29_formula and "B32" not in row29_formula and "B33" not in row29_formula, (
+        f"row 29 formula must NOT reference attribution rows (B31/B32/B33), "
+        f"got {row29_formula!r}"
+    )
+
+    # Row 34 (attribution) must reference owners (B31), equity-other (B32), NCI (B33).
+    assert isinstance(row34_formula, str) and row34_formula.startswith("="), (
+        f"row 34 (*Total Profit (Loss)) missing formula: {row34_formula!r}"
+    )
+    assert "B31" in row34_formula and "B32" in row34_formula and "B33" in row34_formula, (
+        f"row 34 formula must reference attribution rows (B31+B32+B33), "
+        f"got {row34_formula!r}"
+    )
+    assert "B26" not in row34_formula and "B28" not in row34_formula, (
+        f"row 34 formula must NOT reference vertical rows (B26/B28), "
+        f"got {row34_formula!r}"
+    )
+
+
+@pytest.mark.mpers_formulas
+def test_mpers_templates_have_no_duplicate_cell_refs():
+    """Red: no generated MPERS formula may reference the same cell twice.
+
+    Pre-fix bug: sub-sheet totals like `*Total auditor's remuneration` had
+    formulas `=1*B96+1*B96+1*B97+1*B97` because two calc-links declared the
+    same parent→child arc, and the flat merge appended them both. Any repeat
+    reference is mathematically wrong — dedup within a calc block should
+    eliminate it.
+    """
+    import openpyxl
+    import re
+
+    # Match `<weight>*<col><row>` tokens; ignore literal constants.
+    cell_ref_re = re.compile(r"[+-]?\d+\*([A-Z]+)(\d+)")
+
+    for root_dir in ("Company", "Group"):
+        base = REPO_ROOT / "XBRL-template-MPERS" / root_dir
+        for xlsx in sorted(base.glob("*.xlsx")):
+            wb = openpyxl.load_workbook(xlsx, data_only=False)
+            for ws in wb.worksheets:
+                for row_cells in ws.iter_rows():
+                    for cell in row_cells:
+                        f = cell.value
+                        if not (isinstance(f, str) and f.startswith("=")):
+                            continue
+                        refs = cell_ref_re.findall(f)
+                        seen: dict[tuple[str, str], int] = {}
+                        for ref in refs:
+                            seen[ref] = seen.get(ref, 0) + 1
+                        dupes = [f"{c}{r}" for (c, r), count in seen.items() if count > 1]
+                        assert not dupes, (
+                            f"{xlsx.name} [{ws.title}] "
+                            f"{cell.coordinate}: formula {f!r} has duplicate refs {dupes}"
+                        )
+            wb.close()
+
+
+@pytest.mark.mpers_formulas
+def test_mpers_soci_tci_splits_across_rows():
+    """Red: MPERS SOCI-BeforeTax (role 420000) has `ComprehensiveIncome` at
+    both row 28 (vertical: ProfitLoss + Total-OCI) and row 32 (attribution:
+    Owners + NCI). Each row must carry only its own decomposition.
+
+    Row positions 28/32 come from the 420000 presentation walk; the NetOfTax
+    variant (role 410000, file 06-SOCI-NetOfTax.xlsx) puts the same concept
+    at rows 26/30 because it omits the tax-reclassifying abstract.
+    """
+    import openpyxl
+
+    path = MPERS_COMPANY_DIR / "05-SOCI-BeforeTax.xlsx"
+    wb = openpyxl.load_workbook(path, data_only=False)
+    ws = wb["SOCI-BeforeOfTax"]
+
+    vertical_formula = ws.cell(row=28, column=2).value
+    attribution_formula = ws.cell(row=32, column=2).value
+    wb.close()
+
+    # Both rows must carry a formula.
+    assert isinstance(vertical_formula, str) and vertical_formula.startswith("="), (
+        f"row 28 (vertical *Total comprehensive income) missing formula: "
+        f"{vertical_formula!r}"
+    )
+    assert isinstance(attribution_formula, str) and attribution_formula.startswith("="), (
+        f"row 32 (attribution *Total comprehensive income) missing formula: "
+        f"{attribution_formula!r}"
+    )
+
+    # Formulas must be distinct (not the old merged 4-term sum).
+    assert vertical_formula != attribution_formula, (
+        f"ComprehensiveIncome at row 28 and row 32 have identical formulas — "
+        f"must be separate calcs. {vertical_formula!r}"
+    )
+
+    # Row 28 (vertical) sums ProfitLoss (B11) + Total OCI (B27).
+    assert "B11" in vertical_formula and "B27" in vertical_formula, (
+        f"vertical calc at row 28 must reference B11 (ProfitLoss) + B27 "
+        f"(Total OCI), got {vertical_formula!r}"
+    )
+    # Row 32 (attribution) sums owners (B30) + NCI (B31).
+    assert "B30" in attribution_formula and "B31" in attribution_formula, (
+        f"attribution calc at row 32 must reference B30 (owners) + B31 (NCI), "
+        f"got {attribution_formula!r}"
+    )

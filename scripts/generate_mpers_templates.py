@@ -500,22 +500,35 @@ def _calc_file_for_role(calc_role_number: str) -> Path:
     return _MPERS_TAXONOMY_DIR / f"cal_ssmt-fs-mpers_2022-12-31_role-{calc_role_number}.xml"
 
 
-def parse_calc_linkbase(calc_file_path: Path) -> dict[str, list[tuple[str, int]]]:
-    """Parse one calculation linkbase into ``{parent_concept: [(child, weight), …]}``.
+def parse_calc_linkbase_grouped(
+    calc_file_path: Path,
+) -> list[tuple[str, dict[str, list[tuple[str, int]]]]]:
+    """Parse a calculation linkbase, preserving ``<calculationLink>`` boundaries.
 
-    Weights come through as ints (+1 / -1). Children are returned in the order
-    they appear in the calc file (already sorted by ``order`` in the SSM
-    taxonomy). A missing calc file is an error — callers should only pass
-    role numbers present in ``_PRE_TO_CALC_ROLE``.
+    Each XBRL ``<calculationLink>`` element declares an independent summation-
+    consistency rule (e.g. SOPL's role-300100 carries ``ProfitLoss = Continuing
+    + Discontinued`` and role-300100c carries ``ProfitLoss = Owners + EquityOther
+    + NCI`` — both must hold true). Downstream formula emission needs these
+    blocks kept apart so distinct decompositions don't get mashed into one sum
+    (which would double-count the parent).
+
+    Returns a list of ``(link_role_uri, {parent_concept: [(child, weight), …]})``
+    tuples in file order. Within each block, children are de-duplicated on
+    (child, weight) so redundant arcs (e.g. AuditorsRemuneration in role-300200
+    and role-300200c) don't produce ``=1*B96+1*B96`` formulas later.
     """
     tree = ET.parse(calc_file_path)
     root = tree.getroot()
 
-    loc_map: dict[str, str] = {}
-    # parent_concept -> list[(order, child_concept, weight)]
-    pending: dict[str, list[tuple[float, str, int]]] = defaultdict(list)
+    grouped: list[tuple[str, dict[str, list[tuple[str, int]]]]] = []
 
     for calc_link in root.iter(f"{{{_NS['link']}}}calculationLink"):
+        link_role = calc_link.get(f"{{{_NS['xlink']}}}role", "")
+        # Each link has its own loc table — the same label may reference different
+        # concepts in different <calculationLink> blocks.
+        loc_map: dict[str, str] = {}
+        pending: dict[str, list[tuple[float, str, int]]] = defaultdict(list)
+
         for elem in calc_link:
             tag = elem.tag.split("}", 1)[-1]
             if tag == "loc":
@@ -531,8 +544,6 @@ def parse_calc_linkbase(calc_file_path: Path) -> dict[str, list[tuple[str, int]]
                 parent_concept = loc_map.get(frm)
                 child_concept = loc_map.get(to)
                 if not (parent_concept and child_concept):
-                    # Forward references can happen; loc lines appear before arcs
-                    # in SSM files but the iteration picks them up in order.
                     continue
                 try:
                     weight = int(float(elem.get("weight", "1")))
@@ -544,11 +555,63 @@ def parse_calc_linkbase(calc_file_path: Path) -> dict[str, list[tuple[str, int]]
                     order = 0.0
                 pending[parent_concept].append((order, child_concept, weight))
 
-    result: dict[str, list[tuple[str, int]]] = {}
-    for parent, entries in pending.items():
-        entries.sort(key=lambda x: x[0])
-        result[parent] = [(child, weight) for _order, child, weight in entries]
-    return result
+        # Sort children by @order and dedup (child, weight) within this block.
+        calc_map: dict[str, list[tuple[str, int]]] = {}
+        for parent, entries in pending.items():
+            entries.sort(key=lambda x: x[0])
+            seen: set[tuple[str, int]] = set()
+            deduped: list[tuple[str, int]] = []
+            for _order, child, weight in entries:
+                key = (child, weight)
+                if key not in seen:
+                    seen.add(key)
+                    deduped.append(key)
+            calc_map[parent] = deduped
+
+        if calc_map:
+            grouped.append((link_role, calc_map))
+
+    return grouped
+
+
+def parse_calc_linkbase(calc_file_path: Path) -> dict[str, list[tuple[str, int]]]:
+    """Parse one calculation linkbase into ``{parent_concept: [(child, weight), …]}``.
+
+    Kept for backward compatibility with ``scripts/audit_mpers_formulas.py``
+    and the existing ``test_parse_calc_linkbase_*`` regression tests. Builds on
+    top of :func:`parse_calc_linkbase_grouped` by merging blocks with the same
+    parent and de-duplicating ``(child, weight)`` pairs across blocks — so
+    callers that only need "does this concept have calc children at all" still
+    work, but no longer see ``=1*B96+1*B96`` doubling.
+
+    The flattened form does **not** capture distinct-axis decompositions — use
+    :func:`parse_calc_linkbase_grouped` when formula emission needs one formula
+    per presentation occurrence.
+    """
+    grouped = parse_calc_linkbase_grouped(calc_file_path)
+    result: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    seen_by_parent: dict[str, set[tuple[str, int]]] = defaultdict(set)
+    for _role, calc_map in grouped:
+        for parent, children in calc_map.items():
+            for child, weight in children:
+                key = (child, weight)
+                if key not in seen_by_parent[parent]:
+                    seen_by_parent[parent].add(key)
+                    result[parent].append(key)
+    return dict(result)
+
+
+def parse_calc_linkbase_grouped_for_pre_role(
+    pre_role_number: str,
+) -> list[tuple[str, dict[str, list[tuple[str, int]]]]]:
+    """Convenience: map a presentation role number (e.g. ``"210000"``) to its
+    calc file and return the per-link-role calc blocks. Returns ``[]`` if the
+    pre role has no calc counterpart (notes roles, scope, auditor reports, …).
+    """
+    calc_role = _PRE_TO_CALC_ROLE.get(pre_role_number)
+    if calc_role is None:
+        return []
+    return parse_calc_linkbase_grouped(_calc_file_for_role(calc_role))
 
 
 def parse_calc_linkbase_for_pre_role(pre_role_number: str) -> dict[str, list[tuple[str, int]]]:
@@ -565,67 +628,111 @@ def parse_calc_linkbase_for_pre_role(pre_role_number: str) -> dict[str, list[tup
 def _inject_sum_formulas(
     ws,
     rows: list[tuple[int, str, str, bool]],
-    calc_map: dict[str, list[tuple[str, int]]],
+    calc_blocks: list[tuple[str, dict[str, list[tuple[str, int]]]]],
     value_columns: tuple[str, ...] = ("B", "C"),
 ) -> None:
     """Write SUM formulas into total rows based on the calc linkbase.
 
-    For every parent concept in ``calc_map`` that appears in ``rows``, locate
-    the child-concept rows (by concept_id) and write
-    ``=1*B{r1}+1*B{r2}+…`` (or ``-1*B{r}`` for negative weights) into each
-    value column at the parent's row. Matches the MFRS formula style
-    (``=1*B8+1*B9+…``).
+    ``calc_blocks`` is the per-``<calculationLink>`` list produced by
+    :func:`parse_calc_linkbase_grouped`. For every parent concept:
 
-    Only same-sheet references — cross-sheet refs (face → sub) are outside
-    Phase 4's scope (see plan). Children whose concepts aren't present in
-    the local row list are silently skipped, which happens for role
-    200100 (face) referencing sub-level concepts.
+      * Gather the child-row list for each block where that parent appears
+        (skipping children whose concepts aren't present in this sheet's
+        ``rows`` — expected for face roles that reference sub-sheet concepts).
+      * Find every xlsx row where the parent concept occurs in the presentation.
+      * Assign the blocks to the occurrences, right-aligned: the last block is
+        assigned to the last occurrence, the second-last to the second-last
+        occurrence, and so on. Extras at the front are left without a formula.
+
+    Right-alignment matches the SSM convention where totals sit *below* their
+    children. If a concept appears as both "opening balance" (no calc) and
+    "closing balance" (calc at the bottom), the calc lands on the closing row.
+    Concepts that appear with multiple distinct decompositions (e.g. SOPL's
+    ``ProfitLoss`` — vertical + attribution) have two presentation rows *and*
+    two calc blocks; the vertical block lands on the earlier row, attribution
+    on the later row.
+
+    Formula style matches MFRS: ``=1*B{r1}+-1*B{r2}+…``. Only same-sheet refs;
+    cross-sheet refs (face → sub) are out of scope.
     """
-    # concept_id -> Excel row number (1-based, in this sheet's layout).
-    concept_to_row: dict[str, int] = {}
-    for idx, (_depth, concept_id, _label, _abs) in enumerate(rows):
-        concept_to_row[concept_id] = _FIRST_BODY_ROW + idx
+    from openpyxl.styles import Font
 
-    for parent_concept, children in calc_map.items():
-        parent_row = concept_to_row.get(parent_concept)
-        if parent_row is None:
-            continue
-        # Collect child row refs with signed weights.
-        parts: list[tuple[int, int]] = []  # (child_row, weight)
+    # concept_id -> list of Excel rows (in presentation order) where it appears.
+    concept_to_rows: dict[str, list[int]] = defaultdict(list)
+    # The first-occurrence map is still useful for looking up child rows —
+    # children are typically referenced once in the presentation. If a child
+    # concept appears more than once, we take the first occurrence (matches
+    # the pre-fix behaviour that wasn't buggy for non-duplicate concepts).
+    first_occurrence: dict[str, int] = {}
+    for idx, (_depth, concept_id, _label, _abs) in enumerate(rows):
+        xlsx_row = _FIRST_BODY_ROW + idx
+        concept_to_rows[concept_id].append(xlsx_row)
+        first_occurrence.setdefault(concept_id, xlsx_row)
+
+    # Collect per-parent the ordered list of (link_role, children) blocks.
+    # Order preserves the calc-file order.
+    parent_to_blocks: dict[str, list[tuple[str, list[tuple[str, int]]]]] = defaultdict(list)
+    for link_role, calc_map in calc_blocks:
+        for parent, children in calc_map.items():
+            parent_to_blocks[parent].append((link_role, children))
+
+    def _write_formula(parent_row: int, children: list[tuple[str, int]]) -> None:
+        # Resolve child concepts to rows; skip misses (face → sub refs).
+        parts: list[tuple[int, int]] = []
         for child_concept, weight in children:
-            child_row = concept_to_row.get(child_concept)
+            child_row = first_occurrence.get(child_concept)
             if child_row is None:
                 continue
             parts.append((child_row, weight))
         if not parts:
-            continue
+            return
 
         for col_letter in value_columns:
             pieces = [f"{weight}*{col_letter}{row}" for row, weight in parts]
             formula = "=" + "+".join(pieces)
-            # Collapse "+-1*X" → "-1*X" for readability (optional; MFRS uses "+-1").
             col_idx = ord(col_letter) - ord("A") + 1
             ws.cell(row=parent_row, column=col_idx, value=formula)
 
         # Mark the parent label as a total row (MFRS convention): prepend "*"
         # and bold col A. Keeps downstream "*-prefixed = total" heuristic working.
-        from openpyxl.styles import Font
-
         label_cell = ws.cell(row=parent_row, column=1)
         current_label = label_cell.value
         if isinstance(current_label, str) and not current_label.startswith("*"):
             label_cell.value = f"*{current_label}"
         label_cell.font = Font(bold=True)
 
+    for parent, blocks in parent_to_blocks.items():
+        parent_rows = concept_to_rows.get(parent, [])
+        if not parent_rows:
+            continue
 
-def _collect_rows_with_calc(role_number: str) -> tuple[list[tuple[int, str, str, bool]], dict[str, list[tuple[str, int]]]]:
-    """Walk the pre linkbase + load the matching calc map for one role.
+        # Right-align blocks to presentation occurrences. When there are more
+        # rows than blocks (e.g. SOCF CashAndCashEquivalents appears 3x but has
+        # only 1 calc), the formula lands on the last row (the total). When
+        # blocks > rows, the earliest blocks are dropped.
+        n = min(len(parent_rows), len(blocks))
+        row_start = len(parent_rows) - n
+        block_start = len(blocks) - n
+        for i in range(n):
+            parent_row = parent_rows[row_start + i]
+            _link_role, children = blocks[block_start + i]
+            _write_formula(parent_row, children)
 
-    Shared helper between build_template() and the formula-injection path.
+
+def _collect_rows_with_calc(
+    role_number: str,
+) -> tuple[
+    list[tuple[int, str, str, bool]],
+    list[tuple[str, dict[str, list[tuple[str, int]]]]],
+]:
+    """Walk the pre linkbase + load the per-link-role calc blocks for one role.
+
+    Returns ``(rows, calc_blocks)`` — the second item is the grouped calc
+    representation consumed by :func:`_inject_sum_formulas`.
     """
     rows = walk_role(_pre_file_for_role(role_number))
-    calc = parse_calc_linkbase_for_pre_role(role_number)
-    return rows, calc
+    calc_blocks = parse_calc_linkbase_grouped_for_pre_role(role_number)
+    return rows, calc_blocks
 
 
 def _apply_group_socie_layout(ws, rows: list[tuple[int, str, str, bool]]) -> None:
