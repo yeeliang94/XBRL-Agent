@@ -202,6 +202,18 @@ For Gemini 3 models through the proxy, temperature MUST stay at 1.0. Lower value
 
 ## Known Issues & Gotchas
 
+### 0. Known Security Gaps (local-dev tool only)
+
+This app is bound to `localhost:8002` via `./start.sh` and is not intended for
+hosting. The server has several accepted security gaps — path traversal on
+`session_id` path params, no auth on `/api/settings`, no CORS config, the
+download endpoint trusts the DB-stored path without re-validating containment,
+and an unhandled `float(os.environ.get("XBRL_TOLERANCE_RM"))`. See
+[CLAUDE.md §15 Known Security Gaps](./CLAUDE.md#15-known-security-gaps-local-dev-tool-only)
+for the full list with fix directions. Before exposing the server beyond
+localhost, every item in that section must be closed — treat it as the hosting
+gate.
+
 ### 1. Windows Encoding: PYTHONUTF8=1 is Required
 
 Windows defaults to `charmap` codec which crashes on Unicode text from PDFs. The `start.bat` sets `PYTHONUTF8=1` before running Python. If running manually:

@@ -427,6 +427,60 @@ in `notes/coordinator.py` for Sheet 12. Temperature is pinned at 1.0 per the
 "Temperature Constraint" subsection above. Look for `vision inventory tokens: input=X output=Y across N/M batches`
 in the logs to see what the fallback cost on a given run.
 
+### 15. Known Security Gaps (local-dev tool only)
+
+This app is bound to `localhost:8002` via `./start.sh` and is not
+intended for hosting. The items below are safe to ignore today but
+become release blockers the moment the deployment model changes. Any
+agent or human contributor should treat this section as the gate —
+before exposing the server beyond localhost, every gap here must be
+closed.
+
+1. **Path traversal on session-id path params.** `/api/scout/{session_id}`,
+   `/api/run/{session_id}`, `/api/rerun/{session_id}`,
+   `/api/abort/{session_id}`, and `/api/abort/{session_id}/{agent_id}`
+   accept arbitrary strings as `session_id` and join them into
+   filesystem paths. Only `/api/result/{session_id}/{filename}` applies
+   a validator. Risk on localhost: low; on an internet-hosted surface:
+   high (read / overwrite / delete anywhere the server process has
+   permissions). **Fix when hosted:** shared `_validate_session_id()`
+   helper (reject `..`, `/`, `\\`; prefer UUID4 regex), called at
+   every endpoint.
+2. **No auth on `/api/settings`.** Any localhost request can write
+   `GOOGLE_API_KEY` (and siblings) into `.env`. **Fix when hosted:**
+   shared-secret header on the `settings`, `run`, `abort`, and
+   `delete` endpoints at minimum.
+3. **No CORS middleware configured.** Without `CORSMiddleware`, the
+   browser same-origin policy is what keeps cross-origin requests
+   out — but simple requests (GET, form-encoded POST) still reach the
+   server and there's no auth layer to reject them; attackers can also
+   hit the server directly from non-browser clients (curl, scripts).
+   **Fix when hosted:** add `CORSMiddleware` with an explicit
+   allowed-origins list **and** require auth on state-changing
+   endpoints — CORS alone is not a security boundary.
+4. **`/api/runs/{run_id}/download/filled` trusts the DB-stored path.**
+   Reads `runs.merged_workbook_path` and serves the file without
+   re-validating that the path resolves under `OUTPUT_DIR`. `run_id`
+   is a numeric DB primary key so path traversal via the URL param
+   isn't the concern here — the concern is a compromised or
+   mis-written `runs` row pointing anywhere. **Fix when hosted:**
+   `file_path.resolve().relative_to(OUTPUT_DIR.resolve())` check
+   before serving.
+5. **`float(os.environ.get("XBRL_TOLERANCE_RM", "1.0"))` is unhandled
+   at one of two call sites.** Two call sites today:
+   - `server.py:345-347` — guarded by an inline `try/except ValueError`
+     that falls back to `1.0`.
+   - `server.py:1166` — **not guarded**. A malformed env var crashes
+     cross-check setup mid-run.
+   **Fix when hosted:** extract the guarded read into a
+   `_safe_float_env(name, default)` helper and replace both call sites
+   with it.
+
+These gaps assume an internet-facing deployment. The current app is
+bound to `localhost:8002` via `./start.sh` and is not intended for
+hosting. The day the deployment model changes, every item in this
+list becomes a release blocker.
+
 ## Testing
 
 ```bash
