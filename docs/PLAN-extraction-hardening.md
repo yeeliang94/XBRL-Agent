@@ -92,13 +92,17 @@ Goal: the agent cannot finalise a sheet without the verifier passing and mandato
 
 ### Phase 2: MFRS/MPERS Validation Survey + Fill Gaps
 
-Goal: close the remaining intra-statement gaps the verifier doesn't cover, and fix an existing MPERS bug.
+Goal: close the remaining intra-statement gaps the verifier doesn't cover.
 
-- [ ] 🟥 **Step 2.0: Fix `_verify_sopl` MPERS label matching (existing bug)**
-  - Current `_verify_sopl` matches the normalised label `"profit (loss)"` (`tools/verifier.py:832`). On MPERS SOPL-Function, the equivalent row is **`*Profit (loss) from continuing operations, net`** (row 26), and the attribution total is **`*Total Profit (Loss)`** (row 34, not row 31). Today the verifier returns `"SOPL verification failed: missing 'Profit (loss)' label"` on every MPERS run.
-  - **R:** `test_verify_sopl_mpers_function_matches_continuing_ops_row` — load `XBRL-template-MPERS/Company/03-SOPL-Function.xlsx` (or a fixture derived from it) with valid values in row 26 + row 34 → expect pass, not the current "missing label" failure.
-  - **R:** `test_verify_sopl_mpers_detects_row_26_vs_34_mismatch` — same template with row 26 = 100, row 34 = 120 → expect failure reporting both values.
-  - **G:** Extend the label-matcher to accept either `"profit (loss)"` (MFRS) or `"profit (loss) from continuing operations, net"` (MPERS) as the profit_loss_row. Attribution-total matching via `"total profit (loss)"` already works on both standards. Confirm by running against both template variants.
+> **Step 2.0 (MPERS SOPL label fix) — cancelled 2026-04-23.** Empirical probe
+> showed the premise was wrong. MPERS SOPL-Function has a bare `'Profit (loss)'`
+> label on row 29 (no asterisk, no formula) which the existing matcher picks
+> up. The verifier runs without a missing-label error. A separate template-
+> authoring bug exists in the MPERS SOPL-Function row-34 formula
+> (`=B26+B31+B28+B32+B33` — mixes continuing total with a single attribution
+> slice + pre-tax discontinued), which may cause Phase 1's must-pass-before-save
+> gate to trap correctly-extracted MPERS runs. **Out of scope for this plan** —
+> tracked as a template-regen follow-up. Revisit if it bites in production.
 
 - [ ] 🟥 **Step 2.1: SOPL Group attribution (Row 28 + Row 30 = Row 26 on MFRS; analogous rows on MPERS)**
   - Currently `_verify_sopl` checks profit-row ≠ attribution-total but not the owners+NCI sum.
@@ -204,6 +208,7 @@ Goal: surface correction-agent + notes-validator runs in the existing Validator 
 
 ## Risks
 
+- **MPERS SOPL row-34 formula bug (template-side).** `*Total Profit (Loss)` on MPERS SOPL-Function has formula `=B26+B31+B28+B32+B33` which mixes continuing total (B26) with a single attribution slice (B31) and pre-tax discontinued (B28). On correctly-extracted data this will still disagree with row 29 (`Profit (loss)`). Phase 1's "must pass before save" gate could trap MPERS SOPL agents in a retry loop on this template bug. Mitigation: the forced-save escape hatch (Step 1.3 edge case) at iteration 47+ provides a release valve. Actual fix belongs in a template-regen plan.
 - **Latency.** Post-validator + correction agents add sequential phases after parallel fan-out. Expected +60-180s per run on hard cases. Mitigation: bound to 1 iteration each; skip if no failures detected.
 - **False-positive dedup.** Content-overlap fallback could flag legitimate cross-references (same accounting term used in policy + note). Mitigation: threshold tuning + agent has final say (prompt it to double-check via PDF).
 - **Blocking `save_result` on verifier pass** could cause agents to hit `MAX_AGENT_ITERATIONS=50` on PDFs where totals genuinely can't be reconciled (bad PDF, missing pages). Mitigation: force-save escape hatch at iteration 47+ with audit trail.
