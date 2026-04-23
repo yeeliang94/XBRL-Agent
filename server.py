@@ -78,31 +78,13 @@ def _public_notes_templates() -> frozenset:
 _PUBLIC_NOTES_TEMPLATES = _public_notes_templates()
 
 
-def _build_default_cross_checks() -> list:
-    """Return a fresh list of the cross-checks the server runs on every merge.
-
-    Instantiated per call so callers can't accidentally share check state
-    across runs. Promoted to module scope (vs. inlined in
-    `run_multi_agent_stream`) so the MPERS wiring tests can import it
-    directly to pin the registry — a silent drop of SoRE's check would
-    otherwise slip through until a live MPERS filing exposed it.
-    """
-    from cross_checks.sofp_balance import SOFPBalanceCheck
-    from cross_checks.sopl_to_socie_profit import SOPLToSOCIEProfitCheck
-    from cross_checks.soci_to_socie_tci import SOCIToSOCIETCICheck
-    from cross_checks.socie_to_sofp_equity import SOCIEToSOFPEquityCheck
-    from cross_checks.socf_to_sofp_cash import SOCFToSOFPCashCheck
-    from cross_checks.sore_to_sofp_retained_earnings import (
-        SoREToSOFPRetainedEarningsCheck,
-    )
-    return [
-        SOFPBalanceCheck(),
-        SOPLToSOCIEProfitCheck(),
-        SOCIToSOCIETCICheck(),
-        SOCIEToSOFPEquityCheck(),
-        SOCFToSOFPCashCheck(),
-        SoREToSOFPRetainedEarningsCheck(),
-    ]
+# `_build_default_cross_checks` moved to `cross_checks.framework` in the
+# peer-review round so `correction.agent` no longer needs a lazy
+# `from server import …`. Keep a local alias for back-compat with tests
+# that already import from `server` directly (MPERS wiring pins).
+from cross_checks.framework import (
+    build_default_cross_checks as _build_default_cross_checks,
+)
 
 
 # Lazy imports for multi-agent pipeline — done at call sites to keep startup fast.
@@ -238,6 +220,375 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
     provider = GoogleProvider(api_key=api_key)
     return GoogleModel(bare_name, provider=provider)
 
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: correction-agent helper (module-scope for testability)
+# ---------------------------------------------------------------------------
+
+# Agent-id the correction pass emits under. Matches the frontend's CORRECTION
+# tab routing; kept here as a single source of truth so backend + frontend +
+# tests can't drift.
+CORRECTION_AGENT_ID = "CORRECTION"
+NOTES_VALIDATOR_AGENT_ID = "NOTES_VALIDATOR"
+
+# Per-turn timeout for the correction agent. Mirrors the notes coordinator's
+# NOTES_TURN_TIMEOUT — 180s is comfortably above healthy p99 for a single
+# model turn and catches the minute-long stalls we've seen on PydanticAI.
+CORRECTION_TURN_TIMEOUT: float = 180.0
+
+# Same bound for the notes post-validator. Without it, a stalled model
+# turn after merge leaves the whole run hung in `running` (violating
+# gotcha #10 — every exit path must reach a terminal status).
+NOTES_VALIDATOR_TURN_TIMEOUT: float = 180.0
+
+
+async def _run_correction_pass(
+    failed_checks: list,
+    merged_workbook_path: str,
+    pdf_path: str,
+    infopack,
+    filing_level: str,
+    filing_standard: str,
+    model,
+    output_dir: str,
+    event_queue,
+    statements_to_run: Optional[set] = None,
+    agent_id: str = CORRECTION_AGENT_ID,
+    variants: Optional[dict] = None,
+) -> dict:
+    """Run the correction agent once against a failed cross-check set.
+
+    Bounded to 1 iteration per PLAN D4. The helper streams the agent's
+    tool events into ``event_queue`` under ``agent_id`` so the frontend
+    + DB persistence can route them exactly like face / notes agents.
+
+    Returns a dict describing what happened:
+        {
+          "invoked": bool,              # did we actually launch the agent
+          "writes_performed": int,      # fill_workbook invocations (by field)
+          "error": Optional[str],       # set on failure
+        }
+
+    The caller is responsible for re-running cross-checks afterwards —
+    this helper does not know what the "fresh" check registry looks like.
+    """
+    import asyncio as _asyncio
+    from correction.agent import create_correction_agent
+    from notes.coordinator import _iter_with_turn_timeout
+    from pydantic_ai.messages import (
+        FunctionToolCallEvent,
+        FunctionToolResultEvent,
+    )
+    from pydantic_ai import Agent
+
+    outcome: dict = {"invoked": False, "writes_performed": 0, "error": None}
+
+    async def _emit(event_type: str, data: dict) -> None:
+        if event_queue is None:
+            return
+        await event_queue.put({
+            "event": event_type,
+            "data": {**data, "agent_id": agent_id, "agent_role": agent_id},
+        })
+
+    if not failed_checks:
+        return outcome
+
+    outcome["invoked"] = True
+
+    # Default to all statements only when the caller didn't narrow — the
+    # prod path in run_multi_agent_stream always threads the real set so
+    # the agent's run_cross_checks tool sees the same scope as the outer
+    # run. Tests that construct the helper directly without the kwarg
+    # stay functional (they don't invoke the tool).
+    if statements_to_run is None:
+        from statement_types import StatementType as _ST
+        statements_to_run = set(_ST)
+
+    try:
+        agent, deps = create_correction_agent(
+            merged_workbook_path=merged_workbook_path,
+            pdf_path=pdf_path,
+            failed_checks=failed_checks,
+            infopack=infopack,
+            filing_level=filing_level,
+            filing_standard=filing_standard,
+            model=model,
+            output_dir=output_dir,
+            statements_to_run=statements_to_run,
+            variants=variants,
+        )
+    except Exception as e:  # noqa: BLE001 — defensive at the coordinator boundary
+        logger.exception("Correction agent construction failed")
+        # Peer-review S3: include the exception class in the user-facing
+        # SSE message so "agent construction failed: <str>" shows the
+        # error type alongside its message.
+        outcome["error"] = f"agent construction failed: {type(e).__name__}: {e}"
+        await _emit("error", {"message": outcome["error"]})
+        await _emit("complete", {"success": False, "error": outcome["error"]})
+        return outcome
+
+    prompt = (
+        "Investigate the failed cross-checks in your system prompt, correct "
+        "the wrong cell(s) via fill_workbook, re-verify each touched sheet, "
+        "and call run_cross_checks once when finished. You have one "
+        "iteration — do not re-extract entire sheets."
+    )
+
+    await _emit("status", {
+        "phase": "started",
+        "message": f"Correction agent started for {len(failed_checks)} failed check(s).",
+    })
+
+    try:
+        async with agent.iter(prompt, deps=deps) as agent_run:
+            async for node in _iter_with_turn_timeout(
+                agent_run, CORRECTION_TURN_TIMEOUT,
+            ):
+                if Agent.is_call_tools_node(node):
+                    async with node.stream(agent_run.ctx) as tool_stream:
+                        async for event in tool_stream:
+                            if isinstance(event, FunctionToolCallEvent):
+                                args = event.part.args
+                                if isinstance(args, str):
+                                    try:
+                                        parsed = json.loads(args)
+                                    except (json.JSONDecodeError, TypeError):
+                                        parsed = {}
+                                elif isinstance(args, dict):
+                                    parsed = args
+                                else:
+                                    parsed = {}
+                                await _emit("tool_call", {
+                                    "tool_name": event.part.tool_name,
+                                    "tool_call_id": event.part.tool_call_id,
+                                    "args": parsed,
+                                })
+                            elif isinstance(event, FunctionToolResultEvent):
+                                content = event.result.content
+                                summary = str(content)[:800] if content else ""
+                                await _emit("tool_result", {
+                                    "tool_name": event.result.tool_name,
+                                    "tool_call_id": event.result.tool_call_id,
+                                    "result_summary": summary,
+                                    "duration_ms": 0,
+                                })
+        outcome["writes_performed"] = deps.writes_performed
+        await _emit("complete", {
+            "success": True,
+            "writes_performed": deps.writes_performed,
+        })
+    except _asyncio.CancelledError:
+        await _emit("complete", {"success": False, "error": "Cancelled by user"})
+        outcome["error"] = "cancelled"
+        raise
+    except _asyncio.TimeoutError:
+        # Per-turn wait_for fired — the model stalled mid-conversation.
+        # Report writes that landed before the stall so the coordinator
+        # can still re-run cross-checks against partial progress.
+        msg = (
+            f"Correction agent stalled past {CORRECTION_TURN_TIMEOUT}s "
+            f"per-turn timeout after {deps.writes_performed} write(s)."
+        )
+        logger.warning(msg)
+        outcome["error"] = msg
+        outcome["writes_performed"] = deps.writes_performed
+        await _emit("error", {"message": msg})
+        await _emit("complete", {
+            "success": False, "error": msg,
+            "writes_performed": deps.writes_performed,
+        })
+    except Exception as e:  # noqa: BLE001 — never let correction blow up the run
+        logger.exception("Correction agent run failed")
+        outcome["error"] = str(e)
+        await _emit("error", {"message": str(e)})
+        await _emit("complete", {"success": False, "error": str(e)})
+    return outcome
+
+
+async def _run_notes_validator_pass(
+    merged_workbook_path: str,
+    pdf_path: str,
+    notes_template_outputs: dict,
+    filing_level: str,
+    filing_standard: str,
+    model,
+    output_dir: str,
+    event_queue,
+    agent_id: str = NOTES_VALIDATOR_AGENT_ID,
+) -> dict:
+    """Run the notes post-validator once after the merge.
+
+    Triggers only when BOTH Sheet 11 (ACC_POLICIES) and Sheet 12
+    (LIST_OF_NOTES) ran in the run — otherwise there's nothing to
+    cross-validate. Bounded to 1 iteration per PLAN D4.
+
+    ``notes_template_outputs`` maps NotesTemplateType.value (or any string
+    key used by the caller) → filled xlsx path so we can locate the
+    per-template sidecar JSONs the writer left behind.
+
+    Returns:
+        {
+          "invoked": bool,
+          "writes_performed": int,
+          "error": Optional[str],
+          "context": dict (detector findings: duplicates, overlap),
+        }
+    """
+    import asyncio as _asyncio
+    from notes.coordinator import _iter_with_turn_timeout
+    from notes.validator_agent import create_notes_validator_agent
+    from notes.writer import payload_sidecar_path
+    from pydantic_ai.messages import (
+        FunctionToolCallEvent,
+        FunctionToolResultEvent,
+    )
+    from pydantic_ai import Agent
+
+    outcome: dict = {
+        "invoked": False, "writes_performed": 0, "error": None,
+        "context": {},
+    }
+
+    # Trigger condition: both Sheet 11 and Sheet 12 must have run. Keys
+    # may be NotesTemplateType enums (from the coordinator) or bare
+    # strings (from tests) — normalise to the string form.
+    keys_as_strings = {
+        getattr(k, "value", k): v for k, v in notes_template_outputs.items()
+    }
+    if "ACC_POLICIES" not in keys_as_strings or "LIST_OF_NOTES" not in keys_as_strings:
+        return outcome
+
+    sidecar_paths = [
+        str(payload_sidecar_path(p))
+        for p in keys_as_strings.values()
+        if p
+    ]
+
+    async def _emit(event_type: str, data: dict) -> None:
+        if event_queue is None:
+            return
+        await event_queue.put({
+            "event": event_type,
+            "data": {**data, "agent_id": agent_id, "agent_role": agent_id},
+        })
+
+    try:
+        agent, deps, context = create_notes_validator_agent(
+            merged_workbook_path=merged_workbook_path,
+            pdf_path=pdf_path,
+            sidecar_paths=sidecar_paths,
+            filing_level=filing_level,
+            filing_standard=filing_standard,
+            model=model,
+            output_dir=output_dir,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Notes validator construction failed")
+        outcome["error"] = f"agent construction failed: {e}"
+        return outcome
+
+    outcome["context"] = context
+
+    # Short-circuit when there's genuinely nothing to do — skip invoking
+    # the model entirely. Saves latency + tokens on the common case.
+    if not context["duplicates"] and not context["overlap_candidates"]:
+        logger.info(
+            "Notes validator skipped — no cross-sheet duplicate candidates."
+        )
+        return outcome
+
+    outcome["invoked"] = True
+    await _emit("status", {
+        "phase": "started",
+        "message": (
+            f"Notes validator scanning {len(context['duplicates'])} "
+            f"ref-based + {len(context['overlap_candidates'])} overlap "
+            f"candidate(s)."
+        ),
+    })
+
+    prompt = (
+        "Resolve every candidate in your system prompt in one pass. "
+        "Apply the 'Material Accounting Policies → Sheet 11; else Sheet 12' "
+        "rule using the PDF as source of truth. Log each decision via "
+        "flag_duplication."
+    )
+
+    try:
+        async with agent.iter(prompt, deps=deps) as agent_run:
+            async for node in _iter_with_turn_timeout(
+                agent_run, NOTES_VALIDATOR_TURN_TIMEOUT,
+            ):
+                if Agent.is_call_tools_node(node):
+                    async with node.stream(agent_run.ctx) as tool_stream:
+                        async for event in tool_stream:
+                            if isinstance(event, FunctionToolCallEvent):
+                                args = event.part.args
+                                if isinstance(args, str):
+                                    try:
+                                        parsed = json.loads(args)
+                                    except (json.JSONDecodeError, TypeError):
+                                        parsed = {}
+                                elif isinstance(args, dict):
+                                    parsed = args
+                                else:
+                                    parsed = {}
+                                await _emit("tool_call", {
+                                    "tool_name": event.part.tool_name,
+                                    "tool_call_id": event.part.tool_call_id,
+                                    "args": parsed,
+                                })
+                            elif isinstance(event, FunctionToolResultEvent):
+                                content = event.result.content
+                                summary = str(content)[:800] if content else ""
+                                await _emit("tool_result", {
+                                    "tool_name": event.result.tool_name,
+                                    "tool_call_id": event.result.tool_call_id,
+                                    "result_summary": summary,
+                                    "duration_ms": 0,
+                                })
+        outcome["writes_performed"] = deps.writes_performed
+        # Persist the agent's correction log next to the merged workbook
+        # so operators have a durable audit trail of validator actions.
+        try:
+            log_path = Path(output_dir) / "notes_validator_log.json"
+            log_path.write_text(
+                json.dumps(deps.correction_log, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            logger.warning("Failed to write notes_validator_log.json", exc_info=True)
+
+        await _emit("complete", {
+            "success": True,
+            "writes_performed": deps.writes_performed,
+            "decisions_logged": len(deps.correction_log),
+        })
+    except _asyncio.CancelledError:
+        await _emit("complete", {"success": False, "error": "Cancelled by user"})
+        outcome["error"] = "cancelled"
+        raise
+    except _asyncio.TimeoutError:
+        msg = (
+            f"Notes validator stalled past {NOTES_VALIDATOR_TURN_TIMEOUT}s "
+            f"per-turn timeout after {deps.writes_performed} write(s)."
+        )
+        logger.warning(msg)
+        outcome["error"] = msg
+        outcome["writes_performed"] = deps.writes_performed
+        await _emit("error", {"message": msg})
+        await _emit("complete", {
+            "success": False, "error": msg,
+            "writes_performed": deps.writes_performed,
+        })
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Notes validator run failed")
+        outcome["error"] = str(e)
+        await _emit("error", {"message": str(e)})
+        await _emit("complete", {"success": False, "error": str(e)})
+    return outcome
 
 
 # ---------------------------------------------------------------------------
@@ -1223,6 +1574,37 @@ async def run_multi_agent_stream(
                 yield {"event": "error", "data": {"message": f"Coordinator error: {e}"}}
             return
 
+        # Peer-review C1: the main drain loop has exited (it stopped when
+        # the fan-in sentinel arrived). The post-pipeline stages below —
+        # correction agent + notes post-validator — still push events into
+        # `event_queue`. Without this helper those events would be
+        # stranded: no DB persistence, no SSE yields. The helper drains
+        # the queue while a helper task runs, persisting and yielding
+        # each event through the outer generator so the frontend + DB
+        # see live updates from the pseudo-agents.
+        async def _drain_while_running(task: asyncio.Task):
+            """Yield events from the queue while ``task`` runs, then flush
+            anything left behind after it completes. Swallows the sentinel
+            value (None) so a stale sentinel doesn't break the outer loop."""
+            while not task.done():
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.3)
+                except asyncio.TimeoutError:
+                    continue
+                if event is None:
+                    continue
+                yield event
+            # Final non-blocking sweep — agent events enqueued in the last
+            # ms before the task completed might still be sitting here.
+            while True:
+                try:
+                    event = event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if event is None:
+                    continue
+                yield event
+
         # Notes coordinator: per-agent failures are already captured in each
         # NotesAgentResult.status and don't raise here. If the coordinator
         # ITSELF raises (setup bug, unexpected asyncio error, etc.) we must
@@ -1371,6 +1753,159 @@ async def run_multi_agent_stream(
                     message=w.message,
                 ))
 
+        # Peer-review C1: track pseudo-agent outcomes so the persistence
+        # block below can finish_run_agent them. None means the helper was
+        # never invoked (short-circuited because there was nothing to do)
+        # — its row was never created and we shouldn't finalize it.
+        correction_outcome: Optional[dict] = None
+        validator_outcome: Optional[dict] = None
+        correction_run_agent_id: Optional[int] = None
+        validator_run_agent_id: Optional[int] = None
+
+        # Phase 3: if any hard cross-check failed, spawn the correction
+        # agent once. It edits the merged workbook in place; on completion
+        # we re-run the full cross-check registry so the Validator tab
+        # shows the post-correction state. Bounded to 1 iteration per
+        # PLAN D4 — unresolved failures after this pass surface for human
+        # review, they do NOT retry.
+        if merge_result.success:
+            hard_failures = [cr for cr in cross_check_results if cr.status == "failed"]
+            if hard_failures:
+                # Create + register the CORRECTION run_agent row lazily —
+                # only when we actually launch the agent — so runs without
+                # failures don't churn out a "skipped" audit row and the
+                # counts match the number of real agents that did work.
+                if db_conn is not None and run_id is not None:
+                    try:
+                        correction_run_agent_id = repo.create_run_agent(
+                            db_conn, run_id,
+                            statement_type=CORRECTION_AGENT_ID,
+                            variant=None,
+                            model=_model_id(config.model),
+                        )
+                        run_agent_ids_by_agent_id[
+                            CORRECTION_AGENT_ID.lower()
+                        ] = correction_run_agent_id
+                        db_conn.commit()
+                    except Exception:
+                        logger.warning(
+                            "Failed to pre-create correction run_agent row",
+                            exc_info=True,
+                        )
+                correction_task = asyncio.create_task(_run_correction_pass(
+                    failed_checks=hard_failures,
+                    merged_workbook_path=merged_path,
+                    pdf_path=str(session_dir / "uploaded.pdf"),
+                    infopack=infopack,
+                    filing_level=run_config.filing_level,
+                    filing_standard=run_config.filing_standard,
+                    model=model,
+                    output_dir=output_dir,
+                    event_queue=event_queue,
+                    statements_to_run=set(statements_to_run),
+                    variants={stmt: v for stmt, v in variants.items()},
+                ))
+                async for event in _drain_while_running(correction_task):
+                    persist_event(event)
+                    if client_connected:
+                        try:
+                            yield event
+                        except (asyncio.CancelledError, GeneratorExit):
+                            client_connected = False
+                correction_outcome = await correction_task
+                if correction_outcome.get("writes_performed", 0) > 0:
+                    # Re-run cross-checks against the edited workbook so
+                    # the UI + DB see the post-correction state.
+                    #
+                    # Peer-review C2: point the re-run at merged_path —
+                    # the correction agent writes to the merged workbook,
+                    # not the per-statement {stmt}_filled.xlsx files.
+                    # Feeding all_workbook_paths back in would have the
+                    # validator tab parrot the pre-correction failure
+                    # status even though filled.xlsx is now correct.
+                    # This matches the pattern the correction agent's
+                    # own `run_cross_checks` tool uses internally.
+                    merged_paths_by_stmt = {
+                        stmt: merged_path for stmt in all_workbook_paths
+                    }
+                    cross_check_results = run_cross_checks(
+                        all_checks, merged_paths_by_stmt, check_config,
+                        tolerance=tolerance,
+                    )
+                    if merge_result.success:
+                        try:
+                            consistency_warnings = check_notes_consistency(merged_path)
+                        except Exception:
+                            consistency_warnings = []
+                        from cross_checks.framework import CrossCheckResult
+                        for w in consistency_warnings:
+                            cross_check_results.append(CrossCheckResult(
+                                name=(
+                                    f"Notes consistency: "
+                                    f"{w.sheet_11_label} ↔ {w.sheet_12_label}"
+                                ),
+                                status="warning",
+                                message=w.message,
+                            ))
+
+        # Phase 5.5: notes post-validator. Runs only when BOTH Sheet 11
+        # (ACC_POLICIES) and Sheet 12 (LIST_OF_NOTES) were produced in
+        # this run. Operates on the merged workbook (so cross-sheet
+        # visibility is real), after cross-checks + any Phase 3
+        # correction pass, so it sees the final state the user will
+        # download. Bounded to 1 iteration per PLAN D4.
+        if merge_result.success and notes_result is not None:
+            notes_outputs = {
+                r.template_type: r.workbook_path
+                for r in notes_result.agent_results
+                if r.workbook_path
+            }
+            have_both_sheets = (
+                NotesTemplateType.ACC_POLICIES in notes_outputs
+                and NotesTemplateType.LIST_OF_NOTES in notes_outputs
+            )
+            if have_both_sheets:
+                # Lazy pseudo-agent row — created only when the validator
+                # will actually run. Without this gate, short-circuit
+                # cases (no sheet 11/12) would still mint an audit row
+                # and break run_agent counts in tests that expect only
+                # the real extraction agents.
+                if db_conn is not None and run_id is not None:
+                    try:
+                        validator_run_agent_id = repo.create_run_agent(
+                            db_conn, run_id,
+                            statement_type=NOTES_VALIDATOR_AGENT_ID,
+                            variant=None,
+                            model=_model_id(config.model),
+                        )
+                        run_agent_ids_by_agent_id[
+                            NOTES_VALIDATOR_AGENT_ID.lower()
+                        ] = validator_run_agent_id
+                        db_conn.commit()
+                    except Exception:
+                        logger.warning(
+                            "Failed to pre-create notes-validator row",
+                            exc_info=True,
+                        )
+                validator_task = asyncio.create_task(_run_notes_validator_pass(
+                    merged_workbook_path=merged_path,
+                    pdf_path=str(session_dir / "uploaded.pdf"),
+                    notes_template_outputs=notes_outputs,
+                    filing_level=run_config.filing_level,
+                    filing_standard=run_config.filing_standard,
+                    model=model,
+                    output_dir=output_dir,
+                    event_queue=event_queue,
+                ))
+                async for event in _drain_while_running(validator_task):
+                    persist_event(event)
+                    if client_connected:
+                        try:
+                            yield event
+                        except (asyncio.CancelledError, GeneratorExit):
+                            client_connected = False
+                validator_outcome = await validator_task
+
         # Persist per-agent FINAL state + extracted fields + cross-checks.
         # Phase 6.5 moved create_run_agent() UP FRONT so tool events could
         # be persisted live as the stream came in; this block now only
@@ -1450,6 +1985,47 @@ async def run_multi_agent_stream(
                         status=notes_agent_result.status,
                         workbook_path=notes_agent_result.workbook_path,
                     )
+
+                # Peer-review C1: finalise pseudo-agent rows so History
+                # doesn't show them stuck at the initial "running" status.
+                # `finish_run_agent` is safe to call even if events were
+                # persisted live — it just updates the terminal status.
+                if correction_run_agent_id is not None:
+                    try:
+                        if correction_outcome is None:
+                            status = "pending"
+                        elif correction_outcome.get("error"):
+                            status = "failed"
+                        else:
+                            status = "completed"
+                        repo.finish_run_agent(
+                            db_conn, correction_run_agent_id,
+                            status=status,
+                            workbook_path=None,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to finalize CORRECTION run_agent row",
+                            exc_info=True,
+                        )
+                if validator_run_agent_id is not None:
+                    try:
+                        if validator_outcome is None:
+                            status = "pending"
+                        elif validator_outcome.get("error"):
+                            status = "failed"
+                        else:
+                            status = "completed"
+                        repo.finish_run_agent(
+                            db_conn, validator_run_agent_id,
+                            status=status,
+                            workbook_path=None,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to finalize NOTES_VALIDATOR run_agent row",
+                            exc_info=True,
+                        )
 
                 # Persist cross-check results
                 for check_result in cross_check_results:

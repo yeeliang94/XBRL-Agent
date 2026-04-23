@@ -60,10 +60,11 @@ Format — a JSON list of entries, one per batch note:
 - For a note you deliberately did NOT write:
   `{"note_num": <int>, "action": "skipped", "reason": "<one sentence>"}`
   Valid reasons include: the note is the Summary of Accounting Policies
-  (belongs on Sheet 11); the note is Corporate Information (belongs on
-  Sheet 10); the note is Related Party Transactions (belongs on Sheet
-  14); no Sheet-12 row fits and it isn't important enough for the
-  catch-all row.
+  (belongs on Sheet {{CROSS_SHEET:accounting_policies}}); the note is
+  Corporate Information (belongs on Sheet {{CROSS_SHEET:corporate_information}});
+  the note is Related Party Transactions (belongs on Sheet
+  {{CROSS_SHEET:related_party}}); no row on this List of Notes sheet
+  fits and it isn't important enough for the catch-all row.
 
 Every note number in your batch must appear in the receipt exactly
 once. The tool returns errors if anything is missing, duplicated,
@@ -86,10 +87,11 @@ a truthful "skipped" is always better than a guess.
 
 === SCOPE BOUNDARY: SKIP THE ACCOUNTING-POLICIES NOTE ===
 
-Sheet 12 is for DISCLOSURE notes only — the numbered notes that show
-actual figures, breakdowns, reconciliations, and movement tables. It
-is NOT for the Summary of Material Accounting Policies note. That
-policy content belongs on Sheet 11 exclusively.
+This sheet (Sheet {{CROSS_SHEET:list_of_notes}}) is for DISCLOSURE
+notes only — the numbered notes that show actual figures, breakdowns,
+reconciliations, and movement tables. It is NOT for the Summary of
+Material Accounting Policies note. That policy content belongs on
+Sheet {{CROSS_SHEET:accounting_policies}} exclusively.
 
 Identify the policies note by FORM, not by its number (it could be
 Note 1, 2, 3, or elsewhere depending on the filing):
@@ -106,25 +108,26 @@ Note 1, 2, 3, or elsewhere depending on the filing):
 
 If a PDF note in your batch is that policies note (or one of its
 sub-sections), SKIP it entirely — do not emit any payload. Even if a
-policy sub-section's topic matches a Sheet-12 label like "Disclosure
-of fair value measurement" or "Disclosure of income tax expense", the
-real disclosure for that topic lives in a separate, later note (the
-one with the actual numbers). Another agent owns Sheet 11; your job
-is to wait for the disclosure note itself.
+policy sub-section's topic matches a row on this sheet like
+"Disclosure of fair value measurement" or "Disclosure of income tax
+expense", the real disclosure for that topic lives in a separate,
+later note (the one with the actual numbers). Another agent owns the
+Accounting Policies sheet (Sheet {{CROSS_SHEET:accounting_policies}}); your job is to wait for the disclosure note itself.
 
 Why: policy paragraphs and disclosure tables map to distinct MBRS
-XBRL concepts. Sheet 12 and Sheet 11 are separate taxonomy buckets.
-Concatenating a policy paragraph and a disclosure table into one
-Sheet-12 cell contaminates the filing and fails validation — even
-though the content would look "complete" in Excel.
+XBRL concepts. The List of Notes sheet and the Accounting Policies
+sheet are separate taxonomy buckets. Concatenating a policy paragraph
+and a disclosure table into one cell on this sheet contaminates the
+filing and fails validation — even though the content would look
+"complete" in Excel.
 
 === PROSE vs BARE NUMBERS ===
 
-Every Sheet-12 row expects disclosure content — prose, a supporting
-schedule, or both. Do NOT write a bare single number (e.g. "5,023")
-into a row whose label expects prose. If a note contains only a
-balance with no breakdown or explanation, that balance belongs on the
-face statement, not here — skip the row.
+Every row on this sheet expects disclosure content — prose, a
+supporting schedule, or both. Do NOT write a bare single number (e.g.
+"5,023") into a row whose label expects prose. If a note contains
+only a balance with no breakdown or explanation, that balance belongs
+on the face statement, not here — skip the row.
 
 === MATCHING HEURISTICS ===
 

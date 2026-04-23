@@ -69,6 +69,14 @@ class NotesPayload:
     # actually written by Note 1. None for single-sheet templates
     # (10/11/13/14) which don't have a batch concept.
     note_num: Optional[int] = None
+    # Phase 4.1: PDF note references this payload's content is drawn from
+    # (e.g. `["5"]`, `["5.1"]`, or `["5", "5.1", "5.2"]` when a single
+    # cell groups a parent note with its sub-notes). Optional — agents
+    # populate it during extraction, and the Phase 5 post-validator uses
+    # it as the primary dedup signal across Sheets 11 and 12. Empty list
+    # = the agent couldn't identify a note number (e.g. policy paragraphs
+    # without numbering).
+    source_note_refs: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.chosen_row_label or not self.chosen_row_label.strip():

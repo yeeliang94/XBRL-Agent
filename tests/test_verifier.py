@@ -1,7 +1,14 @@
 import openpyxl
 import pytest
 
-from tools.verifier import verify_totals, VerificationResult, _evaluate_formula, _resolve_cell_value
+from tools.verifier import (
+    verify_totals,
+    VerificationResult,
+    _evaluate_formula,
+    _resolve_cell_value,
+    verify_statement,
+)
+from statement_types import StatementType
 
 
 def _make_template(tmp_path):
@@ -240,3 +247,240 @@ def test_verify_targets_sofp_sheet(tmp_path):
     result = verify_totals(str(path))
     assert result.is_balanced
     assert result.computed_totals["total_assets_cy"] == 500
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.1: mandatory-field detection on face sheets
+# ---------------------------------------------------------------------------
+
+def test_verification_result_has_mandatory_unfilled_field():
+    """VerificationResult must carry a `mandatory_unfilled` list so
+    verify_totals feedback can surface unfilled `*` rows."""
+    r = VerificationResult(is_balanced=True, matches_pdf=None)
+    assert r.mandatory_unfilled == []
+
+
+def test_verify_sopl_reports_unfilled_asterisks(tmp_path):
+    """An SOPL sheet with a blank `*Revenue` row should surface 'Revenue'
+    under `mandatory_unfilled`, without suppressing the attribution check."""
+    path = tmp_path / "sopl.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOPL-Function"
+    ws["A1"] = "*Revenue"
+    # B1 deliberately left blank
+    ws["A2"] = "*Cost of sales"
+    ws["B2"] = -40
+    ws["A3"] = "*Profit (loss)"
+    ws["B3"] = 60
+    ws["A4"] = "*Total profit (loss)"
+    ws["B4"] = 60
+    wb.save(str(path))
+
+    r = verify_statement(str(path), StatementType.SOPL, variant="Function")
+    assert "*Revenue" in r.mandatory_unfilled
+
+
+def test_verify_sofp_reports_unfilled_asterisks(tmp_path):
+    """Mandatory-unfilled helper must also run on SOFP via verify_totals."""
+    path = tmp_path / "sofp.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOFP-CuNonCu"
+    ws["A1"] = "*Total assets"
+    ws["B1"] = 100
+    ws["A2"] = "*Cash and cash equivalents"
+    # B2 blank — unfilled
+    ws["A3"] = "*Total equity and liabilities"
+    ws["B3"] = 100
+    wb.save(str(path))
+
+    r = verify_totals(str(path))
+    assert any("Cash and cash equivalents" in s for s in r.mandatory_unfilled)
+
+
+def test_verify_socie_reports_unfilled_asterisks(tmp_path):
+    """SOCIE verifier must also populate mandatory_unfilled."""
+    path = tmp_path / "socie.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOCIE"
+    ws["A1"] = "Equity at beginning of period, restated"
+    ws["X1"] = 100
+    ws["A2"] = "Total increase (decrease) in equity"
+    ws["X2"] = 50
+    ws["A3"] = "Equity at end of period"
+    ws["X3"] = 150
+    # A mandatory row that is unfilled anywhere on the sheet
+    ws["A4"] = "*Profit (loss)"
+    # B4 blank
+    wb.save(str(path))
+
+    r = verify_statement(str(path), StatementType.SOCIE, variant="Default")
+    assert any("Profit (loss)" in s for s in r.mandatory_unfilled)
+
+
+def test_verify_sopl_group_checks_attribution(tmp_path):
+    """SOPL Group filing: owners + NCI attribution rows must sum to Profit
+    (loss). A mismatch between (owners, NCI) pair and the profit row must
+    drive is_balanced=False."""
+    path = tmp_path / "sopl_group_attr.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOPL-Function"
+    ws["A1"] = "Profit (loss)"
+    ws["B1"] = 120  # group profit
+    ws["D1"] = 100  # company profit
+    ws["A2"] = "Profit (loss), attributable to, owners of parent"
+    ws["B2"] = 100  # owners
+    ws["D2"] = 100
+    ws["A3"] = "Profit (loss), attributable to, non-controlling interests"
+    ws["B3"] = 10  # NCI — sum is 110 but profit is 120 → mismatch
+    ws["D3"] = 0
+    ws["A4"] = "Total profit (loss)"
+    ws["B4"] = 120
+    ws["D4"] = 100
+    wb.save(str(path))
+
+    r = verify_statement(
+        str(path), StatementType.SOPL, variant="Function", filing_level="group",
+    )
+    assert r.is_balanced is False
+    assert any("attribution" in m.lower() or "owners" in m.lower()
+               for m in r.mismatches)
+
+
+def test_verify_sopl_group_attribution_passes_when_sum_matches(tmp_path):
+    """Owners + NCI that actually sums to profit must not fail the check."""
+    path = tmp_path / "sopl_group_ok.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOPL-Function"
+    ws["A1"] = "Profit (loss)"
+    ws["B1"] = 110
+    ws["D1"] = 100
+    ws["A2"] = "Profit (loss), attributable to, owners of parent"
+    ws["B2"] = 100
+    ws["D2"] = 100
+    ws["A3"] = "Profit (loss), attributable to, non-controlling interests"
+    ws["B3"] = 10
+    ws["D3"] = 0
+    ws["A4"] = "Total profit (loss)"
+    ws["B4"] = 110
+    ws["D4"] = 100
+    wb.save(str(path))
+
+    r = verify_statement(
+        str(path), StatementType.SOPL, variant="Function", filing_level="group",
+    )
+    # The owners+NCI check should pass; attribution total still matches profit.
+    attribution_fails = [m for m in r.mismatches
+                         if "owners" in m.lower() and "non-controlling" in m.lower()]
+    assert not attribution_fails
+
+
+def test_verify_sofp_group_checks_equity_attribution(tmp_path):
+    """SOFP Group filing: owners + NCI must sum to Total equity."""
+    path = tmp_path / "sofp_group_eq.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOFP-CuNonCu"
+    ws["A1"] = "Equity attributable to owners of parent"
+    ws["B1"] = 500
+    ws["D1"] = 500
+    ws["A2"] = "Non-controlling interests"
+    ws["B2"] = 50  # owners+NCI = 550 but total equity is 600 → mismatch
+    ws["D2"] = 0
+    ws["A3"] = "Total equity"
+    ws["B3"] = 600
+    ws["D3"] = 500
+    ws["A4"] = "Total assets"
+    ws["B4"] = 700
+    ws["D4"] = 600
+    ws["A5"] = "Total equity and liabilities"
+    ws["B5"] = 700
+    ws["D5"] = 600
+    wb.save(str(path))
+
+    r = verify_statement(
+        str(path), StatementType.SOFP, variant="CuNonCu", filing_level="group",
+    )
+    assert r.is_balanced is False
+    assert any("equity" in m.lower() and ("owners" in m.lower() or "attribut" in m.lower())
+               for m in r.mismatches)
+
+
+def test_verify_sofp_group_equity_attribution_passes_when_sum_matches(tmp_path):
+    path = tmp_path / "sofp_group_eq_ok.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOFP-CuNonCu"
+    ws["A1"] = "Equity attributable to owners of parent"
+    ws["B1"] = 500
+    ws["D1"] = 500
+    ws["A2"] = "Non-controlling interests"
+    ws["B2"] = 100
+    ws["D2"] = 0
+    ws["A3"] = "Total equity"
+    ws["B3"] = 600
+    ws["D3"] = 500
+    ws["A4"] = "Total assets"
+    ws["B4"] = 700
+    ws["D4"] = 600
+    ws["A5"] = "Total equity and liabilities"
+    ws["B5"] = 700
+    ws["D5"] = 600
+    wb.save(str(path))
+
+    r = verify_statement(
+        str(path), StatementType.SOFP, variant="CuNonCu", filing_level="group",
+    )
+    equity_attr_fails = [m for m in r.mismatches
+                         if "non-controlling" in m.lower() and "equity" in m.lower()]
+    assert not equity_attr_fails
+
+
+def test_verify_sofp_company_does_not_check_equity_attribution(tmp_path):
+    """The equity-attribution check is Group-only — running it on a Company
+    filing would fail needlessly because standalone SOFPs don't carry NCI."""
+    path = tmp_path / "sofp_company.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOFP-CuNonCu"
+    ws["A1"] = "Total equity"
+    ws["B1"] = 600
+    ws["A2"] = "Total assets"
+    ws["B2"] = 700
+    ws["A3"] = "Total equity and liabilities"
+    ws["B3"] = 700
+    wb.save(str(path))
+
+    r = verify_statement(
+        str(path), StatementType.SOFP, variant="CuNonCu", filing_level="company",
+    )
+    attr_fails = [m for m in r.mismatches if "attribut" in m.lower()]
+    assert not attr_fails
+
+
+def test_verify_sopl_group_flags_company_column_unfilled(tmp_path):
+    """For group filings, mandatory-unfilled must scan both Group CY (col B)
+    and Company CY (col D) — leaving a company column blank still counts."""
+    path = tmp_path / "sopl_group.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOPL-Function"
+    ws["A1"] = "*Revenue"
+    ws["B1"] = 100  # Group CY filled
+    # D1 (Company CY) blank — unfilled
+    ws["A2"] = "*Profit (loss)"
+    ws["B2"] = 30
+    ws["D2"] = 30
+    ws["A3"] = "*Total profit (loss)"
+    ws["B3"] = 30
+    ws["D3"] = 30
+    wb.save(str(path))
+
+    r = verify_statement(
+        str(path), StatementType.SOPL, variant="Function", filing_level="group"
+    )
+    assert any("Revenue" in s for s in r.mandatory_unfilled)

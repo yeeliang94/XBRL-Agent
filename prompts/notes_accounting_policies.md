@@ -13,11 +13,18 @@ generic prose that describes HOW the company accounts for things
 (recognition, measurement, impairment rules, depreciation basis, etc.).
 It is NOT for the numbered disclosure notes that follow (e.g. "Trade
 receivables" showing carrying amounts, "Income tax" showing the
-reconciliation for the year) — those belong on Sheet 12.
+reconciliation for the year) — those belong on the List of Notes
+sheet (Sheet {{CROSS_SHEET:list_of_notes}}).
 
 Identify the policy note by its HEADING and FORM, not by its number —
 it might be Note 1, 2, 3, or another number depending on the filing.
-Look for a heading like:
+The heading in the PDF determines the sheet: if the subheader reads
+"Material Accounting Policies" (or a close variant — "Significant
+Accounting Policies", "Summary of Material Accounting Policies"), that
+content belongs on this sheet (Sheet {{CROSS_SHEET:accounting_policies}}).
+Otherwise it belongs on the List of Notes sheet (Sheet
+{{CROSS_SHEET:list_of_notes}}). **No content belongs on both.** Look
+for a heading like:
 
 - "Summary of material accounting policies"
 - "Significant accounting policies"
@@ -27,11 +34,11 @@ Its contents read as generic rules ("Revenue is recognised when…",
 "Property, plant and equipment is measured at cost less accumulated
 depreciation…"), not as period-specific numbers, tables, or movement
 schedules. If you encounter a table of actual amounts or a
-reconciliation, stop — that's a disclosure note for Sheet 12, not
-this sheet.
+reconciliation, stop — that's a disclosure note for the List of
+Notes sheet, not this sheet.
 
 Why: policy prose and disclosure figures map to distinct MBRS XBRL
-concepts. Sheet 11 stays policy-only so the taxonomy elements line
+concepts. This sheet stays policy-only so the taxonomy elements line
 up cleanly with the filing.
 
 === STRATEGY ===

@@ -137,9 +137,20 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
   // Notes agents are persisted with statement_type = "NOTES_<TEMPLATE>"
   // — render with the same friendly chip the live UI uses so history
   // doesn't fall back to the raw DB enum value (peer-review MEDIUM).
-  const displayName = agent.statement_type.startsWith("NOTES_")
-    ? notesTabLabel(agent.statement_type)
-    : agent.statement_type;
+  // Phase 7.2: CORRECTION + NOTES_VALIDATOR pseudo-agents get the same
+  // friendly labels as the live UI (from appReducer's
+  // PSEUDO_AGENT_LABELS). Keeping the map local to one line keeps the
+  // two call-sites in lockstep without a shared import for three rows.
+  let displayName: string;
+  if (agent.statement_type === "CORRECTION") {
+    displayName = "Correction";
+  } else if (agent.statement_type === "NOTES_VALIDATOR") {
+    displayName = "Notes Validator";
+  } else if (agent.statement_type.startsWith("NOTES_")) {
+    displayName = notesTabLabel(agent.statement_type);
+  } else {
+    displayName = agent.statement_type;
+  }
 
   // Notes-12 branch: derive the sub-agent list from the persisted events
   // (live path gets this for free from the reducer). Only render the

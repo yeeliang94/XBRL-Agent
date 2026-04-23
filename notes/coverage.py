@@ -43,14 +43,20 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Union
 
+from notes.labels import normalize_label
+
 
 def _normalize_label(s: str) -> str:
     """Mirror of `notes.writer._normalize` so the receipt and the
-    writer agree on what "the same label" means. Kept as a private
-    helper here (rather than imported from writer) to avoid a
-    notes.coverage → notes.writer import dependency that would
-    invert the natural module ordering (writer is the lower layer)."""
-    return s.strip().lstrip("*").strip().lower()
+    writer agree on what "the same label" means. Both delegate to
+    `notes.labels.normalize_label` so the two layers cannot drift
+    apart — a change to the normalisation rules lands in one place
+    and flows to both comparators.
+
+    Why a thin wrapper instead of a direct import re-export: coverage.py
+    calls this identifier heavily already; keeping the private name
+    lets the implementation swap underneath without touching call sites."""
+    return normalize_label(s)
 
 
 # Closed set — any other action string is a typo and must be rejected

@@ -508,6 +508,47 @@ describe("RunDetailView", () => {
     expect(screen.queryByRole("tablist", { name: /sheet-12/i })).not.toBeInTheDocument();
   });
 
+  test("history_detail_renders_correction_agent", () => {
+    // Phase 7.2: a persisted CORRECTION pseudo-agent must render under
+    // its friendly label ("Correction") — no raw DB enum leakage.
+    const detail = makeDetail({
+      agents: [
+        makeAgent(),
+        makeAgent({
+          id: 99,
+          statement_type: "CORRECTION",
+          variant: null,
+          status: "completed",
+          workbook_path: null,
+        }),
+      ],
+    });
+    render(
+      <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    expect(screen.getByText("Correction")).toBeTruthy();
+  });
+
+  test("history_detail_renders_notes_validator_agent", () => {
+    // Phase 7.2 counterpart: NOTES_VALIDATOR pseudo-agent label.
+    const detail = makeDetail({
+      agents: [
+        makeAgent(),
+        makeAgent({
+          id: 100,
+          statement_type: "NOTES_VALIDATOR",
+          variant: null,
+          status: "completed",
+          workbook_path: null,
+        }),
+      ],
+    });
+    render(
+      <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    expect(screen.getByText("Notes Validator")).toBeTruthy();
+  });
+
   test("Delete button is enabled for terminal statuses", () => {
     // Sanity check: the disable must NOT bleed into completed / failed /
     // aborted statuses. Each of these represents a terminal run and

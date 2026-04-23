@@ -21,11 +21,14 @@ then SequenceMatcher fallback at ~0.7 similarity.
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
+
+from notes.labels import normalize_label
 
 import openpyxl
 
@@ -140,15 +143,70 @@ def write_notes_workbook(
     evidence_col = _evidence_col(filing_level)
 
     rows_written = 0
+    sidecar_entries: list[dict] = []
     for row, row_payloads in rows_consumed.items():
         combined = _combine_payloads(row_payloads)
         if _write_row(ws, row, combined, filing_level, evidence_col, errors):
             rows_written += 1
+            # Phase 4.3: collect per-cell provenance for the post-validator.
+            # One entry per written row — combining all note-refs from the
+            # contributing payloads so row-112 catch-alls retain the full
+            # list. Preview is a short snippet of content (or the numeric
+            # key names) to help operators cross-reference the sidecar
+            # against the filled xlsx without loading the workbook.
+            refs: list[str] = []
+            seen: set[str] = set()
+            for p in row_payloads:
+                for r in p.source_note_refs:
+                    if r not in seen:
+                        seen.add(r)
+                        refs.append(r)
+            # Aggregate source_pages across contributing payloads so the
+            # post-validator has concrete PDF pages to feed into
+            # `view_pdf_pages` when it needs to apply the heading rule.
+            # Without this the validator could only guess which pages to
+            # render from content_preview, which is both slow and wrong.
+            pages: list[int] = []
+            seen_pages: set[int] = set()
+            for p in row_payloads:
+                for pg in p.source_pages:
+                    if pg not in seen_pages:
+                        seen_pages.add(pg)
+                        pages.append(pg)
+            if combined.numeric_values:
+                preview = f"numeric[{','.join(sorted(combined.numeric_values))}]"
+            else:
+                preview = combined.content[:120]
+            sidecar_entries.append({
+                "sheet": sheet_name,
+                "row": row,
+                "col": 2,  # all prose + all numeric rows start writing at col B
+                "source_note_refs": refs,
+                "source_pages": pages,
+                "content_preview": preview,
+            })
 
     try:
         wb.save(output_path)
     finally:
         wb.close()
+
+    # Phase 4.3: sidecar JSON for the Phase 5 post-validator. One file
+    # per template output, same basename + "_payloads.json" — no shared
+    # global file so the notes coordinator's `asyncio.gather` fan-out
+    # can't race. Writing synchronously here is safe: each notes agent
+    # owns exactly one template path.
+    try:
+        sidecar_path = payload_sidecar_path(output_path)
+        sidecar_path.write_text(
+            json.dumps(sidecar_entries, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError:
+        # Best-effort — a filesystem failure here must not fail the
+        # primary workbook write. The post-validator falls back to the
+        # content-overlap heuristic when the sidecar is missing.
+        logger.warning("Failed to write sidecar next to %s", output_path, exc_info=True)
 
     # Zero-row writes are failures — see docstring. Callers who want a
     # no-op success must short-circuit before calling this function.
@@ -160,6 +218,25 @@ def write_notes_workbook(
         errors=errors,
         fuzzy_matches=fuzzy_matches,
     )
+
+
+def payload_sidecar_path(xlsx_output_path: str) -> Path:
+    """Return the sidecar JSON path for a given filled xlsx output.
+
+    Convention: ``{basename}_payloads.json`` in the same directory as the
+    xlsx. Lifting into a named helper so both the writer and the Phase 5
+    post-validator can import it and agree on the location. Public (no
+    leading underscore) because it is a cross-module contract — the
+    validator and the server orchestrator both resolve sidecar paths
+    through this function.
+    """
+    p = Path(xlsx_output_path)
+    return p.with_suffix("").with_name(p.stem + "_payloads.json")
+
+
+# Backwards-compatibility alias — previous callers used the private form.
+# New call sites should import ``payload_sidecar_path``.
+_payload_sidecar_path = payload_sidecar_path
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +266,12 @@ def _build_label_index(ws) -> list[_LabelEntry]:
 
 
 def _normalize(s: str) -> str:
-    return s.strip().lstrip("*").strip().lower()
+    # Delegates to notes.labels.normalize_label so the writer and the
+    # coverage validator stay in lock-step on what counts as "the same
+    # label". Strips whitespace, a leading `*` marker, lowercases, and
+    # removes a trailing SSM type suffix like `[text block]` — the
+    # latter is what keeps MPERS labels matching bare-form payloads.
+    return normalize_label(s)
 
 
 def _resolve_row(

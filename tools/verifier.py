@@ -24,6 +24,11 @@ class VerificationResult:
     pdf_values: dict[str, float] = field(default_factory=dict)
     mismatches: list[str] = field(default_factory=list)
     feedback: str = ""
+    # Phase 1.1: labels whose mandatory ('*') rows were not filled. Populated
+    # by `_collect_unfilled_mandatory` from each statement verifier so
+    # `verify_totals` feedback can route the agent back to the gap instead
+    # of silently shipping a blank cell. Empty list = no gaps.
+    mandatory_unfilled: list[str] = field(default_factory=list)
 
 
 # The exact labels we look for in the SOFP main sheet to verify balance
@@ -478,6 +483,54 @@ def verify_totals(
                 mismatches.append(f"{key}: computed={actual}, expected={expected}")
                 matches_pdf = False
 
+    # Phase 2.2: SOFP Group equity attribution check — owners + NCI must
+    # sum to Total equity. Group-only because standalone Company SOFPs
+    # don't carry NCI. Label matching works on both MFRS and MPERS
+    # (identical SSM labels).
+    if filing_level == "group":
+        total_equity_row = None
+        owners_equity_row = None
+        nci_equity_row = None
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.column != 1 or cell.value is None:
+                    continue
+                norm = _normalize_label(str(cell.value))
+                if norm == "total equity":
+                    total_equity_row = cell.row
+                elif "equity" in norm and "owners of parent" in norm and "attribut" in norm:
+                    owners_equity_row = cell.row
+                elif norm == "non-controlling interests":
+                    nci_equity_row = cell.row
+
+        if total_equity_row and owners_equity_row and nci_equity_row:
+            for cy_col, prefix in _cy_columns(filing_level):
+                pfx = f"{prefix} " if prefix else ""
+                sfx = f"_{prefix.lower()}" if prefix else ""
+                te = _get_cell_value(
+                    wb, ws, total_equity_row, cy_col, warnings=formula_warnings,
+                ) or 0.0
+                owners = _get_cell_value(
+                    wb, ws, owners_equity_row, cy_col, warnings=formula_warnings,
+                ) or 0.0
+                nci = _get_cell_value(
+                    wb, ws, nci_equity_row, cy_col, warnings=formula_warnings,
+                ) or 0.0
+                computed_totals[f"total_equity_cy{sfx}"] = te
+                computed_totals[f"equity_owners_cy{sfx}"] = owners
+                computed_totals[f"equity_nci_cy{sfx}"] = nci
+                expected = owners + nci
+                if abs(te - expected) > 0.01:
+                    is_balanced = False
+                    mismatches.append(
+                        f"{pfx}Total equity ({te}) != "
+                        f"owners ({owners}) + non-controlling interests ({nci}) = {expected}"
+                    )
+
+    # Phase 1.1: mandatory-field scan. Runs on the SOFP sheet (ws above)
+    # — it is the only sheet verify_totals inspects.
+    mandatory_unfilled = _collect_unfilled_mandatory(wb, ws, filing_level)
+
     wb.close()
 
     return VerificationResult(
@@ -487,6 +540,7 @@ def verify_totals(
         pdf_values=pdf_values or {},
         mismatches=mismatches,
         feedback="\n".join(feedback_lines),
+        mandatory_unfilled=mandatory_unfilled,
     )
 
 
@@ -532,6 +586,61 @@ def _cy_columns(filing_level: str) -> list[tuple[int, str]]:
     if filing_level == "group":
         return [(2, "Group"), (4, "Company")]
     return [(2, "")]
+
+
+# Phase 1.1: mandatory-field helper. Scans col A of the given worksheet for
+# labels prefixed with `*` and reports any whose CY value column(s) are
+# None or empty string. Face sheets only (notes have legitimate blank `*`
+# rows). The caller decides which worksheet to pass so this helper stays
+# dumb about sheet names / variant quirks.
+def _collect_unfilled_mandatory(
+    wb: openpyxl.Workbook,
+    ws,
+    filing_level: str,
+) -> list[str]:
+    """Return mandatory (`*`-prefixed) row labels whose CY cells are blank.
+
+    A row counts as "unfilled" when every CY column (col B for company
+    filings; cols B and D for group filings) is either None, an empty
+    string, or a formula that evaluates to 0 AND the underlying cell is
+    literally blank (i.e. no data was entered and no upstream cell either).
+    Formulas that resolve to a real number — including 0 from a genuine
+    sum — count as filled, so agents aren't nagged into fabricating a
+    non-zero value for a legitimately zero line item.
+    """
+    unfilled: list[str] = []
+    cy_cols = [c for c, _ in _cy_columns(filing_level)]
+    for row in range(1, ws.max_row + 1):
+        raw = ws.cell(row=row, column=1).value
+        if raw is None:
+            continue
+        label = str(raw).strip()
+        if not label.startswith("*"):
+            continue
+        # Treat a row as filled if ANY CY column carries a non-empty value
+        # (literal or formula-resolved). Note: for group, we require BOTH
+        # Group CY and Company CY to be populated — a group filing with a
+        # blank Company column is exactly the gap we want to surface.
+        row_unfilled = False
+        for col in cy_cols:
+            cell = ws.cell(row=row, column=col)
+            val = cell.value
+            if val is None or (isinstance(val, str) and not val.strip()):
+                # Literal blank — unfilled in this column.
+                row_unfilled = True
+                break
+            if isinstance(val, str) and val.startswith("="):
+                # Formula present ⇒ treat as filled. We can't distinguish
+                # a real zero from an unresolvable formula (both return
+                # 0.0), so we prefer quiet false negatives over noisy
+                # false positives. Skipping the `_evaluate_formula` walk
+                # keeps this hot path O(rows) — full evaluation is
+                # expensive (tokenizer + recursive cell resolution) and
+                # its return value is unused.
+                continue
+        if row_unfilled:
+            unfilled.append(label)
+    return unfilled
 
 
 def verify_statement(
@@ -660,6 +769,8 @@ def _verify_socie(
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
 
+    mandatory_unfilled = _collect_unfilled_mandatory(wb, ws, filing_level)
+
     wb.close()
 
     matches_pdf = _check_pdf_values(computed_totals, pdf_values)
@@ -671,6 +782,7 @@ def _verify_socie(
         pdf_values=pdf_values or {},
         mismatches=mismatches,
         feedback="\n".join(mismatches) if mismatches else "SOCIE balance check passed.",
+        mandatory_unfilled=mandatory_unfilled,
     )
 
 
@@ -779,6 +891,8 @@ def _verify_socf(
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
 
+    mandatory_unfilled = _collect_unfilled_mandatory(wb, ws, filing_level)
+
     wb.close()
 
     matches_pdf = _check_pdf_values(computed_totals, pdf_values)
@@ -790,6 +904,7 @@ def _verify_socf(
         pdf_values=pdf_values or {},
         mismatches=mismatches,
         feedback="\n".join(mismatches) if mismatches else "SOCF balance check passed.",
+        mandatory_unfilled=mandatory_unfilled,
     )
 
 
@@ -853,6 +968,31 @@ def _verify_sopl(
             feedback="SOPL verification failed: missing 'Profit (loss)' label",
         )
 
+    # Phase 2.1: SOPL Group attribution check — owners + NCI must sum to
+    # the Profit (loss) row. Only fires on group filings because standalone
+    # filings don't carry the attribution rows. We find the rows by label
+    # match so MFRS and MPERS (which use the identical `attributable to,
+    # owners of parent` / `non-controlling interests` wording) both work.
+    owners_profit_row = None
+    nci_profit_row = None
+    if filing_level == "group":
+        for row in range(1, ws.max_row + 1):
+            val = ws.cell(row=row, column=1).value
+            if not val:
+                continue
+            norm = _normalize_label(str(val))
+            # Match the full SSM label "Profit (loss), attributable to,
+            # owners of parent" and also tolerate shorter variants that
+            # some agents may produce.
+            if "profit" in norm and "owners of parent" in norm and "attribut" in norm:
+                owners_profit_row = row
+            elif (
+                "profit" in norm
+                and "non-controlling interest" in norm
+                and "attribut" in norm
+            ):
+                nci_profit_row = row
+
     for cy_col, prefix in _cy_columns(filing_level):
         pfx = f"{prefix} " if prefix else ""
         sfx = f"_{prefix.lower()}" if prefix else ""
@@ -870,8 +1010,29 @@ def _verify_sopl(
                     f"{pfx}Profit/loss ({pl_val}) != attribution total ({attr_val})"
                 )
 
+        # Phase 2.1: owners + NCI attribution sum check. Only fires when
+        # filing_level == "group" and both rows were found.
+        if filing_level == "group" and owners_profit_row and nci_profit_row:
+            owners = _get_cell_value(
+                wb, ws, owners_profit_row, cy_col, warnings=formula_warnings,
+            ) or 0.0
+            nci = _get_cell_value(
+                wb, ws, nci_profit_row, cy_col, warnings=formula_warnings,
+            ) or 0.0
+            computed_totals[f"profit_owners_cy{sfx}"] = owners
+            computed_totals[f"profit_nci_cy{sfx}"] = nci
+            expected = owners + nci
+            if abs(pl_val - expected) > 0.01:
+                is_balanced = False
+                mismatches.append(
+                    f"{pfx}Profit/loss ({pl_val}) != "
+                    f"owners ({owners}) + non-controlling interests ({nci}) = {expected}"
+                )
+
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
+
+    mandatory_unfilled = _collect_unfilled_mandatory(wb, ws, filing_level)
 
     wb.close()
 
@@ -884,6 +1045,7 @@ def _verify_sopl(
         pdf_values=pdf_values or {},
         mismatches=mismatches,
         feedback="\n".join(mismatches) if mismatches else "SOPL attribution check passed.",
+        mandatory_unfilled=mandatory_unfilled,
     )
 
 
@@ -984,6 +1146,8 @@ def _verify_soci(
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
 
+    mandatory_unfilled = _collect_unfilled_mandatory(wb, ws, filing_level)
+
     wb.close()
 
     matches_pdf = _check_pdf_values(computed_totals, pdf_values)
@@ -995,6 +1159,7 @@ def _verify_soci(
         pdf_values=pdf_values or {},
         mismatches=mismatches,
         feedback="\n".join(mismatches) if mismatches else "SOCI balance check passed.",
+        mandatory_unfilled=mandatory_unfilled,
     )
 
 

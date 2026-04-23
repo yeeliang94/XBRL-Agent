@@ -349,12 +349,23 @@ export function agentSubAgentSummary(agent: AgentState): string | null {
   return `${noteSpan}, ${pageSpan}`;
 }
 
+// Phase 7: display labels for pseudo-agents that emit under a fixed ID
+// (correction pass + notes post-validator). Kept as a dedicated map so the
+// upper-case uppercasing in deriveAgentLabel can't accidentally munge them
+// and a test can pin the exact tab text users see.
+const PSEUDO_AGENT_LABELS: Record<string, string> = {
+  CORRECTION: "Correction",
+  NOTES_VALIDATOR: "Notes Validator",
+};
+
 /** Derive the display label for a newly created agent slot. */
 function deriveAgentLabel(agentId: string, role: string): string {
   if (agentId.startsWith("notes:")) {
     return notesTabLabel(role || agentId);
   }
-  return (role || agentId).toUpperCase().replace(/_\d+$/, "");
+  const upper = (role || agentId).toUpperCase();
+  if (PSEUDO_AGENT_LABELS[upper]) return PSEUDO_AGENT_LABELS[upper];
+  return upper.replace(/_\d+$/, "");
 }
 
 /** Ensure an agent slot exists; create it on-the-fly if not. */

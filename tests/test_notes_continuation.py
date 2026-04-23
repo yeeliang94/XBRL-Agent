@@ -73,6 +73,19 @@ def test_char_limit_footnote_present_in_base_prompt():
     assert "truncated" in base.lower()
 
 
+def test_notes_prompt_instructs_source_note_refs():
+    """Step 4.2: the base notes prompt must teach agents to populate
+    `source_note_refs` with PDF note numbers so the Phase 5 post-validator
+    can dedupe cross-sheet content."""
+    base = (_PROMPT_DIR / "_notes_base.md").read_text(encoding="utf-8")
+    flat = _flatten(base)
+    assert "source_note_refs" in base
+    # The numbering guidance must be present so the agent knows what to fill.
+    assert "note number" in flat
+    # An example (e.g. ["5.1"]) keeps the contract unambiguous for the LLM.
+    assert "5.1" in base
+
+
 def test_rendered_prompt_mentions_inventory_when_provided():
     """When scout provides an inventory, the prompt must surface the
     note-by-note list so the agent can cross-reference page ranges."""

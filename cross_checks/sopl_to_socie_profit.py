@@ -25,7 +25,7 @@ class SOPLToSOCIEProfitCheck:
         # handles the one reconciliation that still makes sense.
         return not is_sore_run(run_config)
 
-    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company") -> CrossCheckResult:
+    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
         sopl_wb = open_workbook(workbook_paths[StatementType.SOPL])
         sopl_ws = find_sheet(sopl_wb, "SOPL-Function", "SOPL-Nature")
         sopl_profit = None
@@ -41,19 +41,29 @@ class SOPLToSOCIEProfitCheck:
         socie_profit = None
         co_socie_profit = None
         if socie_ws is not None:
+            # Phase 5: `socie_column` now honours filing_standard — see
+            # socie_to_sofp_equity.py for the rationale.
             if filing_level == "group":
                 blk = SOCIE_GROUP_BLOCKS["group_cy"]
                 socie_profit = find_value_in_block(
-                    socie_ws, "profit (loss)", col=socie_column(socie_ws, start_row=blk[0], end_row=blk[1]),
+                    socie_ws, "profit (loss)",
+                    col=socie_column(
+                        socie_ws, start_row=blk[0], end_row=blk[1],
+                        filing_standard=filing_standard,
+                    ),
                     start_row=blk[0], end_row=blk[1], wb=socie_wb,
                 )
                 co_blk = SOCIE_GROUP_BLOCKS["company_cy"]
                 co_socie_profit = find_value_in_block(
-                    socie_ws, "profit (loss)", col=socie_column(socie_ws, start_row=co_blk[0], end_row=co_blk[1]),
+                    socie_ws, "profit (loss)",
+                    col=socie_column(
+                        socie_ws, start_row=co_blk[0], end_row=co_blk[1],
+                        filing_standard=filing_standard,
+                    ),
                     start_row=co_blk[0], end_row=co_blk[1], wb=socie_wb,
                 )
             else:
-                col = socie_column(socie_ws)
+                col = socie_column(socie_ws, filing_standard=filing_standard)
                 socie_profit = find_value_by_label(socie_ws, "profit (loss)", col=col, wb=socie_wb)
         socie_wb.close()
 

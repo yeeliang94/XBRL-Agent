@@ -540,6 +540,65 @@ describe("appReducer", () => {
     expect(notesTabLabel("FUTURE_TEMPLATE")).toBe("Notes: FUTURE_TEMPLATE");
   });
 
+  test("appReducer_handles_correction_agent", () => {
+    // Phase 7.1: a CORRECTION agent_id event must materialise a tab with
+    // a friendly "Correction" label, without any frontend enum extension
+    // (backend promise in PLAN §3.2: reuse the existing coarse envelope).
+    const running = appReducer(
+      appReducer(initialState, {
+        type: "UPLOADED",
+        payload: { sessionId: "s", filename: "x.pdf" },
+      }),
+      { type: "RUN_STARTED", payload: {} },
+    );
+    const after = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: {
+          phase: "started",
+          message: "Correction agent started.",
+          agent_id: "CORRECTION",
+          agent_role: "CORRECTION",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    const agent = after.agents["CORRECTION"];
+    expect(agent).toBeDefined();
+    expect(agent.label).toBe("Correction");
+    expect(after.agentTabOrder).toContain("CORRECTION");
+  });
+
+  test("appReducer_handles_notes_validator_agent", () => {
+    // Phase 7.1: NOTES_VALIDATOR pseudo-agent routes through the same
+    // coarse SSE envelope and lands as a dedicated tab.
+    const running = appReducer(
+      appReducer(initialState, {
+        type: "UPLOADED",
+        payload: { sessionId: "s", filename: "x.pdf" },
+      }),
+      { type: "RUN_STARTED", payload: {} },
+    );
+    const after = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: {
+          phase: "started",
+          message: "Notes validator started.",
+          agent_id: "NOTES_VALIDATOR",
+          agent_role: "NOTES_VALIDATOR",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    const agent = after.agents["NOTES_VALIDATOR"];
+    expect(agent).toBeDefined();
+    expect(agent.label).toBe("Notes Validator");
+    expect(after.agentTabOrder).toContain("NOTES_VALIDATOR");
+  });
+
   test("notes agent slot gets the friendly tab label derived from role", () => {
     // When a notes SSE event arrives, ensureAgent creates the slot using
     // deriveAgentLabel(agentId, role). Verify the label is the short

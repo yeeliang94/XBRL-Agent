@@ -12,6 +12,7 @@ from cross_checks.framework import CrossCheckResult
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label,
     find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
+    socie_total_column,
 )
 
 
@@ -23,7 +24,7 @@ class SOCIToSOCIETCICheck:
         # Same reasoning as sopl_to_socie_profit — SoRE has no TCI row.
         return not is_sore_run(run_config)
 
-    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company") -> CrossCheckResult:
+    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
         soci_wb = open_workbook(workbook_paths[StatementType.SOCI])
         soci_ws = find_sheet(soci_wb, "SOCI-BeforeOfTax", "SOCI-BeforeTax", "SOCI-NetOfTax")
         soci_tci = None
@@ -39,19 +40,27 @@ class SOCIToSOCIETCICheck:
         socie_tci = None
         co_socie_tci = None
         if socie_ws is not None:
+            # Phase 5: TCI is a total across dimensional axes — MFRS
+            # always reads col X (24), MPERS always reads col B (2).
+            # `socie_total_column` encapsulates the branch. (Unlike the
+            # profit check, TCI doesn't have a retained-earnings-only
+            # degenerate case, so no NCI detection is needed.)
+            col = socie_total_column(filing_standard)
             if filing_level == "group":
                 blk = SOCIE_GROUP_BLOCKS["group_cy"]
                 socie_tci = find_value_in_block(
-                    socie_ws, "total comprehensive income", col=24,
+                    socie_ws, "total comprehensive income", col=col,
                     start_row=blk[0], end_row=blk[1], wb=socie_wb,
                 )
                 co_blk = SOCIE_GROUP_BLOCKS["company_cy"]
                 co_socie_tci = find_value_in_block(
-                    socie_ws, "total comprehensive income", col=24,
+                    socie_ws, "total comprehensive income", col=col,
                     start_row=co_blk[0], end_row=co_blk[1], wb=socie_wb,
                 )
             else:
-                socie_tci = find_value_by_label(socie_ws, "total comprehensive income", col=24, wb=socie_wb)
+                socie_tci = find_value_by_label(
+                    socie_ws, "total comprehensive income", col=col, wb=socie_wb,
+                )
         socie_wb.close()
 
         if soci_tci is None or socie_tci is None:

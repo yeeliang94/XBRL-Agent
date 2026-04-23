@@ -161,3 +161,27 @@ def test_notes_payload_accepts_all_canonical_numeric_keys():
         source_pages=[42],
         numeric_values={"cy": 1.0, "py": 2.0},
     )
+
+
+def test_notes_payload_has_source_note_refs():
+    """Step 4.1: payloads carry an optional `source_note_refs` list so the
+    Phase 5 post-validator can dedupe notes across Sheet 11 and Sheet 12."""
+    p = NotesPayload(
+        chosen_row_label="Disclosure of trade receivables",
+        content="Trade receivables consist of...",
+        evidence="Pages 30-32",
+        source_pages=[30, 31, 32],
+        source_note_refs=["5", "5.1", "5.2"],
+    )
+    assert p.source_note_refs == ["5", "5.1", "5.2"]
+
+
+def test_notes_payload_source_note_refs_defaults_to_empty_list():
+    """Omitting source_note_refs must not break legacy payloads."""
+    p = NotesPayload(
+        chosen_row_label="Disclosure of revenue",
+        content="Revenue is recognised...",
+        evidence="Page 20",
+        source_pages=[20],
+    )
+    assert p.source_note_refs == []
