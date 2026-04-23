@@ -55,6 +55,169 @@ _TEMPLATE_PROMPT_FILES: dict[NotesTemplateType, str] = {
 }
 
 
+# Allowed filing-standard axis values. Used by render_notes_prompt and any
+# other prompt-side helpers that need to branch on the standard. Kept
+# local to this module rather than hoisted into notes_types because the
+# prompt layer is the only place that treats an unknown standard as a
+# hard error — other layers (registry, writer) already reject upstream.
+_VALID_FILING_STANDARDS = ("mfrs", "mpers")
+
+
+# Sheet-number maps per filing standard. Used by _render_sheet_map to emit
+# the correct "Sheet N — <topic>" layout in the system prompt so agents
+# that skip a note because it belongs on a different sheet cite the right
+# number. MFRS slots notes at 10-14; MPERS slots the MPERS-only SoRE at 10
+# and shifts notes to 11-15 (CLAUDE.md gotcha #15). Missing bug from run
+# #105: this mapping was hardcoded to MFRS in _notes_base.md regardless of
+# the active standard.
+_SHEET_MAP_BY_STANDARD: dict[str, list[tuple[int, str, str]]] = {
+    "mfrs": [
+        (10, "Corporate Information", "Notes-CI"),
+        (11, "Summary of Material Accounting Policies", "Notes-SummaryofAccPol"),
+        (12, "List of Notes", "Notes-Listofnotes"),
+        (13, "Issued Capital", "Notes-Issuedcapital"),
+        (14, "Related Party Transactions", "Notes-RelatedPartytran"),
+    ],
+    "mpers": [
+        # MPERS-only face-statement template — NOT a notes sheet, but we
+        # list it here so the agent understands why notes start at 11.
+        (10, "Statement of Retained Earnings (MPERS-only face statement)", "SoRE"),
+        (11, "Corporate Information", "Notes-CI"),
+        (12, "Summary of Material Accounting Policies", "Notes-SummaryofAccPol"),
+        (13, "List of Notes", "Notes-Listofnotes"),
+        (14, "Issued Capital", "Notes-Issuedcapital"),
+        (15, "Related Party Transactions", "Notes-RelatedPartytran"),
+    ],
+}
+
+
+# Cross-sheet hint map — for a given cross-reference topic, which sheet
+# owns it under a given filing standard. Consumed by the per-template
+# prompts (notes_listofnotes, notes_accounting_policies) via
+# {{CROSS_SHEET:<topic>}} tokens so the "skip because X belongs elsewhere"
+# reasoning cites the correct sheet number. Keyed by lower-case topic
+# slug so prompt-side token substitution stays case-insensitive.
+_CROSS_SHEET_BY_STANDARD: dict[str, dict[str, int]] = {
+    "mfrs": {
+        "corporate_information": 10,
+        "accounting_policies": 11,
+        "list_of_notes": 12,
+        "issued_capital": 13,
+        "related_party": 14,
+    },
+    "mpers": {
+        "corporate_information": 11,
+        "accounting_policies": 12,
+        "list_of_notes": 13,
+        "issued_capital": 14,
+        "related_party": 15,
+    },
+}
+
+
+def _render_sheet_map(filing_standard: str) -> str:
+    """Emit the '=== SHEET MAP ===' block keyed off the active standard.
+
+    Replaces the MFRS-hardcoded sheet list that used to live in
+    `_notes_base.md`. Structured as a plain bullet list so the agent can
+    parse it with the same heuristics it applies to the rest of the
+    prompt — no schema change for the model.
+    """
+    rows = _SHEET_MAP_BY_STANDARD[filing_standard]
+    lines = [
+        "=== SHEET MAP: WHAT EACH SHEET COVERS ===",
+        "",
+        (
+            "Each notes sheet maps to a distinct MBRS XBRL concept, and "
+            "contents must NOT overlap across sheets. Know which sheet is "
+            "yours before you copy any content."
+        ),
+        "",
+    ]
+    for num, topic, sheet_code in rows:
+        lines.append(f"- **Sheet {num} — {topic}** (`{sheet_code}`)")
+    lines.append("")
+    lines.append(
+        "**Do not cross sheets.** Policy paragraphs and disclosure notes "
+        "often cover overlapping topics — a policy paragraph on 'income "
+        "tax' and a separate disclosure note on 'taxation' that shows the "
+        "actual tax reconciliation. They live on DIFFERENT sheets "
+        "because they map to DIFFERENT XBRL concepts in the SSM MBRS "
+        "taxonomy; merging them into one cell produces an invalid "
+        "filing. If the content you're reading clearly belongs on "
+        "another sheet, skip it — the agent owning that sheet will "
+        "cover it."
+    )
+    return "\n".join(lines)
+
+
+def _render_mpers_overlay(filing_standard: str) -> Optional[str]:
+    """Emit an MPERS-only guidance block.
+
+    The MPERS bundle diverges from MFRS in two ways that routinely
+    trip up agents trained on MFRS vocabulary:
+    1. Row labels carry an SSM ReportingLabel type suffix
+       (`[text block]`, `[abstract]`, …) that MFRS rows don't have.
+    2. The MPERS disclosure-notes taxonomy is materially smaller
+       (~83 concept rows vs MFRS's ~139). Concepts like "capital
+       management" or "fair value measurement" simply don't exist
+       as standalone rows.
+
+    Returns None on non-MPERS runs so the MFRS prompt stays identical
+    to its pre-MPERS shape (regression guard for
+    `test_mfrs_prompt_has_no_mpers_overlay_leak`).
+    """
+    if filing_standard != "mpers":
+        return None
+    return (
+        "=== MPERS-SPECIFIC GUIDANCE ===\n"
+        "\n"
+        "You are filling an MPERS (Malaysian Private Entities Reporting "
+        "Standard) template. MPERS differs from MFRS in ways that matter "
+        "for label matching:\n"
+        "\n"
+        "1. **Label form.** Every disclosure row in MPERS templates ends "
+        "   with an SSM taxonomy type suffix such as `[text block]` or "
+        "   `[abstract]`. Example: `Disclosure of cash and cash "
+        "   equivalents [text block]`. Copy the suffix verbatim when "
+        "   you emit `chosen_row_label` — the writer tolerates a bare "
+        "   form, but matching is cleanest when you mirror the template "
+        "   exactly.\n"
+        "\n"
+        "2. **Smaller concept set.** The MPERS disclosure-notes "
+        "   taxonomy is narrower than MFRS. Concepts that exist under "
+        "   MFRS but NOT under MPERS include 'Disclosure of capital "
+        "   management', 'Disclosure of fair value measurement', and "
+        "   'Disclosure of amendments to MFRS'. If a PDF note's topic "
+        "   has no MPERS equivalent, route it to the catch-all "
+        "   'Disclosure of other notes to accounts [text block]' row — "
+        "   do NOT fabricate an MFRS-style label.\n"
+        "\n"
+        "3. **Extra face-statement slot.** MPERS adds a 10-SoRE "
+        "   (Statement of Retained Earnings) face-statement template "
+        "   that MFRS doesn't have. That's why notes sheets are numbered "
+        "   11-15 on MPERS vs 10-14 on MFRS. Check the sheet map above "
+        "   if cross-sheet references are unclear."
+    )
+
+
+def _apply_cross_sheet_tokens(text: str, filing_standard: str) -> str:
+    """Resolve `{{CROSS_SHEET:<topic>}}` tokens in a prompt body to the
+    right sheet number for the active filing standard.
+
+    Per-template prompts use this token when they need to tell the agent
+    "X belongs on Sheet N, not here". The token stays constant in the
+    file; the resolved number flips between MFRS and MPERS. Missing
+    tokens are left as-is so a typo is visible in the rendered prompt
+    rather than silently swallowed.
+    """
+    mapping = _CROSS_SHEET_BY_STANDARD[filing_standard]
+    out = text
+    for topic, sheet_num in mapping.items():
+        out = out.replace(f"{{{{CROSS_SHEET:{topic}}}}}", str(sheet_num))
+    return out
+
+
 def _load_prompt(filename: str) -> str:
     return (_PROMPT_DIR / filename).read_text(encoding="utf-8").strip()
 
@@ -69,6 +232,60 @@ _BASE_PROMPT_FALLBACK = (
     "follow the per-template task section below and emit payloads "
     "with evidence."
 )
+
+
+# Maximum number of label rows to embed in the system prompt. Generous
+# enough to cover any single notes sheet (MFRS LoN is 138 rows, the
+# largest) without bloating every prompt with hundreds of boilerplate
+# lines. If a template grows past this, the agent falls back to the
+# `read_template` tool for the remainder — same behaviour as before
+# Phase 3, just starting from a partial seed instead of nothing.
+_LABEL_CATALOG_MAX_ROWS = 180
+
+
+def _render_label_catalog(labels: list[str]) -> Optional[str]:
+    """Render the seeded row-label catalog block for the system prompt.
+
+    Returns None when the caller didn't pass any labels so the prompt
+    shape stays identical to the pre-Phase-3 layout. Truncates at
+    `_LABEL_CATALOG_MAX_ROWS` rows with a footer pointing at the
+    `read_template` tool — the agent can always retrieve the full
+    list on demand; the block's job is to put the most common labels
+    one turn away instead of two.
+    """
+    if not labels:
+        return None
+    shown = labels[:_LABEL_CATALOG_MAX_ROWS]
+    overflow = len(labels) - len(shown)
+    lines = [
+        "=== TEMPLATE ROW LABELS (copy verbatim) ===",
+        "",
+        (
+            "The rows below are the authoritative col-A labels from the "
+            "template you are filling. Every payload's "
+            "`chosen_row_label` MUST come from this list, copied "
+            "verbatim. The writer normalises leading `*` markers and "
+            "taxonomy type suffixes (`[text block]`, `[abstract]` …) "
+            "for matching, but emitting the label exactly as shown here "
+            "is the safest path."
+        ),
+        "",
+    ]
+    for label in shown:
+        lines.append(f"  - {label}")
+    if overflow > 0:
+        lines.append("")
+        lines.append(
+            f"  … and {overflow} more row(s). Call `read_template` if "
+            f"the label you need isn't listed above."
+        )
+    else:
+        lines.append("")
+        lines.append(
+            "Call `read_template` if you want to re-retrieve this list "
+            "mid-run."
+        )
+    return "\n".join(lines)
 
 
 def _render_inventory_preview(inventory: list[NoteInventoryEntry]) -> str:
@@ -168,6 +385,8 @@ def render_notes_prompt(
     inventory: list[NoteInventoryEntry],
     page_hints: Optional[list[int]] = None,
     page_offset: int = 0,
+    filing_standard: str = "mfrs",
+    label_catalog: Optional[list[str]] = None,
 ) -> str:
     """Compose the system prompt for a notes agent.
 
@@ -180,7 +399,19 @@ def render_notes_prompt(
     and the PDF page index. When positive, the prompt includes a block
     telling the agent how to cross-walk between the two without citing
     the wrong number in `evidence`.
+
+    ``filing_standard`` selects the sheet-map + cross-sheet references
+    emitted into the prompt. MFRS keeps the historical 10-14 layout;
+    MPERS shifts to 11-15 (slot 10 is the MPERS-only SoRE face
+    statement). Unknown standards raise — the run-level dispatcher
+    already validates the axis, so anything invalid reaching here is
+    a wiring bug worth surfacing loudly.
     """
+    if filing_standard not in _VALID_FILING_STANDARDS:
+        raise ValueError(
+            f"Invalid filing_standard {filing_standard!r} — "
+            f"must be one of {_VALID_FILING_STANDARDS}"
+        )
     try:
         base = _load_prompt("_notes_base.md")
     except FileNotFoundError:
@@ -191,21 +422,46 @@ def render_notes_prompt(
     except FileNotFoundError:
         specific = f"=== TASK: {template_type.value} ===\nNo per-template prompt defined yet."
 
+    # Resolve {{CROSS_SHEET:<topic>}} tokens inside the per-template body
+    # so "belongs on Sheet N" hints carry the right number per standard.
+    # Base prompt no longer hardcodes sheet numbers; we emit the map via
+    # _render_sheet_map below.
+    specific = _apply_cross_sheet_tokens(specific, filing_standard)
+
     entry = NOTES_REGISTRY[template_type]
     sheet_line = (
         f"=== TARGET ===\n"
         f"Template: {entry.template_filename}\n"
         f"Sheet:    {entry.sheet_name}\n"
-        f"Filing level: {filing_level}"
+        f"Filing level: {filing_level}\n"
+        f"Filing standard: {filing_standard.upper()}"
     )
 
     parts = [
         base,
+        _render_sheet_map(filing_standard),
         sheet_line,
         _render_column_rules(filing_level),
         specific,
         "=== INVENTORY ===\n" + _render_inventory_preview(inventory),
     ]
+    # Phase 4: MPERS-specific overlay (suffix convention + narrower
+    # taxonomy + SoRE slot note). Rendered after the per-template body
+    # but before the label catalog so the agent reads the taxonomy
+    # caveat right before seeing the actual labels.
+    overlay_block = _render_mpers_overlay(filing_standard)
+    if overlay_block is not None:
+        parts.append(overlay_block)
+    # Phase 3: seed the template's row labels inline so agents aren't
+    # guessing from training-prior vocabulary. Emitted AFTER the
+    # per-template specific section (which describes the task) and
+    # BEFORE the page hints + offset blocks (which are the most-weighted
+    # tail of the prompt). Agents don't need to see the labels right
+    # before their write; they need them before they reason about
+    # which row a note maps to.
+    catalog_block = _render_label_catalog(label_catalog or [])
+    if catalog_block is not None:
+        parts.append(catalog_block)
     # Hints are orthogonal to the inventory — both may be present, and
     # the agent treats them as complementary (inventory = what notes
     # exist; hints = where those notes likely live). Emit hints last
@@ -274,6 +530,13 @@ class NotesDeps:
     # rather than `list[_LabelEntry]` to avoid leaking a writer-internal
     # type into the NotesDeps public signature.
     label_index_cache: Optional[list] = None
+    # Phase 3: the col-A label list loaded at factory time and seeded
+    # into the system prompt. Kept on deps so `read_template` can
+    # short-circuit repeat calls against the cached list instead of
+    # re-opening the workbook. Populated by create_notes_agent; an
+    # empty default stays backwards-compatible with tests that build
+    # NotesDeps directly without going through the factory.
+    template_label_catalog: list[str] = field(default_factory=list)
     # Sheet-12 coverage receipt handshake. Populated by
     # `listofnotes_subcoordinator._invoke_sub_agent_once` alongside
     # `payload_sink` — the sub-agent runner then hands the same list to
@@ -287,6 +550,51 @@ class NotesDeps:
     # finishes to build the aggregated coverage warnings + side-log.
     # Typed `Any` to avoid importing CoverageReceipt here (cycle).
     coverage_receipt: Any = None
+
+
+def _load_template_label_catalog(template_path: str, sheet_name: str) -> list[str]:
+    """Load the col-A row labels from a notes template for prompt seeding.
+
+    Opens the workbook once, reads every non-empty col-A cell on the
+    target sheet, and returns the raw strings in row order. Kept
+    separate from `_read_template_impl` (which yields richer
+    TemplateField records) because the prompt only needs the label
+    text — dragging the full TemplateField list into the prompt
+    renderer would leak implementation details into the prompt layer.
+
+    Returns an empty list on any IO or sheet-missing failure rather
+    than raising — the seeded catalog is a best-effort enhancement;
+    missing it degrades gracefully to the pre-Phase-3 behaviour (the
+    agent falls back to the `read_template` tool).
+    """
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(template_path, data_only=False)
+    except Exception as e:  # noqa: BLE001 — intentional catch-all for IO
+        logger.warning(
+            "Could not open template %s for label catalog: %s",
+            template_path, e,
+        )
+        return []
+    try:
+        if sheet_name not in wb.sheetnames:
+            logger.warning(
+                "Sheet %r missing from %s for label catalog",
+                sheet_name, template_path,
+            )
+            return []
+        ws = wb[sheet_name]
+        labels: list[str] = []
+        for row in range(1, ws.max_row + 1):
+            val = ws.cell(row=row, column=1).value
+            if val is None:
+                continue
+            text = str(val).strip()
+            if text:
+                labels.append(text)
+        return labels
+    finally:
+        wb.close()
 
 
 def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
@@ -631,6 +939,14 @@ def create_notes_agent(
     ))
     filled_filename = f"NOTES_{template_type.value}_filled.xlsx"
 
+    # Phase 3: seed the system prompt with the actual template row
+    # labels. Load once at factory time — cheap compared to the LLM
+    # calls that follow. The list also caches on deps so the
+    # `read_template` tool can short-circuit repeat retrievals.
+    label_catalog = _load_template_label_catalog(
+        template_path_str, entry.sheet_name,
+    )
+
     deps = NotesDeps(
         pdf_path=pdf_path,
         template_path=template_path_str,
@@ -648,6 +964,7 @@ def create_notes_agent(
         # sets this field post-construction (belt-and-braces) so the
         # deps object carries the same value either way.
         batch_note_nums=list(batch_note_nums) if batch_note_nums is not None else None,
+        template_label_catalog=label_catalog,
     )
 
     system_prompt = render_notes_prompt(
@@ -656,6 +973,8 @@ def create_notes_agent(
         inventory=inventory,
         page_hints=page_hints,
         page_offset=page_offset,
+        filing_standard=filing_standard,
+        label_catalog=label_catalog,
     )
 
     # Pin temperature=1.0 (CLAUDE.md gotcha #5).
@@ -754,6 +1073,16 @@ def create_notes_agent(
                 # check rather than failing the write here.
                 raw_note_num = raw.get("note_num")
                 note_num = int(raw_note_num) if raw_note_num is not None else None
+                # Phase 4.1: source_note_refs flows through the agent's
+                # JSON payload so the post-validator can dedupe. Optional
+                # in the raw JSON — missing/None collapses to an empty
+                # list (the fallback content-overlap check in Phase 5.4
+                # covers that case).
+                raw_refs = raw.get("source_note_refs") or []
+                if isinstance(raw_refs, list):
+                    source_note_refs = [str(r) for r in raw_refs if r is not None]
+                else:
+                    source_note_refs = []
                 payloads.append(NotesPayload(
                     chosen_row_label=raw["chosen_row_label"],
                     content=raw.get("content", "") or "",
@@ -762,6 +1091,7 @@ def create_notes_agent(
                     numeric_values=raw.get("numeric_values"),
                     sub_agent_id=ctx.deps.sub_agent_id,
                     note_num=note_num,
+                    source_note_refs=source_note_refs,
                 ))
             except (KeyError, ValueError, TypeError, AttributeError) as e:
                 errors.append(f"Invalid payload {raw!r}: {e}")

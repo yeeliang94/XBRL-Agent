@@ -12,6 +12,7 @@ from cross_checks.framework import CrossCheckResult
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label,
     find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
+    socie_total_column,
 )
 
 
@@ -24,25 +25,35 @@ class SOCIEToSOFPEquityCheck:
         # SoREToSOFPRetainedEarningsCheck carries the SoRE-era reconciliation.
         return not is_sore_run(run_config)
 
-    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company") -> CrossCheckResult:
+    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
         socie_wb = open_workbook(workbook_paths[StatementType.SOCIE])
         socie_ws = find_sheet(socie_wb, "SOCIE")
         socie_equity = None
         co_socie_equity = None
         if socie_ws is not None:
+            # Phase 5: pick the read column per standard. Equity at end
+            # of period is always a total across the dimensional axes
+            # — on MFRS that's col X (24) unconditionally; on MPERS the
+            # flat layout puts it in col B (2). `socie_total_column`
+            # encapsulates the branch. NCI presence doesn't change the
+            # column here (unlike the profit check, where retained-
+            # earnings-only filings read col C).
+            col = socie_total_column(filing_standard)
             if filing_level == "group":
                 blk = SOCIE_GROUP_BLOCKS["group_cy"]
                 socie_equity = find_value_in_block(
-                    socie_ws, "equity at end of period", col=24,
+                    socie_ws, "equity at end of period", col=col,
                     start_row=blk[0], end_row=blk[1], wb=socie_wb,
                 )
                 co_blk = SOCIE_GROUP_BLOCKS["company_cy"]
                 co_socie_equity = find_value_in_block(
-                    socie_ws, "equity at end of period", col=24,
+                    socie_ws, "equity at end of period", col=col,
                     start_row=co_blk[0], end_row=co_blk[1], wb=socie_wb,
                 )
             else:
-                socie_equity = find_value_by_label(socie_ws, "equity at end of period", col=24, wb=socie_wb)
+                socie_equity = find_value_by_label(
+                    socie_ws, "equity at end of period", col=col, wb=socie_wb,
+                )
         socie_wb.close()
 
         sofp_wb = open_workbook(workbook_paths[StatementType.SOFP])

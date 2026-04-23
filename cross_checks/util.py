@@ -65,14 +65,71 @@ def has_nci_data(ws, start_row: int = 1, end_row: Optional[int] = None) -> bool:
     return False
 
 
-def socie_column(ws, start_row: int = 1, end_row: Optional[int] = None) -> int:
-    """Return the correct SOCIE read column: Total (X=24) if NCI data exists,
-    Retained earnings (C=3) otherwise.
+# MPERS SOCIE doesn't use the MFRS matrix layout — values land in col B
+# (CY) and col C (PY) like every other MPERS statement. The dimensional
+# breakdown lives on separate axes, not across 24 columns.
+_MPERS_SOCIE_CY_COL = 2
+_MPERS_SOCIE_PY_COL = 3
 
-    For Group SOCIE, pass the block's row range so NCI detection is scoped
-    to that entity/period block only.
+
+def socie_column(
+    ws,
+    start_row: int = 1,
+    end_row: Optional[int] = None,
+    filing_standard: str = "mfrs",
+) -> int:
+    """Return the correct SOCIE read column for a CY value.
+
+    On MFRS: Total (X=24) if NCI data exists, Retained earnings (C=3)
+    otherwise. The NCI check scans a row range so Group SOCIE blocks
+    can be scoped independently.
+
+    On MPERS: always col B (2). MPERS SOCIE is a flat 2-column
+    (CY/PY) layout with dimensional members on separate rows — the
+    matrix logic doesn't apply. Bypassing the NCI scan also means we
+    don't accidentally pick up a stray dimensional string in col W
+    as "NCI data".
+
+    Defaults to MFRS so callers that haven't migrated (tests, etc.)
+    keep their pre-Phase-5 behaviour.
     """
+    if filing_standard == "mpers":
+        return _MPERS_SOCIE_CY_COL
     return _SOCIE_TOTAL_COL if has_nci_data(ws, start_row, end_row) else _SOCIE_RETAINED_COL
+
+
+def socie_total_column(filing_standard: str = "mfrs") -> int:
+    """Return the SOCIE column that holds an aggregate Total (CY).
+
+    Used by cross-checks that read equity-at-end or TCI — neither has
+    a "per-component" variant, they're always totals across the
+    dimensional axes.
+
+    MFRS → col X (24) unconditionally (the pre-existing contract;
+    equity/TCI tests rely on this).
+    MPERS → col B (2) because MPERS SOCIE is a flat two-column layout
+    with dimensional members on axis rows, not across 24 columns.
+    """
+    return _MPERS_SOCIE_CY_COL if filing_standard == "mpers" else _SOCIE_TOTAL_COL
+
+
+def socie_py_column(filing_standard: str = "mfrs") -> int:
+    """Return the CY→PY offset column for SOCIE reads.
+
+    MPERS SOCIE stores PY in col C (3). MFRS SOCIE PY blocks are in
+    separate row ranges (not a PY column on the same row), so this
+    helper's MFRS branch is only ever needed for Phase-5 symmetry; the
+    existing MFRS checks read PY via block-range lookups and don't
+    call here.
+    """
+    if filing_standard == "mpers":
+        return _MPERS_SOCIE_PY_COL
+    # MFRS doesn't have a "PY column" on the same row — blocks are
+    # row-range-separated. Returning col 25 is technically meaningless
+    # but keeps the symmetric helper shape; callers on MFRS should
+    # pass block ranges via find_value_in_block instead of reading
+    # this column directly.
+    return _SOCIE_TOTAL_COL + 1
 
 
 def find_value_in_block(

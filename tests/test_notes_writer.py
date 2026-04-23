@@ -355,3 +355,77 @@ def test_empty_payloads_returns_failure(tmp_path: Path):
     )
     assert result.success is False
     assert result.rows_written == 0
+
+
+def test_notes_writer_persists_source_note_refs_for_post_validator(tmp_path: Path):
+    """Step 4.3: the writer must persist a per-template sidecar next to
+    the filled xlsx so the Phase 5 post-validator can load note-ref
+    provenance without re-parsing the workbook."""
+    import json
+    from notes.writer import _payload_sidecar_path
+
+    tpl = notes_template_path(NotesTemplateType.CORP_INFO, level="company")
+    out = tmp_path / "Notes-CI_filled.xlsx"
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Financial reporting status",
+            content="The Group is a going concern.",
+            evidence="Page 14",
+            source_pages=[14],
+            source_note_refs=["2", "2(a)"],
+        ),
+    ]
+    result = write_notes_workbook(
+        template_path=str(tpl),
+        payloads=payloads,
+        output_path=str(out),
+        filing_level="company",
+        sheet_name=CORP_INFO_SHEET,
+    )
+    assert result.success, result.errors
+    sidecar = _payload_sidecar_path(str(out))
+    assert sidecar.exists(), f"expected sidecar at {sidecar}"
+    data = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert isinstance(data, list)
+    assert len(data) == 1
+    entry = data[0]
+    assert entry["sheet"] == CORP_INFO_SHEET
+    assert set(entry["source_note_refs"]) == {"2", "2(a)"}
+    assert "Going concern" in entry["content_preview"] or "going concern" in entry["content_preview"]
+
+
+def test_notes_writer_sidecar_concatenates_refs_for_row_with_multiple_payloads(tmp_path: Path):
+    """When multiple payloads collapse into one row (Sheet-12 row-112
+    catch-all pattern), the sidecar must union their source_note_refs."""
+    import json
+    from notes.writer import _payload_sidecar_path
+
+    tpl = notes_template_path(NotesTemplateType.CORP_INFO, level="company")
+    out = tmp_path / "Notes-CI_multi.xlsx"
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Financial reporting status",
+            content="First line.",
+            evidence="Page 10",
+            source_pages=[10],
+            source_note_refs=["2"],
+        ),
+        NotesPayload(
+            chosen_row_label="Financial reporting status",
+            content="Second line.",
+            evidence="Page 11",
+            source_pages=[11],
+            source_note_refs=["2.1"],
+        ),
+    ]
+    result = write_notes_workbook(
+        template_path=str(tpl),
+        payloads=payloads,
+        output_path=str(out),
+        filing_level="company",
+        sheet_name=CORP_INFO_SHEET,
+    )
+    assert result.success
+    data = json.loads(_payload_sidecar_path(str(out)).read_text(encoding="utf-8"))
+    assert len(data) == 1
+    assert set(data[0]["source_note_refs"]) == {"2", "2.1"}

@@ -1,7 +1,7 @@
 # Implementation Plan: Extraction Pipeline Hardening
 
-**Overall Progress:** `0%`
-**Last Updated:** 2026-04-22
+**Overall Progress:** `100%`
+**Last Updated:** 2026-04-23
 **Trigger:** Post-run QA over multiple companies surfaced five recurring failure modes in face-statement + notes output (see Motivation).
 
 ## Motivation
@@ -69,24 +69,24 @@ Reviewing output across several company runs turned up five patterns the pipelin
 
 Goal: the agent cannot finalise a sheet without the verifier passing and mandatory `*` fields populated.
 
-- [ ] 🟥 **Step 1.1: Extend `VerificationResult` with `mandatory_unfilled: list[str]`**
+- [x] 🟩 **Step 1.1: Extend `VerificationResult` with `mandatory_unfilled: list[str]`**
   - **R:** `test_verification_result_has_mandatory_unfilled_field` — dataclass access fails.
   - **G:** Add field to `VerificationResult` (`tools/verifier.py:13-26`), default `[]`.
   - **R:** `test_verify_sopl_reports_unfilled_asterisks` — seed a SOPL xlsx with `*Revenue` row blank; assert `result.mandatory_unfilled` contains `"*Revenue"` (and the SOPL Row 26 check still runs).
   - **G:** Add `_collect_unfilled_mandatory(ws, filing_level) -> list[str]` helper. Call from each `_verify_{sofp,sopl,soci,socf,socie}` function. Helper scans col A for `*`-prefixed labels, reads the CY column(s) per filing level, flags any that are `None` or empty string.
   - **Verified:** all existing verifier tests still green.
 
-- [ ] 🟥 **Step 1.2: Surface `mandatory_unfilled` in `verify_totals` feedback**
+- [x] 🟩 **Step 1.2: Surface `mandatory_unfilled` in `verify_totals` feedback**
   - **R:** `test_verify_totals_tool_output_includes_mandatory_unfilled` in `tests/test_extraction_agent.py` — mock `_verify_statement_impl` to return `mandatory_unfilled=["*Revenue", "*Finance income"]`, assert the string returned by the tool contains both labels and an "Action required:" directive.
   - **G:** Edit `extraction/agent.py:270-295` — append mandatory-unfilled section to the `lines` list before returning.
 
-- [ ] 🟥 **Step 1.3: `save_result` refuses to finalise until last verify was clean**
+- [x] 🟩 **Step 1.3: `save_result` refuses to finalise until last verify was clean**
   - **R:** `test_save_result_blocks_when_verify_totals_failed` — feed an agent loop where `verify_totals` returned `is_balanced=False`, then call `save_result`; assert returned string is an error directing the agent to re-verify.
   - **R:** `test_save_result_blocks_when_verify_totals_never_called` — similar, no verify call at all → error string.
   - **G:** Track last-verify state on `ExtractionDeps` (new field `last_verify_result: Optional[VerificationResult]`, reset in `fill_workbook`, set in `verify_totals`). In `save_result`, refuse to proceed unless `last_verify_result` exists, `is_balanced is True`, and `mandatory_unfilled == []`.
   - **Edge:** allow a "force save" flag if `MAX_AGENT_ITERATIONS-3` already reached — audit log records forced save. Prevents infinite loops on genuinely impossible-to-balance PDFs.
 
-- [ ] 🟥 **Step 1.4: Integration test — agent actually retries after forced verifier feedback**
+- [x] 🟩 **Step 1.4: Integration test — agent actually retries after forced verifier feedback**
   - **R:** E2E test with a mocked LLM that first submits wrong SOPL values (Row 26 ≠ Row 31), reads verifier feedback, corrects, re-verifies, saves. Assert final output has matching totals.
   - **G:** None — pipeline already supports this. Step proves the loop works end-to-end.
 
@@ -106,12 +106,12 @@ Goal: close the remaining intra-statement gaps the verifier doesn't cover.
 > refreshed, and regression tests added under `@pytest.mark.mpers_formulas`.
 > No blocker for Phase 1.
 
-- [ ] 🟥 **Step 2.1: SOPL Group attribution (Row 28 + Row 30 = Row 26 on MFRS; analogous rows on MPERS)**
+- [x] 🟩 **Step 2.1: SOPL Group attribution (Row 28 + Row 30 = Row 26 on MFRS; analogous rows on MPERS)**
   - Currently `_verify_sopl` checks profit-row ≠ attribution-total but not the owners+NCI sum.
   - **R:** `test_verify_sopl_group_checks_attribution` — Group filing with owners=100, NCI=10, profit=120 → fail.
   - **G:** Extend `_verify_sopl` with attribution sum check gated on `filing_level == "group"`. Uses label matching for "attributable to owners" / "non-controlling interests" so it works on both MFRS and MPERS.
 
-- [ ] 🟥 **Step 2.2: SOFP Group equity attribution (owners + NCI = Total equity)**
+- [x] 🟩 **Step 2.2: SOFP Group equity attribution (owners + NCI = Total equity)**
   - **R:** `test_verify_sofp_group_checks_equity_attribution` — Group SOFP where `Equity attributable to owners` + `Non-controlling interests` ≠ `Total equity`.
   - **G:** Extend `_verify_sofp`. Handle both formula-computed and data-entry cells. Works identically on MFRS + MPERS.
 
@@ -123,33 +123,33 @@ Goal: close the remaining intra-statement gaps the verifier doesn't cover.
 
 Goal: when cross-checks fail after merge, spawn a correction agent instead of surfacing-and-forgetting.
 
-- [ ] 🟥 **Step 3.1: `CorrectionAgentDeps` + agent factory**
+- [x] 🟩 **Step 3.1: `CorrectionAgentDeps` + agent factory**
   - **R:** `test_correction_agent_factory_returns_agent_with_expected_tools` — agent has `view_pdf_pages`, `fill_workbook`, `verify_totals`, `run_cross_checks`.
   - **G:** New module `correction/agent.py`. Deps carry: merged workbook path, PDF path, list of failed `CrossCheckResult`, scout infopack, filing level/standard.
 
-- [ ] 🟥 **Step 3.2: Coordinator hook — spawn correction agent after cross-check failure**
+- [x] 🟩 **Step 3.2: Coordinator hook — spawn correction agent after cross-check failure**
   - **R:** `test_run_multi_agent_stream_invokes_correction_on_cross_check_failure` — mock cross-checks to fail SOPL→SOCIE; assert correction agent is invoked with failure context.
   - **G:** Extend `server.py` `run_multi_agent_stream` — after `cross_checks.run_all()`, if any result is `status="failed"`, invoke correction agent once, then re-run cross-checks on the updated workbook.
   - **Bounded:** max 1 correction pass; remaining failures surface in validator tab as before.
   - **SSE:** the correction agent emits the **existing** coarse envelope (`status`, `tool_call`, `tool_result`, `error`, `complete` — see `server.py:1055-1057`) under a new pseudo-agent id `agent_id="CORRECTION"`. No new event types — DB persistence and the frontend appReducer already route by agent_id, so the new agent slots in without extending the enum.
 
-- [ ] 🟥 **Step 3.3: Prompt for correction agent**
+- [x] 🟩 **Step 3.3: Prompt for correction agent**
   - `prompts/correction.md`: describe failure-driven correction workflow. Agent receives `failed_checks` as structured input, views relevant PDF pages, rewrites cells via `fill_workbook`, re-verifies intra-statement, re-runs cross-checks.
 
 ### Phase 4: Notes Sub-Note Identifier + Payload Schema
 
 Goal: make sub-notes first-class so the post-validator can dedupe reliably.
 
-- [ ] 🟥 **Step 4.1: `NotesPayload.source_note_refs: list[str] = []`**
+- [x] 🟩 **Step 4.1: `NotesPayload.source_note_refs: list[str] = []`**
   - **R:** `test_notes_payload_has_source_note_refs`.
   - **G:** Add to `notes/payload.py`. Defaults empty; no migration needed.
 
-- [ ] 🟥 **Step 4.2: Prompt updates — agents populate `source_note_refs` during extraction**
+- [x] 🟩 **Step 4.2: Prompt updates — agents populate `source_note_refs` during extraction**
   - **R:** `test_notes_prompt_instructs_source_note_refs` — pin that the rendered prompt contains the `source_note_refs` contract.
   - **G:** Update `prompts/_notes_base.md` with a "Note reference" section: "When you write a cell, populate `source_note_refs` with every PDF note number the content is drawn from (e.g. `['5', '5.1']`). Use the numbering shown in the PDF note heading. If no numbering is visible, leave empty."
   - Update schema the agents see (whatever `NotesPayload` rendering exposes) to surface the field.
 
-- [ ] 🟥 **Step 4.3: Writer persists `source_note_refs` as a per-template sidecar**
+- [x] 🟩 **Step 4.3: Writer persists `source_note_refs` as a per-template sidecar**
   - **R:** `test_notes_writer_persists_source_note_refs_for_post_validator` — writing payloads with `source_note_refs=["5.1"]` leaves a sidecar file next to the template's xlsx that lists the refs per cell.
   - **G:** Extend `notes/writer.py::write_notes_workbook` to emit `NOTES_{TEMPLATE}_payloads.json` **alongside** the template's own xlsx (same output directory, same naming as `NOTES_{TEMPLATE}_filled.xlsx`). Shape: `[{sheet, row, col, source_note_refs, content_preview}, ...]`. One JSON per template, written synchronously with the xlsx — no concurrency race because each notes agent owns exactly one template path.
   - **Why not a single shared file:** notes agents run in parallel via `asyncio.gather` in `notes/coordinator.py`, and the merged workbook path isn't known until `server.py::run_multi_agent_stream` calls `merge_workbooks` (~line 1305) *after* the coordinator returns. Per-template sidecars avoid both the race and the lifecycle-ordering problem. Aggregation is a Phase-5 concern (see Step 5.5).
@@ -158,24 +158,24 @@ Goal: make sub-notes first-class so the post-validator can dedupe reliably.
 
 Goal: a dedicated agent runs after the parallel notes pass to dedupe across sheets 11 & 12.
 
-- [ ] 🟥 **Step 5.1: `NotesValidatorAgentDeps` + factory**
+- [x] 🟩 **Step 5.1: `NotesValidatorAgentDeps` + factory**
   - **R:** `test_notes_validator_agent_factory_returns_agent` — agent has tools `view_pdf_pages`, `read_cell`, `rewrite_cell`, `flag_duplication`.
   - **G:** New module `notes/validator_agent.py`. Deps: **merged** workbook path, PDF path, list of per-template `NOTES_{TEMPLATE}_payloads.json` sidecars, filing level/standard.
 
-- [ ] 🟥 **Step 5.2: `rewrite_cell` tool — safe overwrite including deletion**
+- [x] 🟩 **Step 5.2: `rewrite_cell` tool — safe overwrite including deletion**
   - **R:** `test_rewrite_cell_tool_replaces_content_and_evidence` — call with `content=""` to delete, assert cell cleared including evidence column.
   - **G:** Implement `rewrite_cell(sheet, row, col, content, evidence)`. Validates the cell is a data-entry cell (not a formula) before writing. Records the operation to a correction log.
 
-- [ ] 🟥 **Step 5.3: Detection — duplicate `source_note_refs` across sheets 11 & 12**
+- [x] 🟩 **Step 5.3: Detection — duplicate `source_note_refs` across sheets 11 & 12**
   - **R:** `test_notes_validator_detects_cross_sheet_duplicate_by_note_ref` — payloads where `source_note_refs=["5.1"]` exist on both Sheet 11 row X and Sheet 12 row Y → agent prompt reports the duplicate as a candidate to resolve.
   - **G:** Prompt tells the agent to: (1) load + concatenate the per-template `NOTES_{TEMPLATE}_payloads.json` sidecars the runtime passes in, (2) group by note_ref, (3) for any ref on both sheets, view the PDF pages, **reason through whether the content is a material accounting policy or a disclosure note using the same rules in the notes prompts** (heading containing "Material Accounting Policies" / "Significant Accounting Policies" / "Summary of Material Accounting Policies" → Sheet 11; otherwise → Sheet 12). The agent makes the call, not a deterministic rule. (4) Rewrite the wrong cell to remove that content; log the agent's rationale.
   - **Note on D3:** no keyword classifier in code — the heading-rule reasoning lives entirely in the agent prompt, consistent with how the Sheet 11 / Sheet 12 split is taught today.
 
-- [ ] 🟥 **Step 5.4: Detection — content overlap fallback when `source_note_refs` is missing**
+- [x] 🟩 **Step 5.4: Detection — content overlap fallback when `source_note_refs` is missing**
   - **R:** `test_notes_validator_detects_overlap_when_refs_missing` — two cells share ≥50% of a normalised text snippet, ref field empty, agent still flags.
   - **G:** Add a content-hash / shingle check (simple Jaccard over word 5-grams, `>= 0.5` threshold). Surface candidates to the agent prompt as "probable duplicates — verify".
 
-- [ ] 🟥 **Step 5.5: Server-side hook — run post-validator after merge**
+- [x] 🟩 **Step 5.5: Server-side hook — run post-validator after merge**
   - **R:** `test_run_multi_agent_stream_invokes_notes_validator_after_merge` — face + notes agents complete, `merge_workbooks` runs, cross-checks run, then post-validator fires exactly once if sheets 11 and 12 both ran.
   - **G:** Edit `server.py::run_multi_agent_stream`, **not** `notes/coordinator.py`. The hook must sit **after** `merge_workbooks` (~line 1305) because the post-validator needs the merged workbook (cross-sheet visibility between sheets 11 and 12). Ordering after cross-checks also means any correction agent from Phase 3 has already run; no interference. Trigger condition: both `NOTES_ACCOUNTING_POLICIES` and `NOTES_LIST_OF_NOTES` appear in `notes_result.workbook_paths`. Bounded to 1 iteration.
   - **SSE:** emits the existing coarse envelope (`status` / `tool_call` / `tool_result` / `error` / `complete`) under a new pseudo-agent id `agent_id="NOTES_VALIDATOR"` — no new event types (see Step 3.2 for the same pattern on the correction agent).
@@ -185,15 +185,15 @@ Goal: a dedicated agent runs after the parallel notes pass to dedupe across shee
 
 Goal: make the "one note, one cell" + "material policies → 11; general → 12" rules ergonomic for the LLM.
 
-- [ ] 🟥 **Step 6.1: `prompts/_notes_base.md` — explicit non-duplication invariant**
+- [x] 🟩 **Step 6.1: `prompts/_notes_base.md` — explicit non-duplication invariant**
   - **R:** `test_notes_base_prompt_contains_non_duplication_rule`.
   - **G:** Add a "Invariants" section: "Each note reference (e.g. 5, 5.1) appears in exactly one cell across the entire workbook. Sub-notes can be grouped with their parent (5, 5.1, 5.2 in one cell), but the same sub-note cannot appear in two cells."
 
-- [ ] 🟥 **Step 6.2: `prompts/notes_accounting_policies.md` — heading rule pin**
+- [x] 🟩 **Step 6.2: `prompts/notes_accounting_policies.md` — heading rule pin**
   - **R:** `test_accounting_policies_prompt_has_heading_rule`.
   - **G:** Strengthen existing guidance: "The heading in the PDF determines the split. If the subheader says 'Material Accounting Policies' (or a close variant: 'Significant Accounting Policies', 'Summary of Material Accounting Policies'), that content belongs on Sheet 11. Otherwise it belongs on Sheet 12. No content belongs on both."
 
-- [ ] 🟥 **Step 6.3: `prompts/notes_listofnotes.md` — mirror the invariant**
+- [x] 🟩 **Step 6.3: `prompts/notes_listofnotes.md` — mirror the invariant**
   - **R:** `test_listofnotes_prompt_has_heading_rule`.
   - **G:** Add symmetric reminder — Sheet-12 agents must skip any note whose heading matches the material-policies pattern.
 
@@ -201,11 +201,11 @@ Goal: make the "one note, one cell" + "material policies → 11; general → 12"
 
 Goal: surface correction-agent + notes-validator runs in the existing Validator tab and History detail.
 
-- [ ] 🟥 **Step 7.1: SSE event types for correction + notes-validator**
+- [x] 🟩 **Step 7.1: SSE event types for correction + notes-validator**
   - **R:** `test_sse_events_include_correction_agent` backend + `test_appReducer_handles_correction_agent` frontend.
   - **G:** Add `agent_id="CORRECTION"` and `agent_id="NOTES_VALIDATOR"` to `appReducer`. Label them in `deriveAgentLabel`. They appear as tabs after the face/notes tabs.
 
-- [ ] 🟥 **Step 7.2: History detail renders correction events**
+- [x] 🟩 **Step 7.2: History detail renders correction events**
   - **R:** `test_history_detail_renders_correction_agent`.
   - **G:** Extend `RunDetailView.tsx` to display the new pseudo-agents alongside existing ones.
 

@@ -8,42 +8,17 @@ genuinely does not fit any template row, you skip it rather than force
 a questionable match. When the same PDF note covers multiple template
 rows, you emit multiple payloads, one per row.
 
-=== SHEET MAP: WHAT EACH SHEET COVERS ===
+=== INVARIANTS: ONE NOTE, ONE CELL ===
 
-There are five notes sheets. Each maps to a distinct MBRS XBRL concept,
-and contents must NOT overlap across sheets. Know which sheet is yours
-before you copy any content.
-
-- **Sheet 10 — Corporate Information** (`Notes-CI`): company identity
-  (name, domicile, registered office, principal activity, holding
-  companies, authorisation date, dormancy / reporting status). Usually
-  the first numbered note.
-- **Sheet 11 — Summary of Material Accounting Policies**
-  (`Notes-SummaryofAccPol`): the company's *rulebook* — generic prose
-  describing HOW the company accounts for things ("Revenue is recognised
-  when…", "Deferred tax is provided for using the liability method…").
-  The PDF heading is typically "Summary of material accounting
-  policies", "Significant accounting policies", or similar, and the
-  note has many alphabetised sub-sections ((a), (b), (c) …). The note
-  NUMBER varies (Note 1, 2, 3, or elsewhere) — identify it by heading
-  and form, not by number.
-- **Sheet 12 — List of Notes** (`Notes-Listofnotes`): the *disclosure*
-  notes — the numbered notes that follow the policy note and show
-  actual figures, breakdowns, reconciliations, and movement tables
-  (e.g. Trade receivables, Income tax expense, PPE movement).
-- **Sheet 13 — Issued Capital** (`Notes-Issuedcapital`): structured
-  numeric share-capital movement table.
-- **Sheet 14 — Related Party Transactions** (`Notes-RelatedPartytran`):
-  structured numeric related-party dealings.
-
-**Do not cross sheets.** Policy paragraphs (Sheet 11) and disclosure
-notes (Sheet 12) often cover overlapping topics — a policy paragraph
-on "income tax" and a separate disclosure note on "taxation" that
-shows the actual tax reconciliation. They live on DIFFERENT sheets
-because they map to DIFFERENT XBRL concepts in the SSM MBRS taxonomy;
-merging them into one cell produces an invalid filing. If the content
-you're reading clearly belongs on another sheet, skip it — the agent
-owning that sheet will cover it.
+Each PDF note number (e.g. Note 5, Note 5.1) appears in **exactly one
+cell** across the entire workbook. Sub-notes can be grouped with their
+parent (Note 5 and its sub-notes 5.1, 5.2 may go in one cell), but
+the same sub-note cannot appear in two cells. In particular, the same
+note must not show up on both the Accounting Policies sheet and the
+List of Notes sheet — a cross-sheet post-validator will flag that as
+a duplicate and rewrite the wrong side, which is both noisy and slow.
+Decide which sheet your note belongs on (using the heading rule) and
+emit exactly one payload for it.
 
 === OUTPUT CONTRACT ===
 
@@ -64,6 +39,16 @@ of payload objects. Each payload has these fields:
 - `source_pages` (list[int]): 1-indexed PDF page numbers backing this row.
 - `numeric_values` (object, structured rows only): keys are `group_cy`,
   `group_py`, `company_cy`, `company_py`. Omit for prose notes.
+- `source_note_refs` (list[str], recommended): every PDF note number
+  the content is drawn from. Use the numbering shown in the PDF note
+  heading — strings, not integers. Examples: `["5"]` for Note 5 alone,
+  `["5", "5.1", "5.2"]` when a single cell groups a parent note with
+  its sub-notes, `["5.1"]` for a sub-note on its own. Omit or send
+  `[]` when the note has no visible numbering (rare — policy
+  paragraphs with no section letter). This field lets the post-
+  validator detect cross-sheet duplicates (e.g. Note 5 appearing on
+  both Sheet 11 and Sheet 12) — populate it whenever numbering is
+  visible.
 
 Every non-empty payload MUST cite at least one source page. Evidence is
 mandatory — there is no optional provenance.

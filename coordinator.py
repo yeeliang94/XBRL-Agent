@@ -361,6 +361,13 @@ async def _run_single_agent(
         async with agent.iter(prompt, deps=deps) as agent_run:
             async for node in agent_run:
                 _iteration_count += 1
+                # Publish the iteration count onto deps so the save_result
+                # gate in extraction/agent.py can see the real iteration
+                # budget, not a local tool-call counter. Peer-review I1:
+                # the force-save escape hatch must fire near the end of
+                # MAX_AGENT_ITERATIONS (per plan §1.3), not after 3
+                # save_result attempts.
+                deps.turn_counter = _iteration_count
                 if _iteration_count > MAX_AGENT_ITERATIONS:
                     raise RuntimeError(
                         f"Hit iteration limit ({MAX_AGENT_ITERATIONS}). "

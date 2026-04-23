@@ -62,6 +62,35 @@ class CrossCheck(Protocol):
         ...
 
 
+def build_default_cross_checks() -> list:
+    """Return a fresh list of the cross-checks the server runs on every merge.
+
+    Instantiated per call so callers can't accidentally share check state
+    across runs. Moved here from `server._build_default_cross_checks` in
+    the peer-review round (I2) so the correction agent's internal re-run
+    doesn't have to do a lazy `from server import …` — that cycle was
+    only safe as long as every touch stayed deferred. The registry now
+    lives in the same module as `run_all`, which is where a discoverer
+    would expect it.
+    """
+    from cross_checks.sofp_balance import SOFPBalanceCheck
+    from cross_checks.sopl_to_socie_profit import SOPLToSOCIEProfitCheck
+    from cross_checks.soci_to_socie_tci import SOCIToSOCIETCICheck
+    from cross_checks.socie_to_sofp_equity import SOCIEToSOFPEquityCheck
+    from cross_checks.socf_to_sofp_cash import SOCFToSOFPCashCheck
+    from cross_checks.sore_to_sofp_retained_earnings import (
+        SoREToSOFPRetainedEarningsCheck,
+    )
+    return [
+        SOFPBalanceCheck(),
+        SOPLToSOCIEProfitCheck(),
+        SOCIToSOCIETCICheck(),
+        SOCIEToSOFPEquityCheck(),
+        SOCFToSOFPCashCheck(),
+        SoREToSOFPRetainedEarningsCheck(),
+    ]
+
+
 def run_all(
     checks: list,
     workbook_paths: Dict[StatementType, str],
@@ -146,8 +175,22 @@ def run_all(
 
         # 5. Run the actual check — catch exceptions so one broken check
         # doesn't abort the entire validation pass.
+        # Phase 5: pass `filing_standard` through so MPERS-aware checks
+        # can branch on layout (MPERS SOCIE col 2 vs MFRS col 24). Uses
+        # a try/except on TypeError so pre-Phase-5 check implementations
+        # that haven't added the kwarg yet still run — they just lose
+        # the standard signal, same as before.
         try:
-            result = check.run(workbook_paths, tolerance, filing_level=filing_level)
+            try:
+                result = check.run(
+                    workbook_paths, tolerance,
+                    filing_level=filing_level,
+                    filing_standard=filing_standard,
+                )
+            except TypeError:
+                result = check.run(
+                    workbook_paths, tolerance, filing_level=filing_level,
+                )
         except Exception as e:
             result = CrossCheckResult(
                 name=check.name,
