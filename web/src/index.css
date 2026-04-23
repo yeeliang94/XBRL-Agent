@@ -71,6 +71,15 @@ button:focus-visible {
   scrollbar-width: none;
 }
 
+/* Underline-style agent tab — hover state. Inline styles can't address
+   :hover, so the AgentTabs button carries .agent-tab and the rest is
+   applied here. Skip when active or disabled so the rule doesn't fight
+   the active orange tint or the skeleton greyed-out state. */
+.agent-tab:hover:not([aria-selected="true"]):not([aria-disabled="true"]) {
+  background: #F5F7F8;
+  color: #303236;
+}
+
 /* Download button hover states — scoped to avoid affecting all buttons */
 .dl-btn:hover {
   filter: brightness(0.97);

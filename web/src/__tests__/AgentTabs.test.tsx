@@ -220,8 +220,8 @@ describe("AgentTabs", () => {
 
     test("same callback reference across renders keeps equality", () => {
       const cb = () => {};
-      const a: AgentTabsProps = { ...baseProps, onTabClick: cb, onRerunAgent: cb };
-      const b: AgentTabsProps = { ...baseProps, onTabClick: cb, onRerunAgent: cb };
+      const a: AgentTabsProps = { ...baseProps, onTabClick: cb };
+      const b: AgentTabsProps = { ...baseProps, onTabClick: cb };
       expect(areAgentTabsPropsEqual(a, b)).toBe(true);
     });
 
@@ -526,68 +526,8 @@ describe("AgentTabs", () => {
     expect(labels[labels.length - 1]).toContain("Validator");
   });
 
-  test("rerun button visible on failed face-statement tab", () => {
-    const agents: Record<string, AgentTabState> = {
-      sofp_0: { agentId: "sofp_0", label: "SOFP", status: "failed", role: "SOFP" },
-    };
-    render(
-      <AgentTabs
-        agents={agents}
-        tabOrder={["sofp_0"]}
-        activeTab="sofp_0"
-        onTabClick={() => {}}
-        onRerunAgent={() => {}}
-        isRunning={false}
-      />,
-    );
-    // Rerun buttons use aria-label "Rerun {label}". Presence proves the gate.
-    expect(screen.getByRole("button", { name: /rerun sofp/i })).toBeInTheDocument();
-  });
-
-  test("rerun button visible on failed notes tab (Phase D.3 symmetry)", () => {
-    const agents: Record<string, AgentTabState> = {
-      "notes:CORP_INFO": {
-        agentId: "notes:CORP_INFO",
-        label: "Corporate Information",
-        status: "failed",
-        role: "CORP_INFO",
-      },
-    };
-    render(
-      <AgentTabs
-        agents={agents}
-        tabOrder={["notes:CORP_INFO"]}
-        activeTab="notes:CORP_INFO"
-        onTabClick={() => {}}
-        onRerunAgent={() => {}}
-        notesInRun={["CORP_INFO"]}
-        isRunning={false}
-      />,
-    );
-    expect(
-      screen.getByRole("button", { name: /rerun corporate information/i }),
-    ).toBeInTheDocument();
-  });
-
-  test("rerun button hidden on scout and validator tabs even when failed", () => {
-    // Peer-review finding #1: handleRerunAgent always built face-statement
-    // payloads, so rerunning scout/validator produced guaranteed-fail POSTs.
-    // The fix hides the button for those tabs entirely.
-    const agents: Record<string, AgentTabState> = {
-      scout: { agentId: "scout", label: "Scout", status: "failed", role: "scout" },
-      validator: { agentId: "validator", label: "Validator", status: "failed", role: "validator" },
-    };
-    render(
-      <AgentTabs
-        agents={agents}
-        tabOrder={["scout", "validator"]}
-        activeTab="scout"
-        onTabClick={() => {}}
-        onRerunAgent={() => {}}
-        isRunning={false}
-      />,
-    );
-    expect(screen.queryByRole("button", { name: /rerun scout/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /rerun validator/i })).not.toBeInTheDocument();
-  });
+  // Per-tab abort/rerun controls now live in ActiveTabPanel's toolbar
+  // (so the tab strip stays a clean navigation row). The "rerun is wired
+  // for failed face/notes tabs" + "rerun hidden on scout/validator"
+  // contracts are exercised in ActiveTabPanel.test.tsx instead.
 });

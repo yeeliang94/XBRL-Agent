@@ -1,7 +1,7 @@
 import React from "react";
 import { pwc } from "../lib/theme";
 import type { AgentTabStatus } from "../lib/types";
-import { CloseIcon, RerunIcon } from "./icons";
+import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,9 +27,6 @@ export interface AgentTabsProps {
   tabOrder: string[];          // ordered agent IDs for active tabs
   activeTab: string;
   onTabClick: (agentId: string) => void;
-  onAbortAgent?: (agentId: string) => void;
-  onRerunAgent?: (agentId: string) => void;
-  isRunning?: boolean;         // when true, rerun buttons are hidden (avoid concurrent writes)
   skeletonTabs?: string[];     // labels for face statements not yet started (greyed-out)
   // Phase 8: gate statement tabs so pre-run state doesn't flash all 5
   // skeletons. Pass the statements the user actually picked for this run;
@@ -49,9 +46,10 @@ export interface AgentTabsProps {
 
 // Tabs in this set follow their own lifecycle (scout is spun up before the
 // run starts; validator is added on run_complete) and are therefore exempt
-// from the statementsInRun gate. Kept as a top-level constant so the rule
-// is discoverable without reading the render body.
-const SPECIAL_TAB_IDS = new Set(["validator", "scout"]);
+// from the statementsInRun gate. The same set drives the per-agent
+// stop/rerun toolbar gating in ActiveTabPanel — both callsites import
+// from `lib/agentTabKinds` to keep the contract in lockstep.
+const SPECIAL_TAB_IDS = NON_AGENT_TAB_IDS;
 
 // Notes agent_ids carry a stable `notes:` prefix (notes/coordinator.py).
 // Kept here rather than imported so AgentTabs has no runtime dep on the
@@ -81,9 +79,6 @@ function AgentTabsImpl({
   tabOrder,
   activeTab,
   onTabClick,
-  onAbortAgent,
-  onRerunAgent,
-  isRunning,
   skeletonTabs,
   statementsInRun,
   notesInRun,
@@ -154,66 +149,32 @@ function AgentTabsImpl({
     else statementActive.push(id);
   }
 
-  // Helper rendering one active tab row. Closes over props/callbacks so
-  // each bucket below can call it without threading them as arguments.
+  // Helper rendering one active tab. Closes over props so each bucket
+  // below can call it without threading them as arguments. Per-tab
+  // abort/rerun controls live in the activity-header toolbar below
+  // (ActiveTabPanel) so the tab strip stays a clean navigation row.
   const renderTab = (agentId: string) => {
     const agent = agents[agentId];
     if (!agent) return null;
     const isActive = agentId === activeTab;
-    const canAbort = agent.status === "running" && onAbortAgent;
-    // Only face statement and notes tabs are single-agent retryable:
-    //   - scout has its own "Auto-detect" button in the pre-run panel
-    //   - validator is a cross-check phase, not an agent
-    // Gating here (not just in handleRerunAgent) keeps the UI honest — no
-    // button → no misleading affordance for tabs that can't be rerun.
-    const isRerunable = !SPECIAL_TAB_IDS.has(agentId);
-    const canRerun =
-      isRerunable &&
-      (agent.status === "failed" || agent.status === "cancelled") &&
-      onRerunAgent && !isRunning;
-    // Abort/rerun controls are real <button>s rendered as siblings of the
-    // tab button, not descendants, to avoid invalid nested interactive
-    // elements (#16). Wrap the tab + controls in a flex group so they
-    // still sit adjacent visually.
     return (
-      <div key={agentId} style={styles.tabGroup}>
-        <button
-          role="tab"
-          aria-selected={isActive}
-          onClick={() => onTabClick(agentId)}
-          style={{ ...styles.tab, ...(isActive ? styles.tabActive : {}) }}
-        >
-          <StatusBadge status={agent.status} />
-          <span style={styles.tabLabelStack}>
-            <span>{agent.label}</span>
-            {agent.subLabel && (
-              <span style={styles.tabSubLabel}>{agent.subLabel}</span>
-            )}
-          </span>
-        </button>
-        {canAbort && (
-          <button
-            type="button"
-            onClick={() => onAbortAgent(agentId)}
-            style={styles.abortBtn}
-            title={`Stop ${agent.label}`}
-            aria-label={`Stop ${agent.label}`}
-          >
-            <CloseIcon />
-          </button>
-        )}
-        {canRerun && (
-          <button
-            type="button"
-            onClick={() => onRerunAgent!(agentId)}
-            style={styles.rerunBtn}
-            title={`Rerun ${agent.label}`}
-            aria-label={`Rerun ${agent.label}`}
-          >
-            <RerunIcon />
-          </button>
-        )}
-      </div>
+      <button
+        key={agentId}
+        role="tab"
+        aria-selected={isActive}
+        onClick={() => onTabClick(agentId)}
+        title={agent.label}
+        className="agent-tab"
+        style={{ ...styles.tab, ...(isActive ? styles.tabActive : {}) }}
+      >
+        <StatusBadge status={agent.status} />
+        <span style={styles.tabLabelStack}>
+          <span style={styles.tabLabelText}>{agent.label}</span>
+          {agent.subLabel && (
+            <span style={styles.tabSubLabel}>{agent.subLabel}</span>
+          )}
+        </span>
+      </button>
     );
   };
 
@@ -245,10 +206,11 @@ function SkeletonTab({ keyPrefix, label }: { keyPrefix: string; label: string })
       aria-selected={false}
       aria-disabled="true"
       disabled
+      className="agent-tab"
       style={{ ...styles.tab, ...styles.tabSkeleton }}
     >
       <span data-status="pending" style={badgeStyles.skeleton} />
-      <span>{label}</span>
+      <span style={styles.tabLabelText}>{label}</span>
     </button>
   );
 }
@@ -267,10 +229,7 @@ export function areAgentTabsPropsEqual(
 ): boolean {
   if (
     prev.activeTab !== next.activeTab ||
-    prev.onTabClick !== next.onTabClick ||
-    prev.onAbortAgent !== next.onAbortAgent ||
-    prev.onRerunAgent !== next.onRerunAgent ||
-    prev.isRunning !== next.isRunning
+    prev.onTabClick !== next.onTabClick
   ) {
     return false;
   }
@@ -321,94 +280,79 @@ export const AgentTabs = React.memo(AgentTabsImpl, areAgentTabsPropsEqual);
 const styles = {
   tabBar: {
     display: "flex",
-    gap: pwc.space.xs,
-    alignItems: "center",
+    gap: 0,
+    alignItems: "stretch",
     background: pwc.white,
     borderRadius: `${pwc.radius.md}px ${pwc.radius.md}px 0 0`,
     border: `1px solid ${pwc.grey200}`,
-    padding: `${pwc.space.sm}px`,
+    paddingLeft: pwc.space.sm,
+    paddingRight: pwc.space.sm,
     overflowX: "auto" as const,
+    minHeight: 44,
   },
-  // Wrapper that keeps the tab button and its sibling abort/rerun controls
-  // adjacent (controls are no longer inside the tab button — see #16).
-  tabGroup: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 2,
-  } as React.CSSProperties,
-  abortBtn: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: 16,
-    height: 16,
-    fontSize: 9,
-    fontWeight: 700,
-    color: pwc.grey500,
-    background: "none",
-    border: "none",
-    borderRadius: "50%",
-    cursor: "pointer",
-    lineHeight: 1,
-    marginLeft: 2,
-  } as React.CSSProperties,
-  rerunBtn: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: 16,
-    height: 16,
-    fontSize: 12,
-    color: pwc.orange500,
-    background: "none",
-    border: "none",
-    borderRadius: "50%",
-    cursor: "pointer",
-    lineHeight: 1,
-    marginLeft: 2,
-  } as React.CSSProperties,
+  // Underline-style tab button. Active state is signalled by an
+  // inset bottom shadow (acts as an underline that doesn't shift
+  // layout) plus a faint orange tint, matching the rest of the
+  // card-based page language. Hover styling lives in index.css
+  // (.agent-tab:hover) since inline styles can't address :hover.
   tab: {
-    display: "flex",
+    display: "inline-flex",
     alignItems: "center",
-    gap: pwc.space.xs,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    gap: pwc.space.xs + 2,
+    padding: `${pwc.space.sm + 2}px ${pwc.space.md + 2}px`,
     fontFamily: pwc.fontHeading,
     fontSize: 13,
     fontWeight: 500,
     color: pwc.grey700,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 999,
+    background: "transparent",
+    border: "none",
+    borderRadius: 0,
     cursor: "pointer",
     whiteSpace: "nowrap" as const,
-    transition: "color 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s",
+    transition: "color 0.15s, background 0.15s, box-shadow 0.15s",
+    minWidth: 0,
+    maxWidth: 220,
   },
   tabActive: {
     color: pwc.orange700,
     fontWeight: 600,
     background: pwc.orange50,
-    borderColor: pwc.orange400,
+    boxShadow: `inset 0 -2px 0 ${pwc.orange500}`,
   },
   tabSkeleton: {
     color: pwc.grey300,
     cursor: "default",
-    opacity: 0.5,
-    background: pwc.grey50,
+    opacity: 0.6,
+    background: "transparent",
   },
   // Stack the main label and sub-label (when present) vertically inside
   // the tab. Most tabs have no subLabel so the render falls back to a
-  // single-line appearance automatically.
+  // single-line appearance automatically. minWidth:0 lets the inner
+  // text node shrink so ellipsis truncation kicks in instead of forcing
+  // the parent flex item wider.
   tabLabelStack: {
     display: "inline-flex",
     flexDirection: "column" as const,
     alignItems: "flex-start" as const,
     lineHeight: 1.15,
+    minWidth: 0,
+    overflow: "hidden",
+  },
+  tabLabelText: {
+    overflow: "hidden",
+    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap" as const,
+    maxWidth: 180,
   },
   tabSubLabel: {
     fontSize: 11,
     fontWeight: 400,
     color: pwc.grey500,
     fontFamily: pwc.fontBody,
+    overflow: "hidden",
+    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap" as const,
+    maxWidth: 180,
   },
 } as const;
 

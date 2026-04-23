@@ -16,6 +16,7 @@ import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesSubTabBar } from "../components/NotesSubTabBar";
 import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
 import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
+import { isNonAgentTab } from "../lib/agentTabKinds";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
 // from ExtractPage keep working. The single source of truth lives in
@@ -132,42 +133,44 @@ export function ExtractPage({
         <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} />
       )}
 
-      {/* Agent tabs + monitor */}
-      {state.agentTabOrder.length > 0 && (
-        <div
-          style={
-            state.events.length > 0 ? styles.activitySection : undefined
-          }
-        >
-          <div style={styles.tabBarCard}>
-            <AgentTabs
-              agents={agentTabsAgents}
-              tabOrder={state.agentTabOrder}
-              activeTab={state.activeTab || state.agentTabOrder[0]}
-              onTabClick={handleTabClick}
-              onAbortAgent={handleAbortAgent}
-              onRerunAgent={handleRerunAgent}
-              isRunning={state.isRunning}
-              // Phase 8: gate statement tabs so nothing shows until a run starts.
-              statementsInRun={state.statementsInRun}
-              skeletonTabs={agentTabsSkeletons}
-              // PLAN §4 Phase D.3: notes gate mirrors the face gate.
-              notesInRun={state.notesInRun}
-              notesSkeletons={notesSkeletonLabels}
-            />
-            {/* Stop All button — top-right of tab bar */}
-            {state.isRunning && (
-              <button
-                onClick={handleAbortAll}
-                style={styles.abortAllButton}
-                title="Stop all running agents"
-              >
-                Stop All
-              </button>
-            )}
-          </div>
+      {/* Agent tabs + monitor. The activity shell renders whenever a run
+          is in flight (`isRunning`) OR any agent tab has already been
+          seeded (`agentTabOrder.length > 0`). The `isRunning` half is
+          load-bearing: `RUN_STARTED` flips isRunning true but does NOT
+          seed `agents` / `agentTabOrder` — those only get populated when
+          the first SSE event with an `agent_id` arrives. Without the
+          isRunning half, Stop all would be invisible during the window
+          between RUN_STARTED and the first event, which can stretch on
+          Windows behind the enterprise proxy while LiteLLM/model creation
+          initialises (the one window where users most need to abort).
+          `AgentTimeline` shows its own "Waiting for the agent to start…"
+          placeholder when events are still empty, so the empty state is
+          graceful. */}
+      {(state.isRunning || state.agentTabOrder.length > 0) && (
+        <div style={styles.activitySection}>
+          <AgentTabs
+            agents={agentTabsAgents}
+            tabOrder={state.agentTabOrder}
+            // Fallback to "" when both activeTab and agentTabOrder are empty
+            // (the no-event window). No tab will match "", which is fine —
+            // the strip renders only the skeleton tabs for selected
+            // statements/notes until the first agent_id event lands.
+            activeTab={state.activeTab || state.agentTabOrder[0] || ""}
+            onTabClick={handleTabClick}
+            // Phase 8: gate statement tabs so nothing shows until a run starts.
+            statementsInRun={state.statementsInRun}
+            skeletonTabs={agentTabsSkeletons}
+            // PLAN §4 Phase D.3: notes gate mirrors the face gate.
+            notesInRun={state.notesInRun}
+            notesSkeletons={notesSkeletonLabels}
+          />
 
-          {state.events.length > 0 && <ActiveTabPanel state={state} />}
+          <ActiveTabPanel
+            state={state}
+            onAbortAll={handleAbortAll}
+            onAbortAgent={handleAbortAgent}
+            onRerunAgent={handleRerunAgent}
+          />
         </div>
       )}
 
@@ -224,7 +227,22 @@ export function ExtractPage({
 // readable top-to-bottom and the component can be tested independently.
 // ---------------------------------------------------------------------------
 
-export function ActiveTabPanel({ state }: { state: AppState }) {
+export interface ActiveTabPanelProps {
+  state: AppState;
+  // Optional toolbar callbacks. When omitted the activity header renders
+  // the title + count only — keeps existing tests (which construct the
+  // panel with just `state`) compatible.
+  onAbortAll?: () => void;
+  onAbortAgent?: (agentId: string) => void;
+  onRerunAgent?: (agentId: string) => void;
+}
+
+export function ActiveTabPanel({
+  state,
+  onAbortAll,
+  onAbortAgent,
+  onRerunAgent,
+}: ActiveTabPanelProps) {
   // Sheet-12 sub-agent selection. null === "All" (the current/legacy view
   // that lumps every sub-agent's events together). Selection persists
   // across tab switches — flipping to SOFP and back keeps the same sub
@@ -233,14 +251,30 @@ export function ActiveTabPanel({ state }: { state: AppState }) {
   // UI detail that doesn't need to survive navigation away from /extract.
   const [notes12SubId, setNotes12SubId] = useState<string | null>(null);
 
+  // Stop-all is meaningful regardless of which tab is active; surfaced on
+  // every header (validator included) so users always have one click out.
+  const showStopAll = state.isRunning && !!onAbortAll;
+
   if (state.activeTab === "validator") {
     return (
       <div style={styles.activityCardAttached}>
         <div style={styles.activityHeader}>
           <span style={styles.activityTitle}>Cross-checks</span>
-          <span style={styles.activityCount}>
-            {state.crossChecks.length} checks
-          </span>
+          <div style={styles.activityHeaderRight}>
+            <span style={styles.activityCount}>
+              {state.crossChecks.length} checks
+            </span>
+            {showStopAll && (
+              <button
+                type="button"
+                onClick={onAbortAll}
+                style={{ ...styles.toolbarBtnBase, ...styles.destructiveBtn }}
+                title="Stop all running agents"
+              >
+                Stop all
+              </button>
+            )}
+          </div>
         </div>
         <ValidatorTab crossChecks={state.crossChecks} partial={state.crossChecksPartial} />
       </div>
@@ -248,6 +282,19 @@ export function ActiveTabPanel({ state }: { state: AppState }) {
   }
 
   const activeAgent = state.activeTab ? state.agents[state.activeTab] : null;
+  // Capture as a non-null local so the click handlers below can pass the
+  // agent id through without TS re-narrowing on each callback. `state.activeTab`
+  // can flip to null between render and click in theory, but the buttons
+  // themselves only render when this is truthy.
+  const activeTabId = state.activeTab ?? "";
+  const isControllable = !!activeTabId && !isNonAgentTab(activeTabId);
+  const showStop =
+    isControllable && activeAgent?.status === "running" && !!onAbortAgent;
+  const showRerun =
+    isControllable &&
+    !state.isRunning &&
+    (activeAgent?.status === "failed" || activeAgent?.status === "cancelled") &&
+    !!onRerunAgent;
 
   // Sheet-12 branch: show the nested sub-tab bar and route the AgentTimeline
   // through the filter when a specific sub is selected. Gated on the
@@ -278,10 +325,46 @@ export function ActiveTabPanel({ state }: { state: AppState }) {
   return (
     <div style={styles.activityCardAttached}>
       <div style={styles.activityHeader}>
-        <span style={styles.activityTitle}>Agent Activity</span>
-        <span style={styles.activityCount}>
-          {events.length} {events.length === 1 ? "event" : "events"}
-        </span>
+        <div style={styles.activityHeaderLeft}>
+          <span style={styles.activityTitle}>Agent Activity</span>
+          {showStop && (
+            <button
+              type="button"
+              onClick={() => onAbortAgent!(activeTabId)}
+              style={{ ...styles.toolbarBtnBase, ...styles.destructiveBtn }}
+              title={`Stop ${activeAgent?.label ?? "agent"}`}
+              aria-label={`Stop ${activeAgent?.label ?? "agent"}`}
+            >
+              Stop
+            </button>
+          )}
+          {showRerun && (
+            <button
+              type="button"
+              onClick={() => onRerunAgent!(activeTabId)}
+              style={{ ...styles.toolbarBtnBase, ...styles.primaryBtn }}
+              title={`Rerun ${activeAgent?.label ?? "agent"}`}
+              aria-label={`Rerun ${activeAgent?.label ?? "agent"}`}
+            >
+              Rerun
+            </button>
+          )}
+        </div>
+        <div style={styles.activityHeaderRight}>
+          <span style={styles.activityCount}>
+            {events.length} {events.length === 1 ? "event" : "events"}
+          </span>
+          {showStopAll && (
+            <button
+              type="button"
+              onClick={onAbortAll}
+              style={{ ...styles.toolbarBtnBase, ...styles.destructiveBtn }}
+              title="Stop all running agents"
+            >
+              Stop all
+            </button>
+          )}
+        </div>
       </div>
       {showSubTabs && (
         <NotesSubTabBar
@@ -305,25 +388,6 @@ export function ActiveTabPanel({ state }: { state: AppState }) {
 // ---------------------------------------------------------------------------
 
 const styles = {
-  abortAllButton: {
-    position: "absolute" as const,
-    right: pwc.space.sm,
-    top: "50%",
-    transform: "translateY(-50%)",
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: 600,
-    color: pwc.white,
-    background: pwc.error,
-    border: "none",
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
-    outline: "none",
-  } as const,
-  tabBarCard: {
-    position: "relative" as const,
-  } as const,
   activitySection: {
     display: "flex",
     flexDirection: "column" as const,
@@ -344,20 +408,56 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: pwc.space.md,
     padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     borderBottom: `1px solid ${pwc.grey200}`,
     background: pwc.grey50,
+  } as const,
+  activityHeaderLeft: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.md,
+    minWidth: 0,
+  } as const,
+  activityHeaderRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.md,
   } as const,
   activityTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
     fontWeight: 600,
     color: pwc.grey900,
+    whiteSpace: "nowrap" as const,
   } as const,
   activityCount: {
     fontFamily: pwc.fontMono,
     fontSize: 11,
     color: pwc.grey500,
+  } as const,
+  // Compact ghost buttons sitting in the activity-header toolbar. Sized
+  // to read as toolbar actions, not page CTAs. `destructiveBtn` powers
+  // both `stopBtn` and `stopAllBtn` (same visual contract); `primaryBtn`
+  // powers `rerunBtn`. Spread base + variant inline at use sites.
+  toolbarBtnBase: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: 600,
+    borderRadius: pwc.radius.sm,
+    padding: `2px ${pwc.space.sm}px`,
+    cursor: "pointer",
+    lineHeight: 1.4,
+  } as const,
+  destructiveBtn: {
+    color: pwc.errorText,
+    background: pwc.errorBg,
+    border: `1px solid ${pwc.errorBorder}`,
+  } as const,
+  primaryBtn: {
+    color: pwc.orange700,
+    background: pwc.orange50,
+    border: `1px solid ${pwc.orange400}`,
   } as const,
   errorBox: {
     background: pwc.errorBg,
