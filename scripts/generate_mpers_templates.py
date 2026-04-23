@@ -45,6 +45,68 @@ _DEFAULT_LABEL_PRIORITY = (
     _STANDARD_LABEL_ROLE,
 )
 
+# SSM ReportingLabel suffixes appended to MPERS taxonomy labels. MFRS templates
+# strip these for display; we do the same so MPERS matches MFRS visually. The
+# underlying concept_id is preserved on every row, so XBRL compliance (which
+# lives in the calculation/presentation linkbase via concept IDs, not label
+# text) is unaffected. Kept in sync with notes.labels._TAXONOMY_SUFFIXES.
+#
+# SSM is inconsistent about spacing: the MFRS 2022 bundle uses ``[text block]``
+# (with a space) on most concepts but ``[textblock]`` (no space) on the notes
+# roles. Both variants appear in the MPERS bundle too. Strip both so the
+# rendered templates match MFRS exactly.
+_DISPLAY_LABEL_SUFFIXES: tuple[str, ...] = (
+    "[text block]",
+    "[textblock]",
+    "[abstract]",
+    "[axis]",
+    "[member]",
+    "[table]",
+    "[line items]",
+)
+
+# Pure-structural labels — rows whose ONLY role is XBRL scaffolding
+# (hypercube tables, axes, typed-member placeholders, line-items anchors).
+# MFRS hand-curated templates omit these; the MPERS generator used to emit
+# them verbatim because it walks the presentation linkbase DFS. We skip rows
+# whose resolved label ends in one of these three markers — the data-carrying
+# rows (tagged [abstract] / [text block]) are retained with the suffix stripped.
+_STRUCTURAL_LABEL_SUFFIXES: tuple[str, ...] = (
+    "[table]",
+    "[axis]",
+    "[member]",
+    "[line items]",
+)
+
+_DISPLAY_SUFFIX_RE = re.compile(
+    r"\s*(?:" + "|".join(re.escape(s) for s in _DISPLAY_LABEL_SUFFIXES) + r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_display_suffix(text: str) -> str:
+    """Remove a single trailing SSM ReportingLabel suffix from a label string.
+
+    Idempotent, case-insensitive on the bracketed text. Only strips the tail;
+    mid-string brackets like ``EBITDA [reconciliation below]`` are preserved.
+    """
+    if not isinstance(text, str):
+        return text
+    return _DISPLAY_SUFFIX_RE.sub("", text)
+
+
+def _is_structural_label(text: str) -> bool:
+    """True when a resolved label is a pure XBRL scaffolding node.
+
+    Structural nodes are hypercube tables, axes, members, and line-items
+    anchors — they have no data column payload, they only define the shape
+    of a dimensional cube. MFRS templates omit them from the rendered sheet.
+    """
+    if not isinstance(text, str):
+        return False
+    lowered = text.strip().lower()
+    return any(lowered.endswith(s) for s in _STRUCTURAL_LABEL_SUFFIXES)
+
 # Matches "[210000] Statement of financial position, ..." inside the role XSD
 # so we can map role_number -> clean title for every role.
 _ROLE_TITLE_PATTERN = re.compile(r"\[(?P<num>\d{6})\]\s*(?P<title>[^<]+?)\s*</link:definition>")
@@ -380,7 +442,20 @@ def walk_role(pre_file_path: Path) -> list[tuple[int, str, str, bool]]:
             if not concept_id:
                 return
             text = _resolve_preferred_label(concept_id, preferred)
-            rows.append((depth, concept_id, text, _is_abstract_concept(concept_id)))
+            # Scaffolding filter — skip XBRL hypercube tables, axes, typed
+            # members, and line-items anchors. These carry no data; MFRS
+            # hand-curated templates omit them. We still RECURSE into their
+            # children so real data rows underneath remain reachable — the
+            # concept_id stays in the taxonomy graph, only the row emit is
+            # suppressed.
+            if not _is_structural_label(text):
+                # Strip display suffix (`[abstract]`, `[text block]`, …) to
+                # match MFRS template formatting. The concept_id on this row
+                # is preserved untouched, so taxonomy compliance is intact.
+                display_text = _strip_display_suffix(text)
+                rows.append(
+                    (depth, concept_id, display_text, _is_abstract_concept(concept_id))
+                )
             # Visit children in declared order. Same (order, to) pairs are
             # stable because Python's sort is stable.
             for _order, child_label, child_preferred in sorted(children[label], key=lambda x: x[0]):
@@ -719,6 +794,48 @@ def _inject_sum_formulas(
             _write_formula(parent_row, children)
 
 
+def _inject_face_to_sub_rollups(
+    face_ws,
+    face_rows: list[tuple[int, str, str, bool]],
+    sub_ws,
+    sub_rows: list[tuple[int, str, str, bool]],
+    value_columns: tuple[str, ...] = ("B", "C"),
+) -> None:
+    """Wire face-sheet line items to sub-sheet rollup totals.
+
+    Mirrors the MFRS template pattern: the main SOFP/SOPL/SOCI sheet references
+    the sub-classification sheet's ``*Total X`` rows via formulas like
+    ``='SOFP-Sub-CuNonCu'!B39``. This preserves the taxonomy calc structure
+    without forcing agents to fill the face line-item *and* the sub details —
+    they fill the sub details and the face rolls up automatically.
+
+    Algorithm: for each face concept that also appears on the sub sheet, point
+    at the **last** occurrence of that concept on the sub sheet (SSM's
+    presentation linkbase puts rollup totals last within a block, so the last
+    occurrence is the ``ReportingTotalLabel`` row). Skip face rows that
+    already carry a formula from :func:`_inject_sum_formulas` — those are the
+    on-sheet subtotals (Total non-current assets, Total equity, etc.) and we
+    must not overwrite them.
+    """
+    # Resolve sub-sheet concept → last xlsx row (rollup target).
+    sub_last_row: dict[str, int] = {}
+    for idx, (_depth, concept_id, _label, _abs) in enumerate(sub_rows):
+        sub_last_row[concept_id] = _FIRST_BODY_ROW + idx
+
+    for idx, (_depth, concept_id, _label, _abs) in enumerate(face_rows):
+        if concept_id not in sub_last_row:
+            continue
+        face_row = _FIRST_BODY_ROW + idx
+        for col_letter in value_columns:
+            col_idx = ord(col_letter) - ord("A") + 1
+            existing = face_ws.cell(row=face_row, column=col_idx).value
+            # Don't overwrite an on-sheet subtotal formula.
+            if isinstance(existing, str) and existing.startswith("="):
+                continue
+            ref = f"='{sub_ws.title}'!{col_letter}{sub_last_row[concept_id]}"
+            face_ws.cell(row=face_row, column=col_idx, value=ref)
+
+
 def _collect_rows_with_calc(
     role_number: str,
 ) -> tuple[
@@ -818,6 +935,10 @@ def build_template(filename: str, level: str, out_dir: Path) -> Path:
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
+    # Keep the per-sheet row-lists around so we can wire face → sub rollups
+    # after all sheets are built (MFRS format parity — main SOFP/SOPL/SOCI
+    # references sub-classification *Total rows via cross-sheet formulas).
+    emitted: list[tuple[Any, list[tuple[int, str, str, bool]]]] = []
     for sheet_name, role_number in zip(sheet_names, role_numbers):
         ws = wb.create_sheet(title=sheet_name)
         rows, calc = _collect_rows_with_calc(role_number)
@@ -834,6 +955,25 @@ def build_template(filename: str, level: str, out_dir: Path) -> Path:
                 _inject_sum_formulas(ws, rows, calc, value_columns=("B", "C", "D", "E"))
         else:
             raise ValueError(f"level={level!r} not supported")
+        emitted.append((ws, rows))
+
+    # Cross-sheet rollups: if this bundle has a face + sub-classification
+    # pair (first = face, second = sub), wire face concepts that also appear
+    # on the sub sheet to pull from the sub sheet's rollup rows. Matches the
+    # MFRS template pattern exactly. SOCIE (single sheet) is skipped because
+    # there is no sub sheet to pull from.
+    if len(emitted) >= 2:
+        face_ws, face_rows = emitted[0]
+        sub_ws, sub_rows = emitted[1]
+        if level == "company":
+            _inject_face_to_sub_rollups(
+                face_ws, face_rows, sub_ws, sub_rows, value_columns=("B", "C")
+            )
+        elif level == "group":
+            _inject_face_to_sub_rollups(
+                face_ws, face_rows, sub_ws, sub_rows,
+                value_columns=("B", "C", "D", "E"),
+            )
 
     out_path = out_dir / filename
     out_path.parent.mkdir(parents=True, exist_ok=True)

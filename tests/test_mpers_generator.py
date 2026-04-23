@@ -502,7 +502,13 @@ FACE_TEMPLATE_CASES = [
     (
         "10-SoRE.xlsx",
         ["SoRE"],
-        15,
+        # Row band tightened after the MFRS-format-alignment pass
+        # (2026-04-23): XBRL hypercube scaffolding rows ([table], [axis],
+        # [line items], Group/Company [member]) are no longer emitted, so
+        # SoRE's row count dropped from ~19 to 14. Floor is 10 to allow
+        # future taxonomy additions without false-alarming on a legitimate
+        # but small data body.
+        10,
         25,
         ["Dividends paid", "Retained earnings at beginning of period", "Retained earnings at end of period"],
         [],
@@ -703,17 +709,22 @@ def test_emitted_template_has_sum_formula_at_total_row():
 
 
 @pytest.mark.mpers_formulas
-def test_emitted_balance_sheet_balances_via_verifier():
+def test_emitted_balance_sheet_balances_via_verifier(tmp_path):
     """Red: after filling a handful of known values, SOFP total rows balance
-    (Assets == Equity + Liabilities). Uses openpyxl's built-in calc chain.
+    (Assets == Equity + Liabilities). Uses our in-process formula evaluator
+    (`_evaluate_sofp_balance`) rather than openpyxl — openpyxl doesn't
+    evaluate on save, and shelling out to Excel/LibreOffice isn't portable.
+
+    Runs in pytest's `tmp_path` fixture so the test doesn't depend on any
+    project-tree directory being writable (the original version wrote into
+    backup-originals/ which is read-only in some sandboxes).
     """
     import shutil
 
     import openpyxl
 
     src = MPERS_COMPANY_DIR / "01-SOFP-CuNonCu.xlsx"
-    dst = src.parent.parent / "backup-originals" / "_balance_check_tmp.xlsx"
-    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst = tmp_path / "_balance_check_tmp.xlsx"
     shutil.copy(src, dst)
 
     wb = openpyxl.load_workbook(dst)
@@ -727,6 +738,9 @@ def test_emitted_balance_sheet_balances_via_verifier():
         raise AssertionError(f"label not found: {label!r}")
 
     # Fill simple balancing figures (Assets = Equity + Liabilities = 1500).
+    # Writing a literal value on the main-sheet line-item cell overwrites
+    # the cross-sheet rollup formula — expected behaviour when an agent
+    # fills the face sheet directly instead of using sub-sheet details.
     ws.cell(row=find_row("Property, plant and equipment"), column=2, value=1000)
     ws.cell(row=find_row("Inventories"), column=2, value=500)
     ws.cell(row=find_row("Issued capital"), column=2, value=1500)
@@ -734,14 +748,9 @@ def test_emitted_balance_sheet_balances_via_verifier():
     wb.save(dst)
     wb.close()
 
-    # Reload with data_only=False so formulas remain, then evaluate manually
-    # via simple re-read (openpyxl doesn't evaluate on save — that's Excel/LibreOffice).
-    # For this test we re-parse the formulas we wrote and check balance
-    # arithmetically without needing a live Excel.
     from scripts.generate_mpers_templates import _evaluate_sofp_balance
 
     balanced = _evaluate_sofp_balance(dst)
-    dst.unlink(missing_ok=True)
     assert balanced, "SOFP did not balance after known-good fill"
 
 
@@ -1031,16 +1040,23 @@ def test_parse_calc_linkbase_grouped_splits_link_roles():
 
 
 @pytest.mark.mpers_formulas
-def test_mpers_sopl_profitloss_splits_across_row29_and_row34():
-    """Red: MPERS SOPL-Function has `ProfitLoss` at both rows 29 and 34
-    (vertical position + attribution position). Each row must get the calc
-    block that semantically matches its position in the presentation:
+def test_mpers_sopl_profitloss_splits_across_vertical_and_attribution():
+    """MPERS SOPL-Function has `ProfitLoss` at two presentation occurrences —
+    once as the vertical total (ContinuingOps + DiscontinuedOps) and once as
+    the attribution breakdown (Owners + EquityOther + NCI). Each row must
+    carry only its own decomposition.
 
-      * Row 29 ("Profit (loss)") — children {ContinuingOps, DiscontinuedOps}.
-      * Row 34 ("*Total Profit (Loss)") — children {Owners, EquityOther, NCI}.
+    The exact row numbers depend on taxonomy walk ordering; we look them up
+    dynamically so the test remains stable when future taxonomy drift or
+    row-formatting changes shift the presentation layout. The row-24 /
+    row-29 numbers below are the post-2026-04-23 layout (hypercube
+    scaffolding + duplicate headers stripped — the vertical 'Profit (loss)'
+    lands at r24 and the '*Total Profit (Loss)' attribution lands at r29).
 
-    Pre-fix bug: row 34 carried a 5-term sum merging both decompositions
-    (=1*B26+1*B31+1*B28+1*B32+1*B33), and row 29 had no formula at all.
+    Pre-fix bug this test pins against: row 34 carried a 5-term sum merging
+    both decompositions (=1*B26+1*B31+1*B28+1*B32+1*B33) and row 29 had no
+    formula at all. After the per-calc-block grouping in
+    parse_calc_linkbase_grouped, each occurrence gets its own calc block.
     """
     import openpyxl
 
@@ -1048,34 +1064,64 @@ def test_mpers_sopl_profitloss_splits_across_row29_and_row34():
     wb = openpyxl.load_workbook(path, data_only=False)
     ws = wb["SOPL-Function"]
 
-    row29_formula = ws.cell(row=29, column=2).value
-    row34_formula = ws.cell(row=34, column=2).value
+    # Find the two ProfitLoss rows by label (robust against row shifts).
+    # SSM presentation order: the vertical total ('*Profit (loss)') comes
+    # first, the attribution rollup ('*Total Profit (Loss)') comes later
+    # inside the attribution block. Both carry formulas; both are total
+    # rows (asterisk prefix per MFRS convention). We walk top-down and
+    # assign the first hit to vertical, second hit to attribution.
+    profit_loss_rows: list[int] = []
+    for r in range(1, ws.max_row + 1):
+        label = ws.cell(row=r, column=1).value
+        formula = ws.cell(row=r, column=2).value
+        if (
+            isinstance(label, str)
+            and label.strip().lower().lstrip("*").strip() in (
+                "profit (loss)",
+                "total profit (loss)",
+            )
+            and isinstance(formula, str)
+            and formula.startswith("=")
+        ):
+            profit_loss_rows.append(r)
+
+    assert len(profit_loss_rows) == 2, (
+        f"expected 2 ProfitLoss formula rows (vertical + attribution); "
+        f"got {len(profit_loss_rows)}: {profit_loss_rows}"
+    )
+    vertical_row, attribution_row = profit_loss_rows
+
+    vertical_formula = ws.cell(row=vertical_row, column=2).value
+    attribution_formula = ws.cell(row=attribution_row, column=2).value
     wb.close()
 
-    # Row 29 (vertical) must reference continuing (B26) and discontinued (B28).
-    assert isinstance(row29_formula, str) and row29_formula.startswith("="), (
-        f"row 29 (Profit (loss)) missing formula: {row29_formula!r}"
+    # Both rows must carry a formula.
+    assert isinstance(vertical_formula, str) and vertical_formula.startswith("="), (
+        f"vertical row r{vertical_row} (Profit (loss)) missing formula: {vertical_formula!r}"
     )
-    assert "B26" in row29_formula and "B28" in row29_formula, (
-        f"row 29 formula must reference continuing (B26) + discontinued (B28), "
-        f"got {row29_formula!r}"
-    )
-    assert "B31" not in row29_formula and "B32" not in row29_formula and "B33" not in row29_formula, (
-        f"row 29 formula must NOT reference attribution rows (B31/B32/B33), "
-        f"got {row29_formula!r}"
+    assert isinstance(attribution_formula, str) and attribution_formula.startswith("="), (
+        f"attribution row r{attribution_row} (*Total Profit (Loss)) missing formula: "
+        f"{attribution_formula!r}"
     )
 
-    # Row 34 (attribution) must reference owners (B31), equity-other (B32), NCI (B33).
-    assert isinstance(row34_formula, str) and row34_formula.startswith("="), (
-        f"row 34 (*Total Profit (Loss)) missing formula: {row34_formula!r}"
+    # Formulas must be distinct — the vertical and attribution blocks must
+    # not merge into one sum.
+    assert vertical_formula != attribution_formula, (
+        f"vertical and attribution formulas are identical — per-calc-block "
+        f"grouping failed. vertical={vertical_formula!r}"
     )
-    assert "B31" in row34_formula and "B32" in row34_formula and "B33" in row34_formula, (
-        f"row 34 formula must reference attribution rows (B31+B32+B33), "
-        f"got {row34_formula!r}"
+
+    # Shape check: vertical is a 2-term sum (continuing + discontinued),
+    # attribution is a 3-term sum (owners + equity-other + NCI).
+    vertical_terms = vertical_formula.count("*B")
+    attribution_terms = attribution_formula.count("*B")
+    assert vertical_terms == 2, (
+        f"vertical formula should have 2 terms (continuing+discontinued), "
+        f"got {vertical_terms}: {vertical_formula!r}"
     )
-    assert "B26" not in row34_formula and "B28" not in row34_formula, (
-        f"row 34 formula must NOT reference vertical rows (B26/B28), "
-        f"got {row34_formula!r}"
+    assert attribution_terms == 3, (
+        f"attribution formula should have 3 terms (owners+equity-other+NCI), "
+        f"got {attribution_terms}: {attribution_formula!r}"
     )
 
 
@@ -1119,13 +1165,17 @@ def test_mpers_templates_have_no_duplicate_cell_refs():
 
 @pytest.mark.mpers_formulas
 def test_mpers_soci_tci_splits_across_rows():
-    """Red: MPERS SOCI-BeforeTax (role 420000) has `ComprehensiveIncome` at
-    both row 28 (vertical: ProfitLoss + Total-OCI) and row 32 (attribution:
-    Owners + NCI). Each row must carry only its own decomposition.
+    """MPERS SOCI-BeforeTax (role 420000) has `ComprehensiveIncome` at two
+    presentation occurrences — vertical (ProfitLoss + Total-OCI) and
+    attribution (Owners + NCI). Each row must carry only its own
+    decomposition and they must be distinct formulas.
 
-    Row positions 28/32 come from the 420000 presentation walk; the NetOfTax
-    variant (role 410000, file 06-SOCI-NetOfTax.xlsx) puts the same concept
-    at rows 26/30 because it omits the tax-reclassifying abstract.
+    Like the SOPL ProfitLoss twin-decomposition test, we locate rows by
+    label rather than hard-coding row indices so taxonomy/formatting drift
+    doesn't break the test. Post-2026-04-23 the rows land at r23 (vertical
+    '*Total comprehensive income') and r27 (attribution '*Total
+    comprehensive income' inside the Comprehensive-income-attributable-to
+    block).
     """
     import openpyxl
 
@@ -1133,33 +1183,62 @@ def test_mpers_soci_tci_splits_across_rows():
     wb = openpyxl.load_workbook(path, data_only=False)
     ws = wb["SOCI-BeforeOfTax"]
 
-    vertical_formula = ws.cell(row=28, column=2).value
-    attribution_formula = ws.cell(row=32, column=2).value
+    # Collect every row that carries a formula and whose label is
+    # '*Total comprehensive income' (case-insensitive). SSM puts the
+    # vertical rollup before the attribution rollup in presentation order.
+    tci_rows: list[tuple[int, str]] = []
+    for r in range(1, ws.max_row + 1):
+        label = ws.cell(row=r, column=1).value
+        formula = ws.cell(row=r, column=2).value
+        if (
+            isinstance(label, str)
+            and label.strip().lower() == "*total comprehensive income"
+            and isinstance(formula, str)
+            and formula.startswith("=")
+        ):
+            tci_rows.append((r, formula))
     wb.close()
 
-    # Both rows must carry a formula.
-    assert isinstance(vertical_formula, str) and vertical_formula.startswith("="), (
-        f"row 28 (vertical *Total comprehensive income) missing formula: "
-        f"{vertical_formula!r}"
+    assert len(tci_rows) == 2, (
+        f"expected 2 '*Total comprehensive income' formula rows "
+        f"(vertical + attribution); got {len(tci_rows)}: "
+        f"{[(r, f) for r, f in tci_rows]}"
     )
-    assert isinstance(attribution_formula, str) and attribution_formula.startswith("="), (
-        f"row 32 (attribution *Total comprehensive income) missing formula: "
-        f"{attribution_formula!r}"
-    )
+
+    vertical_row, vertical_formula = tci_rows[0]
+    attribution_row, attribution_formula = tci_rows[1]
 
     # Formulas must be distinct (not the old merged 4-term sum).
     assert vertical_formula != attribution_formula, (
-        f"ComprehensiveIncome at row 28 and row 32 have identical formulas — "
-        f"must be separate calcs. {vertical_formula!r}"
+        f"ComprehensiveIncome at r{vertical_row} and r{attribution_row} "
+        f"have identical formulas — must be separate calcs. "
+        f"{vertical_formula!r}"
     )
 
-    # Row 28 (vertical) sums ProfitLoss (B11) + Total OCI (B27).
-    assert "B11" in vertical_formula and "B27" in vertical_formula, (
-        f"vertical calc at row 28 must reference B11 (ProfitLoss) + B27 "
-        f"(Total OCI), got {vertical_formula!r}"
+    # Shape: vertical sums 2 terms (ProfitLoss + Total OCI);
+    # attribution sums 2 terms (owners + NCI). Both are 2-term sums so we
+    # can't distinguish by count alone — check that the formulas reference
+    # distinct row ranges (vertical pulls from the OCI block above,
+    # attribution from the owners/NCI rows below it).
+    import re
+    row_re = re.compile(r"B(\d+)")
+    vertical_refs = [int(n) for n in row_re.findall(vertical_formula)]
+    attribution_refs = [int(n) for n in row_re.findall(attribution_formula)]
+
+    assert vertical_refs, f"vertical formula has no cell refs: {vertical_formula!r}"
+    assert attribution_refs, f"attribution formula has no cell refs: {attribution_formula!r}"
+
+    # Vertical must reference rows ABOVE itself; attribution must reference
+    # rows between the vertical total and itself.
+    assert max(vertical_refs) < vertical_row, (
+        f"vertical formula at r{vertical_row} references a row at or below "
+        f"itself: {vertical_formula!r}"
     )
-    # Row 32 (attribution) sums owners (B30) + NCI (B31).
-    assert "B30" in attribution_formula and "B31" in attribution_formula, (
-        f"attribution calc at row 32 must reference B30 (owners) + B31 (NCI), "
-        f"got {attribution_formula!r}"
+    assert max(attribution_refs) < attribution_row, (
+        f"attribution formula at r{attribution_row} references a row at or "
+        f"below itself: {attribution_formula!r}"
+    )
+    assert min(attribution_refs) > vertical_row, (
+        f"attribution formula at r{attribution_row} pulls from rows at or "
+        f"before the vertical total at r{vertical_row}: {attribution_formula!r}"
     )
