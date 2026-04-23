@@ -1,34 +1,41 @@
 #!/usr/bin/env python3
 """Complete MPERS formula audit report.
 
-Compares every SUM formula emitted by `scripts/generate_mpers_templates.py`
-against the SSM MPERS calculation linkbase. Run when a new SSM taxonomy
-version drops to catch any parent/child drift in the generated bundle.
+Compares every SUM formula emitted by ``scripts/generate_mpers_templates.py``
+against the SSM MPERS calculation linkbase, honouring the per-link-role +
+per-presentation-occurrence semantics introduced in commit c609d6c.
 
-Run: python3 scripts/audit_mpers_formulas.py > audit_report.txt
+Run: ``python3 scripts/audit_mpers_formulas.py > audit_report.txt``
+
+Run when a new SSM taxonomy version drops to catch any parent/child drift
+in the generated bundle. The regression tests under
+``tests/test_mpers_generator.py`` (``@pytest.mark.mpers_formulas``) are the
+CI-level guarantee; this script is the broader sweep for humans.
 """
-import xml.etree.ElementTree as ET
-from collections import defaultdict
-from pathlib import Path
-import openpyxl
-import re
+from __future__ import annotations
 
-REPO_ROOT = Path(__file__).resolve().parent
-MPERS_TAXONOMY_DIR = REPO_ROOT / "SSMxT_2022v1.0/rep/ssm/ca-2016/fs/mpers"
+import re
+from pathlib import Path
+from typing import Optional
+
+import openpyxl
+
+from scripts.generate_mpers_templates import (
+    _FIRST_BODY_ROW,
+    _PRE_TO_CALC_ROLE,
+    _pre_file_for_role,
+    parse_calc_linkbase_grouped_for_pre_role,
+    walk_role,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_COMPANY = REPO_ROOT / "XBRL-template-MPERS/Company"
 TEMPLATES_GROUP = REPO_ROOT / "XBRL-template-MPERS/Group"
 
-_PRE_TO_CALC_ROLE = {
-    "210000": "200100", "210100": "200200",
-    "220000": "200100", "220100": "200200",
-    "310000": "300100", "310100": "300200",
-    "320000": "300100", "320100": "300200",
-    "410000": "400100", "420000": "400100",
-    "510000": "500100", "520000": "500100",
-    "610000": "610000", "620000": "620000",
-}
-
-_TEMPLATE_MAPPING = [
+# Mirrors scripts/generate_mpers_templates.py::_TEMPLATE_MAPPING (face/sub
+# roles only — notes roles are kept out of the audit since they carry no
+# calc linkbase).
+_TEMPLATE_MAPPING: list[tuple[str, list[str]]] = [
     ("01-SOFP-CuNonCu.xlsx", ["210000", "210100"]),
     ("02-SOFP-OrderOfLiquidity.xlsx", ["220000", "220100"]),
     ("03-SOPL-Function.xlsx", ["310000", "310100"]),
@@ -41,7 +48,7 @@ _TEMPLATE_MAPPING = [
     ("10-SoRE.xlsx", ["620000"]),
 ]
 
-_SHEET_NAMES = {
+_SHEET_NAMES: dict[str, list[str]] = {
     "01-SOFP-CuNonCu.xlsx": ["SOFP-CuNonCu", "SOFP-Sub-CuNonCu"],
     "02-SOFP-OrderOfLiquidity.xlsx": ["SOFP-OrdOfLiq", "SOFP-Sub-OrdOfLiq"],
     "03-SOPL-Function.xlsx": ["SOPL-Function", "SOPL-Analysis-Function"],
@@ -54,363 +61,283 @@ _SHEET_NAMES = {
     "10-SoRE.xlsx": ["SoRE"],
 }
 
-NS = {
-    "link": "http://www.xbrl.org/2003/linkbase",
-    "xlink": "http://www.w3.org/1999/xlink",
-}
 
-def concept_id_from_href(href: str) -> str:
-    return href.split("#", 1)[-1]
+def _parse_formula_refs(formula_str: str) -> list[tuple[int, int]]:
+    """Parse an emitted SUM formula into ``[(row, weight), …]``.
 
-def parse_calc_linkbase(calc_file_path: Path) -> dict[str, list[tuple[str, int]]]:
-    tree = ET.parse(calc_file_path)
-    root = tree.getroot()
-    loc_map = {}
-    pending = defaultdict(list)
-
-    for calc_link in root.iter(f"{{{NS['link']}}}calculationLink"):
-        for elem in calc_link:
-            tag = elem.tag.split("}", 1)[-1]
-            if tag == "loc":
-                key = elem.get(f"{{{NS['xlink']}}}label")
-                href = elem.get(f"{{{NS['xlink']}}}href")
-                if key and href:
-                    loc_map[key] = concept_id_from_href(href)
-            elif tag == "calculationArc":
-                frm = elem.get(f"{{{NS['xlink']}}}from")
-                to = elem.get(f"{{{NS['xlink']}}}to")
-                if not (frm and to):
-                    continue
-                parent_concept = loc_map.get(frm)
-                child_concept = loc_map.get(to)
-                if not (parent_concept and child_concept):
-                    continue
-                try:
-                    weight = int(float(elem.get("weight", "1")))
-                except ValueError:
-                    weight = 1
-                try:
-                    order = float(elem.get("order", "0"))
-                except ValueError:
-                    order = 0.0
-                pending[parent_concept].append((order, child_concept, weight))
-
-    result = {}
-    for parent, entries in pending.items():
-        entries.sort(key=lambda x: x[0])
-        result[parent] = [(child, weight) for _order, child, weight in entries]
-    return result
-
-def walk_pre_linkbase(pre_file_path: Path) -> list[str]:
-    tree = ET.parse(pre_file_path)
-    root = tree.getroot()
-    rows = []
-    for pres_link in root.iter(f"{{{NS['link']}}}presentationLink"):
-        loc_map = {}
-        children = defaultdict(list)
-        all_froms = set()
-        all_tos = set()
-
-        for elem in pres_link:
-            tag = elem.tag.split("}", 1)[-1]
-            if tag == "loc":
-                key = elem.get(f"{{{NS['xlink']}}}label")
-                href = elem.get(f"{{{NS['xlink']}}}href")
-                if key and href:
-                    loc_map[key] = concept_id_from_href(href)
-            elif tag == "presentationArc":
-                frm = elem.get(f"{{{NS['xlink']}}}from")
-                to = elem.get(f"{{{NS['xlink']}}}to")
-                if not (frm and to):
-                    continue
-                order_raw = elem.get("order", "0")
-                try:
-                    order = float(order_raw)
-                except ValueError:
-                    order = 0.0
-                children[frm].append((order, to))
-                all_froms.add(frm)
-                all_tos.add(to)
-
-        roots = [lbl for lbl in loc_map if lbl in all_froms and lbl not in all_tos]
-        if not roots:
-            roots = [lbl for lbl in loc_map if lbl not in all_tos]
-
-        def dfs(label: str):
-            concept_id = loc_map.get(label)
-            if not concept_id:
-                return
-            rows.append(concept_id)
-            for _order, child_label in sorted(children[label], key=lambda x: x[0]):
-                dfs(child_label)
-
-        for root_label in roots:
-            dfs(root_label)
-
-    return rows
-
-def parse_formula(formula_str: str) -> list[tuple[str, int]]:
-    if not formula_str or not formula_str.startswith("="):
+    Formulas look like ``=1*B12+-1*B14+1*B16`` (the generator's style). Any
+    reference not matching the ``<weight>*<col><row>`` pattern is ignored —
+    cross-sheet refs use the form ``='SOFP-Sub-CuNonCu'!B50`` and aren't
+    relevant to the same-sheet audit this script performs.
+    """
+    if not formula_str or not isinstance(formula_str, str) or not formula_str.startswith("="):
         return []
-    expr = formula_str[1:]
-    expr = expr.replace("-", "+-")
-    terms = [t for t in expr.split("+") if t]
-    result = []
-    for term in terms:
-        if "*" in term:
-            weight_s, ref = term.split("*", 1)
-            try:
-                weight = int(float(weight_s))
-            except ValueError:
-                weight = 1
-        else:
-            ref, weight = term, 1
-        result.append((ref, weight))
+    # Normalise "-" to "+-" so a simple split on "+" works for signed terms.
+    expr = formula_str[1:].replace("-", "+-")
+    result: list[tuple[int, int]] = []
+    for term in expr.split("+"):
+        if not term:
+            continue
+        if "*" not in term:
+            continue
+        weight_s, ref = term.split("*", 1)
+        try:
+            weight = int(float(weight_s))
+        except ValueError:
+            continue
+        match = re.match(r"^([A-Z]+)(\d+)$", ref)
+        if not match:
+            continue
+        _col, row_s = match.groups()
+        result.append((int(row_s), weight))
     return result
 
-def extract_col_row(cell_ref: str) -> tuple[str, int] | None:
-    match = re.match(r"^([A-Z]+)(\d+)$", cell_ref)
-    if match:
-        return (match.group(1), int(match.group(2)))
-    return None
+
+def _compute_expected_formulas(
+    role_number: str,
+) -> list[tuple[int, list[tuple[int, int]]]]:
+    """Return ``[(xlsx_row, expected_children), …]`` for one role.
+
+    Mirrors the per-presentation-occurrence + right-aligned assignment
+    algorithm in ``scripts/generate_mpers_templates._inject_sum_formulas``.
+    Children are resolved to their first-occurrence row (same as the
+    emitter). Parents whose blocks have no resolvable children are skipped.
+    """
+    rows = walk_role(_pre_file_for_role(role_number))
+    calc_blocks = parse_calc_linkbase_grouped_for_pre_role(role_number)
+
+    # concept_id -> list of xlsx rows (presentation order).
+    concept_to_rows: dict[str, list[int]] = {}
+    first_occurrence: dict[str, int] = {}
+    for idx, (_depth, concept_id, _label, _abs) in enumerate(rows):
+        xlsx_row = _FIRST_BODY_ROW + idx
+        concept_to_rows.setdefault(concept_id, []).append(xlsx_row)
+        first_occurrence.setdefault(concept_id, xlsx_row)
+
+    # Per-parent: ordered list of (link_role, children) from the calc file.
+    parent_to_blocks: dict[str, list[list[tuple[str, int]]]] = {}
+    for _role, calc_map in calc_blocks:
+        for parent, children in calc_map.items():
+            parent_to_blocks.setdefault(parent, []).append(children)
+
+    expected: list[tuple[int, list[tuple[int, int]]]] = []
+    for parent, blocks in parent_to_blocks.items():
+        parent_rows = concept_to_rows.get(parent, [])
+        if not parent_rows:
+            continue
+        n = min(len(parent_rows), len(blocks))
+        row_start = len(parent_rows) - n  # right-aligned
+        block_start = len(blocks) - n
+        for i in range(n):
+            xlsx_row = parent_rows[row_start + i]
+            children = blocks[block_start + i]
+            resolved: list[tuple[int, int]] = []
+            for child_concept, weight in children:
+                child_row = first_occurrence.get(child_concept)
+                if child_row is not None:
+                    resolved.append((child_row, weight))
+            if resolved:
+                expected.append((xlsx_row, resolved))
+    return expected
+
+
+def _value_columns_for(filename: str, level: str) -> Optional[list[str]]:
+    """Columns the generator writes formulas into, or ``None`` to skip.
+
+    Returns ``None`` for sheets that use a non-standard layout where the
+    calc-based audit doesn't apply — specifically the Group SOCIE 4-block
+    layout, which replaces the calc-driven single-row formulas entirely.
+    """
+    if filename == "09-SOCIE.xlsx" and level == "group":
+        return None
+    if level == "company":
+        return ["B", "C"]
+    return ["B", "C", "D", "E"]
+
 
 def audit_template(template_path: Path, level: str) -> dict:
+    """Audit one xlsx by comparing each expected formula against the cells."""
     filename = template_path.name
-    role_numbers = None
+    role_numbers: Optional[list[str]] = None
     for fname, rns in _TEMPLATE_MAPPING:
         if fname == filename:
             role_numbers = rns
             break
-
-    if not role_numbers:
+    if role_numbers is None:
         return {"error": f"Unknown template {filename}"}
 
     sheet_names = _SHEET_NAMES.get(filename, [])
     wb = openpyxl.load_workbook(template_path)
-    result = {"filename": filename, "level": level, "sheets": {}}
+    result: dict = {"filename": filename, "level": level, "sheets": {}}
+
+    value_cols = _value_columns_for(filename, level)
+    if value_cols is None:
+        # e.g. Group SOCIE — skip the calc-based audit, record the reason so
+        # the summary counts it as a deliberate skip, not a missing audit.
+        for sheet_name in sheet_names:
+            result["sheets"][sheet_name] = {"skipped": "group_socie_4block_layout"}
+        return result
 
     for sheet_name, role_number in zip(sheet_names, role_numbers):
         if sheet_name not in wb.sheetnames:
-            result["sheets"][sheet_name] = {"error": f"Sheet not found"}
-            continue
-
-        if filename == "09-SOCIE.xlsx" and level == "group":
-            result["sheets"][sheet_name] = {"status": "socie_group_4block"}
+            result["sheets"][sheet_name] = {"error": "Sheet not found"}
             continue
 
         ws = wb[sheet_name]
-        calc_role = _PRE_TO_CALC_ROLE.get(role_number)
-        calc_map = {}
-        if calc_role:
-            calc_file = MPERS_TAXONOMY_DIR / f"cal_ssmt-fs-mpers_2022-12-31_role-{calc_role}.xml"
-            if calc_file.exists():
-                calc_map = parse_calc_linkbase(calc_file)
+        expected = _compute_expected_formulas(role_number)
 
-        pre_file = MPERS_TAXONOMY_DIR / f"pre_ssmt-fs-mpers_2022-12-31_role-{role_number}.xml"
-        pre_rows = walk_pre_linkbase(pre_file)
-        concept_to_row = {cid: 3 + idx for idx, cid in enumerate(pre_rows)}
-
-        sheet_result = {
-            "calc_parents": len(calc_map),
+        sheet_result: dict = {
+            "expected_formulas": len(expected),
             "formulas_correct": 0,
             "formulas_wrong": 0,
             "formulas_missing": 0,
-            "dropped_children_count": 0,
-            "issues": []
+            "issues": [],
         }
 
-        if level == "company":
-            value_cols = ["B", "C"]
-        elif filename == "09-SOCIE.xlsx":
-            sheet_result["note"] = "SOCIE Group 4-block layout"
-            result["sheets"][sheet_name] = sheet_result
-            continue
-        else:
-            value_cols = ["B", "C", "D", "E"]
-
-        for parent_concept, children in calc_map.items():
-            parent_row = concept_to_row.get(parent_concept)
-            if parent_row is None:
-                continue
-
-            expected_parts = []
-            dropped_count = 0
-            for child_concept, weight in children:
-                child_row = concept_to_row.get(child_concept)
-                if child_row is None:
-                    dropped_count += 1
-                else:
-                    expected_parts.append((child_row, weight))
-
-            if dropped_count > 0:
-                sheet_result["dropped_children_count"] += 1
-
-            if not expected_parts:
-                continue
-
+        for parent_row, expected_children in expected:
+            expected_set = set(expected_children)
             for col_letter in value_cols:
                 col_idx = ord(col_letter) - ord("A") + 1
-                formula_cell = ws.cell(row=parent_row, column=col_idx)
-                formula_str = formula_cell.value
-
-                if not formula_str or not isinstance(formula_str, str) or not formula_str.startswith("="):
+                formula = ws.cell(row=parent_row, column=col_idx).value
+                if not (isinstance(formula, str) and formula.startswith("=")):
                     sheet_result["formulas_missing"] += 1
                     sheet_result["issues"].append({
                         "type": "missing",
-                        "parent": parent_concept,
                         "cell": f"{col_letter}{parent_row}",
+                        "expected": sorted(expected_set),
                     })
                     continue
 
-                parsed = parse_formula(formula_str)
-                parsed_pairs = []
-                for cell_ref, weight in parsed:
-                    cr = extract_col_row(cell_ref)
-                    if cr:
-                        _, row = cr
-                        parsed_pairs.append((row, weight))
+                # Only compare refs to THIS column — cross-column refs are
+                # invalid for the same-axis audit.
+                actual_refs = _parse_formula_refs(formula)
+                wrong_col = [f"{col_letter}{parent_row}"] if col_letter not in formula else []
+                if wrong_col:
+                    # A formula exists but references a different column — rare,
+                    # but flag it rather than silently ignoring.
+                    sheet_result["formulas_wrong"] += 1
+                    sheet_result["issues"].append({
+                        "type": "wrong_column",
+                        "cell": f"{col_letter}{parent_row}",
+                        "formula": formula[:120],
+                    })
+                    continue
 
-                expected_set = set(expected_parts)
-                parsed_set = set(parsed_pairs)
-
-                if expected_set == parsed_set:
+                actual_set = set(actual_refs)
+                if actual_set == expected_set:
                     sheet_result["formulas_correct"] += 1
                 else:
                     sheet_result["formulas_wrong"] += 1
                     sheet_result["issues"].append({
                         "type": "mismatch",
-                        "parent": parent_concept,
                         "cell": f"{col_letter}{parent_row}",
-                        "formula": formula_str[:80],
+                        "formula": formula[:120],
+                        "expected_only": sorted(expected_set - actual_set),
+                        "actual_only": sorted(actual_set - expected_set),
                     })
 
         result["sheets"][sheet_name] = sheet_result
 
     return result
 
-def main():
+
+def _accumulate(totals: dict, sheet_result: dict) -> None:
+    totals["sheets"] += 1
+    totals["expected_formulas"] += sheet_result.get("expected_formulas", 0)
+    totals["formulas_correct"] += sheet_result.get("formulas_correct", 0)
+    totals["formulas_wrong"] += sheet_result.get("formulas_wrong", 0)
+    totals["formulas_missing"] += sheet_result.get("formulas_missing", 0)
+
+
+def _print_sheet(filename: str, sheet_name: str, sheet_result: dict) -> None:
+    if "skipped" in sheet_result:
+        print(f"{filename} [{sheet_name}]: SKIPPED ({sheet_result['skipped']})")
+        return
+    if "error" in sheet_result:
+        print(f"{filename} [{sheet_name}]: ERROR ({sheet_result['error']})")
+        return
+    correct = sheet_result["formulas_correct"]
+    wrong = sheet_result["formulas_wrong"]
+    missing = sheet_result["formulas_missing"]
+    expected = sheet_result["expected_formulas"]
+    status = "OK" if (wrong == 0 and missing == 0) else "ISSUES"
+    print(
+        f"{filename} [{sheet_name}]: {status} "
+        f"(expected={expected}, correct={correct}, wrong={wrong}, missing={missing})"
+    )
+    for issue in sheet_result.get("issues", [])[:3]:
+        kind = issue["type"].upper()
+        cell = issue["cell"]
+        extra = ""
+        if issue["type"] == "mismatch":
+            extra = f"  expected_only={issue['expected_only']} actual_only={issue['actual_only']}"
+        print(f"    - {kind}: {cell}{extra}")
+
+
+def main() -> None:
     print("=" * 100)
     print("MPERS FORMULA AUDIT — DETAILED REPORT")
     print("=" * 100)
-    print()
 
-    company_totals = {
-        "templates": 0,
-        "sheets": 0,
-        "calc_parents": 0,
-        "formulas_correct": 0,
-        "formulas_wrong": 0,
-        "formulas_missing": 0,
-        "parents_with_dropped_children": 0,
-    }
+    def _new_totals() -> dict:
+        return {
+            "templates": 0,
+            "sheets": 0,
+            "expected_formulas": 0,
+            "formulas_correct": 0,
+            "formulas_wrong": 0,
+            "formulas_missing": 0,
+        }
 
-    group_totals = {
-        "templates": 0,
-        "sheets": 0,
-        "calc_parents": 0,
-        "formulas_correct": 0,
-        "formulas_wrong": 0,
-        "formulas_missing": 0,
-        "parents_with_dropped_children": 0,
-    }
+    company_totals = _new_totals()
+    group_totals = _new_totals()
 
-    print("COMPANY LEVEL AUDIT")
+    print("\nCOMPANY LEVEL AUDIT")
     print("-" * 100)
-    for filename, _ in _TEMPLATE_MAPPING[:10]:
+    for filename, _ in _TEMPLATE_MAPPING:
         template_path = TEMPLATES_COMPANY / filename
         if not template_path.exists():
             print(f"{filename}: TEMPLATE NOT FOUND")
             continue
-
-        result = audit_template(template_path, level="company")
         company_totals["templates"] += 1
-
+        result = audit_template(template_path, level="company")
         for sheet_name, sheet_result in result.get("sheets", {}).items():
-            company_totals["sheets"] += 1
-            company_totals["calc_parents"] += sheet_result.get("calc_parents", 0)
-            correct = sheet_result.get("formulas_correct", 0)
-            wrong = sheet_result.get("formulas_wrong", 0)
-            missing = sheet_result.get("formulas_missing", 0)
-            dropped = sheet_result.get("dropped_children_count", 0)
+            _print_sheet(filename, sheet_name, sheet_result)
+            _accumulate(company_totals, sheet_result)
 
-            company_totals["formulas_correct"] += correct
-            company_totals["formulas_wrong"] += wrong
-            company_totals["formulas_missing"] += missing
-            company_totals["parents_with_dropped_children"] += dropped
-
-            status = "OK" if (wrong == 0 and missing == 0) else "ISSUES"
-            print(f"{filename} [{sheet_name}]: {status}")
-            print(f"  Calc parents: {sheet_result.get('calc_parents', 0)}, "
-                  f"Correct: {correct}, Wrong: {wrong}, Missing: {missing}, "
-                  f"Dropped: {dropped}")
-            if sheet_result.get("issues"):
-                for issue in sheet_result["issues"][:3]:
-                    print(f"    - {issue['type'].upper()}: {issue['cell']}")
-
-    print()
-    print("GROUP LEVEL AUDIT")
+    print("\nGROUP LEVEL AUDIT")
     print("-" * 100)
-    for filename, _ in _TEMPLATE_MAPPING[:10]:
+    for filename, _ in _TEMPLATE_MAPPING:
         template_path = TEMPLATES_GROUP / filename
         if not template_path.exists():
             print(f"{filename}: TEMPLATE NOT FOUND")
             continue
-
-        result = audit_template(template_path, level="group")
         group_totals["templates"] += 1
-
+        result = audit_template(template_path, level="group")
         for sheet_name, sheet_result in result.get("sheets", {}).items():
-            if "socie_group_4block" in sheet_result.get("status", ""):
-                print(f"{filename} [{sheet_name}]: SOCIE GROUP 4-BLOCK LAYOUT (no formulas)")
-                continue
-
-            group_totals["sheets"] += 1
-            group_totals["calc_parents"] += sheet_result.get("calc_parents", 0)
-            correct = sheet_result.get("formulas_correct", 0)
-            wrong = sheet_result.get("formulas_wrong", 0)
-            missing = sheet_result.get("formulas_missing", 0)
-            dropped = sheet_result.get("dropped_children_count", 0)
-
-            group_totals["formulas_correct"] += correct
-            group_totals["formulas_wrong"] += wrong
-            group_totals["formulas_missing"] += missing
-            group_totals["parents_with_dropped_children"] += dropped
-
-            status = "OK" if (wrong == 0 and missing == 0) else "ISSUES"
-            print(f"{filename} [{sheet_name}]: {status}")
-            print(f"  Calc parents: {sheet_result.get('calc_parents', 0)}, "
-                  f"Correct: {correct}, Wrong: {wrong}, Missing: {missing}, "
-                  f"Dropped: {dropped}")
+            _print_sheet(filename, sheet_name, sheet_result)
+            _accumulate(group_totals, sheet_result)
 
     print()
     print("=" * 100)
     print("SUMMARY")
     print("=" * 100)
-    print()
-    print(f"COMPANY LEVEL (value columns B, C):")
-    print(f"  Templates audited: {company_totals['templates']}")
-    print(f"  Sheets audited: {company_totals['sheets']}")
-    print(f"  Calc parents in linkbase: {company_totals['calc_parents']}")
-    print(f"  Formulas correct: {company_totals['formulas_correct']}")
-    print(f"  Formulas with mismatches: {company_totals['formulas_wrong']}")
-    print(f"  Formulas missing: {company_totals['formulas_missing']}")
-    print(f"  Parents with dropped children (cross-sheet): {company_totals['parents_with_dropped_children']}")
-    print()
-    print(f"GROUP LEVEL (value columns B, C, D, E; SOCIE excepted):")
-    print(f"  Templates audited: {group_totals['templates']}")
-    print(f"  Sheets audited: {group_totals['sheets']}")
-    print(f"  Calc parents in linkbase: {group_totals['calc_parents']}")
-    print(f"  Formulas correct: {group_totals['formulas_correct']}")
-    print(f"  Formulas with mismatches: {group_totals['formulas_wrong']}")
-    print(f"  Formulas missing: {group_totals['formulas_missing']}")
-    print(f"  Parents with dropped children (cross-sheet): {group_totals['parents_with_dropped_children']}")
-    print()
+    for label, totals in (("COMPANY", company_totals), ("GROUP", group_totals)):
+        print(
+            f"\n{label}: templates={totals['templates']} sheets={totals['sheets']} "
+            f"expected={totals['expected_formulas']} "
+            f"correct={totals['formulas_correct']} "
+            f"wrong={totals['formulas_wrong']} "
+            f"missing={totals['formulas_missing']}"
+        )
+    clean = (
+        company_totals["formulas_wrong"] == 0
+        and company_totals["formulas_missing"] == 0
+        and group_totals["formulas_wrong"] == 0
+        and group_totals["formulas_missing"] == 0
+    )
+    print("\nRESULT: ALL FORMULAS CORRECT" if clean else "\nRESULT: ISSUES FOUND")
 
-    if (company_totals["formulas_wrong"] == 0 and company_totals["formulas_missing"] == 0 and
-        group_totals["formulas_wrong"] == 0 and group_totals["formulas_missing"] == 0):
-        print("RESULT: ALL FORMULAS CORRECT")
-    else:
-        print("RESULT: ISSUES FOUND")
 
 if __name__ == "__main__":
     main()
