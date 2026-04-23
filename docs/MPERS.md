@@ -178,6 +178,55 @@ signatures still run.
   simulates sub-agents emitting bare MFRS-style labels against an
   MPERS template, asserts ≥ 8 rows land (pre-fix baseline was 3).
 
+## Template Formatting Alignment (2026-04-23 pass)
+
+A follow-on pass brought MPERS templates into visual parity with MFRS.
+The SSM MPERS presentation linkbase emits XBRL hypercube scaffolding
+(``[table]`` / ``[axis]`` / ``[member]`` / ``[line items]`` nodes) plus
+type-suffixed labels (``[text block]`` / ``[textblock]`` /
+``[abstract]``). The previous generator walked the linkbase faithfully
+and rendered every node as a row, which made MPERS templates longer and
+noisier than MFRS. The MFRS bundle was hand-curated to skip scaffolding
+and strip suffixes; MPERS now does the same.
+
+Two new primitives in `scripts/generate_mpers_templates.py`:
+
+- **`_is_structural_label(text)`** — returns True for labels ending in
+  `[table]`, `[axis]`, `[member]`, or `[line items]`. Rows emitting
+  these are filtered in `walk_role().dfs`; children are still
+  recursed so underlying data rows remain reachable.
+- **`_strip_display_suffix(text)`** — removes a single trailing
+  `[text block]` / `[textblock]` / `[abstract]` / `[axis]` /
+  `[member]` / `[table]` / `[line items]` annotation.
+  Concept IDs are preserved untouched on every row, so XBRL
+  compliance (which lives in the calc/presentation linkbase via
+  concept IDs, not label text) is unaffected.
+
+`notes/labels.py::_TAXONOMY_SUFFIXES` was extended with `[textblock]`
+(no space) and `[line items]` so the writer + coverage validator agree
+with the generator.
+
+Additionally, face ↔ sub cross-sheet rollups were wired in
+`_inject_face_to_sub_rollups()`. For each face-sheet concept that also
+appears on the sub-sheet, the face cell gets
+`='<sub_sheet>'!<col><last_row>` pointing at the sub-sheet's
+``*Total X`` rollup row (the last presentation occurrence of the
+concept). This mirrors MFRS exactly — agents filling the sub-sheet
+details see their totals flow up to the face sheet without a second
+entry.
+
+### Regression anchors
+
+- `tests/test_mpers_generator.py::test_mpers_sopl_profitloss_splits_across_vertical_and_attribution`
+  and `::test_mpers_soci_tci_splits_across_rows` are now row-shift-safe
+  — they locate the vertical vs attribution ProfitLoss / TCI rows by
+  label rather than hard-coded row index.
+- `tests/test_mpers_generator.py::test_emitted_balance_sheet_balances_via_verifier`
+  uses pytest's `tmp_path` so it doesn't depend on
+  `backup-originals/` being writable.
+- SoRE `FACE_TEMPLATE_CASES` row floor was relaxed from 15 to 10 to
+  reflect the post-strip row count (14).
+
 ## Taxonomy Updates
 
 When SSM ships a new MPERS taxonomy (e.g. 2024 vs 2022):

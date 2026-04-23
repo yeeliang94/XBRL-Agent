@@ -297,14 +297,29 @@ Key invariants:
   before launching any agent.
 - **Always run the generator with `--snapshot`** so the previous version
   lands in `backup-originals/` for schema-drift diffing.
+- **Template formatting parity with MFRS (2026-04-23):** the MPERS
+  generator (`scripts/generate_mpers_templates.py`) now strips SSM
+  ReportingLabel suffixes (`[text block]` / `[textblock]` /
+  `[abstract]` / `[axis]` / `[member]` / `[table]` / `[line items]`)
+  from rendered column-A labels via `_strip_display_suffix`, filters
+  pure XBRL scaffolding rows (`[table]` / `[axis]` / `[member]` /
+  `[line items]` nodes) via `_is_structural_label`, and wires
+  face→sub cross-sheet rollup formulas via
+  `_inject_face_to_sub_rollups` so face-sheet line items pull from
+  sub-sheet `*Total X` rows the way MFRS does. Concept IDs on every
+  row are preserved untouched — XBRL compliance lives in the
+  calc/presentation linkbase, not label text. Templates no longer
+  carry the suffixes; `notes.labels.normalize_label` still strips
+  defensively in case agents quote taxonomy labels verbatim.
 - **Notes-pipeline MPERS-awareness (2026-04-23 hardening):**
   `render_notes_prompt` takes a `filing_standard` kwarg; the sheet
   map and cross-sheet hints render per standard. An MPERS overlay
   block surfaces the `[text block]` suffix convention and narrower
   concept set. The writer + coverage-validator normalisers share
   `notes.labels.normalize_label` which strips trailing
-  `[text block]` / `[abstract]` / `[axis]` / `[member]` / `[table]`
-  so short MPERS labels stop failing the 0.85 fuzzy threshold.
+  `[text block]` / `[textblock]` / `[abstract]` / `[axis]` /
+  `[member]` / `[table]` / `[line items]` so agent-emitted labels
+  that drift from template text still match the 0.85 fuzzy threshold.
   `create_notes_agent` seeds the template's col-A labels into the
   system prompt so agents pick from the live MPERS vocabulary, not
   their MFRS training prior. SOCIE cross-checks (`socie_to_sofp_equity`,

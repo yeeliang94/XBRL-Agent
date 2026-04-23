@@ -23,12 +23,21 @@ import re
 # Extend this tuple if a future MPERS generator run surfaces a new
 # type bracket — both the writer and the coverage validator will
 # pick it up because they import from the same constant.
+#
+# SSM uses both "[text block]" (with space, most concepts) and
+# "[textblock]" (no space, notes roles) — strip both for agent-label
+# matching so neither spacing variant breaks fuzzy coverage scoring.
+# "[line items]" is the hypercube anchor label: the generator filters
+# these rows out of templates, but agent prompts may still mention
+# them verbatim when quoting the taxonomy, so normalise defensively.
 _TAXONOMY_SUFFIXES: tuple[str, ...] = (
     "[text block]",
+    "[textblock]",
     "[abstract]",
     "[axis]",
     "[member]",
     "[table]",
+    "[line items]",
 )
 
 # Pre-compiled match: one trailing type-suffix (with any surrounding
