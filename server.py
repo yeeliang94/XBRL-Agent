@@ -21,14 +21,16 @@ import os
 import time
 import traceback
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Dict, List, Literal, Optional, Set, Any
 
 from dotenv import load_dotenv, set_key
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # Suppress LiteLLM SSL warnings (enterprise firewall blocks GitHub pricing fetch)
 try:
@@ -666,7 +668,22 @@ def _strip_binary(obj):
 # FastAPI application
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="XBRL Agent", version="0.3.0")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Create / migrate the audit DB once at startup (peer-review #9).
+
+    Previously every `_open_audit_conn` call re-ran `init_db`, which is
+    idempotent but paid ~1ms of CREATE-IF-NOT-EXISTS churn on every
+    request to the history and notes_cells endpoints. Running it once
+    at startup keeps the schema-migration guarantee (v2/v3 migrations
+    still land on first boot after deploy) without the per-request cost.
+    """
+    from db.schema import init_db
+    init_db(AUDIT_DB_PATH)
+    yield
+
+
+app = FastAPI(title="XBRL Agent", version="0.3.0", lifespan=_lifespan)
 
 # Track active extraction runs by session_id
 active_runs: set[str] = set()
@@ -736,7 +753,7 @@ def _load_extended_settings() -> dict:
         default_models = {}
 
     # Ensure every agent role has a key (fall back to the global model)
-    global_model = os.environ.get("TEST_MODEL", "vertex_ai.gemini-3-flash-preview")
+    global_model = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
     for role in _AGENT_ROLES:
         default_models.setdefault(role, global_model)
 
@@ -765,7 +782,7 @@ async def get_settings():
     extended = _load_extended_settings()
     return {
         # Backward-compatible fields
-        "model": os.environ.get("TEST_MODEL", "vertex_ai.gemini-3-flash-preview"),
+        "model": os.environ.get("TEST_MODEL", "openai.gpt-5.4"),
         "proxy_url": os.environ.get("LLM_PROXY_URL", ""),
         "api_key_set": bool(api_key),
         "api_key_preview": masked,
@@ -946,7 +963,7 @@ async def scout_pdf(session_id: str, request: Request):
     load_dotenv(ENV_FILE, override=True)
     api_key = _resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
-    global_model = os.environ.get("TEST_MODEL", "vertex_ai.gemini-3-flash-preview")
+    global_model = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
 
     if not api_key:
         raise HTTPException(status_code=400, detail="GEMINI_API_KEY (Mac) or GOOGLE_API_KEY (Windows proxy) must be set. Check Settings.")
@@ -1356,7 +1373,14 @@ async def run_multi_agent_stream(
         )
 
         yield {"event": "status", "data": {
-            "phase": "starting", "message": f"Starting extraction for {len(statements_to_run)} statements...",
+            "phase": "starting",
+            "message": f"Starting extraction for {len(statements_to_run)} statements...",
+            # Surface the new run_id so clients that kicked off a
+            # rerun / regenerate (which creates a fresh run row) can
+            # navigate to the new run once it finishes, instead of
+            # sitting on the stale id they POSTed to. Matches the
+            # run_complete event below which also carries it now.
+            "run_id": run_id,
         }}
 
         # Phase 6.5: create run_agents rows UP FRONT so tool events can be
@@ -1501,6 +1525,12 @@ async def run_multi_agent_stream(
             filing_standard=run_config.filing_standard,
             models=notes_models,
             page_hints=notes_page_hints,
+            # Step 6 of the notes rich-editor plan: hand the audit run_id
+            # + DB path down so the coordinator persists each agent's
+            # per-cell HTML to `notes_cells` on success. Skipped cleanly
+            # if the row-creation above failed (run_id is None).
+            run_id=run_id,
+            audit_db_path=str(AUDIT_DB_PATH),
         )
         notes_task = asyncio.create_task(
             run_notes_extraction(
@@ -2116,6 +2146,11 @@ async def run_multi_agent_stream(
                                        if r.status == "failed"],
                 "notes_completed": notes_completed,
                 "notes_failed": notes_failed,
+                # Peer-review follow-up for regenerate-flow: surface the
+                # run_id here (not just in `status: starting`) so a client
+                # that connected mid-stream and missed the starting event
+                # can still pick up the new run id to navigate to.
+                "run_id": run_id,
             }}
     except BaseException:
         # Belt-and-braces: if we reach the outer except without having
@@ -2195,7 +2230,7 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest):
         load_dotenv(ENV_FILE, override=True)
         api_key = _resolve_api_key()
         proxy_url = os.environ.get("LLM_PROXY_URL", "")
-        model_name = os.environ.get("TEST_MODEL", "vertex_ai.gemini-3-flash-preview")
+        model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
 
         if not api_key:
             raise HTTPException(
@@ -2261,6 +2296,133 @@ async def abort_agent(session_id: str, agent_id: str):
 # Rerun endpoint — re-extract a single statement in an existing session
 # ---------------------------------------------------------------------------
 
+@app.post("/api/runs/{run_id}/rerun-notes")
+async def rerun_notes(run_id: int):
+    """Regenerate the notes sheets for a completed run.
+
+    Peer-review [HIGH] #1: before this endpoint existed, the
+    Regenerate-notes button on the History-page run detail redirected
+    to `/?session=<id>#notes` — a URL no code consumed. Users clicking
+    it landed on the Extract page with no Rerun affordance (that button
+    only shows for failed/cancelled agents). This endpoint is the real
+    target: it reads the run's session + config from the DB, builds a
+    notes-only `RunConfigRequest` server-side, and delegates to the same
+    `run_multi_agent_stream` the per-agent rerun uses.
+
+    Keeping the config build server-side (instead of expecting the
+    frontend to reconstruct a RunConfigRequest from the run detail
+    payload) means the Regenerate flow stays resilient to new
+    RunConfigRequest fields landing in the future — only this endpoint
+    needs to learn about them.
+    """
+    # Look up the run row — we need its session_id (for active-runs
+    # locking + output dir) and its stored `run_config_json`.
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(str(AUDIT_DB_PATH))
+    try:
+        from db.repository import fetch_run as _fetch_run
+        run = _fetch_run(conn, run_id)
+    finally:
+        conn.close()
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+
+    config = run.config or {}
+    notes_to_run = config.get("notes_to_run") or []
+    if not notes_to_run:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This run has no notes templates in its config — nothing "
+                "to regenerate. Run the notes pipeline on a fresh session "
+                "instead."
+            ),
+        )
+
+    session_id = run.session_id
+    if not session_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run {run_id} has no session_id — legacy row can't be rerun.",
+        )
+
+    if session_id in active_runs:
+        raise HTTPException(
+            status_code=409,
+            detail="Extraction still running for this session. Wait for it to finish before regenerating.",
+        )
+
+    session_dir = OUTPUT_DIR / session_id
+    pdf_path = session_dir / "uploaded.pdf"
+    if not pdf_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="PDF not found for this session — cannot regenerate.",
+        )
+
+    # Build a notes-only RunConfigRequest from the stored config. Clear
+    # `statements` so only the notes coordinator runs; preserve
+    # filing_level, filing_standard, infopack, use_scout, and any
+    # per-template model overrides so the regenerated notes match the
+    # original run's environment.
+    try:
+        regen_config = RunConfigRequest(
+            statements=[],
+            variants={},
+            models={},
+            infopack=config.get("infopack"),
+            use_scout=False,  # no new scout pass — reuse stored infopack
+            filing_level=config.get("filing_level", "company"),
+            filing_standard=config.get("filing_standard", "mfrs"),
+            notes_to_run=list(notes_to_run),
+            notes_models=config.get("notes_models") or {},
+        )
+    except Exception as e:
+        # Malformed stored config — surface rather than crash mid-stream.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stored run config is malformed: {e}",
+        )
+
+    load_dotenv(ENV_FILE, override=True)
+    api_key = _resolve_api_key()
+    proxy_url = os.environ.get("LLM_PROXY_URL", "")
+    model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="API key not set. Check Settings.",
+        )
+
+    active_runs.add(session_id)
+
+    async def event_stream():
+        try:
+            async for evt in run_multi_agent_stream(
+                session_id=session_id,
+                session_dir=session_dir,
+                run_config=regen_config,
+                api_key=api_key,
+                proxy_url=proxy_url,
+                model_name=model_name,
+            ):
+                yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+        finally:
+            active_runs.discard(session_id)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/api/rerun/{session_id}")
 async def rerun_agent(session_id: str, body: RunConfigRequest):
     """Re-run extraction for a single agent within an existing session.
@@ -2292,7 +2454,7 @@ async def rerun_agent(session_id: str, body: RunConfigRequest):
     load_dotenv(ENV_FILE, override=True)
     api_key = _resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
-    model_name = os.environ.get("TEST_MODEL", "vertex_ai.gemini-3-flash-preview")
+    model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
 
     if not api_key:
         raise HTTPException(status_code=400, detail="API key not set. Check Settings.")
@@ -2327,7 +2489,7 @@ async def test_connection(body: dict):
     """Test LLM connectivity with provided or .env settings."""
     load_dotenv(ENV_FILE, override=True)
 
-    model_name = body.get("model") or os.environ.get("TEST_MODEL", "vertex_ai.gemini-3-flash-preview")
+    model_name = body.get("model") or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
     api_key = body.get("api_key") or os.environ.get("GOOGLE_API_KEY", "")
     proxy_url = body.get("proxy_url") or os.environ.get("LLM_PROXY_URL", "")
 
@@ -2372,15 +2534,40 @@ async def test_connection(body: dict):
 def _open_audit_conn():
     """Open an audit-DB connection with the same pragmas as the lifecycle
     path. Callers must close it themselves (or use the contextmanager via
-    `db_session`)."""
-    from db.schema import init_db
+    `db_session`).
+
+    The schema is initialised once at FastAPI startup
+    (`_init_audit_db_once`). Peer-review I-5: callers that bypass the
+    startup hook (ad-hoc CLI scripts importing `server`, some test
+    harnesses) would otherwise hit `no such table` errors on the first
+    query. We self-heal by running `init_db` if the `schema_version`
+    table is missing — cheap (one PRAGMA + one SELECT) in the hot path,
+    and sqlite's `CREATE TABLE IF NOT EXISTS` makes `init_db` itself
+    idempotent, so the extra call is a no-op once the schema is set up.
+    """
     import sqlite3
-    init_db(AUDIT_DB_PATH)
     conn = sqlite3.connect(str(AUDIT_DB_PATH))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
+    # Defensive init for non-lifespan callers. The `sqlite_master` probe
+    # is cheap and the `init_db` path short-circuits via `IF NOT EXISTS`
+    # when the schema is already present, so the common case (FastAPI
+    # has already run lifespan) pays ~one extra query.
+    schema_present = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type='table' AND name='schema_version' LIMIT 1"
+    ).fetchone()
+    if schema_present is None:
+        conn.close()
+        from db.schema import init_db
+        init_db(AUDIT_DB_PATH)
+        conn = sqlite3.connect(str(AUDIT_DB_PATH))
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.row_factory = sqlite3.Row
     return conn
 
 
@@ -2649,6 +2836,255 @@ async def delete_run_endpoint(run_id: int):
     return {"deleted": run_id}
 
 
+# ---------------------------------------------------------------------------
+# Step 8 (docs/PLAN-NOTES-RICH-EDITOR.md): notes_cells GET/PATCH contract.
+#
+# The post-run editor reads rich HTML payloads per cell via GET (grouped by
+# sheet) and saves edits via PATCH. The wire contract is the one asserted
+# in tests/test_server_notes_cells_api.py — both endpoints go through
+# _open_audit_conn so the same DB/WAL pragmas apply as the rest of the
+# audit path.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/runs/{run_id}/notes_cells")
+async def list_notes_cells_endpoint(run_id: int):
+    """Return every notes cell for ``run_id`` grouped by sheet.
+
+    Shape:
+        {
+            "sheets": [
+                {"sheet": "Notes-CI", "rows": [
+                    {"row": 4, "label": ..., "html": ..., "evidence": ...,
+                     "source_pages": [...], "updated_at": "..."},
+                ]},
+                ...
+            ]
+        }
+
+    404 if the run does not exist (distinguishable from "run exists but
+    has no notes yet" — the latter returns an empty sheets array).
+    """
+    from db import repository as repo
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        cells = repo.list_notes_cells_for_run(conn, run_id)
+    finally:
+        conn.close()
+
+    # Group by sheet while preserving the (sheet, row) order from
+    # list_notes_cells_for_run. A small dict-ordered walk is cheaper than
+    # itertools.groupby for the expected payload size (< ~200 cells/run).
+    sheets: dict[str, list[dict]] = {}
+    for cell in cells:
+        sheets.setdefault(cell.sheet, []).append({
+            "row": cell.row,
+            "label": cell.label,
+            "html": cell.html,
+            "evidence": cell.evidence,
+            "source_pages": cell.source_pages,
+            "updated_at": cell.updated_at,
+        })
+    return {
+        "sheets": [
+            {"sheet": sheet, "rows": rows}
+            for sheet, rows in sheets.items()
+        ],
+    }
+
+
+class _NotesCellPatch(BaseModel):
+    """PATCH body — only ``html`` is editable.
+
+    ``evidence`` and ``source_pages`` are deliberately omitted: the
+    editor treats them as read-only audit data. `extra="forbid"`
+    returns a 422 if a caller sends an unknown field — catches
+    client-side typos like ``htmll`` early, and makes any future
+    attempt to sneak an ``evidence`` override explicit instead of
+    silently dropped.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    html: str
+
+
+@app.patch("/api/runs/{run_id}/notes_cells/{sheet}/{row}")
+async def patch_notes_cell_endpoint(
+    run_id: int, sheet: str, row: int, body: _NotesCellPatch,
+):
+    """Update one cell's HTML. Sanitises the payload and enforces the
+    30k rendered-char cap server-side so the editor cannot bypass it.
+
+    * 404 — no cell at (run_id, sheet, row).
+    * 413 — sanitised HTML renders to more than 30 000 characters.
+    * 200 — updated row returned in the same shape as GET list rows.
+
+    **Concurrency note:** the SELECT-then-UPSERT here is not wrapped
+    in a single transaction. Two concurrent PATCHes against the same
+    cell from two browser tabs resolve as last-write-wins at commit
+    time. This is intentionally left as the simple-single-user
+    trade-off: the deployment target is a desktop tool for one
+    accountant per machine (see CLAUDE.md), so cross-tab races are
+    vanishingly rare and data loss is bounded to "the newer tab's
+    edit wins, which is what the user would expect anyway".
+
+    A parallel race exists between a live PATCH and the coordinator's
+    ``persist_notes_cells`` during a regenerate: the regenerate
+    clobbers, so any PATCH that raced with it silently loses. This
+    is the documented semantics of regenerate (see CLAUDE.md gotcha
+    #16) — not a bug.
+    """
+    from db import repository as repo
+    from notes.html_sanitize import sanitize_notes_html
+    from notes.html_to_text import rendered_length
+    from notes.writer import CELL_CHAR_LIMIT
+
+    # Pre-sanitise size guard (peer-review #4). Reject absurd-length
+    # bodies before the sanitiser parses them — a megabyte of tags
+    # would cost ~50ms of BeautifulSoup CPU per request and never
+    # produce a valid cell. ~7x the rendered cap leaves plenty of
+    # headroom for legitimate tag overhead on the 30k rendered limit
+    # while cutting off the DOS avenue. Distinct detail string so
+    # the pre-guard and post-cap rejections are distinguishable in
+    # server logs.
+    PRESANITIZE_HTML_CAP = 200_000
+    if len(body.html) > PRESANITIZE_HTML_CAP:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"HTML too large (pre-sanitiser): {len(body.html):,} > "
+                f"{PRESANITIZE_HTML_CAP:,} characters."
+            ),
+        )
+    # Sanitise first so the cap is measured against the stored form.
+    cleaned_html, warnings = sanitize_notes_html(body.html)
+    if rendered_length(cleaned_html) > CELL_CHAR_LIMIT:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Rendered text exceeds the {CELL_CHAR_LIMIT:,} character "
+                "limit. Shorten the cell before saving."
+            ),
+        )
+
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        # Peer-review I-3: SELECT+UPSERT must run inside a single write
+        # transaction so a concurrent regenerate (which does
+        # delete_notes_cells_for_run_sheet + re-INSERT) can't interleave
+        # between our existence check and our write. BEGIN IMMEDIATE
+        # upgrades the connection to a writer lock immediately; other
+        # writers block (busy_timeout=5000ms) until this commit. Without
+        # this wrap the PATCH can overwrite a freshly-regenerated row and
+        # defeat the "regenerate clobbers" contract documented in CLAUDE.md
+        # gotcha #16.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Locate the existing row first so a PATCH against a non-existent
+            # cell is a 404, not a silent insert. The editor only ever edits
+            # cells it already listed via GET — phantom inserts would orphan
+            # content from the template walk.
+            existing = conn.execute(
+                "SELECT id, label, evidence, source_pages FROM notes_cells "
+                "WHERE run_id = ? AND sheet = ? AND row = ?",
+                (run_id, sheet, row),
+            ).fetchone()
+            if existing is None:
+                conn.rollback()
+                raise HTTPException(status_code=404, detail="Notes cell not found")
+
+            # Round-trip source_pages so the upsert preserves them unchanged.
+            # The column is JSON; list_notes_cells_for_run decodes it on read
+            # but the upsert helper re-encodes from a Python list.
+            from db.repository import decode_source_pages as _decode_pages
+            pages = _decode_pages(existing["source_pages"])
+
+            repo.upsert_notes_cell(
+                conn,
+                run_id=run_id,
+                sheet=sheet,
+                row=row,
+                label=existing["label"],
+                html=cleaned_html,
+                evidence=existing["evidence"],
+                source_pages=pages,
+            )
+            conn.commit()
+        except HTTPException:
+            # Already rolled back above — re-raise so FastAPI returns
+            # the intended status/detail to the client.
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+        # Read back so the client sees the persisted updated_at.
+        row_back = conn.execute(
+            "SELECT label, html, evidence, source_pages, updated_at "
+            "FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
+            (run_id, sheet, row),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    from db.repository import decode_source_pages
+    return {
+        "sheet": sheet,
+        "row": row,
+        "label": row_back["label"],
+        "html": row_back["html"],
+        "evidence": row_back["evidence"],
+        "source_pages": decode_source_pages(row_back["source_pages"]),
+        "updated_at": row_back["updated_at"] or "",
+        # Peer-review #7: surface what the sanitiser removed so the
+        # editor can tell the user "we dropped a <script> from your
+        # paste" instead of silently swapping content. Empty list when
+        # the sanitiser was a no-op — always present so clients can
+        # treat it as a stable field.
+        "sanitizer_warnings": warnings,
+    }
+
+
+@app.get("/api/runs/{run_id}/notes_cells/edited_count")
+async def notes_cells_edited_count_endpoint(run_id: int):
+    """Step 12 of docs/PLAN-NOTES-RICH-EDITOR.md — count how many
+    ``notes_cells`` rows were touched *after* the run finished.
+
+    The Regenerate-notes confirm dialog opens only when this returns
+    ``count > 0``. Comparing ``updated_at > runs.ended_at`` is the
+    cheap proxy for "user edited this cell post-run" — the writer
+    never updates cells after the run's terminal event, so any later
+    ``updated_at`` came from the PATCH endpoint.
+
+    404 if the run does not exist. For runs that are still executing
+    (``ended_at`` is NULL), we report 0 — there's nothing to lose
+    because the agent is still the canonical source.
+    """
+    from db import repository as repo
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if not run.ended_at:
+            return {"count": 0}
+        row = conn.execute(
+            "SELECT COUNT(*) FROM notes_cells "
+            "WHERE run_id = ? AND updated_at > ?",
+            (run_id, run.ended_at),
+        ).fetchone()
+    finally:
+        conn.close()
+    return {"count": int(row[0]) if row else 0}
+
+
 @app.get("/api/runs/{run_id}/download/filled")
 async def download_filled_endpoint(run_id: int):
     """Stream the merged workbook for a past run.
@@ -2657,6 +3093,12 @@ async def download_filled_endpoint(run_id: int):
     We explicitly do NOT derive the path from session_id or probe the
     filesystem — if the stored path no longer exists on disk we return a
     clear 404 instead of a 500.
+
+    Step 7 of the notes rich-editor plan: when `notes_cells` has rows
+    for this run, the canonical notes content lives in the DB (edited
+    via the post-run editor). We overlay those cells onto a temp copy
+    of the on-disk workbook at stream time so the download always
+    reflects the latest HTML → flattened-plaintext rendering.
     """
     from db import repository as repo
     conn = _open_audit_conn()
@@ -2677,11 +3119,50 @@ async def download_filled_endpoint(run_id: int):
             status_code=404,
             detail=f"Merged workbook file no longer exists on disk: {wb_path}",
         )
+    # Overlay runs synchronously (openpyxl is blocking); push it off
+    # the event loop so concurrent downloads don't serialise. Returns
+    # the original path unchanged when notes_cells is empty, so the
+    # pre-rich-editor behaviour is preserved on older runs.
+    try:
+        from notes.persistence import overlay_notes_cells_into_workbook
+        served_path = await asyncio.to_thread(
+            overlay_notes_cells_into_workbook,
+            xlsx_path=wb_path,
+            run_id=run_id,
+            db_path=str(AUDIT_DB_PATH),
+        )
+    except Exception:  # noqa: BLE001 — fall back to on-disk file
+        logger.exception(
+            "notes_cells overlay failed for run_id=%s; serving stale xlsx",
+            run_id,
+        )
+        served_path = wb_path
+    # The overlay helper either returns the original path unchanged
+    # (nothing to clean up) or a new temp file in the system temp dir
+    # (must be deleted after streaming completes). Attach a background
+    # task only in the second case — never delete the authoritative
+    # `merged_workbook_path` on disk.
+    cleanup: Optional[BackgroundTask] = None
+    if served_path != wb_path:
+        cleanup = BackgroundTask(_remove_overlay_tempfile, str(served_path))
     return FileResponse(
-        str(wb_path),
+        str(served_path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=f"run_{run_id}_filled.xlsx",
+        background=cleanup,
     )
+
+
+def _remove_overlay_tempfile(path: str) -> None:
+    """Best-effort cleanup of a notes-overlay temp file after the
+    FileResponse has finished streaming. Run as a Starlette
+    BackgroundTask; errors are logged but never raised — the response
+    has already been sent.
+    """
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        logger.debug("Failed to remove overlay temp file %s", path, exc_info=True)
 
 
 # --- Download endpoints ---

@@ -20,9 +20,33 @@ def test_get_settings_default(tmp_path, monkeypatch):
     resp = client.get("/api/settings")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["model"] == "vertex_ai.gemini-3-flash-preview"
+    assert data["model"] == "openai.gpt-5.4"
     assert data["api_key_set"] is False
     assert "proxy_url" in data
+
+
+def test_default_model_is_gpt_5_4_for_every_agent_role(tmp_path, monkeypatch):
+    """When TEST_MODEL and XBRL_DEFAULT_MODELS are unset, every agent role
+    (scout + 5 statement types) resolves to openai.gpt-5.4.
+
+    Pins the decision that GPT-5.4 is the global default across platforms
+    (Mac direct + Windows proxy). If someone reverts the .env / server.py
+    default back to a Gemini id, this test catches it before a run goes
+    out with the wrong model.
+    """
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.delenv("TEST_MODEL", raising=False)
+    monkeypatch.delenv("XBRL_DEFAULT_MODELS", raising=False)
+
+    from server import _load_extended_settings, _AGENT_ROLES
+
+    defaults = _load_extended_settings()["default_models"]
+    for role in _AGENT_ROLES:
+        assert defaults[role] == "openai.gpt-5.4", (
+            f"Agent role {role!r} defaulted to {defaults[role]!r}, "
+            f"expected 'openai.gpt-5.4'."
+        )
 
 
 def test_post_settings_writes_env(tmp_path, monkeypatch):
