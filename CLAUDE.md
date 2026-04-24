@@ -338,6 +338,40 @@ Key invariants:
 
 Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 
+### 16. Notes cells are HTML; Excel download regenerates from the DB
+
+Notes agents emit **HTML** (not plaintext) into cells on sheets 10–14
+(MFRS) / 11–15 (MPERS). The payload flow is:
+
+```
+agent HTML → sanitiser → notes_cells (DB, canonical) → overlay → xlsx stream
+                                     ↘ NotesReviewTab (TipTap editor)
+```
+
+Key invariants:
+
+- `notes_cells` (schema v3) is the source of truth. The on-disk xlsx is
+  a flattened snapshot; the download endpoint overlays the DB rows
+  onto a temp workbook at stream time via
+  `notes/persistence.overlay_notes_cells_into_workbook`.
+- Cap is 30,000 **rendered** characters (`notes.html_to_text
+  .rendered_length`), not 30k of raw HTML. The sanitiser-and-writer
+  both enforce this; the server's PATCH endpoint returns 413 when
+  edited content exceeds it.
+- Agent re-run **clobbers** edits: the coordinator calls
+  `delete_notes_cells_for_run_sheet(run_id, sheet)` before writing a
+  fresh batch. The UI gates this with a confirm dialog fed by
+  `GET /api/runs/{run_id}/notes_cells/edited_count` (returns how many
+  rows have `updated_at > run.ended_at`).
+- HTML tag whitelist in `prompts/_notes_base.md` must match the
+  backend sanitiser's `ALLOWED_TAGS` in `notes/html_sanitize.py`. A
+  divergence silently strips legitimate markup the prompt invited.
+- Evidence column is **read-only** in the editor — it's the audit
+  trail. `PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}` ignores
+  any `evidence` key in the body.
+
+Full walkthrough: [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md).
+
 ## Testing
 
 ```bash

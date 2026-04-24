@@ -72,11 +72,50 @@ Exhausted budgets emit side-logs under the run's `output/` directory:
 
 ## Cell Format
 
-- Plain text. `\n\n` for paragraph breaks (Excel renders as Alt+Enter line
-  breaks).
-- ASCII-aligned tables.
-- 30,000-char cap (`notes.writer.CELL_CHAR_LIMIT`). Longer content is truncated
-  with a `[truncated -- see PDF pages N, M]` footer.
+- **HTML is the canonical payload.** Notes agents emit HTML (whitelist in
+  `prompts/_notes_base.md`: `<p> <br> <strong> <em> <ul> <ol> <li>
+  <table> <thead> <tbody> <tr> <th> <td> <h3>`). Plain text is still
+  accepted as a shim (the sanitiser wraps it in `<p>`) but new prompts
+  must require HTML.
+- Paragraph breaks are `<p>` blocks; tables are authored as real
+  `<table>` markup so the editor can render and copy them faithfully.
+- 30,000-char cap applied to the **rendered** text (`notes.html_to_text
+  .rendered_length`). The rendered form is what lands in Excel; the
+  cap leaves room for markup overhead above that.
+- Excel output comes from `notes.html_to_text.html_to_excel_text` —
+  paragraphs become `\n\n`, lists become `- ` / `1. ` prefixed lines,
+  and tables are flattened to ` | `-separated rows. Honest about the
+  loss: the rich form always remains available through the editor and
+  the copy-to-clipboard path.
+
+## Canonical Store: `notes_cells` Table (Schema v3)
+
+- Every successful notes-agent run persists one row per cell into the
+  `notes_cells` table (see `db/schema.py` v2→v3 migration). Columns:
+  `run_id`, `sheet`, `row`, `label`, `html`, `evidence`,
+  `source_pages` (JSON array), `updated_at`.
+- The Excel file on disk stays as a flattened snapshot — the DB row is
+  the authoritative rich form. Downloads regenerate the notes sheets
+  from the DB by overlaying `html_to_excel_text(cell.html)` onto a
+  temp copy of the xlsx.
+- Re-running a notes agent (either the full coordinator or the rerun
+  endpoint) calls `delete_notes_cells_for_run_sheet` before inserting
+  a fresh batch — **user edits are clobbered**. The Notes Review tab
+  UI guards this with a confirm dialog driven by
+  `GET /api/runs/{run_id}/notes_cells/edited_count`.
+
+## Post-Run Editor
+
+- `components/NotesReviewTab.tsx` (in `web/`) renders every cell for
+  the run in a TipTap WYSIWYG editor. Label on the left, rich HTML on
+  the right, evidence rendered as a read-only annotation below the
+  label. Layout is one section per sheet.
+- Edits save via `PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}`
+  after a 1.5s debounce; the server re-sanitises the HTML and
+  enforces the 30k rendered-char cap (413 on overflow).
+- Copy button uses `navigator.clipboard.write` with both `text/html`
+  and `text/plain` variants so M-Tool and plaintext targets both
+  receive the right form.
 
 ## Group vs Company Column Rules
 
