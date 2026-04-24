@@ -45,6 +45,7 @@ def test_related_party_company_write_roundtrip(tmp_path: Path):
             evidence="Page 55, Note 28",
             source_pages=[55],
             numeric_values={"company_cy": 240_000, "company_py": 200_000},
+            parent_note={"number": "1", "title": "Test Note"},
         ),
         NotesPayload(
             chosen_row_label="Amounts receivable",
@@ -52,6 +53,7 @@ def test_related_party_company_write_roundtrip(tmp_path: Path):
             evidence="Page 55, Note 28",
             source_pages=[55],
             numeric_values={"company_cy": 1_500_000, "company_py": 1_200_000},
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -91,6 +93,7 @@ def test_related_party_group_write_fills_all_four_columns(tmp_path: Path):
                 "company_cy": 300_000,
                 "company_py": 280_000,
             },
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(

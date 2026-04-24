@@ -45,6 +45,7 @@ def test_issued_capital_company_write_fills_cy_and_py(tmp_path: Path):
             evidence="Page 45, Note 14",
             source_pages=[45],
             numeric_values={"company_cy": 1_000_000, "company_py": 900_000},
+            parent_note={"number": "1", "title": "Test Note"},
         ),
         NotesPayload(
             chosen_row_label="Amount of shares outstanding at beginning of period",
@@ -52,6 +53,7 @@ def test_issued_capital_company_write_fills_cy_and_py(tmp_path: Path):
             evidence="Page 45, Note 14",
             source_pages=[45],
             numeric_values={"company_cy": 5_000_000, "company_py": 4_500_000},
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -91,6 +93,7 @@ def test_issued_capital_group_write_fills_all_four_columns(tmp_path: Path):
                 "company_cy": 8_000_000,
                 "company_py": 7_500_000,
             },
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(

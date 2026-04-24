@@ -99,6 +99,14 @@ class NotesRunConfig:
     # (Phase 4). 0 = no offset (cover/TOC-free PDF); caller sets this
     # from `Infopack.page_offset` when an infopack is available.
     page_offset: int = 0
+    # Audit-DB wiring for Step 6 (notes rich-editor plan): when both
+    # are set, the coordinator persists each successful agent's
+    # `cells_written` manifest to the `notes_cells` table so the
+    # post-run editor (Phase 3) has canonical HTML to load. Either
+    # left unset (CLI invocations, unit tests that don't exercise
+    # persistence) skips the persist step cleanly.
+    run_id: Optional[int] = None
+    audit_db_path: Optional[str] = None
 
     def model_for(self, template_type: NotesTemplateType) -> Any:
         """Resolve the model instance to use for a given notes template.
@@ -153,6 +161,12 @@ class NotesAgentResult:
     # preserves PLAN §4 Checkpoint C ("partial coverage is success") but
     # the warnings give operators a reviewable audit trail.
     warnings: List[str] = field(default_factory=list)
+    # Per-cell HTML payload manifest produced by the writer. Each entry
+    # carries enough info for `notes.persistence.persist_notes_cells` to
+    # upsert the row in the `notes_cells` table (Step 6 of the rich
+    # editor plan). Empty when the agent didn't write any prose cells
+    # (numeric-only sheets or total failures).
+    cells_written: List[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -303,6 +317,52 @@ async def run_notes_extraction(
             await asyncio.wait(list(tasks.values()), timeout=5.0)
         raise
 
+    # Step 6 of the notes rich-editor plan: persist per-cell HTML for
+    # every successful agent so the post-run editor and the download
+    # overlay have a canonical payload. Each sheet's cells are wiped
+    # and re-upserted (clobber semantics — re-runs replace prior
+    # content rather than merging on top). Best-effort: a persistence
+    # failure must not fail the run — the xlsx is already on disk and
+    # the operator still sees the result.
+    if config.run_id is not None and config.audit_db_path:
+        from notes.persistence import persist_notes_cells
+        from notes_types import NOTES_REGISTRY
+        for r in results:
+            if r.status != "succeeded":
+                continue
+            # Source the sheet name from the registry (not from the
+            # cells_written list) so a succeeded-but-empty agent still
+            # clobbers prior rows. Otherwise a second run that writes
+            # zero prose cells (numeric-only template, or an LLM that
+            # wrote nothing on re-attempt) would leave stale content
+            # from the prior run — visible in the editor and overlaid
+            # on every download — with no way for the user to tell
+            # the xlsx is lagging the DB.
+            registry_entry = NOTES_REGISTRY.get(r.template_type)
+            if registry_entry is None:
+                continue
+            sheet = registry_entry.sheet_name
+            try:
+                # Persistence is synchronous sqlite — offload to a
+                # thread so the event loop is not blocked while the
+                # DB BEGIN IMMEDIATE acquires its write lock.
+                # `cells_written` may legitimately be empty: the
+                # persist helper still runs the clobber inside its
+                # transaction before looping over the (empty) batch,
+                # so stale rows are wiped.
+                await asyncio.to_thread(
+                    persist_notes_cells,
+                    db_path=config.audit_db_path,
+                    run_id=config.run_id,
+                    sheet_name=sheet,
+                    cells_written=r.cells_written,
+                )
+            except Exception:  # noqa: BLE001 — best-effort persistence
+                logger.warning(
+                    "Failed to persist notes_cells for %s (run_id=%s)",
+                    r.template_type.value, config.run_id, exc_info=True,
+                )
+
     return NotesCoordinatorResult(agent_results=results)
 
 
@@ -344,6 +404,13 @@ class _SingleAgentOutcome:
     filled_path: str
     write_errors: list[str] = field(default_factory=list)
     fuzzy_matches: list[tuple[str, str, float]] = field(default_factory=list)
+    # HTML-sanitiser warnings (Step 5 of the notes rich-editor plan).
+    # Surfaced by the writer when a payload contained something the
+    # sanitiser had to strip (e.g. <script>, inline event handlers).
+    sanitizer_warnings: list[str] = field(default_factory=list)
+    # Per-cell HTML manifest produced by the writer. See
+    # `NotesAgentResult.cells_written` for the entry shape.
+    cells_written: list[dict] = field(default_factory=list)
 
 
 async def _run_single_notes_agent(
@@ -483,6 +550,7 @@ async def _run_single_notes_agent(
                 status="succeeded",
                 workbook_path=outcome.filled_path,
                 warnings=warnings,
+                cells_written=list(outcome.cells_written),
             )
         except asyncio.CancelledError:
             # Never retry on user cancellation — propagate the cancellation
@@ -715,6 +783,8 @@ async def _invoke_single_notes_agent_once(
                     filled_path=deps.filled_path,
                     write_errors=list(deps.write_skip_errors),
                     fuzzy_matches=list(deps.write_fuzzy_matches),
+                    sanitizer_warnings=list(deps.write_sanitizer_warnings),
+                    cells_written=list(deps.cells_written),
                 )
             raise RuntimeError(
                 f"{template_type.value}: LLM stalled past {NOTES_TURN_TIMEOUT}s "
@@ -738,6 +808,8 @@ async def _invoke_single_notes_agent_once(
         filled_path=deps.filled_path,
         write_errors=list(deps.write_skip_errors),
         fuzzy_matches=list(deps.write_fuzzy_matches),
+        sanitizer_warnings=list(deps.write_sanitizer_warnings),
+        cells_written=list(deps.cells_written),
     )
 
 
@@ -755,6 +827,8 @@ def _build_single_sheet_warnings(outcome: _SingleAgentOutcome) -> list[str]:
                 f"borderline fuzzy match: '{requested}' -> '{chosen}' "
                 f"(score {score:.2f})"
             )
+    for w in outcome.sanitizer_warnings:
+        warnings.append(f"sanitiser: {w}")
     return warnings
 
 
@@ -1117,6 +1191,10 @@ async def _run_list_of_notes_fanout(
             status="succeeded",
             workbook_path=output_path,
             warnings=warnings,
+            # Sheet-12 rolls up the sub-agents' payloads into one write
+            # pass; the single `write_result.cells_written` is therefore
+            # the authoritative manifest for persistence (Step 6).
+            cells_written=list(write_result.cells_written),
         )
 
     except asyncio.CancelledError:
@@ -1137,6 +1215,7 @@ async def _run_list_of_notes_fanout(
         )
 
 
+@dataclass
 class _EmptyWriteResult:
     """Stand-in for a real `NotesWriteResult` on the all-skipped success
     path where no write was performed.
@@ -1147,10 +1226,16 @@ class _EmptyWriteResult:
     sheet back into failure), so the warnings come exclusively from the
     sub-agent receipts. This class supplies the fields the warning
     builder needs without pulling in the heavier dataclass.
+
+    Peer-review #12: `errors` and `fuzzy_matches` are per-instance
+    lists (`field(default_factory=list)`), not class-level mutables.
+    Today's readers are read-only so the old class-level defaults were
+    latent, but a future append would silently cross-contaminate every
+    no-op sheet on the same process.
     """
 
-    errors: list[str] = []
-    fuzzy_matches: list[tuple[str, str, float]] = []
+    errors: list[str] = field(default_factory=list)
+    fuzzy_matches: list[tuple[str, str, float]] = field(default_factory=list)
 
 
 def _build_write_warnings(write_result: Any, sub_result: Any) -> List[str]:

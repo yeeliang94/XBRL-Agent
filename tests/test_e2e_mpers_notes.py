@@ -109,6 +109,7 @@ async def test_mpers_list_of_notes_lands_bare_form_labels(tmp_path: Path):
                 evidence=f"p.{entry.page_range[0]}",
                 source_pages=[entry.page_range[0]],
                 note_num=entry.note_num,
+                parent_note={"number": "1", "title": "Test Note"},
             ))
         return payloads, 0, 0, None
 
