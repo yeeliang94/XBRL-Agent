@@ -31,6 +31,7 @@ def test_company_prose_write_puts_content_in_b_and_evidence_in_d(tmp_path: Path)
             content="The Group is a going concern.",
             evidence="Page 14, Note 2(a)",
             source_pages=[14],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -46,7 +47,10 @@ def test_company_prose_write_puts_content_in_b_and_evidence_in_d(tmp_path: Path)
     wb = openpyxl.load_workbook(out)
     ws = wb[CORP_INFO_SHEET]
     row = _first_matching_row(ws, "Financial reporting status")
-    assert ws.cell(row=row, column=2).value == "The Group is a going concern."
+    # Cell now carries the heading prepend followed by the body text
+    # (Phase 2 of the notes-heading plan). The heading-specific tests
+    # below pin the prepend order; here we only care about column placement.
+    assert "going concern" in ws.cell(row=row, column=2).value
     # Evidence goes to col D (4) for company filings.
     assert ws.cell(row=row, column=4).value == "Page 14, Note 2(a)"
     # Prior year + company cols are N/A for company-level templates.
@@ -62,6 +66,7 @@ def test_group_prose_writes_to_group_column_only_not_company_columns(tmp_path: P
             content="Consolidated entity is a going concern.",
             evidence="Page 15, Note 2(b)",
             source_pages=[15],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -76,8 +81,10 @@ def test_group_prose_writes_to_group_column_only_not_company_columns(tmp_path: P
     wb = openpyxl.load_workbook(out)
     ws = wb[CORP_INFO_SHEET]
     row = _first_matching_row(ws, "Financial reporting status")
-    # Section 2 #6: Group filing prose → Group col B only.
-    assert ws.cell(row=row, column=2).value == "Consolidated entity is a going concern."
+    # Section 2 #6: Group filing prose → Group col B only. Cell carries
+    # heading prepend + body (Phase 2 notes-heading plan); substring check
+    # because the heading line now precedes the body.
+    assert "going concern" in ws.cell(row=row, column=2).value
     # Company cols (D, E) must be empty for prose.
     assert ws.cell(row=row, column=4).value in (None, "")
     assert ws.cell(row=row, column=5).value in (None, "")
@@ -101,6 +108,7 @@ def test_group_numeric_writes_both_group_and_company_columns(tmp_path: Path):
                 "company_cy": 800.0,
                 "company_py": 700.0,
             },
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -133,6 +141,7 @@ def test_writer_truncates_overlong_content_with_footer(tmp_path: Path):
             content=huge,
             evidence="Pages 10-12",
             source_pages=[10, 11, 12],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -163,6 +172,7 @@ def test_writer_skips_unknown_row_labels(tmp_path: Path):
             content="something",
             evidence="Page 1",
             source_pages=[1],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -191,6 +201,7 @@ def test_writer_surfaces_fuzzy_matches_in_result(tmp_path: Path):
             content="The Group is a going concern.",
             evidence="Page 14",
             source_pages=[14],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -223,6 +234,7 @@ def test_combine_payloads_sorts_by_source_page(tmp_path: Path):
             evidence="p.30",
             source_pages=[30, 31],
             sub_agent_id="subB",
+            parent_note={"number": "1", "title": "Test Note"},
         ),
         NotesPayload(
             chosen_row_label="Disclosure of other notes to accounts",
@@ -230,6 +242,7 @@ def test_combine_payloads_sorts_by_source_page(tmp_path: Path):
             evidence="p.10",
             source_pages=[10, 11],
             sub_agent_id="subA",
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     combined = _combine_payloads(payloads)
@@ -255,6 +268,7 @@ def test_writer_combines_sub_agent_ids_on_row_collision(tmp_path: Path):
             evidence="p.10",
             source_pages=[10],
             sub_agent_id="sub0",
+            parent_note={"number": "1", "title": "Test Note"},
         ),
         NotesPayload(
             chosen_row_label="Disclosure of other notes to accounts",
@@ -262,6 +276,7 @@ def test_writer_combines_sub_agent_ids_on_row_collision(tmp_path: Path):
             evidence="p.20",
             source_pages=[20],
             sub_agent_id="sub2",
+            parent_note={"number": "1", "title": "Test Note"},
         ),
         NotesPayload(
             chosen_row_label="Disclosure of other notes to accounts",
@@ -269,6 +284,7 @@ def test_writer_combines_sub_agent_ids_on_row_collision(tmp_path: Path):
             evidence="p.30",
             source_pages=[30],
             sub_agent_id="sub0",  # duplicate — should dedupe
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     combined = _combine_payloads(payloads)
@@ -323,6 +339,7 @@ def test_evidence_not_written_without_values(tmp_path: Path):
             evidence="Page 14, Note 2(a)",
             source_pages=[14],
             numeric_values=None,
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -373,6 +390,7 @@ def test_notes_writer_persists_source_note_refs_for_post_validator(tmp_path: Pat
             evidence="Page 14",
             source_pages=[14],
             source_note_refs=["2", "2(a)"],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -409,6 +427,7 @@ def test_notes_writer_sidecar_concatenates_refs_for_row_with_multiple_payloads(t
             evidence="Page 10",
             source_pages=[10],
             source_note_refs=["2"],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
         NotesPayload(
             chosen_row_label="Financial reporting status",
@@ -416,6 +435,7 @@ def test_notes_writer_sidecar_concatenates_refs_for_row_with_multiple_payloads(t
             evidence="Page 11",
             source_pages=[11],
             source_note_refs=["2.1"],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -429,3 +449,162 @@ def test_notes_writer_sidecar_concatenates_refs_for_row_with_multiple_payloads(t
     data = json.loads(_payload_sidecar_path(str(out)).read_text(encoding="utf-8"))
     assert len(data) == 1
     assert set(data[0]["source_note_refs"]) == {"2", "2.1"}
+
+
+# ---------------------------------------------------------------------------
+# Heading prepend behaviour (Phase 2 of the model+notes-heading plan).
+#
+# The writer owns the "every note cell opens with its heading" rule —
+# agents supply parent_note (and optionally sub_note) as structured fields
+# and the writer deterministically prepends the <h3> lines. Impossible to
+# drift: the LLM can't forget to include markup it doesn't emit.
+# ---------------------------------------------------------------------------
+
+
+def test_writer_prepends_parent_heading_to_prose_cell(tmp_path: Path):
+    """A payload with only a parent_note gets one `<h3>` line prepended.
+
+    Uses the Excel-flattened output (rather than the raw HTML) because
+    the workbook stores text; the `<h3>` tag is converted to a bolded
+    plain-text line by `html_to_excel_text`. The marker we assert on is
+    the note number + title appearing BEFORE the body in the cell value.
+    """
+    tpl = notes_template_path(NotesTemplateType.CORP_INFO, level="company")
+    out = tmp_path / "Notes-CI_heading_parent.xlsx"
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Financial reporting status",
+            content="<p>The Group is a going concern.</p>",
+            evidence="Page 14, Note 2",
+            source_pages=[14],
+            parent_note={"number": "2", "title": "Basis of Preparation"},
+        ),
+    ]
+    result = write_notes_workbook(
+        template_path=str(tpl),
+        payloads=payloads,
+        output_path=str(out),
+        filing_level="company",
+        sheet_name=CORP_INFO_SHEET,
+    )
+    assert result.success, result.errors
+
+    wb = openpyxl.load_workbook(out)
+    ws = wb[CORP_INFO_SHEET]
+    row = _first_matching_row(ws, "Financial reporting status")
+    written = ws.cell(row=row, column=2).value
+    # Heading text appears before the body text.
+    assert "2 Basis of Preparation" in written
+    assert written.index("2 Basis of Preparation") < written.index("going concern")
+    wb.close()
+
+
+def test_writer_prepends_parent_and_sub_headings_to_subnote_cell(tmp_path: Path):
+    """A payload with both parent_note and sub_note gets two `<h3>` lines,
+    parent first, then sub. Order matters — the sub-note hierarchy reads
+    "5 Material Accounting Policies → 5.4 Property, Plant and Equipment"
+    from top to bottom in the cell."""
+    tpl = notes_template_path(NotesTemplateType.CORP_INFO, level="company")
+    out = tmp_path / "Notes-CI_heading_sub.xlsx"
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Financial reporting status",
+            content="<p>PPE is stated at cost.</p>",
+            evidence="Page 27, Note 5.4",
+            source_pages=[27],
+            parent_note={"number": "5", "title": "Material Accounting Policies"},
+            sub_note={"number": "5.4", "title": "Property, Plant and Equipment"},
+        ),
+    ]
+    result = write_notes_workbook(
+        template_path=str(tpl),
+        payloads=payloads,
+        output_path=str(out),
+        filing_level="company",
+        sheet_name=CORP_INFO_SHEET,
+    )
+    assert result.success, result.errors
+
+    wb = openpyxl.load_workbook(out)
+    ws = wb[CORP_INFO_SHEET]
+    row = _first_matching_row(ws, "Financial reporting status")
+    written = ws.cell(row=row, column=2).value
+    # Parent heading appears, then sub-heading, then body — in that order.
+    parent_idx = written.index("5 Material Accounting Policies")
+    sub_idx = written.index("5.4 Property, Plant and Equipment")
+    body_idx = written.index("stated at cost")
+    assert parent_idx < sub_idx < body_idx, (
+        f"Heading order wrong. Got: {written[:200]!r}"
+    )
+    wb.close()
+
+
+def test_writer_numeric_only_payload_has_no_headings_injected(tmp_path: Path):
+    """Sheet 13/14 numeric-only rows hold a number, not prose — heading
+    injection must be a no-op so the cell stays a clean numeric value."""
+    tpl = notes_template_path(NotesTemplateType.ISSUED_CAPITAL, level="company")
+    out = tmp_path / "Notes-IC_numeric.xlsx"
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Shares issued and fully paid",
+            content="",  # numeric-only
+            evidence="Page 42, Note 14",
+            source_pages=[42],
+            numeric_values={"company_cy": 1000.0, "company_py": 900.0},
+            parent_note={"number": "14", "title": "Issued Capital"},
+        ),
+    ]
+    result = write_notes_workbook(
+        template_path=str(tpl),
+        payloads=payloads,
+        output_path=str(out),
+        filing_level="company",
+        sheet_name="Notes-Issuedcapital",
+    )
+    assert result.success, result.errors
+
+    wb = openpyxl.load_workbook(out)
+    ws = wb["Notes-Issuedcapital"]
+    row = _first_matching_row(ws, "Shares issued and fully paid")
+    # Numeric cells stay numbers — no heading prose injected.
+    assert ws.cell(row=row, column=2).value == 1000.0
+    assert ws.cell(row=row, column=3).value == 900.0
+    wb.close()
+
+
+def test_writer_headings_count_toward_truncation_budget(tmp_path: Path):
+    """When body content is near the char cap, the heading prepend must
+    still happen; truncation then applies to the combined text so the
+    footer sits after the headings, never replacing them."""
+    tpl = notes_template_path(NotesTemplateType.CORP_INFO, level="company")
+    out = tmp_path / "Notes-CI_heading_trunc.xlsx"
+    huge = "A" * (CELL_CHAR_LIMIT + 500)
+    payloads = [
+        NotesPayload(
+            chosen_row_label="Financial reporting status",
+            content=f"<p>{huge}</p>",
+            evidence="Pages 10-12",
+            source_pages=[10, 11, 12],
+            parent_note={"number": "2", "title": "Basis of Preparation"},
+        ),
+    ]
+    result = write_notes_workbook(
+        template_path=str(tpl),
+        payloads=payloads,
+        output_path=str(out),
+        filing_level="company",
+        sheet_name=CORP_INFO_SHEET,
+    )
+    assert result.success, result.errors
+
+    wb = openpyxl.load_workbook(out)
+    ws = wb[CORP_INFO_SHEET]
+    row = _first_matching_row(ws, "Financial reporting status")
+    written = ws.cell(row=row, column=2).value
+    # Heading survives — it's prepended before truncation.
+    assert "2 Basis of Preparation" in written
+    # Truncation still fires: total cell length is under the cap and the
+    # footer indicates truncation.
+    assert len(written) <= CELL_CHAR_LIMIT
+    assert "truncated" in written.lower()
+    wb.close()

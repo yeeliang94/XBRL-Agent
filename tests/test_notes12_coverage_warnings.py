@@ -58,6 +58,7 @@ def _sub_result_uncovered(note_nums: list[int]) -> SubAgentRunResult:
             content="body",
             evidence="p.20",
             source_pages=[20],
+            parent_note={"number": "1", "title": "Test Note"},
         )],
         status="succeeded",
         coverage=None,

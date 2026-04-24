@@ -93,6 +93,7 @@ async def test_coordinator_dispatches_list_of_notes_through_subcoordinator(tmp_p
                 content=f"Revenue for notes {[e.note_num for e in batch]}",
                 evidence=f"p.{batch[0].page_range[0]}",
                 source_pages=[batch[0].page_range[0]],
+                parent_note={"number": "1", "title": "Test Note"},
             ),
         ]
         return payloads, 0, 0, None
@@ -148,6 +149,7 @@ async def test_list_of_notes_writes_merged_workbook_and_populates_rows(tmp_path:
                 content=f"note {e.note_num} borrowings",
                 evidence=f"p.{e.page_range[0]}",
                 source_pages=[e.page_range[0]],
+                parent_note={"number": "1", "title": "Test Note"},
             )
             for e in batch
         ]
@@ -212,6 +214,7 @@ async def test_list_of_notes_writes_unmatched_side_log(tmp_path: Path):
                 content=f"note {e.note_num} weird",
                 evidence=f"p.{e.page_range[0]}",
                 source_pages=[e.page_range[0]],
+                parent_note={"number": "1", "title": "Test Note"},
             )
             for e in batch
         ]
@@ -291,12 +294,14 @@ async def test_list_of_notes_surfaces_writer_warnings_on_success(tmp_path: Path)
                 content=f"note {e.note_num}",
                 evidence=f"p.{e.page_range[0]}",
                 source_pages=[e.page_range[0]],
+                parent_note={"number": "1", "title": "Test Note"},
             ))
             payloads.append(NotesPayload(
                 chosen_row_label="zzzzzzz completely bogus row zzzzzzz",
                 content=f"bogus {e.note_num}",
                 evidence=f"p.{e.page_range[0]}",
                 source_pages=[e.page_range[0]],
+                parent_note={"number": "1", "title": "Test Note"},
             ))
         return payloads, 0, 0, None
 
@@ -415,6 +420,7 @@ async def test_partial_coverage_still_succeeds(tmp_path: Path):
                 content=f"note {e.note_num}",
                 evidence=f"p.{e.page_range[0]}",
                 source_pages=[e.page_range[0]],
+                parent_note={"number": "1", "title": "Test Note"},
             )
             for e in batch
         ]

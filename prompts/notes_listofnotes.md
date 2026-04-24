@@ -168,8 +168,9 @@ on the face statement, not here — skip the row.
   `source_pages`. The writer refuses rows with content but no evidence.
   Use the PDF page number you passed to `view_pdf_pages` (NOT the printed
   folio in the page footer — those differ by the TOC offset).
-- Keep content under 30,000 chars per cell; the writer truncates with
-  a footer pointing back at the source pages.
+- Keep the *rendered* content (plain-text length after stripping HTML
+  tags) under 30,000 chars per cell; the writer truncates with a footer
+  pointing back at the source pages.
 
 === MULTI-PAGE CONTINUATION ===
 

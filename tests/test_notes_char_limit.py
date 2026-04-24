@@ -72,6 +72,7 @@ def test_writer_truncates_overlong_payload_end_to_end(tmp_path: Path):
         content=overflow_body,
         evidence="Page 12, Note 2",
         source_pages=[12],
+        parent_note={"number": "1", "title": "Test Note"},
     )
 
     result = write_notes_workbook(

@@ -109,6 +109,8 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
         filled_path = str(tmp_path / "NOTES_CORP_INFO_filled.xlsx")
         write_skip_errors: list = []
         write_fuzzy_matches: list = []
+        write_sanitizer_warnings: list = []
+        cells_written: list = []
         token_report = _FakeTokenReport()
     class _FakeAgentRun:
         def __aiter__(self): return _SlowIterable()
