@@ -255,6 +255,37 @@ export function ActiveTabPanel({
   // every header (validator included) so users always have one click out.
   const showStopAll = state.isRunning && !!onAbortAll;
 
+  // All hooks MUST run before any conditional return. The validator-tab
+  // early return further down used to sit above this useMemo, which
+  // changed the hook count across renders whenever the user switched
+  // to/from the Cross-checks tab and crashed the app with "Rendered
+  // fewer hooks than expected during the previous render." (React 18
+  // unmounts the whole tree on an unhandled render error, producing the
+  // blank page). Computing these values on the validator branch is a
+  // couple of wasted array references — cheap, and the values are
+  // simply ignored because the early return below doesn't use them.
+  const activeAgent = state.activeTab ? state.agents[state.activeTab] : null;
+  const subAgents =
+    isNotes12AgentId(state.activeTab) && activeAgent?.subAgentBatchRanges
+      ? activeAgent.subAgentBatchRanges
+      : [];
+  const showSubTabs = subAgents.length > 0;
+  const rawEvents = activeAgent ? activeAgent.events : state.events;
+  const running = activeAgent ? activeAgent.status === "running" : state.isRunning;
+  const aggregateTimeline = activeAgent ? activeAgent.toolTimeline : state.toolTimeline;
+
+  // Memoised sub-agent filter — avoids redoing O(N) filter + timeline
+  // rebuild on unrelated rerenders (e.g. token-delta churn from other
+  // agents). For the "All" view we reuse the pre-computed aggregate
+  // timeline and skip the rebuild entirely.
+  const { events, toolTimeline } = useMemo(() => {
+    if (showSubTabs && notes12SubId !== null) {
+      const filtered = filterEventsBySubAgent(rawEvents, notes12SubId);
+      return { events: filtered, toolTimeline: buildToolTimeline(filtered) };
+    }
+    return { events: rawEvents, toolTimeline: aggregateTimeline };
+  }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline]);
+
   if (state.activeTab === "validator") {
     return (
       <div style={styles.activityCardAttached}>
@@ -281,7 +312,6 @@ export function ActiveTabPanel({
     );
   }
 
-  const activeAgent = state.activeTab ? state.agents[state.activeTab] : null;
   // Capture as a non-null local so the click handlers below can pass the
   // agent id through without TS re-narrowing on each callback. `state.activeTab`
   // can flip to null between render and click in theory, but the buttons
@@ -295,32 +325,6 @@ export function ActiveTabPanel({
     !state.isRunning &&
     (activeAgent?.status === "failed" || activeAgent?.status === "cancelled") &&
     !!onRerunAgent;
-
-  // Sheet-12 branch: show the nested sub-tab bar and route the AgentTimeline
-  // through the filter when a specific sub is selected. Gated on the
-  // sub-agent list being non-empty so a Notes-12 tab that hasn't split yet
-  // (pre-first-`started` event) still renders a flat timeline.
-  const subAgents =
-    isNotes12AgentId(state.activeTab) && activeAgent?.subAgentBatchRanges
-      ? activeAgent.subAgentBatchRanges
-      : [];
-  const showSubTabs = subAgents.length > 0;
-
-  const rawEvents = activeAgent ? activeAgent.events : state.events;
-  const running = activeAgent ? activeAgent.status === "running" : state.isRunning;
-  const aggregateTimeline = activeAgent ? activeAgent.toolTimeline : state.toolTimeline;
-
-  // Memoised sub-agent filter — avoids redoing O(N) filter + timeline
-  // rebuild on unrelated rerenders (e.g. token-delta churn from other
-  // agents). For the "All" view we reuse the pre-computed aggregate
-  // timeline and skip the rebuild entirely.
-  const { events, toolTimeline } = useMemo(() => {
-    if (showSubTabs && notes12SubId !== null) {
-      const filtered = filterEventsBySubAgent(rawEvents, notes12SubId);
-      return { events: filtered, toolTimeline: buildToolTimeline(filtered) };
-    }
-    return { events: rawEvents, toolTimeline: aggregateTimeline };
-  }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline]);
 
   return (
     <div style={styles.activityCardAttached}>
