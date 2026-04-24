@@ -1,8 +1,8 @@
 // Shared icon components. Consolidates the inline HTML entities (`&#10005;`,
 // `&#8635;`, literal `×`) and the settings-gear SVG that used to be scattered
-// across App/AgentTabs/SuccessToast/RunDetailModal. Each icon renders as a
-// self-contained <span>/<svg> with `aria-hidden="true"` so screen readers use
-// the parent button's aria-label instead.
+// across App/AgentTabs/SuccessToast. Each icon renders as a self-contained
+// <span>/<svg> with `aria-hidden="true"` so screen readers use the parent
+// button's aria-label instead.
 
 export function CloseIcon({ size = 1 }: { size?: number }) {
   // U+2715 — the same glyph as the old `&#10005;`. `size` is a unitless scale

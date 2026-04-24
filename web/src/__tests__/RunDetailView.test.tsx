@@ -308,16 +308,20 @@ describe("RunDetailView", () => {
     const { container } = render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
-    // Two agents → two timeline sections, each with one tool-card for
-    // the sample read_template call.
+    // Agent cards default to collapsed — expand each before asserting on
+    // timeline contents so the tool rows are mounted.
     const agentCards = container.querySelectorAll("[data-testid='run-detail-agent']");
     expect(agentCards.length).toBe(2);
+    agentCards.forEach((card) => {
+      const toggle = card.querySelector("button");
+      if (toggle) fireEvent.click(toggle);
+    });
     const toolCards = container.querySelectorAll("[data-testid='tool-card']");
     expect(toolCards.length).toBe(2);
   });
 
   test("agent with no events shows an empty timeline", () => {
-    render(
+    const { container } = render(
       <RunDetailView
         detail={makeDetail({
           agents: [makeAgent({ events: [] })],
@@ -326,6 +330,12 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
+    // Expand the (default-collapsed) card so the timeline empty-state
+    // copy is rendered.
+    const toggle = container
+      .querySelector("[data-testid='run-detail-agent']")
+      ?.querySelector("button");
+    if (toggle) fireEvent.click(toggle);
     // AgentTimeline's own empty-state copy — proves the timeline is
     // mounted even when the event list is empty.
     expect(screen.getByText(/Waiting for the agent to start/i)).toBeInTheDocument();
@@ -470,7 +480,15 @@ describe("RunDetailView", () => {
       ],
     });
 
-    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    const { container } = render(
+      <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    // Expand the (default-collapsed) agent card so the sub-tab bar
+    // and timeline mount.
+    const toggle = container
+      .querySelector("[data-testid='run-detail-agent']")
+      ?.querySelector("button");
+    if (toggle) fireEvent.click(toggle);
 
     // Sub-tab bar appears: "All" chip + one chip per sub-agent (2).
     const tabs = screen.getAllByRole("tab");
@@ -502,7 +520,16 @@ describe("RunDetailView", () => {
         }),
       ],
     });
-    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    const { container } = render(
+      <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    // Expand the agent card so we're actually testing "sub-tab bar
+    // absent after mount" and not just "body not rendered because
+    // collapsed".
+    const toggle = container
+      .querySelector("[data-testid='run-detail-agent']")
+      ?.querySelector("button");
+    if (toggle) fireEvent.click(toggle);
 
     // No sub-tab bar rendered for this agent.
     expect(screen.queryByRole("tablist", { name: /sheet-12/i })).not.toBeInTheDocument();

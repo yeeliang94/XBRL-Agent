@@ -1,5 +1,5 @@
-import { describe, test, expect } from "vitest";
-import { appReducer, agentReducer, agentSubAgentSummary, initialState, notesTabLabel } from "../lib/appReducer";
+import { describe, test, expect, afterEach } from "vitest";
+import { appReducer, agentReducer, agentSubAgentSummary, bootState, initialState, notesTabLabel } from "../lib/appReducer";
 import type { SSEEvent } from "../lib/types";
 import { createAgentState, type AgentState } from "../lib/types";
 import { buildToolTimeline } from "../lib/buildToolTimeline";
@@ -1510,5 +1510,58 @@ describe("Sheet-12 sub-agent batch ranges", () => {
       ],
     };
     expect(agentSubAgentSummary(agent)).toBe("Note 5, p 22");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bootState — URL-driven state hydration. Deep-linking to /history/<id>
+// must both flip the view to history AND preselect the run so the
+// full-page detail renders on first paint (no flash of list).
+// ---------------------------------------------------------------------------
+
+describe("bootState", () => {
+  const origPath = typeof window !== "undefined" ? window.location.pathname : "/";
+
+  afterEach(() => {
+    // Restore the URL after each case so later test files don't see
+    // /history lingering on the location.
+    if (typeof window !== "undefined") {
+      window.history.replaceState({}, "", origPath);
+    }
+  });
+
+  function setPath(path: string) {
+    window.history.replaceState({}, "", path);
+  }
+
+  test("pathname '/' boots to extract with no selected run", () => {
+    setPath("/");
+    const s = bootState();
+    expect(s.view).toBe("extract");
+    expect(s.selectedRunId).toBeNull();
+  });
+
+  test("pathname '/history' boots to history with no selected run", () => {
+    setPath("/history");
+    const s = bootState();
+    expect(s.view).toBe("history");
+    expect(s.selectedRunId).toBeNull();
+  });
+
+  test("pathname '/history/42' boots to history with selectedRunId=42", () => {
+    setPath("/history/42");
+    const s = bootState();
+    expect(s.view).toBe("history");
+    expect(s.selectedRunId).toBe(42);
+  });
+
+  test("pathname '/history/not-a-number' ignores the id", () => {
+    // Defensive — a garbage trailing segment shouldn't crash boot or
+    // pre-select a non-existent run. View still lands on history so the
+    // user sees the list instead of the extract tab.
+    setPath("/history/not-a-number");
+    const s = bootState();
+    expect(s.view).toBe("history");
+    expect(s.selectedRunId).toBeNull();
   });
 });

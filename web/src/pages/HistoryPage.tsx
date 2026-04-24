@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import { HistoryFilters } from "../components/HistoryFilters";
 import { HistoryList } from "../components/HistoryList";
-import { RunDetailModal } from "../components/RunDetailModal";
+import { RunDetailPage } from "../components/RunDetailPage";
 import { fetchRuns, fetchRunDetail, deleteRun, downloadFilledUrl } from "../lib/api";
 import type { RunDetailJson, RunSummaryJson, RunsFilterParams } from "../lib/types";
 
@@ -23,7 +23,18 @@ import type { RunDetailJson, RunSummaryJson, RunsFilterParams } from "../lib/typ
 // module constant so the test and the production code use the same number.
 const PAGE_SIZE = 50;
 
-export function HistoryPage() {
+export interface HistoryPageProps {
+  /** Which run's full-page detail is open, or null for the list view.
+   *  Supplied by App when the URL is driving state; omitted for legacy
+   *  callers that let HistoryPage manage its own selection internally. */
+  selectedId?: number | null;
+  /** Called when the user clicks a row (id) or Back (null). Paired with
+   *  `selectedId` — both are either provided together (controlled mode)
+   *  or both omitted (uncontrolled, internal-state mode). */
+  onSelectRun?: (runId: number | null) => void;
+}
+
+export function HistoryPage({ selectedId: selectedIdProp, onSelectRun }: HistoryPageProps = {}) {
   const [filters, setFilters] = useState<RunsFilterParams>({});
   const [runs, setRuns] = useState<RunSummaryJson[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -41,7 +52,21 @@ export function HistoryPage() {
   // Initial-load failures still use `error` and blank the table.
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Controlled mode: parent (App) owns selection so the URL can round-trip.
+  // Uncontrolled mode: we keep local state, used by standalone tests and
+  // any legacy caller. The `?? null` guard treats `undefined` prop as "not
+  // controlled" so a caller passing `selectedId={undefined}` doesn't flip
+  // the component into a broken in-between state.
+  const [internalSelectedId, setInternalSelectedId] = useState<number | null>(null);
+  const isControlled = selectedIdProp !== undefined;
+  const selectedId = isControlled ? (selectedIdProp ?? null) : internalSelectedId;
+  const setSelectedId = useCallback(
+    (id: number | null) => {
+      if (isControlled) onSelectRun?.(id);
+      else setInternalSelectedId(id);
+    },
+    [isControlled, onSelectRun],
+  );
   const [detail, setDetail] = useState<RunDetailJson | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
@@ -192,6 +217,94 @@ export function HistoryPage() {
     window.location.href = downloadFilledUrl(runId);
   }, []);
 
+  // Step 12: Regenerate notes — the NotesReviewTab already showed the
+  // confirm dialog when any cells were user-edited, so by the time this
+  // handler fires the user has opted in to clobbering their edits.
+  //
+  // Peer-review [HIGH] #1: earlier this redirected to `?session=...#notes`,
+  // a URL no code consumed. The regenerate now POSTs to the
+  // `/api/runs/{id}/rerun-notes` endpoint (which reads the run's stored
+  // session + config server-side and kicks off a notes-only
+  // run_multi_agent_stream). We consume the SSE stream just enough to
+  // know when it's done, then refresh the run detail so the editor
+  // picks up the fresh notes cells.
+  const [regenStatus, setRegenStatus] = useState<
+    "idle" | "running" | "succeeded" | "failed"
+  >("idle");
+  const handleRegenerateNotes = useCallback(
+    async (targetRunId: number) => {
+      setRegenStatus("running");
+      try {
+        const resp = await fetch(`/api/runs/${targetRunId}/rerun-notes`, {
+          method: "POST",
+        });
+        if (!resp.ok || !resp.body) {
+          const msg = await resp.text().catch(() => "");
+          setRegenStatus("failed");
+          console.error(
+            `[regenerate-notes] ${resp.status}: ${msg || "empty body"}`,
+          );
+          return;
+        }
+        // Consume the SSE stream until `run_complete` arrives. We don't
+        // render per-event progress in History — this is a "show a
+        // spinner, refresh when done" flow. ExtractPage remains the
+        // live-streaming surface for in-progress runs.
+        //
+        // The regenerate creates a NEW run_id server-side (every
+        // run_multi_agent_stream invocation inserts a fresh runs row).
+        // We parse it out of the stream so we can navigate the detail
+        // page to the new run when the stream finishes — otherwise
+        // the page would keep displaying the old run's notes cells
+        // indefinitely, even though the new run is the fresh one.
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let completed = false;
+        let newRunId: number | null = null;
+        while (!completed) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // Opportunistically snag the run_id from any SSE `data:`
+          // line that carries it. Both the `status: starting` and
+          // `run_complete` events include it now. Cheap substring
+          // extraction avoids parsing every frame.
+          if (newRunId === null) {
+            const match = buffer.match(/"run_id"\s*:\s*(\d+)/);
+            if (match) newRunId = parseInt(match[1], 10);
+          }
+          if (buffer.includes("event: run_complete")) {
+            completed = true;
+          }
+        }
+        setRegenStatus("succeeded");
+        // Navigate to the newly-created run so the editor shows the
+        // regenerated content. The pushState/popstate plumbing in
+        // App.tsx picks this up via the `selectedRunId` state. Fall
+        // back to refreshing the current detail if the stream didn't
+        // surface a run_id (legacy backend).
+        if (newRunId !== null && newRunId !== targetRunId) {
+          window.history.pushState({}, "", `/history/${newRunId}`);
+          // Trigger the App-level popstate handler so URL → state
+          // round-trips uniformly (ensures document.title updates too).
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        } else {
+          try {
+            const fresh = await fetchRunDetail(targetRunId);
+            setDetail(fresh);
+          } catch {
+            /* leave stale detail — user can refresh manually */
+          }
+        }
+      } catch (err) {
+        setRegenStatus("failed");
+        console.error("[regenerate-notes] network error:", err);
+      }
+    },
+    [],
+  );
+
   // Client-side filing-standard filter. The server doesn't filter on this
   // today (per the plan: launch volumes are low and the JSON1 predicate
   // isn't guaranteed across SQLite builds). We still paginate server-side,
@@ -205,6 +318,49 @@ export function HistoryPage() {
   const filterNote = standardFilterActive && runs.length > 0
     ? `Showing ${visibleRuns.length} of ${runs.length} loaded run${runs.length === 1 ? "" : "s"} (${filters.standard!.toUpperCase()}). Load more to scan earlier rows.`
     : null;
+
+  // When a run is selected, the detail page takes over the whole container
+  // instead of floating a modal over the list. The list's scroll position
+  // is preserved by React retaining the parent's DOM when we toggle the
+  // branch — no manual sessionStorage dance needed for the common case.
+  if (selectedId != null) {
+    return (
+      <div style={styles.container}>
+        {regenStatus === "running" && (
+          <div role="status" style={styles.regenBanner}>
+            Regenerating notes — this usually takes 30-60 seconds. You
+            can keep this tab open; the editor will refresh automatically
+            when it finishes.
+          </div>
+        )}
+        {regenStatus === "failed" && (
+          <div role="alert" style={styles.regenBannerError}>
+            Regenerate failed. Check the server logs, then try again.
+          </div>
+        )}
+        <RunDetailPage
+          detail={detail}
+          isLoading={isDetailLoading}
+          error={detailError}
+          onBack={() => {
+            // Always clear selection directly — window.history.back()
+            // is *not* a safe shortcut, because history.length > 1
+            // only means the tab has prior browser history, not that
+            // the previous entry is ours. A user who pastes
+            // /history/<id> into a tab they were already using for
+            // another site would get sent out of the app by back().
+            // Clearing selectedRunId here flows through App's URL
+            // effect and pushes /history; browser Back after that
+            // still works as expected.
+            setSelectedId(null);
+          }}
+          onDownload={handleDownload}
+          onDelete={handleDelete}
+          onRegenerateNotes={handleRegenerateNotes}
+        />
+      </div>
+    );
+  }
 
   return (
     <div style={styles.container}>
@@ -247,18 +403,6 @@ export function HistoryPage() {
           {loadMoreError}
         </div>
       )}
-      {/* Detail lives in a modal rather than a side pane. The list keeps
-          the full main-content width, and the modal gives the 6-column
-          cross-check table enough room to render without clipping. */}
-      <RunDetailModal
-        isOpen={selectedId != null}
-        onClose={() => setSelectedId(null)}
-        detail={detail}
-        isLoading={isDetailLoading}
-        error={detailError}
-        onDownload={handleDownload}
-        onDelete={handleDelete}
-      />
     </div>
   );
 }
@@ -275,6 +419,22 @@ const styles = {
     fontWeight: 600,
     color: pwc.grey900,
     margin: 0,
+  } as React.CSSProperties,
+  regenBanner: {
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    background: "#fef3c7",
+    border: "1px solid #f59e0b",
+    borderRadius: pwc.radius.md,
+    color: "#78350f",
+    fontSize: 13,
+  } as React.CSSProperties,
+  regenBannerError: {
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    background: pwc.errorBg,
+    border: `1px solid ${pwc.errorBorder}`,
+    borderRadius: pwc.radius.md,
+    color: pwc.errorText,
+    fontSize: 13,
   } as React.CSSProperties,
   loadMoreBtn: {
     marginTop: pwc.space.md,

@@ -1,0 +1,76 @@
+/*
+ * Scoped styles for NotesReviewTab (docs/PLAN-NOTES-RICH-EDITOR.md Q1).
+ *
+ * Every selector is prefixed with `.notes-review-tab` so the rules cannot
+ * leak into the rest of the app — CLAUDE.md gotcha #7 bans a global
+ * utility framework like Tailwind, and inline styles cannot express
+ * table cell borders, hover states, or ProseMirror's class-hooked
+ * placeholders.
+ *
+ * Rules are kept deliberately minimal — table borders + light padding +
+ * a "focused editor" outline. Everything else is inline-style on the
+ * component.
+ */
+
+.notes-review-tab .tiptap {
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #fff;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1f2937;
+  min-height: 40px;
+  outline: none;
+}
+
+.notes-review-tab .tiptap:focus-within {
+  border-color: #f28b00;
+  box-shadow: 0 0 0 2px rgba(242, 139, 0, 0.15);
+}
+
+.notes-review-tab .tiptap p {
+  margin: 0 0 8px 0;
+}
+
+.notes-review-tab .tiptap p:last-child {
+  margin-bottom: 0;
+}
+
+.notes-review-tab .tiptap ul,
+.notes-review-tab .tiptap ol {
+  margin: 0 0 8px 18px;
+  padding: 0;
+}
+
+.notes-review-tab .tiptap li {
+  margin: 2px 0;
+}
+
+.notes-review-tab .tiptap h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 12px 0 6px 0;
+  color: #111827;
+}
+
+.notes-review-tab .tiptap table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+}
+
+.notes-review-tab .tiptap th,
+.notes-review-tab .tiptap td {
+  border: 1px solid #d1d5db;
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  font-size: 13px;
+}
+
+.notes-review-tab .tiptap th {
+  background: #f3f4f6;
+  font-weight: 600;
+}

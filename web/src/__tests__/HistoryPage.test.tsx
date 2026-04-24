@@ -474,6 +474,161 @@ describe("HistoryPage", () => {
   // loaded rows and show only the error. Pagination failures should be
   // non-destructive — rows stay visible, error shows inline.
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Full-page run detail — Phase 3 of docs/PLAN.md. HistoryPage now swaps
+  // out the old modal for a RunDetailPage when a run is selected. Selection
+  // state can be driven externally (App.tsx owns it so the URL can round-
+  // trip) or fall back to internal state so legacy render calls still work.
+  // ---------------------------------------------------------------------------
+  test("renders RunDetailPage (with back button) when selectedId prop is provided", async () => {
+    fetchRuns.mockResolvedValue({
+      runs: [{ ...baseRun, id: 77, pdf_filename: "DEEP-LINK.pdf" }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    vi.mocked(api.fetchRunDetail).mockResolvedValue({
+      id: 77,
+      created_at: "2026-04-10T00:00:00Z",
+      pdf_filename: "DEEP-LINK.pdf",
+      status: "completed",
+      session_id: "sess-77",
+      output_dir: "/tmp/out/sess-77",
+      merged_workbook_path: "/tmp/out/sess-77/filled.xlsx",
+      scout_enabled: false,
+      started_at: "2026-04-10T00:00:00Z",
+      ended_at: "2026-04-10T00:01:00Z",
+      config: { statements: ["SOFP"], variants: {}, models: {}, use_scout: false },
+      agents: [],
+      cross_checks: [],
+    });
+
+    render(<HistoryPage selectedId={77} onSelectRun={() => {}} />);
+
+    // The back button is the hallmark of the full page — it doesn't exist
+    // in the list view, so its presence proves the page mounted.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /back to history/i }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  test("does not render the list while a run detail is open", async () => {
+    fetchRuns.mockResolvedValue({
+      runs: [
+        { ...baseRun, id: 77, pdf_filename: "DEEP-LINK.pdf" },
+        { ...baseRun, id: 99, pdf_filename: "OTHER.pdf" },
+      ],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    });
+    vi.mocked(api.fetchRunDetail).mockResolvedValue({
+      id: 77,
+      created_at: "2026-04-10T00:00:00Z",
+      pdf_filename: "DEEP-LINK.pdf",
+      status: "completed",
+      session_id: "sess-77",
+      output_dir: "/tmp/out/sess-77",
+      merged_workbook_path: "/tmp/out/sess-77/filled.xlsx",
+      scout_enabled: false,
+      started_at: "2026-04-10T00:00:00Z",
+      ended_at: "2026-04-10T00:01:00Z",
+      config: { statements: ["SOFP"], variants: {}, models: {}, use_scout: false },
+      agents: [],
+      cross_checks: [],
+    });
+
+    render(<HistoryPage selectedId={77} onSelectRun={() => {}} />);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /back to history/i }),
+      ).toBeInTheDocument();
+    });
+    // OTHER.pdf is an OTHER row; when the detail page is up, the list
+    // should not be visible so the page feels like a full replacement.
+    expect(screen.queryByText("OTHER.pdf")).toBeNull();
+  });
+
+  test("Back button never calls history.back() — even when the tab has prior history", async () => {
+    // Peer-review [HIGH]: window.history.length > 1 is not a reliable
+    // "previous entry is ours" signal. A user who pastes /history/<id>
+    // into a tab that already had other pages would, under the old code,
+    // get sent OUT of the app by window.history.back(). Guard the
+    // contract that Back always clears selection via setSelectedId(null)
+    // (which routes through App's URL effect to push /history).
+    window.history.pushState({}, "", "/");
+    window.history.pushState({}, "", "/history/77");
+    expect(window.history.length).toBeGreaterThan(1);
+    const backSpy = vi.spyOn(window.history, "back");
+
+    fetchRuns.mockResolvedValue({
+      runs: [{ ...baseRun, id: 77, pdf_filename: "DEEP-LINK.pdf" }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    vi.mocked(api.fetchRunDetail).mockResolvedValue({
+      id: 77,
+      created_at: "2026-04-10T00:00:00Z",
+      pdf_filename: "DEEP-LINK.pdf",
+      status: "completed",
+      session_id: "sess-77",
+      output_dir: "/tmp/out/sess-77",
+      merged_workbook_path: "/tmp/out/sess-77/filled.xlsx",
+      scout_enabled: false,
+      started_at: "2026-04-10T00:00:00Z",
+      ended_at: "2026-04-10T00:01:00Z",
+      config: { statements: ["SOFP"], variants: {}, models: {}, use_scout: false },
+      agents: [],
+      cross_checks: [],
+    });
+    const onSelectRun = vi.fn();
+    render(<HistoryPage selectedId={77} onSelectRun={onSelectRun} />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /back to history/i }),
+      ).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /back to history/i }));
+    expect(onSelectRun).toHaveBeenCalledWith(null);
+    expect(backSpy).not.toHaveBeenCalled();
+  });
+
+  test("clicking Back calls onSelectRun(null)", async () => {
+    fetchRuns.mockResolvedValue({
+      runs: [{ ...baseRun, id: 77, pdf_filename: "DEEP-LINK.pdf" }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    vi.mocked(api.fetchRunDetail).mockResolvedValue({
+      id: 77,
+      created_at: "2026-04-10T00:00:00Z",
+      pdf_filename: "DEEP-LINK.pdf",
+      status: "completed",
+      session_id: "sess-77",
+      output_dir: "/tmp/out/sess-77",
+      merged_workbook_path: "/tmp/out/sess-77/filled.xlsx",
+      scout_enabled: false,
+      started_at: "2026-04-10T00:00:00Z",
+      ended_at: "2026-04-10T00:01:00Z",
+      config: { statements: ["SOFP"], variants: {}, models: {}, use_scout: false },
+      agents: [],
+      cross_checks: [],
+    });
+    const onSelectRun = vi.fn();
+    render(<HistoryPage selectedId={77} onSelectRun={onSelectRun} />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /back to history/i }),
+      ).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /back to history/i }));
+    expect(onSelectRun).toHaveBeenCalledWith(null);
+  });
+
   test("Load more failure keeps existing rows visible and shows inline error", async () => {
     fetchRuns.mockResolvedValueOnce({
       runs: Array.from({ length: 50 }, (_, i) => ({
