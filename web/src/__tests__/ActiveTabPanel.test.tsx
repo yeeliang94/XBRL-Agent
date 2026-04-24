@@ -291,3 +291,63 @@ describe("ActiveTabPanel — header toolbar", () => {
     expect(screen.queryByRole("button", { name: /stop all/i })).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: switching to the validator tab after rendering a non-validator
+// tab used to crash the app with "Rendered fewer hooks than expected" because
+// a `useMemo` sat after the `if (state.activeTab === "validator") return …`
+// early return. With no ErrorBoundary the whole <App/> tree unmounts →
+// blank page (observed on every completed run 2026-04-24). The fix hoists
+// the memo above the early return so hook count is stable across all tabs.
+// This test re-renders with two different activeTab values on the same
+// mount, which is exactly what React's hooks dispatcher checks against.
+// ---------------------------------------------------------------------------
+
+describe("ActiveTabPanel — tab switching (hooks rule regression)", () => {
+  test("switching from a statement tab to the validator tab does not crash", () => {
+    const sofp = createAgentState("sofp_0", "SOFP", "SOFP");
+    sofp.status = "complete";
+    const validator = createAgentState("validator", "validator", "Cross-checks");
+    validator.status = "complete";
+
+    const nonValidatorState: AppState = {
+      ...stateWithAgent("sofp_0", sofp, { validator }),
+    };
+    const validatorState: AppState = {
+      ...nonValidatorState,
+      activeTab: "validator",
+      crossChecks: [
+        { name: "sofp_balance", status: "passed", expected: 100, actual: 100, diff: 0, tolerance: 1, message: "Group: ok" },
+      ],
+    };
+
+    const { rerender } = render(<ActiveTabPanel state={nonValidatorState} />);
+    // Re-render on the SAME mount — this is what trips React's hooks
+    // dispatcher when hook counts differ between renders.
+    expect(() => rerender(<ActiveTabPanel state={validatorState} />)).not.toThrow();
+    expect(screen.getByText(/cross-check results/i)).toBeInTheDocument();
+  });
+
+  test("switching from the validator tab back to a statement tab does not crash", () => {
+    // Mirror case: validator first, then back. Guards against the reverse
+    // hook-count delta (1 → 2) which would also throw.
+    const sofp = createAgentState("sofp_0", "SOFP", "SOFP");
+    sofp.status = "complete";
+    const validator = createAgentState("validator", "validator", "Cross-checks");
+    validator.status = "complete";
+
+    const validatorState: AppState = {
+      ...stateWithAgent("validator", validator, { sofp_0: sofp }),
+      crossChecks: [
+        { name: "sofp_balance", status: "passed", expected: 100, actual: 100, diff: 0, tolerance: 1, message: "Group: ok" },
+      ],
+    };
+    const nonValidatorState: AppState = {
+      ...validatorState,
+      activeTab: "sofp_0",
+    };
+
+    const { rerender } = render(<ActiveTabPanel state={validatorState} />);
+    expect(() => rerender(<ActiveTabPanel state={nonValidatorState} />)).not.toThrow();
+  });
+});
