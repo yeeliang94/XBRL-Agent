@@ -509,10 +509,13 @@ def render_notes_prompt(
     # _render_sheet_map below.
     specific = _apply_cross_sheet_tokens(specific, filing_standard)
     # Resolve List-of-Notes placeholders that depend on the live template
-    # (`{{TEMPLATE_ROW_COUNT}}`, `{{CATCH_ALL_LABEL}}`). Runs for every
-    # template_type — non-LoN prompts simply carry no tokens and the
-    # replace is a no-op.
-    specific = _apply_listofnotes_tokens(specific, label_catalog)
+    # (`{{TEMPLATE_ROW_COUNT}}`, `{{CATCH_ALL_LABEL}}`). Only LoN uses these
+    # tokens — gating by template_type avoids calling `_find_catch_all_label`
+    # on the 4 other notes templates, whose catalogs legitimately don't
+    # contain "Disclosure of other notes to accounts" and would each fire
+    # a spurious "no catch-all row" warning.
+    if template_type == NotesTemplateType.LIST_OF_NOTES:
+        specific = _apply_listofnotes_tokens(specific, label_catalog)
 
     entry = NOTES_REGISTRY[template_type]
     sheet_line = (
