@@ -775,7 +775,7 @@ def create_scout_agent(
 
 async def run_scout(
     pdf_path: Path | str,
-    model: Union[str, Model] = "google-gla:gemini-3-flash-preview",
+    model: Union[str, Model] = "openai.gpt-5.4",
     statements_to_find: Optional[Set[StatementType]] = None,
     on_progress: Optional[Any] = None,
     *,
@@ -832,7 +832,7 @@ async def run_scout(
 
 async def run_scout_streaming(
     pdf_path: Path | str,
-    model: Union[str, Model] = "google-gla:gemini-3-flash-preview",
+    model: Union[str, Model] = "openai.gpt-5.4",
     statements_to_find: Optional[Set[StatementType]] = None,
     on_event: Optional[Any] = None,
     *,

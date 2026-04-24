@@ -258,7 +258,7 @@ def create_extraction_agent(
     variant: str,
     pdf_path: str,
     template_path: str,
-    model: Union[str, Model] = "google-gla:gemini-3-flash-preview",
+    model: Union[str, Model] = "openai.gpt-5.4",
     output_dir: Optional[str] = None,
     cache_template: bool = False,
     page_hints: Optional[dict] = None,

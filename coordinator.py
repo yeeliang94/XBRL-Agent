@@ -63,7 +63,7 @@ class RunConfig:
     output_dir: str
     # Accepts str (PydanticAI resolves it) or a provider-backed Model object
     # (from server._create_proxy_model for enterprise proxy support).
-    model: Any = "google-gla:gemini-3-flash-preview"
+    model: Any = "openai.gpt-5.4"
     statements_to_run: Set[StatementType] = field(default_factory=lambda: set(StatementType))
     variants: Dict[StatementType, str] = field(default_factory=dict)
     # Per-agent model overrides — same typing as model (str or Model object)

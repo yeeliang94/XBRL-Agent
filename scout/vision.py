@@ -66,7 +66,7 @@ def _vision_entries_to_toc_entries(vision_entries: list[VisionTocEntry]) -> list
 async def extract_toc_via_vision(
     pdf_path: Path | str,
     candidate_pages: list[int],
-    model: str | Model = "google-gla:gemini-3-flash-preview",
+    model: str | Model = "openai.gpt-5.4",
 ) -> VisionTocResult:
     """Render candidate TOC pages as images and ask LLM to extract entries.
 
