@@ -54,12 +54,14 @@ def test_accounting_policies_write_roundtrip(tmp_path: Path):
                 content="Items are stated at cost less accumulated depreciation and any impairment losses.",
                 evidence="Page 32, Note 2.7",
                 source_pages=[32],
+                parent_note={"number": "1", "title": "Test Note"},
             ),
             NotesPayload(
                 chosen_row_label="Description of accounting policy for leases",
                 content="The Group recognises a right-of-use asset and a lease liability at the commencement date.",
                 evidence="Page 35, Note 2.12",
                 source_pages=[35],
+                parent_note={"number": "1", "title": "Test Note"},
             ),
         ],
         output_path=str(out),
@@ -80,10 +82,13 @@ def test_accounting_policies_write_roundtrip(tmp_path: Path):
         raise AssertionError(f"{needle} not found")
 
     ppe_row = _find_row("property, plant and equipment")
-    assert ws.cell(row=ppe_row, column=2).value.startswith("Items are stated at cost")
+    # Cells now start with the heading prepend (Phase 2 notes-heading plan),
+    # so body text is further into the value. Substring check instead of
+    # startswith.
+    assert "Items are stated at cost" in ws.cell(row=ppe_row, column=2).value
     assert ws.cell(row=ppe_row, column=4).value == "Page 32, Note 2.7"
 
     leases_row = _find_row("Description of accounting policy for leases")
-    assert ws.cell(row=leases_row, column=2).value.startswith("The Group recognises")
+    assert "The Group recognises" in ws.cell(row=leases_row, column=2).value
     assert ws.cell(row=leases_row, column=4).value == "Page 35, Note 2.12"
     wb.close()

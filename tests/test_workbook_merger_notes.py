@@ -33,6 +33,7 @@ def _seed_notes_workbook(tmp_path: Path) -> Path:
             content="Going concern.",
             evidence="Page 14",
             source_pages=[14],
+            parent_note={"number": "1", "title": "Test Note"},
         )],
         output_path=str(out),
         filing_level="company",

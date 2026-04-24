@@ -50,6 +50,7 @@ _FIXTURE_PAYLOADS: dict[NotesTemplateType, list[NotesPayload]] = {
             content="The Group is a going concern and has adequate liquidity.",
             evidence="Page 14, Note 1",
             source_pages=[14],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ],
     NotesTemplateType.ACC_POLICIES: [
@@ -58,12 +59,14 @@ _FIXTURE_PAYLOADS: dict[NotesTemplateType, list[NotesPayload]] = {
             content="PPE is stated at cost less accumulated depreciation.",
             evidence="Page 32, Note 2.7",
             source_pages=[32],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
         NotesPayload(
             chosen_row_label="Description of accounting policy for leases",
             content="Right-of-use assets recognised at lease commencement.",
             evidence="Page 35, Note 2.12",
             source_pages=[35],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ],
     NotesTemplateType.ISSUED_CAPITAL: [
@@ -73,6 +76,7 @@ _FIXTURE_PAYLOADS: dict[NotesTemplateType, list[NotesPayload]] = {
             evidence="Page 55, Note 18",
             source_pages=[55],
             numeric_values={"company_cy": 10_000_000, "company_py": 9_500_000},
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ],
     NotesTemplateType.RELATED_PARTY: [
@@ -82,6 +86,7 @@ _FIXTURE_PAYLOADS: dict[NotesTemplateType, list[NotesPayload]] = {
             evidence="Page 71, Note 24",
             source_pages=[71],
             numeric_values={"company_cy": 450_000, "company_py": 320_000},
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ],
 }
@@ -95,6 +100,7 @@ _LIST_OF_NOTES_PAYLOADS: list[NotesPayload] = [
         evidence="Page 28-30, Note 4",
         source_pages=[28, 29, 30],
         sub_agent_id="notes:LIST_OF_NOTES:sub0",
+        parent_note={"number": "1", "title": "Test Note"},
     ),
     # A catch-all row-112 entry so the writer's row-concatenation path runs.
     NotesPayload(
@@ -103,6 +109,7 @@ _LIST_OF_NOTES_PAYLOADS: list[NotesPayload] = [
         evidence="Page 62, Note 20",
         source_pages=[62],
         sub_agent_id="notes:LIST_OF_NOTES:sub3",
+        parent_note={"number": "1", "title": "Test Note"},
     ),
 ]
 
