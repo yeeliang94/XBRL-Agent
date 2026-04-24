@@ -200,6 +200,69 @@ class TestServerHook:
         # No events should have been emitted on the short-circuit path.
         assert queue.empty()
 
+    @pytest.mark.asyncio
+    async def test_notes_validator_emits_skip_when_both_sheets_but_no_candidates(self, tmp_path):
+        """Bug 4a — when both sheets ran but the detectors find nothing to
+        resolve, the validator still has to surface a terminal event so the
+        frontend tab doesn't hang on 'Waiting for the agent to start…'.
+
+        Seeds a minimal but valid pair of sidecar payloads (empty arrays)
+        so both the outer and inner gates pass and we hit the
+        'no duplicates + no overlap' short-circuit at server.py:494.
+        """
+        import asyncio
+        from server import _run_notes_validator_pass
+        from notes.writer import payload_sidecar_path
+
+        # Both sheets present in notes_template_outputs — outer gate passes.
+        acc_xlsx = tmp_path / "NOTES_ACC_POLICIES_filled.xlsx"
+        lon_xlsx = tmp_path / "NOTES_LIST_OF_NOTES_filled.xlsx"
+        # Workbooks themselves only need to be loadable by the factory.
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        wb.create_sheet("Notes-SummaryofAccPol")
+        wb.create_sheet("Notes-Listofnotes")
+        merged_path = tmp_path / "merged.xlsx"
+        wb.save(str(merged_path))
+
+        # Empty sidecars — so detectors report zero candidates.
+        for xlsx_path in (acc_xlsx, lon_xlsx):
+            payload_sidecar_path(str(xlsx_path)).write_text(
+                json.dumps([]), encoding="utf-8",
+            )
+
+        queue: asyncio.Queue = asyncio.Queue()
+        outcome = await _run_notes_validator_pass(
+            merged_workbook_path=str(merged_path),
+            pdf_path=str(tmp_path / "x.pdf"),
+            notes_template_outputs={
+                "ACC_POLICIES": str(acc_xlsx),
+                "LIST_OF_NOTES": str(lon_xlsx),
+            },
+            filing_level="company",
+            filing_standard="mfrs",
+            model=TestModel(),
+            output_dir=str(tmp_path),
+            event_queue=queue,
+        )
+        assert outcome["invoked"] is False
+
+        events: list[dict] = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+
+        types = [e["event"] for e in events]
+        # Must emit both a status (to seed the tab / show the skip reason)
+        # and a terminal complete (so the badge flips off "running").
+        assert "status" in types, f"expected status event, got: {types}"
+        assert "complete" in types, f"expected complete event, got: {types}"
+
+        # Complete must be a success terminal — the tab renders green, not red.
+        complete_event = next(e for e in events if e["event"] == "complete")
+        assert complete_event["data"]["success"] is True
+        # agent_id must be present so the frontend can route to the tab.
+        assert complete_event["data"].get("agent_id")
+
 
 def _agent_tool_names(agent) -> set[str]:
     names: set[str] = set()

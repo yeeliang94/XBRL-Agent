@@ -218,6 +218,87 @@ def _apply_cross_sheet_tokens(text: str, filing_standard: str) -> str:
     return out
 
 
+# Fallback catch-all label used when the live label_catalog isn't
+# available (e.g. `render_notes_prompt` called without the kwarg in a
+# test path). Matches the bare form that lives in both MFRS row 112
+# and MPERS row 71 post-2026-04-23 generator regeneration.
+_FALLBACK_CATCH_ALL_LABEL = "Disclosure of other notes to accounts"
+
+
+def _find_catch_all_label(label_catalog: Optional[list[str]]) -> str:
+    """Pick the template's catch-all row label from the seeded catalog.
+
+    Searches the catalog for the canonical "other notes to accounts"
+    label; this is the designated sink row on both MFRS and MPERS.
+    Returns the verbatim catalog entry so any standard-specific suffix
+    that snuck in (e.g. taxonomy `[text block]` tail on an older
+    template snapshot) flows through unchanged. Falls back to the bare
+    form when no catalog is passed — keeps render_notes_prompt callable
+    from unit tests that don't exercise the factory path.
+
+    Matching uses a suffix check after stripping the taxonomy type
+    suffixes (peer-review I-2): `label.lower()` is normalised by
+    removing trailing `[text block]` etc. and then compared by
+    `endswith("other notes to accounts")`. This is tighter than the
+    previous substring `in` check, which would match a hypothetical
+    "Disclosure of other notes to accounts (restated)" or similar
+    variant that happened to embed the phrase.
+    """
+    if not label_catalog:
+        return _FALLBACK_CATCH_ALL_LABEL
+    target = "other notes to accounts"
+    for label in label_catalog:
+        normalized = label.lower().strip()
+        # Drop a trailing taxonomy suffix like ` [text block]` so MPERS
+        # rows still match cleanly. Any suffix in square brackets at the
+        # tail is type metadata, not part of the semantic label.
+        suffix_start = normalized.rfind(" [")
+        if suffix_start > 0 and normalized.endswith("]"):
+            normalized = normalized[:suffix_start]
+        if normalized.endswith(target):
+            return label
+    # Catalog was provided but contains no catch-all row — the MBRS
+    # generator is supposed to emit one on every notes sheet, so a miss
+    # here is a generator regression worth surfacing (peer-review I-3).
+    logger.warning(
+        "Seeded label_catalog has no catch-all row "
+        "('other notes to accounts') — falling back to %s. Possible "
+        "generator drift on template sheet.",
+        _FALLBACK_CATCH_ALL_LABEL,
+    )
+    return _FALLBACK_CATCH_ALL_LABEL
+
+
+def _apply_listofnotes_tokens(
+    text: str, label_catalog: Optional[list[str]],
+) -> str:
+    """Resolve the List-of-Notes placeholders that depend on the live
+    template (not just the filing standard).
+
+    `{{TEMPLATE_ROW_COUNT}}` is replaced with the row count of the
+    seeded catalog — 139 on MFRS, 84 on MPERS at 2026-04-23. Previously
+    the prompt hardcoded "138 rows" which primed agents to recall the
+    larger MFRS label set even on MPERS runs, producing the
+    "No matching row for label 'Disclosure of allowance for credit
+    losses'" writer warnings.
+
+    `{{CATCH_ALL_LABEL}}` is replaced with the actual catch-all row
+    label found in the catalog so the sub-agent's unmatched-notes
+    instruction cites a label that exists verbatim in the template it
+    is about to write.
+
+    Missing catalog falls back to sensible defaults rather than raising:
+    the fallbacks keep tests that call `render_notes_prompt` without a
+    catalog functional (they still exercise the token-substitution path
+    and don't leak literal `{{TOKEN}}` strings into the rendered prompt).
+    """
+    row_count = len(label_catalog) if label_catalog else 0
+    row_count_str = str(row_count) if row_count else "all the"
+    out = text.replace("{{TEMPLATE_ROW_COUNT}}", row_count_str)
+    out = out.replace("{{CATCH_ALL_LABEL}}", _find_catch_all_label(label_catalog))
+    return out
+
+
 def _load_prompt(filename: str) -> str:
     return (_PROMPT_DIR / filename).read_text(encoding="utf-8").strip()
 
@@ -427,6 +508,11 @@ def render_notes_prompt(
     # Base prompt no longer hardcodes sheet numbers; we emit the map via
     # _render_sheet_map below.
     specific = _apply_cross_sheet_tokens(specific, filing_standard)
+    # Resolve List-of-Notes placeholders that depend on the live template
+    # (`{{TEMPLATE_ROW_COUNT}}`, `{{CATCH_ALL_LABEL}}`). Runs for every
+    # template_type — non-LoN prompts simply carry no tokens and the
+    # replace is a no-op.
+    specific = _apply_listofnotes_tokens(specific, label_catalog)
 
     entry = NOTES_REGISTRY[template_type]
     sheet_line = (
@@ -946,6 +1032,20 @@ def create_notes_agent(
     label_catalog = _load_template_label_catalog(
         template_path_str, entry.sheet_name,
     )
+    # Peer-review I-1: if the catalog load returned empty, the prompt's
+    # row-count placeholder silently renders as "all the rows" and the
+    # agent primes off its training-prior taxonomy memory instead of
+    # the live template — the exact failure mode the seeding was added
+    # to prevent. Log loudly so a wiring regression (template missing
+    # on disk, sheet-name drift, etc.) surfaces in litellm.log instead
+    # of degrading to "MFRS labels on MPERS output".
+    if not label_catalog:
+        logger.warning(
+            "Notes prompt for %s/%s rendered without a label_catalog — "
+            "template load at %s returned no rows. Agent may fall back "
+            "to training-prior labels; check template_path + sheet_name.",
+            template_type.value, entry.sheet_name, template_path_str,
+        )
 
     deps = NotesDeps(
         pdf_path=pdf_path,

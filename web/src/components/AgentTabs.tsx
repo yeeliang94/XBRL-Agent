@@ -103,12 +103,18 @@ function AgentTabsImpl({
     const notesIds: string[] = [];
     let scoutId: string | null = null;
     let validatorId: string | null = null;
+    let notesValidatorId: string | null = null;
     for (const id of tabOrder) {
       const agent = agents[id];
       if (!agent) continue;
       if (SPECIAL_TAB_IDS.has(id)) {
+        // scout and validator ride their own lifecycle — always shown.
+        // NOTES_VALIDATOR joins them (peer-review F1) so its skip-emit
+        // actually has a visible tab; bucketed with notes below since it
+        // is thematically adjacent to the notes agents that feed it.
         if (id === "scout") scoutId = id;
         else if (id === "validator") validatorId = id;
+        else if (id === "NOTES_VALIDATOR") notesValidatorId = id;
         continue;
       }
       if (id.startsWith(NOTES_TAB_PREFIX)) {
@@ -126,6 +132,7 @@ function AgentTabsImpl({
     return [
       ...statementIds,
       ...notesIds,
+      ...(notesValidatorId ? [notesValidatorId] : []),
       ...(scoutId ? [scoutId] : []),
       ...(validatorId ? [validatorId] : []),
     ];
@@ -142,9 +149,11 @@ function AgentTabsImpl({
   const notesActive: string[] = [];
   let scoutActive: string | null = null;
   let validatorActive: string | null = null;
+  let notesValidatorActive: string | null = null;
   for (const id of gatedOrder) {
     if (id === "scout") scoutActive = id;
     else if (id === "validator") validatorActive = id;
+    else if (id === "NOTES_VALIDATOR") notesValidatorActive = id;
     else if (id.startsWith(NOTES_TAB_PREFIX)) notesActive.push(id);
     else statementActive.push(id);
   }
@@ -179,20 +188,27 @@ function AgentTabsImpl({
   };
 
   return (
+    // Bug 3 — swapped from a single horizontal-scroll row (which truncated
+    // labels once the strip grew past 6 tabs) to a two-row flex-wrap layout
+    // with semantic buckets. Statements on top, notes + scout/validator
+    // below, so a user scanning 13 tabs sees the two mental groups at a
+    // glance instead of hunting through a collapsed row.
     <div role="tablist" className="tab-bar-scroll" style={styles.tabBar}>
-      {/* Render order places each skeleton adjacent to its bucket so a
-          selected-but-not-yet-started notes template appears in the
-          middle (with other notes) rather than trailing after validator. */}
-      {statementActive.map(renderTab)}
-      {skeletonTabs?.map((label) => (
-        <SkeletonTab key={`skeleton-${label}`} keyPrefix="skeleton" label={label} />
-      ))}
-      {notesActive.map(renderTab)}
-      {notesSkeletons?.map((label) => (
-        <SkeletonTab key={`notes-skeleton-${label}`} keyPrefix="notes-skeleton" label={label} />
-      ))}
-      {scoutActive && renderTab(scoutActive)}
-      {validatorActive && renderTab(validatorActive)}
+      <div data-bucket="statements" style={styles.tabRow}>
+        {statementActive.map(renderTab)}
+        {skeletonTabs?.map((label) => (
+          <SkeletonTab key={`skeleton-${label}`} keyPrefix="skeleton" label={label} />
+        ))}
+      </div>
+      <div data-bucket="notes-and-special" style={styles.tabRow}>
+        {notesActive.map(renderTab)}
+        {notesSkeletons?.map((label) => (
+          <SkeletonTab key={`notes-skeleton-${label}`} keyPrefix="notes-skeleton" label={label} />
+        ))}
+        {notesValidatorActive && renderTab(notesValidatorActive)}
+        {scoutActive && renderTab(scoutActive)}
+        {validatorActive && renderTab(validatorActive)}
+      </div>
     </div>
   );
 }
@@ -279,16 +295,34 @@ export const AgentTabs = React.memo(AgentTabsImpl, areAgentTabsPropsEqual);
 
 const styles = {
   tabBar: {
+    // Bug 3 — flex column of two rows, each row flex-wraps its own tabs.
+    // The wrap contract lives on `tabRow.flexWrap: wrap` below; the outer
+    // column only ever has two children (the two row divs), so an outer
+    // flexWrap would never fire and was a misleading style-prop. Tests
+    // now assert flexWrap on the row buckets directly (peer-review R-1).
     display: "flex",
-    gap: 0,
+    flexDirection: "column" as const,
     alignItems: "stretch",
     background: pwc.white,
     borderRadius: `${pwc.radius.md}px ${pwc.radius.md}px 0 0`,
     border: `1px solid ${pwc.grey200}`,
     paddingLeft: pwc.space.sm,
     paddingRight: pwc.space.sm,
-    overflowX: "auto" as const,
+    // Deliberately no overflowX — the two row buckets wrap internally, so
+    // an overflow scroll would only kick in on absurd narrow viewports,
+    // and even there wrap is the right failure mode.
     minHeight: 44,
+    rowGap: 2,
+  },
+  // One horizontal row of tabs inside tabBar. `flexWrap: wrap` on the row
+  // lets an individual row soft-break onto a third visual line if a user
+  // picks (say) all 5 statements plus an extra-long label; usually both
+  // rows sit single-line.
+  tabRow: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    alignItems: "stretch",
+    gap: 0,
   },
   // Underline-style tab button. Active state is signalled by an
   // inset bottom shadow (acts as an underline that doesn't shift
