@@ -326,6 +326,15 @@ Key invariants:
   `sopl_to_socie_profit`, `soci_to_socie_tci`) branch on
   `filing_standard`: MPERS reads col B (2), MFRS keeps col X (24) for
   equity/TCI and the NCI-aware col 24/3 for profit.
+- **Prompt-file precedence (`prompts/__init__.py`):** variant-specific
+  `{stmt}_{variant}.md` wins over filing-standard-specific
+  `{stmt}_{standard}.md`, which wins over the generic `{stmt}.md`.
+  MPERS-specific SOCIE Default lives in `prompts/socie_mpers.md` and is
+  only loaded on MPERS filings — MFRS still falls through to the
+  matrix-shaped `socie.md`. Use this tier (rather than an overlay
+  suffix) whenever an entire statement prompt needs to differ by
+  filing standard; the overlay mechanism remains for level-level
+  differences (e.g. `_group_overlay.md`).
 
 Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 

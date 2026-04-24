@@ -41,12 +41,28 @@ def render_prompt(
     # Load base persona (shared across all statements)
     base = _load_prompt("_base.md")
 
-    # Load statement-specific prompt — prefer variant-specific file if it exists
+    # Load statement-specific prompt. Precedence:
+    #   1. {stmt}_{variant}.md      (e.g. socie_sore.md — MPERS-only SoRE)
+    #   2. {stmt}_{standard}.md     (e.g. socie_mpers.md — MPERS Default
+    #      override for a statement whose generic prompt is MFRS-shaped)
+    #   3. {stmt}.md                (generic / historically MFRS default)
+    #
+    # Rationale (Bug 5a): SOCIE Default on MPERS used to fall through to
+    # socie.md, which hardcodes the MFRS matrix layout and specific MFRS
+    # row ranges (6-25 CY, 30-49 PY). Those row numbers land on blank rows
+    # in the MPERS Company template (ends at row 24) and on wrong blocks
+    # in the MPERS Group template. The `{stmt}_{standard}.md` tier lets a
+    # standard supply its own native prompt without touching the generic
+    # default (so MFRS behaviour is unchanged).
     stmt_key = statement_type.value.lower()
     variant_key = variant.lower()
+    std_key = filing_standard.lower()
     variant_file = _PROMPT_DIR / f"{stmt_key}_{variant_key}.md"
+    standard_file = _PROMPT_DIR / f"{stmt_key}_{std_key}.md"
     if variant_file.exists():
         statement_prompt = variant_file.read_text(encoding="utf-8").strip()
+    elif standard_file.exists():
+        statement_prompt = standard_file.read_text(encoding="utf-8").strip()
     else:
         statement_prompt = _load_prompt(f"{stmt_key}.md")
 
