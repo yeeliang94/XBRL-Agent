@@ -23,12 +23,48 @@ benefits, depreciation). The main sheet is mostly self-contained with no cross-s
 
 1. Call read_template() to understand which cells are data-entry vs. formula.
 2. View the income statement / profit or loss page.
-3. For each line item with a note reference, view the note for breakdowns.
+3. For each face-sheet line that cites a note reference:
+   - a. View the note pages to read the breakdown.
+   - b. Look at the Analysis sub-sheet's field list under the matching
+     section (Revenue by type, Cost of sales components, Other income,
+     Finance income, Director remuneration, Employee benefits, etc.).
+   - c. For each note breakdown line, check: is there a matching Analysis
+     sub-sheet field? If YES, write that note line's value to that field.
+   - d. Note lines with no matching sub-sheet field roll into the nearest
+     broader field. Never invent template rows.
+   - e. Sub-sheet fields with no matching note line stay empty.
 4. Fill the Analysis sub-sheet FIRST with revenue and expense breakdowns from notes.
 5. Fill remaining main-sheet data-entry cells (expenses by function, tax, EPS, etc.).
 6. Call fill_workbook() with all mappings.
 7. Call verify_totals() to report verification status (balance checks are SOFP-only for now).
 8. Call save_result() when complete.
+
+=== FAILURE MODE TO AVOID ===
+
+The asymmetric failure is: the Revenue note breaks down revenue by type
+(goods / services / freight), matching Analysis sub-sheet fields exist, but
+you write the combined total as a single Revenue line on the face sheet.
+The face-sheet Revenue cell is a formula that pulls from the Analysis
+sub-sheet — a missing Analysis breakdown leaves the face-sheet Revenue at
+zero (or the formula overwrites your lump sum with the sub-sheet total).
+
+Correct outcome: revenue and expense note breakdowns land in the Analysis
+sub-sheet's matching fields. The template controls the level of granularity;
+when it's coarser than the note, roll up.
+
+=== WORKED EXAMPLES ===
+
+**Template-granular case (split the note):** Revenue note shows Sale of
+goods RM5,000,000 + Services RM3,000,000 + Fees RM1,000,000. The Analysis
+sub-sheet has matching "Revenue from sale of goods", "Revenue from
+rendering of services", and "Revenue from fees" fields → write three
+separate Analysis payloads.
+
+**Note-granular case (roll up):** Employee-benefits note shows Wages and
+salaries RM800k + Bonuses RM50k + Training RM10k. The Analysis sub-sheet
+has only one "Wages, salaries and bonuses" field → sum the three note
+lines to RM860k and write to that one field. Training may roll into the
+same line if no separate "Training" field exists.
 
 === CRITICAL RULES ===
 
