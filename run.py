@@ -46,7 +46,7 @@ def _next_run_dir(base_dir: str) -> str:
 def run_agent(
     pdf_path: str,
     template_path: Optional[str] = None,
-    model: str = "google-gla:gemini-3-flash-preview",  # resolved through _create_proxy_model
+    model: str = "openai.gpt-5.4",  # resolved through _create_proxy_model
     output_dir: str = _DEFAULT_OUTPUT_DIR,
     cache_template: bool = False,
     statements: Optional[Set[StatementType]] = None,
@@ -206,7 +206,7 @@ def build_parser():
     parser.add_argument("pdf", nargs="?", default="data/FINCO-Audited-Financial-Statement-2021.pdf",
                         help="Path to the PDF to extract from")
     parser.add_argument("--model", default=None,
-                        help="Model to use (e.g. gemini-3-flash-preview, gpt-5.4, claude-sonnet-4-6). "
+                        help="Model to use (e.g. openai.gpt-5.4, gemini-3-flash-preview, claude-sonnet-4-6). "
                              "Defaults to TEST_MODEL from .env")
     parser.add_argument("--statements", nargs="+", default=all_stmt_names,
                         choices=all_stmt_names,
@@ -236,7 +236,7 @@ if __name__ == "__main__":
 
     # Resolve model: CLI flag > TEST_MODEL env var > default
     load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
-    model = args.model or os.environ.get("TEST_MODEL", "google-gla:gemini-3-flash-preview")
+    model = args.model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
 
     print(f"Model: {model}")
     print(f"Standard: {args.standard}   Level: {args.level}")

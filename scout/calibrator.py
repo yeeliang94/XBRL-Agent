@@ -127,7 +127,7 @@ async def calibrate_pages(
     pdf_path: Path,
     toc_entries: list[TocEntry],
     pdf_length: int,
-    model: str | Model = "google-gla:gemini-3-flash-preview",
+    model: str | Model = "openai.gpt-5.4",
 ) -> CalibrationResult:
     """Calibrate each TOC entry to its actual PDF page.
 
