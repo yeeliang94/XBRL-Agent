@@ -6,6 +6,7 @@ import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types
 import { ValidatorTab } from "./ValidatorTab";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
+import { NotesReviewTab } from "./NotesReviewTab";
 import {
   buildToolTimeline,
   filterEventsBySubAgent,
@@ -28,6 +29,11 @@ export interface RunDetailViewProps {
   detail: RunDetailJson;
   onDownload: (runId: number) => void;
   onDelete: (runId: number) => void;
+  /** Called when the user confirms "Regenerate notes" in the Notes
+   *  Review section. The parent wires this to the existing rerun
+   *  endpoint. Optional — legacy callers without Step 12 UX still
+   *  render the detail view unchanged. */
+  onRegenerateNotes?: (runId: number) => void;
 }
 
 /** Render a status badge from a precomputed display. Caller picks
@@ -133,6 +139,11 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
   // replay looks identical to live once the operator picks a sub. null =
   // "All" (every sub-agent merged, same as pre-sub-tab behaviour).
   const [notes12SubId, setNotes12SubId] = useState<string | null>(null);
+  // Collapsed by default: the detail page used to render every agent's
+  // full tool timeline inline, producing a tall, hard-to-scan view when a
+  // run had 5+ agents. Operators said they only occasionally need the
+  // raw event stream, so we hide it until the header is clicked.
+  const [expanded, setExpanded] = useState(false);
 
   // Notes agents are persisted with statement_type = "NOTES_<TEMPLATE>"
   // — render with the same friendly chip the live UI uses so history
@@ -177,8 +188,16 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
 
   return (
     <article data-testid="run-detail-agent" style={styles.agentCard}>
-      <header style={styles.agentHeader}>
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+        style={styles.agentHeaderButton}
+      >
         <div style={styles.agentTitleRow}>
+          <span style={styles.agentChevron} aria-hidden="true">
+            {expanded ? "▾" : "▸"}
+          </span>
           <span style={styles.agentStatement}>{displayName}</span>
           {agent.variant && (
             <span style={styles.agentVariant}>({agent.variant})</span>
@@ -193,24 +212,34 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
               : "— tokens"}
           </span>
         </div>
-      </header>
-      {showSubTabs && (
-        <NotesSubTabBar
-          subAgents={subAgents}
-          activeSubId={notes12SubId}
-          onSelect={setNotes12SubId}
-        />
+      </button>
+      {expanded && (
+        <div style={styles.agentBody}>
+          {showSubTabs && (
+            <NotesSubTabBar
+              subAgents={subAgents}
+              activeSubId={notes12SubId}
+              onSelect={setNotes12SubId}
+            />
+          )}
+          <AgentTimeline
+            events={events}
+            toolTimeline={toolTimeline}
+            isRunning={false}
+          />
+        </div>
       )}
-      <AgentTimeline
-        events={events}
-        toolTimeline={toolTimeline}
-        isRunning={false}
-      />
     </article>
   );
 }
 
-export function RunDetailView({ detail, onDownload, onDelete }: RunDetailViewProps) {
+export function RunDetailView({
+  detail, onDownload, onDelete, onRegenerateNotes,
+}: RunDetailViewProps) {
+  // Notes review is a heavy sub-tree (one TipTap editor per cell). Keep
+  // it unmounted until the operator opens the section so a detail view
+  // with a dozen notes doesn't spin up a dozen editors on first paint.
+  const [notesExpanded, setNotesExpanded] = useState(false);
   const canDownload = !!detail.merged_workbook_path;
   // Legacy detection: rows created before the v2 schema never captured a
   // run_config, merged_workbook_path, or per-agent token counts. Rather
@@ -302,6 +331,26 @@ export function RunDetailView({ detail, onDownload, onDelete }: RunDetailViewPro
         )}
       </section>
 
+      <section style={styles.section} data-testid="run-detail-notes-review">
+        <button
+          type="button"
+          onClick={() => setNotesExpanded((prev) => !prev)}
+          aria-expanded={notesExpanded}
+          style={styles.collapsibleSectionHeading}
+        >
+          <span style={styles.agentChevron} aria-hidden="true">
+            {notesExpanded ? "▾" : "▸"}
+          </span>
+          Notes review
+        </button>
+        {notesExpanded && (
+          <NotesReviewTab
+            runId={detail.id}
+            onRegenerate={onRegenerateNotes}
+          />
+        )}
+      </section>
+
       <section style={styles.section}>
         <h4 style={styles.sectionHeading}>Cross-checks</h4>
         {/* Horizontal scroll fallback for the 6-column cross-check table.
@@ -321,16 +370,13 @@ export function RunDetailView({ detail, onDownload, onDelete }: RunDetailViewPro
 // ---------------------------------------------------------------------------
 
 const styles = {
-  // No border/shadow here — the parent (RunDetailModal) provides the
-  // modal chrome. Keeping an outer card inside the modal would produce
-  // a nested-card look that doubles the visual noise.
+  // No border/shadow here — the parent (RunDetailPage) provides the
+  // top-level layout chrome. Keeping an outer card inside a page would
+  // produce a nested-card look that doubles the visual noise.
   container: {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.lg,
-    // Right padding leaves room for the modal's absolute-positioned close
-    // button so the header title never runs into the ×.
-    paddingRight: pwc.space.xl,
   } as React.CSSProperties,
   crossCheckScroller: {
     overflowX: "auto" as const,
@@ -423,6 +469,27 @@ const styles = {
     textTransform: "uppercase" as const,
     letterSpacing: 0.5,
   } as React.CSSProperties,
+  // Button-flavoured variant of sectionHeading used for collapsible
+  // sections. Strips all default button chrome so it visually matches an
+  // <h4> while staying semantically a control with aria-expanded.
+  collapsibleSectionHeading: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: 600,
+    color: pwc.grey700,
+    margin: 0,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.5,
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.xs,
+    textAlign: "left" as const,
+    width: "fit-content",
+  } as React.CSSProperties,
   dl: {
     display: "flex",
     flexDirection: "column" as const,
@@ -460,12 +527,31 @@ const styles = {
     borderRadius: pwc.radius.sm,
     background: pwc.white,
   } as React.CSSProperties,
-  agentHeader: {
+  // Clickable header serves as the collapse/expand toggle. Styled as a
+  // plain block (no button chrome) so it reads as a card row, not a
+  // standalone control — the chevron + aria-expanded carry the affordance.
+  agentHeaderButton: {
     display: "flex",
     flexDirection: "column" as const,
     gap: 4,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    background: "transparent",
+    border: "none",
+    width: "100%",
+    textAlign: "left" as const,
+    cursor: "pointer",
+    fontFamily: "inherit",
+    font: "inherit",
+    color: "inherit",
+  } as React.CSSProperties,
+  agentBody: {
+    borderTop: `1px solid ${pwc.grey100}`,
+  } as React.CSSProperties,
+  agentChevron: {
+    color: pwc.grey500,
+    fontSize: 12,
+    width: 12,
+    display: "inline-block",
   } as React.CSSProperties,
   agentTitleRow: {
     display: "flex",

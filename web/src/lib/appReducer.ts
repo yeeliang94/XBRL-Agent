@@ -54,6 +54,11 @@ export interface AppState {
   // 'history' is the past-runs browser. Switching views does NOT reset
   // in-flight extraction state, so a user can peek at history mid-run.
   view: AppView;
+  // Which run's full-page detail is currently open. Lifted to app-level
+  // state (rather than kept inside HistoryPage) so the URL router can
+  // round-trip /history/<id>: push on select, pop on back button, hydrate
+  // on deep-link. Null when the history list itself is visible.
+  selectedRunId: number | null;
   // Phase 9: transient toast surfaced in the top-right corner on run
   // completion. Null when no toast is active. Dismissed via DISMISS_TOAST
   // (either from the manual close button or the auto-dismiss timer).
@@ -75,6 +80,7 @@ export type AppAction =
   | { type: "ABORT_AGENT"; payload: { agentId: string } }
   | { type: "RERUN_STARTED"; payload: { agentId: string } }
   | { type: "SET_VIEW"; payload: AppView }
+  | { type: "SET_SELECTED_RUN_ID"; payload: number | null }
   | { type: "DISMISS_TOAST" }
   | { type: "RESET" };
 
@@ -100,20 +106,46 @@ export const initialState: AppState = {
   notesInRun: [],
   lastRunConfig: null,
   view: "extract",
+  selectedRunId: null,
   toast: null,
 };
 
+// Captures the numeric run id when the pathname is exactly `/history/<n>`
+// (optionally with a trailing slash). Used by both bootState and the App's
+// popstate handler so URL parsing stays in one place.
+const HISTORY_RUN_RE = /^\/history\/(\d+)\/?$/;
+
+/** Derive the app view + selected run id from a pathname.
+ *
+ *  - `/history/42` → history view, selectedRunId=42
+ *  - `/history` (any non-numeric suffix included) → history view, no selection
+ *  - anything else → extract view
+ *
+ *  We're permissive on the history side so a URL like `/history/foo` still
+ *  lands on the list instead of bouncing to extract — less confusing when
+ *  someone mistypes a deep link.
+ */
+export function parseRouteFromPath(
+  pathname: string,
+): { view: AppView; selectedRunId: number | null } {
+  if (!pathname.startsWith("/history")) {
+    return { view: "extract", selectedRunId: null };
+  }
+  const m = HISTORY_RUN_RE.exec(pathname);
+  return { view: "history", selectedRunId: m ? Number(m[1]) : null };
+}
+
 /**
  * Lazy initializer for useReducer that inspects the current URL so deep-links
- * and refreshes to `/history` land in the history tab without a flash of the
- * extract UI. Computed at component mount (not module load) so test suites
- * that rewrite the URL between renders get the correct boot view.
+ * and refreshes to `/history` (or `/history/<id>`) land in the history tab
+ * without a flash of the extract UI. Computed at component mount (not module
+ * load) so test suites that rewrite the URL between renders get the correct
+ * boot view.
  */
 export function bootState(): AppState {
-  if (typeof window !== "undefined" && window.location.pathname.startsWith("/history")) {
-    return { ...initialState, view: "history" };
-  }
-  return initialState;
+  if (typeof window === "undefined") return initialState;
+  const { view, selectedRunId } = parseRouteFromPath(window.location.pathname);
+  return { ...initialState, view, selectedRunId };
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +633,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case "SET_VIEW":
       return { ...state, view: action.payload };
+
+    case "SET_SELECTED_RUN_ID":
+      // Clearing selection (payload === null) returns the user to the
+      // history list; setting a number opens the full-page run detail.
+      // Kept purely as a state update — the URL round-trip happens in an
+      // App-level effect watching this field.
+      return { ...state, selectedRunId: action.payload };
 
     case "DISMISS_TOAST":
       return { ...state, toast: null };

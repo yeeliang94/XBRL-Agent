@@ -2,7 +2,7 @@ import { useReducer, useCallback, useState, useRef, useEffect } from "react";
 import type { RunConfigPayload, NotesTemplateType } from "./lib/types";
 import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES } from "./lib/types";
 import { pwc } from "./lib/theme";
-import { appReducer, bootState } from "./lib/appReducer";
+import { appReducer, bootState, parseRouteFromPath } from "./lib/appReducer";
 import { uploadPdf, getSettings, updateSettings, testConnection, abortAll, abortAgent } from "./lib/api";
 import { createMultiAgentSSE } from "./lib/sse";
 import { SettingsModal } from "./components/SettingsModal";
@@ -59,6 +59,18 @@ const styles = {
     flexDirection: "column" as const,
     gap: pwc.space.xl,
   } as const,
+  // History run-detail view benefits from more horizontal space: the agent
+  // timelines and Notes-review editor were clipped inside the 960px rail,
+  // leaving large blank gutters on wide displays. Widening only for the
+  // detail route keeps Extract + History-list layouts unchanged.
+  mainWide: {
+    maxWidth: 1440,
+    margin: "0 auto",
+    padding: `${pwc.space.xxl}px ${pwc.space.xl}px`,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xl,
+  } as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -91,21 +103,49 @@ export default function App() {
     };
   }, []);
 
-  // --- Phase 4: URL <-> view sync ----------------------------------------
-  // Push the view into the address bar whenever it changes, so deep-linking
-  // and copy/paste of the URL work. Listen for popstate so browser Back and
-  // Forward buttons update the in-memory view without a full reload.
+  // --- URL <-> view sync --------------------------------------------------
+  // Push the view (and selected run id, if any) into the address bar so
+  // deep-linking and copy/paste of the URL work. Three shapes:
+  //   /                → extract view
+  //   /history         → history list
+  //   /history/<id>    → full-page run detail (new: shareable run link)
+  // Listening for popstate mirrors browser Back/Forward into state without
+  // a full reload.
   useEffect(() => {
-    const expected = state.view === "history" ? "/history" : "/";
-    if (window.location.pathname !== expected) {
-      window.history.pushState({ view: state.view }, "", expected);
+    let expected: string;
+    if (state.view !== "history") {
+      expected = "/";
+    } else if (state.selectedRunId != null) {
+      expected = `/history/${state.selectedRunId}`;
+    } else {
+      expected = "/history";
     }
-  }, [state.view]);
+    if (window.location.pathname !== expected) {
+      window.history.pushState(
+        { view: state.view, selectedRunId: state.selectedRunId },
+        "",
+        expected,
+      );
+    }
+  }, [state.view, state.selectedRunId]);
+
+  // Reflect the selected run in the browser tab title so a user with
+  // multiple review tabs open can tell them apart without switching.
+  useEffect(() => {
+    document.title =
+      state.view === "history" && state.selectedRunId != null
+        ? `XBRL Agent — Run ${state.selectedRunId}`
+        : "XBRL Agent";
+  }, [state.view, state.selectedRunId]);
 
   useEffect(() => {
     const onPop = () => {
-      const nextView = window.location.pathname.startsWith("/history") ? "history" : "extract";
-      dispatch({ type: "SET_VIEW", payload: nextView });
+      // Route parsing is centralised in parseRouteFromPath so bootState
+      // and popstate agree on how a URL maps to state — including the
+      // "any /history/<garbage> still lands on the list" forgiveness path.
+      const route = parseRouteFromPath(window.location.pathname);
+      dispatch({ type: "SET_VIEW", payload: route.view });
+      dispatch({ type: "SET_SELECTED_RUN_ID", payload: route.selectedRunId });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -259,7 +299,18 @@ export default function App() {
           <h1 style={styles.headerTitle}>XBRL Agent</h1>
           <TopNav
             view={state.view}
-            onViewChange={(v) => dispatch({ type: "SET_VIEW", payload: v })}
+            onViewChange={(v) => {
+              // Tabs are "go to the top of that section" — clicking
+              // History from anywhere must show the list, not the last
+              // run the user was viewing. Without this clear,
+              // selectedRunId leaks across tab switches and the URL
+              // effect routes back to /history/<id> when the user next
+              // clicks History. Popstate still dispatches its own
+              // SET_SELECTED_RUN_ID so browser Back/Forward still
+              // restore a deep-linked run correctly.
+              dispatch({ type: "SET_VIEW", payload: v });
+              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
+            }}
           />
         </div>
         <button
@@ -271,9 +322,20 @@ export default function App() {
         </button>
       </header>
 
-      <main style={styles.main}>
+      <main
+        style={
+          state.view === "history" && state.selectedRunId != null
+            ? styles.mainWide
+            : styles.main
+        }
+      >
         {state.view === "history" ? (
-          <HistoryPage />
+          <HistoryPage
+            selectedId={state.selectedRunId}
+            onSelectRun={(id) =>
+              dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
+            }
+          />
         ) : (
           <ExtractPage
             state={state}
