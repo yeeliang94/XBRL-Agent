@@ -97,6 +97,31 @@ def fill_workbook(
                 continue
         elif mapping.row is not None:
             target_row = mapping.row
+            # Bug 5b — if the agent supplied a row coordinate (no field_label),
+            # check that col A at that row actually has a label. The MPERS
+            # SOCIE bug was exactly this: socie.md's MFRS-matrix instructions
+            # told the agent to write at rows 30/35/49, which on the MPERS
+            # Company template have NO label in col A — the writes landed on
+            # blank cells silently. Row 1 is the documented carve-out for
+            # date cells (see `prompts/_base.md`). Any other labelless row
+            # means the agent is targeting a row that does not exist in the
+            # current template.
+            if target_row != 1:
+                col_a_value = ws.cell(row=target_row, column=1).value
+                if col_a_value is None or not str(col_a_value).strip():
+                    # S-5: earlier wording said "this row does not exist in
+                    # the loaded template" — technically wrong (the row
+                    # exists, the LABEL is absent). The new phrasing points
+                    # at the real fix: field_label matching, and cross-
+                    # check against read_template if the agent believed
+                    # the row was intentional.
+                    errors.append(
+                        f"Refusing to write to {mapping.sheet} row {target_row}: "
+                        f"col A is empty — this row has no label. Use "
+                        f"field_label matching, or call read_template() to "
+                        f"confirm the row is the one you intended."
+                    )
+                    continue
         else:
             errors.append(f"Field has neither label nor row: {mapping}")
             continue
@@ -168,6 +193,22 @@ _LEGACY_MAIN_HEADER_KEYWORDS = frozenset({
     "current liabilities",
 })
 
+# Bug 5c — MPERS Group SOCIE uses four stacked blocks ("Group - Current
+# period", "Group - Prior period", "Company - Current period", "Company -
+# Prior period") divided by plain-text header rows. Those headers carry no
+# fill colour (unlike SOFP section headers), so the coloured-fill discovery
+# in section_headers.py does not pick them up. Without these keywords the
+# four blocks share one empty section and duplicate-label writes (Profit
+# (loss), Equity at end of period, etc.) all default to block 1. The SOCIE-
+# specific keyword set below is passed when the sheet name contains "socie".
+_MPERS_GROUP_SOCIE_BLOCK_HEADERS = frozenset({
+    "group - current period",
+    "group - prior period",
+    "company - current period",
+    "company - prior period",
+})
+
+
 _LEGACY_SUB_HEADER_KEYWORDS = _LEGACY_MAIN_HEADER_KEYWORDS | frozenset({
     "property, plant and equipment",
     "investment property",
@@ -214,7 +255,16 @@ def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
         # so new MBRS templates work without code changes; the legacy keyword
         # set is passed as a safety net for any header missing a coloured fill.
         is_sub_sheet = "sub" in name.lower() or "analysis" in name.lower()
-        fallback = _LEGACY_SUB_HEADER_KEYWORDS if is_sub_sheet else _LEGACY_MAIN_HEADER_KEYWORDS
+        is_socie = "socie" in name.lower()
+        if is_socie:
+            # MPERS Group SOCIE's uncoloured block dividers are load-bearing
+            # for duplicate-label disambiguation; see
+            # _MPERS_GROUP_SOCIE_BLOCK_HEADERS above for the full rationale.
+            fallback = _LEGACY_MAIN_HEADER_KEYWORDS | _MPERS_GROUP_SOCIE_BLOCK_HEADERS
+        elif is_sub_sheet:
+            fallback = _LEGACY_SUB_HEADER_KEYWORDS
+        else:
+            fallback = _LEGACY_MAIN_HEADER_KEYWORDS
         headers = header_set(wb, name, extra_keywords=fallback)
 
         for row in range(1, ws.max_row + 1):
