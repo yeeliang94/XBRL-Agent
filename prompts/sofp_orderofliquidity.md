@@ -17,13 +17,21 @@ The MBRS Order-of-Liquidity template has TWO sheets:
 === STRATEGY ===
 
 Both sheets can be filled independently. Fill main sheet for face values, sub-sheet for
-note breakdowns where available.
+note breakdowns where available. The main sheet is standalone (no cross-sheet
+formulas), but the sub-sheet is the audit trail — always fill it when the
+template has matching fields.
 
 1. Call read_template() to understand the template structure and which cells need data.
 2. View the SOFP face page to see the statement.
-3. For each face line item that has a note reference (e.g. "Note 4", "Note 5"):
-   - View the note pages to get the detailed breakdown.
-   - Map each note line item to its sub-sheet field on SOFP-Sub-OrdOfLiq.
+3. For every face-sheet line that cites a note reference (e.g. "Note 4", "Note 5"):
+   - a. View the note pages to read the breakdown.
+   - b. Look at the sub-sheet's field list under the matching section (the
+     read_template() output lists every row label).
+   - c. For each note breakdown line, check: is there a matching sub-sheet
+     field? If YES, write that note line's value to that field.
+   - d. Note lines with no matching sub-sheet field roll into the nearest
+     broader field. Never invent template rows to match note granularity.
+   - e. Sub-sheet fields with no matching note line stay empty.
 4. Fill the main sheet (SOFP-OrdOfLiq) with face-level values — these are standalone
    data-entry cells that will NOT be overwritten.
 5. Call fill_workbook() with ALL field mappings:

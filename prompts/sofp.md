@@ -28,9 +28,18 @@ the sub-sheet automatically. Only fill non-formula data-entry cells on the main 
 
 1. Call read_template() to understand the template structure and which cells need data.
 2. View the SOFP face page to see the statement.
-3. For each face line item that has a note reference (e.g. "Note 4", "Note 5"):
-   - View the note pages to get the detailed breakdown.
-   - Map each note line item to its sub-sheet field.
+3. For every face-sheet line that cites a note reference (e.g. "Note 4", "Note 5"):
+   - a. View the note pages to read the breakdown.
+   - b. Look at the sub-sheet's field list under the matching section (the
+     read_template() output lists every row label under each section).
+   - c. For each note breakdown line, check: is there a matching sub-sheet
+     field? If YES, write that note line's value to that sub-sheet field.
+   - d. Note lines that don't match a sub-sheet field roll into the nearest
+     broader field (or, if the template is fully coarser, roll up into a
+     single sub-sheet line). Do NOT invent template rows to match note
+     granularity.
+   - e. Sub-sheet fields with no matching note line are left empty. Never
+     fabricate a breakdown.
 4. For face line items WITHOUT note references or that are direct data-entry on the main
    sheet, fill them on the main sheet.
 5. Call fill_workbook() with ALL field mappings. Prioritise sub-sheet fields:
@@ -43,12 +52,39 @@ the sub-sheet automatically. Only fill non-formula data-entry cells on the main 
    call fill_workbook() again with corrections.
 8. Call save_result() when totals balance.
 
+=== FAILURE MODE TO AVOID ===
+
+The asymmetric failure is: the sub-sheet has a granular field that matches a
+breakdown line in the note, but you write the combined lump sum to the face
+sheet. The face-sheet formula then overwrites your lump sum with the (empty)
+sub-sheet total, and the filed return is wrong.
+
+Correct outcome: the values you see in the notes end up in sub-sheet fields
+that match their labels. When the template is coarser than the note, rolling
+up is the right move. When the template is granular, split the note lines.
+Let the template drive, not the note.
+
+=== WORKED EXAMPLES ===
+
+**Template-granular case (split the note):** The "Other payables" note shows
+Accruals RM399,113 + Other payables RM2,809. The sub-sheet has both
+"Accruals" and "Other current non-trade payables" under the same section →
+write each note line to its matching field. Two sub-sheet payloads.
+
+**Note-granular case (roll up into template):** The "Trade receivables" note
+shows Trade receivables – third parties RM320,000 + Trade receivables –
+related companies RM64,375. The sub-sheet has only one "Trade receivables"
+field under Current trade receivables → sum the two note lines to RM384,375
+and write that one value to "Trade receivables". One sub-sheet payload.
+Do NOT invent "Trade receivables – third parties" as a new row.
+
 === CRITICAL RULES ===
 
-- ALWAYS fill the sub-sheet for every breakdown you find in the notes. Missing sub-sheet
-  values = wrong totals because the main sheet formulas depend on sub-sheet data.
-- When a note shows a breakdown (e.g. "Other payables" note shows Accruals RM399,113 and
-  Other payables RM2,809), fill EACH line item separately on the sub-sheet.
+- ALWAYS fill the sub-sheet for every breakdown the template exposes. When
+  a matching sub-sheet field exists, that's where the note line belongs —
+  not on the face sheet as a lump sum.
+- When a note's breakdown is finer than the sub-sheet, roll up into the
+  coarsest matching field. Never fabricate template rows.
 - "Accruals" in the template means ONLY the accruals line. If the PDF note shows
   "Accrued bonus" and "Accruals" as separate items, SUM them into the "Accruals" field.
   Do NOT put accrued bonus into "Other current non-trade payables".
