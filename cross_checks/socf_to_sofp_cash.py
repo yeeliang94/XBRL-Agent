@@ -9,7 +9,9 @@ from typing import Dict
 
 from statement_types import StatementType
 from cross_checks.framework import CrossCheckResult
-from cross_checks.util import open_workbook, find_sheet, find_value_by_label
+from cross_checks.util import (
+    open_workbook, find_sheet, find_value_by_label, filing_level_prefix,
+)
 
 
 class SOCFToSOFPCashCheck:
@@ -52,7 +54,9 @@ class SOCFToSOFPCashCheck:
 
         diff = abs(socf_cash - sofp_cash)
         group_passed = diff <= tolerance
-        parts = [f"Group: SOCF ({socf_cash}) vs SOFP ({sofp_cash}), diff={diff:.2f}"]
+        # Reconciliation check — see cross_checks.util.filing_level_prefix.
+        primary_label = filing_level_prefix(filing_level, with_period=False)
+        parts = [f"{primary_label}: SOCF ({socf_cash}) vs SOFP ({sofp_cash}), diff={diff:.2f}"]
 
         # Group filings must carry Company totals — see sofp_balance.py for
         # the peer-review background on the old silent-pass default.

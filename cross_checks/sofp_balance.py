@@ -9,7 +9,9 @@ from typing import Dict
 
 from statement_types import StatementType
 from cross_checks.framework import CrossCheckResult
-from cross_checks.util import open_workbook, find_sheet, find_value_by_label
+from cross_checks.util import (
+    open_workbook, find_sheet, find_value_by_label, filing_level_prefix,
+)
 
 
 class SOFPBalanceCheck:
@@ -54,7 +56,12 @@ class SOFPBalanceCheck:
 
         diff = abs(assets_cy - eq_liab_cy)
         group_passed = diff <= tolerance
-        parts = [f"Group CY: assets ({assets_cy}) vs equity+liab ({eq_liab_cy}), diff={diff:.2f}"]
+        # Primary column prefix flows through filing_level_prefix so all
+        # 5 P0 checks speak a consistent "Company X:" / "Group X:" idiom
+        # (peer-review S-3/S-4). SOFP is a CY/PY balance check — include
+        # the period marker.
+        primary_label = filing_level_prefix(filing_level, with_period=True)
+        parts = [f"{primary_label}: assets ({assets_cy}) vs equity+liab ({eq_liab_cy}), diff={diff:.2f}"]
 
         # Group filings must carry Company totals. Missing values used to
         # default co_passed=True, silently hiding an incomplete extraction.

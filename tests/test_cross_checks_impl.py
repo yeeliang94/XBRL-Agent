@@ -529,3 +529,140 @@ class TestRealTemplateSmoke:
         # Row 132 is a data-entry cell (None on empty template) — just verify label exists
         assert _label_row_exists(ws, "cash and cash equivalents at end of period")
         wb.close()
+
+
+# ---------------------------------------------------------------------------
+# Bug 2 — cross-check messages must not call company filings "Group"
+#
+# Prior to this fix every check hardcoded "Group:" / "Group CY:" as the
+# primary-column prefix. On a company filing there is only ONE column of
+# figures, so the label is both redundant and wrong — users saw
+# "Group CY: assets (…)" on reports they had explicitly marked Company.
+# These tests pin the filing_level-aware prefix in place.
+# ---------------------------------------------------------------------------
+
+
+class TestMessagePrefixHonoursFilingLevel:
+    def test_sofp_balance_company_does_not_mention_group(self, tmp_dir):
+        path = os.path.join(tmp_dir, "sofp.xlsx")
+        _make_workbook({
+            "SOFP-CuNonCu": [
+                ["*Total assets", 1000.0, 800.0],
+                ["*Total equity and liabilities", 1000.0, 800.0],
+            ],
+        }, path)
+        result = SOFPBalanceCheck().run(
+            {StatementType.SOFP: path}, tolerance=1.0, filing_level="company",
+        )
+        assert "Group" not in result.message, (
+            f"Company filing should not leak 'Group' label: {result.message!r}"
+        )
+        # S-3/S-4: company-filing prefix should be explicit and symmetric
+        # with the group form ("Group CY:") — bare "CY:" leaves users to
+        # guess. "Company CY:" pairs visually with "Group CY:" on group.
+        assert "Company CY:" in result.message, (
+            f"Company filing prefix should be 'Company CY:' "
+            f"(symmetric with 'Group CY:' on group path). Got: {result.message!r}"
+        )
+
+    def test_sofp_balance_group_still_labels_both(self, tmp_dir):
+        """Regression guard — group filings still dual-report Group + Company."""
+        path = os.path.join(tmp_dir, "sofp.xlsx")
+        _make_workbook({
+            "SOFP-CuNonCu": [
+                # Company (col D=4) must exist on a group filing for the check
+                # to have something to compare; pad col D too.
+                ["*Total assets", 1000.0, 800.0, 600.0, 500.0],
+                ["*Total equity and liabilities", 1000.0, 800.0, 600.0, 500.0],
+            ],
+        }, path)
+        result = SOFPBalanceCheck().run(
+            {StatementType.SOFP: path}, tolerance=1.0, filing_level="group",
+        )
+        assert "Group CY:" in result.message
+        assert "Company CY:" in result.message
+
+    def test_sopl_to_socie_profit_company_does_not_mention_group(self, tmp_dir):
+        sopl_path = os.path.join(tmp_dir, "sopl.xlsx")
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        _make_workbook({"SOPL-Function": [["*Profit (loss)", 250000.0, 200000.0]]}, sopl_path)
+        _make_workbook({
+            "SOCIE": [
+                [None, "Issued capital", "Retained earnings"],
+                ["*Profit (loss) for the period", None, 250000.0],
+            ],
+        }, socie_path)
+        result = SOPLToSOCIEProfitCheck().run(
+            {StatementType.SOPL: sopl_path, StatementType.SOCIE: socie_path},
+            tolerance=1.0, filing_level="company",
+        )
+        assert "Group" not in result.message, result.message
+
+    def test_soci_to_socie_tci_company_does_not_mention_group(self, tmp_dir):
+        soci_path = os.path.join(tmp_dir, "soci.xlsx")
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        _make_workbook({
+            "SOCI-BeforeOfTax": [
+                ["*Total comprehensive income for the period", 260000.0, 210000.0],
+            ],
+        }, soci_path)
+        pad = [None] * 22
+        _make_workbook({
+            "SOCIE": [
+                ["*Total comprehensive income for the period", *pad, 260000.0],
+            ],
+        }, socie_path)
+        result = SOCIToSOCIETCICheck().run(
+            {StatementType.SOCI: soci_path, StatementType.SOCIE: socie_path},
+            tolerance=1.0, filing_level="company",
+        )
+        assert "Group" not in result.message, result.message
+
+    def test_socie_to_sofp_equity_company_does_not_mention_group(self, tmp_dir):
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
+        pad = [None] * 22
+        _make_workbook({
+            "SOCIE": [["*Equity at end of period", *pad, 2_000_000.0]],
+        }, socie_path)
+        _make_workbook({
+            "SOFP-CuNonCu": [["*Total equity", 2_000_000.0, 1_800_000.0]],
+        }, sofp_path)
+        result = SOCIEToSOFPEquityCheck().run(
+            {StatementType.SOCIE: socie_path, StatementType.SOFP: sofp_path},
+            tolerance=1.0, filing_level="company",
+        )
+        assert "Group" not in result.message, result.message
+
+    def test_filing_level_prefix_helper_is_single_source_of_truth(self):
+        """S-4: extract `_filing_level_prefix` helper into cross_checks.util
+        so adding a 6th check doesn't require copying the same 2-line
+        branch. The helper's existence and contract are part of the
+        public API for cross-check authors."""
+        from cross_checks.util import filing_level_prefix
+        # Four-col form (SOFP balance uses CY/PY rows → "Group CY" / "Company CY")
+        assert filing_level_prefix("group", with_period=True) == "Group CY"
+        assert filing_level_prefix("company", with_period=True) == "Company CY"
+        # Three-col form (SOCI → SOCIE / SOPL → SOCIE / SOCF → SOFP use
+        # a single-period aggregate so the period marker is redundant)
+        assert filing_level_prefix("group", with_period=False) == "Group"
+        assert filing_level_prefix("company", with_period=False) == "Company"
+
+    def test_socf_to_sofp_cash_company_does_not_mention_group(self, tmp_dir):
+        socf_path = os.path.join(tmp_dir, "socf.xlsx")
+        sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
+        _make_workbook({
+            "SOCF-Indirect": [
+                ["*Cash and cash equivalents at end of period", 5023.0, 2955.0],
+            ],
+        }, socf_path)
+        _make_workbook({
+            "SOFP-OrdOfLiq": [
+                ["Total Cash and bank balances", 5023.0, 2955.0],
+            ],
+        }, sofp_path)
+        result = SOCFToSOFPCashCheck().run(
+            {StatementType.SOCF: socf_path, StatementType.SOFP: sofp_path},
+            tolerance=1.0, filing_level="company",
+        )
+        assert "Group" not in result.message, result.message
