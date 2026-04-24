@@ -69,6 +69,40 @@ def test_listofnotes_tokens_do_not_leak_into_non_lon_prompts():
     assert "{{CATCH_ALL_LABEL}}" not in prompt
 
 
+def test_non_lon_render_does_not_emit_catch_all_warning(caplog):
+    """Regression guard (observed on Windows 2026-04-24): a full MPERS
+    run fired "Seeded label_catalog has no catch-all row" 4 times — one
+    per non-LoN notes agent. Cause: `_apply_listofnotes_tokens` was
+    called unconditionally, so `_find_catch_all_label` scanned every
+    template's catalog for "other notes to accounts" and warned
+    whenever it legitimately wasn't there (CorpInfo, AccPolicies,
+    IssuedCapital, RelatedParty). Fix gates the LoN-token substitution
+    by template_type. This test asserts the gating so the warning
+    can't silently creep back."""
+    import logging
+    catalog = [
+        "Registration number",
+        "Registered office address",
+        "Principal place of business",
+    ]
+    with caplog.at_level(logging.WARNING, logger="notes.agent"):
+        render_notes_prompt(
+            template_type=NotesTemplateType.CORP_INFO,
+            filing_level="company",
+            inventory=[],
+            filing_standard="mpers",
+            label_catalog=catalog,
+        )
+    offending = [
+        r for r in caplog.records
+        if "no catch-all row" in r.getMessage()
+    ]
+    assert not offending, (
+        f"Non-LoN prompt render should not trigger the LoN catch-all "
+        f"warning. Got: {[r.getMessage() for r in offending]}"
+    )
+
+
 def test_prompt_omits_catalog_block_when_none():
     """Backwards-compat: omitting `label_catalog` must keep the
     pre-Phase-3 prompt shape so callers that haven't migrated don't
