@@ -27,6 +27,32 @@ SOCIE_GROUP_BLOCKS = {
 }
 
 
+def filing_level_prefix(filing_level: str, *, with_period: bool) -> str:
+    """Return the message-label prefix for the PRIMARY column of a cross-check.
+
+    All 5 P0 cross-checks dual-report on group filings ("Group: foo vs bar"
+    + "Company: foo vs bar") and single-report on company filings. Earlier
+    the primary prefix was hardcoded as "Group" / "Group CY" in every
+    check — which misled users on company filings (bug 2). Centralising
+    the branch here:
+      - keeps adding a 6th check a one-liner;
+      - gives one place to revisit the verbiage if product wording
+        changes again (peer-review S-3 / S-4);
+      - makes the symmetry between company and group messages enforceable
+        ("Company CY: …" on company parallels "Group CY: …" on group).
+
+    ``with_period=True`` → balance-style checks that read a single CY
+    total from a row (SOFP balance). The "CY" marker disambiguates which
+    year the number comes from.
+    ``with_period=False`` → reconciliation checks that compare a derived
+    aggregate across statements (SOCF↔SOFP cash, SOPL↔SOCIE profit etc.)
+    where the period is implicit from the row label; the trailing "CY"
+    would be redundant.
+    """
+    entity = "Group" if filing_level == "group" else "Company"
+    return f"{entity} CY" if with_period else entity
+
+
 def is_sore_run(run_config: dict) -> bool:
     """True when the run's SOCIE slot is filled by the MPERS SoRE variant.
 

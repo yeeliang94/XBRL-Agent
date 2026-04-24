@@ -11,7 +11,7 @@ from statement_types import StatementType
 from cross_checks.framework import CrossCheckResult
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, socie_column,
-    find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
+    find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run, filing_level_prefix,
 )
 
 
@@ -76,7 +76,11 @@ class SOPLToSOCIEProfitCheck:
 
         diff = abs(sopl_profit - socie_profit)
         group_passed = diff <= tolerance
-        parts = [f"Group: SOPL ({sopl_profit}) vs SOCIE ({socie_profit}), diff={diff:.2f}"]
+        # Reconciliation check — period is implicit from the profit row
+        # label so with_period=False. See cross_checks.util for the
+        # S-3/S-4 rationale behind centralising this prefix.
+        primary_label = filing_level_prefix(filing_level, with_period=False)
+        parts = [f"{primary_label}: SOPL ({sopl_profit}) vs SOCIE ({socie_profit}), diff={diff:.2f}"]
 
         # Group filings must carry Company totals — see sofp_balance.py for
         # the peer-review background on the old silent-pass default.

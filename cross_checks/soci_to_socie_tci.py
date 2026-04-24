@@ -12,7 +12,7 @@ from cross_checks.framework import CrossCheckResult
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label,
     find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
-    socie_total_column,
+    socie_total_column, filing_level_prefix,
 )
 
 
@@ -71,7 +71,9 @@ class SOCIToSOCIETCICheck:
 
         diff = abs(soci_tci - socie_tci)
         group_passed = diff <= tolerance
-        parts = [f"Group: SOCI ({soci_tci}) vs SOCIE ({socie_tci}), diff={diff:.2f}"]
+        # Reconciliation check — see cross_checks.util.filing_level_prefix.
+        primary_label = filing_level_prefix(filing_level, with_period=False)
+        parts = [f"{primary_label}: SOCI ({soci_tci}) vs SOCIE ({socie_tci}), diff={diff:.2f}"]
 
         # Group filings must carry Company totals — see sofp_balance.py for
         # the peer-review background on the old silent-pass default.
