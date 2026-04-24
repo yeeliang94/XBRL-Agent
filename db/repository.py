@@ -120,6 +120,26 @@ class ExtractedField:
 
 
 @dataclass
+class NotesCell:
+    """One row of the `notes_cells` table — canonical per-run notes payload.
+
+    `html` is the authored HTML the post-run editor reads and edits; the
+    Excel download path flattens it via `notes.html_to_text` at write time.
+    `evidence` mirrors what the agent put in col D/F of the workbook; it's
+    surfaced to the editor as read-only.
+    """
+    id: int
+    run_id: int
+    sheet: str
+    row: int
+    label: str
+    html: str
+    evidence: Optional[str] = None
+    source_pages: list[int] = field(default_factory=list)
+    updated_at: str = ""
+
+
+@dataclass
 class CrossCheck:
     id: int
     run_id: int
@@ -399,6 +419,143 @@ def save_cross_check(
         (run_id, check_name, status, expected, actual, diff, tolerance, message),
     )
     return int(cur.lastrowid)
+
+
+# ---------------------------------------------------------------------------
+# notes_cells (v3) — canonical per-run HTML payloads for the post-run editor
+# ---------------------------------------------------------------------------
+
+def upsert_notes_cell(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    sheet: str,
+    row: int,
+    label: str,
+    html: str,
+    evidence: Optional[str] = None,
+    source_pages: Optional[list[int]] = None,
+) -> int:
+    """Insert or update a single notes cell and return its id.
+
+    `UNIQUE(run_id, sheet, row)` makes this an upsert: rerunning a notes
+    agent overwrites the row the coordinator already cleared (see
+    `delete_notes_cells_for_run_sheet`) or, if the delete was skipped,
+    replaces the same (sheet, row) slot in place.
+    """
+    now = _now()
+    pages_json = json.dumps(list(source_pages)) if source_pages else None
+    existing = conn.execute(
+        "SELECT id FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
+        (run_id, sheet, row),
+    ).fetchone()
+    if existing is not None:
+        cell_id = int(existing[0])
+        conn.execute(
+            "UPDATE notes_cells SET label = ?, html = ?, evidence = ?, "
+            "source_pages = ?, updated_at = ? WHERE id = ?",
+            (label, html, evidence, pages_json, now, cell_id),
+        )
+        return cell_id
+    cur = conn.execute(
+        "INSERT INTO notes_cells(run_id, sheet, row, label, html, "
+        "evidence, source_pages, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_id, sheet, row, label, html, evidence, pages_json, now),
+    )
+    return int(cur.lastrowid)
+
+
+def list_notes_cells_for_run(
+    conn: sqlite3.Connection, run_id: int,
+) -> list[NotesCell]:
+    """Return every notes cell for a run, ordered by (sheet, row).
+
+    Ordering matches the template walk so the editor UI can build its
+    per-sheet sections by scanning the list once.
+    """
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT * FROM notes_cells WHERE run_id = ? "
+            "ORDER BY sheet, row",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior_factory
+
+    cells: list[NotesCell] = []
+    for r in rows:
+        cells.append(NotesCell(
+            id=r["id"], run_id=r["run_id"], sheet=r["sheet"],
+            row=r["row"], label=r["label"], html=r["html"],
+            evidence=r["evidence"],
+            source_pages=decode_source_pages(r["source_pages"]),
+            updated_at=r["updated_at"] or "",
+        ))
+    return cells
+
+
+def decode_source_pages(raw: Optional[str]) -> list[int]:
+    """Decode a `notes_cells.source_pages` JSON blob into a clean `list[int]`.
+
+    Fully defensive against every shape of malformation we've observed or
+    could reasonably expect from legacy rows, ad-hoc DB writes, or a future
+    buggy writer:
+
+    - `None` / empty string → `[]`
+    - Malformed JSON → `[]`
+    - JSON decoded to a non-list (e.g. `42`, `"abc"`, `{}`) → `[]`
+    - List with elements that `int(x)` rejects (None, nested lists,
+      non-numeric strings like ``"abc"``) → those elements are filtered;
+      the remaining ints are kept in first-seen order.
+    - List with bools (True/False) → rejected. bool is an int subclass,
+      so `int(True) == 1` would silently coerce to page 1.
+
+    Peer-review S-5 clarification: numeric-looking *strings* are
+    **coerced**, not filtered. ``["1", "2", "abc", "3"]`` decodes to
+    ``[1, 2, 3]`` — `int("1")` succeeds, `int("abc")` raises and
+    that element is dropped. This is the intended resilient-decode
+    behaviour (the writer never persists strings, but a legacy row
+    with JSON-encoded strings shouldn't break the editor).
+
+    One corrupt blob should never block the editor listing for the rest
+    of the run's cells — element-level filtering is the contract.
+    """
+    if not raw:
+        return []
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(decoded, list):
+        return []
+    pages: list[int] = []
+    for p in decoded:
+        if isinstance(p, bool):
+            continue
+        try:
+            pages.append(int(p))
+        except (TypeError, ValueError):
+            continue
+    return pages
+
+
+def delete_notes_cells_for_run_sheet(
+    conn: sqlite3.Connection, *, run_id: int, sheet: str,
+) -> int:
+    """Clobber every cell for (run_id, sheet). Returns rows deleted.
+
+    Called before a notes-agent rerun writes a fresh batch — re-run
+    semantics per the plan are "replace the sheet's contents wholesale",
+    not "merge on top of prior edits". The editor's confirm dialog is
+    the user-facing guard; this helper is the backend enforcement.
+    """
+    cur = conn.execute(
+        "DELETE FROM notes_cells WHERE run_id = ? AND sheet = ?",
+        (run_id, sheet),
+    )
+    return int(cur.rowcount)
 
 
 # ---------------------------------------------------------------------------
