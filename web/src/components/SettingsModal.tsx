@@ -416,7 +416,7 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
             value={model}
             onChange={(e) => setModel(e.target.value)}
             onBlur={() => validateField("model")}
-            placeholder="vertex_ai.gemini-3-flash-preview"
+            placeholder="openai.gpt-5.4"
             style={{
               ...styles.inputMono,
               ...(errors.model ? styles.inputError : {}),
@@ -425,7 +425,7 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
           {errors.model ? (
             <p style={styles.errorText}>{errors.model}</p>
           ) : (
-            <p style={styles.helperText}>e.g., vertex_ai.gemini-3-flash-preview</p>
+            <p style={styles.helperText}>e.g., openai.gpt-5.4</p>
           )}
         </div>
 
