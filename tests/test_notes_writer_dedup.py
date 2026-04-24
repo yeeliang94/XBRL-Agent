@@ -23,6 +23,7 @@ def _p(label: str, content: str, evidence: str, pages: list[int]) -> NotesPayloa
         content=content,
         evidence=evidence,
         source_pages=pages,
+        parent_note={"number": "1", "title": "Test Note"},
     )
 
 

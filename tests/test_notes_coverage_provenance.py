@@ -31,6 +31,7 @@ def _payload(label: str, note_num: int) -> NotesPayload:
         evidence="p.1",
         source_pages=[1],
         note_num=note_num,
+        parent_note={"number": "1", "title": "Test Note"},
     )
 
 
@@ -48,6 +49,7 @@ def test_notes_payload_accepts_optional_note_num():
         evidence="p.1",
         source_pages=[1],
         note_num=5,
+        parent_note={"number": "1", "title": "Test Note"},
     )
     assert p.note_num == 5
 
@@ -57,6 +59,7 @@ def test_notes_payload_note_num_defaults_to_none():
     payloads without note_num. Field must be optional."""
     p = NotesPayload(
         chosen_row_label="X", content="body", evidence="p.1", source_pages=[1],
+        parent_note={"number": "1", "title": "Test Note"},
     )
     assert p.note_num is None
 

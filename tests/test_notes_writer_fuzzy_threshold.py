@@ -110,6 +110,7 @@ def test_writer_rejects_below_threshold_label_as_error(tmp_path: Path) -> None:
             content="Income tax expense reconciliation ...",
             evidence="Page 23, Note 10",
             source_pages=[23],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -158,6 +159,7 @@ def test_regression_taxation_must_not_force_insert_into_bonds(
             ),
             evidence="Pages 19-20, Note 2(g), Note 7 and Note 10",
             source_pages=[19, 20],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(
@@ -194,6 +196,7 @@ def test_regression_corporate_info_must_not_force_insert_into_fair_value(
             ),
             evidence="Page 16, Note 1",
             source_pages=[16],
+            parent_note={"number": "1", "title": "Test Note"},
         ),
     ]
     result = write_notes_workbook(

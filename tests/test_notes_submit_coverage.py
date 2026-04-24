@@ -47,6 +47,7 @@ def _deps_in_sub_agent_mode(
             content="body",
             evidence="p. 22",
             source_pages=[22],
+            parent_note={"number": "1", "title": "Test Note"},
         )
         for label in sink_labels
     ]

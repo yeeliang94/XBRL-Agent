@@ -53,11 +53,18 @@ def test_listofnotes_prompt_pins_pdf_page_citation():
 def test_base_prompt_has_schedules_section():
     """Phase 1.2 — the base prompt must mandate rendering numeric
     schedules (movement tables, ECL allowances, maturity analyses) as
-    ASCII tables rather than replacing them with policy prose."""
+    real tables rather than replacing them with policy prose.
+
+    Note: the schedule rendering format moved from ASCII to HTML as
+    part of the rich-editor pipeline (docs/PLAN-NOTES-RICH-EDITOR.md);
+    the "schedules render, don't get paraphrased" invariant is the
+    stable part, and that's what this test pins."""
     base = (_PROMPT_DIR / "_notes_base.md").read_text(encoding="utf-8")
     assert "SCHEDULES" in base or "SCHEDULE" in base
     flat = _flatten(base)
-    assert "ascii" in flat
+    # Tables must still be mentioned — format is HTML `<table>` now
+    # (formerly ASCII columns).
+    assert "<table>" in base or "table" in flat
     assert "movement" in flat or "maturity" in flat
     # Explicit "do not substitute prose for the schedule" rule.
     assert "do not drop" in flat or "do not replace" in flat
@@ -102,3 +109,69 @@ def test_subcoordinator_prompt_empty_batch_omits_scope_line():
     batch: list[NoteInventoryEntry] = []
     batch_pages = [p for e in batch for p in range(e.page_range[0], e.page_range[1] + 1)]
     assert not batch_pages  # empty-batch invariant
+
+
+# ---------------------------------------------------------------------------
+# Sub-sheet template-first rule (Phase 4 of the model+notes-heading plan).
+#
+# Production runs have been lumping note breakdowns onto the face sheet when a
+# matching sub-sheet field exists. The fix is a prompt rule that gates the
+# breakdown-to-sub-sheet decision on TEMPLATE granularity, not on the note's
+# line count. These tests pin that wording — including a negative assertion
+# against the rejected "one row per note line" quota rule.
+# ---------------------------------------------------------------------------
+
+
+def test_sofp_prompt_has_template_first_breakdown_rule():
+    """prompts/sofp.md must anchor the breakdown rule on the sub-sheet
+    field list (template-first), not on note-line count."""
+    body = (_PROMPT_DIR / "sofp.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    # Core template-first phrasing: the agent checks whether a matching
+    # sub-sheet field exists before deciding to split a note line.
+    assert "matching sub-sheet field" in flat, (
+        "prompts/sofp.md must require the agent to check for a matching "
+        "sub-sheet field before splitting a note breakdown"
+    )
+
+
+def test_sofp_prompt_names_the_failure_mode_explicitly():
+    """The failure case (lump sum on face sheet when a sub-sheet field
+    exists) must be called out as the thing to avoid."""
+    body = (_PROMPT_DIR / "sofp.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "lump sum" in flat and "face sheet" in flat, (
+        "prompts/sofp.md must explicitly call out 'lump sum on the face "
+        "sheet' as the failure mode"
+    )
+
+
+def test_sofp_prompt_does_not_carry_rejected_quota_rule():
+    """Negative assertion: the rigid one-row-per-note-line quota rule
+    is wrong (the template controls granularity, not the note). Guard
+    against it being re-introduced by a future edit."""
+    body = (_PROMPT_DIR / "sofp.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    # Reject both phrasings the earlier plan draft used.
+    assert "one sub-sheet row per breakdown line" not in flat, (
+        "prompts/sofp.md contains the rejected quota rule 'one row per "
+        "breakdown line' — the rule must gate on template granularity"
+    )
+    assert "must write 5 sub-sheet rows" not in flat, (
+        "prompts/sofp.md contains the rejected concrete quota example "
+        "'must write 5 sub-sheet rows'"
+    )
+
+
+def test_sopl_prompt_has_template_first_breakdown_rule():
+    """prompts/sopl.md must carry the same template-first rule for the
+    Analysis sub-sheet."""
+    body = (_PROMPT_DIR / "sopl.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "matching" in flat and "analysis" in flat, (
+        "prompts/sopl.md must reference matching note lines to Analysis "
+        "sub-sheet fields (template-first rule)"
+    )
+    assert "lump" in flat or "single line" in flat, (
+        "prompts/sopl.md must call out the lumping failure mode"
+    )

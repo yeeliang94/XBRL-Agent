@@ -35,6 +35,7 @@ def _payload(label: str, note_num: int) -> NotesPayload:
         content=f"body for note {note_num}",
         evidence=f"p.{20 + note_num}",
         source_pages=[20 + note_num],
+        parent_note={"number": "1", "title": "Test Note"},
     )
 
 

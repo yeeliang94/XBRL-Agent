@@ -28,8 +28,8 @@ of payload objects. Each payload has these fields:
 - `chosen_row_label` (str, required): the col-A label of the target row
   in the template. Must match (or closely match) a real label — the writer
   does fuzzy resolution, so case and leading `*` are ignored.
-- `content` (str): the prose content for this row. Use `\n\n` for paragraph
-  breaks; Excel renders them as line breaks.
+- `content` (str): the HTML content for this row. Wrap every paragraph in
+  `<p>…</p>`. See `CELL FORMAT` below for the full allowed-tag list.
 - `evidence` (str, required when content or numeric_values is non-empty):
   a short human-readable citation, e.g. "Page 14, Note 2(a)" or "Pages 23-25".
   **Always cite the PDF page number you passed to `view_pdf_pages`, NOT the
@@ -49,29 +49,116 @@ of payload objects. Each payload has these fields:
   validator detect cross-sheet duplicates (e.g. Note 5 appearing on
   both Sheet 11 and Sheet 12) — populate it whenever numbering is
   visible.
+- `parent_note` (object, REQUIRED on every non-empty payload): the
+  parent note's number and title as printed in the PDF. Shape:
+  `{"number": "5", "title": "Material Accounting Policies"}`. The
+  writer uses this to prepend a `<h3>{number} {title}</h3>` line to
+  the cell so every note in the workbook is labelled consistently.
+- `sub_note` (object, optional): the sub-note's number and title when
+  the payload covers a specific sub-note (e.g. 5.4). Shape:
+  `{"number": "5.4", "title": "Property, Plant and Equipment"}`.
+  Omit for top-level notes. When present, the writer prepends a
+  second `<h3>` line AFTER the parent heading and BEFORE the body.
 
-Every non-empty payload MUST cite at least one source page. Evidence is
-mandatory — there is no optional provenance.
+### Heading markup is writer-owned
+
+You (the agent) supply `parent_note` and `sub_note` as structured data.
+**Do NOT prepend `<h3>` tags manually** into `content` — the writer
+injects them from these fields. If you include a heading in `content`
+too, the cell will ship with a duplicate heading. Keep `content` to
+the note's body text only.
+
+Every non-empty payload MUST cite at least one source page AND include
+`parent_note`. Both are mandatory provenance — the number/title pair
+is what labels the cell; evidence is what proves it came from the PDF.
 
 === SCHEDULES VS PROSE ===
 
 If a PDF note contains a numeric schedule (a movement table, opening/additions/
 closing roll-forward, maturity analysis, ECL allowance table, etc.), render
-the schedule in the cell as an ASCII-aligned table. Do NOT drop the schedule
-and substitute a paragraph of policy prose — the downstream reader loses the
-numbers. When the note has BOTH policy prose and a schedule (common for
-Leases, Receivables, Property plant and equipment), include both: prose
-first, then a blank line, then the table.
+the schedule in the cell as an HTML `<table>` (see CELL FORMAT below). Do
+NOT drop the schedule and substitute a paragraph of policy prose — the
+downstream reader loses the numbers. When the note has BOTH policy prose
+and a schedule (common for Leases, Receivables, Property plant and
+equipment), include both: prose first (in `<p>` blocks), then the table.
 
 === CELL FORMAT ===
 
-- Plain text only. No Markdown, no bold/italic escapes, no HTML.
-- Paragraphs separated by `\n\n`. Excel renders this as Alt+Enter line
-  breaks inside a single cell.
-- Tables: render as ASCII-aligned columns with padding spaces. Use `|`
-  as a column separator sparingly — only when it improves readability.
-- Keep the total length under 30,000 characters per cell. Longer content
-  will be truncated by the writer with a pointer to source pages.
+**Output is HTML.** The post-run editor renders your content as rich
+text in a WYSIWYG view, and a one-click "copy as rich text" hands it
+to M-Tool with formatting preserved. Do NOT emit Markdown (`**bold**`,
+`- bullet`, `|` tables) — Markdown will not be interpreted. The Excel
+download flattens the HTML back to plain text automatically.
+
+- **Paragraphs:** wrap every paragraph in `<p>…</p>`. Do not use bare
+  `\n\n` for paragraph breaks — the editor won't render them as
+  paragraphs. Use `<br>` only for a soft line break inside a paragraph
+  (rare).
+- **Emphasis:** `<strong>` for bold, `<em>` for italic. No styling
+  attributes (`style=`, `class=`).
+- **Lists:** `<ul><li>…</li></ul>` for bullets, `<ol><li>…</li></ol>`
+  for numbered lists.
+- **Tables:** `<table>` with one `<tr>` per row. Use `<th>` for header
+  cells and `<td>` for body cells. Tables are allowed and encouraged
+  for movement schedules, maturity analyses, and reconciliations.
+- **Headings:** `<h3>` only (no `<h1>`/`<h2>` — the row label is the
+  section heading; `<h3>` is for sub-sections inside a long cell).
+- Keep the total *rendered* text under 30,000 characters per cell
+  (tag characters don't count). Longer content will be truncated by
+  the writer at a tag boundary with an HTML footer pointing at the
+  source pages.
+
+=== ALLOWED HTML TAGS ===
+
+Allowed: `<p>`, `<br>`, `<strong>`, `<em>`, `<ul>`, `<ol>`, `<li>`,
+`<table>`, `<tr>`, `<th>`, `<td>`, `<h3>`.
+
+Everything else — `<script>`, `<style>`, `<img>`, event handlers like
+`onclick=`, inline `style=` attributes, class attributes — will be
+stripped by the sanitiser before the payload is persisted. Do not
+rely on them.
+
+Short examples:
+
+- Paragraph: `<p>Revenue is recognised when control transfers.</p>`
+- Bullet list: `<ul><li>Class A</li><li>Class B</li></ul>`
+- Table:
+  `<table><tr><th>Item</th><th>2024</th><th>2023</th></tr>`
+  `<tr><td>Revenue</td><td>10,000</td><td>9,500</td></tr></table>`
+
+Worked-example payloads showing the heading fields:
+
+Top-level note (Note 5) — only `parent_note`:
+
+```json
+{
+  "chosen_row_label": "Disclosure of revenue",
+  "parent_note": {"number": "5", "title": "Revenue"},
+  "content": "<p>Revenue is recognised when control of the goods or services transfers to the customer.</p>",
+  "evidence": "Page 20, Note 5",
+  "source_pages": [20],
+  "source_note_refs": ["5"]
+}
+```
+
+Sub-note (Note 5.4) — both `parent_note` and `sub_note`:
+
+```json
+{
+  "chosen_row_label": "Property, plant and equipment",
+  "parent_note": {"number": "5", "title": "Material Accounting Policies"},
+  "sub_note": {"number": "5.4", "title": "Property, Plant and Equipment"},
+  "content": "<p>Property, plant and equipment are stated at cost less accumulated depreciation.</p>",
+  "evidence": "Page 27, Note 5.4",
+  "source_pages": [27],
+  "source_note_refs": ["5.4"]
+}
+```
+
+The writer will render the first example with one `<h3>` line
+(`<h3>5 Revenue</h3>`) before the body, and the second with two
+(`<h3>5 Material Accounting Policies</h3><h3>5.4 Property, Plant and
+Equipment</h3>`) in that order.
 
 === PAGE REQUESTS ===
 

@@ -613,6 +613,17 @@ class NotesDeps:
     write_skip_errors: list[str] = field(default_factory=list)
     # (requested_label, chosen_label, score) — only entries where score < 1.0
     write_fuzzy_matches: list[tuple[str, str, float]] = field(default_factory=list)
+    # Human-readable strings from the HTML sanitiser (Step 5 of the
+    # notes rich-editor plan). Each entry describes something the
+    # sanitiser stripped from a payload (script tags, event handlers,
+    # disallowed tags). The coordinator surfaces these as warnings on
+    # the `NotesAgentResult` so dropped content stays visible.
+    write_sanitizer_warnings: list[str] = field(default_factory=list)
+    # Per-cell manifest (sheet/row/label/html/evidence/source_pages)
+    # accumulated across every successful `write_notes` call. The
+    # coordinator reads this off the deps at the end of the run and
+    # hands it to `notes.persistence.persist_notes_cells`.
+    cells_written: list[dict] = field(default_factory=list)
     # Lazily built on first sub-agent write — the label index is only
     # needed in sub-agent mode (pre-validation before sink append) and
     # opening the workbook every tool call would be wasteful. `Any` here
@@ -957,22 +968,63 @@ async def _render_one_page_single_flight(
         _inflight.pop(key, None)
 
 
+# Peer-review S-9: cap the number of simultaneous PDF renders so a
+# misbehaving agent that asks for 100 pages at once can't exhaust the
+# default thread pool. PyMuPDF rendering is CPU-bound; each render also
+# ties up a thread while it runs, which can starve the rest of the app
+# (other agents' tool turns, HTTP handlers, the audit DB). 8 is a
+# conservative cap that keeps latency flat on small batches while
+# bounding the worst case.
+_RENDER_CONCURRENCY_LIMIT = 8
+# Semaphores are bound to the event loop they're created on. Under
+# pytest-asyncio each test spins up a fresh loop, so a module-level
+# Semaphore would carry a dead loop reference into the next test and
+# raise ``got Future attached to a different loop`` on acquire. Key the
+# cache by running loop so each loop gets its own semaphore. Prod runs
+# one loop for the lifetime of the process, so this dict stays
+# single-entry in practice.
+_render_semaphores: dict[int, "asyncio.Semaphore"] = {}
+
+
+def _get_render_semaphore() -> "asyncio.Semaphore":
+    """Return the render semaphore for the currently-running event loop.
+
+    Lazy construction per loop — prod hits a steady-state with one entry
+    in the dict; test harnesses get a fresh semaphore per test loop.
+    """
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    sem = _render_semaphores.get(key)
+    if sem is None:
+        sem = asyncio.Semaphore(_RENDER_CONCURRENCY_LIMIT)
+        _render_semaphores[key] = sem
+    return sem
+
+
 async def _render_pages_async(pdf_path: str, pages: list[int]) -> dict[int, bytes]:
-    """Render pages concurrently with shared cache + single-flight.
+    """Render pages concurrently with shared cache + single-flight +
+    bounded concurrency.
 
     Uses `asyncio.to_thread` under the hood via
     `_render_one_page_single_flight`, which keeps each page render off
     the event loop. Duplicate page numbers within the request list are
     deduplicated up front — the caller may pass [32, 32, 33] and we'll
-    still only schedule two futures.
+    still only schedule two futures. A semaphore caps simultaneous
+    renders at _RENDER_CONCURRENCY_LIMIT so a request for 100 pages
+    doesn't starve other coroutines.
     """
     rendered: dict[int, bytes] = {}
     unique_pages = list(dict.fromkeys(pages))  # preserve order, drop dupes
     if not unique_pages:
         return rendered
 
+    sem = _get_render_semaphore()
+
     async def _one(pn: int) -> tuple[int, bytes]:
-        png = await _render_one_page_single_flight(pdf_path, pn, _NOTES_RENDER_DPI)
+        async with sem:
+            png = await _render_one_page_single_flight(
+                pdf_path, pn, _NOTES_RENDER_DPI,
+            )
         return pn, png
 
     for coro in asyncio.as_completed([_one(pn) for pn in unique_pages]):
@@ -1186,6 +1238,16 @@ def create_notes_agent(
                     source_note_refs = [str(r) for r in raw_refs if r is not None]
                 else:
                     source_note_refs = []
+                # Heading hierarchy (plan Phase 2). The agent emits
+                # `parent_note` and optionally `sub_note` as small objects
+                # like {"number": "5", "title": "Revenue"}. The writer
+                # prepends <h3> lines deterministically from these. Missing
+                # fields fall through to NotesPayload's validator, which
+                # rejects non-empty payloads without a parent_note — the
+                # resulting "Invalid payload" error lands in the errors
+                # list below (same path as any other malformed write).
+                parent_note = raw.get("parent_note")
+                sub_note = raw.get("sub_note")
                 payloads.append(NotesPayload(
                     chosen_row_label=raw["chosen_row_label"],
                     content=raw.get("content", "") or "",
@@ -1195,6 +1257,8 @@ def create_notes_agent(
                     sub_agent_id=ctx.deps.sub_agent_id,
                     note_num=note_num,
                     source_note_refs=source_note_refs,
+                    parent_note=parent_note,
+                    sub_note=sub_note,
                 ))
             except (KeyError, ValueError, TypeError, AttributeError) as e:
                 errors.append(f"Invalid payload {raw!r}: {e}")
@@ -1246,6 +1310,20 @@ def create_notes_agent(
             ctx.deps.write_skip_errors.extend(result.errors)
         if result.fuzzy_matches:
             ctx.deps.write_fuzzy_matches.extend(result.fuzzy_matches)
+        if result.sanitizer_warnings:
+            ctx.deps.write_sanitizer_warnings.extend(result.sanitizer_warnings)
+        if result.cells_written:
+            # A sheet may be written to multiple times inside the same
+            # run (agents sometimes call write_notes twice after a
+            # self-correction). Later writes supersede earlier ones for
+            # the same row — the writer re-opens `filled.xlsx` each
+            # time. Mirror that here so the DB and the xlsx agree.
+            by_key = {
+                (c["sheet"], c["row"]): c for c in ctx.deps.cells_written
+            }
+            for cell in result.cells_written:
+                by_key[(cell["sheet"], cell["row"])] = cell
+            ctx.deps.cells_written = list(by_key.values())
 
         msg = (
             f"Wrote {result.rows_written} row(s) to "

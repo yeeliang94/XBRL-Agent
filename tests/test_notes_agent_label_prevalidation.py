@@ -99,6 +99,7 @@ def _payload(label: str) -> NotesPayload:
         content="stub content",
         evidence="Page 1",
         source_pages=[1],
+        parent_note={"number": "1", "title": "Test Note"},
     )
 
 

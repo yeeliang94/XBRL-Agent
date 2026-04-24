@@ -42,6 +42,7 @@ def _make_payload(label: str, content: str = "body", evidence: str = "page 1") -
         content=content,
         evidence=evidence,
         source_pages=[1],
+        parent_note={"number": "1", "title": "Test Note"},
     )
 
 
