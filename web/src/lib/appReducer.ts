@@ -353,9 +353,14 @@ export function agentSubAgentSummary(agent: AgentState): string | null {
 // (correction pass + notes post-validator). Kept as a dedicated map so the
 // upper-case uppercasing in deriveAgentLabel can't accidentally munge them
 // and a test can pin the exact tab text users see.
+//
+// VALIDATOR is synthetic: created in handleRunComplete when cross_checks
+// arrive, to carry the cross-check table. The friendly label "Cross-checks"
+// stops it from visually colliding with the "Notes Validator" agent tab.
 const PSEUDO_AGENT_LABELS: Record<string, string> = {
   CORRECTION: "Correction",
   NOTES_VALIDATOR: "Notes Validator",
+  VALIDATOR: "Cross-checks",
 };
 
 /** Derive the display label for a newly created agent slot. */
@@ -522,6 +527,30 @@ function handleRunComplete(
   };
   for (const t of rc.notes_completed ?? []) reconcileNotes(t, "complete");
   for (const t of rc.notes_failed ?? []) reconcileNotes(t, "failed");
+
+  // Bug 1 — statement-tab backstop. Same shape as the notes reconcile above:
+  // on Windows (enterprise proxy) per-agent `complete` SSE events can get
+  // buffered/dropped when the stream closes, leaving face tabs stuck at
+  // "running" even though the backend finished, merged and cross-checked.
+  // The server always ships `statements_completed` / `statements_failed` on
+  // run_complete, so we materialise missing tabs and flip any that are still
+  // non-terminal. A tab that reached terminal via its own live complete
+  // event is left alone — the live event is authoritative (it carries the
+  // actual error on failure; the rollup array carries only the name).
+  const reconcileStatement = (role: string, nextStatus: AgentTabStatus) => {
+    // Face agent_ids are the lowercase statement name — mirror what
+    // coordinator.py emits (`stmt_type.value.lower()`).
+    const agentId = role.toLowerCase();
+    const ensured = ensureAgent(agents, tabOrder, agentId, role);
+    agents = ensured.agents;
+    tabOrder = ensured.tabOrder;
+    const existing = agents[agentId];
+    if (TERMINAL.includes(existing.status)) return;
+    agents = { ...agents, [agentId]: { ...existing, status: nextStatus } };
+    mutated = true;
+  };
+  for (const s of rc.statements_completed ?? []) reconcileStatement(s, "complete");
+  for (const s of rc.statements_failed ?? []) reconcileStatement(s, "failed");
 
   if (rc.cross_checks && rc.cross_checks.length > 0) {
     const ensured = ensureAgent(agents, tabOrder, "validator", "validator");

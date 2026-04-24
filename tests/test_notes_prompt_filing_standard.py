@@ -218,6 +218,113 @@ def test_render_notes_prompt_no_unresolved_cross_sheet_tokens():
             )
 
 
+# ---------------------------------------------------------------------------
+# 5: List-of-Notes prompt must drop MFRS-specific hardcoded numbers and
+# pick the row count / catch-all label from the live template catalog.
+# Regression for the run-#107 (816d0389) warning storm where the MPERS
+# sub-agent emitted MFRS-only labels ("Disclosure of allowance for
+# credit losses", "Disclosure of capital management", …) after being
+# primed by the "full template has 138 rows" line.
+# ---------------------------------------------------------------------------
+
+def test_listofnotes_prompt_row_count_reflects_catalog_size():
+    """`{{TEMPLATE_ROW_COUNT}}` must resolve to the seeded catalog's
+    length so an MPERS run sees "84 rows" instead of inheriting the
+    MFRS "138 rows" anchor that primed the training-prior taxonomy."""
+    mpers_catalog = [f"Disclosure of concept {i}" for i in range(84)]
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.LIST_OF_NOTES,
+        filing_level="company",
+        inventory=[],
+        filing_standard="mpers",
+        label_catalog=mpers_catalog,
+    )
+    flat = _flatten(prompt)
+    assert "{{TEMPLATE_ROW_COUNT}}" not in prompt, (
+        "TEMPLATE_ROW_COUNT placeholder left unresolved — wiring gap "
+        "in _apply_listofnotes_tokens."
+    )
+    assert "138 rows" not in flat, (
+        "MFRS-hardcoded '138 rows' leaked into MPERS prompt — agents "
+        "will recall the MFRS label set from training prior."
+    )
+    assert "84 rows" in flat, (
+        "MPERS catalog size didn't make it into the prompt — the agent "
+        "no longer has a concrete size anchor for the MPERS taxonomy."
+    )
+
+
+def test_listofnotes_prompt_catch_all_label_from_catalog():
+    """`{{CATCH_ALL_LABEL}}` must resolve to the actual catch-all row
+    from the seeded catalog so the "route unmatched notes here"
+    instruction cites a label the writer will actually resolve."""
+    mpers_catalog = [
+        "Disclosure of leases",
+        "Disclosure of other notes to accounts",
+        "Disclosure of revenue",
+    ]
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.LIST_OF_NOTES,
+        filing_level="company",
+        inventory=[],
+        filing_standard="mpers",
+        label_catalog=mpers_catalog,
+    )
+    assert "{{CATCH_ALL_LABEL}}" not in prompt, (
+        "CATCH_ALL_LABEL placeholder left unresolved."
+    )
+    assert "Disclosure of other notes to accounts" in prompt, (
+        "Catch-all label reference missing — sub-agents will not know "
+        "where to route unmatched notes."
+    )
+
+
+def test_listofnotes_prompt_catch_all_prefers_catalog_verbatim():
+    """If the catalog carries a suffixed form of the catch-all row
+    (e.g. an older MPERS snapshot with `[text block]`), the resolver
+    must pass that suffixed form through untouched so the writer's
+    exact-match path hits on the live template."""
+    suffixed_catalog = [
+        "Disclosure of leases [text block]",
+        "Disclosure of other notes to accounts [text block]",
+    ]
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.LIST_OF_NOTES,
+        filing_level="company",
+        inventory=[],
+        filing_standard="mpers",
+        label_catalog=suffixed_catalog,
+    )
+    assert "Disclosure of other notes to accounts [text block]" in prompt, (
+        "Catch-all resolver lost the suffix — would drop the agent on a "
+        "row label that no longer exists verbatim in the template."
+    )
+
+
+def test_listofnotes_prompt_no_unresolved_listofnotes_tokens():
+    """Regression: neither `{{TEMPLATE_ROW_COUNT}}` nor `{{CATCH_ALL_LABEL}}`
+    may leak through on any combination of filing_standard and
+    (catalog, no-catalog). A literal placeholder in the rendered prompt
+    is a wiring bug worth flagging before a live run sees it."""
+    for standard in ("mfrs", "mpers"):
+        for catalog in (None, ["Disclosure of other notes to accounts"]):
+            prompt = render_notes_prompt(
+                template_type=NotesTemplateType.LIST_OF_NOTES,
+                filing_level="company",
+                inventory=[],
+                filing_standard=standard,
+                label_catalog=catalog,
+            )
+            assert "{{TEMPLATE_ROW_COUNT}}" not in prompt, (
+                f"TEMPLATE_ROW_COUNT leaked on "
+                f"standard={standard} catalog={'none' if catalog is None else 'live'}"
+            )
+            assert "{{CATCH_ALL_LABEL}}" not in prompt, (
+                f"CATCH_ALL_LABEL leaked on "
+                f"standard={standard} catalog={'none' if catalog is None else 'live'}"
+            )
+
+
 def test_listofnotes_prompt_cross_sheet_hints_match_standard():
     """`notes_listofnotes.md` used to say 'Corporate Information belongs
     on Sheet 10'. On MPERS that's Sheet 11. The rendered prompt must

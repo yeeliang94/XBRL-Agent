@@ -43,7 +43,7 @@ def test_prompt_contains_label_catalog_when_provided():
     )
     # A distinctive, grep-able section header so downstream consumers
     # (tests, ops-level debuggers) can isolate the block.
-    assert "TEMPLATE ROW LABELS" in prompt, (
+    assert "=== TEMPLATE ROW LABELS (copy verbatim) ===" in prompt, (
         "Label catalog block header missing — agents won't know the "
         "seeded labels exist."
     )
@@ -52,17 +52,125 @@ def test_prompt_contains_label_catalog_when_provided():
         assert label in prompt, f"Label {label!r} missing from catalog block"
 
 
+def test_listofnotes_tokens_do_not_leak_into_non_lon_prompts():
+    """Test-gap from peer review: `_apply_listofnotes_tokens` runs on all
+    template_types (no-op contract on non-LoN since placeholders don't
+    appear in their prompt files). A non-LoN render must be crash-free
+    AND must NOT contain literal `{{TEMPLATE_ROW_COUNT}}` / `{{CATCH_ALL_LABEL}}`
+    strings, even though the substitution pipeline ran against them."""
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.CORP_INFO,
+        filing_level="company",
+        inventory=[],
+        filing_standard="mfrs",
+        label_catalog=[],  # no catalog — stress the fallback path too
+    )
+    assert "{{TEMPLATE_ROW_COUNT}}" not in prompt
+    assert "{{CATCH_ALL_LABEL}}" not in prompt
+
+
 def test_prompt_omits_catalog_block_when_none():
     """Backwards-compat: omitting `label_catalog` must keep the
     pre-Phase-3 prompt shape so callers that haven't migrated don't
-    regress."""
+    regress. We check for the BLOCK header (=== TEMPLATE ROW LABELS
+    (copy verbatim) ===), not the plain substring — the LoN prompt now
+    legitimately references the block's title in its fallback
+    guidance (peer-review F2), which is not the same as emitting the
+    block itself."""
     prompt = render_notes_prompt(
         template_type=NotesTemplateType.LIST_OF_NOTES,
         filing_level="company",
         inventory=[],
         filing_standard="mfrs",
     )
-    assert "TEMPLATE ROW LABELS" not in prompt
+    assert "=== TEMPLATE ROW LABELS (copy verbatim) ===" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Peer-review F2 — when the catalog block is absent the LoN prompt text
+# must still be accurate (tell the agent to call read_template as fallback,
+# not claim that a non-existent seeded block lists every col-A label).
+# ---------------------------------------------------------------------------
+
+def test_list_of_notes_prompt_without_catalog_does_not_lie_about_seeded_block():
+    """The prompt text historically said 'the seeded row-label catalog
+    block below already lists every col-A label' unconditionally. When
+    catalog loading fails (empty label_catalog), no such block is
+    emitted — so that line misleads the agent. Fix is to have the
+    prompt text branch on the catalog's presence, or to always include
+    an explicit fallback sentence that tells the agent what to do when
+    no block is present."""
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.LIST_OF_NOTES,
+        filing_level="company",
+        inventory=[],
+        filing_standard="mfrs",
+        label_catalog=[],
+    )
+    # Sanity: no catalog block was emitted (check the actual block header,
+    # not a plain substring — the guidance text may legitimately reference
+    # the block's title).
+    assert "=== TEMPLATE ROW LABELS (copy verbatim) ===" not in prompt
+
+    flat = _flatten(prompt)
+
+    # The "already lists every col-A label" phrase is the specific lie —
+    # it asserts the seeded block exists. Either that phrase must be
+    # gone, or it must be guarded with a conditional like "if present".
+    lies_about_catalog = "already lists every col-a label" in flat
+    if lies_about_catalog:
+        # If the phrase survives, it must be guarded by a conditional
+        # clause — "if present", "when available", etc.
+        guarded = any(
+            qualifier in flat for qualifier in [
+                "if present", "when present", "if available", "when available",
+                "if a row-label catalog", "if the catalog", "when the catalog",
+            ]
+        )
+        assert guarded, (
+            "LoN prompt asserts the catalog block 'already lists every "
+            "col-A label' but no catalog block was emitted. This misleads "
+            "the agent — either drop the unconditional claim or guard it "
+            "with an 'if present' qualifier."
+        )
+
+    # Whichever approach the fix takes, the agent MUST have actionable
+    # guidance for the catalog-absent path. A fallback marker phrase ties
+    # this contract to the real fix — either mention "call read_template
+    # first" as an explicit fallback step, or flag "no catalog" / "catalog
+    # unavailable" so the agent knows it has to go get the labels itself.
+    actionable = (
+        "call read_template first" in flat
+        or "call `read_template` first" in flat
+        or "no catalog" in flat
+        or "catalog unavailable" in flat
+    )
+    assert actionable, (
+        "LoN prompt must supply explicit fallback guidance when the "
+        "seeded catalog block is absent — tell the agent to call "
+        "read_template first."
+    )
+
+
+def test_list_of_notes_prompt_with_catalog_still_uses_catalog_instructions():
+    """Regression guard for the happy path — when the catalog IS seeded,
+    the prompt still tells the agent to read from the seeded block."""
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.LIST_OF_NOTES,
+        filing_level="company",
+        inventory=[],
+        filing_standard="mfrs",
+        label_catalog=[
+            "Disclosure of cash and cash equivalents",
+            "Disclosure of trade and other payables",
+        ],
+    )
+    # Block must actually be emitted, not just referenced in guidance text.
+    assert "=== TEMPLATE ROW LABELS (copy verbatim) ===" in prompt
+    # Positive marker the agent should look at: the 'catalog' nomenclature
+    # plus a reference to the seeded block must persist.
+    flat = _flatten(prompt)
+    assert "catalog" in flat
 
 
 def test_prompt_label_catalog_respects_filing_standard():
@@ -163,16 +271,21 @@ def test_create_notes_agent_seeds_mpers_label_catalog(tmp_path):
         output_dir=str(tmp_path),
         filing_standard="mpers",
     )
-    # The MPERS List-of-Notes template has 83+ disclosure rows with the
-    # `[text block]` suffix. Sanity-check a handful landed on deps.
+    # Post-2026-04-23 (CLAUDE.md gotcha #15): the MPERS generator now
+    # strips SSM ReportingLabel suffixes (`[text block]`, `[abstract]`,
+    # …) from the rendered templates so Column A carries the bare
+    # "Disclosure of …" form — matching MFRS. The writer / coverage
+    # validator still call `notes.labels.normalize_label` defensively
+    # so agents that emit suffixed labels keep matching, but the
+    # catalog seeded from the live template is bare.
     assert deps.template_label_catalog, (
         "Factory produced an empty label catalog — the template load "
         "failed silently."
     )
-    assert "Disclosure of cash and cash equivalents [text block]" in (
+    assert "Disclosure of cash and cash equivalents" in (
         deps.template_label_catalog
     ), "MPERS canary label missing from the seeded catalog on deps."
-    assert "Disclosure of credit risk [text block]" in (
+    assert "Disclosure of credit risk" in (
         deps.template_label_catalog
     )
 

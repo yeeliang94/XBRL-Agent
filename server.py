@@ -493,10 +493,26 @@ async def _run_notes_validator_pass(
 
     # Short-circuit when there's genuinely nothing to do — skip invoking
     # the model entirely. Saves latency + tokens on the common case.
+    #
+    # Bug 4a — the short-circuit used to return silently, which left the
+    # Notes Validator frontend tab stranded on "Waiting for the agent to
+    # start…" with no status chip. Emit a status + success-complete pair
+    # so the tab shows a human-readable skip reason and flips to green.
+    # Both events carry agent_id via _emit so the frontend router can seed
+    # the tab and route them into it.
     if not context["duplicates"] and not context["overlap_candidates"]:
         logger.info(
             "Notes validator skipped — no cross-sheet duplicate candidates."
         )
+        await _emit("status", {
+            "phase": "complete",
+            "message": "No cross-sheet duplicates to review — skipped.",
+        })
+        await _emit("complete", {
+            "success": True,
+            "writes_performed": 0,
+            "skipped": True,
+        })
         return outcome
 
     outcome["invoked"] = True

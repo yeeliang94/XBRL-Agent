@@ -38,9 +38,17 @@ def test_listofnotes_prompt_exists_and_references_template_row_count():
     prompt_path = Path(__file__).resolve().parent.parent / "prompts" / "notes_listofnotes.md"
     assert prompt_path.exists(), f"Missing prompt: {prompt_path}"
     text = prompt_path.read_text(encoding="utf-8").lower()
-    # Must mention the sheet and the unmatched-row sink.
+    # Must mention the sheet and the unmatched-row sink. Post
+    # {{CATCH_ALL_LABEL}} migration the raw file carries the
+    # placeholder — the live catch-all label is substituted in by
+    # `_apply_listofnotes_tokens` from the seeded catalog so the
+    # rendered prompt cites whatever row exists in the active
+    # MFRS/MPERS template.
     assert "notes-listofnotes" in text or "list of notes" in text or "notes 12" in text
-    assert "disclosure of other notes to accounts" in text
+    assert "{{catch_all_label}}" in text, (
+        "catch-all label placeholder missing — the prompt no longer "
+        "tells the sub-agent where to route unmatched notes."
+    )
 
 
 # ---------------------------------------------------------------------------

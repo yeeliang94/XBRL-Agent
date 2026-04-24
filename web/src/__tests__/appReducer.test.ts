@@ -599,6 +599,36 @@ describe("appReducer", () => {
     expect(after.agentTabOrder).toContain("NOTES_VALIDATOR");
   });
 
+  test("run_complete synthesizes a 'Cross-checks' tab, not 'VALIDATOR'", () => {
+    // Bug 4b — the synthetic cross-checks tab used to render with the
+    // default uppercased-role fallback ("VALIDATOR"), which sat right
+    // next to the real "Notes Validator" agent tab and looked like a
+    // duplicate. Pin a friendlier label via PSEUDO_AGENT_LABELS.
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/out/filled.xlsx",
+          merge_errors: [],
+          cross_checks: [
+            { name: "sofp_balance", status: "passed", expected: 100,
+              actual: 100, diff: 0, tolerance: 1, message: "OK" },
+          ],
+          statements_completed: [],
+          statements_failed: [],
+          notes_completed: [],
+          notes_failed: [],
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.agents.validator).toBeDefined();
+    expect(state.agents.validator.label).toBe("Cross-checks");
+  });
+
   test("notes agent slot gets the friendly tab label derived from role", () => {
     // When a notes SSE event arrives, ensureAgent creates the slot using
     // deriveAgentLabel(agentId, role). Verify the label is the short
@@ -1214,6 +1244,153 @@ describe("agentReducer", () => {
       } as SSEEvent,
     });
     expect(state.agents["notes:RELATED_PARTY"].status).toBe("failed");
+  });
+
+  // -------------------------------------------------------------------------
+  // Bug 1 — same reconciliation pass for face statement tabs.
+  //
+  // Under proxy buffering on Windows (or any early SSE close) a face-agent's
+  // per-agent `complete` event can drop on the floor even though the agent
+  // finished and its workbook was merged. Without a backstop, the tab stays
+  // stuck at "running" and the strip lights up orange for ever. run_complete
+  // ships statements_completed / statements_failed — mirror the notes rule.
+  // -------------------------------------------------------------------------
+
+  test("run_complete flips running statement tab to complete from statements_completed", () => {
+    let state = runningState();
+    // Seed a face tab via a status event; no per-agent complete ever lands.
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: {
+          phase: "filling_workbook",
+          message: "Filling",
+          agent_id: "sofp",
+          agent_role: "SOFP",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.agents["sofp"].status).toBe("running");
+
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/out/filled.xlsx",
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: ["SOFP"],
+          statements_failed: [],
+          notes_completed: [],
+          notes_failed: [],
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+    expect(state.agents["sofp"].status).toBe("complete");
+  });
+
+  test("run_complete flips orphan statement tab to failed from statements_failed", () => {
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: { phase: "viewing_pdf", message: "Viewing", agent_id: "sopl", agent_role: "SOPL" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: false,
+          merged_workbook: null,
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: [],
+          statements_failed: ["SOPL"],
+          notes_completed: [],
+          notes_failed: [],
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+    expect(state.agents["sopl"].status).toBe("failed");
+  });
+
+  test("run_complete does not overwrite a statement tab already terminal via its own complete event", () => {
+    // The live per-agent complete event is authoritative — reconcile must
+    // only fill gaps, never clobber a correctly-terminal status.
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "complete",
+        data: {
+          success: false,
+          agent_id: "soci",
+          agent_role: "SOCI",
+          error: "timeout",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.agents["soci"].status).toBe("failed");
+
+    // Backend reports SOCI as failed too — no-op expected.
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: false,
+          merged_workbook: null,
+          merge_errors: [],
+          cross_checks: [],
+          // Corner case: if backend ever disagrees ("completed" but live
+          // said "failed"), trust the live event — it saw the actual error.
+          statements_completed: ["SOCI"],
+          statements_failed: [],
+          notes_completed: [],
+          notes_failed: [],
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+    // Status must remain 'failed' — the reconciler only fills gaps.
+    expect(state.agents["soci"].status).toBe("failed");
+  });
+
+  test("run_complete materializes missing statement tabs from statements_failed", () => {
+    // Coordinator crashed before any per-agent event landed. Backstop must
+    // create the tab AND flip it to failed so the user sees the outcome.
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: false,
+          merged_workbook: null,
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: [],
+          statements_failed: ["SOCF"],
+          notes_completed: [],
+          notes_failed: [],
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.agents).toHaveProperty("socf");
+    expect(state.agents["socf"].status).toBe("failed");
+    expect(state.agentTabOrder).toContain("socf");
   });
 });
 

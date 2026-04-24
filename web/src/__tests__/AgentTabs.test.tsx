@@ -530,4 +530,143 @@ describe("AgentTabs", () => {
   // (so the tab strip stays a clean navigation row). The "rerun is wired
   // for failed face/notes tabs" + "rerun hidden on scout/validator"
   // contracts are exercised in ActiveTabPanel.test.tsx instead.
+
+  // -------------------------------------------------------------------------
+  // Bug 3 — tab strip grew from 6 tabs (5 face + scout) to 13 (5 face + 5
+  // notes + scout + validator + NOTES_VALIDATOR). The single-row horizontal
+  // scroll fit 6 cleanly but truncates everything beyond that. Swap to a
+  // wrapping layout with two visible groupings: face statements on top,
+  // notes + scout/validator below. Users read groups at a glance instead of
+  // hunting through an overflowing row.
+  // -------------------------------------------------------------------------
+
+  describe("two-row wrapping layout (Bug 3)", () => {
+    // Helper that mirrors a real post-run tab population: 5 face + 5 notes +
+    // scout + Cross-checks + Notes Validator = 13 visible tabs.
+    //
+    // Peer-review F1 history note: the earlier Bug 3 fixture intentionally
+    // omitted NOTES_VALIDATOR because the live-view gate silently dropped it
+    // (role "NOTES_VALIDATOR" not in statementsInRun). The gate is now
+    // patched via NON_AGENT_TAB_IDS, so the realistic post-run state is 13
+    // tabs; the fixture and assertions reflect that.
+    function thirteenTabAgents(): Record<string, AgentTabState> {
+      return {
+        scout: { agentId: "scout", label: "Scout", status: "complete", role: "scout" },
+        sofp: { agentId: "sofp", label: "SOFP", status: "complete", role: "SOFP" },
+        sopl: { agentId: "sopl", label: "SOPL", status: "complete", role: "SOPL" },
+        soci: { agentId: "soci", label: "SOCI", status: "complete", role: "SOCI" },
+        socf: { agentId: "socf", label: "SOCF", status: "complete", role: "SOCF" },
+        socie: { agentId: "socie", label: "SOCIE", status: "complete", role: "SOCIE" },
+        "notes:CORP_INFO": { agentId: "notes:CORP_INFO", label: "Notes 10: Corp Info", status: "complete", role: "CORP_INFO" },
+        "notes:ACC_POLICIES": { agentId: "notes:ACC_POLICIES", label: "Notes 11: Acc Policies", status: "complete", role: "ACC_POLICIES" },
+        "notes:LIST_OF_NOTES": { agentId: "notes:LIST_OF_NOTES", label: "Notes 12: List of Notes", status: "complete", role: "LIST_OF_NOTES" },
+        "notes:ISSUED_CAPITAL": { agentId: "notes:ISSUED_CAPITAL", label: "Notes 13: Issued Capital", status: "complete", role: "ISSUED_CAPITAL" },
+        "notes:RELATED_PARTY": { agentId: "notes:RELATED_PARTY", label: "Notes 14: Related Party", status: "complete", role: "RELATED_PARTY" },
+        NOTES_VALIDATOR: { agentId: "NOTES_VALIDATOR", label: "Notes Validator", status: "complete", role: "NOTES_VALIDATOR" },
+        validator: { agentId: "validator", label: "Cross-checks", status: "complete", role: "validator" },
+      };
+    }
+    // Alias kept so existing tests read naturally; same fixture, realistic name.
+    const twelveTabAgents = thirteenTabAgents;
+
+    const STATEMENTS = ["SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"];
+    const NOTES = ["CORP_INFO", "ACC_POLICIES", "LIST_OF_NOTES", "ISSUED_CAPITAL", "RELATED_PARTY"];
+
+    test("each row bucket flex-wraps its tabs instead of overflowing", () => {
+      // R-1 from peer-review: the wrap contract lives on the ROW buckets,
+      // not the outer column. Asserting on the outer was checking the
+      // wrong surface (the outer has two children and never wraps in
+      // practice). Each bucket must wrap so long labels soft-break
+      // rather than horizontally overflow.
+      const agents = twelveTabAgents();
+      const { container } = render(
+        <AgentTabs
+          agents={agents}
+          tabOrder={Object.keys(agents)}
+          activeTab="sofp"
+          onTabClick={() => {}}
+          statementsInRun={STATEMENTS}
+          notesInRun={NOTES}
+        />,
+      );
+      const statementBucket = container.querySelector('[data-bucket="statements"]') as HTMLElement;
+      const notesBucket = container.querySelector('[data-bucket="notes-and-special"]') as HTMLElement;
+      expect(statementBucket.style.flexWrap).toBe("wrap");
+      expect(notesBucket.style.flexWrap).toBe("wrap");
+    });
+
+    test("tablist renders a 'statements' bucket and a 'notes-and-special' bucket", () => {
+      const agents = twelveTabAgents();
+      const { container } = render(
+        <AgentTabs
+          agents={agents}
+          tabOrder={Object.keys(agents)}
+          activeTab="sofp"
+          onTabClick={() => {}}
+          statementsInRun={STATEMENTS}
+          notesInRun={NOTES}
+        />,
+      );
+      const statementBucket = container.querySelector('[data-bucket="statements"]');
+      const notesBucket = container.querySelector('[data-bucket="notes-and-special"]');
+      expect(statementBucket).toBeTruthy();
+      expect(notesBucket).toBeTruthy();
+
+      // Contract: face-statement tabs live in the statements bucket.
+      const statementLabels = Array.from(statementBucket!.querySelectorAll('[role="tab"]'))
+        .map((t) => t.textContent ?? "");
+      for (const face of STATEMENTS) {
+        expect(statementLabels.some((l) => l.includes(face))).toBe(true);
+      }
+      // Contract: notes, scout, validator all live in the other bucket.
+      const otherLabels = Array.from(notesBucket!.querySelectorAll('[role="tab"]'))
+        .map((t) => t.textContent ?? "");
+      expect(otherLabels.some((l) => l.includes("Notes 10"))).toBe(true);
+      expect(otherLabels.some((l) => l.includes("Scout"))).toBe(true);
+      expect(otherLabels.some((l) => l.includes("Cross-checks"))).toBe(true);
+    });
+
+    test("all 13 tabs render simultaneously (none dropped by the bucketer)", () => {
+      const agents = thirteenTabAgents();
+      render(
+        <AgentTabs
+          agents={agents}
+          tabOrder={Object.keys(agents)}
+          activeTab="sofp"
+          onTabClick={() => {}}
+          statementsInRun={STATEMENTS}
+          notesInRun={NOTES}
+        />,
+      );
+      // 5 statements + 5 notes + scout + Cross-checks + Notes Validator = 13.
+      // NOTES_VALIDATOR used to be filtered out of live view because only
+      // scout + validator were gate-exempt; the peer-review F1 fix adds it
+      // to NON_AGENT_TAB_IDS so the full post-run state is visible.
+      const tabs = screen.getAllByRole("tab");
+      expect(tabs).toHaveLength(13);
+    });
+
+    test("NOTES_VALIDATOR tab renders in the notes-and-special bucket", () => {
+      // F1 regression guard — the Notes Validator tab must be visible in
+      // the live extract view so the short-circuit "skipped" emit we ship
+      // from server.py actually has a tab to land in. If this regresses,
+      // the validator will short-circuit silently in users' faces again.
+      const agents = thirteenTabAgents();
+      const { container } = render(
+        <AgentTabs
+          agents={agents}
+          tabOrder={Object.keys(agents)}
+          activeTab="sofp"
+          onTabClick={() => {}}
+          statementsInRun={STATEMENTS}
+          notesInRun={NOTES}
+        />,
+      );
+      const notesBucket = container.querySelector('[data-bucket="notes-and-special"]');
+      expect(notesBucket).toBeTruthy();
+      const notesLabels = Array.from(notesBucket!.querySelectorAll('[role="tab"]'))
+        .map((t) => t.textContent ?? "");
+      expect(notesLabels.some((l) => l.includes("Notes Validator"))).toBe(true);
+    });
+  });
 });
