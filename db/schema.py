@@ -17,7 +17,12 @@ from pathlib import Path
 # the History page can surface every run — including failed / aborted ones —
 # and download its merged workbook from `run_id` alone without guessing
 # filesystem paths.
-CURRENT_SCHEMA_VERSION = 2
+# v3 (notes-rich-editor): adds the `notes_cells` table that holds canonical
+# HTML per notes row. Excel downloads flatten HTML at write time; the
+# post-run editor edits the HTML in place. Additive-only — rollback is a
+# code revert; the stray table is harmless (no FK points at it from any
+# legacy reader).
+CURRENT_SCHEMA_VERSION = 3
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -128,6 +133,26 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         version         INTEGER PRIMARY KEY
     )
     """,
+
+    # v3: canonical per-run store for notes HTML payloads. Every notes
+    # agent write lands here; the Excel download path flattens HTML to
+    # plaintext on demand, and the post-run editor reads/writes HTML
+    # directly against this table. UNIQUE(run_id, sheet, row) is the
+    # upsert key — one row per template cell per run.
+    """
+    CREATE TABLE IF NOT EXISTS notes_cells (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        sheet         TEXT NOT NULL,
+        row           INTEGER NOT NULL,
+        label         TEXT NOT NULL,
+        html          TEXT NOT NULL,
+        evidence      TEXT,
+        source_pages  TEXT,
+        updated_at    TEXT NOT NULL,
+        UNIQUE(run_id, sheet, row)
+    )
+    """,
 )
 
 
@@ -139,6 +164,7 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_extracted_fields_run_agent_id ON extracted_fields(run_agent_id)",
     "CREATE INDEX IF NOT EXISTS ix_cross_checks_run_id ON cross_checks(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_runs_created_at ON runs(created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_notes_cells_run_id ON notes_cells(run_id)",
 )
 
 
@@ -195,6 +221,14 @@ def init_db(path: str | Path) -> None:
         # concurrent init_db calls against a v1 DB will serialize here —
         # the loser re-reads schema_version after the winner commits and
         # finds v2, skipping the ALTER loop entirely.
+        #
+        # Each per-version block advances schema_version by exactly ONE
+        # step (peer-review I-1). A block that jumps to
+        # CURRENT_SCHEMA_VERSION would cause subsequent per-version blocks
+        # to short-circuit on a multi-step walk (e.g. v1 → future-v4 would
+        # skip the v2→v3 and v3→v4 bodies). Today both v2→v3 and (when it
+        # exists) v3→v4 are additive so the jump is harmless, but the
+        # discipline keeps every block runnable independently.
         if current_version is not None and current_version < 2:
             try:
                 conn.execute("BEGIN IMMEDIATE")
@@ -227,7 +261,32 @@ def init_db(path: str | Path) -> None:
                     )
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
-                        (CURRENT_SCHEMA_VERSION,),
+                        (2,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the next per-version block sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v2 → v3: the table was already created above via
+        # CREATE TABLE IF NOT EXISTS; we only need to walk the version
+        # marker forward. Serialised with BEGIN IMMEDIATE so two
+        # concurrent starters don't race on the schema_version UPDATE.
+        if current_version is not None and current_version < 3:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 3:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (3,),
                     )
                 conn.commit()
             except Exception:

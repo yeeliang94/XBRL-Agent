@@ -58,17 +58,22 @@ def test_runs_table_has_new_v2_columns(tmp_path: Path) -> None:
     assert cols["ended_at"]["notnull"] is False
 
 
-def test_schema_version_is_v2(tmp_path: Path) -> None:
+def test_schema_version_is_current(tmp_path: Path) -> None:
+    # v2 was the current version when this file was authored; the
+    # schema has since walked to v3 (see tests/test_db_schema_v3.py).
+    # The invariant this test now pins is "init_db stamps the row
+    # with whatever CURRENT_SCHEMA_VERSION says", so future bumps
+    # don't need to touch it.
     db = tmp_path / "xbrl.db"
     init_db(db)
-    assert CURRENT_SCHEMA_VERSION == 2
+    assert CURRENT_SCHEMA_VERSION >= 2
 
     conn = sqlite3.connect(str(db))
     try:
         (version,) = conn.execute("SELECT version FROM schema_version").fetchone()
     finally:
         conn.close()
-    assert version == 2
+    assert version == CURRENT_SCHEMA_VERSION
 
 
 def test_aborted_status_is_accepted(tmp_path: Path) -> None:
@@ -141,7 +146,7 @@ def test_migration_from_v1_db_adds_columns(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert version == 2
+    assert version == CURRENT_SCHEMA_VERSION
     assert legacy is not None
     assert legacy == ("legacy.pdf", "completed")
 
@@ -159,7 +164,7 @@ def test_migration_is_idempotent(tmp_path: Path) -> None:
         (count,) = conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()
     finally:
         conn.close()
-    assert version == 2
+    assert version == CURRENT_SCHEMA_VERSION
     assert count == 1
 
 
@@ -199,13 +204,13 @@ def test_concurrent_migration_from_v1(tmp_path: Path) -> None:
         p.join(timeout=30)
         assert p.exitcode == 0, f"init_db worker exited with {p.exitcode}"
 
-    # Both finished without error — confirm schema reached v2.
+    # Both finished without error — confirm schema reached the current version.
     conn = sqlite3.connect(str(db))
     try:
         (version,) = conn.execute("SELECT version FROM schema_version").fetchone()
     finally:
         conn.close()
-    assert version == 2
+    assert version == CURRENT_SCHEMA_VERSION
 
 
 def test_runs_created_at_index_exists(tmp_path: Path) -> None:
