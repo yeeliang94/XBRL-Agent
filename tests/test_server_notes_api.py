@@ -303,6 +303,64 @@ def test_rerun_rejects_zero_and_multi_agent_payloads(tmp_path: Path, monkeypatch
     assert resp.status_code == 400
 
 
+def test_rerun_endpoint_includes_warning_when_notes_cells_exist(
+    tmp_path: Path, monkeypatch,
+):
+    """Step 12 of docs/PLAN-NOTES-RICH-EDITOR.md — the edited_count
+    endpoint is the backend for the Regenerate-notes confirm dialog.
+    Returns how many cells have been edited post-run so the UI can
+    decide whether to prompt before clobbering.
+    """
+    import server as server_module
+    from db import repository as repo
+    from db.schema import init_db
+
+    server_module.OUTPUT_DIR = tmp_path
+    server_module.AUDIT_DB_PATH = tmp_path / "audit.sqlite"
+    init_db(server_module.AUDIT_DB_PATH)
+
+    client = TestClient(server_module.app)
+    # No run yet → 404.
+    resp = client.get("/api/runs/999/notes_cells/edited_count")
+    assert resp.status_code == 404
+
+    # Seed a completed run with a notes_cells row whose updated_at is
+    # AFTER the run's ended_at — that's the "user edited" signal.
+    import sqlite3 as _sq
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        run_id = repo.create_run(
+            conn, "sample.pdf",
+            session_id="sess-a", output_dir=str(tmp_path / "sess-a"),
+        )
+        conn.execute(
+            "UPDATE runs SET status = 'completed', ended_at = ? WHERE id = ?",
+            ("2026-04-24T10:00:00Z", run_id),
+        )
+        # One cell with the same timestamp as the run end — NOT an edit.
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet="Notes-CI", row=4,
+            label="Corporate info", html="<p>agent</p>",
+        )
+        conn.execute(
+            "UPDATE notes_cells SET updated_at = ? WHERE run_id = ? AND row = 4",
+            ("2026-04-24T10:00:00Z", run_id),
+        )
+        # One cell edited after the run finished.
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet="Notes-CI", row=12,
+            label="Reg office", html="<p>edit</p>",
+        )
+        conn.execute(
+            "UPDATE notes_cells SET updated_at = ? WHERE run_id = ? AND row = 12",
+            ("2026-04-24T11:00:00Z", run_id),
+        )
+
+    resp = client.get(f"/api/runs/{run_id}/notes_cells/edited_count")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 1
+
+
 @pytest.mark.asyncio
 async def test_unknown_notes_template_rejected_with_error(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key-12345")
