@@ -19,7 +19,7 @@ a matrix; there are no per-component reserve columns.
 - Row 14: `Retained earnings at beginning of period, restated` (FORMULA: row 12 + row 13)
 - Row 16: `Profit (loss)` for the period
 - Row 17: `*Total Profit (loss)` (FORMULA)
-- Row 19: `Dividends paid` (negative — reduces retained earnings)
+- Row 19: `Dividends paid` (positive magnitude — the formula subtracts it)
 - Row 20: `*Total increase (decrease) in retained earnings` (FORMULA: row 17 + row 19)
 - Row 21: `Retained earnings at end of period` (FORMULA: row 14 + row 20)
 
@@ -35,8 +35,13 @@ a matrix; there are no per-component reserve columns.
 
 === CRITICAL RULES ===
 
-- **Dividends are NEGATIVE.** They reduce retained earnings. Enter as a
-  negative number, not a positive one.
+- **Dividends paid are entered as POSITIVE magnitudes.** The SoRE template
+  subtracts the dividends row (`retained earnings + profit - dividends`), so
+  a positive dividend input reduces retained earnings. Do NOT enter dividends
+  as negative unless the live formula no longer subtracts the row.
+- Do not apply the SOPL "expenses/losses are positive" convention here.
+  SoRE is a retained-earnings movement statement: follow the formula sign so
+  closing retained earnings reconciles to SOFP.
 - **Closing retained earnings (row 21) must match SOFP "Retained earnings".**
   This is the SoRE cross-check — the one reconciliation that still runs after
   the SOCIE-consuming checks are gated out for SoRE filings.

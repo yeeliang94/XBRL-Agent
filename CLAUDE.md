@@ -335,6 +335,13 @@ Key invariants:
   suffix) whenever an entire statement prompt needs to differ by
   filing standard; the overlay mechanism remains for level-level
   differences (e.g. `_group_overlay.md`).
+- **SOCIE / SoRE dividend sign (2026-04-25):** entered as POSITIVE
+  magnitudes because every SOCIE/SoRE template's `*Total increase
+  (decrease) in equity` formula subtracts the row. Pinned to live
+  formulas by `tests/test_notes_prompt_phase1.py::test_live_templates_subtract_dividends_paid`
+  (parametrised across all 6 templates including MPERS Group SOCIE,
+  which was extended with per-block formulas in the same change).
+  See [ADR-002](docs/ADR-002-socie-dividend-sign.md).
 
 Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 

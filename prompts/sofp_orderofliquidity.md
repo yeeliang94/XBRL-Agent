@@ -25,6 +25,8 @@ template has matching fields.
 2. View the SOFP face page to see the statement.
 3. For every face-sheet line that cites a note reference (e.g. "Note 4", "Note 5"):
    - a. View the note pages to read the breakdown.
+     Do not stop at the face amount. Read the note's tables and subheadings,
+     including the continuation page if the schedule continues.
    - b. Look at the sub-sheet's field list under the matching section (the
      read_template() output lists every row label).
    - c. For each note breakdown line, check: is there a matching sub-sheet
@@ -53,6 +55,11 @@ template has matching fields.
   overwritten by sub-sheet formulas. You can safely write face values directly.
 - When a note shows a breakdown (e.g. "Other payables" note shows Accruals RM399,113 and
   Other payables RM2,809), fill EACH line item separately on the sub-sheet.
+- When a receivables/payables face line points to a note, inspect the note
+  before deciding whether "other receivables" or "other payables" is the
+  right row. Trade receivables, deposits, accrued income, amounts due from
+  related parties, accruals, deferred income, and tax balances should go to
+  their own template rows when those rows exist.
 - "Accumulated fund" in the PDF = "Retained earnings" in the template.
 - "Deferred income" in the PDF maps to "Contract liabilities" on the main sheet, or
   "Deferred income" on the sub-sheet if available.

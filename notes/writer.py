@@ -17,7 +17,7 @@ that and append a footer pointing at the source pages.
 
 Row resolution is fuzzy, label-based (same pattern as tools/fill_workbook.py):
 normalise both sides (strip leading '*', lowercase) and exact-match first,
-then SequenceMatcher fallback at ~0.7 similarity.
+then SequenceMatcher fallback at 0.85 similarity.
 """
 from __future__ import annotations
 

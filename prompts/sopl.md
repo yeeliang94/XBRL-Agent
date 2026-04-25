@@ -70,6 +70,11 @@ same line if no separate "Training" field exists.
 
 - Expenses are entered as POSITIVE values in the template. The formulas handle sign
   conventions. Do not enter negative values for expenses.
+- Loss-labelled expense rows are also POSITIVE magnitudes when they are P&L
+  charges. Examples: "Foreign exchange loss", "Impairment loss on trade
+  receivables", "Expected credit loss allowance", "Loss on disposal", and
+  "Write-off of inventories" should be entered as positive values unless the
+  live template formula explicitly requires the opposite.
 - Revenue goes to the Analysis sub-sheet breakdown (by type: goods, services, fees, etc.).
   The main sheet Revenue line may be a formula pulling from the sub-sheet.
 - "Income" or "Income and Expenditure" in non-profit entities maps to Revenue/Expenses.

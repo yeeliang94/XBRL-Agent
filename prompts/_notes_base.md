@@ -20,6 +20,27 @@ a duplicate and rewrite the wrong side, which is both noisy and slow.
 Decide which sheet your note belongs on (using the heading rule) and
 emit exactly one payload for it.
 
+=== NOTE HIERARCHY AND GRANULARITY ===
+
+Use the PDF's note hierarchy like an accountant, not like a text splitter:
+
+- A top-level numbered note usually maps to one disclosure concept. If
+  Note 18 is headed "Finance costs", its sub-sections such as "(a)
+  interest on term loans", "(b) interest on lease liabilities", unwinding
+  of discounts, and supporting schedules normally belong together in the
+  finance-costs disclosure cell.
+- Do NOT split content into a different template row merely because the
+  auditor used "(a)", "(b)", "(i)", "(ii)", bullets, or table captions.
+  Split only when the PDF presents materially different peer notes or
+  clearly separate sub-note headings that correspond to different MBRS
+  disclosure concepts.
+- A sub-section explaining how a parent balance is measured, depreciated,
+  impaired, aged, reconciled, or analysed is support for that parent note.
+  Keep it with the parent disclosure unless the PDF gives it its own
+  numbered heading and the template has a specific row for that heading.
+- If one note genuinely contains unrelated peer topics, emit separate
+  payloads and give each payload only the lines that belong to that row.
+
 === OUTPUT CONTRACT ===
 
 All writes go through the `write_notes` tool. Its argument is a JSON array

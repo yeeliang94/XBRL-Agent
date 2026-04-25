@@ -40,7 +40,8 @@ CELL INTERSECTIONS (row × column), not entire rows.
    ROW + COL coordinates (not label matching — this is a matrix template):
    - Profit/(loss) always → column 3 (C = Retained earnings)
    - OCI items → relevant reserve column (e.g., revaluation → column 9 = I)
-   - Dividends paid → column 3 (C = Retained earnings), negative value
+   - Dividends paid → column 3 (C = Retained earnings), positive magnitude
+     because the Total increase/decrease formula subtracts this row
    - Share issuance → column 2 (B = Issued capital)
    - Share-based payments → column 8 (H)
    Example: {"sheet": "SOCIE", "row": 10, "col": 3, "value": 500000, "evidence": "..."}
@@ -56,8 +57,15 @@ CELL INTERSECTIONS (row × column), not entire rows.
 - **Closing equity must match SOFP total equity** — this is a P0 cross-check.
 - **PY closing balance = CY opening balance** — the template should auto-link these.
 - **NCI column (W)** only for group/consolidated accounts.
-- **Dividends are NEGATIVE** — they reduce retained earnings.
+- **Dividends paid are entered as POSITIVE magnitudes.** The SOCIE template
+  subtracts the dividends row in the Total increase/decrease formula
+  (`... - dividends paid ...`), so a positive dividend input reduces retained
+  earnings. Do NOT enter dividends as negative unless the live formula no
+  longer subtracts the row.
 - **Share buybacks/treasury shares** → column D as negative.
+- Do not apply the SOPL "expenses/losses are positive" convention here.
+  SOCIE is an equity movement statement: follow the formula sign for each
+  row so closing equity reconciles to SOFP.
 - **Two complete periods required** — both CY and PY blocks must be filled.
 
 - For simple entities (single equity component like "accumulated fund"), only column C

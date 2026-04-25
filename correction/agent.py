@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Set, Union
 
+import openpyxl
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
@@ -132,6 +133,55 @@ def _format_page_hints(infopack: Any) -> str:
     return "\n".join(lines)
 
 
+def _norm_label(value: Any) -> str:
+    return str(value or "").strip().lstrip("*").strip().lower()
+
+
+def _coerce_int(value: Any, default: int, lo: int, hi: int) -> int:
+    """Coerce a JSON scalar to an int and clamp to [lo, hi].
+
+    Falls back to ``default`` when the value is None, missing, or
+    cannot be parsed (e.g. the model emits ``"context_rows": "nearby"``).
+    Avoids leaking a ValueError out of the tool body — pydantic-ai
+    aborts the agent run on unhandled tool exceptions.
+    """
+    if value is None:
+        coerced = default
+    else:
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            coerced = default
+    return max(lo, min(coerced, hi))
+
+
+def _cell_summary(ws, row: int, max_col: int = 8) -> str:
+    parts: list[str] = []
+    for col in range(1, min(ws.max_column, max_col) + 1):
+        cell = ws.cell(row=row, column=col)
+        if cell.value is not None:
+            parts.append(f"{cell.coordinate}={cell.value}")
+    return "; ".join(parts)
+
+
+def _nearby_formula_refs(ws, target_row: int, window: int = 10, max_col: int = 8) -> list[str]:
+    refs: list[str] = []
+    start = max(1, target_row - window)
+    end = min(ws.max_row, target_row + window)
+    for row in range(start, end + 1):
+        for col in range(2, min(ws.max_column, max_col) + 1):
+            cell = ws.cell(row=row, column=col)
+            value = cell.value
+            if not (isinstance(value, str) and value.startswith("=")):
+                continue
+            # Column-specific refs catch the useful case (e.g. B24 subtracts B17)
+            # without flooding the model with unrelated row-number hits.
+            target_ref = f"{ws.cell(row=target_row, column=col).coordinate}"
+            if target_ref in value:
+                refs.append(f"{cell.coordinate}: {value}")
+    return refs[:12]
+
+
 def create_correction_agent(
     merged_workbook_path: str,
     pdf_path: str,
@@ -184,6 +234,94 @@ def create_correction_agent(
         system_prompt=system_prompt,
         model_settings=ModelSettings(temperature=1.0),
     )
+
+    @agent.tool
+    def inspect_workbook(
+        ctx: RunContext[CorrectionAgentDeps],
+        query_json: str,
+    ) -> str:
+        """Inspect labels, values, and nearby formulas in the merged workbook.
+
+        Args:
+            query_json: JSON object:
+              {
+                "sheet": "SOPL-Nature",              // optional; omit to search all sheets
+                "labels": ["Finance costs"],         // optional label substrings
+                "rows": [17, 24],                    // optional exact row numbers
+                "context_rows": 1,                   // optional surrounding rows (default 1)
+                "max_col": 8                         // optional display cap (default 8)
+              }
+
+        Use this before sign-sensitive corrections. Formula rows near a
+        target data row reveal whether the template adds or subtracts that
+        row, which is safer than guessing from words like "loss" or "paid".
+        """
+        try:
+            query = json.loads(query_json or "{}")
+        except json.JSONDecodeError as exc:
+            return f"Invalid query_json: {exc}"
+
+        sheet_filter = query.get("sheet")
+        labels = [
+            _norm_label(label)
+            for label in query.get("labels", []) or []
+            if str(label).strip()
+        ]
+        rows = {
+            int(row)
+            for row in query.get("rows", []) or []
+            if isinstance(row, int) or str(row).isdigit()
+        }
+        context_rows = _coerce_int(
+            query.get("context_rows"), default=1, lo=0, hi=5,
+        )
+        max_col = _coerce_int(
+            query.get("max_col"), default=8, lo=2, hi=24,
+        )
+
+        try:
+            wb = openpyxl.load_workbook(ctx.deps.merged_workbook_path, data_only=False)
+        except Exception as exc:  # noqa: BLE001
+            return f"Could not open merged workbook: {type(exc).__name__}: {exc}"
+
+        try:
+            sheets = [sheet_filter] if sheet_filter else list(wb.sheetnames)
+            missing = [s for s in sheets if s not in wb.sheetnames]
+            if missing:
+                return f"Sheet(s) not found: {missing}. Available: {wb.sheetnames}"
+
+            lines: list[str] = ["=== Workbook inspection ==="]
+            match_count = 0
+            for sheet_name in sheets:
+                ws = wb[sheet_name]
+                target_rows: set[int] = set(r for r in rows if 1 <= r <= ws.max_row)
+                if labels:
+                    for row in range(1, ws.max_row + 1):
+                        label = _norm_label(ws.cell(row=row, column=1).value)
+                        if label and any(term in label for term in labels):
+                            target_rows.add(row)
+
+                for target_row in sorted(target_rows):
+                    match_count += 1
+                    start = max(1, target_row - context_rows)
+                    end = min(ws.max_row, target_row + context_rows)
+                    lines.append(f"\n-- {sheet_name} row {target_row} --")
+                    for row in range(start, end + 1):
+                        prefix = ">" if row == target_row else " "
+                        lines.append(f"{prefix} row {row}: {_cell_summary(ws, row, max_col=max_col)}")
+                    refs = _nearby_formula_refs(ws, target_row, max_col=max_col)
+                    if refs:
+                        lines.append("Nearby formulas referencing target row:")
+                        lines.extend(f"  {ref}" for ref in refs)
+
+            if match_count == 0:
+                lines.append(
+                    "No matching rows found. Try a broader label substring "
+                    "or provide exact sheet/row from the failed check."
+                )
+            return "\n".join(lines)
+        finally:
+            wb.close()
 
     @agent.tool
     def view_pdf_pages(

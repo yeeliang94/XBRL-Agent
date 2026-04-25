@@ -121,11 +121,18 @@ the presentation variant, and discover related note pages.
 3. For each statement you need to find:
    a. Use the TOC stated page as a starting point. Call `view_pages` with that
       page (and ±2 nearby pages if needed) to confirm the statement header is there.
-   b. Once you find the face page, determine the variant from what you see.
-   c. Call `check_variant_signals` on the page text to cross-check your visual
+   b. Read the face page closely enough to capture the note-reference column.
+      Note references on the face statement are important downstream because
+      extraction agents must inspect those linked notes before filling
+      sub-sheets.
+   c. Once you find the face page, determine the variant from what you see.
+   d. Call `check_variant_signals` on the page text to cross-check your visual
       assessment. If they disagree, trust your visual judgment but note the
       discrepancy.
-   d. Call `discover_notes` with the face page text to find related note pages.
+   e. Call `discover_notes` with the face page text to find related note pages.
+      If the face page has visible note references but `discover_notes` returns
+      none, use the TOC/inventory context and nearby notes pages to provide
+      best-effort note page hints rather than silently dropping the references.
 4. Identify the PDF page where the Notes-to-the-Financial-Statements section
    begins (from the TOC or by inspecting pages right after the last face
    statement) and call `discover_notes_inventory` with it. **This step is

@@ -705,6 +705,7 @@ def _inject_sum_formulas(
     rows: list[tuple[int, str, str, bool]],
     calc_blocks: list[tuple[str, dict[str, list[tuple[str, int]]]]],
     value_columns: tuple[str, ...] = ("B", "C"),
+    base_row: int = _FIRST_BODY_ROW,
 ) -> None:
     """Write SUM formulas into total rows based on the calc linkbase.
 
@@ -739,8 +740,12 @@ def _inject_sum_formulas(
     # concept appears more than once, we take the first occurrence (matches
     # the pre-fix behaviour that wasn't buggy for non-duplicate concepts).
     first_occurrence: dict[str, int] = {}
+    # `base_row` lets non-default layouts (e.g. the 4-block Group SOCIE)
+    # offset the row numbers without duplicating the rest of this logic.
+    # Defaults to _FIRST_BODY_ROW so every existing call site stays
+    # byte-identical.
     for idx, (_depth, concept_id, _label, _abs) in enumerate(rows):
-        xlsx_row = _FIRST_BODY_ROW + idx
+        xlsx_row = base_row + idx
         concept_to_rows[concept_id].append(xlsx_row)
         first_occurrence.setdefault(concept_id, xlsx_row)
 
@@ -852,7 +857,11 @@ def _collect_rows_with_calc(
     return rows, calc_blocks
 
 
-def _apply_group_socie_layout(ws, rows: list[tuple[int, str, str, bool]]) -> None:
+def _apply_group_socie_layout(
+    ws,
+    rows: list[tuple[int, str, str, bool]],
+    calc_blocks: list[tuple[str, dict[str, list[tuple[str, int]]]]] | None = None,
+) -> None:
     """Write the Group SOCIE 4-block layout onto a sheet.
 
     MFRS Group SOCIE format (Phase 1 pin): four 23-row blocks at rows
@@ -860,10 +869,17 @@ def _apply_group_socie_layout(ws, rows: list[tuple[int, str, str, bool]]) -> Non
     ("Group - Current period", "Group - Prior period", "Company - Current
     period", "Company - Prior period"), blank separators at 26/50/74.
 
-    The body of each block is the same MPERS SOCIE row-set. Because SOCIE
-    uses columns for equity components (not period pairs), this is not a
-    6-column value layout — each block takes the full width and labels sit
-    in column A.
+    The body of each block is the same MPERS SOCIE row-set. Each block
+    carries its own column-B value column + column-D source column,
+    mirroring MPERS Company SOCIE's 4-column layout per block (decided
+    in PLAN-mpers-group-socie-formulas.md D1: Option A).
+
+    When ``calc_blocks`` is provided, ``_inject_sum_formulas`` runs once
+    per block with a ``base_row`` offset so the same SOCIE calc (role
+    610000) lands in all 4 vertical blocks. ``calc_blocks=None`` keeps
+    the legacy label-only behaviour for callers that don't have access
+    to the calc data (none today, but the default keeps the helper
+    independently usable).
     """
     from openpyxl.styles import Font
 
@@ -884,6 +900,12 @@ def _apply_group_socie_layout(ws, rows: list[tuple[int, str, str, bool]]) -> Non
     # Truncate the row-set to 22 entries so the 23-row block fits.
     truncated = rows[:22]
 
+    # Row 1: global period placeholder + Source header. Mirrors MFRS Group
+    # SOCIE row 1 (single placeholder in col B; "Source" header in col D
+    # for parity with MPERS Company SOCIE's 4-col layout).
+    ws.cell(row=1, column=2, value=_PERIOD_PLACEHOLDER)
+    ws.cell(row=1, column=4, value="Source")
+
     for (start, _end), header in zip(block_ranges, block_headers):
         ws.cell(row=start, column=1, value=header).font = bold_font
         for idx, (_depth, _concept_id, label, _is_abstract) in enumerate(truncated):
@@ -891,6 +913,20 @@ def _apply_group_socie_layout(ws, rows: list[tuple[int, str, str, bool]]) -> Non
             cell = ws.cell(row=r, column=1, value=label)
             if isinstance(label, str) and label.startswith("*"):
                 cell.font = bold_font
+
+    # Inject per-block subtotal formulas using the SOCIE calc (610000).
+    # Each block needs the same calc applied with its own row offset:
+    # the body of block (header_row, _) starts at header_row + 1, so
+    # base_row = start + 1.
+    if calc_blocks:
+        for start, _end in block_ranges:
+            _inject_sum_formulas(
+                ws,
+                truncated,
+                calc_blocks,
+                value_columns=("B",),
+                base_row=start + 1,
+            )
 
     # Equity-at-end row is the last body row in each block by MFRS
     # convention — bold if it isn't already.
@@ -901,6 +937,8 @@ def _apply_group_socie_layout(ws, rows: list[tuple[int, str, str, bool]]) -> Non
 
     ws.freeze_panes = "A4"
     ws.column_dimensions["A"].width = 55.0
+    ws.column_dimensions["B"].width = 18.0
+    ws.column_dimensions["D"].width = 40.0
 
 
 def build_template(filename: str, level: str, out_dir: Path) -> Path:
@@ -948,7 +986,7 @@ def build_template(filename: str, level: str, out_dir: Path) -> Path:
             if calc:
                 _inject_sum_formulas(ws, rows, calc, value_columns=("B", "C"))
         elif level == "group" and filename == "09-SOCIE.xlsx":
-            _apply_group_socie_layout(ws, rows)
+            _apply_group_socie_layout(ws, rows, calc)
         elif level == "group":
             _apply_group_sheet_layout(ws, rows)
             if calc:

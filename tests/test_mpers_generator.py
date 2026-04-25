@@ -674,6 +674,47 @@ def test_parse_calc_linkbase_handles_negative_weight():
 
 
 @pytest.mark.mpers_formulas
+def test_inject_sum_formulas_accepts_base_row_offset():
+    """`_inject_sum_formulas(base_row=N)` must place all formula references
+    starting at row N — used by the 4-block Group SOCIE layout to drop
+    the same calc into four different row ranges. Default
+    `base_row=_FIRST_BODY_ROW` keeps every existing call site unchanged.
+    """
+    import openpyxl
+    from scripts.generate_mpers_templates import _inject_sum_formulas
+
+    # Minimal 3-row presentation: parent + two children.
+    rows = [
+        (0, "ParentConcept", "Parent total", False),
+        (1, "ChildA", "Child A", False),
+        (1, "ChildB", "Child B", False),
+    ]
+    # One calc block: ParentConcept = ChildA + ChildB.
+    calc_blocks = [
+        ("role-test", {"ParentConcept": [("ChildA", 1), ("ChildB", 1)]}),
+    ]
+
+    base_row = 27
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    # Pre-write the labels at the offset row range so the formula-writer's
+    # "*"-prefix mutation has a target.
+    for idx, (_d, _cid, label, _abs) in enumerate(rows):
+        ws.cell(row=base_row + idx, column=1, value=label)
+
+    _inject_sum_formulas(
+        ws, rows, calc_blocks, value_columns=("B",), base_row=base_row,
+    )
+
+    # Parent lands at base_row; formula must reference children at
+    # base_row+1 and base_row+2 — NOT _FIRST_BODY_ROW (3) + offsets.
+    parent_row = base_row
+    formula = ws.cell(row=parent_row, column=2).value
+    assert formula == f"=1*B{base_row + 1}+1*B{base_row + 2}", (
+        f"Expected formula referencing children at offset rows; got {formula!r}"
+    )
+
+
 def test_emitted_template_has_sum_formula_at_total_row():
     """Red: an emitted template carries `=B<r1>+B<r2>+…` formulas at total rows.
 

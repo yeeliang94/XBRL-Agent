@@ -175,3 +175,161 @@ def test_sopl_prompt_has_template_first_breakdown_rule():
     assert "lump" in flat or "single line" in flat, (
         "prompts/sopl.md must call out the lumping failure mode"
     )
+
+
+def test_base_prompt_requires_following_linked_notes_before_lumping():
+    """Shared face-statement prompt must force the accountant workflow:
+    face line -> linked note -> template-specific component rows."""
+    body = (_PROMPT_DIR / "_base.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "accountant extraction procedure" in flat
+    assert "before writing any face-statement line that has a note reference" in flat
+    assert "only write a lump-sum face value" in flat
+
+
+def test_sofp_prompt_has_linked_note_split_example():
+    """The SOFP prompt should teach linked-note splitting without relying
+    on the user's receivables example."""
+    body = (_PROMPT_DIR / "sofp.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "linked-note cash case" in flat
+    assert "cash on hand" in flat
+    assert "fixed deposits with licensed banks" in flat
+    assert "do not write rm1,200,000 only to the face statement" in flat
+
+
+def test_notes_base_prompt_preserves_parent_note_hierarchy():
+    """Notes prompts should not split supporting sub-sections into
+    unrelated disclosure rows just because the PDF uses (a)/(b)."""
+    body = (_PROMPT_DIR / "_notes_base.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "note hierarchy and granularity" in flat
+    assert "not like a text splitter" in flat
+    assert "finance costs" in flat
+    assert "interest on lease liabilities" in flat
+    assert "do not split content into a different template row merely because" in flat
+
+
+def test_listofnotes_prompt_warns_hierarchy_beats_visual_granularity():
+    """Sheet-12 matching prompt needs the same parent-note hierarchy guardrail."""
+    body = (_PROMPT_DIR / "notes_listofnotes.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "hierarchy beats visual granularity" in flat
+    assert "one finance-costs payload" in flat
+    assert "do not move the lease-interest sub-section" in flat
+
+
+def test_scout_prompt_preserves_face_note_references():
+    """Scout should treat face-statement note references as downstream
+    extraction hints, not incidental text."""
+    from scout.agent import _SYSTEM_PROMPT
+
+    flat = _flatten(_SYSTEM_PROMPT)
+    assert "capture the note-reference column" in flat
+    assert "best-effort note page hints" in flat
+
+
+def test_base_prompt_has_sign_convention_troubleshooting():
+    """Shared prompt should tell agents to debug sign mismatches without
+    blindly negating labels that contain loss/expense wording."""
+    body = (_PROMPT_DIR / "_base.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "sign-convention troubleshooting" in flat
+    assert "do not infer the sign from wording alone" in flat
+    assert "foreign exchange loss" in flat
+    assert "if the formula subtracts a row" in flat
+
+
+def test_sopl_prompt_keeps_loss_expenses_positive():
+    """P&L loss labels should be positive magnitudes because SOPL formulas
+    handle subtraction."""
+    body = (_PROMPT_DIR / "sopl.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "loss-labelled expense rows are also positive magnitudes" in flat
+    assert "foreign exchange loss" in flat
+    assert "impairment loss on trade receivables" in flat
+
+
+def test_socie_mpers_group_section_does_not_advertise_efg_columns():
+    """Negative pin (peer-review H1): MPERS Group SOCIE has only col B
+    per block — no E/F value columns. The prompt previously claimed
+    "Group filings additionally use: E (col=5) = Company CY, F (col=6) =
+    evidence", which contradicted the four-block layout already
+    described elsewhere in the same file. Guard against the line
+    re-appearing in a future edit."""
+    body = (_PROMPT_DIR / "socie_mpers.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    # The exact stale phrasings.
+    assert "additionally use: e (col=5)" not in flat, (
+        "socie_mpers.md still advertises a non-existent col E for Group SOCIE"
+    )
+    assert "f (col=6) = evidence" not in flat, (
+        "socie_mpers.md still advertises a non-existent col F for Group SOCIE"
+    )
+    # Positive guidance: explicitly call out NO additional columns.
+    assert "no additional value columns" in flat or "no e/f" in flat, (
+        "socie_mpers.md must explicitly state Group has no E/F value columns"
+    )
+
+
+def test_equity_prompts_follow_dividend_formula_sign():
+    """SOCIE/SoRE templates subtract dividends, so prompts must ask for
+    positive dividend magnitudes rather than double-negating them."""
+    for filename in ("socie.md", "socie_mpers.md", "socie_sore.md"):
+        body = (_PROMPT_DIR / filename).read_text(encoding="utf-8")
+        flat = _flatten(body)
+        assert "do not apply the sopl" in flat
+        assert "dividends paid are entered as positive magnitudes" in flat
+        assert "subtracts the dividends row" in flat or "formula subtracts it" in flat
+        assert "reconciles to sofp" in flat
+
+
+def _assert_dividends_subtracted(workbook: str, sheet: str) -> None:
+    """Helper: every `Dividends paid` row in `sheet` must be subtracted by
+    a column-B subtotal formula within 10 rows below it.
+
+    Pulled out of the parametrised case so the (currently-broken) MPERS
+    Group SOCIE template can be xfailed individually instead of muting
+    the whole table.
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(_PROMPT_DIR.parent / workbook, data_only=False)
+    try:
+        ws = wb[sheet]
+        div_rows = [
+            row for row in range(1, ws.max_row + 1)
+            if str(ws.cell(row, 1).value or "").strip().lower() == "dividends paid"
+        ]
+        assert div_rows, f"{workbook} has no dividends paid row"
+        for div_row in div_rows:
+            div_ref = f"B{div_row}"
+            formulas = [
+                str(ws.cell(row, 2).value)
+                for row in range(div_row + 1, min(ws.max_row, div_row + 10) + 1)
+                if isinstance(ws.cell(row, 2).value, str)
+                and ws.cell(row, 2).value.startswith("=")
+                and div_ref in ws.cell(row, 2).value
+            ]
+            assert any(f"-1*{div_ref}" in f or f"-{div_ref}" in f for f in formulas), (
+                f"{workbook} formula near row {div_row} does not subtract {div_ref}: {formulas}"
+            )
+    finally:
+        wb.close()
+
+
+@pytest.mark.parametrize(
+    "workbook,sheet",
+    [
+        ("XBRL-template-MFRS/Company/09-SOCIE.xlsx", "SOCIE"),
+        ("XBRL-template-MFRS/Group/09-SOCIE.xlsx", "SOCIE"),
+        ("XBRL-template-MPERS/Company/09-SOCIE.xlsx", "SOCIE"),
+        ("XBRL-template-MPERS/Group/09-SOCIE.xlsx", "SOCIE"),
+        ("XBRL-template-MPERS/Company/10-SoRE.xlsx", "SoRE"),
+        ("XBRL-template-MPERS/Group/10-SoRE.xlsx", "SoRE"),
+    ],
+)
+def test_live_templates_subtract_dividends_paid(workbook: str, sheet: str):
+    """Pin prompt guidance to the live formulas: dividends rows are
+    subtracted by SOCIE/SoRE subtotal formulas."""
+    _assert_dividends_subtracted(workbook, sheet)

@@ -41,6 +41,9 @@ For **Direct** method (82 rows, 71 data-entry):
     Working capital: decrease in receivables = positive, increase in payables = positive.
   - Direct method: cash receipts = POSITIVE, cash payments = NEGATIVE.
   - Investing/financing: inflows = positive, outflows = NEGATIVE.
+  - Do not import SOPL sign rules into SOCF. A "loss" adjustment may be a
+    positive add-back, while a "payment" or "purchase" is normally negative
+    because it is a cash outflow.
 
 - Closing cash MUST equal SOFP cash and bank balances — this is a P0 cross-check.
 - Opening cash must equal prior year's closing cash.

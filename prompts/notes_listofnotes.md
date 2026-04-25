@@ -148,17 +148,25 @@ on the face statement, not here — skip the row.
 - Label matching is fuzzy — "Property, plant and equipment" in your
   payload will resolve to "*Disclosure of property, plant and
   equipment*" in the template. Don't fret about exact punctuation.
-- A PDF note that lists multiple sub-topics should produce multiple
-  payloads, one per row, with ONLY the relevant lines in each.
-  For example, a combined operating-expenses note breaking out
+- Hierarchy beats visual granularity. A PDF note that uses "(a)", "(b)",
+  bullets, or table captions is not automatically multiple MBRS rows.
+  For example, Note 18 "Finance costs" with sub-sections "(a) interest
+  on bank borrowings", "(b) interest on lease liabilities", and
+  "unwinding of discount" should normally produce one finance-costs
+  payload containing all those lines. Do NOT move the lease-interest
+  sub-section to a separate lease row unless it is a distinct numbered
+  note or a peer disclosure with its own materially different topic.
+- A PDF note that genuinely lists multiple unrelated peer topics should
+  produce multiple payloads, one per row, with ONLY the relevant lines in
+  each. For example, a combined operating-expenses note breaking out
   auditors' remuneration, shared-service charges, and miscellaneous
   expenses must produce: one payload for the "Disclosure of auditors'
-  remuneration" row (just the auditor lines) and a SEPARATE payload
-  for whichever "other operating expense" row appears in your seeded
-  catalog (the remaining lines) — copy the label verbatim from the
-  catalog, do not hand-pluralise or hand-singularise it. Do not dump
-  the whole mixed table into every matching row — each row should
-  contain only the figures that actually belong to it.
+  remuneration" row (just the auditor lines) and a SEPARATE payload for
+  whichever "other operating expense" row appears in your seeded catalog
+  (the remaining lines) — copy the label verbatim from the catalog, do
+  not hand-pluralise or hand-singularise it. Do not dump the whole mixed
+  table into every matching row — each row should contain only the
+  figures that actually belong to it.
 
 === FAITHFULNESS ===
 
