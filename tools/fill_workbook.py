@@ -33,6 +33,29 @@ class FillResult:
     errors: list[str]
 
 
+# Default SOCIE evidence column for the MFRS 24-col equity-component matrix.
+# Lives just past Total (col X = 24); MFRS templates have no row-1 "Source"
+# header so we fall back to this. MPERS templates declare a real Source
+# header at col D / F and `_resolve_socie_evidence_col` honours that.
+_DEFAULT_MATRIX_SOCIE_EVIDENCE_COL = 25
+
+
+def _resolve_socie_evidence_col(ws) -> int:
+    """Return the column where SOCIE evidence/source should be written.
+
+    Looks for a row-1 cell whose text equals "Source" (case-insensitive).
+    The MPERS Group/Company SOCIE templates publish this header at col D
+    (4-col layout) and the MPERS Group SoRE template at col F. The MFRS
+    matrix SOCIE templates carry no Source header — fall back to col Y
+    (25) so existing MFRS behaviour is preserved.
+    """
+    for col in range(1, ws.max_column + 1):
+        value = ws.cell(row=1, column=col).value
+        if isinstance(value, str) and value.strip().lower() == "source":
+            return col
+    return _DEFAULT_MATRIX_SOCIE_EVIDENCE_COL
+
+
 def fill_workbook(
     template_path: str,
     output_path: str,
@@ -139,11 +162,18 @@ def fill_workbook(
         fields_written += 1
 
         # Write evidence/source to a single column per sheet so notes don't repeat.
-        # SOCIE sheets use cols B-X for equity components, so evidence goes to col Y (25).
-        # All other sheets: evidence always goes to col D (4) — one column, not per-period.
+        #
+        # SOCIE sheets historically used col Y (25) because the MFRS template is
+        # a 24-col equity-component matrix with no Source header. MPERS SOCIE
+        # templates publish a real Source header at col D (Company) or F (Group),
+        # so writing to col 25 there hides the audit trail off-screen and leaves
+        # the visible Source column empty (peer-review H2). For SOCIE sheets we
+        # now look up the Source header by name and only fall back to 25 when
+        # no header is found (MFRS matrix layouts). Other sheets keep the
+        # filing-level branch as before.
         if mapping.evidence:
             if "socie" in mapping.sheet.lower():
-                evidence_col = 25  # Y — after Total (X=24)
+                evidence_col = _resolve_socie_evidence_col(ws)
             elif filing_level == "group":
                 evidence_col = 6  # F — after Company PY (E=5)
             else:

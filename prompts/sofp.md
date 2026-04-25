@@ -30,6 +30,8 @@ the sub-sheet automatically. Only fill non-formula data-entry cells on the main 
 2. View the SOFP face page to see the statement.
 3. For every face-sheet line that cites a note reference (e.g. "Note 4", "Note 5"):
    - a. View the note pages to read the breakdown.
+     Do not stop at the face amount. Read the note's tables and subheadings,
+     including the continuation page if the schedule continues.
    - b. Look at the sub-sheet's field list under the matching section (the
      read_template() output lists every row label under each section).
    - c. For each note breakdown line, check: is there a matching sub-sheet
@@ -77,6 +79,15 @@ related companies RM64,375. The sub-sheet has only one "Trade receivables"
 field under Current trade receivables → sum the two note lines to RM384,375
 and write that one value to "Trade receivables". One sub-sheet payload.
 Do NOT invent "Trade receivables – third parties" as a new row.
+
+**Linked-note cash case (split before lumping):** The face statement shows
+"Cash and bank balances Note 7 RM1,200,000". Note 7 breaks this into cash
+on hand RM5,000, balances with licensed banks RM895,000, and short-term
+fixed deposits RM300,000. If the sub-sheet has "Cash on hand", "Balances
+with licensed banks", and "Fixed deposits with licensed banks", write the
+three components to those rows. Do NOT write RM1,200,000 only to the face
+statement or only to a generic "cash and bank balances" row when the
+component rows exist.
 
 === CRITICAL RULES ===
 

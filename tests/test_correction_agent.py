@@ -1,11 +1,18 @@
 """Tests for the cross-check correction agent (Phase 3)."""
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from pydantic_ai.models.test import TestModel
 
 from cross_checks.framework import CrossCheckResult
 from statement_types import StatementType
+
+
+def _flatten(text: str) -> str:
+    return re.sub(r"\s+", " ", text).lower()
 
 
 class TestCorrectionAgentFactory:
@@ -44,6 +51,7 @@ class TestCorrectionAgentFactory:
         # back to probing private attributes only if the public path changes.
         tool_names = _agent_tool_names(agent)
         assert "view_pdf_pages" in tool_names
+        assert "inspect_workbook" in tool_names
         assert "fill_workbook" in tool_names
         assert "verify_totals" in tool_names
         assert "run_cross_checks" in tool_names
@@ -73,6 +81,100 @@ class TestCorrectionAgentFactory:
         assert deps.filing_level == "group"
         assert deps.filing_standard == "mpers"
         assert deps.statements_to_run == {StatementType.SOPL, StatementType.SOCIE}
+
+    def test_correction_prompt_has_sign_repair_rules(self):
+        body = (Path(__file__).resolve().parent.parent / "prompts" / "correction.md").read_text(
+            encoding="utf-8"
+        )
+        flat = _flatten(body)
+        assert "inspect_workbook" in flat
+        assert "sign-convention repair rules" in flat
+        assert "foreign exchange loss" in flat
+        assert "dividends as a positive magnitude" in flat
+        assert "nearest subtotal formula subtracts a row" in flat
+
+    def test_inspect_workbook_surfaces_formula_sign(self, tmp_path):
+        import openpyxl
+        from correction.agent import create_correction_agent
+
+        workbook = tmp_path / "merged.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "SOCIE"
+        ws["A16"] = "Dividends paid"
+        ws["B16"] = 100
+        ws["A23"] = "*Total increase (decrease) in equity"
+        ws["B23"] = "=1*B12+-1*B16"
+        wb.save(workbook)
+
+        agent, deps = create_correction_agent(
+            merged_workbook_path=str(workbook),
+            pdf_path="/tmp/x.pdf",
+            failed_checks=[],
+            infopack=None,
+            filing_level="company",
+            filing_standard="mpers",
+            model=TestModel(),
+            output_dir=str(tmp_path),
+            statements_to_run={StatementType.SOCIE},
+        )
+
+        tool_fn = _tool_fn(agent, "inspect_workbook")
+
+        class _Ctx:
+            def __init__(self, deps):
+                self.deps = deps
+
+        result = tool_fn(_Ctx(deps), '{"sheet":"SOCIE","labels":["Dividends paid"],"context_rows":1}')
+        assert "row 16" in result
+        assert "B16=100" in result
+        assert "B23: =1*B12+-1*B16" in result
+
+    def test_inspect_workbook_handles_invalid_scalars(self, tmp_path):
+        """Peer-review M1: a model emitting `"context_rows": "nearby"` or
+        `"max_col": null` must not crash the tool. Bad scalars fall back
+        to documented defaults and the workbook inspection still runs."""
+        import openpyxl
+        from correction.agent import create_correction_agent
+
+        workbook = tmp_path / "merged.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "SOCIE"
+        ws["A16"] = "Dividends paid"
+        ws["B16"] = 100
+        wb.save(workbook)
+
+        agent, deps = create_correction_agent(
+            merged_workbook_path=str(workbook),
+            pdf_path="/tmp/x.pdf",
+            failed_checks=[],
+            infopack=None,
+            filing_level="company",
+            filing_standard="mpers",
+            model=TestModel(),
+            output_dir=str(tmp_path),
+            statements_to_run={StatementType.SOCIE},
+        )
+
+        tool_fn = _tool_fn(agent, "inspect_workbook")
+
+        class _Ctx:
+            def __init__(self, deps):
+                self.deps = deps
+
+        # Garbage scalars that would have raised before the _coerce_int
+        # wrapper landed.
+        result = tool_fn(
+            _Ctx(deps),
+            '{"sheet":"SOCIE","labels":["Dividends paid"],'
+            '"context_rows":"nearby","max_col":"all"}',
+        )
+        # The tool returns a string and the row is still found via the
+        # default context_rows + max_col.
+        assert isinstance(result, str)
+        assert "row 16" in result
+        assert "B16=100" in result
 
 
 class TestCorrectionPassHelper:
@@ -298,3 +400,38 @@ def _agent_tool_names(agent) -> set[str]:
     if isinstance(legacy, dict):
         return set(legacy.keys())
     return names
+
+
+def _tool_fn(agent, tool_name: str):
+    """Resolve a registered tool's underlying function from a pydantic-ai Agent.
+
+    Mirrors the defence-in-depth pattern in `_agent_tool_names`: try the
+    public `toolsets` shape first (1.77+ exposes `ts.tools` as a dict),
+    fall back to a list-shape on `ts.tools`, then to the legacy private
+    `_function_tools` map. A clean "tool not registered" AssertionError
+    is preferable to an opaque AttributeError when the API shifts.
+    """
+    def _unwrap(tool):
+        return getattr(tool, "function", None) or tool
+
+    for ts in getattr(agent, "toolsets", []) or []:
+        tools = getattr(ts, "tools", None)
+        if isinstance(tools, dict):
+            tool = tools.get(tool_name)
+            if tool is not None:
+                return _unwrap(tool)
+        elif isinstance(tools, (list, tuple)):
+            for tool in tools:
+                name = getattr(tool, "name", None) or getattr(
+                    getattr(tool, "function", None), "__name__", None,
+                )
+                if name == tool_name:
+                    return _unwrap(tool)
+
+    legacy = getattr(agent, "_function_tools", None)
+    if isinstance(legacy, dict):
+        tool = legacy.get(tool_name)
+        if tool is not None:
+            return _unwrap(tool)
+
+    raise AssertionError(f"{tool_name} tool not registered")

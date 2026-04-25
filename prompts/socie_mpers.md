@@ -2,25 +2,27 @@
 
 === TEMPLATE STRUCTURE (MPERS) ===
 
-The MPERS SOCIE template is a **flat two-column layout** — NOT a matrix.
-There are no per-equity-component columns (no "Issued capital", "Retained
-earnings", "Reserves" columns). Values for every equity movement go into
-one of these columns:
+The MPERS SOCIE template uses a flat per-row value layout — NOT the MFRS
+24-col equity-component matrix. There are no per-equity-component columns
+(no "Issued capital", "Retained earnings", "Reserves" columns).
+
+### MPERS Company — single block
+One vertical block of data rows (approx. rows 3–24). Columns:
 
 - **A**: Field label (text, read-only)
 - **B** (col=2): Current-period value
 - **C** (col=3): Prior-period value
-- **D** (col=4): Source / evidence (company filings only)
-- Group filings additionally use: E (col=5) = Company CY, F (col=6) = evidence
+- **D** (col=4): Source / evidence
 
-### MPERS Company — single block
-The template has one vertical block of data rows (approx. rows 3–24). CY
-and PY are **column-separated**, not row-separated — fill the same row's
-col B for CY and col C for PY.
+CY and PY are **column-separated**, not row-separated — fill the same
+row's col B for CY and col C for PY.
 
 ### MPERS Group — four vertical blocks
 The template stacks four copies of the data rows with the same labels in
-each block. Block dividers are plain-text headers in column A:
+each block — there are NO additional value columns (no E/F). Each block
+has the same 4-col layout: A=label, B=value, D=source. Period and entity
+are encoded by which block you write into, not by which column. Block
+dividers are plain-text headers in column A:
 
 | Block | Section header (row) | Typical row range |
 |-------|---------------------|-------------------|
@@ -67,7 +69,8 @@ naming the block header exactly. The writer uses it to pick the right row.
    - `Total other comprehensive income` — from SOCI (often blank/zero on MPERS)
    - `Acquisition (dilution) of equity interest in subsidiaries`
    - `Arising from conversion of Irredeemable Convertible Unsecured Loan Stock (ICULS)`
-   - `Dividends paid` — enter as a **negative** number
+   - `Dividends paid` — enter as a **positive** magnitude because the
+     Total increase/decrease formula subtracts this row
    - `Issuance of shares`
    - `Issue of convertible notes, net of tax`
    - `Increase (decrease) through share-based payment transactions, equity`
@@ -91,7 +94,14 @@ naming the block header exactly. The writer uses it to pick the right row.
 - **Leave cells blank where there is no activity.** Do not enter zeros —
   especially for `Total other comprehensive income` when the entity has
   no OCI items.
-- **Dividends are NEGATIVE.** They reduce equity. Enter as a negative number.
+- **Dividends paid are entered as POSITIVE magnitudes.** The MPERS SOCIE
+  template subtracts the dividends row in the Total increase/decrease formula
+  (`... - dividends paid ...`), so a positive dividend input reduces equity.
+  Do NOT enter dividends as negative unless the live formula no longer
+  subtracts the row.
+- Do not apply the SOPL "expenses/losses are positive" convention here.
+  MPERS SOCIE is an equity movement statement: follow the formula sign for
+  each row so closing equity reconciles to SOFP.
 - **PY closing balance = CY opening balance** — the template does not
   auto-link these across rows; you must enter each period's opening
   balance explicitly.
