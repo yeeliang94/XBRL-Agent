@@ -16,6 +16,20 @@ const MULTI_EVENT_TYPES: SSEEventType[] = [
   "error",
   "complete",
   "run_complete",
+  // PLAN-stop-and-validation-visibility Phase 2: surfaces partial-merge
+  // outcome on Stop-All so the UI can show a "saved partial workbook" banner.
+  "partial_merge",
+  // PLAN-stop-and-validation-visibility Phase 5: per-pass progress events
+  // for the cross-check engine — Validator tab fills rows live instead
+  // of all at run_complete.
+  "cross_check_start",
+  "cross_check_result",
+  "cross_check_complete",
+  // PLAN-stop-and-validation-visibility Phase 6: coordinator-level
+  // stage label — surfaces "Validating notes…" / "Re-checking after
+  // correction…" instead of letting the spinner sit on the last
+  // per-agent event during the post-extraction silent zones.
+  "pipeline_stage",
 ];
 
 // Generic parse result. Stays loose on `data` because not every consumer

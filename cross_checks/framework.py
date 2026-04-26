@@ -7,10 +7,13 @@ handles missing-statement detection (→ pending) and variant gating
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Protocol, Set, runtime_checkable
+from typing import Any, Callable, Dict, Optional, Protocol, Set, runtime_checkable
 
 from statement_types import StatementType
+
+logger = logging.getLogger(__name__)
 
 # Default tolerance for numeric comparisons (RM 1 absolute).
 DEFAULT_TOLERANCE_RM = 1.0
@@ -96,6 +99,7 @@ def run_all(
     workbook_paths: Dict[StatementType, str],
     run_config: dict,
     tolerance: float = DEFAULT_TOLERANCE_RM,
+    on_check: "Optional[Any]" = None,
 ) -> list[CrossCheckResult]:
     """Run all registered checks, handling missing statements and variant gating.
 
@@ -106,6 +110,14 @@ def run_all(
                     optionally 'variants' (dict of StatementType -> str),
                     and optionally 'filing_level' (str: "company" or "group", default "company").
         tolerance: absolute RM tolerance for numeric comparisons.
+        on_check: optional callback fired AFTER each check completes
+                  with ``(index, total, result)``. Used by the server
+                  to emit per-check SSE progress events live, so the
+                  UI fills rows in as each check resolves instead of
+                  all-at-end. Sync callable; exceptions are swallowed
+                  so a broken progress emitter never breaks the
+                  validation pass. PLAN-stop-and-validation-visibility
+                  Phase 5 + peer-review fix (2026-04-27).
 
     Returns:
         One CrossCheckResult per check, in the same order as the input list.
@@ -114,89 +126,114 @@ def run_all(
     filing_level = run_config.get("filing_level", "company")
     filing_standard = run_config.get("filing_standard", "mfrs")
     results: list[CrossCheckResult] = []
+    total = len(checks)
 
-    for check in checks:
-        # 1. Are all required statements present in this run?
-        missing = check.required_statements - statements_run
-        if missing:
-            missing_names = sorted(s.value for s in missing)
-            results.append(CrossCheckResult(
-                name=check.name,
-                status="pending",
-                message=(
-                    f"{', '.join(missing_names)} not extracted in this run; "
-                    f"cannot verify {check.name}"
-                ),
-            ))
-            continue
-
-        # 2. Are all required workbooks actually available?
-        # A statement may have been selected but its agent failed, producing no output.
-        missing_workbooks = check.required_statements - set(workbook_paths.keys())
-        if missing_workbooks:
-            missing_names = sorted(s.value for s in missing_workbooks)
-            results.append(CrossCheckResult(
-                name=check.name,
-                status="failed",
-                message=(
-                    f"Workbook missing for {', '.join(missing_names)} "
-                    f"(agent may have failed); cannot run {check.name}"
-                ),
-            ))
-            continue
-
-        # 3. Is this check defined for the current filing standard?
-        #    MPERS-only checks (e.g. sore_to_sofp_retained_earnings) carry a
-        #    narrowed set; gate them out on MFRS runs so they don't fire on
-        #    filings that don't produce the necessary sheet.
-        check_standards = getattr(
-            check, "applies_to_standard", DEFAULT_APPLIES_TO_STANDARD,
-        )
-        if filing_standard not in check_standards:
-            allowed = ", ".join(sorted(check_standards)).upper() or "(none)"
-            results.append(CrossCheckResult(
-                name=check.name,
-                status="not_applicable",
-                message=(
-                    f"{check.name} only applies to {allowed} filings "
-                    f"(this run is {filing_standard.upper()})"
-                ),
-            ))
-            continue
-
-        # 4. Does this check apply to the current variant configuration?
-        if not check.applies_to(run_config):
-            results.append(CrossCheckResult(
-                name=check.name,
-                status="not_applicable",
-                message=f"{check.name} does not apply to the current variant configuration",
-            ))
-            continue
-
-        # 5. Run the actual check — catch exceptions so one broken check
-        # doesn't abort the entire validation pass.
-        # Phase 5: pass `filing_standard` through so MPERS-aware checks
-        # can branch on layout (MPERS SOCIE col 2 vs MFRS col 24). Uses
-        # a try/except on TypeError so pre-Phase-5 check implementations
-        # that haven't added the kwarg yet still run — they just lose
-        # the standard signal, same as before.
+    def _fire_progress(idx: int, result: CrossCheckResult) -> None:
+        if on_check is None:
+            return
         try:
-            try:
-                result = check.run(
-                    workbook_paths, tolerance,
-                    filing_level=filing_level,
-                    filing_standard=filing_standard,
-                )
-            except TypeError:
-                result = check.run(
-                    workbook_paths, tolerance, filing_level=filing_level,
-                )
-        except Exception as e:
-            result = CrossCheckResult(
-                name=check.name,
-                status="failed",
-                message=f"Check raised an exception: {e}",
+            on_check(idx, total, result)
+        except Exception:  # noqa: BLE001
+            # Progress emission is advisory — never break the pass.
+            logger.warning(
+                "on_check progress callback raised on check #%d", idx,
+                exc_info=True,
             )
-        results.append(result)
+
+    for idx, check in enumerate(checks):
+        try:
+            # 1. Are all required statements present in this run?
+            missing = check.required_statements - statements_run
+            if missing:
+                missing_names = sorted(s.value for s in missing)
+                results.append(CrossCheckResult(
+                    name=check.name,
+                    status="pending",
+                    message=(
+                        f"{', '.join(missing_names)} not extracted in this run; "
+                        f"cannot verify {check.name}"
+                    ),
+                ))
+                continue
+
+            # 2. Are all required workbooks actually available?
+            # A statement may have been selected but its agent failed, producing no output.
+            missing_workbooks = check.required_statements - set(workbook_paths.keys())
+            if missing_workbooks:
+                missing_names = sorted(s.value for s in missing_workbooks)
+                results.append(CrossCheckResult(
+                    name=check.name,
+                    status="failed",
+                    message=(
+                        f"Workbook missing for {', '.join(missing_names)} "
+                        f"(agent may have failed); cannot run {check.name}"
+                    ),
+                ))
+                continue
+
+            # 3. Is this check defined for the current filing standard?
+            #    MPERS-only checks (e.g. sore_to_sofp_retained_earnings) carry a
+            #    narrowed set; gate them out on MFRS runs so they don't fire on
+            #    filings that don't produce the necessary sheet.
+            check_standards = getattr(
+                check, "applies_to_standard", DEFAULT_APPLIES_TO_STANDARD,
+            )
+            if filing_standard not in check_standards:
+                allowed = ", ".join(sorted(check_standards)).upper() or "(none)"
+                results.append(CrossCheckResult(
+                    name=check.name,
+                    status="not_applicable",
+                    message=(
+                        f"{check.name} only applies to {allowed} filings "
+                        f"(this run is {filing_standard.upper()})"
+                    ),
+                ))
+                continue
+
+            # 4. Does this check apply to the current variant configuration?
+            if not check.applies_to(run_config):
+                results.append(CrossCheckResult(
+                    name=check.name,
+                    status="not_applicable",
+                    message=f"{check.name} does not apply to the current variant configuration",
+                ))
+                continue
+
+            # 5. Run the actual check — catch exceptions so one broken check
+            # doesn't abort the entire validation pass.
+            # Phase 5: pass `filing_standard` through so MPERS-aware checks
+            # can branch on layout (MPERS SOCIE col 2 vs MFRS col 24). Uses
+            # a try/except on TypeError so pre-Phase-5 check implementations
+            # that haven't added the kwarg yet still run — they just lose
+            # the standard signal, same as before.
+            try:
+                try:
+                    result = check.run(
+                        workbook_paths, tolerance,
+                        filing_level=filing_level,
+                        filing_standard=filing_standard,
+                    )
+                except TypeError:
+                    result = check.run(
+                        workbook_paths, tolerance, filing_level=filing_level,
+                    )
+            except Exception as e:
+                result = CrossCheckResult(
+                    name=check.name,
+                    status="failed",
+                    message=f"Check raised an exception: {e}",
+                )
+            results.append(result)
+        finally:
+            # PLAN-stop-and-validation-visibility Phase 5 + peer-review
+            # fix (2026-04-27): emit per-check progress AS each check
+            # resolves, not in a batch after all checks finish. Without
+            # the live callback, slow validation passes (rare today,
+            # but possible if a future check does heavy I/O) leave the
+            # UI staring at a silent gap. The ``finally`` ensures we
+            # fire even if a check raises (we already appended a
+            # synthesized failure result above).
+            if results and len(results) > idx:
+                _fire_progress(idx, results[idx])
 
     return results

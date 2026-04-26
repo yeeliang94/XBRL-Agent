@@ -11,6 +11,10 @@ import type {
   AgentState,
   AgentTabStatus,
   CrossCheckResult,
+  CrossCheckPhase,
+  CrossCheckResultEventData,
+  PartialMergeData,
+  PipelineStage,
 } from "./types";
 import { createAgentState } from "./types";
 
@@ -78,6 +82,29 @@ export interface AppState {
   // completion. Null when no toast is active. Dismissed via DISMISS_TOAST
   // (either from the manual close button or the auto-dismiss timer).
   toast: ToastState | null;
+  // PLAN-stop-and-validation-visibility Phase 2: payload of the
+  // ``partial_merge`` SSE event the cancel handler emits when at least
+  // one per-statement workbook landed before Stop All. Null on success
+  // paths and on cancellations with nothing to save. ExtractPage uses it
+  // to render a "Saved partial workbook" banner alongside the cancel
+  // error so the user knows their work was preserved.
+  partialMerge: PartialMergeData | null;
+  // PLAN-stop-and-validation-visibility Phase 5: live cross-check
+  // progress per pass. The Validator tab uses this to render rows as
+  // they arrive (with a spinner for not-yet-reported rows) instead of
+  // waiting for the run_complete event.
+  crossCheckProgress: {
+    phase: CrossCheckPhase | null;     // active pass (last seen)
+    total: number;                     // expected check count for the active pass
+    results: CrossCheckResultEventData[];  // results received so far for the active pass
+    isComplete: boolean;               // cross_check_complete fired for the active pass
+  };
+  // PLAN-stop-and-validation-visibility Phase 6: latest coordinator
+  // stage emitted by the backend. Null before the first event, then
+  // walks through the pipeline to "done". The UI labels the active
+  // stage so the user knows whether the silent gap is merge, cross-
+  // check, correction, re-check, or notes validation.
+  pipelineStage: PipelineStage | null;
 }
 
 export interface ToastState {
@@ -126,6 +153,14 @@ export const initialState: AppState = {
   currentRunId: null,
   sessionRunId: null,
   toast: null,
+  partialMerge: null,
+  crossCheckProgress: {
+    phase: null,
+    total: 0,
+    results: [],
+    isComplete: false,
+  },
+  pipelineStage: null,
 };
 
 // Captures the numeric run id when the pathname is exactly `/history/<n>`
@@ -676,6 +711,19 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         statementsInRun: stmts,
         notesInRun: notes,
         lastRunConfig: action.payload?.config || state.lastRunConfig,
+        // A new run wipes any banner from the previous Stop-All so the
+        // user doesn't see "Saved partial workbook" lingering across
+        // unrelated runs.
+        partialMerge: null,
+        // Cross-check progress is per-run; start fresh.
+        crossCheckProgress: {
+          phase: null,
+          total: 0,
+          results: [],
+          isComplete: false,
+        },
+        // Same per-run reset for the pipeline stage label.
+        pipelineStage: null,
       };
     }
 
@@ -735,10 +783,24 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           // agentReducer above and must not kill the global run —
           // other agents may still be running. Only promote to global
           // failure when the error is not scoped to a specific agent.
+          //
+          // Peer-review fix (2026-04-27): Phase 4 introduced typed
+          // coordinator-level errors (``merge_failed``,
+          // ``cross_check_exception``, ``correction_wallclock_exceeded``)
+          // that the BACKEND treats as non-fatal — the run continues
+          // through correction → notes validator → run_complete. The
+          // legacy untyped error path (``Run cancelled``, transport
+          // failures) still terminates the run on arrival. Discriminate
+          // on ``data.type``: typed events surface the message but leave
+          // ``isRunning=true`` so the spinner keeps spinning while the
+          // backend finishes its work.
           if (!getAgentId(event)) {
             updates.hasError = true;
             updates.error = event.data;
-            updates.isRunning = false;
+            const errType = (event.data as { type?: string })?.type;
+            if (!errType) {
+              updates.isRunning = false;
+            }
           }
           break;
 
@@ -764,6 +826,70 @@ export function appReducer(state: AppState, action: AppAction): AppState {
               updates.agentTabOrder ?? state.agentTabOrder,
             ),
           );
+          break;
+
+        case "partial_merge":
+          // PLAN-stop-and-validation-visibility Phase 2: Stop-All landed
+          // a partial filled.xlsx (or at least surfaced what survived).
+          // Captured into AppState so ExtractPage can render the banner;
+          // we deliberately do NOT flip isRunning here — the cancel
+          // handler emits the standard "error" event right after this
+          // one and that's what owns the running→idle transition.
+          updates.partialMerge = event.data as PartialMergeData;
+          break;
+
+        case "cross_check_start":
+          // Phase 5: a new cross-check pass starts. Reset the working
+          // result list so a post_correction pass replaces the initial
+          // pass's rows in-place — the Validator tab cares about the
+          // *latest* state, not history.
+          updates.crossCheckProgress = {
+            phase: event.data.phase,
+            total: event.data.total,
+            results: [],
+            isComplete: false,
+          };
+          break;
+
+        case "cross_check_result": {
+          // Append the per-check result for the active pass. We use
+          // updates.crossCheckProgress if a start event in the same
+          // event batch already wrote it; otherwise read from state.
+          const active = (updates.crossCheckProgress
+            ?? state.crossCheckProgress);
+          // Peer-review S-4 fix (2026-04-27): if the cross_check_start
+          // event was dropped (queue full, transport hiccup) and a
+          // result for a NEW phase arrives while ``active.results``
+          // still holds the prior pass's rows, those rows would
+          // pollute the new pass. Reset on phase mismatch.
+          const resultsBase = (active.phase !== null
+            && active.phase !== event.data.phase)
+            ? []
+            : active.results;
+          updates.crossCheckProgress = {
+            ...active,
+            // The phase carried on the result event is authoritative —
+            // a stray result after a phase switch should land in the
+            // current pass, not the prior one.
+            phase: event.data.phase,
+            results: [...resultsBase, event.data],
+          };
+          break;
+        }
+
+        case "cross_check_complete": {
+          const active = (updates.crossCheckProgress
+            ?? state.crossCheckProgress);
+          updates.crossCheckProgress = {
+            ...active,
+            phase: event.data.phase,
+            isComplete: true,
+          };
+          break;
+        }
+
+        case "pipeline_stage":
+          updates.pipelineStage = event.data.stage;
           break;
       }
 

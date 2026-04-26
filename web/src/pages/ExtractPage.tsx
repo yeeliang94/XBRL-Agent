@@ -219,6 +219,26 @@ export function ExtractPage({
         />
       )}
 
+      {/* PLAN-stop-and-validation-visibility Phase 6: coordinator-level
+          stage label. Only shown for the post-extraction stages
+          (merging / cross-checking / correcting / re-checking /
+          validating notes) — those are the silent dead zones the user
+          had no signal for. "extracting" and "done" are already
+          conveyed by the agent timeline + ResultsView and don't need
+          a duplicate label. */}
+      {state.pipelineStage && state.pipelineStage !== "extracting"
+        && state.pipelineStage !== "done"
+        && state.isRunning && (
+        <div role="status" data-testid="pipeline-stage-label" style={styles.pipelineStageBox}>
+          <span style={styles.pipelineStageDot} />
+          {state.pipelineStage === "merging" && "Merging per-statement workbooks…"}
+          {state.pipelineStage === "cross_checking" && "Running cross-checks…"}
+          {state.pipelineStage === "correcting" && "Correction agent investigating failed cross-checks…"}
+          {state.pipelineStage === "re_checking" && "Re-running cross-checks against the corrected workbook…"}
+          {state.pipelineStage === "validating_notes" && "Validating notes templates…"}
+        </div>
+      )}
+
       {/* Token dashboard (sticky while running) — above the tabs+feed card */}
       {(state.isRunning || state.tokens) && (
         <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} />
@@ -272,6 +292,45 @@ export function ExtractPage({
           toolTimeline={state.toolTimeline}
           isRunning={state.isRunning}
         />
+      )}
+
+      {/* PLAN-stop-and-validation-visibility Phase 2.3: partial-merge banner.
+          Surfaces immediately above the cancel error so the operator
+          knows their work was preserved. Distinct (warning) palette
+          keeps it visually separate from the red error block. */}
+      {state.partialMerge && (
+        state.partialMerge.merged
+          || state.partialMerge.statements_included.length > 0
+          || state.partialMerge.notes_included.length > 0
+      ) && (
+        <div role="status" data-testid="partial-merge-banner" style={styles.partialMergeBox}>
+          <h3 style={styles.partialMergeTitle}>Saved partial workbook</h3>
+          <p style={styles.partialMergeMessage}>
+            {state.partialMerge.merged
+              ? "Your run was stopped, but the agents that finished have been merged into a downloadable workbook."
+              : "Your run was stopped. Some per-statement files survived on disk."}
+          </p>
+          {state.partialMerge.statements_included.length > 0 && (
+            <p style={styles.partialMergeMessage}>
+              <strong>Included:</strong>{" "}
+              {state.partialMerge.statements_included.join(", ")}
+              {state.partialMerge.notes_included.length > 0 && (
+                <>{" + notes "}{state.partialMerge.notes_included.join(", ")}</>
+              )}
+            </p>
+          )}
+          {state.partialMerge.statements_missing.length > 0 && (
+            <p style={styles.partialMergeMessage}>
+              <strong>Missing (incomplete when stopped):</strong>{" "}
+              {state.partialMerge.statements_missing.join(", ")}
+            </p>
+          )}
+          {state.partialMerge.error && (
+            <p style={styles.partialMergeMessage}>
+              <em>Note: {state.partialMerge.error}</em>
+            </p>
+          )}
+        </div>
       )}
 
       {/* Error display */}
@@ -378,13 +437,40 @@ export function ActiveTabPanel({
   }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline]);
 
   if (state.activeTab === "validator") {
+    // PLAN-stop-and-validation-visibility Phase 5.3: prefer the live
+    // progress feed while the run is still going. Once `run_complete`
+    // fires, `state.crossChecks` is the authoritative copy (it carries
+    // the post-correction state if correction ran). The progress feed
+    // mirrors the same shape minus phase/index/total — strip those so
+    // ValidatorTab's existing table renders the live rows the same as
+    // the final ones.
+    const liveProgress = state.crossCheckProgress;
+    const liveRows = state.crossChecks.length === 0 && liveProgress.results.length > 0
+      ? liveProgress.results.map((r) => ({
+          name: r.name,
+          status: r.status,
+          expected: r.expected,
+          actual: r.actual,
+          diff: r.diff,
+          tolerance: r.tolerance,
+          message: r.message,
+        }))
+      : state.crossChecks;
+    const showLiveSubtitle = state.crossChecks.length === 0 && liveProgress.phase !== null;
+    const phaseLabel = liveProgress.phase === "post_correction"
+      ? "Re-checking after correction"
+      : "Cross-checks";
     return (
       <div style={styles.activityCardAttached}>
         <div style={styles.activityHeader}>
-          <span style={styles.activityTitle}>Cross-checks</span>
+          <span style={styles.activityTitle}>
+            {showLiveSubtitle ? phaseLabel : "Cross-checks"}
+          </span>
           <div style={styles.activityHeaderRight}>
             <span style={styles.activityCount}>
-              {state.crossChecks.length} checks
+              {showLiveSubtitle
+                ? `${liveProgress.results.length} / ${liveProgress.total}${liveProgress.isComplete ? "" : "…"}`
+                : `${state.crossChecks.length} checks`}
             </span>
             {showStopAll && (
               <button
@@ -398,7 +484,7 @@ export function ActiveTabPanel({
             )}
           </div>
         </div>
-        <ValidatorTab crossChecks={state.crossChecks} partial={state.crossChecksPartial} />
+        <ValidatorTab crossChecks={liveRows} partial={state.crossChecksPartial} />
       </div>
     );
   }
@@ -580,6 +666,55 @@ const styles = {
     whiteSpace: "pre-wrap" as const,
     overflow: "auto",
     marginTop: pwc.space.sm,
+  } as const,
+  // PLAN-stop-and-validation-visibility Phase 2.3 — distinct palette
+  // from errorBox so the user can tell "we saved your work" apart from
+  // "your work failed". Warning amber matches the chip used for the
+  // correction_exhausted run status (RUN-REVIEW P0-1).
+  partialMergeBox: {
+    background: pwc.warningBg,
+    border: `1px solid ${pwc.warningBorder}`,
+    borderRadius: pwc.radius.md,
+    padding: pwc.space.lg,
+    marginBottom: pwc.space.md,
+  } as const,
+  partialMergeTitle: {
+    fontFamily: pwc.fontHeading,
+    fontWeight: 600,
+    color: pwc.warningText,
+    fontSize: 15,
+    margin: 0,
+  } as const,
+  partialMergeMessage: {
+    fontFamily: pwc.fontBody,
+    color: pwc.warningText,
+    fontSize: 14,
+    marginTop: pwc.space.xs,
+    marginBottom: 0,
+  } as const,
+  // Phase 6 — pipeline stage label. Distinct from PipelineStages
+  // (which is per-agent phases inside one statement); this label
+  // surfaces the coordinator-level stage between agent activity.
+  pipelineStageBox: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    background: pwc.grey50,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
+    marginTop: pwc.space.sm,
+  } as const,
+  pipelineStageDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: pwc.orange400,
+    animation: "pulse-subtle 1.5s ease-in-out infinite",
+    flexShrink: 0,
   } as const,
   resetLink: {
     fontFamily: pwc.fontBody,

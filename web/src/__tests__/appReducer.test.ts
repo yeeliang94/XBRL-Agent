@@ -112,6 +112,32 @@ describe("appReducer", () => {
     expect(state.isRunning).toBe(false);
   });
 
+  // Peer-review fix (2026-04-27): coordinator-level error events with a
+  // ``type`` discriminator are non-fatal — the backend still continues
+  // through correction → notes validator → run_complete. The reducer
+  // must surface the error message but leave ``isRunning=true`` so the
+  // spinner stays on while the backend finishes its work. Without this,
+  // a ``merge_failed`` event mid-run would silently make the UI look
+  // done while the pipeline kept running for minutes.
+  test("typed coordinator error events do NOT flip isRunning to false", () => {
+    for (const type of ["merge_failed", "cross_check_exception", "correction_wallclock_exceeded"]) {
+      const running = runningState();
+      const state = appReducer(running, {
+        type: "EVENT",
+        payload: {
+          event: "error",
+          data: { type, message: "diagnostic", traceback: "" },
+          timestamp: 1,
+        } as SSEEvent,
+      });
+      expect(state.hasError).toBe(true);
+      // Spinner stays spinning — backend will fire run_complete later.
+      expect(state.isRunning).toBe(true);
+      // Error message captured for the banner.
+      expect(state.error?.message).toBe("diagnostic");
+    }
+  });
+
   test("RESET clears all state", () => {
     const state = appReducer(initialState, {
       type: "UPLOADED",
@@ -120,6 +146,220 @@ describe("appReducer", () => {
     const reset = appReducer(state, { type: "RESET" });
     expect(reset.sessionId).toBeNull();
     expect(reset.events).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // PLAN-stop-and-validation-visibility Phase 2.3 — partial_merge banner.
+  // ---------------------------------------------------------------------------
+
+  test("partial_merge event captures payload onto AppState", () => {
+    const running = runningState();
+    const state = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "partial_merge",
+        data: {
+          merged: true,
+          merged_path: "/output/abc/filled.xlsx",
+          statements_included: ["SOFP", "SOPL"],
+          notes_included: [],
+          statements_missing: ["SOCI"],
+          notes_missing: [],
+          error: null,
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.partialMerge).not.toBeNull();
+    expect(state.partialMerge?.merged).toBe(true);
+    expect(state.partialMerge?.statements_included).toEqual(["SOFP", "SOPL"]);
+    expect(state.partialMerge?.statements_missing).toEqual(["SOCI"]);
+    // partial_merge alone does NOT terminate the run — the cancel handler
+    // emits a paired error event right after, which owns the
+    // running→idle transition.
+    expect(state.isRunning).toBe(true);
+    expect(state.hasError).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // PLAN-stop-and-validation-visibility Phase 5 — cross-check progress.
+  // ---------------------------------------------------------------------------
+
+  test("cross_check_start seeds crossCheckProgress for the active pass", () => {
+    const running = runningState();
+    const state = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "cross_check_start",
+        data: { phase: "initial", total: 5 },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.crossCheckProgress.phase).toBe("initial");
+    expect(state.crossCheckProgress.total).toBe(5);
+    expect(state.crossCheckProgress.results).toEqual([]);
+    expect(state.crossCheckProgress.isComplete).toBe(false);
+  });
+
+  test("cross_check_result events accumulate progressively", () => {
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "cross_check_start",
+        data: { phase: "initial", total: 2 },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "cross_check_result",
+        data: {
+          phase: "initial", index: 0, total: 2,
+          name: "check_a", status: "passed",
+          expected: null, actual: null, diff: null, tolerance: null,
+          message: "ok",
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+    expect(state.crossCheckProgress.results).toHaveLength(1);
+    expect(state.crossCheckProgress.results[0].name).toBe("check_a");
+
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "cross_check_result",
+        data: {
+          phase: "initial", index: 1, total: 2,
+          name: "check_b", status: "failed",
+          expected: 100, actual: 90, diff: -10, tolerance: 1,
+          message: "off by 10",
+        },
+        timestamp: 3,
+      } as SSEEvent,
+    });
+    expect(state.crossCheckProgress.results).toHaveLength(2);
+    expect(state.crossCheckProgress.results[1].status).toBe("failed");
+  });
+
+  test("post_correction phase replaces initial-pass results in-place", () => {
+    // Initial pass arrives, then re-run after correction. The Validator
+    // tab should show the post-correction state — initial-pass rows
+    // must NOT linger.
+    let state = runningState();
+    const initialEvents: SSEEvent[] = [
+      { event: "cross_check_start", data: { phase: "initial", total: 1 }, timestamp: 1 } as SSEEvent,
+      {
+        event: "cross_check_result",
+        data: {
+          phase: "initial", index: 0, total: 1,
+          name: "check_a", status: "failed",
+          expected: 100, actual: 90, diff: -10, tolerance: 1,
+          message: "off by 10",
+        },
+        timestamp: 2,
+      } as SSEEvent,
+      { event: "cross_check_complete", data: { phase: "initial", passed: 0, failed: 1, warnings: 0, not_applicable: 0, pending: 0 }, timestamp: 3 } as SSEEvent,
+    ];
+    for (const e of initialEvents) {
+      state = appReducer(state, { type: "EVENT", payload: e });
+    }
+    expect(state.crossCheckProgress.phase).toBe("initial");
+    expect(state.crossCheckProgress.results[0].status).toBe("failed");
+
+    // Now post-correction pass — the SAME check passes after the agent
+    // edits the workbook. The reducer must drop the old result.
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "cross_check_start",
+        data: { phase: "post_correction", total: 1 },
+        timestamp: 4,
+      } as SSEEvent,
+    });
+    expect(state.crossCheckProgress.phase).toBe("post_correction");
+    expect(state.crossCheckProgress.results).toHaveLength(0);
+
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "cross_check_result",
+        data: {
+          phase: "post_correction", index: 0, total: 1,
+          name: "check_a", status: "passed",
+          expected: 100, actual: 100, diff: 0, tolerance: 1,
+          message: "ok after correction",
+        },
+        timestamp: 5,
+      } as SSEEvent,
+    });
+    expect(state.crossCheckProgress.results[0].status).toBe("passed");
+  });
+
+  // ---------------------------------------------------------------------------
+  // PLAN-stop-and-validation-visibility Phase 6 — pipeline stage label.
+  // ---------------------------------------------------------------------------
+
+  test("pipeline_stage event captures stage onto AppState", () => {
+    let state = runningState();
+    expect(state.pipelineStage).toBeNull();
+
+    const stages = ["extracting", "merging", "cross_checking", "correcting", "done"] as const;
+    for (const stage of stages) {
+      state = appReducer(state, {
+        type: "EVENT",
+        payload: {
+          event: "pipeline_stage",
+          data: { stage, started_at: 1700000000 },
+          timestamp: 1,
+        } as SSEEvent,
+      });
+      expect(state.pipelineStage).toBe(stage);
+    }
+  });
+
+  test("RUN_STARTED clears stale pipelineStage from previous run", () => {
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "pipeline_stage",
+        data: { stage: "done", started_at: 1700000000 },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.pipelineStage).toBe("done");
+
+    const restarted = appReducer(state, { type: "RUN_STARTED" });
+    expect(restarted.pipelineStage).toBeNull();
+  });
+
+  test("RUN_STARTED clears any prior partial_merge banner", () => {
+    const running = runningState();
+    const withPartial = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "partial_merge",
+        data: {
+          merged: true,
+          merged_path: "/output/abc/filled.xlsx",
+          statements_included: ["SOFP"],
+          notes_included: [],
+          statements_missing: [],
+          notes_missing: [],
+          error: null,
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(withPartial.partialMerge).not.toBeNull();
+
+    // Starting a new run wipes the banner so users don't see stale
+    // "Saved partial workbook" text from the previous Stop All.
+    const restarted = appReducer(withPartial, { type: "RUN_STARTED" });
+    expect(restarted.partialMerge).toBeNull();
   });
 
   // ---------------------------------------------------------------------------
