@@ -57,6 +57,33 @@ def test_sopl_prompt_constrains_catchall_language():
     )
 
 
+def test_sofp_prompt_forbids_sub_sheet_residual_plug():
+    """RUN-REVIEW P1-2 (2026-04-26): the Amway run wrote `Other property,
+    plant and equipment` 9,525 with evidence literally saying
+    'Total row needed to match face PPE RM64,579'. Until P1-2 the SOFP
+    prompt had no analogue of SOPL's no-plug rule, so the agent had no
+    written prohibition against using sub-sheet 'Other …' rows as a
+    balancing mechanism. This test pins the new no-residual-plug block
+    in `prompts/sofp.md` so a future re-edit can't silently regress."""
+    text = (_PROMPTS / "sofp.md").read_text(encoding="utf-8")
+    assert "NO-RESIDUAL-PLUG RULE" in text, (
+        "sofp.md must carry the named no-residual-plug section — the "
+        "header is the test's anchor for any future re-edit"
+    )
+    lower = text.lower()
+    # The catch-all category list must mention the PPE sub-block by name
+    assert "other property, plant and equipment" in lower
+    # Explicit prohibition + the SOPL-pattern wording about coarse disclosure
+    assert "never plug a residual" in lower or "never plug" in lower
+    assert "genuinely coarse" in lower, (
+        "sofp.md should mirror SOPL's wording: catch-all rows are for "
+        "entities whose disclosure is genuinely coarse, not for plugging"
+    )
+    # Reinforce the legitimate-mapping rule for individual PPE components
+    assert "motor vehicles" in lower
+    assert "construction in progress" in lower
+
+
 def test_correction_prompt_forbids_residual_plug():
     """The correction agent runs after merge if cross-checks fail. It
     must NOT respond to a failed check by plugging a catch-all to make

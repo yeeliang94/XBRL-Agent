@@ -180,3 +180,88 @@ export function createMultiAgentSSE(
 
   return controller;
 }
+
+/**
+ * PLAN-persistent-draft-uploads.md (Phase C, steps 19-20): start a draft
+ * run by run id rather than session id. The backend reads the persisted
+ * config off the `runs` row; the body is empty.
+ *
+ * Same SSE plumbing as `createMultiAgentSSE` — only the URL and the
+ * absent body differ. Sharing the parser keeps wire-format edge cases
+ * (CRLF, comments, malformed JSON) handled in one place.
+ */
+export function createMultiAgentSSEByRunId(
+  runId: number,
+  onEvent: (event: SSEEvent) => void,
+  onDone: () => void,
+  onError: (error: string) => void,
+): AbortController {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const response = await fetch(`/api/runs/${runId}/start`, {
+        method: "POST",
+        // No body: the backend reads run_config_json off the row. Sending
+        // a payload here would be ignored — keep the wire clean.
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let detail = `Request failed (${response.status})`;
+        try {
+          const body = await response.json();
+          detail = body.detail || body.message || detail;
+        } catch { /* no JSON body */ }
+        onError(detail);
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        onError("No response stream");
+        return;
+      }
+
+      for await (const evt of parseSSEStream(reader)) {
+        if (!MULTI_EVENT_TYPES.includes(evt.event as SSEEventType)) continue;
+        const typedEvent = evt as SSEEvent;
+        onEvent(typedEvent);
+        if (typedEvent.event === "run_complete" || typedEvent.event === "error") {
+          onDone();
+        }
+      }
+      onDone();
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        onError((err as Error).message || "SSE connection lost");
+      }
+    }
+  })();
+
+  return controller;
+}
+
+/**
+ * PATCH the persisted run config for a draft. Best-effort — failures
+ * are surfaced to the caller's callback so the UI can decide whether to
+ * retry or block submission.
+ */
+export async function patchRunConfig(
+  runId: number,
+  config: Partial<RunConfigPayload>,
+): Promise<void> {
+  const response = await fetch(`/api/runs/${runId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!response.ok) {
+    let detail = `PATCH /api/runs/${runId} failed (${response.status})`;
+    try {
+      const body = await response.json();
+      detail = body.detail || body.message || detail;
+    } catch { /* no JSON body */ }
+    throw new Error(detail);
+  }
+}

@@ -105,3 +105,85 @@ component rows exist.
 - "Deposits" in receivable notes → "Deposits" under Current non-trade receivables.
   Do NOT put deposits into "Other current non-trade receivables".
 - Always include "section" for ambiguous labels (current vs non-current).
+
+=== NO-RESIDUAL-PLUG RULE (sub-sheet) ===
+
+Catch-all rows on the SOFP-Sub PPE, intangibles, and investments sub-blocks
+— specifically `Other property, plant and equipment`, `Other intangible
+assets`, `Other investment property`, `Other investments in subsidiaries`,
+`Other investments in associates`, and `Other investments in joint
+ventures` — exist for entities whose disclosure is genuinely coarse, NOT
+as a balancing mechanism.
+
+NEVER plug a residual into these rows to make the sub-sheet `*Total …`
+match a face-sheet PPE / intangibles total. If the AFS note itself uses
+"Other …" as a category, fill that row with what the note labels as
+"other"; if the components don't reconcile, leave the leaf rows empty
+and let `verify_totals` flag the gap honestly. A reported imbalance is
+correct behaviour — a fabricated residual is not.
+
+Every PPE component must map to its own dedicated row when one exists:
+`Motor vehicles`, `Construction in progress / Asset work-in-progress`,
+`Office equipment, fixture and fittings`, `Computer software and
+hardware`, etc. Do not lump them into `Other property, plant and
+equipment` to match a face total.
+
+=== AFS NOTE → SSM ROW MAPPING (known confusing cases) ===
+
+These mappings cover terms commonly used in Malaysian AFS notes. Both MFRS
+and MPERS templates use the same SSM labels, so this list applies to
+both standards (rows referenced are illustrative — use the live template
+to find the actual row numbers in your variant).
+
+Inventories:
+- "Consumer products at cost / at NRV" → `Finished goods`. NOT
+  `Other inventories`. Consumer-product entities (Amway, Cosway, etc.)
+  routinely label their inventory this way; treat it as finished goods.
+- "Goods in transit" → `Finished goods` if the underlying nature is
+  finished, otherwise `Raw materials`. Do not put into `Other
+  inventories` unless the AFS itself uses "Other".
+
+Receivables:
+- "Trade receivables due from subsidiary / holding company / associate /
+  joint venture" → the matching `Trade receivables due from …` row,
+  NOT `Other receivables due from …`. The "trade vs other" axis is
+  driven by what the receivable IS (sale of goods/services = trade),
+  not by who the counterparty is.
+- "Amount owing by/from related parties" without further classification
+  defaults to `Other receivables due from other related parties` only
+  when the AFS gives no nature breakdown.
+
+Provisions:
+- `Warranty provision`, `Refunds provision`, `Restructuring provision`,
+  `Legal proceedings provision`, `Onerous contracts provision`, and
+  `Provision for decommissioning, restoration and rehabilitation costs`
+  each have dedicated rows under both Non-current and Current provisions.
+  Use them. Do NOT lump these into `Other current non-trade payables`
+  or `Other non-current non-trade payables`. (MPERS template lacks a
+  separate `Refunds provision` row — fold any refunds-related provision
+  into the closest matching MPERS row only when no dedicated row exists.)
+
+Payables:
+- "Accrued bonus", "Accrued interest", "Accrued expenses" → `Accruals`,
+  not `Other current non-trade payables`. The Accruals row is the
+  proper home for any accrual-flavoured liability.
+- "Deferred income" / "Income received in advance" → `Deferred income`
+  (under the matching Current/Non-current non-trade payables block),
+  NOT `Contract liabilities` on the face sheet — unless the AFS itself
+  invokes MFRS 15 contract-liability treatment.
+
+PPE detail:
+- "Plant and machinery" → `Plant and equipment` (or `Machinery` if a
+  dedicated row exists). Do NOT use `Other property, plant and
+  equipment` as a default landing row.
+- "Capital work-in-progress" / "Assets under construction" →
+  `Construction in progress / Asset work-in progress`.
+- "Renovations and improvements" → if there's no dedicated row,
+  prefer `Office equipment, fixture and fittings` over `Other
+  property, plant and equipment` when the renovations are part of
+  the office fit-out.
+
+Cash:
+- "Fixed deposits with licensed banks" → `Deposits placed with licensed
+  banks` (under Cash equivalents). Do NOT route through
+  `Other banking arrangements`.

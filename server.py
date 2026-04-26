@@ -30,7 +30,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 # Suppress LiteLLM SSL warnings (enterprise firewall blocks GitHub pricing fetch)
 try:
@@ -284,7 +284,30 @@ async def _run_correction_pass(
     )
     from pydantic_ai import Agent
 
-    outcome: dict = {"invoked": False, "writes_performed": 0, "error": None}
+    # RUN-REVIEW P2-3: include token + cost so the correction pseudo-agent
+    # row in run_agents gets the same backfill treatment as face/notes.
+    # RUN-REVIEW P0-1: `exhausted=True` flips the run-level status to
+    # `correction_exhausted` so History distinguishes a corrector that hit
+    # its turn cap from a generic completed_with_errors run.
+    outcome: dict = {
+        "invoked": False,
+        "writes_performed": 0,
+        "error": None,
+        "total_tokens": 0,
+        "total_cost": 0.0,
+        "exhausted": False,
+        "turns_used": 0,
+        "max_turns": 0,
+    }
+
+    # RUN-REVIEW P0-1: turn budget scales with run shape so MPERS Group
+    # (more cells, two column-sets) gets more headroom than MFRS Company.
+    # Formula: 8 base + 4 if Group + 2 per failed check, clamped [8, 25].
+    # Replaces pydantic-ai's silent default `request_limit=50` cap that
+    # fired without surfacing an actionable status to the UI.
+    is_group = (filing_level or "").lower() == "group"
+    n_failed = len(failed_checks)
+    max_turns = max(8, min(25, 8 + (4 if is_group else 0) + 2 * n_failed))
 
     async def _emit(event_type: str, data: dict) -> None:
         if event_queue is None:
@@ -332,16 +355,27 @@ async def _run_correction_pass(
         return outcome
 
     prompt = (
-        "Investigate the failed cross-checks in your system prompt, correct "
-        "the wrong cell(s) via fill_workbook, re-verify each touched sheet, "
-        "and call run_cross_checks once when finished. You have one "
-        "iteration — do not re-extract entire sheets."
+        "Investigate the failed cross-checks in your system prompt, plan "
+        "the complete diff up front, then emit ONE fill_workbook call with "
+        "all edits, followed by exactly one verify_totals and one "
+        f"run_cross_checks. You have at most {max_turns} turns — budget for "
+        "≤2 inspect calls (only when the failure context lacks a value or "
+        "formula), 1 fill, 1 verify, 1 cross-check. Do not re-extract."
     )
 
     await _emit("status", {
         "phase": "started",
-        "message": f"Correction agent started for {len(failed_checks)} failed check(s).",
+        "message": (
+            f"Correction agent started for {len(failed_checks)} failed "
+            f"check(s); turn budget {max_turns}."
+        ),
     })
+
+    # Track tool-call nodes (each one is a model "turn" from the agent
+    # iteration loop's perspective). When the count reaches max_turns
+    # without a final response, bail with `correction_exhausted` instead
+    # of letting pydantic-ai's silent 50-request cap fire.
+    turn_count = 0
 
     try:
         async with agent.iter(prompt, deps=deps) as agent_run:
@@ -349,6 +383,43 @@ async def _run_correction_pass(
                 agent_run, CORRECTION_TURN_TIMEOUT,
             ):
                 if Agent.is_call_tools_node(node):
+                    turn_count += 1
+                    if turn_count > max_turns:
+                        # RUN-REVIEW P0-1: dynamic cap fired before
+                        # pydantic-ai's hidden 50-request limit. Surface
+                        # a structured outcome so the run-level status
+                        # logic can flip to `correction_exhausted`.
+                        msg = (
+                            f"Correction agent exhausted its turn budget "
+                            f"({max_turns}) after {deps.writes_performed} "
+                            f"write(s); {n_failed} failed check(s) remain."
+                        )
+                        logger.warning(msg)
+                        outcome["error"] = "correction_exhausted"
+                        outcome["exhausted"] = True
+                        outcome["turns_used"] = turn_count - 1
+                        outcome["max_turns"] = max_turns
+                        outcome["writes_performed"] = deps.writes_performed
+                        await _emit("error", {"message": msg})
+                        await _emit("complete", {
+                            "success": False,
+                            "error": "correction_exhausted",
+                            "writes_performed": deps.writes_performed,
+                            "turns_used": turn_count - 1,
+                            "max_turns": max_turns,
+                        })
+                        # Best-effort token capture before we bail —
+                        # whatever turns ran represent real spend.
+                        try:
+                            from pricing import estimate_cost as _ec
+                            _u = agent_run.usage()
+                            _p = int(_u.request_tokens or 0)
+                            _c = int(_u.response_tokens or 0)
+                            outcome["total_tokens"] = int(_u.total_tokens or 0)
+                            outcome["total_cost"] = _ec(_p, _c, 0, model)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return outcome
                     async with node.stream(agent_run.ctx) as tool_stream:
                         async for event in tool_stream:
                             if isinstance(event, FunctionToolCallEvent):
@@ -377,9 +448,23 @@ async def _run_correction_pass(
                                     "duration_ms": 0,
                                 })
         outcome["writes_performed"] = deps.writes_performed
+        outcome["turns_used"] = turn_count
+        outcome["max_turns"] = max_turns
+        # RUN-REVIEW P2-3: capture usage for the correction pseudo-agent.
+        try:
+            from pricing import estimate_cost as _ec
+            _u = agent_run.usage()
+            _prompt = int(_u.request_tokens or 0)
+            _completion = int(_u.response_tokens or 0)
+            outcome["total_tokens"] = int(_u.total_tokens or 0)
+            outcome["total_cost"] = _ec(_prompt, _completion, 0, model)
+        except Exception:  # noqa: BLE001 — telemetry is advisory
+            logger.debug("correction agent token capture skipped")
         await _emit("complete", {
             "success": True,
             "writes_performed": deps.writes_performed,
+            "turns_used": turn_count,
+            "max_turns": max_turns,
         })
     except _asyncio.CancelledError:
         await _emit("complete", {"success": False, "error": "Cancelled by user"})
@@ -716,6 +801,39 @@ class RunConfigRequest(BaseModel):
     notes_models: Dict[str, str] = {}
 
 
+class RunConfigPatchRequest(BaseModel):
+    """Partial-update body for PATCH /api/runs/{id}.
+
+    Mirrors RunConfigRequest but every field is optional — the frontend
+    PreRunPanel emits debounced PATCHes for whichever fields changed
+    since the last save (PLAN-persistent-draft-uploads.md, Phase B). The
+    Literal validators on `filing_level`/`filing_standard` are preserved
+    so a typo in the UI surfaces as a 422 instead of silently corrupting
+    the stored config.
+
+    Unset fields are excluded from the merge via `model_dump(exclude_unset=True)`
+    in the handler, so a PATCH that only touches `statements` does not
+    blank out the previously-saved `filing_level`.
+    """
+
+    statements: Optional[List[str]] = None
+    variants: Optional[Dict[str, str]] = None
+    models: Optional[Dict[str, str]] = None
+    use_scout: Optional[bool] = None
+    filing_level: Optional[Literal["company", "group"]] = None
+    filing_standard: Optional[Literal["mfrs", "mpers"]] = None
+    notes_to_run: Optional[List[str]] = None
+    notes_models: Optional[Dict[str, str]] = None
+    # `infopack` is the scout-derived inventory the legacy `POST /api/run/
+    # {session_id}` endpoint receives in its request body. For the
+    # persistent-draft flow there is no separate "scout output store" on
+    # disk — the infopack only exists in the frontend's PreRunPanel
+    # state until it's bundled with the run config. So we MUST persist
+    # it here; otherwise PATCH→DB→start strips it and the coordinator
+    # runs without scout's page hints (peer-review HIGH #1).
+    infopack: Optional[Dict] = None
+
+
 # --- Settings helpers ---
 
 # Statement type keys used for per-agent model defaults
@@ -926,7 +1044,45 @@ async def upload_pdf(file: UploadFile = File(...)):
         file.filename, encoding="utf-8"
     )
 
-    return {"session_id": session_id, "filename": file.filename}
+    # Persistent-draft contract (PLAN-persistent-draft-uploads.md): the upload
+    # response carries a `run_id` so the frontend can navigate to a shareable
+    # `/run/{run_id}` URL immediately. The draft row holds the user-visible
+    # filename + session pointer; config is filled in via PATCH as the user
+    # picks statements / level / standard / model in PreRunPanel.
+    #
+    # Best-effort: if the audit DB is unhappy, we still return the upload
+    # response so the UI flow is not blocked. The user gets a non-persistent
+    # session (legacy behaviour); History just won't see this draft. Logs
+    # capture the failure for ops.
+    run_id: Optional[int] = None
+    try:
+        import sqlite3
+        from db import repository as repo
+        # `init_db` already runs once in the lifespan handler — see the
+        # comment at `_lifespan` for the per-request-cost rationale
+        # (peer-review #9). Don't re-run it here.
+        db_conn = sqlite3.connect(str(AUDIT_DB_PATH))
+        try:
+            db_conn.execute("PRAGMA foreign_keys = ON")
+            db_conn.execute("PRAGMA busy_timeout = 5000")
+            run_id = repo.create_run(
+                db_conn,
+                pdf_filename=file.filename,
+                session_id=session_id,
+                output_dir=str(session_dir),
+                config=None,
+                scout_enabled=False,
+                status="draft",
+            )
+            db_conn.commit()
+        finally:
+            db_conn.close()
+    except Exception:
+        logger.exception(
+            "Failed to insert draft runs row for session %s", session_id,
+        )
+
+    return {"session_id": session_id, "filename": file.filename, "run_id": run_id}
 
 
 # --- Scout endpoint (Phase 7.1) ---
@@ -1118,6 +1274,8 @@ async def run_multi_agent_stream(
     api_key: str,
     proxy_url: str,
     model_name: str,
+    *,
+    existing_run_id: Optional[int] = None,
 ) -> AsyncIterator[dict]:
     """Orchestrates multi-agent extraction with SSE event multiplexing.
 
@@ -1188,28 +1346,92 @@ async def run_multi_agent_stream(
         db_conn.execute("PRAGMA journal_mode = WAL")
         db_conn.execute("PRAGMA busy_timeout = 5000")
         db_conn.row_factory = sqlite3.Row
-        run_id = repo.create_run(
-            db_conn,
-            pdf_filename=pdf_filename,
-            session_id=session_id,
-            output_dir=output_dir,
-            config=run_config.model_dump(),
-            scout_enabled=run_config.use_scout,
-        )
-        db_conn.commit()
     except Exception:
-        # If the DB is unhappy, the extraction itself should still run —
-        # History just won't see this row. Log loudly so ops notices.
+        # Couldn't open the DB at all — there is nothing we can audit.
+        # Log loudly and let extraction continue without an audit trail.
         logger.exception(
-            "Failed to create runs row for session %s", session_id,
+            "Failed to open audit DB connection for session %s", session_id,
         )
-        # Close a partially-opened connection so we don't leak file handles.
         if db_conn is not None:
             try:
                 db_conn.close()
             except Exception:
                 pass
             db_conn = None
+
+    if db_conn is not None:
+        if existing_run_id is not None:
+            # Persistent-draft start path: `start_run_endpoint` has already
+            # done the atomic draft → running flip (peer-review HIGH #3).
+            # We trust the row is in 'running' state. We do NOT mark it
+            # again here, and there is no defensive create_run fallback —
+            # silently creating a fresh row would break the shareable
+            # /run/{id} URL the user just navigated to.
+            #
+            # Refresh the persisted config blob from the live request.
+            # `start_run_endpoint` parsed `run_config` from the same DB
+            # row, so this is a no-op in the happy path; in the rare case
+            # the PATCH/Start race let `start_run_endpoint` see a stale
+            # blob, the live `run_config` is still the authoritative
+            # source-of-truth for what we are about to extract.
+            #
+            # Peer-review #2 (HIGH, RUN-REVIEW follow-up): a failure on
+            # this cosmetic UPDATE must NOT null db_conn. The row was
+            # already flipped to 'running' before this function was
+            # called; if we drop the audit connection here, the
+            # terminal-status write at the end of the run silently
+            # no-ops and the row stays 'running' forever, violating
+            # gotcha #10 (every exit path reaches a terminal status).
+            run_id = existing_run_id
+            try:
+                db_conn.execute(
+                    "UPDATE runs SET run_config_json = ?, scout_enabled = ? "
+                    "WHERE id = ?",
+                    (
+                        json.dumps(run_config.model_dump()),
+                        1 if run_config.use_scout else 0,
+                        existing_run_id,
+                    ),
+                )
+                db_conn.commit()
+            except Exception:
+                logger.warning(
+                    "Failed to refresh run_config_json on existing draft %s "
+                    "— continuing with stale persisted config; terminal "
+                    "status will still be written.",
+                    existing_run_id, exc_info=True,
+                )
+                # Roll back the failed UPDATE so the connection stays
+                # usable for downstream writes (terminal status, agent
+                # rows, cross-checks). We deliberately do NOT null
+                # db_conn — the row is recoverable.
+                try:
+                    db_conn.rollback()
+                except Exception:
+                    pass
+        else:
+            # Fresh-row path: insert the runs row. If THIS fails the run
+            # has no row at all, so dropping the connection is correct
+            # (there's nothing for the terminal-status writer to find).
+            try:
+                run_id = repo.create_run(
+                    db_conn,
+                    pdf_filename=pdf_filename,
+                    session_id=session_id,
+                    output_dir=output_dir,
+                    config=run_config.model_dump(),
+                    scout_enabled=run_config.use_scout,
+                )
+                db_conn.commit()
+            except Exception:
+                logger.exception(
+                    "Failed to create runs row for session %s", session_id,
+                )
+                try:
+                    db_conn.close()
+                except Exception:
+                    pass
+                db_conn = None
 
     coordinator_result = None  # type: ignore[assignment]
     merge_result = None
@@ -1730,10 +1952,22 @@ async def run_multi_agent_stream(
             all_notes_workbook_paths.update(notes_result.workbook_paths)
 
         # Merge workbooks (Phase 7.4). Notes sheets land after face sheets.
+        # RUN-REVIEW peer-review #1 (HIGH): pass skip_recalc=True so
+        # formulas survive into the post-merge stage. The CORRECTION
+        # agent (when triggered) writes to the merged workbook via
+        # fill_workbook, which relies on `cell.value.startswith("=")`
+        # to refuse formula-cell overwrites. If recalc replaced
+        # *Total formulas with literals at merge time, that guard is
+        # silently defeated AND any leaf-only writes from the
+        # corrector fail to propagate (totals stay stale). Recalc
+        # happens once below, AFTER correction has finished, so the
+        # downloaded workbook still carries cached values for
+        # downstream programmatic readers (compare_results.py, etc.).
         merge_result = merge_workbooks(
             all_workbook_paths,
             merged_path,
             notes_workbook_paths=all_notes_workbook_paths,
+            skip_recalc=True,
         )
 
         # Record the merged workbook path on the runs row. History's download
@@ -1952,6 +2186,35 @@ async def run_multi_agent_stream(
                             client_connected = False
                 validator_outcome = await validator_task
 
+        # RUN-REVIEW peer-review #1 (HIGH): recalc happens HERE — after
+        # correction (if any) has had its chance to edit the merged
+        # workbook. By deferring the formula-to-literal replacement
+        # until now we get three things at once:
+        #   1. The CORRECTION fill_workbook guard at fill_workbook.py
+        #      :298-303 stays effective — `cell.value.startswith("=")`
+        #      still catches *Total cells because they're still
+        #      formulas during correction.
+        #   2. Agent writes to leaves DO propagate to *Total cells
+        #      via the formula evaluator in cross_checks/util.py, so
+        #      post-correction cross-checks see the corrected totals.
+        #   3. The downloaded workbook still ends up with cached
+        #      values for downstream programmatic readers
+        #      (compare_results.py and any future verifier).
+        # Best-effort — failures fall back to the merger's existing
+        # `fullCalcOnLoad=True` flag so Excel users still see correct
+        # totals when they open the file.
+        if merge_result.success:
+            try:
+                from tools.recalc import recalc_workbook
+                recalc_workbook(merged_path)
+            except Exception:  # noqa: BLE001 — recalc is advisory
+                logger.warning(
+                    "Post-correction recalc skipped — workbook saved "
+                    "without cached values; Excel will recalc on first "
+                    "open via fullCalcOnLoad.",
+                    exc_info=True,
+                )
+
         # Persist per-agent FINAL state + extracted fields + cross-checks.
         # Phase 6.5 moved create_run_agent() UP FRONT so tool events could
         # be persisted live as the stream came in; this block now only
@@ -1986,6 +2249,10 @@ async def run_multi_agent_stream(
                         status=status,
                         workbook_path=agent_result.workbook_path,
                         variant=agent_result.variant,
+                        # RUN-REVIEW P2-3: backfill token + cost telemetry
+                        # so run_agents stops shipping zeros (gotcha #6).
+                        total_tokens=agent_result.total_tokens,
+                        total_cost=agent_result.total_cost,
                     )
 
                     # Persist extracted fields from per-statement result.json
@@ -2030,6 +2297,9 @@ async def run_multi_agent_stream(
                         db_conn, run_agent_id,
                         status=notes_agent_result.status,
                         workbook_path=notes_agent_result.workbook_path,
+                        # RUN-REVIEW P2-3: notes agents also backfill.
+                        total_tokens=notes_agent_result.total_tokens,
+                        total_cost=notes_agent_result.total_cost,
                     )
 
                 # Peer-review C1: finalise pseudo-agent rows so History
@@ -2044,10 +2314,16 @@ async def run_multi_agent_stream(
                             status = "failed"
                         else:
                             status = "completed"
+                        # RUN-REVIEW P2-3: even when correction failed,
+                        # whatever turns it ran are real spend; persist
+                        # the captured totals (defaulted 0/0 if unset).
+                        _co = correction_outcome or {}
                         repo.finish_run_agent(
                             db_conn, correction_run_agent_id,
                             status=status,
                             workbook_path=None,
+                            total_tokens=int(_co.get("total_tokens", 0)),
+                            total_cost=float(_co.get("total_cost", 0.0)),
                         )
                     except Exception:
                         logger.warning(
@@ -2094,7 +2370,26 @@ async def run_multi_agent_stream(
         any_check_failed = any(cr.status == "failed" for cr in cross_check_results)
         notes_all_succeeded = notes_result is None or notes_result.all_succeeded
         all_agents_ok = coordinator_result.all_succeeded and notes_all_succeeded
-        if all_agents_ok and merge_result.success and not any_check_failed:
+        # RUN-REVIEW P0-1: a CORRECTION pass that hit its turn budget
+        # without converging is a distinct outcome — agents/merge ran
+        # fine and checks may even all be green now, but the corrector
+        # bailed early. Report `correction_exhausted` so operators see
+        # this in History as "needs review" rather than conflating with
+        # generic completed_with_errors.
+        #
+        # Peer-review #5 (MEDIUM): the exhausted check is FIRST in the
+        # branch order so that an exhausted run with all-green checks
+        # still reports `correction_exhausted`, not `completed`. The
+        # earlier ordering (completed-first) contradicted this comment
+        # — a corrector that landed enough writes before its budget
+        # ran out to coincidentally clear all checks would silently
+        # report "completed" with no human-review signal.
+        correction_exhausted = bool(
+            correction_outcome and correction_outcome.get("exhausted")
+        )
+        if all_agents_ok and merge_result.success and correction_exhausted:
+            overall_status = "correction_exhausted"
+        elif all_agents_ok and merge_result.success and not any_check_failed:
             overall_status = "completed"
         elif all_agents_ok and not merge_result.success:
             overall_status = "completed_with_errors"
@@ -2267,6 +2562,173 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest):
 
 ## Legacy GET /api/run/{session_id} endpoint was removed in Phase 11.3.
 ## Use POST /api/run/{session_id} with RunConfigRequest body instead.
+
+
+@app.post("/api/runs/{run_id}/start")
+async def start_run_endpoint(run_id: int):
+    """Start an extraction for a draft run created via the upload endpoint.
+
+    Persistent-draft contract (PLAN-persistent-draft-uploads.md, Phase B):
+    POST /api/upload created a draft row with status='draft'; the frontend
+    PATCHed config onto it; clicking "Start" hits this endpoint, which
+    flips draft → running and streams the same SSE the legacy
+    POST /api/run/{session_id} would have. The legacy endpoint stays alive
+    so CLI/Windows clients keep working unchanged.
+
+    Validation order (matches the legacy path so error semantics are
+    consistent):
+      1. Run exists → else 404.
+      2. Status is 'draft' → else 409 (don't restart a running/completed
+         row).
+      3. Stored config parses as RunConfigRequest with at least one
+         statement → else 422.
+      4. PDF file exists on disk → else 404 (the upload sidecar is the
+         single source of truth for the on-disk PDF).
+      5. API key + active_runs reservation, identical to the legacy path.
+    """
+    from db import repository as repo
+
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+    finally:
+        conn.close()
+
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Run is not a draft (current status: {run.status}). "
+                "Only drafts can be started."
+            ),
+        )
+
+    # Parse the persisted config back into a RunConfigRequest so the same
+    # validation rules apply at start time as the legacy POST body. A draft
+    # with NULL config or an empty `statements` list trips a 422 here.
+    raw_config = run.config or {}
+    try:
+        run_config = RunConfigRequest(**raw_config)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    if not run_config.statements:
+        raise HTTPException(
+            status_code=422,
+            detail=[
+                {
+                    "loc": ["body", "statements"],
+                    "msg": "Pick at least one statement before starting the run.",
+                    "type": "value_error.missing",
+                }
+            ],
+        )
+
+    session_id = run.session_id
+    session_dir = OUTPUT_DIR / session_id
+    pdf_path = session_dir / "uploaded.pdf"
+    if not pdf_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="PDF not found on disk. Re-upload the file.",
+        )
+
+    if session_id in active_runs:
+        raise HTTPException(
+            status_code=409,
+            detail="Extraction already running for this session.",
+        )
+
+    # Atomic flip BEFORE we acquire the active_runs reservation OR open
+    # the SSE stream (peer-review HIGH #3). The atomic UPDATE is the
+    # single source of truth for "this thread won the right to start
+    # this draft" — if it returns rowcount=0 another request raced us
+    # and we must NOT proceed (silently creating a fresh row would
+    # break the shareable /run/{id} URL semantics). Doing the flip
+    # here also lets `run_multi_agent_stream`'s `existing_run_id` path
+    # trust the row is already 'running'.
+    flip_conn = _open_audit_conn()
+    try:
+        flipped = repo.mark_draft_started(flip_conn, run_id)
+        flip_conn.commit()
+    finally:
+        flip_conn.close()
+    if not flipped:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Run is not a draft (state changed during the request). "
+                "Only drafts can be started."
+            ),
+        )
+
+    active_runs.add(session_id)
+
+    try:
+        load_dotenv(ENV_FILE, override=True)
+        api_key = _resolve_api_key()
+        proxy_url = os.environ.get("LLM_PROXY_URL", "")
+        model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "GEMINI_API_KEY (Mac) or GOOGLE_API_KEY (Windows proxy) "
+                    "must be set. Check Settings."
+                ),
+            )
+
+        async def event_stream():
+            try:
+                async for evt in run_multi_agent_stream(
+                    session_id=session_id,
+                    session_dir=session_dir,
+                    run_config=run_config,
+                    api_key=api_key,
+                    proxy_url=proxy_url,
+                    model_name=model_name,
+                    existing_run_id=run_id,
+                ):
+                    yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+            finally:
+                active_runs.discard(session_id)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception:
+        # Anything that prevents the StreamingResponse from being returned
+        # MUST roll the row back to 'draft' AND release the active_runs
+        # reservation; otherwise the user sees a 5xx but the row is stuck
+        # 'running' forever. The flip rollback is best-effort — if it
+        # fails the row is no worse off than today's legacy path on the
+        # same kind of failure.
+        active_runs.discard(session_id)
+        try:
+            rb = _open_audit_conn()
+            try:
+                rb.execute(
+                    "UPDATE runs SET status='draft', started_at='' "
+                    "WHERE id=? AND status='running'",
+                    (run_id,),
+                )
+                rb.commit()
+            finally:
+                rb.close()
+        except Exception:
+            logger.warning(
+                "Failed to roll draft %s back to draft after start error",
+                run_id, exc_info=True,
+            )
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -2780,6 +3242,70 @@ async def get_run_detail_endpoint(run_id: int):
             for c in detail.cross_checks
         ],
     }
+
+
+@app.patch("/api/runs/{run_id}")
+async def patch_run_config_endpoint(run_id: int, body: RunConfigPatchRequest):
+    """Persist pre-run config edits onto a draft run.
+
+    Called from the frontend PreRunPanel as the user picks statements /
+    level / standard / model / notes — debounced ~500ms client-side.
+    Only drafts (status='draft') accept PATCH; once a run starts, its
+    stored config is the audit-trail record of what was actually
+    extracted, so we refuse to mutate it.
+
+    Body validation runs before this handler; an invalid filing_level
+    enum surfaces as a 422 from FastAPI/Pydantic. Unset fields are
+    excluded from the merge so partial updates preserve prior choices.
+
+    Atomicity (peer-review MEDIUM #4): the not-draft guard is enforced
+    by a SQL `WHERE status='draft'` clause inside `update_run_config`,
+    not just by the upfront fetch_run check. The two-step approach
+    (check, then update) opens a TOCTOU window where a /start request
+    in flight could flip the row 'draft' → 'running' between our check
+    and our update — silently mutating a started run's audit-trail
+    config. We still do the upfront fetch so we can distinguish 404
+    (no row at all) from 409 (row exists but it's not a draft).
+    """
+    from db import repository as repo
+
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if run.status != "draft":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Run config is locked once the run has started. "
+                    f"Current status: {run.status}"
+                ),
+            )
+
+        patch = body.model_dump(exclude_unset=True)
+        if not patch:
+            # Empty PATCH is a no-op — return the current config so the
+            # client's optimistic state stays in sync.
+            return {"id": run_id, "config": run.config or {}}
+
+        merged = repo.update_run_config(conn, run_id, patch)
+        if merged is None:
+            # Race: the row flipped between fetch_run and the UPDATE's
+            # WHERE clause. Same user-facing semantics as the upfront
+            # check above.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Run config is locked once the run has started "
+                    "(state changed during the request)."
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"id": run_id, "config": merged}
 
 
 @app.delete("/api/runs/{run_id}")

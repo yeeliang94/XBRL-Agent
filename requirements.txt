@@ -4,6 +4,11 @@ python-dotenv>=1.0.0
 python-multipart>=0.0.9
 pydantic-ai>=1.77.0
 openpyxl>=3.1.0
+# RUN-REVIEW P0-3 (2026-04-26): pure-Python Excel formula evaluator
+# used by tools/recalc.py to write cached values into merged workbooks
+# so downstream programmatic readers (compare_results.py, the agent's
+# verify_totals when it reads sub-sheet rollups) don't see None.
+formulas>=1.2
 PyMuPDF>=1.24.0
 openai>=1.0.0
 litellm[proxy]

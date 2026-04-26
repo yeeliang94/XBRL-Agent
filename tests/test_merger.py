@@ -130,8 +130,16 @@ class TestMergedWorkbookHasAllSheets:
 class TestMergerPreservesFormulas:
     """Formulas in per-statement sheets remain formulas in merged output."""
 
-    def test_formulas_preserved(self, tmp_dir):
-        """Formulas should NOT be evaluated — they stay as formula strings."""
+    def test_formulas_preserved_when_recalc_skipped(self, tmp_dir):
+        """Formulas should survive merge VERBATIM when ``skip_recalc=True``.
+
+        RUN-REVIEW P0-3 (2026-04-26): the default merge path now runs a
+        post-merge recalc that REPLACES formulas with their cached values
+        (so downstream programmatic readers don't see None). The
+        formula-preservation contract is therefore opt-in via
+        ``skip_recalc=True`` — useful for tests, debugging, or edge cases
+        where the user wants the formula string back.
+        """
         from workbook_merger import merge
 
         # Create a workbook with formulas
@@ -141,21 +149,53 @@ class TestMergerPreservesFormulas:
         ws["A1"] = "Assets"
         ws["B1"] = 100
         ws["B2"] = 200
-        ws["B3"] = "=SUM(B1:B2)"  # formula — must survive merge
+        ws["B3"] = "=SUM(B1:B2)"  # formula — must survive merge with skip_recalc
         p = str(Path(tmp_dir) / "SOFP_filled.xlsx")
         wb.save(p)
         wb.close()
 
         output = str(Path(tmp_dir) / "filled.xlsx")
-        merge({StatementType.SOFP: p}, output)
+        merge({StatementType.SOFP: p}, output, skip_recalc=True)
 
         wb2 = openpyxl.load_workbook(output, data_only=False)
         cell = wb2["SOFP-CuNonCu"]["B3"]
         assert cell.value == "=SUM(B1:B2)", f"Formula was lost: got {cell.value}"
         wb2.close()
 
+    def test_formulas_replaced_with_cached_values_by_default(self, tmp_dir):
+        """The DEFAULT merge path runs recalc, so a formula cell holds
+        its computed value after merge (and reads back via openpyxl
+        ``data_only=True``). Without this, downstream readers see None.
+        Pinned because it's the visible behaviour change from P0-3."""
+        from workbook_merger import merge
+
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        ws = wb.create_sheet("SOFP-CuNonCu")
+        ws["A1"] = "Assets"
+        ws["B1"] = 100
+        ws["B2"] = 200
+        ws["B3"] = "=SUM(B1:B2)"
+        p = str(Path(tmp_dir) / "SOFP_filled.xlsx")
+        wb.save(p)
+        wb.close()
+
+        output = str(Path(tmp_dir) / "filled.xlsx")
+        merge({StatementType.SOFP: p}, output)  # default: skip_recalc=False
+
+        # Post-recalc: cell now holds the literal sum. Both data_only modes
+        # return the same number because the formula was replaced.
+        wb2 = openpyxl.load_workbook(output, data_only=True)
+        assert wb2["SOFP-CuNonCu"]["B3"].value == 300
+        wb2.close()
+
     def test_cross_sheet_formulas_preserved(self, tmp_dir):
-        """Cross-sheet references within the same statement workbook survive merge."""
+        """Cross-sheet references survive merge with skip_recalc=True.
+
+        With recalc enabled (default) the cross-sheet formula gets
+        replaced by its computed value (12345); both behaviours are
+        documented above. This test pins the no-recalc path.
+        """
         from workbook_merger import merge
 
         # SOFP main sheet references sub-sheet
@@ -170,7 +210,7 @@ class TestMergerPreservesFormulas:
         wb.close()
 
         output = str(Path(tmp_dir) / "filled.xlsx")
-        merge({StatementType.SOFP: p}, output)
+        merge({StatementType.SOFP: p}, output, skip_recalc=True)
 
         wb2 = openpyxl.load_workbook(output, data_only=False)
         assert wb2["SOFP-CuNonCu"]["B8"].value == "='SOFP-Sub-CuNonCu'!B39"

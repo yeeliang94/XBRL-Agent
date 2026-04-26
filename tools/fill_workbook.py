@@ -35,6 +35,10 @@ class FillResult:
     fields_written: int
     output_path: str
     errors: list[str]
+    # RUN-REVIEW P1-1 (2026-04-26): non-fatal warnings surfaced to the
+    # agent so it can self-correct double-booking before the next
+    # verify_totals pass. Empty list when no concerns detected.
+    warnings: list[str] = field(default_factory=list)
 
 
 # Default SOCIE evidence column for the MFRS 24-col equity-component matrix.
@@ -58,6 +62,131 @@ def _resolve_socie_evidence_col(ws) -> int:
         if isinstance(value, str) and value.strip().lower() == "source":
             return col
     return _DEFAULT_MATRIX_SOCIE_EVIDENCE_COL
+
+
+def _evidence_token_overlap(a: str, b: str) -> int:
+    """Count distinct lowercase tokens (≥4 chars) shared by two evidence
+    strings. Used by the double-booking guard (RUN-REVIEW P1-1) to decide
+    whether two same-value writes really refer to the same disclosure.
+    Short tokens are ignored because words like "of", "and", "the", "RM"
+    overlap on every pair and would make the guard fire constantly.
+    """
+    if not a or not b:
+        return 0
+    norm = lambda s: {  # noqa: E731
+        tok for tok in
+        ''.join(c.lower() if c.isalnum() else ' ' for c in s).split()
+        if len(tok) >= 4
+    }
+    return len(norm(a) & norm(b))
+
+
+def _detect_double_bookings(
+    label_index: dict[str, "list[_LabelEntry]"],
+    written: list[FieldMapping],
+    *,
+    min_value: float = 1.0,
+    overlap_threshold: int = 3,
+) -> list[str]:
+    """Return human-readable warnings about same-value/same-section writes.
+
+    RUN-REVIEW §3.3-D: the Amway run wrote restoration provision PY 1,881
+    onto BOTH row 287 (Provision for decommissioning…) and row 318 (Other
+    non-current non-trade payables) in the same Non-current liabilities
+    section. The face balance still passes because *Total non-current
+    liabilities sums both — but the value is double-booked.
+
+    The guard is intentionally narrow:
+
+    * Same sheet, same column, same numeric value.
+    * Evidence-string token overlap ≥ ``overlap_threshold`` distinct
+      tokens of length ≥ 4. Disjoint evidence (two different
+      disclosures that happen to round to the same number) does NOT
+      trip the guard — that's a coincidence, not a double-book.
+    * Tiny values (|val| < ``min_value``) are ignored — zeros and
+      single-digit RM amounts coincide too often to be meaningful.
+
+    Note we do NOT require both rows to share an exact section label.
+    The Amway bug had row 287 (section "non-current provisions") and
+    row 318 (section "non-current non-trade payables") — peer
+    sub-sections under Non-current liabilities. Forcing exact-section
+    match would silently miss this real failure mode. The
+    evidence-overlap discriminator carries the load instead.
+
+    The guard is column-scoped so legitimate consolidation pass-through
+    on Group filings (same value in Group-CY col B AND Company-CY col
+    D for the same row) does NOT trigger — that's by design, the
+    discriminator is whether we're seeing two ROWS with the same value
+    in ONE column.
+    """
+    warnings: list[str] = []
+    if not written:
+        return warnings
+
+    # Group writes by (sheet, col) so we only compare within the same
+    # column — Group consolidation pass-through (same value in Group +
+    # Company columns) is legitimate and must not warn.
+    by_col: dict[tuple[str, int], list[tuple[FieldMapping, "_LabelEntry"]]] = {}
+    for m in written:
+        if m.value is None:
+            continue
+        try:
+            v = float(m.value)
+        except (TypeError, ValueError):
+            continue
+        if abs(v) < min_value:
+            continue
+        sheet_entries = label_index.get(m.sheet, [])
+        # Find the entry for the row we wrote to (already resolved during
+        # the main loop; here we just look it up by mapping fields).
+        entry = None
+        for e in sheet_entries:
+            if m.row is not None and e.row == m.row:
+                entry = e
+                break
+            if m.field_label and e.normalized_label == _normalize_label(m.field_label):
+                # Section-aware match when row coordinate isn't carried.
+                if m.section and m.section.lower() not in e.section.lower():
+                    continue
+                entry = e
+                break
+        if entry is None or entry.is_header:
+            continue
+        by_col.setdefault((m.sheet, m.col), []).append((m, entry))
+
+    for (sheet, col), items in by_col.items():
+        # Find pairs sharing (value, overlapping-evidence) within this
+        # (sheet, col). We do NOT gate on exact section match — the
+        # canonical Amway bug straddled peer sub-sections, see the
+        # docstring rationale above. Section labels are still surfaced
+        # in the warning text so the agent has navigation context.
+        for i, (m_a, e_a) in enumerate(items):
+            for m_b, e_b in items[i + 1:]:
+                if e_a.row == e_b.row:
+                    continue
+                # Cast through float so 1881 == 1881.0 etc.
+                if abs(float(m_a.value) - float(m_b.value)) > 0.5:
+                    continue
+                overlap = _evidence_token_overlap(m_a.evidence, m_b.evidence)
+                if overlap < overlap_threshold:
+                    continue
+                col_letter = openpyxl.utils.get_column_letter(col)
+                same_section = e_a.section == e_b.section
+                section_note = (
+                    f"section '{e_a.section}'"
+                    if same_section
+                    else f"sections '{e_a.section}' / '{e_b.section}'"
+                )
+                warnings.append(
+                    f"Possible double-booking on {sheet} col {col_letter} "
+                    f"{section_note}: value {m_a.value} appears "
+                    f"on row {e_a.row} ('{m_a.field_label or ''}') AND "
+                    f"row {e_b.row} ('{m_b.field_label or ''}') with "
+                    f"overlapping evidence ({overlap} shared token(s)). "
+                    f"If both are correct, leave them; if one is the "
+                    f"wrong row, remove it before the next verify_totals."
+                )
+    return warnings
 
 
 def fill_workbook(
@@ -95,6 +224,10 @@ def fill_workbook(
     wb = openpyxl.load_workbook(template_path)
     errors: list[str] = []
     fields_written = 0
+    # RUN-REVIEW P1-1: track successful writes so the post-loop double-
+    # booking guard only sees mappings that actually landed (skipped
+    # writes shouldn't raise spurious warnings).
+    successful_writes: list[FieldMapping] = []
 
     # Build section-aware label index per sheet
     label_index = _build_label_index(wb)
@@ -190,6 +323,17 @@ def fill_workbook(
 
         cell.value = mapping.value
         fields_written += 1
+        # Stash a copy with the resolved row coordinate so the double-
+        # booking guard doesn't have to redo label/section matching.
+        successful_writes.append(FieldMapping(
+            sheet=mapping.sheet,
+            field_label=mapping.field_label,
+            col=mapping.col,
+            value=mapping.value,
+            section=mapping.section,
+            row=target_row,
+            evidence=mapping.evidence,
+        ))
 
         # Write evidence/source to a single column per sheet so notes don't repeat.
         #
@@ -216,12 +360,20 @@ def fill_workbook(
     wb.save(output_path)
     wb.close()
 
+    # RUN-REVIEW P1-1: scan successful writes for double-bookings now
+    # that the workbook is closed. Warnings are advisory — they don't
+    # flip success to False — but they bubble up to the agent so it
+    # can decide whether to keep both rows or remove one before the
+    # next verify_totals pass.
+    warnings = _detect_double_bookings(label_index, successful_writes)
+
     if errors and fields_written == 0:
         return FillResult(
             success=False,
             fields_written=0,
             output_path=output_path,
             errors=errors,
+            warnings=warnings,
         )
 
     return FillResult(
@@ -229,6 +381,7 @@ def fill_workbook(
         fields_written=fields_written,
         output_path=output_path,
         errors=errors,
+        warnings=warnings,
     )
 
 

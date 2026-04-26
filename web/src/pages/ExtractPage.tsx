@@ -1,9 +1,9 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunConfigPayload } from "../lib/types";
 import { pwc } from "../lib/theme";
 import type { AppState, AppAction } from "../lib/appReducer";
 import { notesTabLabel, agentSubAgentSummary } from "../lib/appReducer";
-import { getResultJson, getExtendedSettings } from "../lib/api";
+import { fetchRunDetail, getResultJson, getExtendedSettings } from "../lib/api";
 import { UploadPanel } from "../components/UploadPanel";
 import { PreRunPanel } from "../components/PreRunPanel";
 import { PipelineStages } from "../components/PipelineStages";
@@ -30,8 +30,9 @@ export { NOTES_12_AGENT_ID };
 // ---------------------------------------------------------------------------
 
 // Minimal local alias — avoids circular import of the real UploadResponse type
-// while keeping the prop type honest.
-type UploadResponseShape = { session_id: string; filename: string };
+// while keeping the prop type honest. run_id is forward-compat for the
+// persistent-draft contract; existing callers still receive it on success.
+type UploadResponseShape = { session_id: string; filename: string; run_id: number | null };
 
 export interface ExtractPageProps {
   state: AppState;
@@ -42,6 +43,14 @@ export interface ExtractPageProps {
   handleAbortAgent: (agentId: string) => Promise<void>;
   handleRerunAgent: (agentId: string) => void;
   handleReset: () => void;
+  /** Peer-review #4 (MEDIUM, RUN-REVIEW follow-up): debounced
+   *  callback the parent wires to `patchRunConfig(currentRunId, …)`.
+   *  Forwarded to PreRunPanel so the persistent-draft contract holds
+   *  across refresh/share — pre-fix the only PATCH happened on Run-
+   *  click. Optional so legacy callers that never touched the draft
+   *  keep working (the no-PATCH path is still valid for ad-hoc
+   *  legacy `/` uploads where there's no run id to update). */
+  handleConfigChange?: (config: RunConfigPayload) => void;
 }
 
 export function ExtractPage({
@@ -53,7 +62,81 @@ export function ExtractPage({
   handleAbortAgent,
   handleRerunAgent,
   handleReset,
+  handleConfigChange,
 }: ExtractPageProps) {
+  // PLAN-persistent-draft-uploads.md (Phase C): when the URL is /run/{id}
+  // (currentRunId is non-null on mount) and we have not yet loaded that
+  // run's details, fetch the row from the audit DB and seed the workspace
+  // with its filename + session_id. This is the load-bearing rehydration
+  // for "refresh the page and your upload is still there" — without it
+  // the upload card sits empty on every refresh.
+  //
+  // We compare against state.sessionId (already set when uploading on the
+  // same tab) to avoid re-fetching when the user just dropped the file.
+  // The ref guards against React-StrictMode double-mounting in dev so we
+  // do not fire two GET /api/runs/{id} calls.
+  //
+  // Peer-review MEDIUM #5: the fetched config blob is held here so it can
+  // be passed to PreRunPanel as `initialConfig`. PreRunPanel mounts only
+  // after `state.sessionId` is set — we dispatch UPLOADED *after* the
+  // config lands in this state so the panel sees the saved config on
+  // its very first render.
+  const rehydratedRunIdRef = useRef<number | null>(null);
+  const [draftConfig, setDraftConfig] = useState<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    const id = state.currentRunId;
+    if (id == null) {
+      // Navigated away from /run/{id} (e.g. Reset / new upload) — clear
+      // any prior draft config so the next mount starts fresh.
+      setDraftConfig(null);
+      return;
+    }
+    if (rehydratedRunIdRef.current === id) return;
+    // Peer-review #3 (HIGH): only treat the existing sessionId as
+    // belonging to THIS run when sessionRunId matches. Otherwise it's
+    // stale state from a prior upload — navigating from /run/A to
+    // /run/B would have skipped the fetch and silently kept A's
+    // session, so scout would have run against the wrong PDF.
+    if (state.sessionId && state.sessionRunId === id) {
+      // Same-tab upload (or already-rehydrated): sessionId is current.
+      rehydratedRunIdRef.current = id;
+      return;
+    }
+    let cancelled = false;
+    rehydratedRunIdRef.current = id;
+    fetchRunDetail(id)
+      .then((detail) => {
+        if (cancelled) return;
+        // Stash the saved config first so PreRunPanel sees it on its
+        // first render after the UPLOADED dispatch below.
+        setDraftConfig(detail.config ?? null);
+        // UPLOADED is the existing action that seeds sessionId + filename;
+        // re-using it keeps the rehydration path identical to a same-tab
+        // upload so all downstream effects (PreRunPanel mount, scout flow)
+        // pick up state without special-casing.
+        dispatch({
+          type: "UPLOADED",
+          payload: {
+            sessionId: detail.session_id,
+            filename: detail.pdf_filename,
+            // Pin ownership: this sessionId was just fetched FOR this id.
+            runId: id,
+          },
+        });
+      })
+      .catch(() => {
+        // Non-existent run id or audit DB hiccup — clear the ref so the
+        // user can navigate away and back to retry. We do not surface a
+        // visible error here because /run/{garbage} also lands in this
+        // branch, and silently degrading to the bare extract page is
+        // gentler than a banner the user can't action.
+        rehydratedRunIdRef.current = null;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.currentRunId, state.sessionId, state.sessionRunId, dispatch]);
+
   // Memoize the tab-bar props so token-delta events don't churn references.
   // AgentTabs itself is React.memo — without stable refs the memo never fires.
   const agentTabsAgents = useMemo(
@@ -110,12 +193,20 @@ export function ExtractPage({
         startTime={state.runStartTime}
       />
 
-      {/* Pre-run configuration panel — shown after upload, hidden once running */}
+      {/* Pre-run configuration panel — shown after upload, hidden once running.
+          A `key` tied to currentRunId forces a remount when the page navigates
+          to a different /run/{id}, so PreRunPanel re-runs its useState
+          initializers with the freshly-fetched draftConfig. Without this a
+          back-then-forward between two drafts would leak the first one's
+          state into the second's panel. */}
       {state.sessionId && !state.isRunning && !state.isComplete && !state.hasError && (
         <PreRunPanel
+          key={state.currentRunId ?? "fresh"}
           sessionId={state.sessionId}
           getSettings={getExtendedSettings}
           onRun={handleMultiRun}
+          initialConfig={draftConfig}
+          onConfigChange={handleConfigChange}
         />
       )}
 

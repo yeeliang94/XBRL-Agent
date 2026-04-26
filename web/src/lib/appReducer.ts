@@ -59,6 +59,21 @@ export interface AppState {
   // round-trip /history/<id>: push on select, pop on back button, hydrate
   // on deep-link. Null when the history list itself is visible.
   selectedRunId: number | null;
+  // PLAN-persistent-draft-uploads.md (Phase C): the run id encoded in a
+  // shareable `/run/{id}` URL. Distinct from `selectedRunId` (which is a
+  // History-page concept). When set, ExtractPage rehydrates from
+  // `GET /api/runs/{id}` so a refresh or a copy-pasted link picks up the
+  // saved PDF + draft config. Null on the bare `/` extract page.
+  currentRunId: number | null;
+  // Peer-review #3 (HIGH, RUN-REVIEW follow-up): the run id that "owns"
+  // the current sessionId. Set in lockstep with sessionId during
+  // UPLOADED. ExtractPage uses this to discriminate "fresh upload for
+  // this run" (skip re-fetch) from "stale sessionId from a prior
+  // upload, navigated to a different draft" (must re-fetch).
+  // Without it, navigating /run/A → /run/B with a sessionId still in
+  // state silently keeps A's session, so scout runs against the wrong
+  // PDF.
+  sessionRunId: number | null;
   // Phase 9: transient toast surfaced in the top-right corner on run
   // completion. Null when no toast is active. Dismissed via DISMISS_TOAST
   // (either from the manual close button or the auto-dismiss timer).
@@ -73,7 +88,7 @@ export interface ToastState {
 export type AppView = "extract" | "history";
 
 export type AppAction =
-  | { type: "UPLOADED"; payload: { sessionId: string; filename: string } }
+  | { type: "UPLOADED"; payload: { sessionId: string; filename: string; runId?: number | null } }
   | { type: "RUN_STARTED"; payload?: { statements?: string[]; notes?: string[]; config?: RunConfigPayload } }
   | { type: "EVENT"; payload: SSEEvent }
   | { type: "SET_ACTIVE_TAB"; payload: string }
@@ -81,6 +96,7 @@ export type AppAction =
   | { type: "RERUN_STARTED"; payload: { agentId: string } }
   | { type: "SET_VIEW"; payload: AppView }
   | { type: "SET_SELECTED_RUN_ID"; payload: number | null }
+  | { type: "SET_CURRENT_RUN_ID"; payload: number | null }
   | { type: "DISMISS_TOAST" }
   | { type: "RESET" };
 
@@ -107,6 +123,8 @@ export const initialState: AppState = {
   lastRunConfig: null,
   view: "extract",
   selectedRunId: null,
+  currentRunId: null,
+  sessionRunId: null,
   toast: null,
 };
 
@@ -114,25 +132,43 @@ export const initialState: AppState = {
 // (optionally with a trailing slash). Used by both bootState and the App's
 // popstate handler so URL parsing stays in one place.
 const HISTORY_RUN_RE = /^\/history\/(\d+)\/?$/;
+// Persistent-draft URL — `/run/<n>` is the shareable link returned from
+// the upload endpoint. Same trailing-slash tolerance as the history form.
+const RUN_RE = /^\/run\/(\d+)\/?$/;
 
-/** Derive the app view + selected run id from a pathname.
+/** Derive the app view + selected/current run id from a pathname.
  *
  *  - `/history/42` → history view, selectedRunId=42
  *  - `/history` (any non-numeric suffix included) → history view, no selection
+ *  - `/run/42` → extract view, currentRunId=42
+ *  - `/run/garbage` → extract view, no run id (graceful fallback for typos)
  *  - anything else → extract view
  *
  *  We're permissive on the history side so a URL like `/history/foo` still
  *  lands on the list instead of bouncing to extract — less confusing when
- *  someone mistypes a deep link.
+ *  someone mistypes a deep link. The same forgiveness applies to bad
+ *  /run/<x> ids: render the generic extract page, don't throw.
  */
 export function parseRouteFromPath(
   pathname: string,
-): { view: AppView; selectedRunId: number | null } {
+): { view: AppView; selectedRunId: number | null; currentRunId: number | null } {
+  if (pathname.startsWith("/run")) {
+    const m = RUN_RE.exec(pathname);
+    return {
+      view: "extract",
+      selectedRunId: null,
+      currentRunId: m ? Number(m[1]) : null,
+    };
+  }
   if (!pathname.startsWith("/history")) {
-    return { view: "extract", selectedRunId: null };
+    return { view: "extract", selectedRunId: null, currentRunId: null };
   }
   const m = HISTORY_RUN_RE.exec(pathname);
-  return { view: "history", selectedRunId: m ? Number(m[1]) : null };
+  return {
+    view: "history",
+    selectedRunId: m ? Number(m[1]) : null,
+    currentRunId: null,
+  };
 }
 
 /**
@@ -144,8 +180,8 @@ export function parseRouteFromPath(
  */
 export function bootState(): AppState {
   if (typeof window === "undefined") return initialState;
-  const { view, selectedRunId } = parseRouteFromPath(window.location.pathname);
-  return { ...initialState, view, selectedRunId };
+  const { view, selectedRunId, currentRunId } = parseRouteFromPath(window.location.pathname);
+  return { ...initialState, view, selectedRunId, currentRunId };
 }
 
 // ---------------------------------------------------------------------------
@@ -611,8 +647,23 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         // Preserve the current view so an upload from /history doesn't silently
         // punt the user back to the extract tab.
         view: state.view,
+        // PLAN-persistent-draft-uploads.md: UPLOADED is dispatched both
+        // on first-upload AND on rehydration from `/run/{id}`. Preserving
+        // currentRunId keeps the shareable URL alive across the dispatch
+        // — without this the URL effect snaps back to `/` mid-rehydration
+        // and the address bar lies about what the user is looking at.
+        currentRunId: state.currentRunId,
         sessionId: action.payload.sessionId,
         filename: action.payload.filename,
+        // Peer-review #3 (HIGH): record which run id this sessionId
+        // belongs to. Falls back to currentRunId when payload doesn't
+        // carry runId (legacy callers); same-tab uploads pass it
+        // explicitly so the rehydrate effect can tell "fresh upload
+        // for this run" from "stale session from a prior upload".
+        sessionRunId:
+          action.payload.runId !== undefined
+            ? action.payload.runId
+            : state.currentRunId,
       };
 
     case "RUN_STARTED": {
@@ -640,6 +691,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       // Kept purely as a state update — the URL round-trip happens in an
       // App-level effect watching this field.
       return { ...state, selectedRunId: action.payload };
+
+    case "SET_CURRENT_RUN_ID":
+      // Persistent-draft `/run/{id}` URL lives here. Setting a non-null
+      // value tells ExtractPage to fetch + rehydrate that run; clearing
+      // it brings the user back to the bare /` extract page (e.g. after
+      // a "Start new extraction" reset).
+      return { ...state, currentRunId: action.payload };
 
     case "DISMISS_TOAST":
       return { ...state, toast: null };

@@ -381,6 +381,10 @@ def create_correction_agent(
             )
             if result.errors:
                 msg += f"\nErrors: {result.errors}"
+            # RUN-REVIEW P1-1: surface double-booking warnings so the
+            # corrector can resolve them before the next run_cross_checks.
+            if result.warnings:
+                msg += f"\nWarnings: {result.warnings}"
             return msg
         return f"Failed to fill workbook. Errors: {result.errors}"
 
