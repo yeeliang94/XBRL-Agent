@@ -474,6 +474,32 @@ _HEADER_ROW = 2  # Row where period-placeholder strings go (row 2 for Group, row
 _FIRST_BODY_ROW = 3
 _PERIOD_PLACEHOLDER = "01/01/YYYY - 31/12/YYYY"
 
+# Header fill convention copied from MFRS hand-curated templates: dark navy
+# with white bold text on every row whose underlying concept is XBRL-
+# abstract. `tools.section_headers._HEADER_FILL_RGB` keys off this exact
+# colour, so painting it here makes the abstract-row write guard in
+# fill_workbook + the [ABSTRACT] marker in _summarize_template light up on
+# MPERS the same way they do on MFRS.
+_HEADER_FILL_ARGB = "FF1F3864"
+
+
+def _apply_abstract_row_styling(cell) -> None:
+    """Paint a col-A label cell to match MFRS abstract-concept rows.
+
+    Dark-navy fill + white bold font. Idempotent — safe to call after the
+    label cell already carries other formatting (e.g. `*`-bold for total
+    rows; in practice abstract and total rows don't overlap, but we don't
+    rely on that).
+    """
+    from openpyxl.styles import Font, PatternFill
+
+    cell.fill = PatternFill(
+        start_color=_HEADER_FILL_ARGB,
+        end_color=_HEADER_FILL_ARGB,
+        fill_type="solid",
+    )
+    cell.font = Font(bold=True, color="FFFFFFFF")
+
 
 def _apply_group_sheet_layout(ws, rows: list[tuple[int, str, str, bool]]) -> None:
     """Write the 6-column Group layout onto a sheet.
@@ -497,10 +523,15 @@ def _apply_group_sheet_layout(ws, rows: list[tuple[int, str, str, bool]]) -> Non
         ws.cell(row=2, column=col, value=_PERIOD_PLACEHOLDER)
 
     bold_font = Font(bold=True)
-    for idx, (_depth, _concept_id, label, _is_abstract) in enumerate(rows):
+    for idx, (_depth, _concept_id, label, is_abstract) in enumerate(rows):
         r = _FIRST_BODY_ROW + idx
         cell = ws.cell(row=r, column=1, value=label)
-        if isinstance(label, str) and label.startswith("*"):
+        # Abstract concept rows get dark-navy fill + white bold font to
+        # match MFRS — this is what the writer's abstract-row guard keys
+        # off. Total rows ('*'-prefixed) keep their bold-only treatment.
+        if is_abstract:
+            _apply_abstract_row_styling(cell)
+        elif isinstance(label, str) and label.startswith("*"):
             cell.font = bold_font
 
     ws.freeze_panes = "A4"
@@ -524,10 +555,14 @@ def _apply_company_sheet_layout(ws, rows: list[tuple[int, str, str, bool]]) -> N
     ws.cell(row=1, column=4, value="Source")
 
     bold_font = Font(bold=True)
-    for idx, (_depth, _concept_id, label, _is_abstract) in enumerate(rows):
+    for idx, (_depth, _concept_id, label, is_abstract) in enumerate(rows):
         r = _FIRST_BODY_ROW + idx
         cell = ws.cell(row=r, column=1, value=label)
-        if isinstance(label, str) and label.startswith("*"):
+        # Abstract concept rows get dark-navy fill + white bold font (MFRS
+        # parity). Total rows ('*'-prefixed) keep their bold-only treatment.
+        if is_abstract:
+            _apply_abstract_row_styling(cell)
+        elif isinstance(label, str) and label.startswith("*"):
             cell.font = bold_font
 
     # Freeze + widths pin: matches MFRS Company format reference.
@@ -908,10 +943,15 @@ def _apply_group_socie_layout(
 
     for (start, _end), header in zip(block_ranges, block_headers):
         ws.cell(row=start, column=1, value=header).font = bold_font
-        for idx, (_depth, _concept_id, label, _is_abstract) in enumerate(truncated):
+        for idx, (_depth, _concept_id, label, is_abstract) in enumerate(truncated):
             r = start + 1 + idx
             cell = ws.cell(row=r, column=1, value=label)
-            if isinstance(label, str) and label.startswith("*"):
+            # SOCIE abstract rows are rare (the linkbase has mostly leaves
+            # under the 'Components of equity' axis) but we paint them when
+            # present for parity with MFRS's hand-curated SOCIE template.
+            if is_abstract:
+                _apply_abstract_row_styling(cell)
+            elif isinstance(label, str) and label.startswith("*"):
                 cell.font = bold_font
 
     # Inject per-block subtotal formulas using the SOCIE calc (610000).

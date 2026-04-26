@@ -234,6 +234,7 @@ def _summarize_template(fields: list[TemplateField]) -> str:
                 "row": f.row,
                 "label": f.label[:80],
                 "is_data_entry": f.is_data_entry,
+                "is_abstract": getattr(f, "is_abstract", False),
                 "formula": f.formula[:60] if f.formula else None,
             }
         )
@@ -244,8 +245,19 @@ def _summarize_template(fields: list[TemplateField]) -> str:
         lines.append(
             f"Total cells: {info['total']} | Data entry: {info['data_entry']} | Formulas: {info['formula']}"
         )
+        # Bug A: surface ABSTRACT explicitly so the agent's read_template
+        # summary stops calling section-header rows DATA_ENTRY. Without this
+        # the agent saw e.g. "Interest income" tagged DATA_ENTRY and wrote
+        # numeric values onto the abstract concept instead of the leaf rows
+        # below. The writer will refuse abstract writes regardless, but
+        # surfacing it here gives the agent the hint up front.
         for r in info["rows"]:
-            status = "DATA_ENTRY" if r["is_data_entry"] else f"FORMULA: {r['formula']}"
+            if r["is_abstract"]:
+                status = "ABSTRACT (section header — do not write)"
+            elif r["is_data_entry"]:
+                status = "DATA_ENTRY"
+            else:
+                status = f"FORMULA: {r['formula']}"
             lines.append(
                 f"  {r['coord']:>5} (row {r['row']:>3}): {r['label']:<60} [{status}]"
             )

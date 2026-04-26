@@ -107,7 +107,12 @@ def test_verify_unbalanced(tmp_path):
 
 
 def test_verify_unbalanced_feedback_direction(tmp_path):
-    """When assets > equity+liabilities, feedback should point at the liabilities side."""
+    """When assets > equity+liabilities, feedback should point at the liabilities side.
+
+    The literal phrase changed when the no-plug guidance was added (Bug B,
+    2026-04-26); the diagnostic intent — telling the agent which side is
+    lower so it can re-examine the right notes — is preserved.
+    """
     path = tmp_path / "unbalanced.xlsx"
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -119,7 +124,10 @@ def test_verify_unbalanced_feedback_direction(tmp_path):
 
     result = verify_totals(str(path))
     assert not result.is_balanced
-    assert "equity+liabilities section is too low" in result.feedback
+    feedback = result.feedback.lower()
+    # Direction marker: feedback names equity+liabilities as the lower side.
+    assert "equity+liabilities" in feedback
+    assert "lower" in feedback or "too low" in feedback
 
 
 def test_evaluate_formula_weighted_sum(tmp_path):
