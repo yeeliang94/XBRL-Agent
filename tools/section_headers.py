@@ -116,3 +116,77 @@ def header_set(
     return frozenset(
         h.normalized for h in discover_section_headers(wb[sheet_name], extra_keywords)
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared keyword fallback registry (peer-review #1, 2026-04-26)
+#
+# Header detection by fill colour covers ~95% of cases. The remaining 5% are
+# uncoloured-but-load-bearing rows: SOFP sub-sheet sub-section dividers and
+# MPERS Group SOCIE block dividers ("Group - Current period", etc.).
+# fill_workbook's label-disambiguation pass needs them; template_reader's
+# is_abstract marking needs them too. Owning the keyword fallback selection
+# here keeps reader and writer symmetric — without it, an agent could see
+# [DATA_ENTRY] in the read_template summary and then have its write refused.
+# ---------------------------------------------------------------------------
+
+_LEGACY_MAIN_HEADER_KEYWORDS: frozenset[str] = frozenset({
+    "non-current assets",
+    "current assets",
+    "equity",
+    "non-current liabilities",
+    "current liabilities",
+})
+
+_LEGACY_SUB_HEADER_KEYWORDS: frozenset[str] = _LEGACY_MAIN_HEADER_KEYWORDS | frozenset({
+    "property, plant and equipment",
+    "investment property",
+    "biological assets",
+    "intangible assets",
+    "investments in subsidiaries",
+    "investments in associates",
+    "investments in joint ventures",
+    "non-current trade receivables",
+    "current trade receivables",
+    "non-current derivative financial assets",
+    "current derivative financial assets",
+    "inventories",
+    "cash and cash equivalents",
+    "non-current borrowings",
+    "current borrowings",
+    "non-current employee benefit liabilities",
+    "current employee benefit liabilities",
+    "non-current provisions",
+    "current provisions",
+    "non-current trade payables",
+    "current trade payables",
+    "non-current non-trade payables",
+    "current non-trade payables",
+    "non-current derivative financial liabilities",
+    "current derivative financial liabilities",
+})
+
+_MPERS_GROUP_SOCIE_BLOCK_HEADERS: frozenset[str] = frozenset({
+    "group - current period",
+    "group - prior period",
+    "company - current period",
+    "company - prior period",
+})
+
+
+def keyword_fallback_for_sheet(sheet_name: str) -> frozenset[str]:
+    """Return the keyword fallback set appropriate for a sheet.
+
+    Used by both the writer (fill_workbook) and the reader (template_reader)
+    so that abstract-row detection stays symmetric across the two layers.
+    Sheet-name heuristics mirror the legacy logic from fill_workbook's
+    `_build_label_index`: SOCIE sheets get the MPERS block-divider keywords;
+    sub-sheets / analysis sheets get the broader sub-section keyword set;
+    everything else gets the main-statement keyword set.
+    """
+    name = sheet_name.lower()
+    if "socie" in name:
+        return _LEGACY_MAIN_HEADER_KEYWORDS | _MPERS_GROUP_SOCIE_BLOCK_HEADERS
+    if "sub" in name or "analysis" in name:
+        return _LEGACY_SUB_HEADER_KEYWORDS
+    return _LEGACY_MAIN_HEADER_KEYWORDS

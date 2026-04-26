@@ -379,6 +379,52 @@ Key invariants:
 
 Full walkthrough: [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md).
 
+### 17. Abstract section-header rows are never writable; agents must not plug residuals
+
+Two coupled defences live in the writer + prompts (added 2026-04-26 after a
+Windows run polluted SOPL-Analysis-Function with header-row writes and
+catch-all "balancing amount" plugs):
+
+- **Header guard in `tools/fill_workbook.py`**: any row whose col-A cell has
+  the dark-navy / mid-blue header fill (`_HEADER_FILL_RGB` in
+  `tools/section_headers.py`) is XBRL-abstract. Writes to those rows are
+  refused with an actionable error pointing at the leaves below. The
+  template summary the agent sees from `read_template()` already labels
+  them `[ABSTRACT (section header — do not write)]` (via
+  `extraction/agent.py::_summarize_template`).
+- **Leaf-preferred-over-header in `_find_row_by_label`**: when the same
+  label appears at both a header and a leaf row in the same sheet (the
+  "Other fee and commission income" case on SOPL-Analysis), the writer
+  picks the leaf. Header detection is **row-based** — the legacy
+  label-set form falsely marked any leaf with the same text as a header.
+- **No-residual-plug rule in `prompts/_base.md`, `prompts/sopl.md`, and
+  `prompts/correction.md`**: catch-all rows ("Other …",
+  "Miscellaneous …", "Administrative expenses") are for genuinely coarse
+  entity disclosures only. Agents must NEVER plug a residual into them
+  to balance verify_totals or run_cross_checks. If the breakdown can't
+  reconcile, leaf rows stay empty and the run finishes with a flagged
+  imbalance — that is correct behaviour.
+- **Verifier feedback is non-directive**: `tools/verifier.py` SOFP
+  imbalance feedback carries the diagnostic ("equity+liabilities side is
+  lower than assets") AND an explicit "do NOT plug a catch-all row".
+
+Pinned by `tests/test_template_reader.py::test_abstract_rows_marked_in_sopl_analysis`,
+`tests/test_fill_workbook_abstract_guard.py`,
+`tests/test_prompt_residual_plug_rule.py`, and
+`tests/test_verifier_feedback_wording.py`. Removing any of these defences
+without updating the matching test will fail CI loudly.
+
+**MPERS parity (2026-04-26):** the abstract-row guard works on MPERS too.
+`scripts/generate_mpers_templates.py::_apply_abstract_row_styling` paints
+the same dark-navy `1F3864` fill + white bold font that MFRS uses, on
+every row whose underlying SSM concept ends in `Abstract`. Don't drop
+this when editing the generator's `_apply_*_sheet_layout` helpers —
+without it the guard silently no-ops on MPERS and the SOPL-Analysis
+header-pollution failure mode returns. Pinned by
+`tests/test_template_reader.py::test_mpers_templates_carry_header_fills_like_mfrs`
+and the end-to-end
+`test_writer_refuses_abstract_writes_on_mpers_sopl_analysis`.
+
 ## Testing
 
 ```bash
@@ -420,6 +466,10 @@ Some tests auto-skip when sample data is absent (e.g. `test_pdf_viewer.py`).
 - **Don't remove `_safe_mark_finished`'s try/except** (gotcha #10).
 - **Don't add deterministic label-matching to the notes pipeline** — it's
   intentionally all LLM judgement.
+- **Don't soften the abstract-row guard or the no-residual-plug prompts**
+  (gotcha #17) — both encode the 2026-04-26 SOPL-Analysis incident where the
+  agent wrote values onto section headers and used catch-all rows as a
+  balancing plug.
 - **`docs/Archive/` is read-only** — completed plans and fix reports kept for
   audit trail.
 - **`docs/PLAN-*.md` are historical context**, not API contracts. Treat them

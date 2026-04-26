@@ -7,7 +7,11 @@ from typing import Optional
 
 import openpyxl
 
-from tools.section_headers import header_set
+from tools.section_headers import (
+    discover_section_headers,
+    header_set,
+    keyword_fallback_for_sheet,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +162,32 @@ def fill_workbook(
             )
             continue
 
+        # Bug A (2026-04-26): refuse writes to abstract section-header rows.
+        # The screenshot bug on SOPL-Analysis-Function had the agent writing
+        # 6,092 onto the dark-navy "Interest income" row instead of the
+        # leaves below — the formula-driven "Total interest income" then
+        # evaluated to 0 because the leaves were empty. The header is an
+        # XBRL abstract concept, never a data target. We look the row up
+        # in the same `label_index` we just built so the check stays cheap
+        # and consistent with `_find_row_by_label`'s leaf-preference logic.
+        sheet_entries = label_index.get(mapping.sheet, [])
+        target_entry = next(
+            (e for e in sheet_entries if e.row == target_row),
+            None,
+        )
+        if target_entry is not None and target_entry.is_header:
+            label_text = ws.cell(row=target_row, column=1).value
+            errors.append(
+                f"Refusing to write to {mapping.sheet}!{cell.coordinate}: "
+                f"row {target_row} ('{label_text}') is an XBRL abstract "
+                f"section header, not a data-entry cell. Write to a leaf "
+                f"row under it (call read_template() and look for non-"
+                f"[ABSTRACT] rows in this section), or roll the value up "
+                f"into the nearest matching leaf. Never plug a residual "
+                f"into a catch-all to make totals reconcile."
+            )
+            continue
+
         cell.value = mapping.value
         fields_written += 1
 
@@ -208,64 +238,16 @@ class _LabelEntry:
     normalized_label: str
     row: int
     section: str  # e.g. "non-current assets", "current liabilities"
+    # Bug A (2026-04-26): True when this label is itself a section-header
+    # (XBRL-abstract) row. Used by `_find_row_by_label` to prefer leaves
+    # over headers on duplicate labels, and by the writer to refuse writes
+    # whose target lands on an abstract row.
+    is_header: bool = False
 
 
-# Legacy keyword fallbacks. These mirror the section headers previously
-# hard-coded here — we keep them as an `extra_keywords` safety net for the
-# `header_set()` discovery helper, in case a template ships a section header
-# without the expected fill colour. Discovery by fill colour is the primary
-# path; these keywords only add missing entries, never remove any.
-_LEGACY_MAIN_HEADER_KEYWORDS = frozenset({
-    "non-current assets",
-    "current assets",
-    "equity",
-    "non-current liabilities",
-    "current liabilities",
-})
-
-# Bug 5c — MPERS Group SOCIE uses four stacked blocks ("Group - Current
-# period", "Group - Prior period", "Company - Current period", "Company -
-# Prior period") divided by plain-text header rows. Those headers carry no
-# fill colour (unlike SOFP section headers), so the coloured-fill discovery
-# in section_headers.py does not pick them up. Without these keywords the
-# four blocks share one empty section and duplicate-label writes (Profit
-# (loss), Equity at end of period, etc.) all default to block 1. The SOCIE-
-# specific keyword set below is passed when the sheet name contains "socie".
-_MPERS_GROUP_SOCIE_BLOCK_HEADERS = frozenset({
-    "group - current period",
-    "group - prior period",
-    "company - current period",
-    "company - prior period",
-})
-
-
-_LEGACY_SUB_HEADER_KEYWORDS = _LEGACY_MAIN_HEADER_KEYWORDS | frozenset({
-    "property, plant and equipment",
-    "investment property",
-    "biological assets",
-    "intangible assets",
-    "investments in subsidiaries",
-    "investments in associates",
-    "investments in joint ventures",
-    "non-current trade receivables",
-    "current trade receivables",
-    "non-current derivative financial assets",
-    "current derivative financial assets",
-    "inventories",
-    "cash and cash equivalents",
-    "non-current borrowings",
-    "current borrowings",
-    "non-current employee benefit liabilities",
-    "current employee benefit liabilities",
-    "non-current provisions",
-    "current provisions",
-    "non-current trade payables",
-    "current trade payables",
-    "non-current non-trade payables",
-    "current non-trade payables",
-    "non-current derivative financial liabilities",
-    "current derivative financial liabilities",
-})
+# Keyword fallback registry now lives in `tools.section_headers` so the
+# reader (template_reader) and the writer share one source of truth — see
+# peer-review #1 (2026-04-26) and `keyword_fallback_for_sheet`.
 
 
 def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
@@ -280,22 +262,16 @@ def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
         entries: list[_LabelEntry] = []
         current_section = ""
 
-        # Use granular sections only for sub-sheets; main sheet uses top-level only.
-        # Section headers are discovered from the template itself (fill colour)
-        # so new MBRS templates work without code changes; the legacy keyword
-        # set is passed as a safety net for any header missing a coloured fill.
-        is_sub_sheet = "sub" in name.lower() or "analysis" in name.lower()
-        is_socie = "socie" in name.lower()
-        if is_socie:
-            # MPERS Group SOCIE's uncoloured block dividers are load-bearing
-            # for duplicate-label disambiguation; see
-            # _MPERS_GROUP_SOCIE_BLOCK_HEADERS above for the full rationale.
-            fallback = _LEGACY_MAIN_HEADER_KEYWORDS | _MPERS_GROUP_SOCIE_BLOCK_HEADERS
-        elif is_sub_sheet:
-            fallback = _LEGACY_SUB_HEADER_KEYWORDS
-        else:
-            fallback = _LEGACY_MAIN_HEADER_KEYWORDS
-        headers = header_set(wb, name, extra_keywords=fallback)
+        # Detect header rows by row index (not label string). The legacy
+        # form returned a set of normalised labels, which mis-marked any
+        # leaf with the same text as a header — that was itself part of
+        # the SOPL-Analysis duplicate-label bug. Keyword fallback selection
+        # is shared with template_reader via section_headers — see
+        # peer-review #1 (2026-04-26).
+        fallback = keyword_fallback_for_sheet(name)
+        header_rows = {
+            h.row for h in discover_section_headers(ws, extra_keywords=fallback)
+        }
 
         for row in range(1, ws.max_row + 1):
             cell_val = ws.cell(row=row, column=1).value
@@ -303,15 +279,19 @@ def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
                 continue
 
             normalized = _normalize_label(str(cell_val))
-
-            # Check if this row is a section header
-            if normalized in headers:
+            is_header = row in header_rows
+            # Section transitions: every header switches the running
+            # section. Leaves that happen to share a header's label do
+            # not — they keep their parent's section because is_header
+            # is row-based.
+            if is_header:
                 current_section = normalized
 
             entries.append(_LabelEntry(
                 normalized_label=normalized,
                 row=row,
                 section=current_section,
+                is_header=is_header,
             ))
 
         index[name] = entries
@@ -339,6 +319,15 @@ def _find_row_by_label(
 
     # Collect all exact matches
     exact_matches = [e for e in entries if e.normalized_label == normalized]
+
+    # Bug A (2026-04-26): if the label has both a header occurrence and a
+    # leaf occurrence (the "Other fee and commission income" case on
+    # SOPL-Analysis), prefer the leaves. The header is XBRL-abstract — the
+    # writer's separate header guard will refuse it anyway, and bumping
+    # past it here lets the legitimate leaf write succeed without forcing
+    # the agent to add a section hint it shouldn't need.
+    if exact_matches and any(not e.is_header for e in exact_matches):
+        exact_matches = [e for e in exact_matches if not e.is_header]
 
     if exact_matches:
         if len(exact_matches) == 1:

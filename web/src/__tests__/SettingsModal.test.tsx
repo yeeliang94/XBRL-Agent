@@ -147,7 +147,7 @@ describe("SettingsModal — P3 enhancements", () => {
 
     expect(screen.getByText(/Enterprise LiteLLM proxy endpoint/)).toBeInTheDocument();
     expect(screen.getByText(/From Bruno/)).toBeInTheDocument();
-    expect(screen.getByText(/e\.g\., vertex_ai/)).toBeInTheDocument();
+    expect(screen.getByText(/e\.g\., openai\.gpt-5\.4/)).toBeInTheDocument();
   });
 
   test("save blocks invalid values even when user never blurred (e.g., types then hits Enter)", async () => {

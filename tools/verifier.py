@@ -10,6 +10,72 @@ from openpyxl.formula.tokenizer import Tokenizer
 # function to avoid a circular import if verifier ever grows into a package.
 
 
+# Peer-review #2 (2026-04-26): factor the imbalance feedback so every
+# branch (CY, PY, Group Company-CY, Group Company-PY) gets the diagnostic
+# direction marker AND the no-plug guidance — the original Bug B fix
+# only updated the CY branch, leaving the other three with the legacy
+# bare line and no anti-plug guard.
+def _sofp_imbalance_feedback(period_label: str, diff: float) -> list[str]:
+    """Return the IMBALANCE + diagnostic + no-plug lines for a SOFP period.
+
+    `period_label` is what appears in the IMBALANCE prefix — "CY", "PY",
+    "Company CY", or "Company PY". `diff = assets - (equity+liabilities)`,
+    so a positive sign means assets exceeds equity+liabilities (something
+    missing on the equity/liabilities side, or assets carries an extra
+    value); a negative sign is the mirror image. The legacy phrasing
+    inverted the negative-diff direction (peer-review 2026-04-26) — the
+    correct reading is that assets is LOWER, not higher.
+    """
+    direction = (
+        "equity+liabilities section is lower than assets, or assets "
+        "carries an extra value"
+        if diff > 0
+        else "assets section is lower than equity+liabilities, or "
+             "equity+liabilities carries an extra value"
+    )
+    return [
+        f"IMBALANCE ({period_label}): assets - (equity+liabilities) = {diff}",
+        # Diagnostic + no-plug guidance. Wording deliberately avoids the
+        # legacy "Action: re-examine X side" framing because, paired with
+        # the save-gate's hard block, that pushed the agent toward
+        # plugging a residual into a catch-all row to satisfy the gate.
+        f"Diagnostic: {direction}. Re-examine the relevant notes for any "
+        f"sub-items you may have missed. Do NOT plug a catch-all row "
+        f"('Other …', 'Other miscellaneous …', similar) to balance — if "
+        f"the discrepancy persists, leave the leaves untouched and "
+        f"finish honestly with the gap flagged."
+    ]
+
+
+# Footer appended to every non-SOFP verifier's feedback when imbalanced,
+# so SOPL/SOCI/SOCF/SOCIE attribution and balance failures also reach the
+# agent with the no-plug guard. SOFP uses `_sofp_imbalance_feedback` per
+# branch instead because it has the assets-vs-equity directional cue.
+_NO_PLUG_FOOTER = (
+    "Reminder: do NOT plug a catch-all row ('Other …', 'Other "
+    "miscellaneous …', similar) to absorb the discrepancy. If you cannot "
+    "locate the missing component in the notes, leave the leaves "
+    "untouched and finish honestly with the gap flagged."
+)
+
+
+def _compose_feedback(
+    mismatches: list[str],
+    is_balanced: Optional[bool],
+    passed_message: str,
+) -> str:
+    """Build the per-statement feedback string with the no-plug footer
+    appended whenever the statement is unbalanced. Used by SOCIE / SOCF /
+    SOPL / SOCI verifiers (SOFP injects no-plug guidance per branch via
+    `_sofp_imbalance_feedback`)."""
+    if not mismatches:
+        return passed_message
+    lines = list(mismatches)
+    if is_balanced is False:
+        lines.append(_NO_PLUG_FOOTER)
+    return "\n".join(lines)
+
+
 @dataclass
 class VerificationResult:
     # `is_balanced` is True/False for statements where the concept applies
@@ -419,11 +485,7 @@ def verify_totals(
                 f"CY: assets={computed_totals['total_assets_cy']} "
                 f"!= equity+liabilities={computed_totals['total_equity_liabilities_cy']}"
             )
-            feedback_lines.append(f"IMBALANCE (CY): assets - (equity+liabilities) = {diff}")
-            if diff > 0:
-                feedback_lines.append("Action: equity+liabilities section is too low. Re-examine liabilities or equity sub-items.")
-            else:
-                feedback_lines.append("Action: assets section is too high, or equity+liabilities has extra values. Re-examine asset sub-items.")
+            feedback_lines.extend(_sofp_imbalance_feedback("CY", diff))
 
     # Check PY balance
     if (
@@ -437,7 +499,7 @@ def verify_totals(
                 f"PY: assets={computed_totals['total_assets_py']} "
                 f"!= equity+liabilities={computed_totals['total_equity_liabilities_py']}"
             )
-            feedback_lines.append(f"IMBALANCE (PY): assets - (equity+liabilities) = {diff}")
+            feedback_lines.extend(_sofp_imbalance_feedback("PY", diff))
 
     # Group filing: also check Company columns (D/E)
     if filing_level == "group":
@@ -452,7 +514,7 @@ def verify_totals(
                     f"Company CY: assets={computed_totals['company_total_assets_cy']} "
                     f"!= equity+liabilities={computed_totals['company_total_equity_liabilities_cy']}"
                 )
-                feedback_lines.append(f"IMBALANCE (Company CY): assets - (equity+liabilities) = {diff}")
+                feedback_lines.extend(_sofp_imbalance_feedback("Company CY", diff))
         if (
             "company_total_assets_py" in computed_totals
             and "company_total_equity_liabilities_py" in computed_totals
@@ -464,7 +526,7 @@ def verify_totals(
                     f"Company PY: assets={computed_totals['company_total_assets_py']} "
                     f"!= equity+liabilities={computed_totals['company_total_equity_liabilities_py']}"
                 )
-                feedback_lines.append(f"IMBALANCE (Company PY): assets - (equity+liabilities) = {diff}")
+                feedback_lines.extend(_sofp_imbalance_feedback("Company PY", diff))
 
     if not computed_totals:
         is_balanced = False
@@ -781,7 +843,9 @@ def _verify_socie(
         computed_totals=computed_totals,
         pdf_values=pdf_values or {},
         mismatches=mismatches,
-        feedback="\n".join(mismatches) if mismatches else "SOCIE balance check passed.",
+        feedback=_compose_feedback(
+            mismatches, is_balanced, "SOCIE balance check passed.",
+        ),
         mandatory_unfilled=mandatory_unfilled,
     )
 
@@ -903,7 +967,9 @@ def _verify_socf(
         computed_totals=computed_totals,
         pdf_values=pdf_values or {},
         mismatches=mismatches,
-        feedback="\n".join(mismatches) if mismatches else "SOCF balance check passed.",
+        feedback=_compose_feedback(
+            mismatches, is_balanced, "SOCF balance check passed.",
+        ),
         mandatory_unfilled=mandatory_unfilled,
     )
 
@@ -1044,7 +1110,9 @@ def _verify_sopl(
         computed_totals=computed_totals,
         pdf_values=pdf_values or {},
         mismatches=mismatches,
-        feedback="\n".join(mismatches) if mismatches else "SOPL attribution check passed.",
+        feedback=_compose_feedback(
+            mismatches, is_balanced, "SOPL attribution check passed.",
+        ),
         mandatory_unfilled=mandatory_unfilled,
     )
 
@@ -1158,7 +1226,9 @@ def _verify_soci(
         computed_totals=computed_totals,
         pdf_values=pdf_values or {},
         mismatches=mismatches,
-        feedback="\n".join(mismatches) if mismatches else "SOCI balance check passed.",
+        feedback=_compose_feedback(
+            mismatches, is_balanced, "SOCI balance check passed.",
+        ),
         mandatory_unfilled=mandatory_unfilled,
     )
 

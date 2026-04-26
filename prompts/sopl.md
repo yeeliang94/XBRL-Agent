@@ -81,7 +81,22 @@ same line if no separate "Training" field exists.
 - Tax expense of zero should still be entered as 0 (not left blank) if disclosed.
 - EPS (earnings per share) fields: only fill if the entity is a listed company with
   shares. CLG companies and entities without share capital skip EPS.
-- For Function variant: "Administrative expenses" is a catch-all for operating expenses
-  when the entity doesn't break them down by function.
-- For Nature variant: "Other expenses" is the catch-all after employee benefits and
-  depreciation are separated out.
+- Catch-all rows exist for entities whose disclosure is genuinely coarse, NOT
+  as a balancing mechanism. See the INTEGRITY RULE in the system prompt:
+  never plug a residual. Specifically:
+  - For Function variant: "Administrative expenses" is the legitimate
+    landing row for operating expenses ONLY when the entity discloses one
+    aggregate operating-expense total without a function-level breakdown.
+    If the entity discloses a breakdown by function, allocate to the
+    matching rows (cost of sales, distribution, admin, research) — do not
+    sweep a residual into Administrative expenses.
+  - For Nature variant: "Other expenses" is the legitimate landing row for
+    operating expenses that don't fit Employee benefits / Depreciation /
+    Raw materials when the note itself groups them as "Other". Never use
+    it to absorb a balancing figure between the face statement and your
+    sub-sheet sum.
+- If the SOPL Analysis sub-sheet sum does not tie to the face statement
+  total, do NOT add a residual to "Other miscellaneous expenses" or any
+  similar bucket. Either find the missing component in the notes or
+  finish with the gap left honestly — verify_totals reporting an
+  imbalance is preferable to a fabricated residual.
