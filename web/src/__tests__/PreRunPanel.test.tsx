@@ -1224,4 +1224,141 @@ describe("PreRunPanel", () => {
 
     fetchSpy.mockRestore();
   });
+
+  // ---------------------------------------------------------------------------
+  // Peer-review MEDIUM #5 regression: when PreRunPanel mounts with an
+  // `initialConfig` (rehydrated from a saved draft), it must seed all
+  // user-pickable state from that config. Otherwise refreshing /run/{id}
+  // loses every selection the user made before the refresh.
+  // ---------------------------------------------------------------------------
+
+  test("initialConfig seeds filing_level, filing_standard, statements, variants, and notes", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel
+        sessionId="abc-123"
+        getSettings={getSettings}
+        onRun={onRun}
+        initialConfig={{
+          filing_level: "group",
+          filing_standard: "mpers",
+          statements: ["SOFP", "SOCIE"],
+          variants: { SOFP: "CuNonCu", SOCIE: "SoRE" },
+          models: {},
+          notes_to_run: ["CORP_INFO"],
+          notes_models: {},
+          use_scout: false,
+        }}
+      />,
+    );
+
+    // Wait for settings to load (mount the panel).
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+    });
+
+    // Click Run; the emitted config must reflect everything the user
+    // had before the refresh — no defaults snuck back in.
+    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+
+    expect(onRun).toHaveBeenCalledTimes(1);
+    const cfg = onRun.mock.calls[0][0];
+    expect(cfg.filing_level).toBe("group");
+    expect(cfg.filing_standard).toBe("mpers");
+    expect(cfg.statements.sort()).toEqual(["SOCIE", "SOFP"]);
+    expect(cfg.variants.SOFP).toBe("CuNonCu");
+    expect(cfg.variants.SOCIE).toBe("SoRE");
+    expect(cfg.notes_to_run).toEqual(["CORP_INFO"]);
+    expect(cfg.use_scout).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Peer-review #4 (MEDIUM, RUN-REVIEW follow-up): debounced auto-save
+  // -------------------------------------------------------------------------
+  describe("onConfigChange debounced auto-save", () => {
+    test("fires after the user toggles a statement (debounced)", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const getSettings = vi.fn().mockResolvedValue(mockSettings);
+        const onConfigChange = vi.fn();
+        render(
+          <PreRunPanel
+            sessionId="abc-123"
+            getSettings={getSettings}
+            onRun={vi.fn()}
+            onConfigChange={onConfigChange}
+          />,
+        );
+        // Wait for the initial load — auto-save's first-render skip
+        // means we should NOT have any calls yet.
+        await waitFor(() => {
+          expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+        });
+        expect(onConfigChange).not.toHaveBeenCalled();
+
+        // Toggle a statement — kicks the debounce timer
+        const sofpCheckbox = screen.getAllByRole("checkbox")
+          .find((cb) => cb.getAttribute("name") === "SOFP")
+          ?? screen.getAllByRole("checkbox")[2]; // fallback by index
+        fireEvent.click(sofpCheckbox);
+
+        // Before the debounce window closes — still no save
+        vi.advanceTimersByTime(300);
+        expect(onConfigChange).not.toHaveBeenCalled();
+
+        // After the debounce window — exactly one save
+        vi.advanceTimersByTime(300);
+        await waitFor(() => {
+          expect(onConfigChange).toHaveBeenCalled();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    test("never fires on initial render — first dispatch must be a real edit", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const getSettings = vi.fn().mockResolvedValue(mockSettings);
+        const onConfigChange = vi.fn();
+        render(
+          <PreRunPanel
+            sessionId="abc-123"
+            getSettings={getSettings}
+            onRun={vi.fn()}
+            onConfigChange={onConfigChange}
+          />,
+        );
+        await waitFor(() => {
+          expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+        });
+        // Run the debounce timer past 500ms with no edits made
+        vi.advanceTimersByTime(2000);
+        // Auto-save must NOT fire — otherwise rehydrating /run/{id}
+        // would clobber the saved blob with default values on mount.
+        expect(onConfigChange).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    test("works without onConfigChange prop (legacy callers)", async () => {
+      // Backwards compat: the prop is optional. CLI-shaped tests and
+      // legacy `/` upload-then-Run flows have no draft to PATCH.
+      const getSettings = vi.fn().mockResolvedValue(mockSettings);
+      render(
+        <PreRunPanel
+          sessionId="abc-123"
+          getSettings={getSettings}
+          onRun={vi.fn()}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+      });
+      // No assertions on calls; this test passes if mount + edits don't
+      // throw despite the absent callback.
+    });
+  });
 });

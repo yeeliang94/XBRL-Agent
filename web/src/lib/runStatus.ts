@@ -32,9 +32,18 @@ const FALLBACK: RunStatusDisplay = {
 };
 
 const RUN_STATUS_MAP: Record<string, RunStatusDisplay> = {
+  // PLAN-persistent-draft-uploads.md (Phase D): drafts are unstarted
+  // uploads. Slate-grey neutral palette so they read as "waiting" rather
+  // than success/failure — distinct from `aborted` which uses warmer grey.
+  draft:                  { label: "Not started",          color: pwc.grey700,   bg: pwc.grey100 },
   running:                { label: "Running",              color: pwc.orange500, bg: pwc.orange50 },
   completed:              { label: "Completed",            color: pwc.success,   bg: pwc.successBg },
   completed_with_errors:  { label: "Completed with errors", color: "#D97706",    bg: "#FFFBEB" },
+  // RUN-REVIEW P0-1 (2026-04-26): correction agent hit its turn budget
+  // without converging. Distinct palette from completed_with_errors so
+  // operators can spot the "needs human review" runs in History at a
+  // glance — rendered with a more attention-grabbing amber+rose pair.
+  correction_exhausted:   { label: "Needs review",         color: "#B45309",    bg: "#FEF3C7" },
   failed:                 { label: "Failed",               color: pwc.error,     bg: pwc.errorBg },
   aborted:                { label: "Aborted",              color: pwc.grey700,   bg: pwc.grey100 },
 };
@@ -69,11 +78,15 @@ export function agentStatusDisplay(status: string): RunStatusDisplay {
 /** The set of run-status values the History filter dropdown surfaces. The
  *  order here is the order shown in the UI. Keep this list in sync with
  *  RUN_STATUS_MAP — any addition to the map should be considered for the
- *  filter list. `running` is intentionally last since it's transient. */
+ *  filter list. `running` is intentionally last since it's transient.
+ *  `draft` slots in between completed/failed and the transient running so
+ *  users browsing for unstarted uploads find them quickly. */
 export const RUN_STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "completed", label: "Completed" },
   { value: "completed_with_errors", label: "Completed with errors" },
+  { value: "correction_exhausted", label: "Needs review" },
   { value: "failed", label: "Failed" },
   { value: "aborted", label: "Aborted" },
+  { value: "draft", label: "Not started" },
   { value: "running", label: "Running" },
 ];

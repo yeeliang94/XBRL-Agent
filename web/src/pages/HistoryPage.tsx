@@ -32,9 +32,13 @@ export interface HistoryPageProps {
    *  `selectedId` — both are either provided together (controlled mode)
    *  or both omitted (uncontrolled, internal-state mode). */
   onSelectRun?: (runId: number | null) => void;
+  /** PLAN-persistent-draft-uploads.md (Phase D): clicking a draft row
+   *  routes to `/run/{id}` instead of opening the inline RunDetailPage.
+   *  App passes a handler that dispatches SET_VIEW + SET_CURRENT_RUN_ID. */
+  onResumeDraft?: (runId: number) => void;
 }
 
-export function HistoryPage({ selectedId: selectedIdProp, onSelectRun }: HistoryPageProps = {}) {
+export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeDraft }: HistoryPageProps = {}) {
   const [filters, setFilters] = useState<RunsFilterParams>({});
   const [runs, setRuns] = useState<RunSummaryJson[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -372,6 +376,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun }: History
         error={error}
         selectedId={selectedId}
         onRunSelected={handleRunSelected}
+        onResumeDraft={onResumeDraft}
       />
       {filterNote && (
         // Client-side filter transparency: this footnote explains why

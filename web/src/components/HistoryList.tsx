@@ -16,6 +16,12 @@ export interface HistoryListProps {
   error?: string | null;
   selectedId?: number | null;
   onRunSelected: (runId: number) => void;
+  /** PLAN-persistent-draft-uploads.md (Phase D): clicking a draft row
+   *  should route the user back to `/run/{id}` so they can edit config
+   *  and click Start, NOT open the inline RunDetailPage (which has
+   *  nothing to render for an unstarted run). When omitted, drafts fall
+   *  back to `onRunSelected` so legacy callers keep working. */
+  onResumeDraft?: (runId: number) => void;
 }
 
 function formatDate(iso: string): string {
@@ -40,6 +46,7 @@ export function HistoryList({
   error,
   selectedId,
   onRunSelected,
+  onResumeDraft,
 }: HistoryListProps) {
   if (isLoading) {
     return (
@@ -96,6 +103,14 @@ export function HistoryList({
           {runs.map((run) => {
             const display = runStatusDisplay(run.status);
             const isSelected = selectedId === run.id;
+            // Drafts route to /run/{id} via onResumeDraft so the user can
+            // resume editing. Non-drafts open the inline detail panel via
+            // onRunSelected (existing behaviour).
+            const isDraft = run.status === "draft";
+            const handleActivate = () => {
+              if (isDraft && onResumeDraft) onResumeDraft(run.id);
+              else onRunSelected(run.id);
+            };
             // Rows act like buttons: focusable with Tab, activatable with
             // Enter/Space, and announced as interactive to assistive tech.
             // We keep the <tr> element so the table row/column context is
@@ -107,12 +122,12 @@ export function HistoryList({
                 role="button"
                 tabIndex={0}
                 aria-selected={isSelected}
-                onClick={() => onRunSelected(run.id)}
+                onClick={handleActivate}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     // Space would otherwise scroll the page; suppress that.
                     e.preventDefault();
-                    onRunSelected(run.id);
+                    handleActivate();
                   }
                 }}
                 style={isSelected ? styles.rowSelected : styles.row}

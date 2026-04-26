@@ -77,6 +77,67 @@ describe("HistoryList", () => {
     expect(onRunSelected).toHaveBeenCalledWith(2);
   });
 
+  // ---------------------------------------------------------------------------
+  // PLAN-persistent-draft-uploads.md — Phase D (steps 21-22).
+  // Drafts live in History (so users can find their unstarted uploads) but
+  // they need a different click affordance than completed runs. The
+  // RunDetailPage shape doesn't render meaningfully for an empty draft;
+  // clicking a draft row routes the user back to /run/{id} where they can
+  // edit config and click Start.
+  // ---------------------------------------------------------------------------
+
+  test("renders a 'Not started' badge for draft rows", () => {
+    const drafts: RunSummaryJson[] = [
+      {
+        id: 7,
+        created_at: "2026-04-26T12:00:00Z",
+        pdf_filename: "Draft.pdf",
+        status: "draft",
+        session_id: "sess-7",
+        statements_run: [],
+        models_used: [],
+        duration_seconds: null,
+        scout_enabled: false,
+        has_merged_workbook: false,
+      },
+    ];
+    render(<HistoryList runs={drafts} onRunSelected={() => {}} />);
+    // The badge label is "Not started" (the user-friendly form), not the
+    // raw enum string "draft".
+    expect(screen.getByText("Not started")).toBeInTheDocument();
+  });
+
+  test("clicking a draft row fires onResumeDraft, not onRunSelected", () => {
+    const drafts: RunSummaryJson[] = [
+      {
+        id: 7,
+        created_at: "2026-04-26T12:00:00Z",
+        pdf_filename: "Draft.pdf",
+        status: "draft",
+        session_id: "sess-7",
+        statements_run: [],
+        models_used: [],
+        duration_seconds: null,
+        scout_enabled: false,
+        has_merged_workbook: false,
+      },
+    ];
+    const onRunSelected = vi.fn<(id: number) => void>();
+    const onResumeDraft = vi.fn<(id: number) => void>();
+    render(
+      <HistoryList
+        runs={drafts}
+        onRunSelected={onRunSelected}
+        onResumeDraft={onResumeDraft}
+      />,
+    );
+    fireEvent.click(screen.getByText("Draft.pdf"));
+    // Drafts route to /run/{id} via onResumeDraft so the user can edit
+    // their config — clicking should NOT open the inline detail panel.
+    expect(onResumeDraft).toHaveBeenCalledWith(7);
+    expect(onRunSelected).not.toHaveBeenCalled();
+  });
+
   test("renders 'completed_with_errors' status with a friendly label", () => {
     // Server emits this status when extraction succeeded but a cross-check
     // or merge step failed. The frontend must recognize it explicitly,

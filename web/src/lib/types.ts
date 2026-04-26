@@ -1,6 +1,13 @@
 export interface UploadResponse {
   session_id: string;
   filename: string;
+  // PLAN-persistent-draft-uploads.md (Phase A): the upload endpoint
+  // creates a draft `runs` row and returns its id so the frontend can
+  // navigate to a shareable `/run/{run_id}` URL immediately. Nullable
+  // because the backend best-effort path returns null when the audit
+  // DB write failed — the UI still gets a working session even if
+  // History won't show this run.
+  run_id: number | null;
 }
 
 export interface SettingsResponse {

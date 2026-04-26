@@ -19,6 +19,7 @@ def render_prompt(
     page_hints: Optional[dict] = None,
     filing_level: str = "company",
     filing_standard: str = "mfrs",
+    template_path: Optional[str] = None,
 ) -> str:
     """Build the full system prompt for a given statement type and variant.
 
@@ -93,6 +94,21 @@ def render_prompt(
             f"{template_summary}\n"
             f"=== END TEMPLATE STRUCTURE ==="
         )
+
+    # RUN-REVIEW P2-2: SOCF / SoRE per-row sign-from-formula injection.
+    # Mirrors the ADR-002 pattern for SOCIE dividends. The block lists
+    # each leaf row that feeds a `*Total …` formula along with its
+    # sign coefficient, so the agent can match the cell's directional
+    # name to the formula's intent (e.g. (Gain) loss on disposal of
+    # PPE — added with +1 → enter loss as POSITIVE magnitude).
+    if template_path and statement_type in (StatementType.SOCF, StatementType.SOCIE):
+        try:
+            from prompts._sign_conventions import socf_sign_convention_block
+            block = socf_sign_convention_block(template_path)
+            if block:
+                parts.append(block)
+        except Exception:  # noqa: BLE001 — sign block is advisory
+            pass
 
     return "\n\n".join(parts)
 

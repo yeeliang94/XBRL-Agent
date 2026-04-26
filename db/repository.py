@@ -231,7 +231,12 @@ def db_session(path: str | Path) -> Iterator[sqlite3.Connection]:
 # test_mark_run_finished_is_idempotent_for_terminal_states for why: the
 # except-then-finally block in run_multi_agent_stream can finalize twice.
 _TERMINAL_STATUSES = frozenset(
-    {"completed", "completed_with_errors", "failed", "aborted"}
+    # `correction_exhausted` (RUN-REVIEW P0-1) is a distinct terminal
+    # status: the run finished but the corrector hit its turn budget
+    # without converging. Surfaces in History as "needs review" so
+    # operators don't conflate it with generic completed_with_errors.
+    {"completed", "completed_with_errors", "correction_exhausted",
+     "failed", "aborted"}
 )
 
 
@@ -244,6 +249,7 @@ def create_run(
     output_dir: str = "",
     config: Optional[dict[str, Any]] = None,
     scout_enabled: bool = False,
+    status: str = "running",
 ) -> int:
     """Insert a new run row and return its id.
 
@@ -253,19 +259,29 @@ def create_run(
     `config`, and `scout_enabled` as keyword arguments so History can
     display the run meaningfully even if it later crashes.
 
-    `started_at` is always set by this call — the row is created BEFORE the
-    coordinator launches (Phase 1.6), so there is no before-state to lose.
+    `status` defaults to "running" — that is the existing post-Phase-1.6
+    contract for run-start callers. The upload endpoint passes status="draft"
+    to record an unstarted run so the URL is shareable from the moment the
+    PDF lands on disk (PLAN-persistent-draft-uploads.md).
+
+    For drafts (`status="draft"`), `started_at` is left as the empty string
+    so the History page can distinguish "never started" from "ran in zero
+    seconds". Run-start flips this to a real timestamp.
     """
     now = _now()
     config_json = json.dumps(config) if config is not None else None
+    # Drafts have no started_at — the run hasn't begun. The History page
+    # uses started_at to compute wall-clock duration; an empty string means
+    # "no duration yet" (vs ended_at-minus-started_at for finished runs).
+    started_at = "" if status == "draft" else now
     cur = conn.execute(
         "INSERT INTO runs(created_at, pdf_filename, status, notes, "
         "session_id, output_dir, run_config_json, scout_enabled, started_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            now, pdf_filename, "running", notes or None,
+            now, pdf_filename, status, notes or None,
             session_id, output_dir, config_json,
-            1 if scout_enabled else 0, now,
+            1 if scout_enabled else 0, started_at,
         ),
     )
     return int(cur.lastrowid)
@@ -273,6 +289,83 @@ def create_run(
 
 def update_run_status(conn: sqlite3.Connection, run_id: int, status: str) -> None:
     conn.execute("UPDATE runs SET status = ? WHERE id = ?", (status, run_id))
+
+
+def mark_draft_started(
+    conn: sqlite3.Connection,
+    run_id: int,
+) -> bool:
+    """Flip a draft row to status='running' and stamp `started_at` now.
+
+    Used by the persistent-draft start path (POST /api/runs/{id}/start)
+    so the existing draft becomes the same kind of "row created BEFORE
+    coordinator runs" record that the legacy upload-then-run path
+    produces. Returns True if the flip happened, False if the row was
+    not in draft state (caller should 409).
+    """
+    cur = conn.execute(
+        "UPDATE runs SET status = 'running', started_at = ? "
+        "WHERE id = ? AND status = 'draft'",
+        (_now(), run_id),
+    )
+    return cur.rowcount > 0
+
+
+def update_run_config(
+    conn: sqlite3.Connection,
+    run_id: int,
+    patch: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Merge `patch` into a draft run's stored config and return the result.
+
+    Used by `PATCH /api/runs/{id}` to persist pre-run config edits as the
+    user picks statements, level, standard, models, and notes selection.
+
+    Atomicity (peer-review MEDIUM #4): the UPDATE is guarded by
+    `status='draft'` so a request that races against `mark_draft_started`
+    cannot mutate a started run's stored config — that record is the
+    audit-trail of what was actually extracted. Returns:
+
+      - ``None`` when the row does not exist OR when the row exists but
+        its status is no longer 'draft' (caller distinguishes via a
+        prior fetch_run for the 404 path; a None return after a
+        successful fetch implies the race took the row out of 'draft').
+      - The merged dict on success.
+
+    Top-level keys in `patch` overwrite their counterparts; nested dicts
+    (e.g. `models`, `notes_models`) are NOT deep-merged because the
+    frontend always sends the full dict for those fields.
+    """
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT run_config_json FROM runs WHERE id = ? AND status = 'draft'",
+            (run_id,),
+        ).fetchone()
+    finally:
+        conn.row_factory = prior_factory
+    if row is None:
+        # Either the row doesn't exist or it isn't a draft any more.
+        return None
+    raw = row["run_config_json"]
+    try:
+        existing = json.loads(raw) if raw else {}
+    except (TypeError, json.JSONDecodeError):
+        # Corrupt blob — start fresh rather than erroring. The user's PATCH
+        # is a strictly newer source of truth than the unparseable record.
+        existing = {}
+    merged = {**existing, **patch}
+    cur = conn.execute(
+        "UPDATE runs SET run_config_json = ? WHERE id = ? AND status = 'draft'",
+        (json.dumps(merged), run_id),
+    )
+    if cur.rowcount == 0:
+        # Race window between SELECT and UPDATE — another request flipped
+        # the row to 'running' in between. Surface as None so the caller
+        # returns 409.
+        return None
+    return merged
 
 
 def mark_run_merged(

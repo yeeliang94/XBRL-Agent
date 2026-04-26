@@ -4,7 +4,7 @@ import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES } from "./lib/types";
 import { pwc } from "./lib/theme";
 import { appReducer, bootState, parseRouteFromPath } from "./lib/appReducer";
 import { uploadPdf, getSettings, updateSettings, testConnection, abortAll, abortAgent } from "./lib/api";
-import { createMultiAgentSSE } from "./lib/sse";
+import { createMultiAgentSSE, createMultiAgentSSEByRunId, patchRunConfig } from "./lib/sse";
 import { SettingsModal } from "./components/SettingsModal";
 import { TopNav } from "./components/TopNav";
 import { SuccessToast } from "./components/SuccessToast";
@@ -104,30 +104,41 @@ export default function App() {
   }, []);
 
   // --- URL <-> view sync --------------------------------------------------
-  // Push the view (and selected run id, if any) into the address bar so
-  // deep-linking and copy/paste of the URL work. Three shapes:
-  //   /                → extract view
+  // Push the view (and selected/current run id, if any) into the address
+  // bar so deep-linking and copy/paste of the URL work. Four shapes:
+  //   /                → extract view, no run loaded
+  //   /run/<id>        → extract view rehydrated from a draft/running run
+  //                       (PLAN-persistent-draft-uploads.md)
   //   /history         → history list
-  //   /history/<id>    → full-page run detail (new: shareable run link)
+  //   /history/<id>    → full-page run detail (existing alias for completed
+  //                       runs viewed from the History tab)
   // Listening for popstate mirrors browser Back/Forward into state without
-  // a full reload.
+  // a full reload. /run/<id> wins over the other extract-view shapes when
+  // currentRunId is non-null, so a refresh of /run/42 stays on /run/42
+  // instead of being rewritten back to /.
   useEffect(() => {
     let expected: string;
-    if (state.view !== "history") {
-      expected = "/";
-    } else if (state.selectedRunId != null) {
-      expected = `/history/${state.selectedRunId}`;
+    if (state.view === "history") {
+      expected = state.selectedRunId != null
+        ? `/history/${state.selectedRunId}`
+        : "/history";
+    } else if (state.currentRunId != null) {
+      expected = `/run/${state.currentRunId}`;
     } else {
-      expected = "/history";
+      expected = "/";
     }
     if (window.location.pathname !== expected) {
       window.history.pushState(
-        { view: state.view, selectedRunId: state.selectedRunId },
+        {
+          view: state.view,
+          selectedRunId: state.selectedRunId,
+          currentRunId: state.currentRunId,
+        },
         "",
         expected,
       );
     }
-  }, [state.view, state.selectedRunId]);
+  }, [state.view, state.selectedRunId, state.currentRunId]);
 
   // Reflect the selected run in the browser tab title so a user with
   // multiple review tabs open can tell them apart without switching.
@@ -146,6 +157,7 @@ export default function App() {
       const route = parseRouteFromPath(window.location.pathname);
       dispatch({ type: "SET_VIEW", payload: route.view });
       dispatch({ type: "SET_SELECTED_RUN_ID", payload: route.selectedRunId });
+      dispatch({ type: "SET_CURRENT_RUN_ID", payload: route.currentRunId });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -163,8 +175,25 @@ export default function App() {
     const result = await uploadPdf(file);
     dispatch({
       type: "UPLOADED",
-      payload: { sessionId: result.session_id, filename: result.filename },
+      payload: {
+        sessionId: result.session_id,
+        filename: result.filename,
+        // Peer-review #3 (HIGH): pin the runId that owns this sessionId
+        // so ExtractPage's rehydrate effect can skip re-fetch ONLY when
+        // the session and the URL agree.
+        runId: result.run_id ?? null,
+      },
     });
+    // PLAN-persistent-draft-uploads.md (Phase C): the upload response
+    // carries a run_id pointing at a freshly-inserted draft row. Setting
+    // currentRunId here makes the URL effect rewrite the address bar to
+    // `/run/{id}` so the user can refresh, bookmark, or share. When the
+    // backend's draft-write failed (best-effort path), run_id is null and
+    // we keep the legacy `/` URL — the upload still works, it's just not
+    // reattach-on-refresh durable.
+    if (result.run_id != null) {
+      dispatch({ type: "SET_CURRENT_RUN_ID", payload: result.run_id });
+    }
     return result;
   }, []);
 
@@ -194,8 +223,36 @@ export default function App() {
     [],
   );
 
-  // Multi-agent run: receives a RunConfigPayload from PreRunPanel
-  const handleMultiRun = useCallback((config: RunConfigPayload) => {
+  // Multi-agent run: receives a RunConfigPayload from PreRunPanel.
+  //
+  // PLAN-persistent-draft-uploads.md (Phase C, steps 19-20): when the
+  // current page is a draft (`currentRunId` is set), we route through the
+  // run-id endpoint so the audit row is reused — flipping `draft` →
+  // `running` instead of creating a fresh row. Before kicking off the
+  // stream we PATCH the live config to the row so the persisted blob
+  // matches what the user is about to extract; the backend belt-and-
+  // braces overwrites it again at start time, but the PATCH is what the
+  // History "config" column displays for the run.
+  // Peer-review #4 (MEDIUM, RUN-REVIEW follow-up): debounced draft
+  // config persistence. PreRunPanel debounces the actual fire (500ms),
+  // so this handler can stay synchronous-shaped — it just kicks off
+  // the PATCH and swallows transient network errors. Without this,
+  // refreshing or sharing /run/{id} pre-Run loses every selection
+  // the user made, contradicting the persistent-draft contract.
+  // Mandatory-arg currentRunId means we no-op when there's no draft
+  // to PATCH (e.g. legacy `/` upload-then-Run flow).
+  const handleDraftConfigChange = useCallback(async (config: RunConfigPayload) => {
+    if (state.currentRunId == null) return;
+    try {
+      await patchRunConfig(state.currentRunId, config);
+    } catch {
+      // Auto-save is best-effort — a flaky save shouldn't disrupt
+      // the user's editing flow. The user's eventual Run-click
+      // fires the same PATCH and surfaces any persistent failure.
+    }
+  }, [state.currentRunId]);
+
+  const handleMultiRun = useCallback(async (config: RunConfigPayload) => {
     if (!state.sessionId) return;
     sseControllerRef.current?.abort();
     dispatch({
@@ -206,8 +263,46 @@ export default function App() {
         config,
       },
     });
-    sseControllerRef.current = startSSERun(state.sessionId, config);
-  }, [state.sessionId, startSSERun]);
+    if (state.currentRunId != null) {
+      // Persist config to the draft, then start. The PATCH is the
+      // authoritative way to get this run's choices (statements, level,
+      // standard, models, infopack) into the DB; `/start` reads them
+      // back out and never sees the live request body. So a failed
+      // PATCH means the run would either start with stale config or
+      // fail validation server-side after the UI has already moved
+      // into "running" — surface the failure here instead.
+      try {
+        await patchRunConfig(state.currentRunId, config);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Failed to save run config";
+        dispatch({
+          type: "EVENT",
+          payload: {
+            event: "error",
+            data: { message, traceback: "" },
+            timestamp: Date.now() / 1000,
+          },
+        });
+        return;
+      }
+      sseControllerRef.current = createMultiAgentSSEByRunId(
+        state.currentRunId,
+        (event) => dispatch({ type: "EVENT", payload: event }),
+        () => {},
+        (error) =>
+          dispatch({
+            type: "EVENT",
+            payload: {
+              event: "error",
+              data: { message: error, traceback: "" },
+              timestamp: Date.now() / 1000,
+            },
+          }),
+      );
+    } else {
+      sseControllerRef.current = startSSERun(state.sessionId, config);
+    }
+  }, [state.sessionId, state.currentRunId, startSSERun]);
 
   // Abort all running agents
   const handleAbortAll = useCallback(async () => {
@@ -335,6 +430,15 @@ export default function App() {
             onSelectRun={(id) =>
               dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
             }
+            onResumeDraft={(id) => {
+              // PLAN-persistent-draft-uploads.md: drafts in History
+              // navigate to /run/{id} instead of opening the inline
+              // detail. Switching the view + setting currentRunId
+              // triggers the URL effect to push the shareable URL.
+              dispatch({ type: "SET_VIEW", payload: "extract" });
+              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
+              dispatch({ type: "SET_CURRENT_RUN_ID", payload: id });
+            }}
           />
         ) : (
           <ExtractPage
@@ -346,6 +450,7 @@ export default function App() {
             handleAbortAgent={handleAbortAgent}
             handleRerunAgent={handleRerunAgent}
             handleReset={handleReset}
+            handleConfigChange={handleDraftConfigChange}
           />
         )}
       </main>

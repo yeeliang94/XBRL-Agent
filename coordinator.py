@@ -85,6 +85,12 @@ class AgentResult:
     status: str  # "succeeded", "failed", or "cancelled"
     workbook_path: Optional[str] = None
     error: Optional[str] = None
+    # End-of-run usage from `agent_run.usage()`. Per CLAUDE.md gotcha #6
+    # per-turn counts are zero (PydanticAI counts internally) — this is
+    # the aggregate. The coordinator captures it on the success path so
+    # server.py can persist into run_agents.total_tokens / total_cost.
+    total_tokens: int = 0
+    total_cost: float = 0.0
 
 
 @dataclass
@@ -473,6 +479,21 @@ async def _run_single_agent(
         # Save per-statement conversation trace for debugging/audit
         save_agent_trace(result, output_dir, statement_type.value)
 
+        # Capture end-of-run usage so the run_agents row can be backfilled
+        # with real token / cost numbers (gotcha #6 — per-turn zeros are
+        # internal). best-effort: if usage is unavailable for any reason,
+        # we still return success with zeros rather than failing the run.
+        final_tokens = 0
+        final_cost = 0.0
+        try:
+            _u = agent_run.usage()
+            _prompt = int(_u.request_tokens or 0)
+            _completion = int(_u.response_tokens or 0)
+            final_tokens = int(_u.total_tokens or 0)
+            final_cost = estimate_cost(_prompt, _completion, 0, model)
+        except Exception:  # noqa: BLE001 — telemetry is advisory
+            logger.debug("agent token backfill skipped for %s", statement_type.value)
+
         await _emit("complete", {
             "success": True,
             "workbook_path": deps.filled_path or None,
@@ -483,6 +504,8 @@ async def _run_single_agent(
             variant=variant,
             status="succeeded",
             workbook_path=deps.filled_path or None,
+            total_tokens=final_tokens,
+            total_cost=final_cost,
         )
 
     except asyncio.CancelledError:

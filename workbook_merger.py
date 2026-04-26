@@ -40,6 +40,7 @@ def merge(
     workbook_paths: Dict[StatementType, str],
     output_path: str,
     notes_workbook_paths: Optional[Dict[NotesTemplateType, str]] = None,
+    skip_recalc: bool = False,
 ) -> MergeResult:
     """Merge per-statement and per-notes workbooks into a single output file.
 
@@ -50,6 +51,13 @@ def merge(
             Notes sheets are appended AFTER face-statement sheets, in canonical
             notes-template-type order (CORP_INFO → ACC_POLICIES → LIST_OF_NOTES
             → ISSUED_CAPITAL → RELATED_PARTY).
+        skip_recalc: When True, the post-merge `tools.recalc.recalc_workbook`
+            pass is skipped — formulas survive verbatim and `*Total …` cells
+            read None via openpyxl `data_only=True` until Excel opens them.
+            Default False (recalc runs). RUN-REVIEW P0-3 (2026-04-26) added
+            recalc; this opt-out exists for tests asserting formula preservation
+            and for any future Windows edge cases where the `formulas` package
+            misbehaves.
 
     Returns:
         MergeResult with success flag and error details.
@@ -124,6 +132,24 @@ def merge(
         return MergeResult(success=False, output_path=output_path, errors=[f"Failed to save: {e}"])
     finally:
         merged.close()
+
+    # RUN-REVIEW P0-3: force formula recalc on the merged workbook so
+    # `*Total …` cells carry cached values. Without this, downstream
+    # programmatic readers (compare_results.py, the agent's verifier
+    # when it reads sub-sheet rollups) see None and silently misread
+    # the workbook. Best-effort: any failure leaves the original file
+    # untouched and the existing fullCalcOnLoad flag remains the
+    # fallback for Excel users who open the file directly.
+    if not skip_recalc:
+        try:
+            from tools.recalc import recalc_workbook
+            recalc_workbook(output_path)
+        except Exception:  # noqa: BLE001 — recalc telemetry is advisory
+            logger.warning(
+                "Post-merge recalc skipped — workbook saved without cached "
+                "values. Excel will recalc on first open via fullCalcOnLoad.",
+                exc_info=True,
+            )
 
     if errors:
         logger.warning("Merge completed with errors: %s", errors)

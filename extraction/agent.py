@@ -320,6 +320,9 @@ def create_extraction_agent(
         page_hints=page_hints,
         filing_level=filing_level,
         filing_standard=filing_standard,
+        # RUN-REVIEW P2-2: pass the live template path so SOCF/SoRE
+        # prompts get a per-row sign-from-formula block injected.
+        template_path=template_path,
     )
 
     # Pin temperature=1.0 explicitly. CLAUDE.md gotcha #5: Gemini 3 through
@@ -422,6 +425,10 @@ def create_extraction_agent(
             msg = f"Successfully wrote {result.fields_written} fields to {output_path}."
             if result.errors:
                 msg += f"\nErrors: {result.errors}"
+            # RUN-REVIEW P1-1: surface double-booking warnings so the
+            # agent can self-correct before the next verify_totals.
+            if result.warnings:
+                msg += f"\nWarnings: {result.warnings}"
             return msg
         else:
             return f"Failed to fill workbook. Errors: {result.errors}"

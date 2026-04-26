@@ -214,6 +214,19 @@ pointer to `filled.xlsx` even if later persistence crashes.
 `_safe_mark_finished` in `server.py` swallows audit-write exceptions so error
 handlers never double-fault. **Don't** "fix" this by removing the try/except.
 
+**Persistent-draft addition (2026-04-26):** `POST /api/upload` now also
+inserts a draft `runs` row at upload time with `status='draft'` and an
+empty `started_at`. This makes the upload immediately shareable as
+`/run/{run_id}` and ensures abandoned uploads still appear in History.
+The new `POST /api/runs/{id}/start` endpoint reuses the existing draft
+(flipping `draft → running` via `repo.mark_draft_started`) instead of
+creating a fresh row, so for that flow `run_multi_agent_stream` accepts
+an `existing_run_id` kwarg. The legacy `POST /api/run/{session_id}`
+keeps creating a new row from scratch — both paths converge on the same
+terminal-status guarantee. `_safe_mark_finished` only fires once
+extraction has actually started, so drafts that are never started simply
+sit in History with status `draft` forever (no auto-cleanup is in scope).
+
 ### 11. DB schema v2 — auto-migration on startup
 
 `db/schema.py` carries `CURRENT_SCHEMA_VERSION = 2`. `init_db` detects v1

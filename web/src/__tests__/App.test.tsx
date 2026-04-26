@@ -128,4 +128,81 @@ describe("App — AgentTimeline integration", () => {
     // Legacy ChatFeed header must be gone — we stripped the whole component.
     expect(screen.queryByText(/Chat Feed/i)).toBeNull();
   });
+
+  // ---------------------------------------------------------------------------
+  // Peer-review HIGH #2 regression: a failed PATCH before /start must
+  // surface a visible error and NOT proceed to start the SSE stream.
+  // Otherwise the run would either silently use stale config or fail
+  // server-side after the UI has flipped into the running state.
+  // ---------------------------------------------------------------------------
+  test("draft start aborts and shows error when patchRunConfig rejects", async () => {
+    vi.resetModules();
+    captureOnEvent = null;
+
+    let sseFactoryCalled = false;
+    vi.doMock("../lib/sse", () => ({
+      createMultiAgentSSE: () => {
+        sseFactoryCalled = true;
+        return new AbortController();
+      },
+      createMultiAgentSSEByRunId: () => {
+        sseFactoryCalled = true;
+        return new AbortController();
+      },
+      patchRunConfig: vi.fn(async () => {
+        throw new Error("Backend exploded saving config");
+      }),
+    }));
+    vi.doMock("../lib/api", async () => {
+      const actual = await vi.importActual<typeof import("../lib/api")>(
+        "../lib/api",
+      );
+      return {
+        ...actual,
+        getSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+        })),
+        getExtendedSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+          available_models: [], default_models: {},
+          scout_enabled_default: false, tolerance_rm: 1,
+        })),
+        uploadPdf: vi.fn(async () => ({
+          session_id: "sess_1", filename: "FINCO.pdf", run_id: 99,
+        })),
+      };
+    });
+
+    const { default: App } = await import("../App");
+    window.history.replaceState({}, "", "/");
+    render(<App />);
+
+    // Upload to land us on /run/99 with a session+filename.
+    const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+    const file = new File(["x"], "FINCO.pdf", { type: "application/pdf" });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    });
+    const runButton = await waitFor(() => {
+      const btn = screen.queryByRole("button", { name: /run/i });
+      if (!btn) throw new Error("Run button not ready");
+      return btn;
+    }, { timeout: 2000 });
+
+    // Click Run → handleMultiRun → PATCH rejects.
+    await act(async () => {
+      fireEvent.click(runButton);
+    });
+    // Microtask drain so the dispatched error event commits.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The SSE factory must NOT have been called — start was blocked.
+    expect(sseFactoryCalled).toBe(false);
+    // The error message must be visible (one or more places — the
+    // ExtractPage error box AND PreRunPanel both render run errors).
+    expect(
+      screen.getAllByText(/backend exploded saving config/i).length,
+    ).toBeGreaterThan(0);
+  });
 });

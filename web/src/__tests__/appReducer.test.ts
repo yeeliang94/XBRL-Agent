@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { appReducer, agentReducer, agentSubAgentSummary, bootState, initialState, notesTabLabel } from "../lib/appReducer";
+import { appReducer, agentReducer, agentSubAgentSummary, bootState, initialState, notesTabLabel, parseRouteFromPath } from "../lib/appReducer";
 import type { SSEEvent } from "../lib/types";
 import { createAgentState, type AgentState } from "../lib/types";
 import { buildToolTimeline } from "../lib/buildToolTimeline";
@@ -120,6 +120,44 @@ describe("appReducer", () => {
     const reset = appReducer(state, { type: "RESET" });
     expect(reset.sessionId).toBeNull();
     expect(reset.events).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Persistent draft uploads — Phase C, steps 11-12.
+  // /run/{id} is the canonical shareable URL for an upload-then-extract run.
+  // It maps to view='extract' so the same workspace UI is used; currentRunId
+  // tells ExtractPage to fetch + rehydrate from the server. Existing
+  // /history/{id} stays a separate path (still resolves to view='history').
+  // ---------------------------------------------------------------------------
+
+  test("parseRouteFromPath maps /run/42 to extract view with currentRunId=42", () => {
+    const route = parseRouteFromPath("/run/42");
+    expect(route.view).toBe("extract");
+    expect(route.currentRunId).toBe(42);
+    // History selection is independent — a /run URL never seeds it.
+    expect(route.selectedRunId).toBeNull();
+  });
+
+  test("parseRouteFromPath /run/42/ (trailing slash) parses identically", () => {
+    const route = parseRouteFromPath("/run/42/");
+    expect(route.currentRunId).toBe(42);
+  });
+
+  test("parseRouteFromPath leaves currentRunId null for /history routes", () => {
+    expect(parseRouteFromPath("/history").currentRunId).toBeNull();
+    expect(parseRouteFromPath("/history/9").currentRunId).toBeNull();
+  });
+
+  test("parseRouteFromPath returns currentRunId=null for the root path", () => {
+    expect(parseRouteFromPath("/").currentRunId).toBeNull();
+  });
+
+  test("parseRouteFromPath /run/garbage falls back to extract with no run id", () => {
+    // Non-numeric suffix means "we don't know which run" — show the
+    // generic extract page rather than throwing or routing to history.
+    const route = parseRouteFromPath("/run/abc");
+    expect(route.view).toBe("extract");
+    expect(route.currentRunId).toBeNull();
   });
 
   // --- P0: New streaming event types ---
@@ -1563,5 +1601,66 @@ describe("bootState", () => {
     const s = bootState();
     expect(s.view).toBe("history");
     expect(s.selectedRunId).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Peer-review #3 (HIGH, RUN-REVIEW follow-up): sessionRunId tracking
+// ---------------------------------------------------------------------------
+// Pre-fix, ExtractPage's rehydrate effect skipped re-fetching whenever
+// `state.sessionId` was set, regardless of which run that session
+// belonged to. Navigating from /run/A to /run/B kept A's session
+// attached to B's URL — scout would then run against the wrong PDF.
+// The fix carries `sessionRunId` alongside `sessionId` so the effect
+// can tell "fresh upload for this run" from "stale prior session".
+
+describe("UPLOADED sessionRunId ownership tracking", () => {
+  test("UPLOADED with explicit runId pins sessionRunId to it", () => {
+    const state = appReducer(initialState, {
+      type: "UPLOADED",
+      payload: { sessionId: "abc", filename: "x.pdf", runId: 42 },
+    });
+    expect(state.sessionId).toBe("abc");
+    expect(state.sessionRunId).toBe(42);
+  });
+
+  test("UPLOADED without runId falls back to current state.currentRunId", () => {
+    // Legacy path / no run_id from upload response — preserve the
+    // shareable URL's id as the session owner.
+    const seeded = appReducer(initialState, {
+      type: "SET_CURRENT_RUN_ID", payload: 7,
+    });
+    const state = appReducer(seeded, {
+      type: "UPLOADED",
+      payload: { sessionId: "abc", filename: "x.pdf" },
+    });
+    expect(state.sessionRunId).toBe(7);
+  });
+
+  test("RESET clears sessionRunId so a future upload starts owner-clean", () => {
+    const uploaded = appReducer(initialState, {
+      type: "UPLOADED",
+      payload: { sessionId: "abc", filename: "x.pdf", runId: 9 },
+    });
+    expect(uploaded.sessionRunId).toBe(9);
+    const reset = appReducer(uploaded, { type: "RESET" });
+    expect(reset.sessionRunId).toBeNull();
+    expect(reset.sessionId).toBeNull();
+  });
+
+  test("rehydration UPLOADED with explicit runId beats prior sessionRunId", () => {
+    // User uploads a file under run 42, then navigates to /run/100 and
+    // ExtractPage's effect dispatches a fresh UPLOADED with runId: 100
+    // after fetchRunDetail. The latest dispatch wins.
+    const first = appReducer(initialState, {
+      type: "UPLOADED",
+      payload: { sessionId: "abc", filename: "a.pdf", runId: 42 },
+    });
+    const second = appReducer(first, {
+      type: "UPLOADED",
+      payload: { sessionId: "xyz", filename: "b.pdf", runId: 100 },
+    });
+    expect(second.sessionRunId).toBe(100);
+    expect(second.sessionId).toBe("xyz");
   });
 });

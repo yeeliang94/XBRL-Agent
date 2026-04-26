@@ -32,6 +32,30 @@ interface Props {
   sessionId: string;
   getSettings: () => Promise<ExtendedSettingsResponse>;
   onRun: (config: RunConfigPayload) => void;
+  /** PLAN-persistent-draft-uploads.md (peer-review MEDIUM #5): when
+   *  the panel mounts on a `/run/{id}` rehydration, the saved draft's
+   *  config blob is threaded in here so every user-pickable slot
+   *  (filing level/standard, enabled statements + variants, model
+   *  overrides, notes selection, scout flag, infopack) is seeded from
+   *  the persisted state instead of resetting to defaults.
+   *
+   *  `Record<string, unknown>` because the blob is the
+   *  `RunConfigRequest.model_dump()` shape from the server — we narrow
+   *  per field at read time so a corrupt or partially-populated blob
+   *  doesn't crash the panel mount. */
+  initialConfig?: Record<string, unknown> | null;
+  /** Peer-review #4 (MEDIUM, RUN-REVIEW follow-up): debounced
+   *  callback the panel fires whenever the user edits any pickable
+   *  field. The parent wires this to `patchRunConfig(currentRunId, …)`
+   *  so the persistent-draft contract holds across refresh and share —
+   *  pre-fix the only PATCH happened on Run-click, and refreshing
+   *  /run/{id} mid-config silently lost everything. The callback is
+   *  best-effort: parents should swallow network errors here so a
+   *  flaky save doesn't disrupt the user's editing flow.
+   *
+   *  Optional so the panel keeps working in tests / CLI-shaped
+   *  callers that don't have a draft to PATCH against. */
+  onConfigChange?: (config: RunConfigPayload) => void;
 }
 
 const styles = {
@@ -152,13 +176,115 @@ const makeNotesDisabled = (): Record<NotesTemplateType, boolean> => {
   return out;
 };
 
-export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
+// ---------------------------------------------------------------------------
+// initialConfig narrowing helpers (peer-review MEDIUM #5)
+//
+// The blob is the server's `RunConfigRequest.model_dump()` JSON, but it's
+// typed `Record<string, unknown>` here because (a) the panel is also
+// renderable without rehydration and (b) a partially-corrupt blob from
+// an earlier deploy must NOT crash the mount — we degrade per-field to
+// the same defaults a fresh upload would use.
+// ---------------------------------------------------------------------------
+
+function _seedFilingLevel(cfg: Record<string, unknown> | null | undefined): FilingLevel {
+  const v = cfg?.filing_level;
+  return v === "group" ? "group" : "company";
+}
+
+function _seedFilingStandard(cfg: Record<string, unknown> | null | undefined): FilingStandard {
+  const v = cfg?.filing_standard;
+  return v === "mpers" ? "mpers" : "mfrs";
+}
+
+function _seedStatementsEnabled(
+  cfg: Record<string, unknown> | null | undefined,
+): Record<StatementType, boolean> {
+  if (!cfg || !Array.isArray(cfg.statements)) return makeAllEnabled();
+  // Honour the persisted choice — explicit empty list disables all.
+  const wanted = new Set<string>(
+    (cfg.statements as unknown[]).filter((s): s is string => typeof s === "string"),
+  );
+  const out = {} as Record<StatementType, boolean>;
+  for (const st of STATEMENT_TYPES) out[st] = wanted.has(st);
+  return out;
+}
+
+function _seedVariantSelections(
+  cfg: Record<string, unknown> | null | undefined,
+): Record<StatementType, VariantSelection> {
+  const empty = makeEmptySelections();
+  if (!cfg || typeof cfg.variants !== "object" || cfg.variants === null) return empty;
+  const variants = cfg.variants as Record<string, unknown>;
+  for (const st of STATEMENT_TYPES) {
+    const v = variants[st];
+    if (typeof v === "string" && v) {
+      empty[st] = { variant: v, confidence: null };
+    }
+  }
+  return empty;
+}
+
+function _seedModelOverrides(
+  cfg: Record<string, unknown> | null | undefined,
+): Record<StatementType, string> {
+  const out = {} as Record<StatementType, string>;
+  if (!cfg || typeof cfg.models !== "object" || cfg.models === null) return out;
+  const models = cfg.models as Record<string, unknown>;
+  for (const st of STATEMENT_TYPES) {
+    const m = models[st];
+    if (typeof m === "string" && m) out[st] = m;
+  }
+  return out;
+}
+
+function _seedNotesEnabled(
+  cfg: Record<string, unknown> | null | undefined,
+): Record<NotesTemplateType, boolean> {
+  const out = makeNotesDisabled();
+  if (!cfg || !Array.isArray(cfg.notes_to_run)) return out;
+  const wanted = new Set<string>(
+    (cfg.notes_to_run as unknown[]).filter((n): n is string => typeof n === "string"),
+  );
+  for (const nt of NOTES_TEMPLATE_TYPES) {
+    if (wanted.has(nt)) out[nt] = true;
+  }
+  return out;
+}
+
+function _seedNotesModelOverrides(
+  cfg: Record<string, unknown> | null | undefined,
+): Record<NotesTemplateType, string> {
+  const out = {} as Record<NotesTemplateType, string>;
+  if (!cfg || typeof cfg.notes_models !== "object" || cfg.notes_models === null) return out;
+  const models = cfg.notes_models as Record<string, unknown>;
+  for (const nt of NOTES_TEMPLATE_TYPES) {
+    const m = models[nt];
+    if (typeof m === "string" && m) out[nt] = m;
+  }
+  return out;
+}
+
+function _seedInfopack(
+  cfg: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  const v = cfg?.infopack;
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+function _seedScoutEnabled(
+  cfg: Record<string, unknown> | null | undefined,
+): boolean {
+  if (cfg && typeof cfg.use_scout === "boolean") return cfg.use_scout;
+  return true;  // Original default when no rehydration.
+}
+
+export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scoutError, setScoutError] = useState<string | null>(null);
   const [scoutProgress, setScoutProgress] = useState<string | null>(null);
   const [scoutStartTime, setScoutStartTime] = useState<number | null>(null);
-  const [scoutEnabled, setScoutEnabled] = useState(true);
+  const [scoutEnabled, setScoutEnabled] = useState(() => _seedScoutEnabled(initialConfig));
   // Operator override for scanned (image-only) PDFs. When ticked, the scout
   // endpoint is told to skip the PyMuPDF-regex notes-inventory path and go
   // straight to the vision fallback. Default off — the LLM scout still
@@ -190,15 +316,23 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   const [scoutEvents, setScoutEvents] = useState<SSEEvent[]>([]);
   const [scoutLogOpen, setScoutLogOpen] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
-  const [infopack, setInfopack] = useState<Record<string, unknown> | null>(null);
+  const [infopack, setInfopack] = useState<Record<string, unknown> | null>(
+    () => _seedInfopack(initialConfig),
+  );
 
-  const [filingLevel, setFilingLevel] = useState<FilingLevel>("company");
+  const [filingLevel, setFilingLevel] = useState<FilingLevel>(
+    () => _seedFilingLevel(initialConfig),
+  );
   // Phase 7 MPERS wiring: filing-standard toggle. MFRS is the default so every
   // pre-existing flow keeps working. Scout's detected_standard preselects
   // this on infopack arrival only if the user hasn't already touched the
   // toggle — operator intent wins over detection.
-  const [filingStandard, setFilingStandard] = useState<FilingStandard>("mfrs");
-  const filingStandardTouchedRef = useRef(false);
+  const [filingStandard, setFilingStandard] = useState<FilingStandard>(
+    () => _seedFilingStandard(initialConfig),
+  );
+  // When rehydrating, treat the persisted standard as user intent — scout
+  // must NOT silently overwrite a user's saved choice on a refresh.
+  const filingStandardTouchedRef = useRef(initialConfig?.filing_standard != null);
   // Mirror filingStandard into a ref so the scout callback (whose deps
   // deliberately exclude filingStandard) can read the current value without
   // a stale closure. Needed for the per-variant validity check when scout
@@ -211,13 +345,30 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     filingStandardTouchedRef.current = true;
     setFilingStandard(next);
   }, []);
-  const [variantSelections, setVariantSelections] = useState(makeEmptySelections);
-  const [statementsEnabled, setStatementsEnabled] = useState(makeAllEnabled);
+  const [variantSelections, setVariantSelections] = useState(
+    () => _seedVariantSelections(initialConfig),
+  );
+  const [statementsEnabled, setStatementsEnabled] = useState(
+    () => _seedStatementsEnabled(initialConfig),
+  );
   // Tracks statements the user has EXPLICITLY enabled. Scout will not
   // silently disable these even if it failed to detect them (#18). Cleared
   // entries mean "no explicit user preference" — scout is free to manage them.
+  // On rehydration, every saved-as-enabled statement counts as an explicit
+  // user preference so scout cannot blank them on a refresh.
   const [userEnabledOverrides, setUserEnabledOverrides] = useState<Set<StatementType>>(
-    () => new Set<StatementType>(),
+    () => {
+      const seeded = _seedStatementsEnabled(initialConfig);
+      const set = new Set<StatementType>();
+      // Only treat as overrides when initialConfig was actually provided —
+      // otherwise the empty set keeps current behaviour (no overrides).
+      if (initialConfig) {
+        for (const st of STATEMENT_TYPES) {
+          if (seeded[st]) set.add(st);
+        }
+      }
+      return set;
+    },
   );
   // Mirror the latest overrides into a ref so the scout handler — which
   // runs asynchronously across many SSE events — sees mid-run toggles
@@ -232,16 +383,18 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
   // the user's explicit enable instead. Drives the one-line notice in UI.
   const [scoutOverrideNote, setScoutOverrideNote] = useState<string | null>(null);
   const [modelOverrides, setModelOverrides] = useState<Record<StatementType, string>>(
-    {} as Record<StatementType, string>,
+    () => _seedModelOverrides(initialConfig),
   );
   const [availableModels, setAvailableModels] = useState<ModelEntry[]>([]);
-  const [notesEnabled, setNotesEnabled] = useState(makeNotesDisabled);
+  const [notesEnabled, setNotesEnabled] = useState(
+    () => _seedNotesEnabled(initialConfig),
+  );
   // Per-note model overrides — mirrors `modelOverrides` for face statements.
   // Initialized from the same defaults as the face-statement rows so every
   // cell always has a concrete model id (required by <select value=...>).
   const [notesModelOverrides, setNotesModelOverrides] = useState<
     Record<NotesTemplateType, string>
-  >({} as Record<NotesTemplateType, string>);
+  >(() => _seedNotesModelOverrides(initialConfig));
 
   // Load settings on mount
   useEffect(() => {
@@ -249,7 +402,16 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     getSettings()
       .then((settings) => {
         if (cancelled) return;
-        setScoutEnabled(settings.scout_enabled_default);
+        // PLAN-persistent-draft-uploads.md (peer-review MEDIUM #5): when
+        // we mounted with `initialConfig`, the user's saved choice for
+        // each slot below MUST win over the global settings default.
+        // Without these guards a refresh would silently re-enable scout
+        // / re-pick the global default model even though the saved
+        // draft said otherwise.
+        const seedSrc = (initialConfig ?? {}) as Record<string, unknown>;
+        if (typeof seedSrc.use_scout !== "boolean") {
+          setScoutEnabled(settings.scout_enabled_default);
+        }
         setAvailableModels(settings.available_models);
         // Peer-review #7 defensive fallback: if the persisted scout model
         // has been removed from config/models.json between sessions, a
@@ -270,19 +432,31 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
           // options and the Auto-detect call will fail informatively.
           setScoutModel(persistedScout);
         }
-        // Initialize model overrides from defaults
+        // Initialize model overrides from defaults — but per-statement,
+        // a saved override from initialConfig wins. The seeded
+        // `modelOverrides` already has the saved entries; we only fill
+        // in missing slots from settings here.
+        const seededModels = (seedSrc.models ?? {}) as Record<string, unknown>;
         const overrides = {} as Record<StatementType, string>;
         for (const stmt of STATEMENT_TYPES) {
-          overrides[stmt] = settings.default_models[stmt] || settings.model;
+          const saved = seededModels[stmt];
+          overrides[stmt] = (typeof saved === "string" && saved)
+            ? saved
+            : (settings.default_models[stmt] || settings.model);
         }
         setModelOverrides(overrides);
         // Notes use the same default-model fallback chain: per-template
         // default_models entry → global `settings.model`. The backend
         // accepts partial notes_models, so we only send explicit overrides
         // at submit time — but every dropdown still needs a value at init.
+        // Same per-template "saved wins" guard as the face statements above.
+        const seededNotes = (seedSrc.notes_models ?? {}) as Record<string, unknown>;
         const notesOverrides = {} as Record<NotesTemplateType, string>;
         for (const nt of NOTES_TEMPLATE_TYPES) {
-          notesOverrides[nt] = settings.default_models[nt] || settings.model;
+          const saved = seededNotes[nt];
+          notesOverrides[nt] = (typeof saved === "string" && saved)
+            ? saved
+            : (settings.default_models[nt] || settings.model);
         }
         setNotesModelOverrides(notesOverrides);
         setLoading(false);
@@ -668,28 +842,26 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
     [],
   );
 
-  const handleRun = useCallback(() => {
+  // Peer-review #4 (MEDIUM): build the live RunConfigPayload from
+  // the current state. Extracted from handleRun so the debounced
+  // auto-save effect can re-use the exact same shape the user
+  // would see if they clicked Run right now.
+  const buildCurrentConfig = useCallback((): RunConfigPayload => {
     const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s]);
     const variants: Record<string, string> = {};
     const models: Record<string, string> = {};
-
     for (const stmt of enabledStmts) {
       if (variantSelections[stmt].variant) {
         variants[stmt] = variantSelections[stmt].variant;
       }
       models[stmt] = modelOverrides[stmt];
     }
-
     const notes_to_run = NOTES_TEMPLATE_TYPES.filter((nt) => notesEnabled[nt]);
-    // Only include model entries for notes the user actually enabled, so
-    // the backend doesn't spin up proxy-model objects for templates it
-    // won't run. Mirrors how `models` is populated for face statements.
     const notes_models: Partial<Record<NotesTemplateType, string>> = {};
     for (const nt of notes_to_run) {
       notes_models[nt] = notesModelOverrides[nt];
     }
-
-    onRun({
+    return {
       statements: enabledStmts,
       variants,
       models,
@@ -699,8 +871,42 @@ export function PreRunPanel({ sessionId, getSettings, onRun }: Props) {
       filing_standard: filingStandard,
       notes_to_run,
       notes_models,
-    });
-  }, [statementsEnabled, variantSelections, modelOverrides, infopack, scoutEnabled, filingLevel, filingStandard, notesEnabled, notesModelOverrides, onRun]);
+    };
+  }, [
+    statementsEnabled, variantSelections, modelOverrides, infopack,
+    scoutEnabled, filingLevel, filingStandard, notesEnabled, notesModelOverrides,
+  ]);
+
+  const handleRun = useCallback(() => {
+    onRun(buildCurrentConfig());
+  }, [buildCurrentConfig, onRun]);
+
+  // Peer-review #4 (MEDIUM): debounced auto-save of the draft config
+  // to the backend. Without this the persistent-draft contract is
+  // partially broken — refreshing or sharing /run/{id} mid-config
+  // would lose every selection the user made. We skip the FIRST
+  // render so the auto-save doesn't fire before the user has
+  // touched anything (would clobber the saved blob with defaults
+  // on a /run/{id} rehydrate). 500ms matches the comment-stated
+  // debounce target in App.tsx's existing PATCH machinery.
+  const skipFirstSaveRef = useRef(true);
+  useEffect(() => {
+    if (!onConfigChange) return;
+    if (loading) return; // don't auto-save before initialConfig is applied
+    if (skipFirstSaveRef.current) {
+      skipFirstSaveRef.current = false;
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      try {
+        onConfigChange(buildCurrentConfig());
+      } catch {
+        // Auto-save is best-effort — never let a malformed config
+        // crash the editing flow. The next edit will re-fire.
+      }
+    }, 500);
+    return () => window.clearTimeout(handle);
+  }, [buildCurrentConfig, onConfigChange, loading]);
 
   if (loading) {
     return (

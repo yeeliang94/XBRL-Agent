@@ -167,6 +167,10 @@ class NotesAgentResult:
     # editor plan). Empty when the agent didn't write any prose cells
     # (numeric-only sheets or total failures).
     cells_written: List[dict] = field(default_factory=list)
+    # End-of-run usage so server.py can backfill run_agents.total_tokens
+    # / total_cost. Mirrors the face-coordinator AgentResult addition.
+    total_tokens: int = 0
+    total_cost: float = 0.0
 
 
 @dataclass
@@ -411,6 +415,12 @@ class _SingleAgentOutcome:
     # Per-cell HTML manifest produced by the writer. See
     # `NotesAgentResult.cells_written` for the entry shape.
     cells_written: list[dict] = field(default_factory=list)
+    # End-of-run usage; bubbles up through the retry loop into
+    # NotesAgentResult.total_tokens / total_cost. Zero when the agent
+    # short-circuited via the post-write timeout path (no usage object
+    # is reachable after a mid-turn timeout).
+    total_tokens: int = 0
+    total_cost: float = 0.0
 
 
 async def _run_single_notes_agent(
@@ -551,6 +561,8 @@ async def _run_single_notes_agent(
                 workbook_path=outcome.filled_path,
                 warnings=warnings,
                 cells_written=list(outcome.cells_written),
+                total_tokens=outcome.total_tokens,
+                total_cost=outcome.total_cost,
             )
         except asyncio.CancelledError:
             # Never retry on user cancellation — propagate the cancellation
@@ -800,6 +812,22 @@ async def _invoke_single_notes_agent_once(
     # otherwise the wrapped try/except silently hides regressions.
     _backfill_token_report(deps.token_report, agent_run.usage, template_type.value)
 
+    # RUN-REVIEW P2-3 (gotcha #6 closure): capture the SAME usage we
+    # just folded into the cost report and bubble it up so the
+    # NotesAgentResult lands real numbers in run_agents.total_tokens.
+    # Best-effort — if usage is unreachable we still return success
+    # rather than failing the run on advisory telemetry.
+    _agent_tokens = 0
+    _agent_cost = 0.0
+    try:
+        _u = agent_run.usage()
+        _prompt = int(_u.request_tokens or 0)
+        _completion = int(_u.response_tokens or 0)
+        _agent_tokens = int(_u.total_tokens or 0)
+        _agent_cost = estimate_cost(_prompt, _completion, 0, model)
+    except Exception:  # noqa: BLE001 — telemetry is best-effort
+        logger.debug("notes agent token bubble-up skipped for %s", template_type.value)
+
     # Guard against silent no-op success — retryable per PLAN §4 E.1.
     if not deps.wrote_once or not deps.filled_path:
         raise _NoWriteError("Notes agent finished without writing any payloads")
@@ -810,6 +838,8 @@ async def _invoke_single_notes_agent_once(
         fuzzy_matches=list(deps.write_fuzzy_matches),
         sanitizer_warnings=list(deps.write_sanitizer_warnings),
         cells_written=list(deps.cells_written),
+        total_tokens=_agent_tokens,
+        total_cost=_agent_cost,
     )
 
 

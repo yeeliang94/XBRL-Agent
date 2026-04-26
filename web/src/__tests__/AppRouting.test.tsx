@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, fireEvent, cleanup, act, screen } from "@testing-library/react";
 
 // Stub out the settings/history API calls that App fires on mount so the
 // tests don't need a live backend. The real useEffect calls getExtendedSettings
@@ -152,5 +152,142 @@ describe("App routing", () => {
     });
     await new Promise((r) => setTimeout(r, 0));
     expect(window.location.pathname).toBe("/history/7");
+  });
+
+  // ---------------------------------------------------------------------------
+  // PLAN-persistent-draft-uploads.md (Phase C) — `/run/<id>` URL.
+  // ---------------------------------------------------------------------------
+
+  test("initial /run/42 URL boots the extract view with currentRunId set", async () => {
+    // The shareable upload URL: refreshing or copy-pasting `/run/42` must
+    // land on the extract workspace (not history) and surface the run id
+    // so ExtractPage can fetch + rehydrate the saved PDF + draft config.
+    window.history.replaceState({}, "", "/run/42");
+    const { default: App } = await import("../App");
+    render(<App />);
+    // Mount-time pushState effect runs after the first render — give it a tick.
+    await new Promise((r) => setTimeout(r, 0));
+    // URL must NOT be rewritten back to `/` (the bare extract page).
+    expect(window.location.pathname).toBe("/run/42");
+    // The Extract tab must be the selected one.
+    expect(
+      screen.getByRole("tab", { name: /extract/i }).getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  test("visiting /run/42 fetches the run and restores filename + sessionId", async () => {
+    // Refresh / shareable-link contract: ExtractPage must rehydrate from
+    // GET /api/runs/{id}. Filename in the upload card and sessionId on
+    // the app state are the load-bearing signals for the rest of the
+    // workspace (PreRunPanel needs sessionId; the upload card shows the
+    // user's chosen filename so they know they're on the right run).
+    vi.resetModules();
+    vi.doMock("../lib/api", async () => {
+      const actual = await vi.importActual<typeof import("../lib/api")>(
+        "../lib/api",
+      );
+      return {
+        ...actual,
+        getSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+        })),
+        getExtendedSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+          available_models: [], default_models: {},
+          scout_enabled_default: false, tolerance_rm: 1,
+        })),
+        fetchRuns: vi.fn(async () => ({ runs: [], total: 0 })),
+        fetchRunDetail: vi.fn(async () => ({
+          id: 42,
+          session_id: "sess_42",
+          pdf_filename: "Annual-Report.pdf",
+          status: "draft",
+          config: {
+            statements: ["SOFP"],
+            variants: { SOFP: "CuNonCu" },
+            models: {},
+            filing_level: "company",
+            filing_standard: "mfrs",
+            notes_to_run: [],
+            notes_models: {},
+            use_scout: false,
+          },
+          created_at: "2026-04-26T10:00:00Z",
+          started_at: "",
+          ended_at: null,
+          merged_workbook_path: null,
+          output_dir: "/tmp/sess_42",
+          scout_enabled: false,
+          agents: [],
+          cross_checks: [],
+        })),
+      };
+    });
+    window.history.replaceState({}, "", "/run/42");
+    const { default: App } = await import("../App");
+    render(<App />);
+    // Wait for fetchRunDetail to resolve and the dispatch to commit.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The upload card now shows the rehydrated filename instead of the
+    // empty drop zone. UploadPanel renders the filename in a span when
+    // `filename` is non-null.
+    expect(screen.getByText("Annual-Report.pdf")).toBeInTheDocument();
+    // URL stays at /run/42 — no rewrite back to /.
+    expect(window.location.pathname).toBe("/run/42");
+  });
+
+  test("uploading a PDF drives the URL to /run/{run_id}", async () => {
+    // Arrange: stub uploadPdf to return a run_id alongside session_id +
+    // filename — the new Phase A contract. The App's handleUpload must
+    // dispatch a navigation so the URL becomes shareable immediately.
+    vi.resetModules();
+    vi.doMock("../lib/api", async () => {
+      const actual = await vi.importActual<typeof import("../lib/api")>(
+        "../lib/api",
+      );
+      return {
+        ...actual,
+        getSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+        })),
+        getExtendedSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+          available_models: [], default_models: {},
+          scout_enabled_default: false, tolerance_rm: 1,
+        })),
+        fetchRuns: vi.fn(async () => ({ runs: [], total: 0 })),
+        // The UploadResponse type carries run_id under the new contract.
+        // Cast through unknown so the doMock factory can return the new
+        // shape even before lib/types.ts is updated to match.
+        uploadPdf: vi.fn(async () => ({
+          session_id: "sess_99",
+          filename: "Z.pdf",
+          run_id: 99,
+        })) as unknown as typeof import("../lib/api").uploadPdf,
+        // Avoid the GET /api/runs/{id} fetch in this test — the upload
+        // flow's URL change is what we're asserting; rehydration is a
+        // separate test (step 15).
+        fetchRunDetail: vi.fn(async () => {
+          throw new Error("not expected in this test");
+        }),
+      };
+    });
+    window.history.replaceState({}, "", "/");
+    const { default: App } = await import("../App");
+    render(<App />);
+
+    const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+    const file = new File(["x"], "Z.pdf", { type: "application/pdf" });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    });
+    // Wait for the upload promise + dispatch to settle. Two ticks: one
+    // for the upload await, one for the React commit + URL effect.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(window.location.pathname).toBe("/run/99");
   });
 });
