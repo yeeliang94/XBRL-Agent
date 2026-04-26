@@ -244,6 +244,35 @@ CORRECTION_TURN_TIMEOUT: float = 180.0
 # gotcha #10 — every exit path must reach a terminal status).
 NOTES_VALIDATOR_TURN_TIMEOUT: float = 180.0
 
+# PLAN-stop-and-validation-visibility Phase 3: wall-clock cap on the
+# whole correction / notes-validator pass. Defence-in-depth on top of
+# the dynamic turn cap (RUN-REVIEW P0-1, max 25 turns) and per-turn
+# timeout (180s above): the slow-LLM scenario where every turn takes
+# 100s but the agent never stalls would still loop for ~40 minutes
+# (25 × 100s) before any cap fires. 5 minutes is a comfortable bound
+# for "this is the legitimate work" while still being far short of
+# what the user perceives as "stuck".
+#
+# Operators can tune via XBRL_CORRECTION_WALLCLOCK_S /
+# XBRL_NOTES_VALIDATOR_WALLCLOCK_S (positive ints, seconds). 0 or
+# negative disables the cap entirely.
+def _resolve_wallclock(env_var: str, default: float) -> float:
+    raw = os.environ.get(env_var, "")
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+        return v if v > 0 else float("inf")
+    except ValueError:
+        return default
+
+CORRECTION_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
+    "XBRL_CORRECTION_WALLCLOCK_S", 300.0,
+)
+NOTES_VALIDATOR_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
+    "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", 300.0,
+)
+
 
 async def _run_correction_pass(
     failed_checks: list,
@@ -377,11 +406,49 @@ async def _run_correction_pass(
     # of letting pydantic-ai's silent 50-request cap fire.
     turn_count = 0
 
+    # PLAN-stop-and-validation-visibility Phase 3: wall-clock cap.
+    # Defence-in-depth on the existing per-turn (180s) and dynamic
+    # turn-budget (max 25 turns) caps. Catches the slow-LLM scenario
+    # where many quick-but-not-quick-enough turns add up past the
+    # cumulative cap before either of the other guards fires.
+    #
+    # The check fires at the top of each iteration body. We can't
+    # bound a single ``__anext__`` against the wall-clock without
+    # double-booking the per-turn timeout; instead we let the per-turn
+    # timeout handle individual stalls and the wall-clock check handle
+    # cumulative drift. Since iterations come fast in the slow-LLM
+    # case (sub-180s), this is responsive enough for the test.
+    #
+    # Read the cap at call time so monkeypatching the module constant
+    # in tests takes effect.
+    import time as _wc_time
+    import server as _server_self
+    _wc_start = _wc_time.monotonic()
+    _wallclock_cap = float(getattr(
+        _server_self, "CORRECTION_WALLCLOCK_TIMEOUT",
+        CORRECTION_WALLCLOCK_TIMEOUT,
+    ))
+
+    class _WallclockExceeded(Exception):
+        """Sentinel exception so the handler below can distinguish a
+        wall-clock breach from a per-turn ``asyncio.TimeoutError``."""
+
     try:
         async with agent.iter(prompt, deps=deps) as agent_run:
             async for node in _iter_with_turn_timeout(
-                agent_run, CORRECTION_TURN_TIMEOUT,
+                agent_run, _wallclock_cap if _wallclock_cap < CORRECTION_TURN_TIMEOUT else CORRECTION_TURN_TIMEOUT,
             ):
+                # Wall-clock breach check at the top of each iteration.
+                # When ``_wallclock_cap`` is shorter than the per-turn
+                # timeout (e.g. tests that set 1s), the per-turn wrap
+                # fires first and we surface it as a wall-clock breach
+                # below.
+                if _wc_time.monotonic() - _wc_start > _wallclock_cap:
+                    raise _WallclockExceeded(
+                        f"Correction agent exceeded wall-clock cap "
+                        f"of {_wallclock_cap}s after "
+                        f"{deps.writes_performed} write(s)."
+                    )
                 if Agent.is_call_tools_node(node):
                     turn_count += 1
                     if turn_count > max_turns:
@@ -470,22 +537,62 @@ async def _run_correction_pass(
         await _emit("complete", {"success": False, "error": "Cancelled by user"})
         outcome["error"] = "cancelled"
         raise
-    except _asyncio.TimeoutError:
-        # Per-turn wait_for fired — the model stalled mid-conversation.
-        # Report writes that landed before the stall so the coordinator
-        # can still re-run cross-checks against partial progress.
-        msg = (
-            f"Correction agent stalled past {CORRECTION_TURN_TIMEOUT}s "
-            f"per-turn timeout after {deps.writes_performed} write(s)."
-        )
+    except _WallclockExceeded as wc:
+        # PLAN-stop-and-validation-visibility Phase 3: explicit
+        # wall-clock breach. Distinct from the per-turn TimeoutError
+        # below so the frontend can show a different message ("ran
+        # out of time" vs "model stalled").
+        msg = str(wc)
         logger.warning(msg)
-        outcome["error"] = msg
+        outcome["error"] = "correction_wallclock_exceeded"
         outcome["writes_performed"] = deps.writes_performed
-        await _emit("error", {"message": msg})
+        await _emit("error", {
+            "type": "correction_wallclock_exceeded",
+            "message": msg,
+        })
         await _emit("complete", {
-            "success": False, "error": msg,
+            "success": False,
+            "error": "correction_wallclock_exceeded",
             "writes_performed": deps.writes_performed,
         })
+    except _asyncio.TimeoutError:
+        # Per-turn wait_for fired — the model stalled mid-conversation.
+        # When the wall-clock cap is shorter than the per-turn timeout
+        # (test scenario, or a tightened env override), the per-turn
+        # wrap fires for what is semantically a wall-clock breach;
+        # surface it as such so the frontend doesn't show "model
+        # stalled" for "you set a 1-second cap".
+        elapsed = _wc_time.monotonic() - _wc_start
+        if _wallclock_cap <= CORRECTION_TURN_TIMEOUT and elapsed >= _wallclock_cap:
+            msg = (
+                f"Correction agent exceeded wall-clock cap of "
+                f"{_wallclock_cap}s after {deps.writes_performed} write(s)."
+            )
+            logger.warning(msg)
+            outcome["error"] = "correction_wallclock_exceeded"
+            outcome["writes_performed"] = deps.writes_performed
+            await _emit("error", {
+                "type": "correction_wallclock_exceeded",
+                "message": msg,
+            })
+            await _emit("complete", {
+                "success": False,
+                "error": "correction_wallclock_exceeded",
+                "writes_performed": deps.writes_performed,
+            })
+        else:
+            msg = (
+                f"Correction agent stalled past {CORRECTION_TURN_TIMEOUT}s "
+                f"per-turn timeout after {deps.writes_performed} write(s)."
+            )
+            logger.warning(msg)
+            outcome["error"] = msg
+            outcome["writes_performed"] = deps.writes_performed
+            await _emit("error", {"message": msg})
+            await _emit("complete", {
+                "success": False, "error": msg,
+                "writes_performed": deps.writes_performed,
+            })
     except Exception as e:  # noqa: BLE001 — never let correction blow up the run
         logger.exception("Correction agent run failed")
         outcome["error"] = str(e)
@@ -619,11 +726,35 @@ async def _run_notes_validator_pass(
         "flag_duplication."
     )
 
+    # PLAN-stop-and-validation-visibility Phase 3 + peer-review fix
+    # (2026-04-27): wall-clock cap mirrors the correction agent's
+    # guard. Defence-in-depth on top of the per-turn 180s timeout for
+    # the slow-LLM scenario where many quick turns add up past the
+    # advertised 5-minute cap. Read at call time so test monkeypatches
+    # of the module constant take effect.
+    import time as _wc_time
+    import server as _server_self
+    _wc_start = _wc_time.monotonic()
+    _wallclock_cap = float(getattr(
+        _server_self, "NOTES_VALIDATOR_WALLCLOCK_TIMEOUT",
+        NOTES_VALIDATOR_WALLCLOCK_TIMEOUT,
+    ))
+
+    class _ValidatorWallclockExceeded(Exception):
+        """Distinguishes wall-clock breach from per-turn TimeoutError."""
+
     try:
         async with agent.iter(prompt, deps=deps) as agent_run:
             async for node in _iter_with_turn_timeout(
-                agent_run, NOTES_VALIDATOR_TURN_TIMEOUT,
+                agent_run,
+                _wallclock_cap if _wallclock_cap < NOTES_VALIDATOR_TURN_TIMEOUT else NOTES_VALIDATOR_TURN_TIMEOUT,
             ):
+                if _wc_time.monotonic() - _wc_start > _wallclock_cap:
+                    raise _ValidatorWallclockExceeded(
+                        f"Notes validator exceeded wall-clock cap "
+                        f"of {_wallclock_cap}s after "
+                        f"{deps.writes_performed} write(s)."
+                    )
                 if Agent.is_call_tools_node(node):
                     async with node.stream(agent_run.ctx) as tool_stream:
                         async for event in tool_stream:
@@ -673,19 +804,55 @@ async def _run_notes_validator_pass(
         await _emit("complete", {"success": False, "error": "Cancelled by user"})
         outcome["error"] = "cancelled"
         raise
-    except _asyncio.TimeoutError:
-        msg = (
-            f"Notes validator stalled past {NOTES_VALIDATOR_TURN_TIMEOUT}s "
-            f"per-turn timeout after {deps.writes_performed} write(s)."
-        )
+    except _ValidatorWallclockExceeded as wc:
+        msg = str(wc)
         logger.warning(msg)
-        outcome["error"] = msg
+        outcome["error"] = "validator_wallclock_exceeded"
         outcome["writes_performed"] = deps.writes_performed
-        await _emit("error", {"message": msg})
+        await _emit("error", {
+            "type": "validator_wallclock_exceeded",
+            "message": msg,
+        })
         await _emit("complete", {
-            "success": False, "error": msg,
+            "success": False,
+            "error": "validator_wallclock_exceeded",
             "writes_performed": deps.writes_performed,
         })
+    except _asyncio.TimeoutError:
+        # When the wall-clock cap is shorter than the per-turn timeout
+        # (test override), the per-turn wrap fires for what's
+        # semantically a wall-clock breach — surface it as such.
+        elapsed = _wc_time.monotonic() - _wc_start
+        if _wallclock_cap <= NOTES_VALIDATOR_TURN_TIMEOUT and elapsed >= _wallclock_cap:
+            msg = (
+                f"Notes validator exceeded wall-clock cap of "
+                f"{_wallclock_cap}s after {deps.writes_performed} write(s)."
+            )
+            logger.warning(msg)
+            outcome["error"] = "validator_wallclock_exceeded"
+            outcome["writes_performed"] = deps.writes_performed
+            await _emit("error", {
+                "type": "validator_wallclock_exceeded",
+                "message": msg,
+            })
+            await _emit("complete", {
+                "success": False,
+                "error": "validator_wallclock_exceeded",
+                "writes_performed": deps.writes_performed,
+            })
+        else:
+            msg = (
+                f"Notes validator stalled past {NOTES_VALIDATOR_TURN_TIMEOUT}s "
+                f"per-turn timeout after {deps.writes_performed} write(s)."
+            )
+            logger.warning(msg)
+            outcome["error"] = msg
+            outcome["writes_performed"] = deps.writes_performed
+            await _emit("error", {"message": msg})
+            await _emit("complete", {
+                "success": False, "error": msg,
+                "writes_performed": deps.writes_performed,
+            })
     except Exception as e:  # noqa: BLE001
         logger.exception("Notes validator run failed")
         outcome["error"] = str(e)
@@ -1233,6 +1400,183 @@ def _safe_mark_finished(
         return False
 
 
+def _attempt_partial_merge(
+    session_dir: Path,
+    merged_path: str,
+    statements_to_run,
+    notes_to_run,
+    db_conn: "Optional[Any]",
+    run_id: Optional[int],
+) -> dict:
+    """PLAN-stop-and-validation-visibility Phase 2.1.
+
+    Best-effort merge of any per-statement / per-notes workbooks already
+    on disk. Called from the Stop-All cancel handler so a user-initiated
+    abort doesn't throw away work that completed before the cancel
+    signal. Mirrors the success-path merge block in
+    ``run_multi_agent_stream`` (around line 1966) — the difference is we
+    have no ``CoordinatorResult`` so we infer "what completed" purely
+    from disk.
+
+    Hardened against gotcha #10: every step is wrapped so the cancel
+    handler never gets a second exception from this helper. If anything
+    fails, returns ``merged=False`` with an ``error`` message — the run
+    still finalizes as 'aborted' the way it always did.
+
+    Returns a dict suitable for the ``partial_merge`` SSE payload:
+        {
+          "merged": bool,                 # did filled.xlsx land?
+          "merged_path": str,
+          "statements_included": [str],   # SOFP/SOPL/... values
+          "notes_included": [str],
+          "statements_missing": [str],    # requested but not on disk
+          "notes_missing": [str],
+          "error": Optional[str],
+        }
+    """
+    out = {
+        "merged": False,
+        "merged_path": merged_path,
+        "statements_included": [],
+        "notes_included": [],
+        "statements_missing": [],
+        "notes_missing": [],
+        "error": None,
+    }
+    try:
+        # Lazy imports mirror the success-path merge block (server.py:1303-1305)
+        # so tests that patch `workbook_merger.merge` see the same module
+        # surface in both code paths.
+        from db import repository as repo
+        from notes_types import NotesTemplateType
+        from statement_types import StatementType
+        from workbook_merger import merge as merge_workbooks
+
+        face_paths = {}
+        for stmt in StatementType:
+            wb = session_dir / f"{stmt.value}_filled.xlsx"
+            if wb.exists():
+                face_paths[stmt] = str(wb)
+        notes_paths = {}
+        for nt in NotesTemplateType:
+            wb = session_dir / f"NOTES_{nt.value}_filled.xlsx"
+            if wb.exists():
+                notes_paths[nt] = str(wb)
+
+        out["statements_included"] = sorted(s.value for s in face_paths)
+        out["notes_included"] = sorted(n.value for n in notes_paths)
+        if statements_to_run:
+            out["statements_missing"] = sorted(
+                s.value for s in statements_to_run if s not in face_paths
+            )
+        if notes_to_run:
+            out["notes_missing"] = sorted(
+                n.value for n in notes_to_run if n not in notes_paths
+            )
+
+        # Nothing on disk → nothing to merge. Not an error, not a
+        # partial_merge event.
+        if not face_paths and not notes_paths:
+            return out
+
+        try:
+            merge_result = merge_workbooks(
+                face_paths,
+                merged_path,
+                notes_workbook_paths=notes_paths,
+                # Same skip_recalc reasoning as the success path — no
+                # post-merge corrector runs after a Stop-All, so the
+                # recalc that normally happens after correction won't
+                # fire either. Excel will recalc on open.
+                skip_recalc=True,
+            )
+        except Exception as e:  # noqa: BLE001 — never escape the cancel handler
+            out["error"] = f"merge failed: {type(e).__name__}: {e}"
+            logger.warning(
+                "Partial-merge raised on cancel for run %s",
+                run_id, exc_info=True,
+            )
+            return out
+
+        if not getattr(merge_result, "success", False):
+            errs = getattr(merge_result, "errors", None) or []
+            out["error"] = "; ".join(errs) or "merge produced no output"
+            return out
+
+        out["merged"] = True
+        out["merged_path"] = merge_result.output_path or merged_path
+
+        # Best-effort DB pointer write. If this fails the file is still
+        # on disk under output/{session}/filled.xlsx — but History won't
+        # be able to find it, so the user would have to dig manually.
+        if db_conn is not None and run_id is not None:
+            try:
+                repo.mark_run_merged(db_conn, run_id, out["merged_path"])
+                db_conn.commit()
+            except Exception:
+                logger.warning(
+                    "Partial-merge mark_run_merged failed for run %s",
+                    run_id, exc_info=True,
+                )
+        return out
+    except Exception:  # noqa: BLE001 — last-ditch swallow per gotcha #10
+        logger.exception("_attempt_partial_merge raised unexpectedly")
+        out["error"] = "internal error"
+        return out
+
+
+def _emit_cross_check_summary(
+    results,
+    phase: str,
+    event_queue,
+) -> None:
+    """PLAN-stop-and-validation-visibility Phase 5.2 +
+    peer-review fix (2026-04-27).
+
+    Emit only the ``cross_check_complete`` aggregate summary. The
+    pre-loop ``cross_check_start`` and per-check ``cross_check_result``
+    events are now emitted live by the server's ``on_check`` callback
+    threaded into ``run_all`` (instead of batched after the synchronous
+    pass returns). This helper finalizes the pass with the count
+    rollup so the frontend can render "Passed N, Failed M, Warning K"
+    without re-tallying.
+
+    Also covers cross-check passes that landed via fallback paths
+    (e.g. notes-consistency warnings appended after run_all returned)
+    by including those results in the summary count.
+
+    The function is sync and uses ``put_nowait`` because it's called
+    from the post-extraction code path which is itself running on the
+    event-loop thread between async awaits. Failures to enqueue are
+    logged but never raised — surfacing cross-check progress is
+    nice-to-have; never breaking the run is mandatory (gotcha #10).
+    """
+    if event_queue is None:
+        return
+    try:
+        passed = sum(1 for r in results if r.status == "passed")
+        failed = sum(1 for r in results if r.status == "failed")
+        warnings = sum(1 for r in results if r.status == "warning")
+        not_applicable = sum(1 for r in results if r.status == "not_applicable")
+        pending = sum(1 for r in results if r.status == "pending")
+        event_queue.put_nowait({
+            "event": "cross_check_complete",
+            "data": {
+                "phase": phase,
+                "passed": passed,
+                "failed": failed,
+                "warnings": warnings,
+                "not_applicable": not_applicable,
+                "pending": pending,
+            },
+        })
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Cross-check summary emission failed (phase=%s)",
+            phase, exc_info=True,
+        )
+
+
 def _fail_run(db_conn: "Optional[Any]", run_id: Optional[int], msg: str):
     """Build the error + run_complete SSE events and mark the run row failed.
 
@@ -1669,6 +2013,75 @@ async def run_multi_agent_stream(
             "status", "tool_call", "tool_result", "error", "complete",
         })
 
+        # Peer-review fix (2026-04-27): lazily create a SYSTEM
+        # pseudo-agent row on first coordinator-level error event so
+        # ``merge_failed`` / ``cross_check_exception`` /
+        # ``correction_wallclock_exceeded`` show up in History after
+        # reload, not just in the live SSE stream. Creating it lazily
+        # keeps healthy runs from churning out an extra audit row.
+        _system_run_agent_id: Optional[int] = None
+
+        def _ensure_system_pseudo_agent() -> None:
+            """Lazy-create the SYSTEM run_agents row + register it in
+            ``run_agent_ids_by_agent_id`` so persist_event picks up
+            coordinator-level errors stamped with agent_role=SYSTEM."""
+            nonlocal _system_run_agent_id
+            if _system_run_agent_id is not None:
+                return
+            if db_conn is None or run_id is None:
+                return
+            try:
+                _system_run_agent_id = repo.create_run_agent(
+                    db_conn, run_id,
+                    statement_type="SYSTEM",
+                    variant=None,
+                    model=_model_id(config.model),
+                )
+                run_agent_ids_by_agent_id["system"] = _system_run_agent_id
+                db_conn.commit()
+            except Exception:
+                logger.warning(
+                    "Failed to lazy-create SYSTEM run_agent row for run %s",
+                    run_id, exc_info=True,
+                )
+
+        def _enqueue_system_error(payload: dict) -> None:
+            """Surface a coordinator-level error on both the live SSE
+            stream AND the audit DB.
+
+            The wire copy has NO ``agent_id`` so the frontend reducer
+            routes it to the global typed-error branch (see I-2 fix in
+            appReducer.ts: ``isRunning`` stays true for typed errors so
+            the spinner keeps spinning while the backend continues).
+
+            The DB copy is stamped with ``agent_role="SYSTEM"`` so
+            persist_event accepts it and History after reload still
+            shows the diagnostic. The SYSTEM run_agents row is created
+            lazily here on first call.
+            """
+            _ensure_system_pseudo_agent()
+            # DB persistence — stamped copy, lazily-created SYSTEM row.
+            if _system_run_agent_id is not None:
+                try:
+                    persist_event({
+                        "event": "error",
+                        "data": {
+                            **payload,
+                            "agent_id": "SYSTEM",
+                            "agent_role": "SYSTEM",
+                        },
+                    })
+                except Exception:
+                    logger.warning(
+                        "Failed to persist SYSTEM error to audit DB",
+                        exc_info=True,
+                    )
+            # Wire — bare payload, no agent routing.
+            try:
+                event_queue.put_nowait({"event": "error", "data": dict(payload)})
+            except asyncio.QueueFull:
+                logger.warning("event_queue full; SYSTEM error dropped")
+
         def persist_event(evt: dict) -> None:
             if db_conn is None:
                 return
@@ -1706,6 +2119,54 @@ async def run_multi_agent_stream(
         # Event bridge: concurrent agents push events into this queue,
         # and the SSE generator drains it in real time. None = all done.
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+
+        # PLAN-stop-and-validation-visibility Phase 6: pipeline_stage
+        # events surface the coordinator-level stage boundaries that
+        # otherwise look like silent dead zones to the user (the long
+        # gap between "all face agents finished" and "run_complete"
+        # arrived). Emit at each boundary; the frontend reducer
+        # captures the latest stage so PipelineStages can label the
+        # current activity.
+        #
+        # Hoist ``client_connected`` initialization above the first
+        # stage emit — the original assignment lived just before the
+        # drain loop, but we need to ``yield`` from this generator
+        # earlier now and don't want an UnboundLocalError sneaking in
+        # if the client somehow disconnected between request acceptance
+        # and this point (a hypothetical race; the test harness
+        # surfaced it deterministically because TestClient sets up the
+        # generator fully before consuming).
+        client_connected = True
+        import time as _time
+
+        def _stage_event(stage: str) -> dict:
+            return {
+                "event": "pipeline_stage",
+                "data": {"stage": stage, "started_at": _time.time()},
+            }
+
+        def _emit_stage(stage: str) -> None:
+            """Push a pipeline_stage event onto the queue so the drain
+            loop yields it the same way it yields agent events. Direct
+            ``yield`` from this generator was tried first, but it broke
+            the disconnect-finalization contract: GeneratorExit raised
+            at a yield outside the drain loop's try/except escaped to
+            the outer ``except BaseException`` and marked the run
+            ``failed`` even though the agents had succeeded.
+            """
+            try:
+                event_queue.put_nowait(_stage_event(stage))
+            except asyncio.QueueFull:
+                # Best-effort — pipeline_stage labels are nice-to-have,
+                # never block the run.
+                logger.warning(
+                    "event_queue full; pipeline_stage=%s dropped", stage,
+                )
+
+        # Stage 1: extracting — fired the moment we launch the
+        # coordinator task and the first per-agent events are about to
+        # start streaming.
+        _emit_stage("extracting")
 
         # Launch coordinator as a background task so we can drain events while agents run.
         # push_sentinel=False: we're multiplexing face + notes into one queue;
@@ -1829,9 +2290,28 @@ async def run_multi_agent_stream(
             coordinator_result = await coordinator_task
         except asyncio.CancelledError:
             logger.info("Coordinator cancelled", extra={"session_id": session_id})
+            # PLAN-stop-and-validation-visibility Phase 2: best-effort merge
+            # of whatever per-statement workbooks already landed on disk
+            # before the cancel signal arrived. Without this, History has
+            # no downloadable filled.xlsx even though the per-statement
+            # files are still in output/{session_id}/. The helper itself
+            # is hardened to never raise — gotcha #10 still holds.
+            partial = _attempt_partial_merge(
+                session_dir=session_dir,
+                merged_path=merged_path,
+                statements_to_run=statements_to_run,
+                notes_to_run=notes_to_run,
+                db_conn=db_conn,
+                run_id=run_id,
+            )
             if _safe_mark_finished(db_conn, run_id, "aborted"):
                 terminal_status = "aborted"
             if client_connected:
+                # Surface the partial-merge outcome BEFORE the generic
+                # cancel error so the frontend can render a "saved partial
+                # workbook" banner alongside the cancellation message.
+                if partial["merged"] or partial["statements_included"] or partial["notes_included"]:
+                    yield {"event": "partial_merge", "data": partial}
                 yield {"event": "error", "data": {"message": "Run cancelled"}}
             return
         except Exception as e:
@@ -1951,6 +2431,31 @@ async def run_multi_agent_stream(
         if notes_result is not None:
             all_notes_workbook_paths.update(notes_result.workbook_paths)
 
+        # Phase 6: stage boundary — extraction is fully drained, we're
+        # about to merge per-statement workbooks into filled.xlsx.
+        # Push to queue + drain so the event rides the standard
+        # GeneratorExit-tolerant yield path.
+        _emit_stage("merging")
+        while True:
+            try:
+                evt = event_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if evt is None:
+                continue
+            persist_event(evt)
+            if client_connected:
+                try:
+                    yield evt
+                except (asyncio.CancelledError, GeneratorExit):
+                    client_connected = False
+
+        # PLAN-stop-and-validation-visibility Phase 4: classify common
+        # post-extraction errors with a type discriminator the frontend
+        # can route on. Mirrors the per-event ``data.type`` pattern the
+        # correction agent already uses for its exhausted-budget event.
+        # Distinct buckets keep "merge failed" from looking like
+        # "agent crashed" — the user-facing remediation is different.
         # Merge workbooks (Phase 7.4). Notes sheets land after face sheets.
         # RUN-REVIEW peer-review #1 (HIGH): pass skip_recalc=True so
         # formulas survive into the post-merge stage. The CORRECTION
@@ -1988,6 +2493,32 @@ async def run_multi_agent_stream(
                     "Failed to mark run_merged on run %s", run_id, exc_info=True,
                 )
 
+        # Phase 4: surface merge failure as an SSE error event. The
+        # success path already covers itself via run_complete; the
+        # failure path used to log + continue silently, so the user
+        # got "run_complete success=false" with no diagnostic.
+        if not merge_result.success:
+            err_msg = "; ".join(merge_result.errors) or "unknown merge error"
+            _enqueue_system_error({
+                "type": "merge_failed",
+                "message": f"Workbook merge failed: {err_msg}",
+                "errors": list(merge_result.errors),
+            })
+            # Drain the event we just pushed.
+            while True:
+                try:
+                    evt = event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if evt is None:
+                    continue
+                persist_event(evt)
+                if client_connected:
+                    try:
+                        yield evt
+                    except (asyncio.CancelledError, GeneratorExit):
+                        client_connected = False
+
         # Run cross-checks (Phase 5 wiring). See `_build_default_cross_checks`
         # at module scope for the canonical registry the MPERS wiring tests
         # pin against.
@@ -1999,10 +2530,83 @@ async def run_multi_agent_stream(
             "filing_standard": run_config.filing_standard,
         }
         tolerance = float(os.environ.get("XBRL_TOLERANCE_RM", "1.0"))
-        cross_check_results = run_cross_checks(
-            all_checks, all_workbook_paths, check_config,
-            tolerance=tolerance,
-        )
+        # Phase 6: stage boundary — about to run the initial
+        # cross-check pass. Pushed via the queue so the drain happens
+        # together with the cross-check progress emissions below.
+        _emit_stage("cross_checking")
+        # Phase 4: cross-check exceptions (corrupt workbook, missing
+        # sheet, etc.) used to propagate to the outer except and kill
+        # the run with a generic "Stream error" message. Catch them
+        # here so we surface a structured `cross_check_exception`
+        # SSE error and let run_complete still fire — the run lands
+        # as completed_with_errors instead of failed/aborted.
+        #
+        # Peer-review fix (2026-04-27): track whether a cross-check
+        # pass crashed so the final-status logic can flip to
+        # ``completed_with_errors`` and ``run_complete.success=false``.
+        # Without this, an empty cross_check_results list would make
+        # ``any_check_failed=False`` and the run would silently report
+        # success=true even though validation never ran.
+        cross_check_crashed = False
+
+        # Peer-review fix (2026-04-27): live per-check progress —
+        # rather than batching cross_check_result events after
+        # ``run_cross_checks`` returns, emit them via the on_check
+        # callback as each check resolves. Send a ``cross_check_start``
+        # frame first so the UI can size its progress block. The
+        # post-pass ``cross_check_complete`` aggregator still fires
+        # below in ``_emit_cross_check_progress``, so the existing
+        # event-shape contract is preserved.
+        try:
+            event_queue.put_nowait({
+                "event": "cross_check_start",
+                "data": {"phase": "initial", "total": len(all_checks)},
+            })
+        except asyncio.QueueFull:
+            logger.warning("event_queue full; cross_check_start dropped")
+
+        def _on_initial_check(idx: int, total: int, result) -> None:
+            try:
+                event_queue.put_nowait({
+                    "event": "cross_check_result",
+                    "data": {
+                        "phase": "initial",
+                        "index": idx,
+                        "total": total,
+                        "name": result.name,
+                        "status": result.status,
+                        "expected": result.expected,
+                        "actual": result.actual,
+                        "diff": result.diff,
+                        "tolerance": result.tolerance,
+                        "message": result.message,
+                    },
+                })
+            except asyncio.QueueFull:
+                logger.warning(
+                    "event_queue full; cross_check_result idx=%d dropped", idx,
+                )
+
+        try:
+            cross_check_results = run_cross_checks(
+                all_checks, all_workbook_paths, check_config,
+                tolerance=tolerance,
+                on_check=_on_initial_check,
+            )
+        except Exception as _cc_exc:  # noqa: BLE001
+            logger.exception(
+                "Initial cross-check pass raised on run %s", run_id,
+            )
+            cross_check_results = []
+            cross_check_crashed = True
+            _enqueue_system_error({
+                "type": "cross_check_exception",
+                "phase": "initial",
+                "message": (
+                    f"Cross-check pass crashed: "
+                    f"{type(_cc_exc).__name__}: {_cc_exc}"
+                ),
+            })
 
         # Phase 6.1: advisory cross-sheet notes-consistency check. Warns
         # when Sheet 11 and Sheet 12 disagree on the PDF page for the same
@@ -2032,6 +2636,29 @@ async def run_multi_agent_stream(
                     status="warning",
                     message=w.message,
                 ))
+
+        # PLAN-stop-and-validation-visibility Phase 5: surface the
+        # initial cross-check pass as per-check SSE events so the
+        # Validator tab can render rows progressively rather than
+        # waiting for the final run_complete event.
+        _emit_cross_check_summary(cross_check_results, "initial", event_queue)
+        # Drain whatever the emitter just pushed (it's synchronous, so
+        # everything is already in the queue). Persist for audit and
+        # yield to the SSE client. Same pattern as _drain_while_running
+        # but no task to wait on — the events are already there.
+        while True:
+            try:
+                evt = event_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if evt is None:
+                continue
+            persist_event(evt)
+            if client_connected:
+                try:
+                    yield evt
+                except (asyncio.CancelledError, GeneratorExit):
+                    client_connected = False
 
         # Peer-review C1: track pseudo-agent outcomes so the persistence
         # block below can finish_run_agent them. None means the helper was
@@ -2072,6 +2699,11 @@ async def run_multi_agent_stream(
                             "Failed to pre-create correction run_agent row",
                             exc_info=True,
                         )
+                # Phase 6: stage boundary — about to launch the
+                # correction agent. The most opaque stage of the run
+                # historically; this label tells the UI the "10-min
+                # silent gap" everyone reports is correction running.
+                _emit_stage("correcting")
                 correction_task = asyncio.create_task(_run_correction_pass(
                     failed_checks=hard_failures,
                     merged_workbook_path=merged_path,
@@ -2094,6 +2726,10 @@ async def run_multi_agent_stream(
                             client_connected = False
                 correction_outcome = await correction_task
                 if correction_outcome.get("writes_performed", 0) > 0:
+                    # Phase 6: stage boundary — correction edited the
+                    # workbook, time to re-run cross-checks against the
+                    # corrected state.
+                    _emit_stage("re_checking")
                     # Re-run cross-checks against the edited workbook so
                     # the UI + DB see the post-correction state.
                     #
@@ -2108,10 +2744,71 @@ async def run_multi_agent_stream(
                     merged_paths_by_stmt = {
                         stmt: merged_path for stmt in all_workbook_paths
                     }
-                    cross_check_results = run_cross_checks(
-                        all_checks, merged_paths_by_stmt, check_config,
-                        tolerance=tolerance,
-                    )
+                    # Peer-review fix (2026-04-27): mirror the initial
+                    # pass's try/except so a malformed merged workbook
+                    # produced by the correction agent (writes that
+                    # break openpyxl readability, etc.) raises a
+                    # structured ``cross_check_exception`` event with
+                    # phase="post_correction" instead of crashing the
+                    # whole run. ALSO mirror the on_check live emission
+                    # so the post-correction validator tab fills rows
+                    # in progressively.
+                    try:
+                        event_queue.put_nowait({
+                            "event": "cross_check_start",
+                            "data": {"phase": "post_correction", "total": len(all_checks)},
+                        })
+                    except asyncio.QueueFull:
+                        logger.warning(
+                            "event_queue full; post_correction "
+                            "cross_check_start dropped"
+                        )
+
+                    def _on_post_check(idx: int, total: int, result) -> None:
+                        try:
+                            event_queue.put_nowait({
+                                "event": "cross_check_result",
+                                "data": {
+                                    "phase": "post_correction",
+                                    "index": idx,
+                                    "total": total,
+                                    "name": result.name,
+                                    "status": result.status,
+                                    "expected": result.expected,
+                                    "actual": result.actual,
+                                    "diff": result.diff,
+                                    "tolerance": result.tolerance,
+                                    "message": result.message,
+                                },
+                            })
+                        except asyncio.QueueFull:
+                            logger.warning(
+                                "event_queue full; post_correction "
+                                "cross_check_result idx=%d dropped", idx,
+                            )
+
+                    try:
+                        cross_check_results = run_cross_checks(
+                            all_checks, merged_paths_by_stmt, check_config,
+                            tolerance=tolerance,
+                            on_check=_on_post_check,
+                        )
+                    except Exception as _cc_exc2:  # noqa: BLE001
+                        logger.exception(
+                            "Post-correction cross-check re-run raised "
+                            "on run %s", run_id,
+                        )
+                        cross_check_results = []
+                        cross_check_crashed = True
+                        _enqueue_system_error({
+                            "type": "cross_check_exception",
+                            "phase": "post_correction",
+                            "message": (
+                                f"Post-correction cross-check pass "
+                                f"crashed: "
+                                f"{type(_cc_exc2).__name__}: {_cc_exc2}"
+                            ),
+                        })
                     if merge_result.success:
                         try:
                             consistency_warnings = check_notes_consistency(merged_path)
@@ -2127,6 +2824,30 @@ async def run_multi_agent_stream(
                                 status="warning",
                                 message=w.message,
                             ))
+
+                    # PLAN-stop-and-validation-visibility Phase 5:
+                    # surface the post-correction re-run as a separate
+                    # progress phase so the UI can flip rows from "old"
+                    # to "new" status as each post-correction result
+                    # confirms — instead of the silent dead zone we had
+                    # before (run_cross_checks returns; nothing emitted
+                    # until run_complete carries everything in one go).
+                    _emit_cross_check_summary(
+                        cross_check_results, "post_correction", event_queue,
+                    )
+                    while True:
+                        try:
+                            evt = event_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        if evt is None:
+                            continue
+                        persist_event(evt)
+                        if client_connected:
+                            try:
+                                yield evt
+                            except (asyncio.CancelledError, GeneratorExit):
+                                client_connected = False
 
         # Phase 5.5: notes post-validator. Runs only when BOTH Sheet 11
         # (ACC_POLICIES) and Sheet 12 (LIST_OF_NOTES) were produced in
@@ -2167,6 +2888,13 @@ async def run_multi_agent_stream(
                             "Failed to pre-create notes-validator row",
                             exc_info=True,
                         )
+                # Phase 6: stage boundary — about to run the notes
+                # post-validator (sheet-11/12 cross-sheet review). Only
+                # fires when both ACC_POLICIES and LIST_OF_NOTES landed,
+                # so the absence of this event isn't a bug — it just
+                # means the run didn't request the post-validator's
+                # required notes templates.
+                _emit_stage("validating_notes")
                 validator_task = asyncio.create_task(_run_notes_validator_pass(
                     merged_workbook_path=merged_path,
                     pdf_path=str(session_dir / "uploaded.pdf"),
@@ -2389,11 +3117,16 @@ async def run_multi_agent_stream(
         )
         if all_agents_ok and merge_result.success and correction_exhausted:
             overall_status = "correction_exhausted"
-        elif all_agents_ok and merge_result.success and not any_check_failed:
+        elif all_agents_ok and merge_result.success and not any_check_failed and not cross_check_crashed:
+            # Peer-review fix (2026-04-27): a cross-check pass that
+            # crashed produced an empty results list, so
+            # ``any_check_failed`` is misleadingly False. Without the
+            # explicit ``cross_check_crashed`` guard, validation
+            # crashes silently became "completed" runs.
             overall_status = "completed"
         elif all_agents_ok and not merge_result.success:
             overall_status = "completed_with_errors"
-        elif all_agents_ok and any_check_failed:
+        elif all_agents_ok and (any_check_failed or cross_check_crashed):
             overall_status = "completed_with_errors"
         else:
             overall_status = "failed"
@@ -2429,8 +3162,20 @@ async def run_multi_agent_stream(
         # run is already fully persisted in the DB (History will show it
         # correctly on reload); the client just won't see this event.
         if client_connected:
+            # Phase 6: stage boundary — pipeline finished, run_complete
+            # carries the final aggregate. The "done" stage tells the
+            # frontend to stop spinning the active-stage indicator.
+            try:
+                yield _stage_event("done")
+            except (asyncio.CancelledError, GeneratorExit):
+                client_connected = False
+                logger.info(
+                    "Client disconnected at done-stage yield; finalizing",
+                    extra={"session_id": session_id},
+                )
+        if client_connected:
             yield {"event": "run_complete", "data": {
-                "success": all_agents_ok and merge_result.success and not any_check_failed,
+                "success": all_agents_ok and merge_result.success and not any_check_failed and not cross_check_crashed,
                 "merged_workbook": merged_path if merge_result.success else None,
                 "merge_errors": merge_result.errors,
                 "cross_checks": checks_data,

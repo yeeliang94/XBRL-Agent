@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +21,60 @@ _STRIP_THRESHOLD_BYTES = 500
 
 # Single source of truth for the "how many node iterations before we give
 # up and assume the agent is stuck" cap. Used by face/notes coordinators
-# and scout. Raise here rather than per-module.
-MAX_AGENT_ITERATIONS = 50
+# and scout.
+#
+# PLAN-stop-and-validation-visibility Phase 0.3 (2026-04-27): the value
+# MUST stay strictly below pydantic-ai's silent default
+# ``UsageLimits.request_limit=50``. The 2026-04-26 incident was a face
+# agent racing that silent cap and losing — pydantic-ai fired
+# ``UsageLimitExceeded`` from inside its own request preparation,
+# bypassing our coordinator.py iteration-cap path that would have
+# emitted a structured "Hit iteration limit" SSE error. We hold a
+# 10-turn buffer (40 vs 50) so pydantic-ai's per-iteration request
+# overhead can't tip a 49-iteration agent over the silent cap.
+#
+# Operators who need more headroom can set ``XBRL_MAX_AGENT_ITERATIONS``
+# in env. Setting it >= 50 reintroduces the silent-cap race and is
+# explicitly documented as risky; pinned by
+# tests/test_max_agent_iterations_below_pydantic_cap.py.
+def _resolve_max_iterations() -> int:
+    # Hard ceiling: pydantic-ai's silent ``UsageLimits.request_limit=50``
+    # races our cap. If our value is >= 50, pydantic-ai wins and the
+    # user sees ``UsageLimitExceeded`` instead of our structured "Hit
+    # iteration limit" message — exactly the 2026-04-26 incident this
+    # constant exists to prevent. Clamp the env override to 45 (5-turn
+    # buffer absorbs pydantic-ai's per-iteration overhead) and log a
+    # loud warning when an operator tried to push it past the safe
+    # ceiling. Peer-review fix (2026-04-27).
+    _SAFE_CEILING = 45
+
+    raw = os.environ.get("XBRL_MAX_AGENT_ITERATIONS", "")
+    if not raw:
+        return 40
+    try:
+        v = int(raw)
+    except ValueError:
+        logger.warning(
+            "XBRL_MAX_AGENT_ITERATIONS=%r is not an int; using default 40", raw,
+        )
+        return 40
+    if v <= 0:
+        return 40
+    if v > _SAFE_CEILING:
+        logger.warning(
+            "XBRL_MAX_AGENT_ITERATIONS=%d exceeds safe ceiling of %d "
+            "(pydantic-ai's silent request_limit=50). Clamping to %d to "
+            "preserve the structured 'Hit iteration limit' surfacing path. "
+            "If you genuinely need more headroom, raise this with the "
+            "team — there's a deeper fix that involves explicit "
+            "UsageLimits config per agent role.",
+            v, _SAFE_CEILING, _SAFE_CEILING,
+        )
+        return _SAFE_CEILING
+    return v
+
+
+MAX_AGENT_ITERATIONS = _resolve_max_iterations()
 
 
 def strip_binary(obj: Any) -> None:

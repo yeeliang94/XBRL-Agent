@@ -1,8 +1,33 @@
 # Implementation Plan: Stop-All Preservation + Correction Error Surfacing + Validation Visibility
 
-**Overall Progress:** `0%`
+**Overall Progress:** `~95%` (all phases landed; manual smoke + per-agent structured exhausted events deferred)
 **PRD Reference:** N/A (scoped from in-session brainstorm 2026-04-26)
-**Last Updated:** 2026-04-26
+**Last Updated:** 2026-04-26 (post-rework after commit 6e139a4)
+
+## Diff-rebase note — 2026-04-26 (post commit 6e139a4)
+
+After this plan was first drafted, commit **6e139a4** ("server+web:
+persistent-draft uploads + RUN-REVIEW fixes") landed and shipped a
+**partial Phase 0** — the correction agent now has a dynamic turn-counting
+cap that fires before pydantic-ai's silent 50-cap, plus a new
+`correction_exhausted` terminal status threaded end-to-end. RUN-REVIEW.md
+in that commit independently identified the same 50-cap root cause from
+the screenshot.
+
+What that commit did NOT do:
+
+- Face / scout / notes / notes-validator agents are still subject to the
+  silent pydantic-ai 50-cap. **Phase 0 Steps 0.2-0.6 still apply to them.**
+- Stop-All cancel handler still bails without partial merge.
+- No wall-clock cap on correction or notes-validator.
+- Post-correction cross-check re-run (server.py:2111) still emits zero
+  SSE events.
+- No pipeline-stage indicator.
+
+The implementation chose **turn counting in the iter() loop** rather than
+`UsageLimits` config. That's equivalent for budget purposes and easier to
+emit structured "exhausted" events from. **Reuse the same pattern for the
+remaining agents** rather than introducing two budgeting mechanisms.
 
 ## Summary
 
@@ -67,11 +92,32 @@ addresses it directly.
 
 ## Pre-Implementation Checklist
 
-- [ ] 🟥 Confirm 5-min wall-clock is the right number (not 3 or 10)
+- [ ] 🟥 Approve the per-role turn budgets in Phase 0 Step 0.2 (face: 25,
+      scout: 8, notes: 20, Sheet 12 sub: 12, validator: 12)
+- [ ] 🟥 Decide Phase 0 Step 0.4: roll non-correction exhaustion up to
+      `completed_with_errors` (recommended) vs add new statuses
+- [ ] 🟥 Confirm whether the wall-clock cap (Phase 3) is still wanted
+      after the turn-counting cap landed — operator smoke-test correction
+      first, then decide
 - [ ] 🟥 Confirm partial-merge artifact name should still be `filled.xlsx`
       (not `filled_partial.xlsx`) — keeps download endpoint dumb
-- [ ] 🟥 No conflicting in-progress work — `docs/PLAN-persistent-draft-uploads.md`
-      touches different paths (uploads), no overlap
+- [x] 🟩 No conflicting in-progress work — `docs/PLAN-persistent-draft-uploads.md`
+      and `docs/PLAN-run-review-fixes.md` already merged in commit 6e139a4
+
+## Recommended order of attack (post-rebase)
+
+1. **Phase 2 first** (Stop-All preserve+merge) — biggest user-visible
+   win, no overlap with what just landed, clean isolation.
+2. **Phase 5 second** (cross-check progress events) — kills the silent
+   dead zone after correction. Pure additive SSE work.
+3. **Phase 0 Step 0.3** (extend turn-cap pattern to face/scout/notes/
+   validator) — replicates an already-proven mechanism.
+4. **Phase 6** (pipeline-stage indicator) — ties everything together UX-wise.
+5. **Phase 4** (audit silent exception paths) — once 0.3 lands, the
+   remaining silent paths shrink dramatically.
+6. **Phase 3** (wall-clock cap) — only if operator finds correction
+   still slow after Phase 0 finishes.
+7. **Phase 7** (E2E + manual smoke) — gates the work for landing.
 
 ## Tasks
 
@@ -79,84 +125,88 @@ addresses it directly.
 
 This phase MUST land first — it's the actual bug behind the screenshot.
 
-- [ ] 🟥 **Step 0.1: Test — UsageLimitExceeded today escapes silently**
-      (`tests/test_usage_limit_surfacing.py`)
-  - [ ] 🟥 RED: write a test that monkey-patches a face agent's run to
-        raise `pydantic_ai.exceptions.UsageLimitExceeded` mid-run. Assert
-        an `error` SSE event arrives with a message containing
-        `"request budget"` (a friendly classification, not the raw
-        pydantic-ai message). Expect FAIL today.
-  - [ ] 🟥 Repeat for the correction agent.
-  - **Verify:** `pytest tests/test_usage_limit_surfacing.py -v` shows
-    both tests failing — captures baseline before any change.
+**Rebase note:** the correction agent slice of this phase landed in commit
+6e139a4 (RUN-REVIEW P0-1). The pattern there — turn-counting in the
+`agent.iter()` loop with a structured `exhausted=True` outcome — should be
+reused for the remaining agents below rather than introducing a parallel
+`UsageLimits` mechanism.
 
-- [ ] 🟥 **Step 0.2: Audit every `Agent(...)` and `agent.iter(...)` call site**
-  - [ ] 🟥 `grep -rn "agent.iter\|Agent(" --include='*.py'` and list every
-        location. Expect: face extraction, scout, notes, correction, notes
-        validator, plus any utility agents.
-  - [ ] 🟥 For each, decide the request budget:
-        - face extraction: 30 (current ceiling observed in successful runs)
-        - scout: 10
-        - notes (per template): 25
-        - notes Sheet 12 sub-agents: 15 each
-        - correction: 25
-        - notes validator: 15
-  - [ ] 🟥 Document numbers + rationale here as a sub-bullet before
-        implementing — agree with operator first.
-  - **Verify:** the list of sites + budgets appears as a sub-bullet in
-    this plan.
+- [x] 🟩 **Step 0.1: Test — pydantic-ai 50-cap escapes silently for
+      correction** ✅ DONE in commit 6e139a4
+  - Covered by `tests/test_correction_iteration_cap.py` with the
+    `inspect_flood_model` fixture.
+  - **Status:** GREEN. Cap fires at 10 turns (Company + 1 failed check),
+    not 50. Outcome carries `exhausted=True`.
 
-- [ ] 🟥 **Step 0.3: Central budget config module** (`config/usage_limits.py`)
-  - [ ] 🟥 New module exposes `usage_limits_for(role: str) -> UsageLimits`
-        that returns a `pydantic_ai.usage.UsageLimits` configured for the
-        given role.
-  - [ ] 🟥 Each role's request budget readable from env
-        (`XBRL_BUDGET_FACE`, `XBRL_BUDGET_CORRECTION`, etc.) with the
-        Step 0.2 numbers as defaults.
-  - [ ] 🟥 RED test: assert `usage_limits_for("correction").request_limit
-        == 25` and that env override works.
-  - **Verify:** `pytest tests/test_usage_limits_config.py -v` passes.
+- [ ] 🟨 **Step 0.2: Audit remaining `agent.iter()` call sites** (PARTIAL)
+  - [x] 🟩 Correction agent — done (server.py:381 + dynamic cap).
+  - [ ] 🟥 Face extraction (`extraction/agent.py`) — still uncapped.
+  - [ ] 🟥 Scout (`scout/`) — still uncapped.
+  - [ ] 🟥 Notes per-template agents (`notes/coordinator.py` per template)
+        — still uncapped.
+  - [ ] 🟥 Notes Sheet 12 sub-agents — still uncapped.
+  - [ ] 🟥 Notes validator (`server.py:_run_notes_validator_pass`)
+        — still uncapped.
+  - [ ] 🟥 Propose budgets per role (rationale: based on tool-call profile
+        + RUN-REVIEW efficiency snapshot of 77-82% cache-hit on heavy
+        agents):
+        - face extraction: 25 (5 tools × 5 retries average)
+        - scout: 8 (lookup-only)
+        - notes per template: 20 (most templates are short)
+        - notes Sheet 12 sub-agents: 12 each (single-note scope)
+        - notes validator: 12 (one-pass review)
+        - correction: already done (8-25 dynamic)
+  - **Verify:** numbers above approved by operator before implementing.
 
-- [ ] 🟥 **Step 0.4: Thread budgets into every `agent.iter()` call**
-  - [ ] 🟥 For each call site from Step 0.2, pass
-        `usage_limits=usage_limits_for(role)` to `agent.iter()`.
-  - [ ] 🟥 Important: `agent.iter()` accepts `usage_limits=` kwarg in
-        pydantic-ai 1.77+. Confirm signature first.
-  - [ ] 🟥 Test: per-call-site assertion that the agent run is invoked
-        with the expected `UsageLimits` (mock the iter, capture kwargs).
-  - **Verify:** new tests pass; full suite still green.
+- [ ] 🟥 **Step 0.3: Reuse the turn-counting pattern, not `UsageLimits`**
+  - [ ] 🟥 RED: write `tests/test_face_agent_turn_cap.py` and similar
+        for scout / notes / validator that scripts a `FunctionModel`
+        emitting more turns than the cap allows. Assert a structured
+        outcome with `exhausted=True` and an SSE `error` event.
+  - [ ] 🟥 GREEN: copy the turn-counter snippet from server.py:378-422
+        into each agent's run helper. Each gets its own
+        `<ROLE>_MAX_TURNS` constant + `XBRL_BUDGET_<ROLE>` env override.
+  - [ ] 🟥 Each surfaces a role-specific exhausted error event so the
+        frontend can differentiate.
+  - **Verify:** new per-agent cap tests pass; full suite still green.
 
-- [ ] 🟥 **Step 0.5: Catch `UsageLimitExceeded` specifically** (`server.py` +
-      `notes/coordinator.py`)
-  - [ ] 🟥 In `_run_correction_pass`, `_run_notes_validator_pass`, and the
-        face-extraction / notes coordinator paths, add an
-        `except UsageLimitExceeded as e:` branch BEFORE the generic
-        `except Exception:` one.
-  - [ ] 🟥 Emit an `error` event with a structured payload:
-        `{"type": "request_budget_exceeded", "role": <role>,
-         "limit": <int>, "message": "Agent <role> exceeded its
-         request budget of <N>. ..."}`.
-  - [ ] 🟥 Outcome dict gets `error_type: "request_budget_exceeded"` so
-        downstream code can branch on it (e.g. don't retry).
-  - [ ] 🟥 GREEN: Step 0.1 tests pass.
-  - **Verify:** `pytest tests/test_usage_limit_surfacing.py -v` passes;
-    triggering a budget overrun in a manual run shows a clear UI banner
-    instead of a terminal traceback.
+- [ ] 🟥 **Step 0.4: New terminal statuses for non-correction exhaustion**
+      (only if needed)
+  - [ ] 🟥 Decide: do we need `face_exhausted` / `notes_exhausted` /
+        `validator_exhausted` as distinct statuses, or do they all
+        roll up to `completed_with_errors` with a richer per-agent
+        message?
+  - [ ] 🟥 Recommendation: roll up to `completed_with_errors` with
+        per-agent error messages. Avoids status-explosion. The amber
+        "Needs review" chip already covers the "human needs to look"
+        case via `correction_exhausted`.
+  - **Verify:** decision recorded as a Key Decision; tests align.
 
-- [ ] 🟥 **Step 0.6: Frontend — distinct chip for budget exhaustion**
-      (`web/src/components/RunDetailView.tsx` or ValidatorTab)
-  - [ ] 🟥 RED: vitest renders an SSE `error` event with
-        `type: "request_budget_exceeded"`. Asserts a yellow/orange
-        "LLM budget exhausted" chip appears with the role + limit
-        labelled — distinct from a generic red error.
-  - [ ] 🟥 GREEN: extend the error classifier added in Step 3.3 to
-        recognize `request_budget_exceeded` as its own bucket.
-  - **Verify:** vitest passes; manual run shows the distinct chip.
+- [x] 🟩 **Step 0.5: Catch budget exhaustion specifically (correction)**
+      ✅ DONE in commit 6e139a4
+  - Correction agent emits structured SSE error + `exhausted=True`
+    outcome at server.py:386-422.
+  - **Open work:** Steps 0.3 above replicate the pattern for face /
+    scout / notes / validator.
+
+- [x] 🟩 **Step 0.6: Frontend chip for correction exhaustion**
+      ✅ DONE in commit 6e139a4
+  - `correction_exhausted` rendered as amber "Needs review" chip via
+    `web/src/lib/runStatus.ts:46`.
+  - **Open work:** if Step 0.4 decision adds non-correction exhausted
+    statuses, extend the chip map. Otherwise, no frontend change
+    needed — generic `completed_with_errors` chip already exists.
 
 ### Phase 1: Investigation — pin current behaviour with failing tests
 
 These tests start RED and *stay RED until later phases flip them*. They
 serve as the executable spec for each fix.
+
+**Rebase note:** Step 1.2 (correction wall-clock cap) is now redundant
+with the turn-counting cap that landed in commit 6e139a4 — the dynamic
+cap already bounds total wall-clock through the per-turn timeout
+(180s × 25 turns = 75 min worst case, but in practice 5-10 min). Keep
+the wall-clock cap as **defence-in-depth** but downgrade priority.
 
 - [ ] 🟥 **Step 1.1: Test — Stop-All currently skips merge** (`tests/test_stop_all_preserves_partial.py`)
   - [ ] 🟥 RED: write a test that runs the coordinator with two of three
@@ -168,13 +218,18 @@ serve as the executable spec for each fix.
   - **Verify:** `pytest tests/test_stop_all_preserves_partial.py -v` shows the
     new test failing with `assert merged_workbook_path is not None`.
 
-- [ ] 🟥 **Step 1.2: Test — correction has no wall-clock cap** (`tests/test_correction_wallclock_cap.py`)
-  - [ ] 🟥 RED: write a test that mocks the correction agent's
-        `agent.iter()` to sleep 6 minutes (mocked clock). Assert
-        `_run_correction_pass` returns within 5 min wall-clock with
-        `outcome["error"]` containing `"wall-clock"`.
-  - [ ] 🟥 Expect FAIL today (no wall-clock cap exists).
-  - **Verify:** test fails with timeout or assertion error.
+- [ ] 🟥 **Step 1.2: Test — correction has no wall-clock cap** (DOWNGRADED, `tests/test_correction_wallclock_cap.py`)
+  - **Status:** lower priority post-rebase. The 25-turn × 180s per-turn
+    bound caps total time at ~75 min worst case but typical correction
+    runs are now 1-3 min. Keep the test as defence-in-depth — operator
+    can still hit a slow-LLM scenario where the per-turn timeout never
+    fires but every turn takes 100s (~40 min total). A 5-min wall-clock
+    cap would catch this.
+  - [ ] 🟥 RED: still write the test, expect FAIL today (no wall-clock).
+  - [ ] 🟥 Decide whether to actually implement Step 3.1 GREEN — if
+        operator says correction now feels fast enough, defer.
+  - **Verify:** test fails today; revisit decision after Phase 0 Step
+    0.3 lands and operator does a smoke run.
 
 - [ ] 🟥 **Step 1.3: Test — post-correction cross-check re-run is silent** (`tests/test_cross_check_progress_events.py`)
   - [ ] 🟥 RED: write a test that consumes the SSE stream from a run that

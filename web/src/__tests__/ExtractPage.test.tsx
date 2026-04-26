@@ -11,7 +11,12 @@ function makeProps(overrides?: { state?: Partial<AppState>; handleAbortAll?: () 
   return {
     state,
     dispatch: vi.fn(),
-    handleUpload: vi.fn(async () => ({ session_id: "s", filename: "f.pdf" })),
+    // Persistent-draft uploads (commit 6e139a4) added `run_id` to the
+    // upload response — null is the legacy "no draft row was created"
+    // fallback the persistent-draft work itself preserves for older
+    // backends. Without it `tsc -b` fails because ExtractPageProps now
+    // requires the field.
+    handleUpload: vi.fn(async () => ({ session_id: "s", filename: "f.pdf", run_id: null })),
     handleMultiRun: vi.fn(),
     handleAbortAll: overrides?.handleAbortAll ?? (vi.fn(async () => {}) as () => Promise<void>),
     handleAbortAgent: vi.fn(async () => {}) as (id: string) => Promise<void>,

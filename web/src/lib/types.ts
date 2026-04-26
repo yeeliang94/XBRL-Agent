@@ -40,7 +40,23 @@ export type SSEEventType =
   | "token_update"     // Running token totals
   | "error"            // Agent/system error
   | "complete"         // Single-agent run finished (legacy) OR per-agent completion (multi-agent)
-  | "run_complete";    // Final aggregate event for multi-agent runs
+  | "run_complete"     // Final aggregate event for multi-agent runs
+  // PLAN-stop-and-validation-visibility Phase 2: emitted from the
+  // Stop-All cancel handler when at least one per-statement workbook
+  // already landed on disk. Lets the frontend show a "Saved partial
+  // workbook" banner alongside the "Run cancelled" error.
+  | "partial_merge"
+  // PLAN-stop-and-validation-visibility Phase 5: per-pass progress
+  // events for the cross-check engine so the Validator tab fills
+  // rows in as they're confirmed instead of waiting for run_complete.
+  | "cross_check_start"      // pass-level prelude: phase + total
+  | "cross_check_result"     // one per check, in order
+  | "cross_check_complete"   // pass-level summary: counts
+  // PLAN-stop-and-validation-visibility Phase 6: coordinator-level
+  // stage boundaries so the UI can label the current activity
+  // (extracting / merging / cross_checking / correcting /
+  // re_checking / validating_notes / done).
+  | "pipeline_stage";
 
 // Every multi-agent event carries these routing fields inside `data` (the
 // backend stamps them in coordinator._build_event). We keep them in `data`
@@ -69,6 +85,16 @@ interface SSEEventDataMap {
   error: ErrorData & AgentRouting;
   complete: (CompleteData | AgentCompleteData) & AgentRouting;
   run_complete: RunCompleteData & AgentRouting;
+  // partial_merge has no agent_id (it's a coordinator-level event)
+  // but the routing intersection is harmless — keeps the union shape
+  // uniform across all event types.
+  partial_merge: PartialMergeData & AgentRouting;
+  // PLAN-stop-and-validation-visibility Phase 5 — cross-check progress.
+  cross_check_start: CrossCheckStartData & AgentRouting;
+  cross_check_result: CrossCheckResultEventData & AgentRouting;
+  cross_check_complete: CrossCheckCompleteData & AgentRouting;
+  // PLAN-stop-and-validation-visibility Phase 6 — pipeline stage label.
+  pipeline_stage: PipelineStageData & AgentRouting;
 }
 
 export type SSEEvent = {
@@ -124,6 +150,93 @@ export interface TokenData {
 export interface ErrorData {
   message: string;
   traceback: string;
+}
+
+/** PLAN-stop-and-validation-visibility Phase 5.1.
+ *  Phase label distinguishes the initial cross-check pass from the
+ *  post-correction re-run so the UI can render two separate progress
+ *  blocks ("Cross-checks…" and "Re-checking after correction…").
+ */
+export type CrossCheckPhase = "initial" | "post_correction";
+
+/** Pass-level prelude — emitted once at the start of each cross-check
+ *  pass with the total checks the engine plans to run. */
+export interface CrossCheckStartData {
+  phase: CrossCheckPhase;
+  total: number;
+}
+
+/** Per-check progress payload. ``index`` is 0-based and ``total``
+ *  matches the start event so the frontend can render "3 / 12". */
+export interface CrossCheckResultEventData {
+  phase: CrossCheckPhase;
+  index: number;
+  total: number;
+  name: string;
+  status: "passed" | "failed" | "warning" | "not_applicable" | "pending";
+  expected: number | null;
+  actual: number | null;
+  diff: number | null;
+  tolerance: number | null;
+  message: string;
+}
+
+/** Pass-level summary — emitted once at the end of each cross-check
+ *  pass with status counts so the Validator tab can render a concise
+ *  rollup ("Passed 8, Failed 1, Warning 2") without re-tallying. */
+export interface CrossCheckCompleteData {
+  phase: CrossCheckPhase;
+  passed: number;
+  failed: number;
+  warnings: number;
+  not_applicable: number;
+  pending: number;
+}
+
+/** PLAN-stop-and-validation-visibility Phase 6.
+ *  Coordinator-level stage label. Distinct from per-agent EventPhase
+ *  (reading_template / viewing_pdf / …) — those describe what a single
+ *  agent is doing inside its own loop. ``PipelineStage`` describes the
+ *  whole pipeline's current top-level activity, which the UI uses to
+ *  label the dead zones between agent activity (merge → cross-check →
+ *  correct → re-check → notes-validate). */
+export type PipelineStage =
+  | "extracting"
+  | "merging"
+  | "cross_checking"
+  | "correcting"
+  | "re_checking"
+  | "validating_notes"
+  | "done";
+
+export interface PipelineStageData {
+  stage: PipelineStage;
+  /** Server-side timestamp (epoch seconds). */
+  started_at: number;
+}
+
+/** PLAN-stop-and-validation-visibility Phase 2.2.
+ *  Payload of the ``partial_merge`` SSE event. Emitted from the cancel
+ *  handler when the user hits Stop All and at least one per-statement
+ *  workbook is already on disk. Lets the live UI render a "Saved partial
+ *  workbook" banner with the included statement list. */
+export interface PartialMergeData {
+  /** True when filled.xlsx was successfully merged from the survivors. */
+  merged: boolean;
+  /** Path to filled.xlsx on the server. Mirrored on the runs row so the
+   *  History download endpoint serves the same file. */
+  merged_path: string;
+  /** Face statements whose per-statement workbook was on disk
+   *  (e.g. ["SOFP", "SOPL"]). Empty list when nothing landed. */
+  statements_included: string[];
+  /** Notes templates whose workbook was on disk. */
+  notes_included: string[];
+  /** Face statements that were requested but never produced a file. */
+  statements_missing: string[];
+  /** Notes templates that were requested but never produced a file. */
+  notes_missing: string[];
+  /** Set when the merge attempt itself raised; null on a clean run. */
+  error: string | null;
 }
 
 export interface CompleteData {

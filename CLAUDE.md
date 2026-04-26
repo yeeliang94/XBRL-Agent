@@ -227,6 +227,17 @@ terminal-status guarantee. `_safe_mark_finished` only fires once
 extraction has actually started, so drafts that are never started simply
 sit in History with status `draft` forever (no auto-cleanup is in scope).
 
+**Stop-All partial-merge addition (2026-04-27):** the `CancelledError`
+branch of the coordinator-await now calls `_attempt_partial_merge`
+*before* `_safe_mark_finished("aborted")`. Any per-statement
+`{stmt}_filled.xlsx` files already on disk get merged into a partial
+`filled.xlsx`; `mark_run_merged` writes the DB pointer; a
+`partial_merge` SSE event surfaces the included / missing statement
+list. The helper is hardened to swallow every exception so the cancel
+handler never double-faults (gotcha #10 invariant preserved). Users on
+slow runs who hit Stop All now keep their work as a downloadable
+artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
+
 ### 11. DB schema v2 — auto-migration on startup
 
 `db/schema.py` carries `CURRENT_SCHEMA_VERSION = 2`. `init_db` detects v1
@@ -437,6 +448,78 @@ header-pollution failure mode returns. Pinned by
 `tests/test_template_reader.py::test_mpers_templates_carry_header_fills_like_mfrs`
 and the end-to-end
 `test_writer_refuses_abstract_writes_on_mpers_sopl_analysis`.
+
+### 18. Iteration caps must stay below pydantic-ai's silent 50-cap
+
+`agent_tracing.MAX_AGENT_ITERATIONS` was lowered from 50 to **40** on
+2026-04-27 (Phase 0.3 of `docs/PLAN-stop-and-validation-visibility.md`).
+The 2026-04-26 user-reported incident — terminal traceback
+`pydantic_ai.exceptions.UsageLimitExceeded: request_limit of 50` — was
+caused by our cap racing pydantic-ai's silent default and losing.
+Pydantic-ai 1.77's `UsageLimits.request_limit=50` fires from inside
+its own `check_before_request`, bypassing the structured "Hit
+iteration limit" path our coordinators emit.
+
+The buffer (40 vs 50) absorbs pydantic-ai's per-iteration request
+overhead. Operators can override via `XBRL_MAX_AGENT_ITERATIONS` but
+**must not raise it to ≥50** — pinned by
+`tests/test_max_agent_iterations_below_pydantic_cap.py`.
+
+The correction agent has its own dynamic 8-25 turn cap that's much
+tighter (RUN-REVIEW P0-1) and is independent of MAX_AGENT_ITERATIONS;
+both fire structured `correction_exhausted` outcomes via
+`server._run_correction_pass`.
+
+**Wall-clock cap on correction (2026-04-27):**
+`CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
+defence-in-depth on top of the dynamic turn cap and the 180s per-turn
+timeout. It catches the slow-LLM scenario where many quick-but-not-
+quick-enough turns add up past 5 minutes total without either of the
+finer-grained guards firing. Override via `XBRL_CORRECTION_WALLCLOCK_S`
+(positive seconds; 0 disables). Same constant exists for
+`NOTES_VALIDATOR_WALLCLOCK_TIMEOUT` but the validator pass hasn't
+been wrapped with the in-loop check yet — that's a follow-up.
+
+### 19. Pipeline-stage + cross-check progress events
+
+Two new SSE event families surface the post-extraction silent dead
+zones (added 2026-04-27, Phases 5 & 6 of the same plan):
+
+- **`pipeline_stage`** — coordinator-level stage label, one of
+  `extracting | merging | cross_checking | correcting | re_checking |
+  validating_notes | done`. Emitted at every phase boundary in
+  `run_multi_agent_stream`. The frontend captures the latest stage
+  and labels the corresponding silent gap ("Validating notes…",
+  "Re-running cross-checks…"). Pinned by
+  `tests/test_pipeline_stage_events.py`.
+- **`cross_check_start` / `cross_check_result` / `cross_check_complete`**
+  — per-pass progress for each cross-check run. ValidatorTab fills
+  rows incrementally instead of waiting for `run_complete`. Two
+  passes labelled `phase: "initial"` and `phase: "post_correction"`;
+  the post-correction events overwrite the initial-pass results in-
+  place because the user cares about latest state, not history.
+  Pinned by `tests/test_cross_check_progress_events.py`.
+
+Both event families are pushed to the same `event_queue` the agents
+use, then drained through the existing GeneratorExit-tolerant yield
+path — never yield directly from the generator outside that pattern
+(it breaks the disconnect-finalization contract; see the 2026-04-27
+fix in `_emit_stage`).
+
+### 20. Silent post-extraction failures are now structured SSE errors
+
+Two paths used to swallow errors silently (2026-04-27 fix):
+
+- **Merge failure** → `event: error` with `data.type =
+  "merge_failed"` carrying the `MergeResult.errors` list. The success
+  path already covers itself via `run_complete`; the failure path
+  used to log + continue silently.
+- **Cross-check exception** → wrapped in try/except. Emits
+  `data.type = "cross_check_exception"` carrying the class name +
+  message, falls back to empty results, and lets `run_complete` still
+  fire. Run lands as `completed_with_errors` instead of crashing the
+  whole pipeline. Pinned by
+  `tests/test_silent_exception_surfacing.py`.
 
 ## Testing
 
