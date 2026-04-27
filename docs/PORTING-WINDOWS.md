@@ -11,7 +11,11 @@ checklist when something goes wrong.
 4. Set `LLM_PROXY_URL=https://genai-sharedservice-emea.pwc.com` (enterprise
    proxy).
 5. Verify the proxy is reachable — must be on corporate network / VPN. Direct
-   Google API calls are blocked (403).
+   Google API calls are blocked (403). The proxy presents a corporate-MITM
+   cert; `server.py` injects `truststore` at startup so Python trusts the
+   Windows cert store. If you see `httpx.ConnectError: [SSL:
+   CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate`,
+   `pip install -r requirements.txt` to pick up `truststore` (Python ≥ 3.10).
 6. Confirm `PYTHONUTF8=1` is set in the environment (start.bat does this; if
    running manually: `set PYTHONUTF8=1 && python server.py`).
 7. If pydantic-ai version differs from Mac: check `_create_proxy_model()` in

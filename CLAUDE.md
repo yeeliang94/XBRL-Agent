@@ -156,14 +156,25 @@ shifted +1 from the current template. False "EXTRA" / "MISSING" diffs are that
 mismatch, not a bug in `fill_workbook`. Validate by opening the filled
 workbook in Excel so formulas evaluate — don't rely on the diff.
 
-### 5. LiteLLM SSL warning is safe to ignore
+### 5. SSL: two distinct things — only one is harmless
+
+**Harmless (suppressed):**
 
 ```
 LiteLLM:WARNING: Failed to fetch remote model cost map... [SSL: CERTIFICATE_VERIFY_FAILED]
 ```
 
 Enterprise firewall blocks GitHub; LiteLLM falls back to local pricing data.
-Already suppressed via `litellm.suppress_debug_info = True` in `server.py`.
+Suppressed via `litellm.suppress_debug_info = True` in `server.py`.
+
+**Real (fixed by truststore, 2026-04-27):** if the *actual* LLM call to the
+proxy raises `httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] ... unable
+to get local issuer certificate`, that's the corporate MITM root CA missing
+from `certifi`. `server.py` calls `truststore.inject_into_ssl()` at import so
+Python's `ssl` module reads the OS certificate store (Windows store / macOS
+Keychain). `truststore` is in `requirements.txt`; reinstall deps after a
+pull if you see this error. Requires Python ≥ 3.10 — older interpreters
+silently skip the inject and need `SSL_CERT_FILE` set manually.
 
 ### 6. Per-turn token counts are approximate
 
