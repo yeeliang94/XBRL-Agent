@@ -14,6 +14,16 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+# Trust the OS certificate store for SSL verification. Required on Windows
+# behind corporate MITM proxies (e.g. genai-sharedservice-emea.pwc.com) whose
+# root CA is installed system-wide but absent from certifi's bundle. Must
+# run before any TLS connection is opened. Idempotent; no-op on Py<3.10.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 import asyncio
 import json
 import logging
