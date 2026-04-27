@@ -57,7 +57,15 @@ up cleanly with the filing.
      label resolution.
    - Copy the full paragraph(s) verbatim, preserving ordering and
      semantics.
-   - Emit a NotesPayload with `content` = the paragraph text.
+   - **Preserve any "(a)/(b)/(i)/(ii)" sub-section labels verbatim** as
+     bold paragraph headers (e.g. `<p><strong>(a) Short term
+     benefits</strong></p>`) before the paragraphs they introduce. A
+     policy split into "(a)" / "(b)" sub-clauses stays in one cell —
+     keep both labels and both bodies, do not flatten them into one
+     undifferentiated paragraph block. See `_notes_base.md` "NOTE
+     HIERARCHY AND GRANULARITY" for the full rule.
+   - Emit a NotesPayload with `content` = the paragraph text (with
+     sub-section labels included as above).
 5. Skip sub-policies that genuinely do not match any of the 53 labels.
    Do NOT redirect unmatched policies to row 57 ("Description of other
    material accounting policies…") — that row is only for policies the

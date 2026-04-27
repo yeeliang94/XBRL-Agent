@@ -210,6 +210,71 @@ def test_notes_base_prompt_preserves_parent_note_hierarchy():
     assert "do not split content into a different template row merely because" in flat
 
 
+def test_notes_base_prompt_requires_in_prose_subsection_label_preservation():
+    """Bug 2026-04-27: agents were stripping "(a) Short term benefits" /
+    "(b) Defined contribution plans" sub-headers from the body, leaving
+    naked prose. The prompt must explicitly require preserving these
+    in-prose sub-section labels as bold paragraph headers — and must
+    scope the writer-owned heading rule to parent_note/sub_note only so
+    the agent doesn't over-generalise it to "drop all sub-headings"."""
+    body = (_PROMPT_DIR / "_notes_base.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    # Must explicitly require preservation of in-prose (a)/(b) labels.
+    assert "preserve the sub-section labels themselves in the body" in flat, (
+        "_notes_base.md must explicitly tell the agent to preserve "
+        "(a)/(b)/(i)/(ii) sub-section labels in the body content"
+    )
+    # Must show the recommended <strong> rendering pattern so the agent
+    # has a concrete shape to copy.
+    assert "<strong>(a) short term benefits</strong>" in flat, (
+        "_notes_base.md must show the <p><strong>(a) ...</strong></p> "
+        "pattern in the hierarchy guidance"
+    )
+    # Must scope the writer-owned heading rule so it doesn't cause the
+    # agent to over-strip in-prose sub-headers.
+    assert (
+        "applies only to the parent_note and sub_note" in flat
+        or "scoped strictly to the parent_note and sub_note" in flat
+    ), (
+        "_notes_base.md 'Heading markup is writer-owned' rule must be "
+        "scoped to parent_note + sub_note only — the wider phrasing "
+        "causes agents to strip in-prose (a)/(b) labels"
+    )
+
+
+def test_notes_base_prompt_shows_subsection_worked_example():
+    """The prompt must include a worked example with (a)/(b) sub-section
+    labels preserved as <strong> headers so the LLM has a concrete shape
+    to copy. Without an example, the rule is too easily missed."""
+    body = (_PROMPT_DIR / "_notes_base.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    # Worked example must show both labels alongside a parent_note that
+    # carries a dotted-number (the (a)/(b) pattern is most common in
+    # accounting-policy sub-policies like 2.14 Employee benefits).
+    assert "<strong>(a) short term benefits</strong>" in flat
+    assert "<strong>(b) defined contribution plans</strong>" in flat
+    assert '"number": "2.14"' in body
+
+
+def test_notes_accounting_policies_prompt_calls_out_subsection_preservation():
+    """The accounting-policies per-template prompt is the most common
+    landing spot for (a)/(b) sub-policy splits (Note 2.x), so it must
+    repeat the rule rather than relying on the base prompt alone."""
+    body = (_PROMPT_DIR / "notes_accounting_policies.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "preserve any \"(a)/(b)/(i)/(ii)\" sub-section labels" in flat, (
+        "notes_accounting_policies.md must repeat the in-prose "
+        "sub-section preservation rule (the bug surfaced on a Note 2.14 "
+        "Employee benefits cell)"
+    )
+    assert "do not flatten them" in flat or "do not strip" in flat or (
+        "<strong>" in body
+    ), (
+        "notes_accounting_policies.md must show a concrete <strong> shape "
+        "or call out the do-not-flatten rule"
+    )
+
+
 def test_listofnotes_prompt_warns_hierarchy_beats_visual_granularity():
     """Sheet-12 matching prompt needs the same parent-note hierarchy guardrail."""
     body = (_PROMPT_DIR / "notes_listofnotes.md").read_text(encoding="utf-8")

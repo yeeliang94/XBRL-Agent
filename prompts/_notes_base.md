@@ -34,6 +34,16 @@ Use the PDF's note hierarchy like an accountant, not like a text splitter:
   Split only when the PDF presents materially different peer notes or
   clearly separate sub-note headings that correspond to different MBRS
   disclosure concepts.
+- **Preserve the sub-section labels themselves in the body.** When you
+  group (a)/(b)/(i)/(ii) sub-sections into one cell, render each label
+  as a bold paragraph header BEFORE the paragraphs that belong to it,
+  e.g. `<p><strong>(a) Short term benefits</strong></p>` followed by
+  the body `<p>...</p>` paragraphs, then `<p><strong>(b) Defined
+  contribution plans</strong></p>` and its body, etc. **Do not strip
+  these labels** — the cell otherwise reads like one undifferentiated
+  wall of policy text and the auditor's structural intent is lost.
+  The writer-owned heading rule below applies ONLY to the parent_note
+  / sub_note `<h3>` lines; (a)/(b) sub-section labels are body content.
 - A sub-section explaining how a parent balance is measured, depreciated,
   impaired, aged, reconciled, or analysed is support for that parent note.
   Keep it with the parent disclosure unless the PDF gives it its own
@@ -81,13 +91,21 @@ of payload objects. Each payload has these fields:
   Omit for top-level notes. When present, the writer prepends a
   second `<h3>` line AFTER the parent heading and BEFORE the body.
 
-### Heading markup is writer-owned
+### Heading markup is writer-owned (parent + sub_note headings only)
 
 You (the agent) supply `parent_note` and `sub_note` as structured data.
-**Do NOT prepend `<h3>` tags manually** into `content` — the writer
-injects them from these fields. If you include a heading in `content`
-too, the cell will ship with a duplicate heading. Keep `content` to
-the note's body text only.
+**Do NOT prepend `<h3>` tags manually** into `content` for those two
+headings — the writer injects them from those fields. If you include
+the parent / sub-note heading in `content` too, the cell will ship
+with a duplicate heading. Keep `content` to the note's body text.
+
+This rule is scoped strictly to the parent_note and sub_note `<h3>`
+lines the writer auto-injects. **In-prose sub-section labels** like
+"(a) Short term benefits", "(b) Defined contribution plans", or
+roman-numbered "(i)/(ii)" sub-clauses ARE part of the body and MUST
+be preserved verbatim — render them as `<p><strong>...</strong></p>`
+before the paragraph(s) they introduce. See "NOTE HIERARCHY AND
+GRANULARITY" above for the full rule.
 
 Every non-empty payload MUST cite at least one source page AND include
 `parent_note`. Both are mandatory provenance — the number/title pair
@@ -176,10 +194,27 @@ Sub-note (Note 5.4) — both `parent_note` and `sub_note`:
 }
 ```
 
+Sub-sections within one note (Note 2.14 with (a)/(b) labels) — preserve
+the (a)/(b) labels verbatim in the body as bold paragraph headers, do
+NOT strip them:
+
+```json
+{
+  "chosen_row_label": "Description of accounting policy for employee benefits",
+  "parent_note": {"number": "2.14", "title": "Employee benefits"},
+  "content": "<p><strong>(a) Short term benefits</strong></p><p>Wages, salaries, bonuses and social security contributions are recognised as an expense in the year in which the associated services are rendered by employees of the Company. Short term accumulating compensated absences such as paid annual leave are recognised when services are rendered by employees that increase their entitlement to future compensated absences. Short term non-accumulating compensated absences such as sick leave are recognised when the absences occur.</p><p><strong>(b) Defined contribution plans</strong></p><p>Defined contribution plans are post-employment benefit plans under which the Company pays fixed contributions into separate entities or funds and will have no legal or constructive obligation to pay further contributions if any of the fund do not hold sufficient assets to pay all employee benefits relating to employee services in the current and preceding financial years.</p><p>The Company make contributions to the Employee Provident Fund in Malaysia, a defined contribution pension scheme. Contributions to defined contribution pension schemes are recognised as an expense in the period in which the related service is performed.</p>",
+  "evidence": "Page 18, Note 2.14",
+  "source_pages": [18],
+  "source_note_refs": ["2.14"]
+}
+```
+
 The writer will render the first example with one `<h3>` line
-(`<h3>5 Revenue</h3>`) before the body, and the second with two
+(`<h3>5 Revenue</h3>`) before the body, the second with two
 (`<h3>5 Material Accounting Policies</h3><h3>5.4 Property, Plant and
-Equipment</h3>`) in that order.
+Equipment</h3>`), and the third with one (`<h3>2.14 Employee
+benefits</h3>`) followed by the body — including its `(a)` / `(b)`
+bold sub-headers — verbatim.
 
 === PAGE REQUESTS ===
 
