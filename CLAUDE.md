@@ -411,6 +411,37 @@ Key invariants:
 - Evidence column is **read-only** in the editor — it's the audit
   trail. `PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}` ignores
   any `evidence` key in the body.
+- **Heading-injection scope (2026-04-27 fix):** the writer auto-injects
+  `<h3>` lines from `parent_note` + optional `sub_note` structured
+  fields. The "Heading markup is writer-owned" rule is scoped strictly
+  to those two — in-prose `(a)/(b)/(i)/(ii)` sub-section labels (e.g.
+  Note 2.14 Employee benefits → "(a) Short term benefits", "(b)
+  Defined contribution plans") MUST be preserved verbatim by the agent
+  as `<p><strong>...</strong></p>` paragraph headers in the body. A
+  pre-fix prompt let agents over-generalise the writer-owned rule and
+  strip these labels, leaving an undifferentiated wall of policy
+  prose. Pinned by `tests/test_notes_prompt_phase1.py
+  ::test_notes_base_prompt_requires_in_prose_subsection_label_preservation`
+  and the worked-example test alongside it. Don't soften either rule
+  without updating both tests.
+- **Clipboard decoration (2026-04-27 fix):** `web/src/lib/clipboard.ts`
+  exports `decorateHtmlForClipboard` which injects inline `style=`
+  attributes (border, padding, right-align for numeric cells) into
+  every `<table>`/`<th>`/`<td>` *immediately before* the HTML hits
+  the clipboard. The DB / sanitiser remain style-free; only the
+  clipboard variant carries inline styling because external CSS does
+  not travel with paste targets like M-Tool, Word, or Outlook. Without
+  it, pasted tables collapse to bare borderless boxes with column
+  contents jammed together. Numeric-cell detection uses
+  `_NUMERIC_CELL_RE` which matches `1,595` / `(95)` / `-` / `1.5`
+  shapes — accountant-style. Spacing (margin, padding) mirrors
+  `web/src/components/NotesReviewTab.css` for layout parity with the
+  in-app editor preview. Border **colour** intentionally diverges —
+  editor uses `#d1d5db` (modern soft grey on the app's white surface);
+  clipboard uses `#999` because external editors render lighter
+  borders against off-white surfaces and the grid disappears. Update
+  both sides + this note if you change either colour. Pinned by 5
+  tests in `web/src/__tests__/clipboard.test.ts`.
 
 Full walkthrough: [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md).
 

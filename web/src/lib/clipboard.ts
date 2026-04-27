@@ -25,6 +25,111 @@
 // / `web/src/__tests__/clipboard.test.ts` to confirm the divergence
 // is still deliberate.
 
+// Inline-style snippets injected into table elements before the HTML is
+// handed to the clipboard. The DB version of the HTML carries no
+// `style=` attributes (the sanitiser strips them); the in-app TipTap
+// editor decorates rendering via scoped CSS that does NOT travel with
+// the clipboard payload. Without these inline styles, M-Tool / Word /
+// Outlook paste targets render bare `<table>`s with no borders, no
+// padding, and no right-alignment for numeric columns — which is the
+// formatting collapse reported on 2026-04-27.
+//
+// Spacing values match `web/src/components/NotesReviewTab.css` so the
+// M-Tool paste lays out the same way as the editor preview. The border
+// COLOUR intentionally diverges: editor uses `#d1d5db` (a soft modern
+// grey that reads well on a white app background); clipboard uses
+// `#999` because external paste targets often render against subtle
+// or off-white backgrounds where `#d1d5db` borders fade out almost
+// completely. Darker grid lines on paste keep the table visibly bound
+// regardless of the host editor's surface colour. If you change either
+// colour, update the other side AND update CLAUDE.md gotcha #16's
+// note on this divergence.
+const _CLIPBOARD_TABLE_STYLE =
+  "border-collapse: collapse; margin: 8px 0;";
+const _CLIPBOARD_CELL_STYLE_BASE =
+  "border: 1px solid #999; padding: 4px 8px; vertical-align: top;";
+const _CLIPBOARD_HEADER_EXTRA =
+  " background: #f3f4f6; font-weight: 600;";
+
+// Numeric-cell heuristic: matches accountant-style numbers including
+// thousands-separated values (`1,595`), parenthesised negatives
+// (`(95)`), bare dashes used for "—" in empty year columns, decimals,
+// and a leading minus. Cells that match get `text-align: right` so the
+// paste lines up the way the human-filled reference (top of the
+// 2026-04-27 image) does. Non-matching cells default to left-align.
+const _NUMERIC_CELL_RE =
+  /^\(?\s*-?\s*[\d,]+(?:\.\d+)?\s*\)?$|^[-—–]+$/;
+
+/** Add inline styles to table / th / td so a paste into M-Tool
+ *  (or Word / Outlook / Gmail) renders with visible borders,
+ *  comfortable cell padding, and right-aligned numeric cells.
+ *
+ *  Pure transformation: takes raw editor HTML, returns decorated HTML.
+ *  Does NOT mutate any DOM the caller may still be using (parses into
+ *  a detached `<div>`). Safe to call on any HTML the sanitiser
+ *  produced — non-table content passes through untouched.
+ *
+ *  Why only at clipboard time and not in the DB / sanitiser:
+ *    - The sanitiser's job is to strip authoring-side styling so two
+ *      users editing the same cell see the same canonical content.
+ *    - The editor's display already styles tables via scoped CSS;
+ *      adding inline styles to the DB would be redundant in-editor
+ *      and clobber any future "user picks a theme" feature.
+ *    - The clipboard is the only surface where styling can't ride on
+ *      external CSS, so it's the only surface that needs the inline
+ *      version.
+ */
+export function decorateHtmlForClipboard(html: string): string {
+  if (!html || (!html.includes("<table") && !html.includes("<th") && !html.includes("<td"))) {
+    // Fast-path: nothing tabular to decorate. Avoids a parse + reserialise
+    // round-trip on the common short-prose case.
+    return html;
+  }
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+
+  for (const table of Array.from(tmp.querySelectorAll("table"))) {
+    _mergeStyle(table, _CLIPBOARD_TABLE_STYLE);
+    // Word/Outlook honour the legacy `border` attribute even when CSS
+    // is partially stripped on paste. Belt-and-braces — the inline
+    // style above does the heavy lifting on web targets.
+    if (!table.hasAttribute("border")) table.setAttribute("border", "1");
+    if (!table.hasAttribute("cellpadding"))
+      table.setAttribute("cellpadding", "4");
+    if (!table.hasAttribute("cellspacing"))
+      table.setAttribute("cellspacing", "0");
+  }
+
+  for (const th of Array.from(tmp.querySelectorAll("th"))) {
+    const text = (th.textContent ?? "").trim();
+    const align = _NUMERIC_CELL_RE.test(text) ? " text-align: right;" : " text-align: left;";
+    _mergeStyle(th, _CLIPBOARD_CELL_STYLE_BASE + _CLIPBOARD_HEADER_EXTRA + align);
+  }
+
+  for (const td of Array.from(tmp.querySelectorAll("td"))) {
+    const text = (td.textContent ?? "").trim();
+    const align = _NUMERIC_CELL_RE.test(text) ? " text-align: right;" : " text-align: left;";
+    _mergeStyle(td, _CLIPBOARD_CELL_STYLE_BASE + align);
+  }
+
+  return tmp.innerHTML;
+}
+
+/** Append an inline style fragment to a node's existing `style=` attr.
+ *  Most editor HTML reaching this function carries no `style=` (the
+ *  sanitiser stripped it), but we don't want to clobber any styling a
+ *  future code path might add — concatenating preserves both. */
+function _mergeStyle(el: Element, addition: string): void {
+  const existing = el.getAttribute("style");
+  if (!existing) {
+    el.setAttribute("style", addition);
+    return;
+  }
+  // Ensure a separator between existing and new declarations.
+  const sep = existing.trimEnd().endsWith(";") ? " " : "; ";
+  el.setAttribute("style", existing.trimEnd() + sep + addition.trimStart());
+}
+
 /** Encode a string as a `text/plain` clipboard variant. This is a
  *  best-effort plaintext rendering — the editor also keeps the exact
  *  HTML in the text/html variant for rich targets.
@@ -167,13 +272,18 @@ export async function copyHtmlAsRichText(html: string): Promise<boolean> {
   if (nav?.clipboard?.write && hasClipboardItem) {
     try {
       const plain = htmlToPlaintext(html);
+      // Decorate AFTER the plain-text rendering so the plain variant
+      // sees the original semantic HTML and produces the same
+      // pipe-separated rows as before — the inline-style pass is a
+      // visual decoration only and adds nothing to the plaintext form.
+      const decorated = decorateHtmlForClipboard(html);
       const ClipboardItemCtor = (
         globalThis as unknown as {
           ClipboardItem: new (items: Record<string, Blob>) => unknown;
         }
       ).ClipboardItem;
       const item = new ClipboardItemCtor({
-        "text/html": new Blob([html], { type: "text/html" }),
+        "text/html": new Blob([decorated], { type: "text/html" }),
         "text/plain": new Blob([plain], { type: "text/plain" }),
       });
       await nav.clipboard.write([item as unknown as ClipboardItem]);
@@ -191,7 +301,9 @@ export async function copyHtmlAsRichText(html: string): Promise<boolean> {
   try {
     const holder = document.createElement("div");
     holder.contentEditable = "true";
-    holder.innerHTML = html;
+    // Same decoration pass as the modern path so legacy-fallback
+    // pastes don't lose table styling.
+    holder.innerHTML = decorateHtmlForClipboard(html);
     // Pull off-screen rather than display:none — hidden elements cannot
     // carry a Selection in most browsers.
     holder.style.position = "fixed";
