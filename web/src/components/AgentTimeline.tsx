@@ -94,12 +94,12 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   terminalDone: {
-    borderColor: "#D7F5E2",
-    background: "#FCFFFD",
+    borderColor: pwc.successBg,
+    background: pwc.white,
   } as React.CSSProperties,
   terminalError: {
     borderColor: pwc.errorBorder,
-    background: "#FFF8F8",
+    background: pwc.errorBg,
   } as React.CSSProperties,
   terminalDoneBadge: {
     background: pwc.successBg,

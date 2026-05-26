@@ -80,12 +80,12 @@ describe("PipelineStages", () => {
     const activeDot = container.querySelector("[data-testid='step-active']");
     expect(activeDot?.getAttribute("style")).toContain("rgb(254, 124, 57)");
 
-    // Completed step should use success green (#16A34A → rgb(22, 163, 74))
+    // Completed step should use success green (#059669 → rgb(5, 150, 105))
     const check = container.querySelector("[data-testid='step-complete']");
-    expect(check?.getAttribute("style")).toContain("rgb(22, 163, 74)");
+    expect(check?.getAttribute("style")).toContain("rgb(5, 150, 105)");
 
-    // Pending step should use grey300 (#CBD1D6 → rgb(203, 209, 214))
+    // Pending step should use grey300 (#C9C9C9 → rgb(201, 201, 201))
     const pending = container.querySelector("[data-testid='step-pending']");
-    expect(pending?.getAttribute("style")).toContain("rgb(203, 209, 214)");
+    expect(pending?.getAttribute("style")).toContain("rgb(201, 201, 201)");
   });
 });

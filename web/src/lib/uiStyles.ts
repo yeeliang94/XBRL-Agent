@@ -1,94 +1,243 @@
 import type { CSSProperties } from "react";
 import { pwc } from "./theme";
 
-// Shared inline component primitives. The app intentionally avoids Tailwind /
-// className styling for Windows compatibility, so common UI language lives here
+// Shared inline component primitives, modelled on docs/pwc-design-system.html.
+// The app intentionally avoids Tailwind / className styling for Windows
+// compatibility (CLAUDE.md gotcha #7), so the common UI language lives here
 // instead of being recreated per page.
+//
+// Hover / focus states can't be expressed inline. Components opt into the
+// matching global rules in index.css by also setting `className` to one of
+// the `uiClass` constants below (e.g. `<button className={uiClass.btnPrimary}
+// style={ui.buttonPrimary}>`). Form-control focus rings are applied globally
+// to all inputs/selects/textareas in index.css and need no className.
 
 const controlBase: CSSProperties = {
   fontFamily: pwc.fontBody,
-  fontSize: 13,
-  lineHeight: 1.4,
-  borderRadius: pwc.radius.sm,
+  fontSize: 15,
+  lineHeight: 1.45,
+  borderRadius: pwc.radius.lg,
   border: `1px solid ${pwc.grey300}`,
   background: pwc.white,
   color: pwc.grey900,
+};
+
+// Shared button geometry. Variants differ only in colour.
+const buttonBase: CSSProperties = {
+  minHeight: 40,
+  padding: `10px ${pwc.space.xl}px`,
+  fontFamily: pwc.fontHeading,
+  fontSize: 15,
+  fontWeight: pwc.weight.medium,
+  borderRadius: pwc.radius.lg,
+  border: "1px solid transparent",
+  cursor: "pointer",
+  textDecoration: "none",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: pwc.space.sm,
+  whiteSpace: "nowrap",
+  lineHeight: 1.2,
+  transition: "background .15s ease, border-color .15s ease",
+};
+
+const badgeBase: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  minHeight: 22,
+  padding: "3px 10px",
+  borderRadius: pwc.radius.pill,
+  fontFamily: pwc.fontHeading,
+  fontSize: 12,
+  fontWeight: pwc.weight.medium,
+  lineHeight: 1.4,
+  whiteSpace: "nowrap",
+};
+
+const alertBase: CSSProperties = {
+  display: "flex",
+  gap: pwc.space.md,
+  alignItems: "flex-start",
+  padding: pwc.space.lg,
+  borderRadius: pwc.radius.md,
+  border: "1px solid transparent",
+  fontFamily: pwc.fontBody,
+  fontSize: 15,
+  lineHeight: 1.55,
 };
 
 export const ui = {
   card: {
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
+    borderRadius: pwc.radius.lg,
     boxShadow: pwc.shadow.card,
   } as CSSProperties,
 
   fieldLabel: {
     fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: 600,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
     color: pwc.grey700,
   } as CSSProperties,
 
   input: {
     ...controlBase,
-    minHeight: 36,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    minHeight: 44,
+    padding: `11px ${pwc.space.lg}px`,
   } as CSSProperties,
 
   select: {
     ...controlBase,
-    minHeight: 36,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    minHeight: 44,
+    padding: `11px ${pwc.space.lg}px`,
   } as CSSProperties,
 
+  textarea: {
+    ...controlBase,
+    minHeight: 80,
+    padding: `9px ${pwc.space.md}px`,
+    resize: "vertical",
+  } as CSSProperties,
+
+  // --- Buttons -----------------------------------------------------------
   buttonPrimary: {
-    minHeight: 36,
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
+    ...buttonBase,
     color: pwc.white,
     background: pwc.orange500,
-    border: `1px solid ${pwc.orange500}`,
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
-    textDecoration: "none",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: pwc.space.sm,
-    whiteSpace: "nowrap",
+    borderColor: pwc.orange500,
   } as CSSProperties,
 
   buttonSecondary: {
-    minHeight: 36,
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
+    ...buttonBase,
     color: pwc.grey900,
     background: pwc.white,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
-    textDecoration: "none",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: pwc.space.sm,
-    whiteSpace: "nowrap",
+    borderColor: pwc.grey300,
   } as CSSProperties,
 
+  buttonSubtle: {
+    ...buttonBase,
+    color: pwc.grey900,
+    background: pwc.grey100,
+  } as CSSProperties,
+
+  buttonGhost: {
+    ...buttonBase,
+    color: pwc.orange500,
+    background: "transparent",
+  } as CSSProperties,
+
+  // Size modifiers — spread after a variant: { ...ui.buttonPrimary, ...ui.buttonSm }
+  buttonSm: {
+    minHeight: 36,
+    padding: "8px 16px",
+    fontSize: 14,
+  } as CSSProperties,
+
+  buttonLg: {
+    minHeight: 44,
+    padding: "12px 24px",
+    fontSize: 15,
+  } as CSSProperties,
+
+  // --- Badges ------------------------------------------------------------
+  // `badge` kept as the neutral default for backward-compatible call sites.
   badge: {
-    display: "inline-flex",
-    alignItems: "center",
-    minHeight: 24,
-    padding: `2px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.sm,
-    fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 600,
-    whiteSpace: "nowrap",
+    ...badgeBase,
+    background: pwc.grey100,
+    color: pwc.grey700,
+  } as CSSProperties,
+  badgeNeutral: {
+    ...badgeBase,
+    background: pwc.grey100,
+    color: pwc.grey700,
+  } as CSSProperties,
+  badgeSuccess: {
+    ...badgeBase,
+    background: pwc.successBg,
+    color: pwc.success,
+  } as CSSProperties,
+  badgeWarning: {
+    ...badgeBase,
+    background: pwc.warningBg,
+    color: pwc.warningText,
+  } as CSSProperties,
+  badgeError: {
+    ...badgeBase,
+    background: pwc.errorBg,
+    color: pwc.error,
+  } as CSSProperties,
+  badgeInfo: {
+    ...badgeBase,
+    background: pwc.infoBg,
+    color: pwc.info,
+  } as CSSProperties,
+  badgeBrand: {
+    ...badgeBase,
+    background: pwc.orange50,
+    color: pwc.orange500,
+  } as CSSProperties,
+
+  // --- Alerts ------------------------------------------------------------
+  alertInfo: {
+    ...alertBase,
+    background: pwc.infoBg,
+    borderColor: pwc.infoBorder,
+    color: pwc.grey800,
+  } as CSSProperties,
+  alertSuccess: {
+    ...alertBase,
+    background: pwc.successBg,
+    borderColor: pwc.successBorder,
+    color: pwc.grey800,
+  } as CSSProperties,
+  alertWarning: {
+    ...alertBase,
+    background: pwc.warningBg,
+    borderColor: pwc.warningBorder,
+    color: pwc.grey800,
+  } as CSSProperties,
+  alertError: {
+    ...alertBase,
+    background: pwc.errorBg,
+    borderColor: pwc.errorBorder,
+    color: pwc.grey800,
+  } as CSSProperties,
+
+  // --- Table -------------------------------------------------------------
+  tableWrap: {
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.lg,
+    overflow: "hidden",
+  } as CSSProperties,
+  th: {
+    textAlign: "left",
+    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
+    background: pwc.grey100,
+    fontSize: 13,
+    textTransform: "uppercase",
+    // Workspace convention keeps letter-spacing at 0 (the design-system
+    // reference shows .8px on table headers, but local guidance wins here).
+    letterSpacing: 0,
+    color: pwc.grey500,
+    fontWeight: pwc.weight.semibold,
+    borderBottom: `1px solid ${pwc.grey200}`,
+  } as CSSProperties,
+  td: {
+    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
+    borderBottom: `1px solid ${pwc.grey200}`,
   } as CSSProperties,
 };
+
+// className hooks for states inline styles can't express (hover). The matching
+// rules live in index.css. Focus rings are global and don't need a class.
+export const uiClass = {
+  btnPrimary: "pwc-btn-primary",
+  btnSecondary: "pwc-btn-secondary",
+  btnSubtle: "pwc-btn-subtle",
+  btnGhost: "pwc-btn-ghost",
+  card: "pwc-card",
+  tableRow: "pwc-table-row",
+} as const;

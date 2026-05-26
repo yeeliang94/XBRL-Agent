@@ -39,8 +39,11 @@ const styles = {
   } as const,
   headerTitle: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    // Brand wordmark sits at light weight per the design language — large
+    // headings earn hierarchy through size + letter-spacing, not bold.
+    fontWeight: pwc.weight.light,
     fontSize: 20,
+    letterSpacing: 0,
     color: pwc.grey900,
     margin: 0,
   } as const,
@@ -53,27 +56,17 @@ const styles = {
     cursor: "pointer",
   } as const,
   main: {
-    maxWidth: 960,
+    maxWidth: 1120,
     margin: "0 auto",
     padding: `${pwc.space.xxl}px ${pwc.space.xl}px`,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xl,
-  } as const,
-  // History run-detail view benefits from more horizontal space: the agent
-  // timelines and Notes-review editor were clipped inside the 960px rail,
-  // leaving large blank gutters on wide displays. Widening only for the
-  // detail route keeps Extract + History-list layouts unchanged.
-  mainWide: {
-    maxWidth: 1440,
-    margin: "0 auto",
-    padding: `${pwc.space.xxl}px ${pwc.space.xl}px`,
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: pwc.space.xl,
+    // 32px between major stacked blocks gives the airier section rhythm the
+    // design language calls for (was 24px).
+    gap: pwc.space.xxl,
   } as const,
   // The concepts review workspace is a 3-column side-by-side surface that
-  // genuinely benefits from the full viewport — the 1440 cap left wide
+  // genuinely benefits from the full viewport — the max-width cap left wide
   // gutters and squeezed the grid + PDF. No max-width here; tighter side
   // padding so the columns use most of the screen.
   mainFull: {
@@ -83,6 +76,17 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.lg,
+  } as const,
+  // History is full-width like the concepts workspace but keeps the same
+  // generous side padding as the standard (capped) page so it reads
+  // consistently with the Template/Extract pages.
+  mainHistory: {
+    maxWidth: "100%",
+    margin: "0 auto",
+    padding: `${pwc.space.xxl}px ${pwc.space.xl}px`,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xxl,
   } as const,
 };
 
@@ -473,8 +477,8 @@ export default function App() {
         style={
           state.view === "concepts"
             ? styles.mainFull
-            : state.view === "history" && state.selectedRunId != null
-            ? styles.mainWide
+            : state.view === "history"
+            ? styles.mainHistory
             : styles.main
         }
       >

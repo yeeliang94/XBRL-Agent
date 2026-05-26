@@ -208,6 +208,17 @@ Tailwind CSS v4 didn't load reliably on Windows (the upload button was
 unclickable). All components use inline `style={}` props. **Do not** convert
 back to className-based Tailwind.
 
+**Visual spec ([docs/pwc-design-system.html](docs/pwc-design-system.html)):**
+the canonical PwC design-system reference. Tokens live in
+`web/src/lib/theme.ts` (the `pwc` object — imported by ~30 components, so it
+is the single cascade point); shared component primitives in
+`web/src/lib/uiStyles.ts`. Anything inline styles can't express (`:hover`,
+`:focus-visible`, focus rings, table cell borders) lives in
+`web/src/index.css` global classes or `NotesReviewTab.css`. Many frontend
+tests assert exact RGB values derived from `theme.ts` tokens — change a token
+and its pinning test in the same commit. Clipboard styling
+(`web/src/lib/clipboard.ts`) is intentionally NOT tokenised (gotcha #16).
+
 ### 8. Node.js may not be on PATH (Windows)
 
 `start.bat` auto-discovers Node.js in `C:\Program Files\nodejs\`. If it's

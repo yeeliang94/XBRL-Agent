@@ -95,7 +95,7 @@ const CARD_BASE: React.CSSProperties = {
 const CARD_STYLES: Record<GlyphState, React.CSSProperties> = {
   active: {
     background: pwc.orange50,
-    border: "1px solid #FED7AA",
+    border: `1px solid ${pwc.orange200}`,
     borderLeft: `3px solid ${pwc.orange500}`,
     animation: "fade-in 0.2s ease-out",
   },
@@ -103,7 +103,7 @@ const CARD_STYLES: Record<GlyphState, React.CSSProperties> = {
     background: pwc.white,
   },
   failed: {
-    background: "#FFF8F8",
+    background: pwc.errorBg,
     borderLeft: `3px solid ${pwc.error}`,
   },
   cancelled: {
@@ -180,7 +180,7 @@ const styles = {
 // Badge background/foreground colour pairs per tone.
 const BADGE_TONE: Record<ResultTone, { bg: string; fg: string }> = {
   success: { bg: pwc.successBg, fg: pwc.success },
-  warn: { bg: "#FEF3C7", fg: "#92400E" },
+  warn: { bg: pwc.warningBg, fg: pwc.warningText },
 };
 
 const NEUTRAL_BADGE = { bg: pwc.grey50, fg: pwc.grey500 };

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { UploadResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import { ElapsedTimer } from "./ElapsedTimer";
 
 interface Props {
@@ -19,15 +20,15 @@ const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 const styles = {
   container: {
     background: pwc.white,
-    borderRadius: pwc.radius.md,
+    borderRadius: pwc.radius.lg,
     border: `1px solid ${pwc.grey200}`,
     boxShadow: pwc.shadow.card,
     padding: pwc.space.xl,
   } as React.CSSProperties,
   dropZone: {
     border: `2px dashed ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    padding: pwc.space.xxl,
+    borderRadius: pwc.radius.lg,
+    padding: pwc.space.xxxl,
     textAlign: "center" as const,
     background: pwc.grey50,
   } as React.CSSProperties,
@@ -38,25 +39,11 @@ const styles = {
     marginBottom: pwc.space.md,
   } as React.CSSProperties,
   chooseButton: {
-    padding: "10px 24px",
-    backgroundColor: pwc.orange500,
-    color: pwc.white,
-    border: "none",
-    borderRadius: pwc.radius.md,
-    fontSize: 14,
-    fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    ...ui.buttonPrimary,
     cursor: "pointer",
   } as React.CSSProperties,
   chooseButtonDisabled: {
-    padding: "10px 24px",
-    backgroundColor: pwc.orange500,
-    color: pwc.white,
-    border: "none",
-    borderRadius: pwc.radius.md,
-    fontSize: 14,
-    fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    ...ui.buttonPrimary,
     cursor: "not-allowed",
     opacity: 0.5,
   } as React.CSSProperties,
@@ -73,14 +60,14 @@ const styles = {
   fileIcon: {
     width: 32,
     height: 32,
-    background: "#FEE2E2",
+    background: pwc.errorBg,
     borderRadius: pwc.radius.sm,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     color: pwc.error,
     fontSize: 11,
-    fontWeight: "bold" as const,
+    fontWeight: pwc.weight.semibold,
     fontFamily: pwc.fontMono,
   } as React.CSSProperties,
   fileName: {
@@ -197,6 +184,7 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
             type="button"
             onClick={() => inputRef.current?.click()}
             disabled={disabled}
+            className={uiClass.btnPrimary}
             style={disabled ? styles.chooseButtonDisabled : styles.chooseButton}
           >
             Choose PDF

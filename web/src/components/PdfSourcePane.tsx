@@ -295,7 +295,7 @@ const styles = {
     margin: 0,
     fontFamily: pwc.fontHeading,
     fontSize: 15,
-    fontWeight: 700,
+    fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
   } as React.CSSProperties,
   zoomGroup: { display: "flex", gap: pwc.space.xs } as React.CSSProperties,

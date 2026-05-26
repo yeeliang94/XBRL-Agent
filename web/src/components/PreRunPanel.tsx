@@ -18,6 +18,7 @@ import {
   variantsFor,
 } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { uiClass } from "../lib/uiStyles";
 import { abortAgent, updateSettings } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { ScoutToggle } from "./ScoutToggle";
@@ -61,7 +62,7 @@ interface Props {
 const styles = {
   container: {
     background: pwc.white,
-    borderRadius: pwc.radius.md,
+    borderRadius: pwc.radius.lg,
     border: `1px solid ${pwc.grey200}`,
     boxShadow: pwc.shadow.card,
     padding: pwc.space.xl,
@@ -71,7 +72,7 @@ const styles = {
   } as React.CSSProperties,
   heading: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    fontWeight: pwc.weight.medium,
     fontSize: 16,
     color: pwc.grey900,
     margin: 0,
@@ -147,7 +148,7 @@ const styles = {
   } as React.CSSProperties,
   scoutProgressPanel: {
     padding: pwc.space.md,
-    background: "#FFFBF5",
+    background: pwc.orange50,
     borderRadius: pwc.radius.sm,
     borderLeft: `3px solid ${pwc.orange500}`,
     display: "flex",
@@ -1205,6 +1206,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       <button
         onClick={handleRun}
         disabled={!canRun}
+        className={uiClass.btnPrimary}
         style={canRun ? styles.runButton : styles.runButtonDisabled}
       >
         Run Extraction

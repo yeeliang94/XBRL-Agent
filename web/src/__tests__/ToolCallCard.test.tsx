@@ -111,8 +111,8 @@ describe("ToolCallCard", () => {
     expect(balanced).toBeInTheDocument();
     expect(matches).toBeInTheDocument();
     // Verify the coloring via style attributes (jsdom converts hex to rgb)
-    expect(balanced.style.background).toBe("rgb(240, 253, 244)");  // green bg
-    expect(matches.style.background).toBe("rgb(254, 242, 242)");   // red bg
+    expect(balanced.style.background).toBe("rgb(230, 244, 239)");  // successBg #E6F4EF
+    expect(matches.style.background).toBe("rgb(251, 233, 233)");   // errorBg #FBE9E9
   });
 
   // --- Step 11: collapsed preview is human-readable ---

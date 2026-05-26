@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 import { RUN_STATUS_FILTER_OPTIONS } from "../lib/runStatus";
 import type { FilingStandard, RunsFilterParams } from "../lib/types";
 
@@ -164,45 +165,32 @@ const styles = {
   row: {
     display: "flex",
     alignItems: "flex-end",
-    gap: pwc.space.md,
+    gap: pwc.space.xl,
     flexWrap: "wrap" as const,
-    padding: pwc.space.md,
+    padding: pwc.space.xl,
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
+    borderRadius: pwc.radius.lg,
     boxShadow: pwc.shadow.card,
   } as React.CSSProperties,
   label: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: pwc.space.sm,
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 14,
     color: pwc.grey700,
   } as React.CSSProperties,
   labelText: {
-    fontWeight: 600,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.5,
+    fontWeight: pwc.weight.medium,
+    letterSpacing: 0,
   } as React.CSSProperties,
   input: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey900,
-    minWidth: 220,
-    background: pwc.white,
+    ...ui.input,
+    minWidth: 180,
   } as React.CSSProperties,
   select: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey900,
-    background: pwc.white,
+    ...ui.select,
     minWidth: 160,
   } as React.CSSProperties,
 } as const;

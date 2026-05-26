@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
+import { ui, uiClass } from "../lib/uiStyles";
 
 // ---------------------------------------------------------------------------
 // ReconciliationQueue — side panel listing open conflicts for a run.
@@ -184,6 +184,7 @@ export function ReconciliationQueue({
               <div style={{ marginTop: pwc.space.sm, display: "flex", gap: pwc.space.sm }}>
                 <button
                   data-testid={`resolve-btn-${c.id}`}
+                  className={uiClass.btnPrimary}
                   onClick={(e) => {
                     // Don't let the action bubble to the row's select handler.
                     e.stopPropagation();
@@ -200,6 +201,7 @@ export function ReconciliationQueue({
                 </button>
                 <button
                   data-testid={`dismiss-btn-${c.id}`}
+                  className={uiClass.btnSecondary}
                   onClick={(e) => {
                     e.stopPropagation();
                     onResolve(c.id, "dismissed");
@@ -240,7 +242,7 @@ export function ReconciliationQueue({
           fontFamily: pwc.fontHeading,
           color: pwc.grey900,
           fontSize: 15,
-          fontWeight: 700,
+          fontWeight: pwc.weight.semibold,
         }}
       >
         Reconciliation queue ({conflicts.length})

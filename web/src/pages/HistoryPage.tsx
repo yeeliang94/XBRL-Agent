@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
+import { PageHeader } from "../components/PageHeader";
 import { HistoryFilters } from "../components/HistoryFilters";
 import { HistoryList } from "../components/HistoryList";
 import { RunDetailPage } from "../components/RunDetailPage";
@@ -372,7 +373,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.heading}>Run history</h2>
+      <PageHeader title="History" />
       <HistoryFilters value={filters} onChange={setFilters} />
       <HistoryList
         runs={visibleRuns}
@@ -420,21 +421,14 @@ const styles = {
   container: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
-  } as React.CSSProperties,
-  heading: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 20,
-    fontWeight: 600,
-    color: pwc.grey900,
-    margin: 0,
+    gap: pwc.space.xxl,
   } as React.CSSProperties,
   regenBanner: {
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: "#fef3c7",
-    border: "1px solid #f59e0b",
+    background: pwc.warningBg,
+    border: `1px solid ${pwc.warningBorder}`,
     borderRadius: pwc.radius.md,
-    color: "#78350f",
+    color: pwc.warningText,
     fontSize: 13,
   } as React.CSSProperties,
   regenBannerError: {

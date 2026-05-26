@@ -25,7 +25,7 @@ function formatElapsed(startTime: number | null): string {
 const styles = {
   container: {
     background: pwc.white,
-    borderRadius: pwc.radius.md,
+    borderRadius: pwc.radius.lg,
     border: `1px solid ${pwc.grey200}`,
     boxShadow: pwc.shadow.card,
     overflow: "hidden",
@@ -82,7 +82,8 @@ const styles = {
   cardValue: {
     fontFamily: pwc.fontMono,
     fontSize: 20,
-    fontWeight: 600,
+    // Metric values read as light display numerals (design .ui-card .v).
+    fontWeight: pwc.weight.light,
     color: pwc.grey900,
   } as React.CSSProperties,
   successBadge: {

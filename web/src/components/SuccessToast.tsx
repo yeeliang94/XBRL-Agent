@@ -23,8 +23,7 @@ const AUTO_DISMISS_MS = 4000;
 const TONE_STYLES: Record<ToastState["tone"], { background: string; border: string; color: string }> = {
   success: {
     background: pwc.successBg,
-    // Lighter green border — kept inline since no other component uses it.
-    border: `1px solid #BBF7D0`,
+    border: `1px solid ${pwc.successBorder}`,
     color: pwc.successText,
   },
   error: {
@@ -110,7 +109,7 @@ const styles = {
     border: "none",
     cursor: "pointer",
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: pwc.weight.semibold,
     padding: 0,
     lineHeight: 1,
   } as React.CSSProperties,
