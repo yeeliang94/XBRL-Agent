@@ -83,6 +83,25 @@ def test_verify_totals_tool_output_includes_mandatory_unfilled():
     assert "Action required:" in rendered
 
 
+def test_verify_totals_clean_pass_is_not_an_action():
+    """run_id=126 fix: a clean verify whose feedback is a SUCCESS message must
+    NOT be rendered under 'Action required:' — that told SOPL to fix a balanced
+    statement and contributed to the iteration-limit loop."""
+    from extraction.agent import _format_verify_result
+
+    result = VerificationResult(
+        is_balanced=None,  # SOPL has no balance identity
+        matches_pdf=None,
+        mismatches=[],
+        mandatory_unfilled=[],
+        feedback="SOPL attribution check passed.",
+    )
+    rendered = _format_verify_result(result)
+    assert "Action required:" not in rendered
+    assert "SOPL attribution check passed." in rendered
+    assert "Status:" in rendered
+
+
 # ---------------------------------------------------------------------------
 # Phase 1.3: save_result gating
 # ---------------------------------------------------------------------------

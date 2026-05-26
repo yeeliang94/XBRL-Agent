@@ -47,6 +47,13 @@ class CrossCheckResult:
     diff: Optional[float] = None
     tolerance: Optional[float] = None
     message: str = ""
+    # Review Workspace M2/Step 8 — the cell this result points at, so the
+    # validator UI can jump straight to it. A check sets these when it has a
+    # natural anchor (e.g. SOFP balance → the total-assets row); left None
+    # otherwise. The (sheet, row) pair is resolved to a concept on the
+    # frontend by matching render_sheet/render_row.
+    target_sheet: Optional[str] = None
+    target_row: Optional[int] = None
 
 
 @runtime_checkable

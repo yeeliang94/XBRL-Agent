@@ -218,6 +218,38 @@ def find_sheet(wb: openpyxl.Workbook, *candidates: str):
     return None
 
 
+def find_label_row(
+    ws,
+    label_substr: Union[str, Sequence[str]],
+) -> Optional[int]:
+    """Return the row number whose column-A label matches `label_substr`.
+
+    Same exact-then-substring matching as `find_value_by_label`, but returns
+    the row index instead of a value. Used to record a cross-check's
+    click-to-cell target (Review Workspace Step 8) so the validator UI can
+    jump to the offending row. Returns None when no candidate matches.
+    """
+    candidates = [label_substr] if isinstance(label_substr, str) else list(label_substr)
+    for candidate in candidates:
+        target = candidate.strip().lower()
+        exact_row: Optional[int] = None
+        substr_row: Optional[int] = None
+        for row in ws.iter_rows(min_col=1, max_col=1):
+            cell = row[0]
+            if cell.value is None:
+                continue
+            normalized = str(cell.value).strip().lstrip("*").strip().lower()
+            if normalized == target:
+                exact_row = cell.row
+                break
+            if substr_row is None and (target in normalized or normalized in target):
+                substr_row = cell.row
+        resolved = exact_row if exact_row is not None else substr_row
+        if resolved is not None:
+            return resolved
+    return None
+
+
 def find_value_by_label(
     ws,
     label_substr: Union[str, Sequence[str]],

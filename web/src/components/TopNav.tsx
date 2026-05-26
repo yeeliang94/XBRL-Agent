@@ -21,7 +21,7 @@ export interface TopNavProps {
 const ITEMS: { id: AppView; label: string }[] = [
   { id: "extract", label: "Extract" },
   { id: "history", label: "History" },
-  { id: "concepts", label: "Review" },
+  { id: "concepts", label: "Template" },
 ];
 
 export function TopNav({ view, onViewChange, showConcepts = true }: TopNavProps) {

@@ -8,6 +8,14 @@ import type { CrossCheckResult } from "../lib/types";
 export interface ValidatorTabProps {
   crossChecks: CrossCheckResult[];
   partial?: boolean;
+  // Review Workspace Step 8 — when provided, a check carrying a target cell
+  // becomes clickable and calls this with its (sheet, row). The host wires it
+  // to drive the source-PDF pane / concept selection.
+  onSelectTarget?: (sheet: string, row: number) => void;
+  // When true, drop the outer card wrapper + "Cross-Check Results" heading so
+  // a host CollapsiblePanel can own the chrome (3-column review layout).
+  // Default keeps the standalone card for RunDetailView / live runs.
+  embedded?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -31,7 +39,7 @@ const STATUS_DISPLAY: Record<
 // Component
 // ---------------------------------------------------------------------------
 
-export function ValidatorTab({ crossChecks, partial }: ValidatorTabProps) {
+export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = false }: ValidatorTabProps) {
   if (crossChecks.length === 0) {
     return (
       <div style={styles.empty}>
@@ -47,8 +55,8 @@ export function ValidatorTab({ crossChecks, partial }: ValidatorTabProps) {
   const warningChecks = crossChecks.filter((c) => c.status === "warning");
 
   return (
-    <div style={styles.container}>
-      <h3 style={styles.heading}>Cross-Check Results</h3>
+    <div style={embedded ? styles.embeddedContainer : styles.container}>
+      {!embedded && <h3 style={styles.heading}>Cross-Check Results</h3>}
       {partial && (
         <p style={{ fontFamily: pwc.fontBody, fontSize: 13, color: "#D97706", margin: `0 0 ${pwc.space.md}px 0` }}>
           Group filing: cross-checks currently validate consolidated (Group) figures only. Standalone (Company) columns are not yet checked.
@@ -70,10 +78,25 @@ export function ValidatorTab({ crossChecks, partial }: ValidatorTabProps) {
             {numericChecks.map((check) => {
               const display = STATUS_DISPLAY[check.status];
               const isMuted = check.status === "not_applicable";
+              // Clickable only when the host wired a handler AND this check
+              // carries a resolved target cell.
+              const clickable =
+                onSelectTarget != null &&
+                check.target_sheet != null &&
+                check.target_row != null;
               return (
                 <tr
                   key={check.name}
-                  style={isMuted ? styles.rowMuted : styles.row}
+                  data-testid={`cross-check-row-${check.name}`}
+                  onClick={
+                    clickable
+                      ? () => onSelectTarget!(check.target_sheet!, check.target_row!)
+                      : undefined
+                  }
+                  style={{
+                    ...(isMuted ? styles.rowMuted : styles.row),
+                    cursor: clickable ? "pointer" : "default",
+                  }}
                 >
                   <td style={styles.td}>
                     <span style={{ fontFamily: pwc.fontMono, fontSize: 13 }}>{check.name}</span>
@@ -150,6 +173,10 @@ const styles = {
     borderTop: "none",
     boxShadow: pwc.shadow.card,
     padding: pwc.space.lg,
+  } as React.CSSProperties,
+  // Embedded: no card chrome (the host CollapsiblePanel provides it).
+  embeddedContainer: {
+    overflowX: "auto",
   } as React.CSSProperties,
   heading: {
     fontFamily: pwc.fontHeading,

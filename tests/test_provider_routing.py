@@ -81,6 +81,97 @@ def test_create_proxy_model_direct_mode_routes_to_correct_provider(
     assert type(model).__module__ == expected_module
 
 
+def test_gemini_on_local_proxy_routes_direct_to_google(monkeypatch):
+    """Gemini-3 can't round-trip thought_signatures through the OpenAI proxy.
+
+    On the local-dev proxy, a Gemini model must bypass the proxy and use
+    pydantic-ai's native GoogleModel (which preserves the signature). Pinned
+    so the proxy path is never silently restored for Gemini.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "real-gemini-key")
+
+    model = server._create_proxy_model(
+        "vertex_ai.gemini-3-flash-preview",
+        proxy_url="http://localhost:4000/v1",
+        api_key="sk-local-dev-key",
+    )
+    assert type(model).__module__ == "pydantic_ai.models.google"
+    # Bare name reaches the constructor, not the prefixed registry id.
+    assert getattr(model, "model_name", "") == "gemini-3-flash-preview"
+
+
+def test_gemini_on_enterprise_proxy_stays_on_proxy(monkeypatch):
+    """The remote enterprise proxy must NOT be bypassed — direct Google is
+    firewall-blocked (403) on Windows. Gemini there stays on OpenAIChatModel."""
+    monkeypatch.setenv("GEMINI_API_KEY", "real-gemini-key")
+
+    model = server._create_proxy_model(
+        "vertex_ai.gemini-3-flash-preview",
+        proxy_url="https://genai-sharedservice-emea.pwc.com/v1",
+        api_key="enterprise-key",
+    )
+    assert type(model).__module__ == "pydantic_ai.models.openai"
+
+
+def test_gemini_on_local_proxy_without_key_falls_back_to_proxy(monkeypatch):
+    """No real Google key (neither GEMINI_API_KEY nor GOOGLE_API_KEY) → no
+    direct path available, stay on the proxy."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    model = server._create_proxy_model(
+        "vertex_ai.gemini-3-flash-preview",
+        proxy_url="http://localhost:4000/v1",
+        api_key="sk-local-dev-key",
+    )
+    assert type(model).__module__ == "pydantic_ai.models.openai"
+
+
+def test_gemini_bypass_uses_google_api_key_when_gemini_unset(monkeypatch):
+    """The Settings UI writes the user's key to GOOGLE_API_KEY, so the local
+    bypass must accept it — not only GEMINI_API_KEY. Pins the HIGH peer-review
+    fix: reading GEMINI_API_KEY alone silently broke the default Mac flow."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "real-google-key")
+
+    model = server._create_proxy_model(
+        "vertex_ai.gemini-3-flash-preview",
+        proxy_url="http://localhost:4000/v1",
+        api_key="sk-local-dev-key",
+    )
+    assert type(model).__module__ == "pydantic_ai.models.google"
+
+
+def test_proxy_auth_prefers_llm_proxy_api_key(monkeypatch):
+    """On the local proxy, OpenAI-routed calls authenticate with
+    LLM_PROXY_API_KEY (the proxy master key), leaving GOOGLE_API_KEY free to
+    carry the user's real Google key."""
+    monkeypatch.setenv("LLM_PROXY_API_KEY", "sk-local-dev-key")
+    monkeypatch.setenv("GOOGLE_API_KEY", "real-google-key")
+
+    model = server._create_proxy_model(
+        "openai.gpt-5.4",
+        proxy_url="http://localhost:4000/v1",
+        api_key="real-google-key",
+    )
+    assert type(model).__module__ == "pydantic_ai.models.openai"
+    # The provider's client must carry the proxy master key, not the Google key.
+    api_key = getattr(model.client, "api_key", None)
+    assert api_key == "sk-local-dev-key"
+
+
+def test_openai_on_local_proxy_stays_on_proxy(monkeypatch):
+    """The bypass is Gemini-only — OpenAI models keep using the proxy."""
+    monkeypatch.setenv("GEMINI_API_KEY", "real-gemini-key")
+
+    model = server._create_proxy_model(
+        "openai.gpt-5.4",
+        proxy_url="http://localhost:4000/v1",
+        api_key="sk-local-dev-key",
+    )
+    assert type(model).__module__ == "pydantic_ai.models.openai"
+
+
 def test_create_proxy_model_strips_prefix_before_construction(monkeypatch):
     """The model constructor should receive a bare model name, not the
     prefixed registry form — otherwise the upstream API gets a string it

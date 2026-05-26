@@ -30,12 +30,21 @@ export interface ConflictRow {
 export function ReconciliationQueue({
   runId,
   reloadKey,
+  onSelectConcept,
+  embedded = false,
 }: {
   runId: number;
   // Bumped by the parent after a value edit so the queue re-fetches and
   // surfaces (or clears) conflicts the cascade just wrote — without a
   // full-page reload. Phase 2.2.
   reloadKey?: number;
+  // Review Workspace M2: clicking a conflict selects its concept in the grid
+  // (and drives the PDF pane). Optional so the queue still works standalone.
+  onSelectConcept?: (conceptUuid: string) => void;
+  // When true, drop the component's own card wrapper + "Reconciliation queue"
+  // heading so a host CollapsiblePanel can own the chrome (3-column review
+  // layout). Default keeps the standalone card for existing callers.
+  embedded?: boolean;
 }) {
   const [conflicts, setConflicts] = useState<ConflictRow[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -109,26 +118,8 @@ export function ReconciliationQueue({
     );
   }
 
-  return (
-    <div
-      data-testid="reconciliation-queue"
-      style={{
-        ...ui.card,
-        padding: pwc.space.lg,
-      }}
-    >
-      <h2
-        style={{
-          margin: 0,
-          marginBottom: pwc.space.md,
-          fontFamily: pwc.fontHeading,
-          color: pwc.grey900,
-          fontSize: 15,
-          fontWeight: 700,
-        }}
-      >
-        Reconciliation queue ({conflicts.length})
-      </h2>
+  const body = (
+    <>
       {actionError && (
         <div
           data-testid="reconciliation-action-error"
@@ -159,10 +150,16 @@ export function ReconciliationQueue({
             <li
               key={c.id}
               data-testid={`conflict-${c.id}`}
+              onClick={
+                onSelectConcept
+                  ? () => onSelectConcept(c.concept_uuid)
+                  : undefined
+              }
               style={{
                 padding: `${pwc.space.md}px 0`,
                 borderTop: `1px solid ${pwc.grey100}`,
                 marginBottom: pwc.space.sm,
+                cursor: onSelectConcept ? "pointer" : "default",
               }}
             >
               <div
@@ -187,7 +184,11 @@ export function ReconciliationQueue({
               <div style={{ marginTop: pwc.space.sm, display: "flex", gap: pwc.space.sm }}>
                 <button
                   data-testid={`resolve-btn-${c.id}`}
-                  onClick={() => onResolve(c.id, "resolved")}
+                  onClick={(e) => {
+                    // Don't let the action bubble to the row's select handler.
+                    e.stopPropagation();
+                    onResolve(c.id, "resolved");
+                  }}
                   style={{
                     ...ui.buttonPrimary,
                     minHeight: 30,
@@ -199,7 +200,10 @@ export function ReconciliationQueue({
                 </button>
                 <button
                   data-testid={`dismiss-btn-${c.id}`}
-                  onClick={() => onResolve(c.id, "dismissed")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onResolve(c.id, "dismissed");
+                  }}
                   style={{
                     ...ui.buttonSecondary,
                     minHeight: 30,
@@ -214,6 +218,34 @@ export function ReconciliationQueue({
           ))}
         </ul>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return <div data-testid="reconciliation-queue">{body}</div>;
+  }
+
+  return (
+    <div
+      data-testid="reconciliation-queue"
+      style={{
+        ...ui.card,
+        padding: pwc.space.lg,
+      }}
+    >
+      <h2
+        style={{
+          margin: 0,
+          marginBottom: pwc.space.md,
+          fontFamily: pwc.fontHeading,
+          color: pwc.grey900,
+          fontSize: 15,
+          fontWeight: 700,
+        }}
+      >
+        Reconciliation queue ({conflicts.length})
+      </h2>
+      {body}
     </div>
   );
 }

@@ -1,9 +1,13 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
+import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesReviewTab } from "../components/NotesReviewTab";
+import { PdfSourcePane } from "../components/PdfSourcePane";
+import { parseEvidencePages } from "../lib/evidencePages";
 import { downloadFilledUrl } from "../lib/api";
+import type { CrossCheckResult } from "../lib/types";
 import { TemplateSettingsPage } from "./TemplateSettingsPage";
 
 // Phase 3.2 — sentinel selector value that swaps the main panel from the
@@ -139,13 +143,38 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
   const [recheck, setRecheck] = useState<
     { running: boolean; summary: string | null }
   >({ running: false, summary: null });
+  // Full per-check results from the last re-run, so a failed cross-statement
+  // check (e.g. SOFP no longer balances after an edit) is actionable — not just
+  // an aggregate count. Cross-checks validate ACROSS statements; the
+  // reconciliation queue validates WITHIN a statement (parent vs children), so
+  // they intentionally don't share a surface.
+  const [crossChecks, setCrossChecks] = useState<CrossCheckResult[]>([]);
+  // Sub-sheet filter (M3 nested nav): when set, the tree shows only this
+  // render_sheet within the active template. null = all sheets of the template.
+  const [activeSheet, setActiveSheet] = useState<string | null>(null);
+  // 3-column workspace layout: the Menu and Source PDF columns are both
+  // resizable (drag handle) and hideable (collapse to a thin rail). The
+  // Results column flexes to fill the rest.
+  const [menuWidth, setMenuWidth] = useState(280);
+  const [pdfWidth, setPdfWidth] = useState(440);
+  const [menuCollapsed, setMenuCollapsed] = useState(false);
+  const [pdfCollapsed, setPdfCollapsed] = useState(false);
   const [selectedConceptUuid, setSelectedConceptUuid] = useState<string | null>(
     null
   );
-  // Abort an in-flight recheck on unmount so its response can't setState on a
-  // gone component (parity with the other fetches on this page).
+  // Abort an in-flight recheck on unmount AND on runId change — otherwise a
+  // slow /recheck from run A can land its results onto run B (this component
+  // re-renders rather than remounts when runId changes; the other fetches on
+  // this page already key their cleanup on runId, so recheck must too). Also
+  // clear the now-stale recheck summary + results when the run switches.
   const recheckAbort = useRef<AbortController | null>(null);
-  useEffect(() => () => recheckAbort.current?.abort(), []);
+  useEffect(() => {
+    return () => {
+      recheckAbort.current?.abort();
+      setRecheck({ running: false, summary: null });
+      setCrossChecks([]);
+    };
+  }, [runId]);
 
   // Initial load.  Peer-review #11: abort the in-flight request on
   // unmount / runId change so a slow response can't land on a stale
@@ -186,6 +215,38 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
       });
     return () => controller.abort();
   }, [runId, conflictReloadKey]);
+
+  // M3 — open-conflict counts per template, for the navigator's badges. We
+  // fetch the same /conflicts endpoint the reconciliation queue uses (keyed on
+  // conflictReloadKey so it refreshes after an edit) and roll them up by the
+  // owning concept's template. A separate lightweight fetch keeps the queue's
+  // own resolve/dismiss state untouched.
+  const [conflictCounts, setConflictCounts] = useState<Record<string, number>>(
+    {}
+  );
+  useEffect(() => {
+    if (runId == null || concepts.length === 0) return;
+    const controller = new AbortController();
+    fetch(`/api/runs/${runId}/conflicts`, { signal: controller.signal })
+      .then((r) => (r.ok ? r.json() : { conflicts: [] }))
+      .then((data) => {
+        const templateByUuid = new Map(
+          concepts.map((c) => [c.concept_uuid, c.template_id])
+        );
+        const counts: Record<string, number> = {};
+        for (const cf of (data.conflicts || []).filter(
+          (c: { status: string }) => c.status === "open"
+        )) {
+          const tid = templateByUuid.get(cf.concept_uuid);
+          if (tid) counts[tid] = (counts[tid] || 0) + 1;
+        }
+        setConflictCounts(counts);
+      })
+      .catch((err) => {
+        if (err?.name !== "AbortError") setConflictCounts({});
+      });
+    return () => controller.abort();
+  }, [runId, conflictReloadKey, concepts]);
 
   // Phase 2.1 — write a user value edit for one concept in the active
   // (scope, period), then fold the response back into local state: the
@@ -294,13 +355,14 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
         return;
       }
       const data = await resp.json();
-      const results: Array<{ status: string }> = data.results || [];
+      const results: CrossCheckResult[] = data.results || [];
       // Backend statuses are "passed" / "failed" / "warning" /
       // "not_applicable" / "pending" (cross_checks.framework). Match those
       // exactly — "pass"/"fail" would always count 0.
       const passed = results.filter((r) => r.status === "passed").length;
       const failed = results.filter((r) => r.status === "failed").length;
       const warnings = results.filter((r) => r.status === "warning").length;
+      setCrossChecks(results);
       setRecheck({
         running: false,
         summary: `${passed} passed · ${failed} failed · ${warnings} warnings`,
@@ -311,12 +373,58 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
     }
   }, [runId]);
 
+  // Review Workspace M2 — select a concept from outside the grid (e.g. a
+  // reconciliation conflict). The conflict only knows the concept_uuid, so we
+  // look up its template here and switch to it: otherwise the active-template
+  // filter would hide the row and the selection effect would reset it. Any
+  // active search is cleared for the same reason (search overrides the
+  // template view).
+  const handleSelectConcept = useCallback(
+    (conceptUuid: string) => {
+      const target = concepts.find((c) => c.concept_uuid === conceptUuid);
+      if (!target) return;
+      setActiveTemplate(target.template_id);
+      // Show the whole template (clear any sub-sheet filter) so the target row
+      // is guaranteed visible regardless of which sub-sheet it lives on.
+      setActiveSheet(null);
+      setSearchQuery("");
+      setSelectedConceptUuid(conceptUuid);
+    },
+    [concepts]
+  );
+
+  // Cross-check click-through: a failing check carries a (target_sheet,
+  // target_row) anchor (currently only sofp_balance). Resolve it to the owning
+  // concept and select it, reusing handleSelectConcept's template/sheet switch.
+  const handleSelectTarget = useCallback(
+    (sheet: string, row: number) => {
+      const target = concepts.find(
+        (c) => c.render_sheet === sheet && c.render_row === row
+      );
+      if (target) handleSelectConcept(target.concept_uuid);
+    },
+    [concepts, handleSelectConcept]
+  );
+
   // Distinct templates for the selector dropdown — order-preserving so
   // SOFP appears before SOPL/SOCI/SOCF when a run carries all four.
   const templates: string[] = [];
   for (const c of concepts) {
     if (!templates.includes(c.template_id)) templates.push(c.template_id);
   }
+
+  // Per-template ordered render_sheets — the navigator expands a face
+  // statement (one template, several sub-sheets) into nested entries so the
+  // reviewer can jump straight to a sub-sheet instead of scrolling one flat
+  // tree. Single-sheet templates have no children and behave as before.
+  const sheetsByTemplate = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const c of concepts) {
+      const sheets = (map[c.template_id] ||= []);
+      if (!sheets.includes(c.render_sheet)) sheets.push(c.render_sheet);
+    }
+    return map;
+  }, [concepts]);
 
   // Search overrides the template filter (matches happen across all
   // templates so a user can hop between statements via the result
@@ -330,7 +438,11 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
         return canon.includes(q) || disp.includes(q);
       })
     : activeTemplate
-    ? concepts.filter((c) => c.template_id === activeTemplate)
+    ? concepts.filter(
+        (c) =>
+          c.template_id === activeTemplate &&
+          (activeSheet == null || c.render_sheet === activeSheet)
+      )
     : concepts;
 
   // Detect Group runs by the presence of ANY concept with Group-side
@@ -375,8 +487,22 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
       ? null
       : filtered.find((r) => r.concept_uuid === selectedConceptUuid) || null;
 
-  const editableCount = concepts.filter((c) => c.editable === true).length;
+  // Memoised so the PDF pane isn't handed a fresh array on every unrelated
+  // re-render (which would reset its current page + zoom). Keyed on the
+  // evidence string itself.
+  const selectedEvidencePages = useMemo(
+    () => parseEvidencePages(selectedConcept?.evidence),
+    [selectedConcept?.evidence]
+  );
+
+  // Editable count is scoped to the CURRENT view so it reads consistently
+  // beside "Fields shown" (both describe the visible set). A global editable
+  // count next to a filtered shown-count read like a bug — e.g. "710 editable"
+  // sitting next to "123 fields shown".
   const shownCount = filtered.filter((c) => c.kind !== "ABSTRACT").length;
+  const editableCount = filtered.filter(
+    (c) => c.editable === true && c.kind !== "ABSTRACT"
+  ).length;
 
   if (runId == null) {
     // No run selected → this surface becomes the global template settings
@@ -399,23 +525,100 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
     );
   }
 
+  const totalOpenConflicts = Object.values(conflictCounts).reduce(
+    (a, b) => a + b,
+    0
+  );
+
+  const menuColumn = (
+    <div style={{ ...styles.column, flex: `0 0 ${menuWidth}px`, width: menuWidth }}>
+      <ColumnHeader
+        title="Menu"
+        testId="menu"
+        onHide={() => setMenuCollapsed(true)}
+      />
+      <CollapsiblePanel title="Sheets" testId="panel-sheets">
+        <SheetNavigator
+          templates={templates}
+          sheetsByTemplate={sheetsByTemplate}
+          activeTemplate={activeTemplate}
+          activeSheet={activeSheet}
+          notesKey={NOTES_KEY}
+          conflictCounts={conflictCounts}
+          onSelectTemplate={(tid) => {
+            // Switching sheets clears any active search so the chosen sheet's
+            // rows are actually shown (search overrides the template view), and
+            // clears the sub-sheet filter so the whole template is shown.
+            setSearchQuery("");
+            setActiveTemplate(tid);
+            setActiveSheet(null);
+          }}
+          onSelectSheet={(tid, sheet) => {
+            setSearchQuery("");
+            setActiveTemplate(tid);
+            setActiveSheet(sheet);
+          }}
+        />
+      </CollapsiblePanel>
+      <CollapsiblePanel title="Selected field" testId="panel-details">
+        <ConceptEvidenceBody concept={selectedConcept} />
+      </CollapsiblePanel>
+      <CollapsiblePanel
+        title={`Reconciliation queue (${totalOpenConflicts})`}
+        testId="panel-recon"
+      >
+        <ReconciliationQueue
+          runId={runId}
+          reloadKey={conflictReloadKey}
+          onSelectConcept={handleSelectConcept}
+          embedded
+        />
+      </CollapsiblePanel>
+    </div>
+  );
+
+  const pdfColumn = (
+    <div style={{ ...styles.column, flex: `0 0 ${pdfWidth}px`, width: pdfWidth }}>
+      <ColumnHeader
+        title="Source PDF"
+        testId="pdf"
+        onHide={() => setPdfCollapsed(true)}
+      />
+      {/* Source-PDF verification: the pane follows the selected concept's
+          evidence pages so a reviewer can eyeball the figure against the
+          document without leaving the page (M1). */}
+      <PdfSourcePane runId={runId} pages={selectedEvidencePages} />
+    </div>
+  );
+
   return (
-    <div
-      data-testid="concepts-page"
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        gap: pwc.space.xl,
-        alignItems: "start",
-        fontFamily: pwc.fontBody,
-      }}
-    >
-      <main style={{ minWidth: 0, flex: "1 1 760px" }}>
+    <div data-testid="concepts-page" style={styles.shell}>
+      {/* Column 1 — Menu (sheets, selected field, reconciliation) */}
+      {menuCollapsed ? (
+        <CollapsedRail
+          label="Menu"
+          testId="menu"
+          onExpand={() => setMenuCollapsed(false)}
+        />
+      ) : (
+        <>
+          {menuColumn}
+          <ResizeHandle
+            testId="resize-menu"
+            onDelta={(dx) => setMenuWidth((w) => clamp(w + dx, 200, 520))}
+          />
+        </>
+      )}
+
+      {/* Column 2 — Results + concept grid (always visible, flexes to fill).
+          Sits directly beside the Source PDF so a value and the document page
+          it came from are adjacent — no center-then-far-left eye travel. */}
+      <main style={styles.resultsCol}>
         <section style={styles.reviewHeader}>
           <div style={styles.titleRow}>
             <div>
-              <div style={styles.kicker}>Post-run review</div>
-              <h1 style={styles.pageTitle}>Review extracted values</h1>
+              <div style={styles.kicker}>Template</div>
+              <h1 style={styles.pageTitle}>Extracted values</h1>
             </div>
             <div style={styles.actionRow}>
               {recheck.summary && (
@@ -470,29 +673,26 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
           </div>
         )}
 
-        <section style={styles.toolbar} aria-label="Review controls">
-          <div style={styles.controlGroupWide}>
-            <label htmlFor="template-selector" style={ui.fieldLabel}>
-              Template
-            </label>
-            <select
-              id="template-selector"
-              data-testid="template-selector"
-              value={activeTemplate || ""}
-              onChange={(e) => setActiveTemplate(e.target.value || null)}
-              style={{ ...ui.select, width: "100%" }}
+        {/* Cross-statement check detail. Appears after a re-run so a failed
+            check (e.g. SOFP no longer balances) is a named, sometimes-clickable
+            finding — not just the aggregate count in the header. Distinct from
+            the reconciliation queue, which checks within-statement sums. */}
+        {crossChecks.length > 0 && (
+          <div style={styles.crossChecksWrap}>
+            <CollapsiblePanel
+              title="Cross-check results"
+              testId="review-cross-checks"
             >
-              {templates.map((tid) => (
-                <option key={tid} value={tid}>
-                  {tid}
-                </option>
-              ))}
-              {/* Phase 3.2 — Notes review lives in the same selector so face
-                  statements and notes are one review surface. */}
-              <option value={NOTES_KEY}>Notes</option>
-            </select>
+              <ValidatorTab
+                crossChecks={crossChecks}
+                onSelectTarget={handleSelectTarget}
+                embedded
+              />
+            </CollapsiblePanel>
           </div>
+        )}
 
+        <section style={styles.toolbar} aria-label="Review controls">
           {!notesActive && isGroupRun && (
             <div style={styles.controlGroup}>
               <span style={ui.fieldLabel}>Entity</span>
@@ -556,11 +756,191 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
         )}
       </main>
 
-      <aside style={styles.sideRail}>
-        <ConceptEvidencePanel concept={selectedConcept} />
-        <ReconciliationQueue runId={runId} reloadKey={conflictReloadKey} />
-      </aside>
+      {/* Column 3 — Source PDF, docked on the right so the value grid and its
+          source page sit side by side. The resize handle is on the PDF's LEFT
+          edge now, so a rightward drag shrinks it — delta sign is flipped
+          relative to the Menu handle on the far left. */}
+      {pdfCollapsed ? (
+        <CollapsedRail
+          label="Source PDF"
+          testId="pdf"
+          onExpand={() => setPdfCollapsed(false)}
+        />
+      ) : (
+        <>
+          <ResizeHandle
+            testId="resize-pdf"
+            onDelta={(dx) => setPdfWidth((w) => clamp(w - dx, 260, 720))}
+          />
+          {pdfColumn}
+        </>
+      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Layout primitives for the 3-column workspace — a generic collapsible panel,
+// per-column hide header + collapsed rail, and a drag-to-resize handle. Inline
+// styles only (gotcha #7).
+// ---------------------------------------------------------------------------
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
+
+function CollapsiblePanel({
+  title,
+  testId,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  testId?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section data-testid={testId} style={styles.panelCard}>
+      <button
+        type="button"
+        data-testid={testId ? `${testId}-toggle` : undefined}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        style={styles.panelHeader}
+      >
+        <span style={styles.panelHeaderTitle}>{title}</span>
+        <span
+          style={{
+            ...styles.panelChevron,
+            transform: open ? "none" : "rotate(-90deg)",
+          }}
+        >
+          ▾
+        </span>
+      </button>
+      {open && <div style={styles.panelBody}>{children}</div>}
+    </section>
+  );
+}
+
+function ColumnHeader({
+  title,
+  testId,
+  onHide,
+}: {
+  title: string;
+  testId: string;
+  onHide: () => void;
+}) {
+  return (
+    <div style={styles.columnHeader}>
+      <span style={styles.columnHeaderTitle}>{title}</span>
+      <button
+        type="button"
+        data-testid={`col-hide-${testId}`}
+        onClick={onHide}
+        style={styles.columnHideBtn}
+        title={`Hide ${title} panel`}
+        aria-label={`Hide ${title} panel`}
+      >
+        « Hide
+      </button>
+    </div>
+  );
+}
+
+function CollapsedRail({
+  label,
+  testId,
+  onExpand,
+}: {
+  label: string;
+  testId: string;
+  onExpand: () => void;
+}) {
+  // A thin vertical button is easy to miss, so the rail carries an explicit
+  // expand chevron at top + bottom and lifts to the accent colour on hover so
+  // it clearly reads as "click to reveal" rather than a passive divider.
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      data-testid={`col-show-${testId}`}
+      onClick={onExpand}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        ...styles.collapsedRail,
+        background: hover ? pwc.orange50 : pwc.white,
+        borderColor: hover ? pwc.orange400 : pwc.grey200,
+        color: hover ? pwc.orange700 : pwc.grey700,
+      }}
+      title={`Show ${label} panel`}
+      aria-label={`Show ${label} panel`}
+    >
+      <span aria-hidden="true" style={styles.collapsedRailChevron}>
+        »
+      </span>
+      <span style={styles.collapsedRailLabel}>{label}</span>
+      <span aria-hidden="true" style={styles.collapsedRailChevron}>
+        »
+      </span>
+    </button>
+  );
+}
+
+function ResizeHandle({
+  testId,
+  onDelta,
+}: {
+  testId: string;
+  onDelta: (dx: number) => void;
+}) {
+  const [active, setActive] = useState(false);
+  // Hold the live drag listeners so an unmount mid-drag can tear them down —
+  // otherwise the window listeners (and the body user-select lock) leak if the
+  // component disappears between mousedown and mouseup.
+  const cleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => cleanupRef.current?.(), []);
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    let lastX = e.clientX;
+    setActive(true);
+    const move = (ev: MouseEvent) => {
+      const dx = ev.clientX - lastX;
+      lastX = ev.clientX;
+      onDelta(dx);
+    };
+    const teardown = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.style.userSelect = "";
+      cleanupRef.current = null;
+    };
+    const up = () => {
+      teardown();
+      setActive(false);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    document.body.style.userSelect = "none";
+    // The unmount effect calls this; it skips setActive (the component is gone).
+    cleanupRef.current = teardown;
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      data-testid={testId}
+      onMouseDown={onMouseDown}
+      style={{
+        ...styles.resizeHandle,
+        background: active ? pwc.orange400 : pwc.grey200,
+      }}
+    />
   );
 }
 
@@ -707,6 +1087,22 @@ function ConceptMatrixGrid({
     }
   }
 
+  // M2 — scroll the row holding the selected cell into view when selection is
+  // driven from outside the grid. We key element refs by render_row and locate
+  // the owning row by scanning cells for the selected uuid.
+  const rowRefs = useRef(new Map<number, HTMLDivElement | null>());
+  useEffect(() => {
+    if (!selectedUuid) return;
+    for (const [rn, g] of byRow) {
+      for (const cell of g.cells.values()) {
+        if (cell.uuid === selectedUuid) {
+          rowRefs.current.get(rn)?.scrollIntoView?.({ block: "nearest" });
+          return;
+        }
+      }
+    }
+  }, [selectedUuid, byRow]);
+
   // Wider columns so an input fits without clipping accountant figures.
   const visiblePeriods: Period[] = showPeriods ? ["CY", "PY"] : ["CY"];
   const valueColumns = cols.flatMap((c) =>
@@ -766,6 +1162,7 @@ function ConceptMatrixGrid({
         return (
           <div
             key={rn}
+            ref={(el) => rowRefs.current.set(rn, el)}
             role="row"
             style={{
               display: "grid",
@@ -847,6 +1244,14 @@ function ConceptRowView({
   activeScope: "Company" | "Group";
   showPeriods: boolean;
 }) {
+  // M2 — when selection is driven from outside the grid (a reconciliation
+  // conflict), bring the row into view. `scrollIntoView` is guarded with `?.`
+  // because jsdom doesn't implement it (the test env would otherwise throw).
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (selected) rowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [selected]);
+
   // Phase 5.3 — labels are READ-ONLY in the per-run review; renaming lives
   // on the global Template settings page so there's one coherent place to
   // edit labels and one (here) to edit values. The label still shows the
@@ -879,6 +1284,7 @@ function ConceptRowView({
 
   return (
     <div
+      ref={rowRef}
       data-testid={`concept-row-${row.concept_uuid}`}
       data-kind={row.kind}
       onClick={() => onSelectRow(row.concept_uuid)}
@@ -1131,14 +1537,129 @@ function StatusBadge({
   );
 }
 
-function ConceptEvidencePanel({
+// ---------------------------------------------------------------------------
+// SheetNavigator — M3. An always-visible left rail listing each template (and
+// the Notes editor) so reviewers switch sheets in one click instead of hunting
+// through a dropdown. Each item carries an open-conflict count badge so the
+// reviewer can triage where to look first.
+// ---------------------------------------------------------------------------
+
+function SheetNavigator({
+  templates,
+  sheetsByTemplate,
+  activeTemplate,
+  activeSheet,
+  notesKey,
+  conflictCounts,
+  onSelectTemplate,
+  onSelectSheet,
+}: {
+  templates: string[];
+  sheetsByTemplate: Record<string, string[]>;
+  activeTemplate: string | null;
+  activeSheet: string | null;
+  notesKey: string;
+  conflictCounts: Record<string, number>;
+  onSelectTemplate: (templateId: string) => void;
+  onSelectSheet: (templateId: string, sheet: string) => void;
+}) {
+  return (
+    <nav
+      data-testid="sheet-navigator"
+      aria-label="Sheets"
+      style={styles.sideNav}
+    >
+      {templates.map((tid) => {
+        const active = tid === activeTemplate;
+        const count = conflictCounts[tid] || 0;
+        const sheets = sheetsByTemplate[tid] || [];
+        // A statement workbook is split across several sub-sheets (face +
+        // breakdowns). Expand them as nested entries under the active
+        // template so the reviewer can jump to one sub-sheet directly. Only
+        // worth showing when there's more than one sheet.
+        const showSubSheets = active && sheets.length > 1;
+        return (
+          <div key={tid}>
+            <button
+              type="button"
+              data-testid={`sheet-nav-${tid}`}
+              aria-current={active && activeSheet == null ? "true" : undefined}
+              onClick={() => onSelectTemplate(tid)}
+              style={{
+                ...styles.sideNavItem,
+                // Highlight the template header only when it represents the
+                // current view (all sheets); a selected sub-sheet dims it.
+                background: active && activeSheet == null ? pwc.orange50 : pwc.white,
+                color: active && activeSheet == null ? pwc.orange700 : pwc.grey800,
+                borderColor: active ? pwc.orange400 : pwc.grey200,
+                fontWeight: active && activeSheet == null ? 600 : 500,
+              }}
+            >
+              <span style={styles.sideNavLabel}>{tid}</span>
+              {count > 0 && (
+                <span
+                  data-testid={`sheet-nav-count-${tid}`}
+                  style={styles.sideNavBadge}
+                  title={`${count} open conflict${count === 1 ? "" : "s"}`}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+            {showSubSheets && (
+              <div style={styles.sideNavSubGroup}>
+                {sheets.map((sheet) => {
+                  const sheetActive = active && activeSheet === sheet;
+                  return (
+                    <button
+                      key={sheet}
+                      type="button"
+                      data-testid={`sheet-nav-sheet-${tid}-${sheet}`}
+                      aria-current={sheetActive ? "true" : undefined}
+                      onClick={() => onSelectSheet(tid, sheet)}
+                      style={{
+                        ...styles.sideNavSubItem,
+                        background: sheetActive ? pwc.orange50 : pwc.white,
+                        color: sheetActive ? pwc.orange700 : pwc.grey700,
+                        borderColor: sheetActive ? pwc.orange400 : pwc.grey200,
+                        fontWeight: sheetActive ? 600 : 400,
+                      }}
+                    >
+                      <span style={styles.sideNavLabel}>{sheet}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        data-testid={`sheet-nav-${notesKey}`}
+        aria-current={activeTemplate === notesKey ? "true" : undefined}
+        onClick={() => onSelectTemplate(notesKey)}
+        style={{
+          ...styles.sideNavItem,
+          background: activeTemplate === notesKey ? pwc.orange50 : pwc.white,
+          color: activeTemplate === notesKey ? pwc.orange700 : pwc.grey800,
+          borderColor: activeTemplate === notesKey ? pwc.orange400 : pwc.grey200,
+          fontWeight: activeTemplate === notesKey ? 600 : 500,
+        }}
+      >
+        <span style={styles.sideNavLabel}>Notes</span>
+      </button>
+    </nav>
+  );
+}
+
+function ConceptEvidenceBody({
   concept,
 }: {
   concept: ConceptRow | null;
 }) {
   return (
-    <section style={styles.evidencePanel}>
-      <h2 style={styles.panelTitle}>Selected field</h2>
+    <>
       {concept == null ? (
         <p style={styles.panelMuted}>Select a value row to view source context.</p>
       ) : (
@@ -1174,7 +1695,7 @@ function ConceptEvidencePanel({
           </div>
         </div>
       )}
-    </section>
+    </>
   );
 }
 
@@ -1335,9 +1856,128 @@ function EditableValueCell({
 }
 
 const styles = {
+  // 3-column workspace shell. No flex-wrap: columns keep their row so the
+  // resize handles stay between them; the Results column flexes to fill.
+  shell: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: pwc.space.sm,
+    fontFamily: pwc.fontBody,
+  } as React.CSSProperties,
+  column: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.md,
+    minWidth: 0,
+    position: "sticky" as const,
+    top: pwc.space.lg,
+    alignSelf: "flex-start",
+    maxHeight: "calc(100vh - 32px)",
+    overflowY: "auto" as const,
+  } as React.CSSProperties,
+  resultsCol: {
+    flex: "1 1 460px",
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+  } as React.CSSProperties,
+  columnHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: `0 ${pwc.space.xs}px`,
+  } as React.CSSProperties,
+  columnHeaderTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: 600,
+    color: pwc.grey500,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.04em",
+  } as React.CSSProperties,
+  columnHideBtn: {
+    border: "none",
+    background: "transparent",
+    color: pwc.grey500,
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: "pointer",
+    padding: `2px ${pwc.space.xs}px`,
+  } as React.CSSProperties,
+  collapsedRail: {
+    flex: "0 0 40px",
+    alignSelf: "stretch",
+    minHeight: 240,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    padding: `${pwc.space.md}px 0`,
+    position: "sticky" as const,
+    top: pwc.space.lg,
+    transition: "background 0.12s, border-color 0.12s, color 0.12s",
+  } as React.CSSProperties,
+  collapsedRailChevron: {
+    fontSize: 14,
+    lineHeight: 1,
+    fontWeight: 600,
+  } as React.CSSProperties,
+  collapsedRailLabel: {
+    writingMode: "vertical-rl" as const,
+    transform: "rotate(180deg)",
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: "0.04em",
+  } as React.CSSProperties,
+  resizeHandle: {
+    flex: "0 0 6px",
+    alignSelf: "stretch",
+    minHeight: 240,
+    borderRadius: 3,
+    cursor: "col-resize",
+    position: "sticky" as const,
+    top: pwc.space.lg,
+  } as React.CSSProperties,
+  panelCard: {
+    ...ui.card,
+    overflow: "hidden",
+  } as React.CSSProperties,
+  panelHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    border: "none",
+    background: pwc.grey50,
+    borderBottom: `1px solid ${pwc.grey100}`,
+    cursor: "pointer",
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    textAlign: "left" as const,
+  } as React.CSSProperties,
+  panelHeaderTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: 600,
+    color: pwc.grey500,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.04em",
+  } as React.CSSProperties,
+  panelChevron: {
+    color: pwc.grey500,
+    fontSize: 12,
+    transition: "transform 0.15s",
+  } as React.CSSProperties,
+  panelBody: {
+    padding: pwc.space.md,
+  } as React.CSSProperties,
   reviewHeader: {
     ...ui.card,
-    padding: pwc.space.xl,
+    padding: pwc.space.lg,
     marginBottom: pwc.space.lg,
   } as React.CSSProperties,
   titleRow: {
@@ -1349,9 +1989,9 @@ const styles = {
   } as React.CSSProperties,
   kicker: {
     fontFamily: pwc.fontHeading,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 600,
-    color: pwc.orange700,
+    color: pwc.grey500,
     textTransform: "uppercase" as const,
     letterSpacing: "0.04em",
     marginBottom: pwc.space.xs,
@@ -1359,8 +1999,8 @@ const styles = {
   pageTitle: {
     fontFamily: pwc.fontHeading,
     color: pwc.grey900,
-    fontSize: 20,
-    fontWeight: 700,
+    fontSize: 18,
+    fontWeight: 600,
     lineHeight: 1.2,
     margin: 0,
   } as React.CSSProperties,
@@ -1380,7 +2020,7 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
     gap: pwc.space.md,
-    marginTop: pwc.space.xl,
+    marginTop: pwc.space.lg,
   } as React.CSSProperties,
   metric: {
     border: `1px solid ${pwc.grey200}`,
@@ -1392,34 +2032,40 @@ const styles = {
   } as React.CSSProperties,
   metricValue: {
     fontFamily: pwc.fontMono,
-    fontSize: 18,
-    fontWeight: 700,
+    fontSize: 16,
+    fontWeight: 600,
     color: pwc.grey900,
   } as React.CSSProperties,
   metricLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 11,
-    fontWeight: 600,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.03em",
+    fontWeight: 500,
+    letterSpacing: "0.02em",
   } as React.CSSProperties,
   errorBanner: {
     marginBottom: pwc.space.md,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     background: pwc.errorBg,
     border: `1px solid ${pwc.errorBorder}`,
+    borderLeft: `3px solid ${pwc.error}`,
     borderRadius: pwc.radius.sm,
     color: pwc.errorText,
     fontSize: 13,
+    lineHeight: 1.5,
   } as React.CSSProperties,
   editedBanner: {
     marginBottom: pwc.space.md,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     background: pwc.orange50,
     border: `1px solid ${pwc.orange100}`,
+    borderLeft: `3px solid ${pwc.orange400}`,
     borderRadius: pwc.radius.sm,
     fontSize: 13,
-    color: pwc.grey900,
+    lineHeight: 1.5,
+    color: pwc.grey800,
+  } as React.CSSProperties,
+  crossChecksWrap: {
+    marginBottom: pwc.space.lg,
   } as React.CSSProperties,
   toolbar: {
     ...ui.card,
@@ -1432,13 +2078,6 @@ const styles = {
     position: "sticky" as const,
     top: 0,
     zIndex: 5,
-  } as React.CSSProperties,
-  controlGroupWide: {
-    flex: "1 1 340px",
-    minWidth: 260,
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: pwc.space.xs,
   } as React.CSSProperties,
   controlGroup: {
     display: "flex",
@@ -1470,27 +2109,63 @@ const styles = {
     fontWeight: 600,
     minWidth: 54,
   } as React.CSSProperties,
-  sideRail: {
+  sideNav: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
-    position: "sticky" as const,
-    top: pwc.space.xl,
-    flex: "1 1 320px",
-    maxWidth: 380,
+    gap: pwc.space.xs,
     minWidth: 0,
   } as React.CSSProperties,
-  evidencePanel: {
-    ...ui.card,
-    padding: pwc.space.lg,
+  sideNavItem: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.sm,
+    width: "100%",
+    textAlign: "left" as const,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.sm,
+    cursor: "pointer",
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    fontWeight: 500,
   } as React.CSSProperties,
-  panelTitle: {
-    margin: 0,
-    marginBottom: pwc.space.md,
-    fontFamily: pwc.fontHeading,
-    fontSize: 15,
+  sideNavLabel: {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+    minWidth: 0,
+  } as React.CSSProperties,
+  sideNavSubGroup: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xs,
+    margin: `${pwc.space.xs}px 0 ${pwc.space.xs}px ${pwc.space.md}px`,
+    paddingLeft: pwc.space.sm,
+    borderLeft: `2px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  sideNavSubItem: {
+    display: "flex",
+    alignItems: "center",
+    width: "100%",
+    textAlign: "left" as const,
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.sm,
+    cursor: "pointer",
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+  } as React.CSSProperties,
+  sideNavBadge: {
+    flex: "0 0 auto",
+    minWidth: 18,
+    textAlign: "center" as const,
+    padding: `1px ${pwc.space.xs}px`,
+    borderRadius: 9,
+    background: pwc.errorBg,
+    color: pwc.errorText,
+    fontSize: 11,
     fontWeight: 700,
-    color: pwc.grey900,
   } as React.CSSProperties,
   panelMuted: {
     margin: 0,
@@ -1511,8 +2186,8 @@ const styles = {
   evidenceLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 11,
-    fontWeight: 600,
-    color: pwc.grey700,
+    fontWeight: 500,
+    color: pwc.grey500,
     textTransform: "uppercase" as const,
     letterSpacing: "0.03em",
     marginBottom: 2,
@@ -1534,13 +2209,14 @@ const styles = {
     gap: pwc.space.md,
     minWidth: 760,
     padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    background: pwc.grey900,
-    color: pwc.white,
+    background: pwc.grey50,
+    color: pwc.grey700,
+    borderBottom: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   headerCell: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
   } as React.CSSProperties,
   valueCell: {
     textAlign: "right" as const,

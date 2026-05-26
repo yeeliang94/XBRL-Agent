@@ -79,15 +79,24 @@ if lsof -ti :${LITELLM_PORT} &>/dev/null; then
     sleep 1
 fi
 
-# Launch proxy in background — logs go to litellm.log
+# Launch proxy in background — logs (stdout + stderr) go to litellm.log.
+# Order matters: redirect stdout to the file FIRST, then point stderr at the
+# same place. The reverse (2>&1 >file) leaves stderr on the terminal.
 litellm --config litellm_config.yaml --port ${LITELLM_PORT} \
-    2>&1 > litellm.log &
+    > litellm.log 2>&1 &
 LITELLM_PID=$!
 
-# Wait for proxy to be ready (up to 15 seconds)
+# Wait for proxy to be ready (up to 15 seconds).
+# Use /health/readiness — it reports proxy readiness from loaded config WITHOUT
+# sending a live test ping to every model. The plain /health endpoint probes
+# each model in litellm_config.yaml with a "What's 1 + 1?" completion on every
+# startup, which burns tokens and spams the provider logs (and 404s on any
+# model id that doesn't exist on the API).
 echo -n "  Waiting for proxy"
 for i in $(seq 1 15); do
-    if curl -s -H "Authorization: Bearer sk-local-dev-key" "${LITELLM_URL}/health" >/dev/null 2>&1; then
+    # -f makes curl fail (non-zero) on any non-2xx response, so a still-loading
+    # proxy (503) or a missing endpoint (404) isn't mistaken for "ready".
+    if curl -fsS -H "Authorization: Bearer sk-local-dev-key" "${LITELLM_URL}/health/readiness" >/dev/null 2>&1; then
         echo " ready!"
         break
     fi
@@ -95,16 +104,19 @@ for i in $(seq 1 15); do
     sleep 1
 done
 
-if ! curl -s -H "Authorization: Bearer sk-local-dev-key" "${LITELLM_URL}/health" >/dev/null 2>&1; then
+if ! curl -fsS -H "Authorization: Bearer sk-local-dev-key" "${LITELLM_URL}/health/readiness" >/dev/null 2>&1; then
     echo ""
     echo "WARNING: LiteLLM proxy didn't start. Check litellm.log"
     echo "Falling back to direct API mode (no proxy)."
     kill $LITELLM_PID 2>/dev/null || true
     LITELLM_PID=""
 else
-    # Point the server at the local proxy (simulates enterprise setup)
+    # Point the server at the local proxy (simulates enterprise setup).
+    # Use a DEDICATED proxy-auth var instead of clobbering GOOGLE_API_KEY —
+    # the Gemini direct-call bypass (server.py) needs the user's real Google
+    # key, and start.sh can't see the .env value to preserve it.
     export LLM_PROXY_URL="${LITELLM_URL}/v1"
-    export GOOGLE_API_KEY="sk-local-dev-key"
+    export LLM_PROXY_API_KEY="sk-local-dev-key"
     echo "  LLM_PROXY_URL=${LLM_PROXY_URL}"
 fi
 

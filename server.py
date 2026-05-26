@@ -37,7 +37,7 @@ from typing import AsyncIterator, Dict, List, Literal, Optional, Set, Any
 
 from dotenv import load_dotenv, set_key
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -406,6 +406,8 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
                 "diff": r.diff,
                 "tolerance": r.tolerance,
                 "message": r.message,
+                "target_sheet": r.target_sheet,
+                "target_row": r.target_row,
             }
             for r in results
         ]
@@ -553,12 +555,24 @@ def _model_id(model_obj) -> str:
     return str(model_obj)
 
 
+def _is_local_proxy(proxy_url: str) -> bool:
+    """True when ``proxy_url`` points at the Mac local-dev LiteLLM proxy.
+
+    The enterprise proxy is a remote PwC host; the dev proxy started by
+    ``start.sh`` lives on localhost. Only the local-dev case is allowed to
+    bypass the proxy for direct Gemini calls — direct Google is firewall
+    -blocked (403) on the Windows enterprise network (CLAUDE.md gotcha #5).
+    """
+    return "localhost" in proxy_url or "127.0.0.1" in proxy_url
+
+
 def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
     """Create a PydanticAI model with multi-provider support.
 
     Routing logic:
     1. If ``proxy_url`` is set → enterprise LiteLLM proxy (Windows). All
-       models go through the OpenAI-compatible proxy endpoint.
+       models go through the OpenAI-compatible proxy endpoint — EXCEPT
+       Gemini models on the local-dev proxy, which go direct (see below).
     2. If ``proxy_url`` is empty (Mac / direct API):
        - OpenAI models (gpt-*, o1-*, o3-*, o4-*) → OpenAI API via OPENAI_API_KEY
        - Anthropic models (claude-*) → Anthropic API via ANTHROPIC_API_KEY
@@ -566,10 +580,46 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
     """
     # Enterprise proxy path — everything goes through one OpenAI-compatible endpoint
     if proxy_url:
+        # Gemini-3 thinking models require a `thought_signature` to be echoed
+        # back on every prior functionCall part across multi-turn tool calls.
+        # The OpenAI chat format can't carry that field, so routing Gemini
+        # through the OpenAI-compatible proxy breaks on the second turn with
+        # "Function call is missing a thought_signature". pydantic-ai's native
+        # GoogleModel round-trips the signature correctly, so on the local-dev
+        # proxy (Mac) we bypass the proxy and call Gemini directly. The
+        # enterprise proxy is left untouched — direct Google is blocked there.
+        if _detect_provider(model_name) == "google" and _is_local_proxy(proxy_url):
+            # The proxy's auth key now lives in LLM_PROXY_API_KEY (set by
+            # start.sh), so GOOGLE_API_KEY / GEMINI_API_KEY keep their real
+            # Google values for this direct bypass. Accept either — the Settings
+            # UI writes the user's key to GOOGLE_API_KEY (server.py /api/settings),
+            # so reading only GEMINI_API_KEY here silently broke the default flow.
+            google_key = (
+                os.environ.get("GEMINI_API_KEY", "")
+                or os.environ.get("GOOGLE_API_KEY", "")
+            )
+            if google_key:
+                from pydantic_ai.models.google import GoogleModel
+                from pydantic_ai.providers.google import GoogleProvider
+
+                bare_name = _strip_provider_prefix(model_name)
+                provider = GoogleProvider(api_key=google_key)
+                return GoogleModel(bare_name, provider=provider)
+            logger.warning(
+                "Gemini model %r on the local proxy needs a real GEMINI_API_KEY "
+                "or GOOGLE_API_KEY for the direct-call bypass; none set, falling "
+                "back to the proxy (multi-turn tool calls will likely fail with a "
+                "thought_signature error).", model_name,
+            )
+
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.providers.openai import OpenAIProvider
 
-        provider = OpenAIProvider(base_url=proxy_url, api_key=api_key)
+        # The proxy authenticates with its own master key, not a provider key.
+        # Prefer LLM_PROXY_API_KEY (local-dev proxy) and fall back to the passed
+        # key (enterprise proxy, where GOOGLE_API_KEY is the real proxy key).
+        proxy_auth = os.environ.get("LLM_PROXY_API_KEY", "") or api_key
+        provider = OpenAIProvider(base_url=proxy_url, api_key=proxy_auth)
         return OpenAIChatModel(model_name, provider=provider)
 
     # Direct API paths — route by provider.
@@ -3282,6 +3332,8 @@ async def run_multi_agent_stream(
                         "diff": result.diff,
                         "tolerance": result.tolerance,
                         "message": result.message,
+                        "target_sheet": result.target_sheet,
+                        "target_row": result.target_row,
                     },
                 })
             except asyncio.QueueFull:
@@ -3583,6 +3635,8 @@ async def run_multi_agent_stream(
                                     "diff": result.diff,
                                     "tolerance": result.tolerance,
                                     "message": result.message,
+                                    "target_sheet": result.target_sheet,
+                                    "target_row": result.target_row,
                                 },
                             })
                         except asyncio.QueueFull:
@@ -3892,6 +3946,8 @@ async def run_multi_agent_stream(
                         diff=check_result.diff,
                         tolerance=check_result.tolerance,
                         message=check_result.message,
+                        target_sheet=check_result.target_sheet,
+                        target_row=check_result.target_row,
                     )
                 db_conn.commit()
             except Exception as e:
@@ -3966,6 +4022,8 @@ async def run_multi_agent_stream(
                 "diff": cr.diff,
                 "tolerance": cr.tolerance,
                 "message": cr.message,
+                "target_sheet": cr.target_sheet,
+                "target_row": cr.target_row,
             })
         cross_checks_partial = False
 
@@ -4815,6 +4873,8 @@ async def get_run_detail_endpoint(run_id: int):
                 "diff": c.diff,
                 "tolerance": c.tolerance,
                 "message": c.message,
+                "target_sheet": c.target_sheet,
+                "target_row": c.target_row,
             }
             for c in detail.cross_checks
         ],
@@ -5247,6 +5307,130 @@ async def recheck_endpoint(run_id: int):
                    "no succeeded statements).",
         )
     return {"run_id": run_id, "results": results}
+
+
+def _resolve_run_pdf_path(run: "Any") -> Optional[Path]:
+    """Locate the source PDF that was uploaded for a run, or None.
+
+    The upload writes the file to ``OUTPUT_DIR/{session_id}/uploaded.pdf``
+    (server.py upload handler), and ``session_id`` is the canonical output
+    directory name. We prefer it; for older rows that predate the session_id
+    column we fall back to the merged-workbook's parent dir, which is the same
+    session folder. Returns None when neither yields an existing file — the
+    PDF pane then shows an empty state instead of erroring (legacy / CLI runs
+    never copied a PDF into an output dir).
+    """
+    candidates: list[Path] = []
+    if run.session_id:
+        candidates.append(OUTPUT_DIR / run.session_id / "uploaded.pdf")
+    if run.merged_workbook_path:
+        candidates.append(Path(run.merged_workbook_path).parent / "uploaded.pdf")
+    # Defense-in-depth: session_id is a server-minted UUID in practice, so
+    # these inputs are DB- not URL-controlled — but mirror the hardening on
+    # /api/result/ anyway. Resolve each candidate and require it to live under
+    # OUTPUT_DIR; a `..`-laden session_id can't escape the output tree.
+    output_root = OUTPUT_DIR.resolve()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(output_root)
+        except (ValueError, OSError):
+            continue
+        if resolved.exists():
+            return resolved
+    return None
+
+
+@app.get("/api/runs/{run_id}/pdf/info")
+async def pdf_info_endpoint(run_id: int):
+    """Return the source PDF's page count so the viewer can bound paging.
+
+    404 when the run is unknown or has no stored PDF — the frontend treats
+    that as "no source available" and degrades gracefully.
+    """
+    from db import repository as repo
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    pdf_path = _resolve_run_pdf_path(run)
+    if pdf_path is None:
+        raise HTTPException(status_code=404, detail="No source PDF stored for this run.")
+    from tools.pdf_viewer import count_pdf_pages
+    try:
+        # count_pdf_pages opens the document with PyMuPDF; a corrupt/locked
+        # file raises, which we surface as a 422 rather than a 500.
+        pages = await asyncio.to_thread(count_pdf_pages, str(pdf_path))
+    except Exception as exc:  # noqa: BLE001 — bad file is a client-visible condition
+        raise HTTPException(status_code=422, detail=f"Could not read source PDF: {exc}")
+    return {"run_id": run_id, "pages": pages}
+
+
+# Clamp the render resolution: too low is illegible, too high blows up the
+# payload and render time. 150 DPI is a readable default for statement pages.
+_PDF_MIN_DPI = 72
+_PDF_MAX_DPI = 250
+_PDF_DEFAULT_DPI = 150
+
+
+@app.get("/api/runs/{run_id}/pdf/page/{page}.png")
+async def pdf_page_endpoint(run_id: int, page: int, dpi: int = _PDF_DEFAULT_DPI):
+    """Render one source-PDF page (1-indexed) to a PNG for side-by-side review.
+
+    Reuses ``tools.pdf_viewer.render_pages_to_png_bytes`` (and its module-level
+    page cache) — the same renderer the scout/correction/extraction agents use.
+    This is a read-only, image-only path: it does NOT widen the file-download
+    whitelist, so the raw PDF itself is never served.
+    """
+    from db import repository as repo
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    pdf_path = _resolve_run_pdf_path(run)
+    if pdf_path is None:
+        raise HTTPException(status_code=404, detail="No source PDF stored for this run.")
+    from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
+
+    dpi = max(_PDF_MIN_DPI, min(_PDF_MAX_DPI, dpi))
+
+    try:
+        total_pages = await asyncio.to_thread(count_pdf_pages, str(pdf_path))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Could not read source PDF: {exc}")
+    if page < 1 or page > total_pages:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Page {page} out of range (document has {total_pages} pages).",
+        )
+
+    # Heavy raster work off the event loop so concurrent page requests don't
+    # serialise behind one another. A render failure (corrupt page, PyMuPDF
+    # error) is a client-visible bad-input condition → 422, not a 500.
+    try:
+        png_bytes = (
+            await asyncio.to_thread(
+                render_pages_to_png_bytes, str(pdf_path), page, page, dpi
+            )
+        )[0]
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Could not render page {page}: {exc}")
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={
+            # Pages are immutable for a finished run, so let the browser cache
+            # them; the viewer re-renders nothing on a second visit.
+            "Cache-Control": "private, max-age=3600",
+            "X-PDF-Page-Count": str(total_pages),
+        },
+    )
 
 
 @app.get("/api/runs/{run_id}/download/filled")

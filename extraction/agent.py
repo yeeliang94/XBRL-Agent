@@ -23,6 +23,7 @@ from tools.template_reader import read_template as _read_template_impl, Template
 from tools.pdf_viewer import render_pages_to_png_bytes, count_pdf_pages
 from tools.fill_workbook import fill_workbook as _fill_workbook_impl
 from tools.verifier import verify_statement as _verify_statement_impl
+from extraction.history_processors import strip_stale_images, strip_duplicate_template
 from prompts import render_prompt
 
 logger = logging.getLogger(__name__)
@@ -251,7 +252,13 @@ def _format_verify_result(result) -> str:
     lines: list[str] = []
     lines.append(f"Balanced: {result.is_balanced}")
     lines.append(f"Matches PDF: {result.matches_pdf}")
-    lines.append(f"Computed totals: {json.dumps(result.computed_totals, indent=2)}")
+    # Phase 4 (token-cost): the full computed_totals dump is only useful when
+    # the agent has to debug an imbalance. On the balanced path the agent acts
+    # on nothing in it, so omit it to stop re-billing the dump every turn.
+    # Failure-path detail (mismatches, mandatory_unfilled, feedback) stays
+    # fully intact below so self-correction is unaffected.
+    if not result.is_balanced:
+        lines.append(f"Computed totals: {json.dumps(result.computed_totals, indent=2)}")
     if result.mismatches:
         lines.append(f"Mismatches: {json.dumps(result.mismatches, indent=2)}")
     if result.mandatory_unfilled:
@@ -259,8 +266,19 @@ def _format_verify_result(result) -> str:
             "Mandatory fields unfilled: "
             + json.dumps(result.mandatory_unfilled, indent=2)
         )
+    # Only treat the verifier feedback as an action when something is actually
+    # wrong. The non-SOFP verifiers reuse `feedback` to carry a SUCCESS message
+    # (e.g. "SOPL attribution check passed."); routing that under "Action
+    # required:" told the agent to fix a clean statement and contributed to the
+    # run_id=126 SOPL loop. A problem exists iff there are mismatches, an
+    # explicit imbalance, or unfilled mandatory rows.
+    has_problem = (
+        bool(result.mismatches)
+        or result.is_balanced is False
+        or bool(result.mandatory_unfilled)
+    )
     actions: list[str] = []
-    if result.feedback:
+    if result.feedback and has_problem:
         actions.append(result.feedback)
     if result.mandatory_unfilled:
         actions.append(
@@ -270,6 +288,10 @@ def _format_verify_result(result) -> str:
         )
     if actions:
         lines.append("\nAction required:\n" + "\n\n".join(actions))
+    elif result.feedback:
+        # Clean verification — surface the verifier's note as status, not a
+        # demand for action, so the agent moves on to save_result.
+        lines.append(f"Status: {result.feedback}")
     return "\n".join(lines)
 
 
@@ -396,6 +418,11 @@ def create_extraction_agent(
         deps_type=ExtractionDeps,
         system_prompt=system_prompt,
         model_settings=ModelSettings(temperature=1.0),
+        # Token-cost reduction: strip re-billed payloads from the outbound
+        # request each turn — stale page images and the repeated template
+        # summary. Pure functions over the message list; see
+        # extraction/history_processors.py and docs/PLAN-token-cost-reduction.md.
+        history_processors=[strip_stale_images, strip_duplicate_template],
     )
 
     # --- Tools ---
@@ -404,6 +431,12 @@ def create_extraction_agent(
     def read_template(ctx: RunContext[ExtractionDeps]) -> str:
         """Read the template structure. Returns the full template summary
         (cached after the first call so repeated calls are free)."""
+        # Phase 2 (token-cost): when the summary is already embedded in the
+        # system prompt (cache_template=True), don't return a second full copy —
+        # that would land the ~12k-token summary twice. Point the agent at the
+        # copy it already has.
+        if cache_template:
+            return "Template structure already embedded in the system prompt above."
         if not ctx.deps.template_fields:
             ctx.deps.template_fields = _read_template_impl(ctx.deps.template_path)
         return _summarize_template(ctx.deps.template_fields)
@@ -486,12 +519,15 @@ def create_extraction_agent(
 
         if result.success:
             msg = f"Successfully wrote {result.fields_written} fields to {output_path}."
+            # Phase 4 (token-cost): collapse the error/warning arrays to a
+            # count + one-line summary instead of dumping the raw list repr
+            # every turn. The messages themselves are kept (double-booking
+            # warnings must still surface enough for the agent to act —
+            # RUN-REVIEW P1-1), just rendered compactly on a single line.
             if result.errors:
-                msg += f"\nErrors: {result.errors}"
-            # RUN-REVIEW P1-1: surface double-booking warnings so the
-            # agent can self-correct before the next verify_totals.
+                msg += f"\n{len(result.errors)} error(s): " + "; ".join(result.errors)
             if result.warnings:
-                msg += f"\nWarnings: {result.warnings}"
+                msg += f"\n{len(result.warnings)} warning(s): " + "; ".join(result.warnings)
             # Canonical mode: surface any facts that didn't make it into the
             # DB so the gap isn't silent (peer-review HIGH). Advisory — the
             # xlsx write still succeeded.
@@ -546,6 +582,8 @@ def create_extraction_agent(
         report_path = Path(ctx.deps.output_dir) / f"{stmt_prefix}_cost_report.txt"
         report_path.write_text(report, encoding="utf-8")
 
-        return f"Results saved to {json_path}\nCost report saved to {report_path}\n\n{report}"
+        # Phase 4 (token-cost): write the cost-report body to file only —
+        # the agent does not act on it, so don't re-bill it in the tool return.
+        return f"Results saved to {json_path}. Cost report saved to {report_path}."
 
     return agent, deps

@@ -89,7 +89,7 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    expect(screen.getByText("Review extracted values")).toBeTruthy();
+    expect(screen.getByText("Extracted values")).toBeTruthy();
     await waitFor(() => screen.getByTestId("concept-row-leaf-1"));
   });
 
@@ -145,12 +145,35 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    const selector = await waitFor(() =>
-      screen.getByTestId("template-selector") as HTMLSelectElement
+    // M3 — the dropdown was replaced by an always-visible sheet navigator.
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    expect(
+      screen.getByTestId("sheet-nav-mfrs-company-sofp-cunoncu-v1")
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("sheet-nav-mfrs-company-sopl-function-v1")
+    ).toBeTruthy();
+  });
+
+  test("navigator shows an open-conflict count badge per template (M3)", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts"))
+        return {
+          conflicts: [
+            { id: 1, concept_uuid: "leaf-1", kind: "partial_state", residual: null, detail: null, status: "open" },
+            { id: 2, concept_uuid: "leaf-1", kind: "partial_state", residual: null, detail: null, status: "open" },
+            { id: 3, concept_uuid: "leaf-1", kind: "partial_state", residual: null, detail: null, status: "resolved" },
+          ],
+        };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    // Two OPEN conflicts map to SOFP's leaf-1; the resolved one is excluded.
+    const badge = await waitFor(() =>
+      screen.getByTestId("sheet-nav-count-mfrs-company-sofp-cunoncu-v1")
     );
-    const options = Array.from(selector.options).map((o) => o.value);
-    expect(options).toContain("mfrs-company-sofp-cunoncu-v1");
-    expect(options).toContain("mfrs-company-sopl-function-v1");
+    expect(badge.textContent).toBe("2");
   });
 
   test("selecting template swaps the tree view", async () => {
@@ -182,14 +205,14 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("template-selector"));
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
     // SOFP rows visible initially.
     expect(screen.getByTestId("concept-row-leaf-1")).toBeTruthy();
     expect(screen.queryByTestId("concept-row-leaf-2")).toBeNull();
 
-    fireEvent.change(screen.getByTestId("template-selector"), {
-      target: { value: "mfrs-company-sopl-function-v1" },
-    });
+    fireEvent.click(
+      screen.getByTestId("sheet-nav-mfrs-company-sopl-function-v1")
+    );
 
     expect(screen.getByTestId("concept-row-leaf-2")).toBeTruthy();
     expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
@@ -224,7 +247,7 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("template-selector"));
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
 
     fireEvent.change(screen.getByTestId("concept-search"), {
       target: { value: "Revenue" },
@@ -717,12 +740,10 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("template-selector"));
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
     // Face statement visible first.
     expect(screen.getByTestId("concept-row-leaf-1")).toBeTruthy();
-    fireEvent.change(screen.getByTestId("template-selector"), {
-      target: { value: "__notes__" },
-    });
+    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
     expect(screen.getByTestId("review-notes-panel")).toBeTruthy();
     // The face tree is gone while notes are shown.
     expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
@@ -762,6 +783,168 @@ describe("ConceptsPage", () => {
     const summary = await waitFor(() => screen.getByTestId("recheck-summary"));
     expect(summary.textContent).toMatch(/2 passed/);
     expect(summary.textContent).toMatch(/1 failed/);
+  });
+
+  test("Re-run checks renders a cross-check detail panel with the failed check", async () => {
+    mockFetch((url) => {
+      if (url.includes("/recheck"))
+        return {
+          run_id: 42,
+          results: [
+            { name: "sofp_balance", status: "failed", expected: 999, actual: 900, diff: 99, tolerance: 1, message: "assets exceed equity+liabilities", target_sheet: null, target_row: null },
+            { name: "sopl_profit_tie", status: "passed", expected: null, actual: null, diff: null, tolerance: null, message: "" },
+          ],
+        };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    const btn = await waitFor(() => screen.getByTestId("recheck-btn"));
+    // No panel until a re-run has produced results.
+    expect(screen.queryByTestId("review-cross-checks")).toBeNull();
+    fireEvent.click(btn);
+    const panel = await waitFor(() => screen.getByTestId("review-cross-checks"));
+    // The failing check is now a named, visible finding (not just a count).
+    expect(panel.textContent).toMatch(/sofp_balance/);
+    expect(panel.textContent).toMatch(/assets exceed equity\+liabilities/);
+  });
+
+  test("clicking a targeted failed check selects the offending concept's sheet", async () => {
+    const multi = {
+      run_id: 42,
+      concepts: [
+        ...sampleConcepts.concepts,
+        {
+          concept_uuid: "leaf-2",
+          parent_uuid: null,
+          kind: "LEAF",
+          canonical_label: "Revenue",
+          display_label: null,
+          render_sheet: "SOPL-Function",
+          render_row: 5,
+          render_col: "B",
+          template_id: "mfrs-company-sopl-function-v1",
+          value: 500.0,
+          value_status: "observed",
+          children_status: null,
+          source: "pdf",
+          evidence: null,
+        },
+      ],
+    };
+    mockFetch((url) => {
+      if (url.includes("/recheck"))
+        return {
+          run_id: 42,
+          results: [
+            // Target points at leaf-2 (SOPL), which is NOT the active template.
+            { name: "sopl_check", status: "failed", expected: 1, actual: 2, diff: 1, tolerance: 0, message: "mismatch", target_sheet: "SOPL-Function", target_row: 5 },
+          ],
+        };
+      if (url.includes("/concepts")) return multi;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    // SOFP active initially → leaf-2 hidden.
+    expect(screen.queryByTestId("concept-row-leaf-2")).toBeNull();
+    fireEvent.click(screen.getByTestId("recheck-btn"));
+    const row = await waitFor(() => screen.getByTestId("cross-check-row-sopl_check"));
+    fireEvent.click(row);
+    // Click-through switched the active template to SOPL → leaf-2 visible.
+    await waitFor(() => screen.getByTestId("concept-row-leaf-2"));
+  });
+
+  test("navigator expands the active template into its sub-sheets and filters by sheet", async () => {
+    const subSheets = {
+      run_id: 42,
+      concepts: [
+        ...sampleConcepts.concepts, // all on SOFP-CuNonCu
+        {
+          concept_uuid: "sub-leaf",
+          parent_uuid: null,
+          kind: "LEAF",
+          canonical_label: "Cash and bank balances",
+          display_label: null,
+          render_sheet: "SOFP-Cash",
+          render_row: 4,
+          render_col: "B",
+          template_id: "mfrs-company-sofp-cunoncu-v1",
+          value: 50.0,
+          value_status: "observed",
+          children_status: null,
+          source: "pdf",
+          evidence: null,
+        },
+      ],
+    };
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return subSheets;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    // Active template has two render_sheets → nested sub-sheet entries appear.
+    const tid = "mfrs-company-sofp-cunoncu-v1";
+    expect(screen.getByTestId(`sheet-nav-sheet-${tid}-SOFP-CuNonCu`)).toBeTruthy();
+    expect(screen.getByTestId(`sheet-nav-sheet-${tid}-SOFP-Cash`)).toBeTruthy();
+    // All sheets shown by default (no sub-sheet filter).
+    expect(screen.getByTestId("concept-row-leaf-1")).toBeTruthy();
+    expect(screen.getByTestId("concept-row-sub-leaf")).toBeTruthy();
+    // Selecting a sub-sheet filters the tree to that render_sheet only.
+    fireEvent.click(screen.getByTestId(`sheet-nav-sheet-${tid}-SOFP-Cash`));
+    expect(screen.getByTestId("concept-row-sub-leaf")).toBeTruthy();
+    expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
+  });
+
+  test("Menu column hides to a rail and restores", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    // Hide the whole Menu column.
+    fireEvent.click(screen.getByTestId("col-hide-menu"));
+    expect(screen.queryByTestId("sheet-navigator")).toBeNull();
+    // A collapsed rail offers to restore it.
+    const rail = screen.getByTestId("col-show-menu");
+    fireEvent.click(rail);
+    expect(screen.getByTestId("sheet-navigator")).toBeTruthy();
+  });
+
+  test("Source PDF column hides to a rail and restores", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("pdf-source-pane"));
+    fireEvent.click(screen.getByTestId("col-hide-pdf"));
+    expect(screen.queryByTestId("pdf-source-pane")).toBeNull();
+    fireEvent.click(screen.getByTestId("col-show-pdf"));
+    expect(screen.getByTestId("pdf-source-pane")).toBeTruthy();
+  });
+
+  test("a panel toggle collapses its body (reconciliation queue)", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    // The reconciliation queue is embedded in the Menu column's recon panel.
+    await waitFor(() => screen.getByTestId("reconciliation-empty"));
+    fireEvent.click(screen.getByTestId("panel-recon-toggle"));
+    expect(screen.queryByTestId("reconciliation-empty")).toBeNull();
+    // Toggling again restores it.
+    fireEvent.click(screen.getByTestId("panel-recon-toggle"));
+    expect(screen.getByTestId("reconciliation-empty")).toBeTruthy();
   });
 
   test("shows an edited-values banner when facts/edited_count > 0", async () => {

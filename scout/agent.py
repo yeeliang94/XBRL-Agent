@@ -47,6 +47,7 @@ from scout.notes_discoverer import (
 )
 from scout.standard_detector import detect_filing_standard
 from tools.pdf_viewer import render_pages_to_png_bytes
+from extraction.history_processors import strip_stale_images
 
 logger = logging.getLogger(__name__)
 
@@ -620,6 +621,10 @@ def create_scout_agent(
         deps_type=ScoutDeps,
         system_prompt=system_prompt,
         model_settings=ModelSettings(temperature=1.0),
+        # Token-cost reduction: strip stale page-image blobs (from view_pages)
+        # out of the outbound request each turn. Pure function over the message
+        # list; see extraction/history_processors.py.
+        history_processors=[strip_stale_images],
     )
 
     # --- Tools ---

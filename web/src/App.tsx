@@ -72,6 +72,18 @@ const styles = {
     flexDirection: "column" as const,
     gap: pwc.space.xl,
   } as const,
+  // The concepts review workspace is a 3-column side-by-side surface that
+  // genuinely benefits from the full viewport — the 1440 cap left wide
+  // gutters and squeezed the grid + PDF. No max-width here; tighter side
+  // padding so the columns use most of the screen.
+  mainFull: {
+    maxWidth: "100%",
+    margin: "0 auto",
+    padding: `${pwc.space.lg}px ${pwc.space.lg}px`,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.lg,
+  } as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -165,11 +177,11 @@ export default function App() {
   }, [state.view, state.selectedRunId, state.currentRunId]);
 
   // Reflect the selected run in the browser tab title so a user with
-  // multiple review tabs open can tell them apart without switching.
+  // multiple Template tabs open can tell them apart without switching.
   useEffect(() => {
     document.title =
       state.view === "concepts" && state.selectedRunId != null
-        ? `XBRL Agent — Review ${state.selectedRunId}`
+        ? `XBRL Agent — Template ${state.selectedRunId}`
         : state.view === "history" && state.selectedRunId != null
         ? `XBRL Agent — Run ${state.selectedRunId}`
         : "XBRL Agent";
@@ -430,6 +442,19 @@ export default function App() {
               // clicks History. Popstate still dispatches its own
               // SET_SELECTED_RUN_ID so browser Back/Forward still
               // restore a deep-linked run correctly.
+              //
+              // "Extract" is the top of its own section: a fresh, empty
+              // upload box. A bare SET_VIEW would leave currentRunId +
+              // sessionId + the completed-run state intact, so the page
+              // re-showed the *last run* instead of an empty box. Reuse
+              // the full reset (also clears the /run/<id> URL + aborts any
+              // stale stream). Guarded on isRunning so clicking Extract
+              // while a run is still streaming surfaces it instead of
+              // killing it.
+              if (v === "extract" && !state.isRunning) {
+                handleReset();
+                return;
+              }
               dispatch({ type: "SET_VIEW", payload: v });
               dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
             }}
@@ -446,8 +471,9 @@ export default function App() {
 
       <main
         style={
-          state.view === "concepts" ||
-          (state.view === "history" && state.selectedRunId != null)
+          state.view === "concepts"
+            ? styles.mainFull
+            : state.view === "history" && state.selectedRunId != null
             ? styles.mainWide
             : styles.main
         }

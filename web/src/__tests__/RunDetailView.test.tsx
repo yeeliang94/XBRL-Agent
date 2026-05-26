@@ -164,6 +164,62 @@ describe("RunDetailView", () => {
     expect(screen.getByText("Passed")).toBeTruthy();
   });
 
+  test("clicking a targeted cross-check drives the source-PDF pane (Step 8 integration)", async () => {
+    // Regression for the peer-review HIGH: crossChecksForValidator used to
+    // drop target_sheet/target_row, so the row was never clickable here.
+    const detail = makeDetail({
+      cross_checks: [
+        {
+          name: "sofp_balance",
+          status: "failed",
+          expected: 100,
+          actual: 90,
+          diff: 10,
+          tolerance: 1,
+          message: "off by 10",
+          target_sheet: "SOFP-CuNonCu",
+          target_row: 30,
+        },
+      ],
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url: string) => {
+      if (url.includes("/concepts")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            concepts: [
+              {
+                concept_uuid: "c1",
+                render_sheet: "SOFP-CuNonCu",
+                render_row: 30,
+                evidence: "Page 7, Note 1",
+              },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes("/pdf/info")) {
+        return { ok: true, status: 200, json: async () => ({ pages: 50 }) } as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as Response;
+    }) as unknown as typeof fetch;
+    try {
+      render(
+        <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
+      );
+      // Wait for the concept map to load, then click the failed check.
+      const row = await screen.findByTestId("cross-check-row-sofp_balance");
+      fireEvent.click(row);
+      // The pane resolves the target's evidence ("Page 7") and shows page 7.
+      const img = (await screen.findByTestId("pdf-page-image")) as HTMLImageElement;
+      expect(img.getAttribute("src")).toBe("/api/runs/42/pdf/page/7.png");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("Download button is present and wired to onDownload with run id", () => {
     const onDownload = vi.fn<(id: number) => void>();
     render(
