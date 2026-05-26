@@ -77,7 +77,7 @@ describe("UploadPanel — P1 enhancements", () => {
     const dropZone = container.querySelector("[data-testid='drop-zone']");
     expect(dropZone).toBeInTheDocument();
     // jsdom converts hex to rgb in style attributes
-    expect(dropZone?.getAttribute("style")).toContain("rgb(245, 247, 248)"); // grey50
-    expect(dropZone?.getAttribute("style")).toContain("rgb(223, 227, 230)"); // grey200
+    expect(dropZone?.getAttribute("style")).toContain("rgb(250, 250, 250)"); // grey50 #FAFAFA
+    expect(dropZone?.getAttribute("style")).toContain("rgb(222, 222, 222)"); // grey200 #DEDEDE
   });
 });

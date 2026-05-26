@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
+import { PageHeader } from "../components/PageHeader";
 
 // ---------------------------------------------------------------------------
 // TemplateSettingsPage — Phase 5.1 global template settings.
@@ -95,15 +97,8 @@ export function TemplateSettingsPage() {
   );
 
   return (
-    <div data-testid="template-settings-page" style={{ padding: pwc.space.xl }}>
-      <h1 style={{ fontFamily: pwc.fontHeading, color: pwc.grey800 }}>
-        Template settings
-      </h1>
-      <p style={{ color: pwc.grey700, fontSize: 13, maxWidth: 720 }}>
-        Rename field labels for a template. Changes apply to every future run.
-        These are display names only — the exported Excel always uses the
-        official taxonomy label in column A.
-      </p>
+    <div data-testid="template-settings-page" style={styles.page}>
+      <PageHeader title="Template settings" />
       {error && (
         <div style={{ color: pwc.error, marginBottom: pwc.space.md }}>
           {error}
@@ -123,20 +118,16 @@ export function TemplateSettingsPage() {
         </div>
       ) : (
         <>
-      <div style={{ margin: `${pwc.space.md}px 0` }}>
-        <label htmlFor="ts-template" style={{ fontSize: 13, color: pwc.grey700 }}>
-          Template:{" "}
+      <div style={styles.toolbar}>
+        <label htmlFor="ts-template" style={ui.fieldLabel}>
+          Template
         </label>
         <select
           id="ts-template"
           data-testid="ts-template-selector"
           value={activeTemplate || ""}
           onChange={(e) => setActiveTemplate(e.target.value || null)}
-          style={{
-            padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-            borderRadius: 2,
-            border: `1px solid ${pwc.grey300}`,
-          }}
+          style={ui.select}
         >
           {templates.map((t) => (
             <option key={t.template_id} value={t.template_id}>
@@ -147,14 +138,10 @@ export function TemplateSettingsPage() {
       </div>
       <div
         role="table"
-        style={{
-          background: pwc.white,
-          border: `1px solid ${pwc.grey200}`,
-          borderRadius: 4,
-        }}
+        style={styles.tableWrap}
       >
         {concepts.length === 0 ? (
-          <div style={{ color: pwc.grey700, padding: `${pwc.space.sm}px ${pwc.space.md}px` }}>
+          <div style={styles.emptyRow}>
             No fields for this template.
           </div>
         ) : (
@@ -190,12 +177,16 @@ function TemplateConceptRow({
       data-testid={`ts-row-${concept.concept_uuid}`}
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) 80px",
-        gap: pwc.space.md,
-        padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+        gridTemplateColumns: "minmax(0, 1fr) 112px",
+        gap: pwc.space.lg,
+        padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
         borderBottom: `1px solid ${pwc.grey100}`,
         background: isAbstract ? pwc.grey100 : pwc.white,
-        fontWeight: isAbstract ? 600 : 400,
+        alignItems: "center",
+        fontFamily: pwc.fontBody,
+        fontSize: 15,
+        fontWeight: isAbstract ? pwc.weight.medium : pwc.weight.regular,
+        lineHeight: 1.55,
       }}
     >
       <div title={`canonical: ${concept.canonical_label}`}>
@@ -210,7 +201,7 @@ function TemplateConceptRow({
                 void onRename(concept.concept_uuid, draft || null);
               }
             }}
-            style={{ width: "100%" }}
+            style={{ ...ui.input, width: "100%" }}
           />
         ) : (
           <span>{label}</span>
@@ -221,13 +212,8 @@ function TemplateConceptRow({
           <button
             data-testid={`ts-rename-btn-${concept.concept_uuid}`}
             onClick={() => setEditing(true)}
-            style={{
-              background: "transparent",
-              border: `1px solid ${pwc.grey300}`,
-              borderRadius: 2,
-              cursor: "pointer",
-              fontSize: 12,
-            }}
+            className={uiClass.btnSecondary}
+            style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
           >
             Rename
           </button>
@@ -236,3 +222,26 @@ function TemplateConceptRow({
     </div>
   );
 }
+
+const styles = {
+  page: {
+    padding: pwc.space.xl,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xxl,
+  } as React.CSSProperties,
+  toolbar: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.lg,
+  } as React.CSSProperties,
+  tableWrap: {
+    ...ui.card,
+    overflow: "hidden",
+  } as React.CSSProperties,
+  emptyRow: {
+    color: pwc.grey700,
+    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
+    fontSize: 15,
+  } as React.CSSProperties,
+} as const;

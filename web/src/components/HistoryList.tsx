@@ -1,4 +1,5 @@
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 import type { RunSummaryJson } from "../lib/types";
 
@@ -137,35 +138,15 @@ export function HistoryList({
                     {run.pdf_filename}
                   </span>
                   {run.filing_level === "group" && (
-                    <span style={{
-                      display: "inline-block",
-                      marginLeft: 6,
-                      padding: "1px 6px",
-                      borderRadius: 3,
-                      fontSize: 10,
-                      fontWeight: 600,
-                      background: "#EDE9FE",
-                      color: "#6D28D9",
-                      verticalAlign: "middle",
-                    }}>
+                    <span style={{ ...styles.inlineBadge, background: pwc.infoBg, color: pwc.info }}>
                       Group
                     </span>
                   )}
                   {run.filing_standard === "mpers" && (
                     // MPERS-only badge. Default (mfrs) is implied — showing a
-                    // badge on every row would be noise. Teal tint to avoid
-                    // colliding with the purple Group badge right next to it.
-                    <span style={{
-                      display: "inline-block",
-                      marginLeft: 6,
-                      padding: "1px 6px",
-                      borderRadius: 3,
-                      fontSize: 10,
-                      fontWeight: 600,
-                      background: "#CCFBF1",
-                      color: "#0F766E",
-                      verticalAlign: "middle",
-                    }}>
+                    // badge on every row would be noise. Brand-orange tint to
+                    // stay distinct from the blue Group badge right next to it.
+                    <span style={{ ...styles.inlineBadge, background: pwc.orange50, color: pwc.orange500 }}>
                       MPERS
                     </span>
                   )}
@@ -229,10 +210,7 @@ const rowBase: React.CSSProperties = {
 
 const styles = {
   container: {
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    boxShadow: pwc.shadow.card,
+    ...ui.card,
     overflow: "hidden",
   } as React.CSSProperties,
   table: {
@@ -242,22 +220,17 @@ const styles = {
     // on long content (filenames, model IDs). Without this the browser
     // auto-sizes columns from content and the truncation never kicks in.
     tableLayout: "fixed" as const,
-    fontSize: 14,
+    fontSize: 15,
     fontFamily: pwc.fontBody,
   } as React.CSSProperties,
   th: {
-    textAlign: "left" as const,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    borderBottom: `2px solid ${pwc.grey200}`,
-    fontWeight: 600,
+    ...ui.th,
+    fontSize: 14,
     color: pwc.grey700,
-    fontSize: 12,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.5,
-    background: pwc.grey50,
   } as React.CSSProperties,
   td: {
-    padding: `${pwc.space.md}px ${pwc.space.md}px`,
+    ...ui.td,
+    padding: `${pwc.space.xl}px ${pwc.space.xl}px`,
     borderBottom: `1px solid ${pwc.grey100}`,
     verticalAlign: "middle" as const,
     overflow: "hidden",
@@ -266,7 +239,8 @@ const styles = {
   // row-selected variant below. Keeping padding identical to other cells
   // so the rail doesn't shift content when a row becomes active.
   tdFilename: {
-    padding: `${pwc.space.md}px ${pwc.space.md}px`,
+    ...ui.td,
+    padding: `${pwc.space.xl}px ${pwc.space.xl}px`,
     borderBottom: `1px solid ${pwc.grey100}`,
     verticalAlign: "middle" as const,
     overflow: "hidden",
@@ -277,12 +251,12 @@ const styles = {
   // currently-open detail modal.
   rowSelected: {
     ...rowBase,
-    background: "#FFF0E0",
+    background: pwc.orange100,
     boxShadow: `inset 3px 0 0 0 ${pwc.orange500}`,
   } as React.CSSProperties,
   filename: {
     fontFamily: pwc.fontBody,
-    fontWeight: 500,
+    fontWeight: pwc.weight.medium,
     color: pwc.grey900,
     display: "block",
     // Single-line truncation: long filenames like
@@ -295,28 +269,37 @@ const styles = {
   } as React.CSSProperties,
   dim: {
     color: pwc.grey700,
-    fontSize: 13,
+    fontSize: 14,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   badge: {
     display: "inline-block",
     padding: `2px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.sm,
-    fontSize: 12,
-    fontWeight: 600,
+    borderRadius: pwc.radius.lg,
+    fontSize: 13,
+    fontWeight: pwc.weight.medium,
     lineHeight: 1.6,
+  } as React.CSSProperties,
+  inlineBadge: {
+    display: "inline-block",
+    marginLeft: pwc.space.sm,
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    borderRadius: pwc.radius.md,
+    fontSize: 12,
+    fontWeight: pwc.weight.medium,
+    verticalAlign: "middle",
   } as React.CSSProperties,
   chipRow: {
     display: "flex",
     flexWrap: "wrap" as const,
-    gap: pwc.space.xs,
+    gap: pwc.space.sm,
   } as React.CSSProperties,
   chip: {
     display: "inline-block",
-    padding: `2px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.sm,
-    fontSize: 11,
-    fontWeight: 600,
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    borderRadius: pwc.radius.md,
+    fontSize: 12,
+    fontWeight: pwc.weight.medium,
     background: pwc.grey100,
     color: pwc.grey800,
     fontFamily: pwc.fontMono,
@@ -328,10 +311,10 @@ const styles = {
   // columns; full name is in the title attribute.
   modelChip: {
     display: "inline-block",
-    padding: `2px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.sm,
-    fontSize: 11,
-    fontWeight: 600,
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    borderRadius: pwc.radius.md,
+    fontSize: 12,
+    fontWeight: pwc.weight.medium,
     background: pwc.orange50,
     color: pwc.orange700,
     fontFamily: pwc.fontMono,

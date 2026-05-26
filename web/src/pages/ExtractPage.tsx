@@ -4,6 +4,7 @@ import { pwc } from "../lib/theme";
 import type { AppState, AppAction } from "../lib/appReducer";
 import { notesTabLabel, agentSubAgentSummary } from "../lib/appReducer";
 import { fetchRunDetail, getResultJson, getExtendedSettings } from "../lib/api";
+import { PageHeader } from "../components/PageHeader";
 import { UploadPanel } from "../components/UploadPanel";
 import { PreRunPanel } from "../components/PreRunPanel";
 import { PipelineStages } from "../components/PipelineStages";
@@ -189,6 +190,8 @@ export function ExtractPage({
   );
   return (
     <>
+      <PageHeader title="Extract" />
+
       {/* Upload + Run */}
       <UploadPanel
         onUpload={handleUpload}

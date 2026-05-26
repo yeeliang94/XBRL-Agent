@@ -60,7 +60,7 @@ const styles = {
   } as React.CSSProperties,
   heading: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    fontWeight: pwc.weight.medium,
     fontSize: 18,
     color: pwc.grey900,
     margin: 0,

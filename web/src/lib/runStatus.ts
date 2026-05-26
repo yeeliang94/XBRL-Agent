@@ -38,12 +38,13 @@ const RUN_STATUS_MAP: Record<string, RunStatusDisplay> = {
   draft:                  { label: "Not started",          color: pwc.grey700,   bg: pwc.grey100 },
   running:                { label: "Running",              color: pwc.orange500, bg: pwc.orange50 },
   completed:              { label: "Completed",            color: pwc.success,   bg: pwc.successBg },
-  completed_with_errors:  { label: "Completed with errors", color: "#D97706",    bg: "#FFFBEB" },
+  completed_with_errors:  { label: "Completed with errors", color: pwc.warningText, bg: pwc.warningBg },
   // RUN-REVIEW P0-1 (2026-04-26): correction agent hit its turn budget
-  // without converging. Distinct palette from completed_with_errors so
-  // operators can spot the "needs human review" runs in History at a
-  // glance — rendered with a more attention-grabbing amber+rose pair.
-  correction_exhausted:   { label: "Needs review",         color: "#B45309",    bg: "#FEF3C7" },
+  // without converging. Shares the amber warning fill with
+  // completed_with_errors but uses error-grade (red) text so the
+  // "needs a human" runs stay visually distinct at a glance — both stay
+  // within the design system's status palette (warning bg + error text).
+  correction_exhausted:   { label: "Needs review",         color: pwc.errorText,   bg: pwc.warningBg },
   failed:                 { label: "Failed",               color: pwc.error,     bg: pwc.errorBg },
   aborted:                { label: "Aborted",              color: pwc.grey700,   bg: pwc.grey100 },
 };

@@ -31,7 +31,7 @@ const STATUS_DISPLAY: Record<
   // Advisory only (Phase 6.1 notes-consistency). Amber so it's distinct
   // from success/error and reuses the shared warning palette.
   warning: { label: "Warning", color: pwc.warningText, bg: pwc.warningBg },
-  pending: { label: "Pending", color: "#D97706", bg: "#FFFBEB" },
+  pending: { label: "Pending", color: pwc.warningText, bg: pwc.warningBg },
   not_applicable: { label: "N/A", color: pwc.grey500, bg: pwc.grey100 },
 };
 
@@ -58,7 +58,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
     <div style={embedded ? styles.embeddedContainer : styles.container}>
       {!embedded && <h3 style={styles.heading}>Cross-Check Results</h3>}
       {partial && (
-        <p style={{ fontFamily: pwc.fontBody, fontSize: 13, color: "#D97706", margin: `0 0 ${pwc.space.md}px 0` }}>
+        <p style={{ fontFamily: pwc.fontBody, fontSize: 13, color: pwc.warningText, margin: `0 0 ${pwc.space.md}px 0` }}>
           Group filing: cross-checks currently validate consolidated (Group) figures only. Standalone (Company) columns are not yet checked.
         </p>
       )}
@@ -181,7 +181,7 @@ const styles = {
   heading: {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
-    fontWeight: 600,
+    fontWeight: pwc.weight.medium,
     color: pwc.grey900,
     margin: `0 0 ${pwc.space.md}px 0`,
   } as React.CSSProperties,

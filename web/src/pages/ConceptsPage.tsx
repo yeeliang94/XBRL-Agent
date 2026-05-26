@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
+import { ui, uiClass } from "../lib/uiStyles";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesReviewTab } from "../components/NotesReviewTab";
@@ -510,16 +510,6 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
     // (Phase 5.1 / 5.3). The "pick a run" guidance moves into the panel.
     return (
       <div data-testid="concepts-page-empty">
-        <div
-          style={{
-            padding: `${pwc.space.md}px ${pwc.space.xl}px 0`,
-            color: pwc.grey700,
-            fontSize: 13,
-          }}
-        >
-          Open a run from the History tab to review its extracted values. Below,
-          you can rename template field labels that apply to all runs.
-        </div>
         <TemplateSettingsPage />
       </div>
     );
@@ -617,7 +607,6 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
         <section style={styles.reviewHeader}>
           <div style={styles.titleRow}>
             <div>
-              <div style={styles.kicker}>Template</div>
               <h1 style={styles.pageTitle}>Extracted values</h1>
             </div>
             <div style={styles.actionRow}>
@@ -628,6 +617,7 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
               )}
               <button
                 data-testid="recheck-btn"
+                className={uiClass.btnSecondary}
                 onClick={onRecheck}
                 disabled={recheck.running}
                 style={{
@@ -641,6 +631,7 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
               <a
                 data-testid="generate-final-excel"
                 href={downloadFilledUrl(runId)}
+                className={uiClass.btnPrimary}
                 style={ui.buttonPrimary}
               >
                 Download final Excel
@@ -1293,11 +1284,11 @@ function ConceptRowView({
         gridTemplateColumns: isAbstract
           ? "minmax(0, 1fr)"
           : treeColumns(showPeriods),
-        gap: pwc.space.md,
+        gap: pwc.space.lg,
         minWidth: 760,
         padding: isAbstract
-          ? `${pwc.space.md}px ${pwc.space.lg}px`
-          : `${pwc.space.md}px ${pwc.space.lg}px`,
+          ? `${pwc.space.lg}px ${pwc.space.xl}px`
+          : `${pwc.space.lg}px ${pwc.space.xl}px`,
         background: isAbstract
           ? pwc.grey100
           : selected
@@ -1305,8 +1296,8 @@ function ConceptRowView({
           : pwc.white,
         borderBottom: `1px solid ${pwc.grey100}`,
         fontFamily: pwc.fontBody,
-        fontSize: 13,
-        fontWeight: isAbstract ? 600 : 400,
+        fontSize: 15,
+        fontWeight: isAbstract ? pwc.weight.medium : pwc.weight.regular,
         color: isComputed ? pwc.grey700 : pwc.grey900,
         cursor: "pointer",
         alignItems: "center",
@@ -1318,8 +1309,8 @@ function ConceptRowView({
           paddingLeft: depth * 14,
           display: "flex",
           flexDirection: "column",
-          gap: 2,
-          lineHeight: 1.45,
+          gap: pwc.space.xs,
+          lineHeight: 1.55,
         }}
       >
         <span data-testid={`label-${row.concept_uuid}`}>{label}</span>
@@ -1809,12 +1800,12 @@ function EditableValueCell({
   const highlightEmpty = highlight && draft.trim() === "";
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: pwc.space.sm }}>
       {badge && (
         <span
           data-testid={statusTestId}
           style={{
-            fontSize: 10,
+            fontSize: 12,
             color: status === "error" ? pwc.error : pwc.grey700,
           }}
         >
@@ -1835,9 +1826,9 @@ function EditableValueCell({
           flush(e.target.value);
         }}
         style={{
-          width: 132,
+          width: 148,
           textAlign: "right",
-          padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+          padding: `${pwc.space.sm}px ${pwc.space.md}px`,
           border: `1px solid ${
             status === "error"
               ? pwc.error
@@ -1845,9 +1836,9 @@ function EditableValueCell({
               ? pwc.orange400
               : pwc.grey300
           }`,
-          borderRadius: pwc.radius.sm,
+          borderRadius: pwc.radius.md,
           fontFamily: pwc.fontMono,
-          fontSize: 13,
+          fontSize: 14,
           background: highlightEmpty ? pwc.orange50 : pwc.white,
         }}
       />
@@ -1861,13 +1852,13 @@ const styles = {
   shell: {
     display: "flex",
     alignItems: "flex-start",
-    gap: pwc.space.sm,
+    gap: pwc.space.md,
     fontFamily: pwc.fontBody,
   } as React.CSSProperties,
   column: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.md,
+    gap: pwc.space.lg,
     minWidth: 0,
     position: "sticky" as const,
     top: pwc.space.lg,
@@ -1893,7 +1884,7 @@ const styles = {
     fontWeight: 600,
     color: pwc.grey500,
     textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    letterSpacing: 0,
   } as React.CSSProperties,
   columnHideBtn: {
     border: "none",
@@ -1932,7 +1923,7 @@ const styles = {
     fontFamily: pwc.fontHeading,
     fontSize: 11,
     fontWeight: 600,
-    letterSpacing: "0.04em",
+    letterSpacing: 0,
   } as React.CSSProperties,
   resizeHandle: {
     flex: "0 0 6px",
@@ -1956,7 +1947,7 @@ const styles = {
     background: pwc.grey50,
     borderBottom: `1px solid ${pwc.grey100}`,
     cursor: "pointer",
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     textAlign: "left" as const,
   } as React.CSSProperties,
   panelHeaderTitle: {
@@ -1965,7 +1956,7 @@ const styles = {
     fontWeight: 600,
     color: pwc.grey500,
     textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    letterSpacing: 0,
   } as React.CSSProperties,
   panelChevron: {
     color: pwc.grey500,
@@ -1973,12 +1964,12 @@ const styles = {
     transition: "transform 0.15s",
   } as React.CSSProperties,
   panelBody: {
-    padding: pwc.space.md,
+    padding: pwc.space.lg,
   } as React.CSSProperties,
   reviewHeader: {
     ...ui.card,
-    padding: pwc.space.lg,
-    marginBottom: pwc.space.lg,
+    padding: pwc.space.xl,
+    marginBottom: pwc.space.xl,
   } as React.CSSProperties,
   titleRow: {
     display: "flex",
@@ -1987,21 +1978,12 @@ const styles = {
     gap: pwc.space.xl,
     flexWrap: "wrap",
   } as React.CSSProperties,
-  kicker: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 600,
-    color: pwc.grey500,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
-    marginBottom: pwc.space.xs,
-  } as React.CSSProperties,
   pageTitle: {
     fontFamily: pwc.fontHeading,
     color: pwc.grey900,
-    fontSize: 18,
-    fontWeight: 600,
-    lineHeight: 1.2,
+    fontSize: 24,
+    fontWeight: pwc.weight.medium,
+    lineHeight: 1.25,
     margin: 0,
   } as React.CSSProperties,
   actionRow: {
@@ -2019,28 +2001,28 @@ const styles = {
   summaryStrip: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-    gap: pwc.space.md,
-    marginTop: pwc.space.lg,
+    gap: pwc.space.lg,
+    marginTop: pwc.space.xl,
   } as React.CSSProperties,
   metric: {
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    borderRadius: pwc.radius.lg,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,
   } as React.CSSProperties,
   metricValue: {
     fontFamily: pwc.fontMono,
-    fontSize: 16,
-    fontWeight: 600,
+    fontSize: 20,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
   } as React.CSSProperties,
   metricLabel: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: 500,
-    letterSpacing: "0.02em",
+    letterSpacing: 0,
   } as React.CSSProperties,
   errorBanner: {
     marginBottom: pwc.space.md,
@@ -2069,8 +2051,8 @@ const styles = {
   } as React.CSSProperties,
   toolbar: {
     ...ui.card,
-    padding: pwc.space.lg,
-    marginBottom: pwc.space.lg,
+    padding: pwc.space.xl,
+    marginBottom: pwc.space.xl,
     display: "flex",
     flexWrap: "wrap",
     gap: pwc.space.md,
@@ -2094,25 +2076,25 @@ const styles = {
   segmented: {
     display: "inline-flex",
     border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.sm,
+    borderRadius: pwc.radius.lg,
     overflow: "hidden",
     background: pwc.white,
-    minHeight: 36,
+    minHeight: 44,
   } as React.CSSProperties,
   segmentedButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     border: "none",
     borderRight: `1px solid ${pwc.grey200}`,
     cursor: "pointer",
     fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: 600,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
     minWidth: 54,
   } as React.CSSProperties,
   sideNav: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: pwc.space.sm,
     minWidth: 0,
   } as React.CSSProperties,
   sideNavItem: {
@@ -2122,12 +2104,12 @@ const styles = {
     gap: pwc.space.sm,
     width: "100%",
     textAlign: "left" as const,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
+    borderRadius: pwc.radius.lg,
     cursor: "pointer",
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: 500,
   } as React.CSSProperties,
   sideNavLabel: {
@@ -2139,8 +2121,8 @@ const styles = {
   sideNavSubGroup: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
-    margin: `${pwc.space.xs}px 0 ${pwc.space.xs}px ${pwc.space.md}px`,
+    gap: pwc.space.sm,
+    margin: `${pwc.space.sm}px 0 ${pwc.space.sm}px ${pwc.space.md}px`,
     paddingLeft: pwc.space.sm,
     borderLeft: `2px solid ${pwc.grey200}`,
   } as React.CSSProperties,
@@ -2149,12 +2131,12 @@ const styles = {
     alignItems: "center",
     width: "100%",
     textAlign: "left" as const,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
+    borderRadius: pwc.radius.md,
     cursor: "pointer",
     fontFamily: pwc.fontBody,
-    fontSize: 11,
+    fontSize: 13,
   } as React.CSSProperties,
   sideNavBadge: {
     flex: "0 0 auto",
@@ -2165,12 +2147,12 @@ const styles = {
     background: pwc.errorBg,
     color: pwc.errorText,
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: pwc.weight.semibold,
   } as React.CSSProperties,
   panelMuted: {
     margin: 0,
     color: pwc.grey700,
-    fontSize: 13,
+    fontSize: 14,
     lineHeight: 1.5,
   } as React.CSSProperties,
   evidenceStack: {
@@ -2189,11 +2171,11 @@ const styles = {
     fontWeight: 500,
     color: pwc.grey500,
     textTransform: "uppercase" as const,
-    letterSpacing: "0.03em",
+    letterSpacing: 0,
     marginBottom: 2,
   } as React.CSSProperties,
   evidenceText: {
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey900,
     lineHeight: 1.45,
     overflowWrap: "anywhere" as const,
@@ -2208,15 +2190,15 @@ const styles = {
     gridTemplateColumns: "minmax(260px, 1fr) minmax(150px, 190px) 120px minmax(120px, 180px)",
     gap: pwc.space.md,
     minWidth: 760,
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
+    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
     background: pwc.grey50,
     color: pwc.grey700,
     borderBottom: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   headerCell: {
     fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: 600,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   valueCell: {
     textAlign: "right" as const,
@@ -2228,18 +2210,18 @@ const styles = {
   } as React.CSSProperties,
   emptyValueBox: {
     display: "inline-block",
-    width: 132,
-    height: 26,
+    width: 148,
+    height: 32,
     border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.sm,
+    borderRadius: pwc.radius.md,
     background: pwc.white,
   } as React.CSSProperties,
   mandatoryEmptyValueBox: {
     display: "inline-block",
-    width: 132,
-    height: 26,
+    width: 148,
+    height: 32,
     border: `1px solid ${pwc.orange400}`,
-    borderRadius: pwc.radius.sm,
+    borderRadius: pwc.radius.md,
     background: pwc.orange50,
   } as React.CSSProperties,
   // Computed totals / non-editable values: same footprint as the editable
@@ -2248,14 +2230,14 @@ const styles = {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "flex-end",
-    width: 132,
-    minHeight: 26,
+    width: 148,
+    minHeight: 32,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
+    borderRadius: pwc.radius.md,
     background: pwc.grey50,
     fontFamily: pwc.fontMono,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey800,
   } as React.CSSProperties,
   stateCell: {
@@ -2265,7 +2247,7 @@ const styles = {
   } as React.CSSProperties,
   sourceCell: {
     color: pwc.grey700,
-    fontSize: 12,
+    fontSize: 14,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,

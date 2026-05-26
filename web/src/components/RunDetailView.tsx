@@ -329,7 +329,8 @@ export function RunDetailView({
   return (
     <div style={styles.container}>
       <header style={styles.header}>
-        <div>
+        <div style={styles.headerText}>
+          <div style={styles.kicker}>Run {detail.id}</div>
           <h3 style={styles.filename}>{detail.pdf_filename}</h3>
           <div style={styles.metaRow}>
             {statusBadge(runStatusDisplay(detail.status))}
@@ -469,14 +470,31 @@ const styles = {
   header: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "flex-end",
     gap: pwc.space.lg,
     flexWrap: "wrap" as const,
+    // Page-header treatment: hairline rule + generous separation from the
+    // detail body, matching the design system's page-head.
+    paddingBottom: pwc.space.lg,
+    borderBottom: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  headerText: {
+    minWidth: 0,
+  } as React.CSSProperties,
+  kicker: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: pwc.weight.medium,
+    textTransform: "uppercase" as const,
+    letterSpacing: "2px",
+    color: pwc.orange500,
+    marginBottom: pwc.space.xs,
   } as React.CSSProperties,
   filename: {
     fontFamily: pwc.fontHeading,
-    fontSize: 18,
-    fontWeight: 600,
+    fontSize: 22,
+    fontWeight: pwc.weight.light,
+    letterSpacing: "-0.3px",
     color: pwc.grey900,
     margin: 0,
   } as React.CSSProperties,

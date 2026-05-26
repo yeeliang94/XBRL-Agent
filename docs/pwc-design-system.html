@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PwC Application Design System</title>
+<style>
+  /* =========================================================
+     PwC APPLICATION DESIGN SYSTEM — DESIGN TOKENS
+     Anchored in PwC's 2025 brand refresh (black + orange,
+     "momentum" identity). Production hex values are not
+     published publicly; the orange below is a close match —
+     replace with your official brand token where noted.
+     ========================================================= */
+  :root {
+    /* ---- Brand (exact values from brand.pwc.com/standards/colour.html) ---- */
+    --pwc-orange:        #fd5108;   /* core orange "500" · Pantone 1655C · signature accent */
+    --pwc-orange-hover:  #e0470a;   /* slightly darkened for interaction states */
+    --pwc-orange-400:    #fe7c39;
+    --pwc-orange-300:    #ffaa72;
+    --pwc-orange-200:    #ffcda8;
+    --pwc-orange-100:    #ffe8d4;
+    --pwc-orange-50:     #fff5ed;
+    --pwc-orange-soft:   #fff5ed;   /* alias = Orange 50, for soft fills */
+    --pwc-black:         #000000;   /* true black — official */
+    --pwc-ink:           #1a1a1a;   /* near-black for body text */
+
+    /* ---- Neutral scale (light-first greys for structure & data viz) ---- */
+    --n-0:   #ffffff;
+    --n-25:  #fafafa;
+    --n-50:  #f4f4f4;
+    --n-100: #ededed;
+    --n-200: #dedede;
+    --n-300: #c9c9c9;
+    --n-400: #a4a4a4;
+    --n-500: #7d7d7d;
+    --n-600: #5e5e5e;
+    --n-700: #464646;
+    --n-800: #2d2d2d;
+    --n-900: #1a1a1a;
+
+    /* ---- Status colours (functional use only — NOT brand colours, per guide) ---- */
+    --success: #059669;
+    --success-soft: #e6f4ef;
+    --warning: #e9b01f;
+    --warning-soft: #fdf4e0;
+    --error:   #dc2626;
+    --error-soft: #fbe9e9;
+    --info:    #2f6fb0;
+    --info-soft: #ecf3fa;
+
+    /* ---- Surface roles ---- */
+    --bg:        var(--n-25);
+    --surface:   var(--n-0);
+    --border:    var(--n-200);
+    --border-strong: var(--n-300);
+    --text:      var(--n-800);
+    --text-muted:var(--n-500);
+    --text-subtle: var(--n-400);
+
+    /* ---- Typography ---- */
+    --font-sans: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+    --fw-light: 300;
+    --fw-regular: 400;
+    --fw-medium: 500;
+    --fw-semibold: 600;
+
+    /* ---- Radius ---- */
+    --r-sm: 3px;
+    --r-md: 6px;
+    --r-lg: 10px;
+    --r-pill: 999px;
+
+    /* ---- Spacing (4px base) ---- */
+    --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
+    --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
+
+    /* ---- Elevation (light, diffuse) ---- */
+    --shadow-sm: 0 1px 2px rgba(26,26,25,.04), 0 1px 3px rgba(26,26,25,.06);
+    --shadow-md: 0 2px 4px rgba(26,26,25,.04), 0 4px 12px rgba(26,26,25,.07);
+    --shadow-lg: 0 8px 28px rgba(26,26,25,.10);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--font-sans);
+    font-weight: var(--fw-regular);
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    font-size: 15px;
+  }
+
+  /* ---------- Layout shell ---------- */
+  .shell { display: flex; min-height: 100vh; }
+
+  .sidebar {
+    width: 248px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: var(--s-5) 0;
+  }
+
+  .brand-lockup {
+    padding: 0 var(--s-5) var(--s-5);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: var(--s-4);
+  }
+  .brand-lockup .wordmark {
+    font-size: 26px;
+    font-weight: var(--fw-light);
+    letter-spacing: -.5px;
+    color: var(--pwc-black);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .momentum-mark {
+    width: 22px; height: 22px; flex-shrink: 0;
+  }
+  .brand-lockup .sub {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    font-weight: var(--fw-regular);
+  }
+
+  .nav-group { margin-bottom: var(--s-4); }
+  .nav-group h4 {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text-subtle);
+    font-weight: var(--fw-semibold);
+    padding: 0 var(--s-5) var(--s-2);
+  }
+  .nav-group a {
+    display: block;
+    padding: 7px var(--s-5);
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 13.5px;
+    border-left: 2px solid transparent;
+    transition: all .15s ease;
+  }
+  .nav-group a:hover {
+    color: var(--text);
+    background: var(--n-25);
+    border-left-color: var(--border-strong);
+  }
+  .nav-group a.active {
+    color: var(--pwc-orange);
+    border-left-color: var(--pwc-orange);
+    font-weight: var(--fw-medium);
+  }
+
+  .main { flex: 1; max-width: 1000px; padding: var(--s-7) var(--s-8); }
+  @media (max-width: 900px){
+    .sidebar{ display:none; }
+    .main{ padding: var(--s-5); }
+  }
+
+  /* ---------- Page header ---------- */
+  .page-head {
+    padding-bottom: var(--s-5);
+    margin-bottom: var(--s-7);
+    border-bottom: 1px solid var(--border);
+  }
+  .page-head .eyebrow {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--pwc-orange);
+    font-weight: var(--fw-medium);
+    margin-bottom: var(--s-3);
+  }
+  .page-head h1 {
+    font-size: 38px;
+    font-weight: var(--fw-light);
+    letter-spacing: -.8px;
+    line-height: 1.1;
+    margin-bottom: var(--s-4);
+  }
+  .page-head p {
+    font-size: 16px;
+    color: var(--text-muted);
+    max-width: 60ch;
+    font-weight: var(--fw-light);
+  }
+
+  /* ---------- Sections ---------- */
+  section { margin-bottom: var(--s-8); scroll-margin-top: var(--s-5); }
+  .section-head { margin-bottom: var(--s-5); }
+  .section-head h2 {
+    font-size: 22px;
+    font-weight: var(--fw-regular);
+    letter-spacing: -.3px;
+    margin-bottom: var(--s-2);
+  }
+  .section-head .rule {
+    width: 32px; height: 2px; background: var(--pwc-orange); margin-bottom: var(--s-3);
+  }
+  .section-head p { color: var(--text-muted); max-width: 64ch; font-weight: var(--fw-light); }
+
+  h3.sub-label {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px;
+    color: var(--text-muted); font-weight: var(--fw-semibold);
+    margin: var(--s-5) 0 var(--s-3);
+  }
+
+  /* ---------- Cards / demo panels ---------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--s-5);
+    margin-bottom: var(--s-4);
+  }
+  .demo-row { display: flex; flex-wrap: wrap; gap: var(--s-4); align-items: center; }
+
+  /* ---------- Color tokens ---------- */
+  .swatch-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: var(--s-3);
+  }
+  .swatch {
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .swatch .chip { height: 64px; }
+  .swatch .meta { padding: var(--s-3); }
+  .swatch .name { font-size: 13px; font-weight: var(--fw-medium); }
+  .swatch .hex { font-size: 12px; color: var(--text-muted); font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-top: 2px; }
+
+  .scale-strip { display: flex; border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--border); }
+  .scale-strip .cell { flex: 1; height: 56px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 4px; font-size: 9.5px; color: rgba(0,0,0,.45); font-family: ui-monospace, monospace; }
+
+  /* ---------- Typography specimen ---------- */
+  .type-row { display: flex; align-items: baseline; gap: var(--s-5); padding: var(--s-3) 0; border-bottom: 1px solid var(--border); }
+  .type-row:last-child { border-bottom: none; }
+  .type-row .label { width: 130px; flex-shrink: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-subtle); }
+  .type-row .spec { font-size: 11px; color: var(--text-subtle); font-family: ui-monospace, monospace; margin-left: auto; flex-shrink: 0; }
+  .t-display { font-size: 38px; font-weight: var(--fw-light); letter-spacing: -.8px; }
+  .t-h1 { font-size: 28px; font-weight: var(--fw-light); letter-spacing: -.5px; }
+  .t-h2 { font-size: 22px; font-weight: var(--fw-regular); letter-spacing: -.3px; }
+  .t-h3 { font-size: 18px; font-weight: var(--fw-medium); }
+  .t-body { font-size: 15px; font-weight: var(--fw-regular); }
+  .t-small { font-size: 13px; font-weight: var(--fw-regular); color: var(--text-muted); }
+  .t-caption { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    font-family: inherit; font-size: 14px; font-weight: var(--fw-medium);
+    padding: 9px 18px; border-radius: var(--r-md); border: 1px solid transparent;
+    cursor: pointer; transition: all .15s ease; line-height: 1.2;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .btn-primary { background: var(--pwc-orange); color: #fff; }
+  .btn-primary:hover { background: var(--pwc-orange-hover); }
+  .btn-secondary { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
+  .btn-secondary:hover { background: var(--n-50); border-color: var(--n-400); }
+  .btn-ghost { background: transparent; color: var(--pwc-orange); }
+  .btn-ghost:hover { background: var(--pwc-orange-soft); }
+  .btn-subtle { background: var(--n-100); color: var(--text); }
+  .btn-subtle:hover { background: var(--n-200); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-sm { padding: 6px 12px; font-size: 13px; }
+  .btn-lg { padding: 12px 24px; font-size: 15px; }
+
+  /* ---------- Form controls ---------- */
+  .field { margin-bottom: var(--s-4); max-width: 360px; }
+  .field label { display: block; font-size: 13px; font-weight: var(--fw-medium); margin-bottom: 6px; }
+  .field .hint { font-size: 12px; color: var(--text-muted); margin-top: 5px; }
+  .input, .select, .textarea {
+    width: 100%; font-family: inherit; font-size: 14px;
+    padding: 9px 12px; border: 1px solid var(--border-strong);
+    border-radius: var(--r-md); background: var(--surface); color: var(--text);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .input:focus, .select:focus, .textarea:focus {
+    outline: none; border-color: var(--pwc-orange);
+    box-shadow: 0 0 0 3px var(--pwc-orange-soft);
+  }
+  .input::placeholder { color: var(--text-subtle); }
+  .textarea { resize: vertical; min-height: 80px; }
+  .input-error { border-color: var(--error); }
+  .input-error:focus { box-shadow: 0 0 0 3px var(--error-soft); }
+
+  .checkbox-row { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; font-size: 14px; }
+  .checkbox-row input { width: 16px; height: 16px; accent-color: var(--pwc-orange); }
+
+  /* toggle */
+  .toggle { position: relative; width: 40px; height: 22px; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle .track { position: absolute; inset: 0; background: var(--n-300); border-radius: var(--r-pill); transition: .2s; cursor: pointer; }
+  .toggle .track::before { content:""; position:absolute; height:16px; width:16px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; box-shadow: var(--shadow-sm); }
+  .toggle input:checked + .track { background: var(--pwc-orange); }
+  .toggle input:checked + .track::before { transform: translateX(18px); }
+
+  /* ---------- Badges ---------- */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: var(--fw-medium); padding: 3px 10px;
+    border-radius: var(--r-pill); line-height: 1.4;
+  }
+  .badge-neutral { background: var(--n-100); color: var(--n-600); }
+  .badge-success { background: var(--success-soft); color: var(--success); }
+  .badge-warning { background: var(--warning-soft); color: var(--warning); }
+  .badge-error   { background: var(--error-soft); color: var(--error); }
+  .badge-info    { background: var(--info-soft); color: var(--info); }
+  .badge-brand   { background: var(--pwc-orange-soft); color: var(--pwc-orange); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* ---------- Cards ---------- */
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px,1fr)); gap: var(--s-4); }
+  .ui-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-lg); padding: var(--s-5); transition: box-shadow .2s, transform .2s;
+  }
+  .ui-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+  .ui-card .k { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 8px; }
+  .ui-card .v { font-size: 30px; font-weight: var(--fw-light); letter-spacing: -.5px; }
+  .ui-card .delta { font-size: 12.5px; margin-top: 6px; color: var(--success); }
+  .ui-card .delta.down { color: var(--error); }
+
+  /* ---------- Table ---------- */
+  .table-wrap { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  thead th {
+    text-align: left; padding: 11px var(--s-4); background: var(--n-50);
+    font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--text-muted); font-weight: var(--fw-semibold);
+    border-bottom: 1px solid var(--border);
+  }
+  tbody td { padding: 12px var(--s-4); border-bottom: 1px solid var(--border); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--n-25); }
+
+  /* ---------- Alerts ---------- */
+  .alert { display: flex; gap: 12px; padding: var(--s-4); border-radius: var(--r-md); border: 1px solid; margin-bottom: var(--s-3); align-items: flex-start; }
+  .alert .ico { font-size: 16px; line-height: 1.4; flex-shrink: 0; }
+  .alert .body { font-size: 13.5px; }
+  .alert .body strong { font-weight: var(--fw-semibold); display: block; margin-bottom: 2px; }
+  .alert-info    { background: var(--info-soft); border-color: #cfe0f0; color: var(--info); }
+  .alert-success { background: var(--success-soft); border-color: #c8e6d2; color: var(--success); }
+  .alert-warning { background: var(--warning-soft); border-color: #f4e2b0; color: var(--warning); }
+  .alert-error   { background: var(--error-soft); border-color: #f4cfca; color: var(--error); }
+  .alert .body, .alert .body strong { color: var(--text); }
+
+  /* ---------- Code block ---------- */
+  pre {
+    background: var(--n-900); color: #e8e8e6; border-radius: var(--r-md);
+    padding: var(--s-4); overflow-x: auto; font-size: 12.5px; line-height: 1.6;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-top: var(--s-3);
+  }
+  pre .c { color: #8a8a85; }
+  pre .p { color: var(--pwc-orange); }
+  code.inline { background: var(--n-100); padding: 1px 6px; border-radius: var(--r-sm); font-family: ui-monospace, monospace; font-size: .9em; }
+
+  /* ---------- Spacing visual ---------- */
+  .space-demo { display: flex; align-items: flex-end; gap: var(--s-4); flex-wrap: wrap; }
+  .space-item { text-align: center; }
+  .space-item .box { background: var(--pwc-orange-soft); border: 1px solid var(--pwc-orange); border-radius: var(--r-sm); }
+  .space-item .lbl { font-size: 11px; color: var(--text-muted); margin-top: 6px; font-family: ui-monospace, monospace; }
+
+  .principle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: var(--s-4); }
+  .principle { padding: var(--s-4); border-left: 2px solid var(--pwc-orange); background: var(--n-25); border-radius: 0 var(--r-md) var(--r-md) 0; }
+  .principle h4 { font-size: 14px; font-weight: var(--fw-medium); margin-bottom: 6px; }
+  .principle p { font-size: 13px; color: var(--text-muted); font-weight: var(--fw-light); }
+
+  footer { margin-top: var(--s-8); padding-top: var(--s-5); border-top: 1px solid var(--border); font-size: 12px; color: var(--text-subtle); }
+  footer a { color: var(--text-muted); }
+
+  .note-box {
+    background: var(--warning-soft); border: 1px solid #ecdcae; border-radius: var(--r-md);
+    padding: var(--s-3) var(--s-4); font-size: 13px; color: var(--n-700); margin-top: var(--s-4);
+  }
+  .note-box strong { color: var(--n-800); }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ================= SIDEBAR ================= -->
+  <aside class="sidebar">
+    <div class="brand-lockup">
+      <div class="wordmark">
+        <svg class="momentum-mark" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="#fd5108" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>pwc</span>
+      </div>
+      <div class="sub">Design System</div>
+    </div>
+
+    <nav class="nav-group">
+      <h4>Foundations</h4>
+      <a href="#overview" class="active">Overview</a>
+      <a href="#principles">Principles</a>
+      <a href="#color">Color</a>
+      <a href="#typography">Typography</a>
+      <a href="#spacing">Spacing &amp; Layout</a>
+      <a href="#elevation">Elevation</a>
+    </nav>
+
+    <nav class="nav-group">
+      <h4>Components</h4>
+      <a href="#buttons">Buttons</a>
+      <a href="#forms">Form Controls</a>
+      <a href="#badges">Badges &amp; Status</a>
+      <a href="#cards">Cards</a>
+      <a href="#table">Tables</a>
+      <a href="#alerts">Alerts</a>
+    </nav>
+
+    <nav class="nav-group">
+      <h4>Reference</h4>
+      <a href="#tokens">Token Usage</a>
+    </nav>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main class="main">
+
+    <header class="page-head">
+      <div class="eyebrow">Application UI Standards</div>
+      <h1>PwC Design System</h1>
+      <p>A lightweight, minimal component and style reference for standardizing application interfaces. Built on PwC's 2025 brand foundations — restrained typography, generous whitespace, and a disciplined black-and-orange palette.</p>
+    </header>
+
+    <!-- OVERVIEW -->
+    <section id="overview">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Overview</h2>
+        <p>This document defines the visual language and reusable interface components for internal and client-facing applications. It is organized into <em>Foundations</em> (the design tokens everything is built from) and <em>Components</em> (the assembled UI patterns). Every example is live HTML/CSS that maps directly to the CSS custom properties defined at the top of this file.</p>
+      </div>
+      <div class="note-box">
+        <strong>On brand accuracy:</strong> The colour values in this system are taken directly from PwC's official brand standard at <code class="inline">brand.pwc.com/standards/colour.html</code>. The signature orange is <code class="inline">#FD5108</code> (Pantone 1655C), supported by the official orange tint ladder (400–50), with white and black as core colours. Status colours (<code class="inline">#059669</code>, <code class="inline">#E9B01F</code>, <code class="inline">#DC2626</code>) are for functional UI states only and are not brand colours. The neutral grey scale is a UI-structural extension, not part of the core brand palette. <strong>Typography was not included in the supplied pages — replace <code class="inline">--font-sans</code> with PwC's official typeface (e.g. the corporate "Charter"/"Helvetica Neue" pairing per your brand portal) when available.</strong>
+      </div>
+    </section>
+
+    <!-- PRINCIPLES -->
+    <section id="principles">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Design Principles</h2>
+        <p>Four ideas guide every decision in this system.</p>
+      </div>
+      <div class="principle-grid">
+        <div class="principle"><h4>Light &amp; open</h4><p>White surfaces, soft borders, and generous spacing. Weight is created by space, not by heavy fills.</p></div>
+        <div class="principle"><h4>Restrained type</h4><p>Light and regular weights carry most of the interface. Emphasis is earned through hierarchy and color, not bold everywhere.</p></div>
+        <div class="principle"><h4>Orange with intent</h4><p>The signature orange marks the single most important action or status in a view — never decoration.</p></div>
+        <div class="principle"><h4>Quietly consistent</h4><p>One radius scale, one spacing rhythm, one shadow family. Predictability is the feature.</p></div>
+      </div>
+    </section>
+
+    <!-- COLOR -->
+    <section id="color">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Color</h2>
+        <p>Per PwC's brand standard, orange is a single signature accent used to "leave our mark" — we lead with orange, never as full-bleed fills, and reach into the orange tints when more range is needed. White carries backgrounds; greys handle structure. Status colours are functional only and are <em>not</em> brand colours.</p>
+      </div>
+
+      <h3 class="sub-label">Core</h3>
+      <div class="swatch-grid">
+        <div class="swatch"><div class="chip" style="background:var(--pwc-orange)"></div><div class="meta"><div class="name">Orange (core)</div><div class="hex">#FD5108 · PMS 1655C</div></div></div>
+        <div class="swatch"><div class="chip" style="background:#ffffff; border-bottom:1px solid var(--border)"></div><div class="meta"><div class="name">White</div><div class="hex">#FFFFFF</div></div></div>
+        <div class="swatch"><div class="chip" style="background:#000000"></div><div class="meta"><div class="name">Black</div><div class="hex">#000000</div></div></div>
+      </div>
+
+      <h3 class="sub-label">Orange tints</h3>
+      <div class="swatch-grid">
+        <div class="swatch"><div class="chip" style="background:var(--pwc-orange)"></div><div class="meta"><div class="name">500 · core</div><div class="hex">#FD5108</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--pwc-orange-400)"></div><div class="meta"><div class="name">Orange 400</div><div class="hex">#FE7C39</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--pwc-orange-300)"></div><div class="meta"><div class="name">Orange 300</div><div class="hex">#FFAA72</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--pwc-orange-200)"></div><div class="meta"><div class="name">Orange 200</div><div class="hex">#FFCDA8</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--pwc-orange-100)"></div><div class="meta"><div class="name">Orange 100</div><div class="hex">#FFE8D4</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--pwc-orange-50); border-bottom:1px solid var(--border)"></div><div class="meta"><div class="name">Orange 50</div><div class="hex">#FFF5ED</div></div></div>
+      </div>
+
+      <h3 class="sub-label">Neutral scale</h3>
+      <div class="scale-strip">
+        <div class="cell" style="background:var(--n-0); color:#999">0</div>
+        <div class="cell" style="background:var(--n-50)">50</div>
+        <div class="cell" style="background:var(--n-100)">100</div>
+        <div class="cell" style="background:var(--n-200)">200</div>
+        <div class="cell" style="background:var(--n-300)">300</div>
+        <div class="cell" style="background:var(--n-400)">400</div>
+        <div class="cell" style="background:var(--n-500); color:#fff">500</div>
+        <div class="cell" style="background:var(--n-600); color:#fff">600</div>
+        <div class="cell" style="background:var(--n-700); color:#fff">700</div>
+        <div class="cell" style="background:var(--n-800); color:#fff">800</div>
+        <div class="cell" style="background:var(--n-900); color:#fff">900</div>
+      </div>
+
+      <h3 class="sub-label">Status colours <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--text-subtle)">— functional use only, not brand colours</span></h3>
+      <div class="swatch-grid">
+        <div class="swatch"><div class="chip" style="background:var(--success)"></div><div class="meta"><div class="name">Success</div><div class="hex">#059669</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--warning)"></div><div class="meta"><div class="name">Warning</div><div class="hex">#E9B01F</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--error)"></div><div class="meta"><div class="name">Error</div><div class="hex">#DC2626</div></div></div>
+      </div>
+    </section>
+
+    <!-- TYPOGRAPHY -->
+    <section id="typography">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Typography</h2>
+        <p>A single sans-serif family across the system. Hierarchy comes from size and weight contrast — large headings sit at light (300) weight, body stays regular (400), and bold is reserved for genuine emphasis only.</p>
+      </div>
+      <div class="panel">
+        <div class="type-row"><span class="label">Display</span><span class="t-display">Momentum</span><span class="spec">38px / 300</span></div>
+        <div class="type-row"><span class="label">Heading 1</span><span class="t-h1">Build &amp; accelerate</span><span class="spec">28px / 300</span></div>
+        <div class="type-row"><span class="label">Heading 2</span><span class="t-h2">Section heading</span><span class="spec">22px / 400</span></div>
+        <div class="type-row"><span class="label">Heading 3</span><span class="t-h3">Subsection heading</span><span class="spec">18px / 500</span></div>
+        <div class="type-row"><span class="label">Body</span><span class="t-body">The quick brown fox jumps over the lazy dog.</span><span class="spec">15px / 400</span></div>
+        <div class="type-row"><span class="label">Small</span><span class="t-small">Secondary supporting text and metadata.</span><span class="spec">13px / 400</span></div>
+        <div class="type-row"><span class="label">Caption</span><span class="t-caption">Label · uppercase</span><span class="spec">11px / 400</span></div>
+      </div>
+      <div class="note-box"><strong>Weights in use:</strong> Light 300 · Regular 400 · Medium 500 · Semibold 600. Avoid 700+ in product UI. Substitute your licensed corporate typeface in <code class="inline">--font-sans</code>; the stack falls back to Helvetica Neue.</div>
+    </section>
+
+    <!-- SPACING -->
+    <section id="spacing">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Spacing &amp; Layout</h2>
+        <p>A 4px base unit keeps rhythm consistent. Use the named steps rather than arbitrary pixel values.</p>
+      </div>
+      <div class="panel">
+        <div class="space-demo">
+          <div class="space-item"><div class="box" style="width:4px;height:4px"></div><div class="lbl">s-1 · 4</div></div>
+          <div class="space-item"><div class="box" style="width:8px;height:8px"></div><div class="lbl">s-2 · 8</div></div>
+          <div class="space-item"><div class="box" style="width:12px;height:12px"></div><div class="lbl">s-3 · 12</div></div>
+          <div class="space-item"><div class="box" style="width:16px;height:16px"></div><div class="lbl">s-4 · 16</div></div>
+          <div class="space-item"><div class="box" style="width:24px;height:24px"></div><div class="lbl">s-5 · 24</div></div>
+          <div class="space-item"><div class="box" style="width:32px;height:32px"></div><div class="lbl">s-6 · 32</div></div>
+          <div class="space-item"><div class="box" style="width:48px;height:48px"></div><div class="lbl">s-7 · 48</div></div>
+          <div class="space-item"><div class="box" style="width:64px;height:64px"></div><div class="lbl">s-8 · 64</div></div>
+        </div>
+      </div>
+      <h3 class="sub-label">Corner radius</h3>
+      <div class="demo-row">
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--n-100);border:1px solid var(--border);border-radius:var(--r-sm)"></div><div class="lbl" style="font-size:11px;color:var(--text-muted);margin-top:6px;font-family:ui-monospace,monospace">sm · 3px</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--n-100);border:1px solid var(--border);border-radius:var(--r-md)"></div><div class="lbl" style="font-size:11px;color:var(--text-muted);margin-top:6px;font-family:ui-monospace,monospace">md · 6px</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--n-100);border:1px solid var(--border);border-radius:var(--r-lg)"></div><div class="lbl" style="font-size:11px;color:var(--text-muted);margin-top:6px;font-family:ui-monospace,monospace">lg · 10px</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--n-100);border:1px solid var(--border);border-radius:var(--r-pill)"></div><div class="lbl" style="font-size:11px;color:var(--text-muted);margin-top:6px;font-family:ui-monospace,monospace">pill</div></div>
+      </div>
+    </section>
+
+    <!-- ELEVATION -->
+    <section id="elevation">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Elevation</h2>
+        <p>Shadows are soft and low-contrast — depth should be felt, not seen. Three levels only.</p>
+      </div>
+      <div class="demo-row" style="gap:var(--s-5)">
+        <div style="text-align:center"><div style="width:120px;height:80px;background:var(--surface);border-radius:var(--r-md);box-shadow:var(--shadow-sm)"></div><div class="lbl" style="font-size:11px;color:var(--text-muted);margin-top:10px;font-family:ui-monospace,monospace">shadow-sm</div></div>
+        <div style="text-align:center"><div style="width:120px;height:80px;background:var(--surface);border-radius:var(--r-md);box-shadow:var(--shadow-md)"></div><div class="lbl" style="font-size:11px;color:var(--text-muted);margin-top:10px;font-family:ui-monospace,monospace">shadow-md</div></div>
+        <div style="text-align:center"><div style="width:120px;height:80px;background:var(--surface);border-radius:var(--r-md);box-shadow:var(--shadow-lg)"></div><div class="lbl" style="font-size:11px;color:var(--text-muted);margin-top:10px;font-family:ui-monospace,monospace">shadow-lg</div></div>
+      </div>
+    </section>
+
+    <!-- BUTTONS -->
+    <section id="buttons">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Buttons</h2>
+        <p>One primary action per view, carried by orange. Everything else recedes to neutral.</p>
+      </div>
+      <div class="panel">
+        <h3 class="sub-label">Variants</h3>
+        <div class="demo-row">
+          <button class="btn btn-primary">Primary</button>
+          <button class="btn btn-secondary">Secondary</button>
+          <button class="btn btn-subtle">Subtle</button>
+          <button class="btn btn-ghost">Ghost</button>
+          <button class="btn btn-primary" disabled>Disabled</button>
+        </div>
+        <h3 class="sub-label">Sizes</h3>
+        <div class="demo-row">
+          <button class="btn btn-primary btn-sm">Small</button>
+          <button class="btn btn-primary">Default</button>
+          <button class="btn btn-primary btn-lg">Large</button>
+        </div>
+        <pre><span class="c">&lt;!-- Primary action --&gt;</span>
+&lt;button class=<span class="p">"btn btn-primary"</span>&gt;Save changes&lt;/button&gt;</pre>
+      </div>
+    </section>
+
+    <!-- FORMS -->
+    <section id="forms">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Form Controls</h2>
+        <p>Clear labels, soft borders, and an orange focus ring tie inputs back to the brand without shouting.</p>
+      </div>
+      <div class="panel">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s-5)">
+          <div>
+            <div class="field">
+              <label>Full name</label>
+              <input class="input" type="text" placeholder="Jane Doe">
+            </div>
+            <div class="field">
+              <label>Engagement type</label>
+              <select class="select">
+                <option>Assurance</option><option>Tax</option><option>Advisory</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Email</label>
+              <input class="input input-error" type="email" value="jane@@">
+              <div class="hint" style="color:var(--error)">Enter a valid email address.</div>
+            </div>
+          </div>
+          <div>
+            <div class="field">
+              <label>Notes</label>
+              <textarea class="textarea" placeholder="Add context…"></textarea>
+            </div>
+            <div class="field">
+              <div class="checkbox-row"><input type="checkbox" checked id="c1"><label for="c1" style="margin:0;font-weight:400">Email me updates</label></div>
+              <div class="checkbox-row"><input type="checkbox" id="c2"><label for="c2" style="margin:0;font-weight:400">Share with team</label></div>
+              <div class="checkbox-row" style="margin-top:14px">
+                <label class="toggle"><input type="checkbox" checked><span class="track"></span></label>
+                <span>Enable notifications</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- BADGES -->
+    <section id="badges">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Badges &amp; Status</h2>
+        <p>Compact status indicators using the functional palette. Soft fills keep them quiet against light surfaces.</p>
+      </div>
+      <div class="panel">
+        <div class="demo-row">
+          <span class="badge badge-neutral"><span class="dot"></span>Draft</span>
+          <span class="badge badge-success"><span class="dot"></span>Approved</span>
+          <span class="badge badge-warning"><span class="dot"></span>Pending</span>
+          <span class="badge badge-error"><span class="dot"></span>Overdue</span>
+          <span class="badge badge-info"><span class="dot"></span>In review</span>
+          <span class="badge badge-brand"><span class="dot"></span>Priority</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- CARDS -->
+    <section id="cards">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Cards</h2>
+        <p>The primary container for grouped content and metrics. A subtle lift on hover signals interactivity.</p>
+      </div>
+      <div class="card-grid">
+        <div class="ui-card"><div class="k">Active engagements</div><div class="v">248</div><div class="delta">▲ 12 this quarter</div></div>
+        <div class="ui-card"><div class="k">Hours logged</div><div class="v">14.2k</div><div class="delta">▲ 4.1% vs last month</div></div>
+        <div class="ui-card"><div class="k">Open actions</div><div class="v">37</div><div class="delta down">▼ 8 since Monday</div></div>
+      </div>
+    </section>
+
+    <!-- TABLE -->
+    <section id="table">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Tables</h2>
+        <p>Dense, scannable data with uppercase column labels, hairline row dividers, and a quiet hover state.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Client</th><th>Service line</th><th>Owner</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Aurora Holdings</td><td>Assurance</td><td>J. Tan</td><td><span class="badge badge-success"><span class="dot"></span>Approved</span></td></tr>
+            <tr><td>Meridian Group</td><td>Advisory</td><td>K. Lim</td><td><span class="badge badge-warning"><span class="dot"></span>Pending</span></td></tr>
+            <tr><td>Northwind Ltd</td><td>Tax</td><td>R. Singh</td><td><span class="badge badge-info"><span class="dot"></span>In review</span></td></tr>
+            <tr><td>Vertex Partners</td><td>Advisory</td><td>A. Cruz</td><td><span class="badge badge-error"><span class="dot"></span>Overdue</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ALERTS -->
+    <section id="alerts">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Alerts</h2>
+        <p>Inline messaging for system feedback. Color-coded to the functional palette, with a leading icon and concise copy.</p>
+      </div>
+      <div class="alert alert-info"><span class="ico">ℹ</span><div class="body"><strong>Heads up</strong>Your session will refresh data every 5 minutes.</div></div>
+      <div class="alert alert-success"><span class="ico">✓</span><div class="body"><strong>Saved</strong>Your changes have been published to the engagement.</div></div>
+      <div class="alert alert-warning"><span class="ico">⚠</span><div class="body"><strong>Review needed</strong>Three line items are missing approver sign-off.</div></div>
+      <div class="alert alert-error"><span class="ico">✕</span><div class="body"><strong>Upload failed</strong>The file exceeds the 25&nbsp;MB limit. Try a smaller file.</div></div>
+    </section>
+
+    <!-- TOKENS -->
+    <section id="tokens">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Token Usage</h2>
+        <p>All components reference CSS custom properties. Theming the entire system — or swapping in official PwC values — is a matter of editing the <code class="inline">:root</code> block.</p>
+      </div>
+      <pre><span class="c">/* Replace these two with official corporate tokens */</span>
+:root {
+  --pwc-orange: <span class="p">#FD5108</span>;   <span class="c">/* core orange · Pantone 1655C */</span>
+  --font-sans:  <span class="p">"YourCorporateFont"</span>, "Helvetica Neue", Arial, sans-serif;
+}
+
+<span class="c">/* Then everything inherits automatically */</span>
+.btn-primary { background: <span class="p">var(--pwc-orange)</span>; }
+.input:focus { box-shadow: 0 0 0 3px <span class="p">var(--pwc-orange-soft)</span>; }</pre>
+    </section>
+
+    <footer>
+      <p>PwC Application Design System · Reference document · Generated May 2026. Colour values sourced from PwC's official brand standard (brand.pwc.com/standards/colour.html); core orange #FD5108 / Pantone 1655C. Typography pending official typeface. Not an official PwC brand publication.</p>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+  // Scroll-spy for sidebar
+  const links = document.querySelectorAll('.nav-group a');
+  const sections = [...links].map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const active = document.querySelector('.nav-group a[href="#' + e.target.id + '"]');
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(s => obs.observe(s));
+</script>
+</body>
+</html>

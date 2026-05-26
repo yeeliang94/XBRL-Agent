@@ -1,13 +1,17 @@
-/* Keyframe animations for P0+ components */
+/* Keyframe animations for P0+ components.
+   Base colours/typography mirror the PwC design tokens in lib/theme.ts
+   (grey50 page bg, grey900 ink, Helvetica Neue family). */
 html {
-  background: #F5F7F8;
+  background: #FAFAFA;
 }
 
 body {
   margin: 0;
-  background: #F5F7F8;
-  color: #303236;
-  font-family: Arial, sans-serif;
+  background: #FAFAFA;
+  color: #1A1A1A;
+  font-family: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -54,10 +58,61 @@ body {
 }
 
 /* Keyboard-accessible focus ring for inline-styled buttons.
-   Overrides outline:none set in JS when keyboard-navigating. */
+   Overrides outline:none set in JS when keyboard-navigating. Brand orange. */
 button:focus-visible {
-  outline: 2px solid #D97706 !important;
+  outline: 2px solid #FD5108 !important;
   outline-offset: 2px;
+}
+
+/* Orange focus ring on every form control (design system spec). Applied at
+   the element level so components need no className. !important is required
+   because inline border-color (set from theme tokens) otherwise wins over a
+   stylesheet :focus rule on specificity. */
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #FD5108 !important;
+  box-shadow: 0 0 0 3px #FFF5ED !important; /* orange50 soft ring */
+}
+
+/* Button hover states for the shared primitives (lib/uiStyles.ts → uiClass).
+   Inline styles can't express :hover, so components add the matching class
+   alongside their inline style object. */
+.pwc-btn-primary:hover:not(:disabled) {
+  background: #E0470A !important; /* orange700 */
+  border-color: #E0470A !important;
+}
+.pwc-btn-secondary:hover:not(:disabled) {
+  background: #FAFAFA !important; /* grey50 */
+  border-color: #C9C9C9 !important; /* grey300 */
+}
+.pwc-btn-subtle:hover:not(:disabled) {
+  background: #DEDEDE !important; /* grey200 */
+}
+.pwc-btn-ghost:hover:not(:disabled) {
+  background: #FFF5ED !important; /* orange50 */
+}
+.pwc-btn-primary:disabled,
+.pwc-btn-secondary:disabled,
+.pwc-btn-subtle:disabled,
+.pwc-btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Card hover lift (design system: subtle raise signals interactivity). */
+.pwc-card {
+  transition: box-shadow .2s ease, transform .2s ease;
+}
+.pwc-card:hover {
+  box-shadow: 0 2px 4px rgba(26,26,25,0.04), 0 4px 12px rgba(26,26,25,0.07);
+  transform: translateY(-2px);
+}
+
+/* Quiet table-row hover. */
+.pwc-table-row:hover {
+  background: #FAFAFA; /* grey50 */
 }
 
 /* Custom scrollbar for agent activity panels */
@@ -68,16 +123,16 @@ button:focus-visible {
   background: transparent;
 }
 .agent-scroll::-webkit-scrollbar-thumb {
-  background: #CBD1D6;
+  background: #C9C9C9; /* grey300 */
   border-radius: 3px;
 }
 .agent-scroll::-webkit-scrollbar-thumb:hover {
-  background: #A1A8B3;
+  background: #7D7D7D; /* grey500 */
 }
 /* Firefox */
 .agent-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #CBD1D6 transparent;
+  scrollbar-color: #C9C9C9 transparent;
 }
 
 /* Hide scrollbar on tab bar — still scrollable via drag/touch */
@@ -93,8 +148,8 @@ button:focus-visible {
    applied here. Skip when active or disabled so the rule doesn't fight
    the active orange tint or the skeleton greyed-out state. */
 .agent-tab:hover:not([aria-selected="true"]):not([aria-disabled="true"]) {
-  background: #F5F7F8;
-  color: #303236;
+  background: #FAFAFA; /* grey50 */
+  color: #1A1A1A; /* grey900 */
 }
 
 /* Download button hover states — scoped to avoid affecting all buttons */

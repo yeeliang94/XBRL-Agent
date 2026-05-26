@@ -57,8 +57,8 @@ export function TopNav({ view, onViewChange, showConcepts = true }: TopNavProps)
 const tabBase: React.CSSProperties = {
   padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
   fontFamily: pwc.fontHeading,
-  fontSize: 14,
-  fontWeight: 600,
+  fontSize: 15,
+  fontWeight: pwc.weight.medium,
   background: "none",
   border: "none",
   borderBottom: "2px solid transparent",
