@@ -1,4 +1,4 @@
-// Step 11 of docs/PLAN-NOTES-RICH-EDITOR.md — write a cell's HTML to the
+// Step 11 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md — write a cell's HTML to the
 // OS clipboard as BOTH `text/html` and `text/plain`.
 //
 // Why both: the user-tested clipboard round-trip through M-Tool relies on

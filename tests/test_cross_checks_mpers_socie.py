@@ -1,7 +1,7 @@
 """Phase 5 MPERS hardening — reproduce the three run-#105 SOCIE
 cross-check failures in a test, then drive them green.
 
-Red tests for `docs/PLAN-mpers-notes-hardening.md` Phase 5.
+Red tests for `docs/Archive/PLAN-mpers-notes-hardening.md` Phase 5.
 
 Run #105 produced:
   sopl_to_socie_profit   failed — SOPL (-20678) vs SOCIE (-21329), diff 651

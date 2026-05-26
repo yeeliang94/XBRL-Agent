@@ -48,6 +48,35 @@ PHASE_MAP = {
 }
 
 
+# Per-turn LLM timeout for face agents. Matches NOTES_TURN_TIMEOUT in
+# notes/coordinator.py — same failure mode (model stalls mid-stream on
+# a single iteration), same threshold. 180s is well above healthy p99
+# for one model-request node and catches the minutes-long stalls that
+# would otherwise pin the coordinator to `running` until MAX_AGENT_ITERATIONS
+# triggers (which only fires *between* iterations, not during one).
+FACE_TURN_TIMEOUT: float = 180.0
+
+
+async def _iter_with_turn_timeout(async_iterable, timeout: float):
+    """Yield nodes from ``async_iterable`` with a per-step timeout.
+
+    Each call to ``__anext__`` is wrapped in ``asyncio.wait_for`` — if
+    it takes longer than ``timeout`` seconds, ``asyncio.TimeoutError``
+    propagates out and the iterator's pending coroutine is cancelled
+    by ``wait_for`` itself (so we don't leak a background task).
+
+    Mirror of notes.coordinator._iter_with_turn_timeout; kept local so
+    importing one module doesn't drag the other into the call graph.
+    """
+    iterator = async_iterable.__aiter__()
+    while True:
+        try:
+            node = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
+        except StopAsyncIteration:
+            return
+        yield node
+
+
 def _build_event(event_type: str, agent_id: str, agent_role: str, data: dict) -> dict:
     """Construct an SSE-shaped event dict with agent identification."""
     return {
@@ -75,6 +104,11 @@ class RunConfig:
     # routing through the MFRS template tree unchanged. Set to "mpers"
     # to route through XBRL-template-MPERS/ and enable the SoRE variant.
     filing_standard: str = "mfrs"
+    # Canonical mode (Phase B): when both are set, extraction agents project
+    # their cell writes into run_concept_facts for this run via the facts
+    # API. Both None in legacy mode. db_path is the audit/canonical SQLite DB.
+    run_id: Optional[int] = None
+    db_path: Optional[str] = None
 
 
 @dataclass
@@ -82,7 +116,10 @@ class AgentResult:
     """Outcome of a single extraction sub-agent."""
     statement_type: StatementType
     variant: str
-    status: str  # "succeeded", "failed", or "cancelled"
+    # "succeeded" / "failed" / "cancelled" / "skipped". "skipped" is for
+    # variants with no template (NotPrepared) — distinct from "failed" so
+    # the merge / UI can tell "nothing to do" apart from "tried and broke".
+    status: str
     workbook_path: Optional[str] = None
     error: Optional[str] = None
     # End-of-run usage from `agent_run.usage()`. Per CLAUDE.md gotcha #6
@@ -100,7 +137,19 @@ class CoordinatorResult:
 
     @property
     def all_succeeded(self) -> bool:
-        return all(r.status == "succeeded" for r in self.agent_results)
+        # `skipped` (NotPrepared variants — no template to fill) is a
+        # legitimate non-outcome, NOT a failure: a run that asks for SOCI
+        # NotPrepared and gets everything else done is fully successful.
+        # Only a real `failed`/`cancelled` agent makes a run unsuccessful.
+        return all(
+            r.status in ("succeeded", "skipped") for r in self.agent_results
+        )
+
+    @property
+    def skipped(self) -> List[AgentResult]:
+        """NotPrepared (no-template) results, surfaced separately so the
+        run-complete summary can report them distinctly from failures."""
+        return [r for r in self.agent_results if r.status == "skipped"]
 
     @property
     def workbook_paths(self) -> Dict[StatementType, str]:
@@ -140,6 +189,12 @@ async def run_extraction(
     # Maps agent_id -> (asyncio.Task, StatementType, variant) so we can
     # collect results even if individual tasks are cancelled.
     task_map: dict[str, tuple[asyncio.Task, StatementType, str]] = {}
+
+    # NotPrepared variants produce no template — record them as explicit
+    # `skipped` results so merge / history / UI can distinguish "nothing
+    # to do" from "tried and failed". Silent `continue` (the pre-fix
+    # behaviour) left these statements invisible downstream.
+    skipped_results: list[AgentResult] = []
 
     # Sort by canonical enum order (SOFP → SOPL → SOCI → SOCF → SOCIE)
     # so agent_ids and tab order are stable across runs.
@@ -182,9 +237,16 @@ async def run_extraction(
             detectable = [v for v in applicable if v.detection_signals]
             variant = (detectable[0].name if detectable else applicable[0].name)
 
-        # Skip NotPrepared variants — no template to fill
+        # Skip NotPrepared variants — no template to fill. Capture as
+        # an explicit `skipped` result rather than silently dropping it.
         if variant == "NotPrepared":
             logger.info("Skipping %s — variant is NotPrepared (no template)", stmt_type.value)
+            skipped_results.append(AgentResult(
+                statement_type=stmt_type,
+                variant=variant,
+                status="skipped",
+                error=None,
+            ))
             continue
 
         model = config.models.get(stmt_type, config.model)
@@ -248,6 +310,8 @@ async def run_extraction(
                 agent_id=agent_id,
                 filing_level=config.filing_level,
                 filing_standard=config.filing_standard,
+                run_id=getattr(config, "run_id", None),
+                db_path=getattr(config, "db_path", None),
             ),
             name=agent_id,
         )
@@ -314,7 +378,9 @@ async def run_extraction(
         # multiplex), the caller is still responsible for calling
         # task_registry.remove_session.
 
-    return CoordinatorResult(agent_results=results)
+    # Prepend skipped (NotPrepared) results so they survive the
+    # CancelledError reset above and land in the CoordinatorResult.
+    return CoordinatorResult(agent_results=skipped_results + results)
 
 
 async def _run_single_agent(
@@ -329,9 +395,18 @@ async def _run_single_agent(
     agent_id: str = "",
     filing_level: str = "company",
     filing_standard: str = "mfrs",
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
 ) -> AgentResult:
     """Run a single extraction agent, streaming events into event_queue if provided."""
     agent_role = statement_type.value
+    # Canonical mode: derive the concept template_id from the template path
+    # (deterministic — matches the importer's id) so fact writes link to the
+    # right tree. None in legacy mode.
+    template_id = None
+    if run_id is not None and db_path:
+        from concept_model.parser import _derive_template_id
+        template_id = _derive_template_id(Path(template_path))
 
     async def _emit(event_type: str, data: dict) -> None:
         """Push an event into the queue when streaming is active."""
@@ -349,6 +424,9 @@ async def _run_single_agent(
             page_hints=page_hints,
             filing_level=filing_level,
             filing_standard=filing_standard,
+            run_id=run_id,
+            db_path=db_path,
+            template_id=template_id,
         )
 
         prompt = (
@@ -363,9 +441,12 @@ async def _run_single_agent(
         _thinking_counter = 0
         _iteration_count = 0
 
-        # Use agent.iter() for granular streaming instead of agent.run()
+        # Use agent.iter() for granular streaming instead of agent.run().
+        # Wrapped with `_iter_with_turn_timeout` so one stalled provider
+        # call can't hang the whole face extraction past MAX_AGENT_ITERATIONS
+        # — the iteration cap only fires *between* nodes, not during one.
         async with agent.iter(prompt, deps=deps) as agent_run:
-            async for node in agent_run:
+            async for node in _iter_with_turn_timeout(agent_run, FACE_TURN_TIMEOUT):
                 _iteration_count += 1
                 # Publish the iteration count onto deps so the save_result
                 # gate in extraction/agent.py can see the real iteration
@@ -380,9 +461,16 @@ async def _run_single_agent(
                         f"Agent appears stuck in a loop."
                     )
                 if Agent.is_call_tools_node(node):
-                    # Stream tool call/result events as they happen
+                    # Stream tool call/result events as they happen.
+                    # Bound the *inner* event iteration too (peer-review):
+                    # a provider can stall mid-stream on a single node, which
+                    # the outer per-node timeout doesn't cover. Wrapping the
+                    # event loop makes the FACE_TURN_TIMEOUT promise true
+                    # during streaming, not just between nodes.
                     async with node.stream(agent_run.ctx) as tool_stream:
-                        async for event in tool_stream:
+                        async for event in _iter_with_turn_timeout(
+                            tool_stream, FACE_TURN_TIMEOUT
+                        ):
                             if isinstance(event, FunctionToolCallEvent):
                                 tool_name = event.part.tool_name
                                 # Emit phase change based on which tool is being called
@@ -430,7 +518,12 @@ async def _run_single_agent(
                     _thinking_id = f"{agent_id}_think_{_thinking_counter}"
                     _thinking_active = False
                     async with node.stream(agent_run.ctx) as model_stream:
-                        async for event in model_stream:
+                        # Same bounded iteration as the tool-stream branch —
+                        # a model that stalls mid-token stream is caught by
+                        # FACE_TURN_TIMEOUT instead of hanging indefinitely.
+                        async for event in _iter_with_turn_timeout(
+                            model_stream, FACE_TURN_TIMEOUT
+                        ):
                             if isinstance(event, PartDeltaEvent):
                                 delta = event.delta
                                 if isinstance(delta, TextPartDelta):
@@ -494,18 +587,79 @@ async def _run_single_agent(
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("agent token backfill skipped for %s", statement_type.value)
 
+        # Peer-review (2026-05-21): coordinator used to return
+        # status="succeeded" even when the agent finished without ever
+        # calling fill_workbook (deps.filled_path empty). The save gate
+        # in extraction/agent.py blocks save_result without a passing
+        # verify, but it can't force the agent to *enter* the gate.
+        # A conversational-only end-of-turn would still mark the run
+        # green. Require a workbook artifact on the success path.
+        if not deps.filled_path:
+            err_msg = (
+                f"{statement_type.value}: agent finished without writing a "
+                "workbook (no fill_workbook tool call landed)."
+            )
+            logger.warning(err_msg)
+            await _emit("error", {"message": err_msg})
+            await _emit("complete", {"success": False, "error": err_msg})
+            return AgentResult(
+                statement_type=statement_type,
+                variant=variant,
+                status="failed",
+                error=err_msg,
+                total_tokens=final_tokens,
+                total_cost=final_cost,
+            )
+
         await _emit("complete", {
             "success": True,
-            "workbook_path": deps.filled_path or None,
+            "workbook_path": deps.filled_path,
         })
 
         return AgentResult(
             statement_type=statement_type,
             variant=variant,
             status="succeeded",
-            workbook_path=deps.filled_path or None,
+            workbook_path=deps.filled_path,
             total_tokens=final_tokens,
             total_cost=final_cost,
+        )
+
+    except asyncio.TimeoutError:
+        # _iter_with_turn_timeout fired: the LLM stalled on a single
+        # node iteration past FACE_TURN_TIMEOUT. Mirror the notes
+        # coordinator's policy — if a workbook already landed on disk
+        # the result is salvageable; otherwise it's a hard failure.
+        if deps.filled_path:
+            logger.warning(
+                "%s/%s: LLM stalled past %ss after write — treating as done "
+                "(workbook at %s).",
+                statement_type.value, variant, FACE_TURN_TIMEOUT,
+                deps.filled_path,
+            )
+            await _emit("complete", {
+                "success": True,
+                "workbook_path": deps.filled_path,
+                "stalled_after_write": True,
+            })
+            return AgentResult(
+                statement_type=statement_type,
+                variant=variant,
+                status="succeeded",
+                workbook_path=deps.filled_path,
+            )
+        err_msg = (
+            f"{statement_type.value}: LLM stalled past {FACE_TURN_TIMEOUT}s "
+            "without writing a workbook."
+        )
+        logger.warning(err_msg)
+        await _emit("error", {"message": err_msg, "type": "turn_timeout"})
+        await _emit("complete", {"success": False, "error": err_msg})
+        return AgentResult(
+            statement_type=statement_type,
+            variant=variant,
+            status="failed",
+            error=err_msg,
         )
 
     except asyncio.CancelledError:

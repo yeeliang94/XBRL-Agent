@@ -2,7 +2,7 @@
 must mirror the writer's taxonomy suffix stripping so receipt labels
 stay equivalent to payload_sink labels across the suffix difference.
 
-Red tests for `docs/PLAN-mpers-notes-hardening.md` Phase 2. The writer
+Red tests for `docs/Archive/PLAN-mpers-notes-hardening.md` Phase 2. The writer
 side is tested in `test_notes_writer_suffix_normalize.py`; this file
 covers the coverage.py side.
 

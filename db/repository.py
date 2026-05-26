@@ -528,6 +528,7 @@ def upsert_notes_cell(
     html: str,
     evidence: Optional[str] = None,
     source_pages: Optional[list[int]] = None,
+    concept_uuid: Optional[str] = None,
 ) -> int:
     """Insert or update a single notes cell and return its id.
 
@@ -535,9 +536,18 @@ def upsert_notes_cell(
     agent overwrites the row the coordinator already cleared (see
     `delete_notes_cells_for_run_sheet`) or, if the delete was skipped,
     replaces the same (sheet, row) slot in place.
+
+    Phase 7: every notes row gets a stable canonical ``concept_uuid``. If
+    the caller doesn't supply one, it's minted deterministically from
+    (sheet, row, label) — so the live coordinator path and the shared
+    facts API agree on identity for the same cell (incl. Sheet-12
+    LIST_OF_NOTES fan-out rows).
     """
+    from concept_model.parser import mint_notes_concept_uuid
+
     now = _now()
     pages_json = json.dumps(list(source_pages)) if source_pages else None
+    cuid = concept_uuid or mint_notes_concept_uuid(sheet, row, label)
     existing = conn.execute(
         "SELECT id FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
         (run_id, sheet, row),
@@ -546,14 +556,15 @@ def upsert_notes_cell(
         cell_id = int(existing[0])
         conn.execute(
             "UPDATE notes_cells SET label = ?, html = ?, evidence = ?, "
-            "source_pages = ?, updated_at = ? WHERE id = ?",
-            (label, html, evidence, pages_json, now, cell_id),
+            "source_pages = ?, updated_at = ?, concept_uuid = ? WHERE id = ?",
+            (label, html, evidence, pages_json, now, cuid, cell_id),
         )
         return cell_id
     cur = conn.execute(
         "INSERT INTO notes_cells(run_id, sheet, row, label, html, "
-        "evidence, source_pages, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (run_id, sheet, row, label, html, evidence, pages_json, now),
+        "evidence, source_pages, updated_at, concept_uuid) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_id, sheet, row, label, html, evidence, pages_json, now, cuid),
     )
     return int(cur.lastrowid)
 

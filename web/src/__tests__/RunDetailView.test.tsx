@@ -111,6 +111,25 @@ describe("RunDetailView", () => {
     expect(screen.getAllByText(/completed/i).length).toBeGreaterThan(0);
   });
 
+  test("Review values link is gated on canonical mode (peer-review F6)", () => {
+    // Default (canonical disabled) → no link, matching TopNav/Results gating.
+    const { rerender } = render(
+      <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    expect(screen.queryByText("Review values")).toBeNull();
+    // Canonical enabled → link appears, pointing at this run's concepts page.
+    rerender(
+      <RunDetailView
+        detail={makeDetail()}
+        onDelete={() => {}}
+        onDownload={() => {}}
+        canonicalEnabled
+      />,
+    );
+    const link = screen.getByText("Review values") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/concepts/42");
+  });
+
   test("renders run config: statements, variants, models, scout flag", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,

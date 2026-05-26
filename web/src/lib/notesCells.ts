@@ -1,4 +1,4 @@
-// Step 8/9+ of docs/PLAN-NOTES-RICH-EDITOR.md — frontend client for the
+// Step 8/9+ of docs/Archive/PLAN-NOTES-RICH-EDITOR.md — frontend client for the
 // notes_cells GET/PATCH endpoints. Kept in `lib/` (not a React hook) so
 // tests can exercise the URL + body contract directly; the editor tab
 // calls these from `useEffect` / its save handler.

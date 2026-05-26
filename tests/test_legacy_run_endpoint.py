@@ -1,6 +1,6 @@
 """Pin the legacy POST /api/run/{session_id} contract after Phase B refactor.
 
-Plan: docs/PLAN-persistent-draft-uploads.md — Phase E (step 23).
+Plan: docs/Archive/PLAN-persistent-draft-uploads.md — Phase E (step 23).
 
 The persistent-draft work refactored `run_multi_agent_stream` to accept
 an optional `existing_run_id`. The legacy upload-then-run flow (CLI +

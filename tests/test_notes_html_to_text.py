@@ -1,6 +1,6 @@
 """HTML→Excel-plaintext conversion for the notes rich-editor feature.
 
-Step 1 of docs/PLAN-NOTES-RICH-EDITOR.md. The notes pipeline now emits
+Step 1 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md. The notes pipeline now emits
 HTML as its canonical payload; Excel downloads flatten that HTML to
 plain text (tables to pipe+newline). This module encodes both directions
 and is the foundation every later phase depends on.

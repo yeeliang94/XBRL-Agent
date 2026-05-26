@@ -1,6 +1,6 @@
 """POST /api/runs/{id}/start — flip a draft into a running extraction.
 
-Plan: docs/PLAN-persistent-draft-uploads.md — Phase B (steps 7-8).
+Plan: docs/Archive/PLAN-persistent-draft-uploads.md — Phase B (steps 7-8).
 
 This is the second half of the persistent-draft contract: after the
 frontend has PATCHed config onto the draft, the user clicks "Start" and

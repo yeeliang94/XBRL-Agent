@@ -122,7 +122,7 @@ class TestDetectVariantFromSignals:
         Every statement now has at least two detectable variants — SOCIE
         gained the MPERS-only SoRE alongside Default, so there is no
         single-candidate shortcut anywhere. The scout's standard-aware
-        selector (Phase 5.4 in docs/PLAN-mpers-pipeline-wiring.md) is the
+        selector (Phase 5.4 in docs/Archive/PLAN-mpers-pipeline-wiring.md) is the
         layer that will pick Default vs SoRE based on the detected filing
         standard; `detect_variant_from_signals` itself remains signal-driven.
         """

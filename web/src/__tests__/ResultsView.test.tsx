@@ -44,6 +44,49 @@ describe("ResultsView — P4", () => {
     expect(screen.getByRole("button", { name: /downloads/i })).toBeInTheDocument();
   });
 
+  test("shows a review button when runId + onViewConcepts provided", () => {
+    const onViewConcepts = vi.fn();
+    const getResultJson = vi.fn().mockResolvedValue(sampleResultJson);
+    render(
+      <ResultsView
+        complete={completeData}
+        sessionId="abc"
+        runStartTime={Date.now()}
+        getResultJson={getResultJson}
+        runId={42}
+        onViewConcepts={onViewConcepts}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /review extracted values/i });
+    fireEvent.click(btn);
+    expect(onViewConcepts).toHaveBeenCalledWith(42);
+  });
+
+  test("no review button when runId is null", () => {
+    renderResults();
+    expect(screen.queryByRole("button", { name: /review extracted values/i })).toBeNull();
+  });
+
+  test("shows a reconciliation prompt when openConflicts > 0", () => {
+    const getResultJson = vi.fn().mockResolvedValue(sampleResultJson);
+    render(
+      <ResultsView
+        complete={{ ...completeData, openConflicts: 3 } as CompleteData}
+        sessionId="abc"
+        runStartTime={Date.now()}
+        getResultJson={getResultJson}
+        runId={42}
+        onViewConcepts={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/3 .*conflict/i)).toBeInTheDocument();
+  });
+
+  test("no reconciliation prompt when openConflicts is 0", () => {
+    renderResults({ openConflicts: 0 });
+    expect(screen.queryByText(/conflict/i)).toBeNull();
+  });
+
   test("defaults to Summary tab", () => {
     renderResults();
     // Summary content should be visible

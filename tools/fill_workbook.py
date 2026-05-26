@@ -39,6 +39,11 @@ class FillResult:
     # agent so it can self-correct double-booking before the next
     # verify_totals pass. Empty list when no concerns detected.
     warnings: list[str] = field(default_factory=list)
+    # Canonical mode (Phase B): resolved cell coordinates that actually
+    # landed, so the caller can project each into run_concept_facts. Each
+    # entry is {sheet, row, col, value, evidence} with `row` already
+    # label-resolved. Empty in legacy mode / on total failure.
+    resolved_writes: list[dict] = field(default_factory=list)
 
 
 # Default SOCIE evidence column for the MFRS 24-col equity-component matrix.
@@ -367,6 +372,18 @@ def fill_workbook(
     # next verify_totals pass.
     warnings = _detect_double_bookings(label_index, successful_writes)
 
+    resolved_writes = [
+        {
+            "sheet": w.sheet,
+            "row": w.row,
+            "col": w.col,
+            "value": w.value,
+            "evidence": w.evidence,
+        }
+        for w in successful_writes
+        if w.row is not None
+    ]
+
     if errors and fields_written == 0:
         return FillResult(
             success=False,
@@ -382,6 +399,7 @@ def fill_workbook(
         output_path=output_path,
         errors=errors,
         warnings=warnings,
+        resolved_writes=resolved_writes,
     )
 
 

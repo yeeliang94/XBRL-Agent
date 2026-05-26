@@ -31,6 +31,9 @@ export interface RunDetailPageProps {
    *  Regenerate button. Optional for callers that don't use the notes
    *  subsystem. */
   onRegenerateNotes?: (runId: number) => void;
+  /** Forwarded to RunDetailView to gate the "View Concepts" link on
+   *  canonical mode (peer-review F6). */
+  canonicalEnabled?: boolean;
 }
 
 export function RunDetailPage({
@@ -41,6 +44,7 @@ export function RunDetailPage({
   onDownload,
   onDelete,
   onRegenerateNotes,
+  canonicalEnabled = false,
 }: RunDetailPageProps) {
   return (
     <div style={styles.root}>
@@ -75,6 +79,7 @@ export function RunDetailPage({
           onDownload={onDownload}
           onDelete={onDelete}
           onRegenerateNotes={onRegenerateNotes}
+          canonicalEnabled={canonicalEnabled}
         />
       )}
     </div>

@@ -1,6 +1,6 @@
 """Persist per-run notes HTML payloads into the audit DB.
 
-Step 6 of docs/PLAN-NOTES-RICH-EDITOR.md. The coordinator hands the
+Step 6 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md. The coordinator hands the
 list of cells a notes agent wrote through this module after each
 successful run; the result is the canonical payload the post-run
 editor reads/writes and the Excel download overlays at stream time.

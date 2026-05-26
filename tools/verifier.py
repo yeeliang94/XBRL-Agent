@@ -711,6 +711,7 @@ def verify_statement(
     variant: str = "",
     pdf_values: Optional[dict[str, float]] = None,
     filing_level: str = "company",
+    filing_standard: str = "mfrs",
 ) -> VerificationResult:
     """Verify a filled workbook for a given statement type.
 
@@ -732,7 +733,13 @@ def verify_statement(
     if name == StatementType.SOFP.value:
         return verify_totals(path, pdf_values=pdf_values, filing_level=filing_level)
     elif name == StatementType.SOCIE.value:
-        return _verify_socie(path, pdf_values=pdf_values, filing_level=filing_level)
+        return _verify_socie(
+            path,
+            variant=variant,
+            pdf_values=pdf_values,
+            filing_level=filing_level,
+            filing_standard=filing_standard,
+        )
     elif name == StatementType.SOCF.value:
         return _verify_socf(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
     elif name == StatementType.SOPL.value:
@@ -756,10 +763,15 @@ def verify_statement(
 
 def _verify_socie(
     path: str,
+    variant: str = "",
     pdf_values: Optional[dict[str, float]] = None,
     filing_level: str = "company",
+    filing_standard: str = "mfrs",
 ) -> VerificationResult:
     wb = openpyxl.load_workbook(path, data_only=False)
+    # MPERS SoRE renders into a "SOCIE" sheet name too, but uses a flat
+    # B/C layout instead of the MFRS 24-col matrix — fall through to the
+    # column-resolution branch below.
     ws = wb["SOCIE"] if "SOCIE" in wb.sheetnames else wb.active
 
     computed_totals: dict[str, float] = {}
@@ -775,19 +787,41 @@ def _verify_socie(
             norm = _normalize_label(str(val))
             label_rows.setdefault(norm, []).append(row)
 
-    restated_rows = label_rows.get("equity at beginning of period, restated", [])
-    total_inc_rows = label_rows.get("total increase (decrease) in equity", [])
-    closing_rows = label_rows.get("equity at end of period", [])
+    # MPERS SoRE (Statement of Retained Earnings) replaces the equity
+    # matrix with a single retained-earnings schedule. Its rows are
+    # labelled "Retained earnings …", not "Equity …", so it needs its own
+    # label set — otherwise the equity-label lookup below misses every row
+    # and a legitimate SoRE extraction fails verification (peer-review).
+    # The balance arithmetic is identical (closing = restated + increase).
+    is_sore = (variant or "").strip().lower() == "sore" or ws.title.lower() == "sore"
+    if is_sore:
+        restated_label = "retained earnings at beginning of period, restated"
+        total_label = "total increase (decrease) in retained earnings"
+        closing_label = "retained earnings at end of period"
+        pretty = ("'Retained earnings at beginning of period, restated'",
+                  "'Total increase (decrease) in retained earnings'",
+                  "'Retained earnings at end of period'")
+    else:
+        restated_label = "equity at beginning of period, restated"
+        total_label = "total increase (decrease) in equity"
+        closing_label = "equity at end of period"
+        pretty = ("'Equity at beginning of period, restated'",
+                  "'Total increase (decrease) in equity'",
+                  "'Equity at end of period'")
+
+    restated_rows = label_rows.get(restated_label, [])
+    total_inc_rows = label_rows.get(total_label, [])
+    closing_rows = label_rows.get(closing_label, [])
 
     # Fail closed: if we can't find the rows we need, report it
     if not restated_rows or not total_inc_rows or not closing_rows:
         missing = []
         if not restated_rows:
-            missing.append("'Equity at beginning of period, restated'")
+            missing.append(pretty[0])
         if not total_inc_rows:
-            missing.append("'Total increase (decrease) in equity'")
+            missing.append(pretty[1])
         if not closing_rows:
-            missing.append("'Equity at end of period'")
+            missing.append(pretty[2])
         wb.close()
         return VerificationResult(
             is_balanced=False,
@@ -798,8 +832,15 @@ def _verify_socie(
             feedback=f"SOCIE verification failed: missing labels {', '.join(missing)}",
         )
 
-    # Check each period block — the "Total" column is X (col 24)
-    total_col = 24  # Column X = grand total
+    # Total column resolution differs by filing standard. MFRS SOCIE is a
+    # 24-column equity-component matrix where col X (24) carries the row
+    # aggregate. MPERS SOCIE / SoRE is a flat layout — CY in col B (2),
+    # PY in col C (3) — so the matrix-Total column doesn't exist and a
+    # hardcoded col 24 read would return None and false-flag every block
+    # as imbalanced. Mirrors the cross-checks fix from 2026-04-23.
+    from cross_checks.util import socie_total_column
+
+    total_col = socie_total_column(filing_standard)
 
     if filing_level == "group":
         block_labels = ["group_cy", "group_py", "company_cy", "company_py"]

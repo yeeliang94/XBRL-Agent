@@ -1,4 +1,21 @@
 /* Keyframe animations for P0+ components */
+html {
+  background: #F5F7F8;
+}
+
+body {
+  margin: 0;
+  background: #F5F7F8;
+  color: #303236;
+  font-family: Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
 @keyframes pulse-subtle {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }

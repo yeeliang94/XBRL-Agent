@@ -1,6 +1,6 @@
 """History list (GET /api/runs) surfaces drafts alongside terminated runs.
 
-Plan: docs/PLAN-persistent-draft-uploads.md — Phase B (steps 9-10).
+Plan: docs/Archive/PLAN-persistent-draft-uploads.md — Phase B (steps 9-10).
 
 Drafts are runs the user uploaded but never started. They live in History
 forever (per the brainstorm) so the user can come back to a partially-

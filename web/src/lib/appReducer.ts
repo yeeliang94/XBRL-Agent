@@ -112,7 +112,7 @@ export interface ToastState {
   tone: "success" | "error";
 }
 
-export type AppView = "extract" | "history";
+export type AppView = "extract" | "history" | "concepts";
 
 export type AppAction =
   | { type: "UPLOADED"; payload: { sessionId: string; filename: string; runId?: number | null } }
@@ -170,6 +170,10 @@ const HISTORY_RUN_RE = /^\/history\/(\d+)\/?$/;
 // Persistent-draft URL — `/run/<n>` is the shareable link returned from
 // the upload endpoint. Same trailing-slash tolerance as the history form.
 const RUN_RE = /^\/run\/(\d+)\/?$/;
+// Phase 1 canonical-mode concepts page: `/concepts/<n>` opens the tree view
+// for a run.  Mounted under selectedRunId so the App treats it the same
+// way it treats a History detail page.
+const CONCEPTS_RE = /^\/concepts\/(\d+)\/?$/;
 
 /** Derive the app view + selected/current run id from a pathname.
  *
@@ -187,6 +191,14 @@ const RUN_RE = /^\/run\/(\d+)\/?$/;
 export function parseRouteFromPath(
   pathname: string,
 ): { view: AppView; selectedRunId: number | null; currentRunId: number | null } {
+  if (pathname.startsWith("/concepts")) {
+    const m = CONCEPTS_RE.exec(pathname);
+    return {
+      view: "concepts",
+      selectedRunId: m ? Number(m[1]) : null,
+      currentRunId: null,
+    };
+  }
   if (pathname.startsWith("/run")) {
     const m = RUN_RE.exec(pathname);
     return {
@@ -588,7 +600,12 @@ function handleRunComplete(
       // in server.py emit `{success: false, message}`). Without this the
       // diagnostic falls off the floor and the UI shows a bare "Failed".
       error: !rc.success && rc.message ? rc.message : null,
+      // Phase E: carry the canonical reconciliation count through to
+      // ResultsView so it can prompt the user to reconcile.
+      openConflicts: rc.open_conflicts ?? 0,
+      runId: rc.run_id,
     } as CompleteData,
+    currentRunId: rc.run_id ?? state.currentRunId,
     crossChecks: rc.cross_checks || [],
     crossChecksPartial: rc.cross_checks_partial || false,
   };

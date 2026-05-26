@@ -2,7 +2,7 @@
 template label catalog so agents pick labels from the live MPERS/MFRS
 vocabulary rather than their training-prior taxonomy memory.
 
-Red tests for `docs/PLAN-mpers-notes-hardening.md` Phase 3.
+Red tests for `docs/Archive/PLAN-mpers-notes-hardening.md` Phase 3.
 
 The bug from run #105: GPT-5.4 defaulted to MFRS-flavoured labels like
 `"Disclosure of fair value measurement"` which don't exist on MPERS.

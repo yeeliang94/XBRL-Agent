@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>XBRL Agent — User Journey: Before vs Now</title>
+<style>
+  :root{
+    --ink:#1a1a2e; --muted:#5b5b6b; --line:#e4e4ec; --bg:#f7f7fb;
+    --orange:#e0521f; --orange-soft:#fff3ec; --orange-line:#fdba74;
+    --blue:#2f4f8f; --blue-soft:#eef3fb; --green:#1f8a4c; --green-soft:#eafaf0;
+    --grey-soft:#f0f0f4;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:48px 24px 80px}
+  header.hero{margin-bottom:40px}
+  .kicker{font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--orange); font-weight:700}
+  h1{font-size:34px; line-height:1.15; margin:8px 0 12px}
+  .lede{font-size:17px; color:var(--muted); max-width:760px; margin:0}
+  .flag{display:inline-block; margin-top:14px; padding:4px 10px; border-radius:6px;
+        background:#1a1a2e; color:#fff; font:600 12px/1.4 "SFMono-Regular",Menlo,Consolas,monospace}
+
+  h2{font-size:13px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
+     margin:52px 0 16px; border-top:1px solid var(--line); padding-top:24px}
+
+  .cols{display:grid; grid-template-columns:1fr 1fr; gap:20px}
+  @media(max-width:760px){.cols{grid-template-columns:1fr}}
+
+  .card{background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px 22px 8px;
+        box-shadow:0 1px 2px rgba(20,20,40,.04)}
+  .card.before{border-top:4px solid #9aa0ad}
+  .card.now{border-top:4px solid var(--orange)}
+  .card h3{margin:0 0 4px; font-size:19px; display:flex; align-items:center; gap:8px}
+  .card .tag{font:600 11px/1 inherit; padding:4px 8px; border-radius:999px}
+  .tag.legacy{background:var(--grey-soft); color:var(--muted)}
+  .tag.canon{background:var(--orange-soft); color:var(--orange)}
+  .card .sub{color:var(--muted); font-size:13px; margin:0 0 18px}
+
+  ol.flow{list-style:none; margin:0; padding:0; counter-reset:step}
+  ol.flow li{position:relative; padding:0 0 18px 40px; counter-increment:step}
+  ol.flow li::before{
+    content:counter(step); position:absolute; left:0; top:0;
+    width:26px; height:26px; border-radius:50%; display:grid; place-items:center;
+    font:700 13px/1 inherit; color:#fff;
+  }
+  .before ol.flow li::before{background:#9aa0ad}
+  .now ol.flow li::before{background:var(--orange)}
+  ol.flow li::after{
+    content:""; position:absolute; left:13px; top:26px; bottom:2px; width:2px; background:var(--line);
+  }
+  ol.flow li:last-child::after{display:none}
+  ol.flow li b{display:block; font-size:14.5px}
+  ol.flow li span{font-size:13px; color:var(--muted)}
+  .pill{display:inline-block; font:600 11px/1.5 "SFMono-Regular",Menlo,Consolas,monospace;
+        background:var(--grey-soft); border-radius:5px; padding:0 6px; color:#3a3a4a}
+
+  .seen{margin:6px 0 22px; padding:14px 16px; border-radius:10px; font-size:13.5px}
+  .before .seen{background:var(--grey-soft)}
+  .now .seen{background:var(--orange-soft); border:1px solid var(--orange-line)}
+  .seen b{display:block; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:6px}
+
+  table{width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line);
+        border-radius:14px; overflow:hidden; font-size:14px}
+  th,td{padding:13px 16px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line)}
+  thead th{background:#1a1a2e; color:#fff; font-size:12px; letter-spacing:.04em}
+  tbody tr:last-child td{border-bottom:none}
+  td.dim{color:var(--muted)}
+  td.win{color:var(--green); font-weight:600}
+  .aspect{font-weight:600}
+
+  .callout{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:8px}
+  @media(max-width:760px){.callout{grid-template-columns:1fr}}
+  .ko{background:#fff; border:1px solid var(--line); border-radius:12px; padding:18px}
+  .ko .big{font-size:26px; font-weight:800; color:var(--orange)}
+  .ko .lbl{font-size:13px; color:var(--muted); margin-top:4px}
+
+  .note{margin-top:40px; padding:18px 20px; background:var(--blue-soft);
+        border:1px solid #cdddf5; border-radius:12px; font-size:14px; color:#2a3a55}
+  .note b{color:var(--blue)}
+  footer{margin-top:48px; color:var(--muted); font-size:12.5px; text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">XBRL Agent · Canonical Concept Model</div>
+    <h1>How the journey changed</h1>
+    <p class="lede">
+      Before, the agent typed values straight into Excel cells and the spreadsheet was the
+      only record of what happened. Now, extraction produces <strong>structured facts in a
+      database</strong> — the spreadsheet becomes an export of that data, and every value,
+      total, and correction is inspectable and reconcilable in the UI.
+    </p>
+    <span class="flag">enabled by&nbsp; XBRL_CANONICAL_MODE=1</span>
+  </header>
+
+  <h2>The run, step by step</h2>
+  <div class="cols">
+
+    <!-- BEFORE -->
+    <div class="card before">
+      <h3>Before <span class="tag legacy">Legacy</span></h3>
+      <p class="sub">The workbook is the source of truth.</p>
+      <ol class="flow">
+        <li><b>Upload a PDF and start the run</b><span>Pick statements, level, standard.</span></li>
+        <li><b>Agents write into Excel cells</b><span>Each agent calls <span class="pill">fill_workbook</span> and edits its own <span class="pill">{stmt}_filled.xlsx</span> directly.</span></li>
+        <li><b>Workbooks are merged</b><span>Per-statement files combine into one <span class="pill">filled.xlsx</span>.</span></li>
+        <li><b>Cross-checks run on the spreadsheet</b><span>Totals/consistency validated by reading cells back.</span></li>
+        <li><b>Correction edits the spreadsheet</b><span>On failures, a correction agent rewrites cells in the merged <span class="pill">.xlsx</span> — opaque, with no structured record of what changed or why.</span></li>
+        <li><b>Download <span class="pill">filled.xlsx</span></b><span>The spreadsheet is the only artifact.</span></li>
+      </ol>
+      <div class="seen">
+        <b>What the user sees</b>
+        Agent tabs, a cross-check list, and a download button. No structured view of the
+        extracted numbers, no way to inspect a subtotal's makeup, no record of unresolved
+        disagreements. To audit a value you open Excel and trace formulas by hand.
+      </div>
+    </div>
+
+    <!-- NOW -->
+    <div class="card now">
+      <h3>Now <span class="tag canon">Canonical</span></h3>
+      <p class="sub">The database of facts is the source of truth; Excel is an export.</p>
+      <ol class="flow">
+        <li><b>Concept trees load at startup</b><span>Every face template (MFRS/MPERS × Company/Group) is imported once so the system knows each statement's concepts, parents, and totals.</span></li>
+        <li><b>Upload a PDF and start the run</b><span>Same upload — but the run now carries a DB identity for its facts.</span></li>
+        <li><b>Agents write structured facts</b><span>Each extracted value is projected into <span class="pill">run_concept_facts</span> against a known concept — the database, not the cell, is authoritative.</span></li>
+        <li><b>Totals compute automatically</b><span>A cascade rolls leaf values up into subtotals and totals; mismatches become tracked <em>conflicts</em>.</span></li>
+        <li><b>Workbook is exported from the DB</b><span>Leaves become literal values; itemised totals keep <strong>live Excel formulas</strong>; "aggregate-only" totals become annotated literals.</span></li>
+        <li><b>Correction works on facts</b><span>The correction agent resolves conflicts in the tree (revise a leaf, mark aggregate-only, mark not-disclosed), then the workbook is <strong>re-exported &amp; re-merged</strong> — so the file always matches the data.</span></li>
+        <li><b>Review &amp; reconcile in the Concepts page</b><span>Browse the concept tree, see each value's status, and clear the reconciliation queue. Unresolved conflicts are flagged on the results screen.</span></li>
+        <li><b>Download <span class="pill">filled.xlsx</span></b><span>Generated from the facts — it matches exactly what you saw in the UI.</span></li>
+      </ol>
+      <div class="seen">
+        <b>What the user sees</b>
+        A new <strong>Concepts</strong> tab (and per-run links) showing the full concept tree
+        with values, statuses, and source/evidence; a <strong>reconciliation queue</strong> for
+        conflicts; and a banner on the results screen — "<em>N unresolved conflicts need
+        review</em>" — when the run needs attention.
+      </div>
+    </div>
+
+  </div>
+
+  <h2>What actually changed</h2>
+  <table>
+    <thead>
+      <tr><th style="width:24%">Aspect</th><th style="width:38%">Before</th><th style="width:38%">Now</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="aspect">Source of truth</td>
+        <td class="dim">The <span class="pill">.xlsx</span> file — whatever is in the cells.</td>
+        <td class="win">A database of structured facts; the spreadsheet is an export of it.</td>
+      </tr>
+      <tr>
+        <td class="aspect">Visibility of data</td>
+        <td class="dim">Open Excel and read cells; no in-app view of the numbers.</td>
+        <td class="win">A Concepts tree shows every value, its status, and its evidence.</td>
+      </tr>
+      <tr>
+        <td class="aspect">Subtotals &amp; totals</td>
+        <td class="dim">Whatever the agent left in the cell.</td>
+        <td class="win">Computed by a cascade; itemised totals stay live formulas in Excel.</td>
+      </tr>
+      <tr>
+        <td class="aspect">Corrections</td>
+        <td class="dim">Opaque cell rewrites in the merged workbook.</td>
+        <td class="win">Tracked resolutions on the concept tree, then re-exported to Excel.</td>
+      </tr>
+      <tr>
+        <td class="aspect">Disagreements</td>
+        <td class="dim">Invisible unless a cross-check happened to catch them.</td>
+        <td class="win">Surfaced as a reconciliation queue and a results-screen banner.</td>
+      </tr>
+      <tr>
+        <td class="aspect">UI ↔ file consistency</td>
+        <td class="dim">A late cell edit could diverge from anything you'd reviewed.</td>
+        <td class="win">The download is regenerated from the facts — they can't drift apart.</td>
+      </tr>
+      <tr>
+        <td class="aspect">"Done" signal</td>
+        <td class="dim">Completed, unless a cross-check failed.</td>
+        <td class="win">Open conflicts flip the run to <em>completed&nbsp;with&nbsp;errors</em> for review.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>In one breath</h2>
+  <div class="callout">
+    <div class="ko"><div class="big">Cells → Facts</div><div class="lbl">Extraction now produces structured, queryable data instead of raw spreadsheet edits.</div></div>
+    <div class="ko"><div class="big">Opaque → Inspectable</div><div class="lbl">Every value, total, and correction is visible and auditable in the Concepts page.</div></div>
+    <div class="ko"><div class="big">Drift → In sync</div><div class="lbl">The downloaded workbook is exported from the facts, so it always matches the UI.</div></div>
+  </div>
+
+  <div class="note">
+    <b>Rollout &amp; safety.</b> The new journey is gated behind the <span class="pill">XBRL_CANONICAL_MODE</span>
+    flag. With it off, the product behaves exactly as before (legacy path), so it's a one
+    env-var rollback. The legacy spreadsheet pipeline still exists untouched underneath —
+    the canonical layer sits on top of it.
+  </div>
+
+  <div class="note" style="background:#fff7ed;border-color:#fdba74;color:#7a3a12">
+    <b>Status.</b> The pipeline is fully wired and test-backed end-to-end (import → extract →
+    cascade → export → correct → reconcile). What's still owed is <b>validation against real
+    PDFs</b> across MFRS/MPERS, Company/Group, and SOCIE filings before relying on it in
+    production.
+  </div>
+
+  <footer>XBRL Agent · canonical concept model · generated explainer</footer>
+
+</div>
+</body>
+</html>

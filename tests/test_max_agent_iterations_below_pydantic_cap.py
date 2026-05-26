@@ -23,7 +23,7 @@ import pytest
 
 # Pydantic-ai 1.77's default ``UsageLimits.request_limit`` is 50 — see
 # the smoking-gun screenshot in
-# docs/PLAN-stop-and-validation-visibility.md. We never set explicit
+# docs/Archive/PLAN-stop-and-validation-visibility.md. We never set explicit
 # UsageLimits anywhere in the codebase, so this default is what every
 # agent inherits. The buffer below it (5+ turns) absorbs the request
 # overhead pydantic-ai itself spends on tool-call book-keeping inside a

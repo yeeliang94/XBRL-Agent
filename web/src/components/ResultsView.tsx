@@ -8,6 +8,11 @@ interface Props {
   sessionId: string;
   runStartTime: number | null;
   getResultJson: (sessionId: string) => Promise<Record<string, unknown>>;
+  // Canonical-mode entry point: when both are present, render a review action
+  // that opens this run's concept tree (/concepts/{runId}).
+  // Null runId (legacy non-draft flow) hides the link.
+  runId?: number | null;
+  onViewConcepts?: (runId: number) => void;
 }
 
 type Tab = "summary" | "preview" | "downloads";
@@ -213,6 +218,55 @@ const styles = {
   downloadSection: {
     marginBottom: pwc.space.lg,
   } as React.CSSProperties,
+  reconcileBanner: {
+    margin: `${pwc.space.md}px 0`,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    background: pwc.orange50,
+    border: `1px solid ${pwc.orange400}`,
+    borderRadius: pwc.radius.sm,
+    color: pwc.grey800,
+    fontSize: 13,
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  reconcileLink: {
+    marginLeft: "auto",
+    background: "none",
+    border: "none",
+    color: pwc.orange500,
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  reviewActionBar: {
+    margin: `${pwc.space.lg}px ${pwc.space.xl}px 0`,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    background: pwc.grey50,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    flexWrap: "wrap" as const,
+  } as React.CSSProperties,
+  reviewActionCopy: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey800,
+  } as React.CSSProperties,
+  reviewActionButton: {
+    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
+    fontFamily: pwc.fontHeading,
+    fontSize: 13,
+    fontWeight: 600,
+    color: pwc.white,
+    background: pwc.orange500,
+    border: `1px solid ${pwc.orange500}`,
+    borderRadius: pwc.radius.sm,
+    cursor: "pointer",
+  } as React.CSSProperties,
   downloadSectionLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 11,
@@ -224,7 +278,7 @@ const styles = {
   } as React.CSSProperties,
 };
 
-export function ResultsView({ complete, sessionId, runStartTime, getResultJson }: Props) {
+export function ResultsView({ complete, sessionId, runStartTime, getResultJson, runId, onViewConcepts }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>("summary");
   const [resultData, setResultData] = useState<Record<string, unknown> | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -275,6 +329,37 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson }
           </button>
         ))}
       </div>
+
+      {runId != null && onViewConcepts && (
+        <div style={styles.reviewActionBar}>
+          <span style={styles.reviewActionCopy}>
+            Review the extracted facts, source evidence, overrides, and reconciliation items before downloading the final workbook.
+          </span>
+          <button
+            onClick={() => onViewConcepts(runId)}
+            style={styles.reviewActionButton}
+          >
+            Review extracted values
+          </button>
+        </div>
+      )}
+
+      {/* Phase E: canonical reconciliation prompt. Shown when the run left
+          unresolved conflicts the user should reconcile in the Concepts page. */}
+      {complete.openConflicts ? (
+        <div style={styles.reconcileBanner}>
+          {complete.openConflicts} unresolved{" "}
+          {complete.openConflicts === 1 ? "conflict" : "conflicts"} need review.
+          {runId != null && onViewConcepts && (
+            <button
+              onClick={() => onViewConcepts(runId)}
+              style={styles.reconcileLink}
+            >
+              Review conflicts →
+            </button>
+          )}
+        </div>
+      ) : null}
 
       {/* Tab content */}
       <div style={styles.content}>

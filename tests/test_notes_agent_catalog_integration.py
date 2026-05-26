@@ -1,7 +1,7 @@
 """Phase 3 MPERS hardening — integration test proving the factory
 seed + Phase 2 suffix normalisation compose to fix the run-#105 drop.
 
-Red-green-refactor anchor for `docs/PLAN-mpers-notes-hardening.md`
+Red-green-refactor anchor for `docs/Archive/PLAN-mpers-notes-hardening.md`
 Phase 3 Step 3.3. The test simulates the end-to-end path an MPERS
 sub-agent takes:
   1. Factory loads the MPERS LIST_OF_NOTES label catalog.

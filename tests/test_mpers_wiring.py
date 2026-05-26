@@ -3,7 +3,7 @@
 Exercises the `filing_standard` axis across the whole pipeline, from the
 template registry up through the CLI and server request body. Every test
 is paired with the production change that makes it pass in
-`docs/PLAN-mpers-pipeline-wiring.md`.
+`docs/Archive/PLAN-mpers-pipeline-wiring.md`.
 """
 from __future__ import annotations
 

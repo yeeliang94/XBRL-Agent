@@ -1,6 +1,6 @@
 """PATCH /api/runs/{id} — persist pre-run config edits onto a draft row.
 
-Plan: docs/PLAN-persistent-draft-uploads.md — Phase B (steps 5-6).
+Plan: docs/Archive/PLAN-persistent-draft-uploads.md — Phase B (steps 5-6).
 
 The frontend PreRunPanel debounce-PATCHes the runs row each time the user
 toggles a statement, switches filing level, or changes a model. The

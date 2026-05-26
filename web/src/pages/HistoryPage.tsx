@@ -36,9 +36,12 @@ export interface HistoryPageProps {
    *  routes to `/run/{id}` instead of opening the inline RunDetailPage.
    *  App passes a handler that dispatches SET_VIEW + SET_CURRENT_RUN_ID. */
   onResumeDraft?: (runId: number) => void;
+  /** Gates the run-detail "View Concepts" link on canonical mode
+   *  (peer-review F6). Forwarded straight to RunDetailPage. */
+  canonicalEnabled?: boolean;
 }
 
-export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeDraft }: HistoryPageProps = {}) {
+export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeDraft, canonicalEnabled = false }: HistoryPageProps = {}) {
   const [filters, setFilters] = useState<RunsFilterParams>({});
   const [runs, setRuns] = useState<RunSummaryJson[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -346,6 +349,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           detail={detail}
           isLoading={isDetailLoading}
           error={detailError}
+          canonicalEnabled={canonicalEnabled}
           onBack={() => {
             // Always clear selection directly — window.history.back()
             // is *not* a safe shortcut, because history.length > 1

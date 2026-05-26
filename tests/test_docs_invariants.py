@@ -1,4 +1,4 @@
-"""Step 13 of docs/PLAN-NOTES-RICH-EDITOR.md — grep-style invariants on
+"""Step 13 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md — grep-style invariants on
 the project docs.
 
 These guards are cheap: they assert that specific load-bearing phrases

@@ -3,10 +3,24 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { TopNav } from "../components/TopNav";
 
 describe("TopNav", () => {
-  test("renders Extract and History buttons", () => {
+  test("renders Extract, History and Review buttons", () => {
     render(<TopNav view="extract" onViewChange={() => {}} />);
     expect(screen.getByRole("tab", { name: /extract/i })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /history/i })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /review/i })).toBeTruthy();
+  });
+
+  test("clicking Review fires onViewChange with 'concepts'", () => {
+    const onViewChange = vi.fn();
+    render(<TopNav view="extract" onViewChange={onViewChange} />);
+    fireEvent.click(screen.getByRole("tab", { name: /review/i }));
+    expect(onViewChange).toHaveBeenCalledWith("concepts");
+  });
+
+  test("hides Review tab when showConcepts=false", () => {
+    render(<TopNav view="extract" onViewChange={() => {}} showConcepts={false} />);
+    expect(screen.queryByRole("tab", { name: /review/i })).toBeNull();
+    expect(screen.getByRole("tab", { name: /extract/i })).toBeTruthy();
   });
 
   test("active view has aria-selected=true", () => {

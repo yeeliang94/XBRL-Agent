@@ -43,6 +43,9 @@ class ExtractionDeps:
         page_hints: Optional[dict] = None,
         filing_level: str = "company",
         filing_standard: str = "mfrs",
+        run_id: Optional[int] = None,
+        db_path: Optional[str] = None,
+        template_id: Optional[str] = None,
     ):
         self.pdf_path = pdf_path
         self.template_path = template_path
@@ -53,6 +56,13 @@ class ExtractionDeps:
         self.variant = variant
         self.page_hints = page_hints
         self.filing_level = filing_level
+        # Canonical mode (Phase B): when run_id + db_path + template_id are
+        # all set, fill_workbook also projects each resolved cell write into
+        # run_concept_facts so the DB becomes the authoritative fact store.
+        # All None in legacy mode — the tool stays xlsx-only.
+        self.run_id = run_id
+        self.db_path = db_path
+        self.template_id = template_id
         # Filing standard axis — surfaced to prompts so MPERS-specific
         # overlays (Phase 6.2) can inject MPERS-vs-MFRS labelling. Not used
         # for behaviour changes in Phase 2; this is wiring-only.
@@ -112,6 +122,52 @@ def _is_force_save_allowed(deps: "ExtractionDeps") -> bool:
     iter_based = deps.turn_counter >= MAX_AGENT_ITERATIONS - _FORCE_SAVE_ITER_MARGIN
     attempts_fallback = deps.turn_counter == 0 and deps.save_attempts >= 50
     return iter_based or attempts_fallback
+
+
+def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]:
+    """Project a fill_workbook result's resolved writes into run_concept_facts
+    when canonical mode is active. Returns an advisory warning string when any
+    cells were skipped/rejected (so the agent + run see the gap), or None.
+
+    Canonical mode is active iff run_id + db_path + template_id are all set on
+    deps (the coordinator only threads them through in canonical mode). Never
+    raises — a projection failure must not break extraction, since the scratch
+    xlsx write already succeeded.
+    """
+    if not (deps.run_id is not None and deps.db_path and deps.template_id):
+        return None
+    if not result.resolved_writes:
+        return None
+    try:
+        from concept_model.cell_resolver import project_writes
+        proj = project_writes(
+            deps.db_path,
+            deps.run_id,
+            deps.template_id,
+            result.resolved_writes,
+            filing_level=deps.filing_level,
+        )
+    except Exception:
+        logger.exception(
+            "canonical fact projection failed for %s",
+            deps.statement_type.value,
+        )
+        return "Canonical projection error: facts may be incomplete (see logs)."
+
+    if proj.has_gaps:
+        logger.warning(
+            "%s: canonical projection — %d projected, %d skipped, %d rejected: "
+            "skipped=%s rejected=%s",
+            deps.statement_type.value, proj.projected,
+            len(proj.skipped), len(proj.rejected), proj.skipped, proj.rejected,
+        )
+        parts = [f"Canonical projection: {proj.projected} fact(s) saved"]
+        if proj.skipped:
+            parts.append(f"{len(proj.skipped)} cell(s) unmapped to a concept")
+        if proj.rejected:
+            parts.append(f"{len(proj.rejected)} rejected by the facts API")
+        return "; ".join(parts) + "."
+    return None
 
 
 def _check_save_gate(deps: "ExtractionDeps") -> Optional[str]:
@@ -276,6 +332,9 @@ def create_extraction_agent(
     page_hints: Optional[dict] = None,
     filing_level: str = "company",
     filing_standard: str = "mfrs",
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+    template_id: Optional[str] = None,
 ) -> tuple[Agent[ExtractionDeps, str], ExtractionDeps]:
     """Create an extraction agent for any statement type.
 
@@ -304,6 +363,9 @@ def create_extraction_agent(
         page_hints=page_hints,
         filing_level=filing_level,
         filing_standard=filing_standard,
+        run_id=run_id,
+        db_path=db_path,
+        template_id=template_id,
     )
 
     # Optionally embed template in system prompt for caching
@@ -420,6 +482,7 @@ def create_extraction_agent(
             # Phase 1.3: any write invalidates the previous verification.
             # Forces the agent to call verify_totals again before save.
             ctx.deps.last_verify_result = None
+            projection_warning = _project_facts_if_canonical(ctx.deps, result)
 
         if result.success:
             msg = f"Successfully wrote {result.fields_written} fields to {output_path}."
@@ -429,6 +492,11 @@ def create_extraction_agent(
             # agent can self-correct before the next verify_totals.
             if result.warnings:
                 msg += f"\nWarnings: {result.warnings}"
+            # Canonical mode: surface any facts that didn't make it into the
+            # DB so the gap isn't silent (peer-review HIGH). Advisory — the
+            # xlsx write still succeeded.
+            if projection_warning:
+                msg += f"\n{projection_warning}"
             return msg
         else:
             return f"Failed to fill workbook. Errors: {result.errors}"
@@ -449,6 +517,7 @@ def create_extraction_agent(
             ctx.deps.statement_type,
             ctx.deps.variant,
             filing_level=ctx.deps.filing_level,
+            filing_standard=ctx.deps.filing_standard,
         )
         # Phase 1.3: remember the last verification so save_result can
         # refuse to finalise if the agent skipped or failed verification.

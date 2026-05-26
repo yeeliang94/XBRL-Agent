@@ -14,6 +14,24 @@ templates, across two filing standards (MFRS, MPERS) and two filing levels
 (Company, Group). Agents run concurrently via a coordinator; results merge
 into one workbook; cross-checks validate consistency.
 
+## How to Behave Here
+
+Before touching code in this repo (the project-specific specialization of the
+session's general operating rules):
+
+- **Surface assumptions.** This codebase has 21 load-bearing invariants below.
+  If your change brushes one and the intent is ambiguous, present the
+  interpretations — don't pick silently.
+- **Stay surgical.** Every changed line must trace to the request. Don't
+  "improve" adjacent template formulas, prompts, or inline styles as a side
+  effect (see gotchas #3, #7).
+- **Keep it minimum.** No speculative abstractions or config the task didn't
+  ask for — the notes pipeline is deliberately all-LLM-judgement, not
+  deterministic matching.
+- **The bar for "done" is the pinning test, not "looks right."** Almost every
+  invariant below names a `tests/…` file that guards it. A change near an
+  invariant is complete only when its pinning test passes — run it and cite it.
+
 ## Quick Start
 
 ```bash
@@ -249,16 +267,28 @@ handler never double-faults (gotcha #10 invariant preserved). Users on
 slow runs who hit Stop All now keep their work as a downloadable
 artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
-### 11. DB schema v2 — auto-migration on startup
+### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION = 2`. `init_db` detects v1
-databases and runs `ALTER TABLE runs ADD COLUMN …` for the seven lifecycle
-fields. Migration is idempotent and backfills `started_at` from `created_at`.
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **3**). `init_db`
+reads the stored version and walks an old database up one version at a time
+through per-version `ALTER TABLE` blocks, so any older DB lands on the current
+schema without manual intervention. Each step is idempotent. Shipped steps:
+
+- **v1 → v2:** adds the seven `runs` lifecycle fields; backfills `started_at`
+  from `created_at` (`_V2_MIGRATION_COLUMNS`).
+- **v2 → v3:** adds the `notes_cells` table — the canonical per-cell notes
+  store (see gotcha #16).
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
-entry in `_V2_MIGRATION_COLUMNS` is nullable or has a safe default. The
-`status` column has no `CHECK` constraint on purpose: adding a new status
+entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
+The `status` column has no `CHECK` constraint on purpose: adding a new status
 value should not require a full-table migration.
+
+> **In-flight:** the canonical-concept-model work (gotcha #21, uncommitted)
+> pushes the working-tree schema to **v6** (v4 concept-model tables, v5
+> `matrix_col`, v6 `concept_uuid` on `notes_cells`). Those steps follow the
+> same version-stepped pattern but are not yet shipped — don't treat v4–v6 as
+> stable until that work lands.
 
 ### 12. Filing level — Company vs Group
 
@@ -563,6 +593,24 @@ Two paths used to swallow errors silently (2026-04-27 fix):
   whole pipeline. Pinned by
   `tests/test_silent_exception_surfacing.py`.
 
+### 21. Canonical concept model — WORK IN PROGRESS (uncommitted)
+
+A new `concept_model/` subsystem is under active development: a read-mostly
+canonical concept registry (parser, importer, exporter, cell resolver,
+cascade recompute, group checks, facts API) plus a canonical correction
+agent (`correction/canonical_agent.py`, `prompts/correction_canonical.md`).
+It carries the working-tree DB schema to v6 (see gotcha #11) and adds a
+`tests/test_concept_*` / `tests/test_canonical_*` / `tests/test_facts_api*`
+suite.
+
+**This is not shipped yet** — the plan notes real-PDF validation and
+correction-agent wiring are still owed, so its interfaces and invariants may
+still change. Treat the plan docs as the source of truth, not this file:
+[docs/PLAN-canonical-concept-model.md](docs/PLAN-canonical-concept-model.md),
+[docs/PLAN-canonical-concept-model-phase1.md](docs/PLAN-canonical-concept-model-phase1.md),
+[docs/PRD-canonical-concept-model.html](docs/PRD-canonical-concept-model.html).
+Promote a proper invariant section here once the work lands.
+
 ## Testing
 
 ```bash
@@ -584,7 +632,7 @@ python compare_results.py SOFP-Xbrl-reference-FINCO-filled.xlsx output/run_001/f
 - `tests/test_e2e.py` — full 5-agent mocked pipeline.
 - `tests/test_cross_checks.py` — cross-check framework + per-check unit tests.
 - `tests/test_server_run_lifecycle.py` — runs-row pre-validation + terminal-status contract (see gotcha #10).
-- `tests/test_db_schema_v2.py` — v1→v2 migration + fresh-init invariants.
+- `tests/test_db_schema_v2.py` / `test_db_schema_v3.py` — migration steps + fresh-init invariants (see gotcha #11).
 - `tests/test_notes_retry_budget.py` — max-1-retry contract + failure side-logs.
 - `tests/test_mpers_wiring.py` + `tests/test_mpers_generator.py` — MPERS phase-by-phase.
 - `tests/test_filing_level.py` — Company vs Group routing end-to-end.
