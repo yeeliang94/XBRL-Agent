@@ -1,5 +1,15 @@
 [
   {
+    "id": "openai.gpt-5.5",
+    "display_name": "GPT-5.5",
+    "provider": "openai",
+    "supports_vision": true,
+    "notes": "Latest OpenAI flagship.",
+    "input_price_per_mtok": 5.00,
+    "output_price_per_mtok": 30.00,
+    "notes_parallel": 5
+  },
+  {
     "id": "openai.gpt-5.4",
     "display_name": "GPT-5.4",
     "provider": "openai",
@@ -27,6 +37,16 @@
     "notes": "Smallest/cheapest GPT-5.4. Good for scout and simple statements.",
     "input_price_per_mtok": 0.25,
     "output_price_per_mtok": 2.00,
+    "notes_parallel": 2
+  },
+  {
+    "id": "vertex_ai.gemini-3.5-flash",
+    "display_name": "Gemini 3.5 Flash",
+    "provider": "google",
+    "supports_vision": true,
+    "notes": "Latest Gemini flash tier. Fast, cost-effective.",
+    "input_price_per_mtok": 1.50,
+    "output_price_per_mtok": 9.00,
     "notes_parallel": 2
   },
   {
@@ -67,6 +87,16 @@
     "notes": "Strong reasoning, good balance of speed and quality.",
     "input_price_per_mtok": 3.00,
     "output_price_per_mtok": 15.00,
+    "notes_parallel": 5
+  },
+  {
+    "id": "bedrock.anthropic.claude-opus-4-7",
+    "display_name": "Claude Opus 4.7",
+    "provider": "anthropic",
+    "supports_vision": true,
+    "notes": "Latest, highest quality Anthropic model. Best for difficult extractions.",
+    "input_price_per_mtok": 5.00,
+    "output_price_per_mtok": 25.00,
     "notes_parallel": 5
   },
   {
