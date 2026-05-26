@@ -1,7 +1,7 @@
 """Phase 1 (post-FINCO-2021 audit) — prompt-contract pins.
 
 These tests anchor the three prompt-level changes from
-`docs/PLAN-notes-pipeline-improvements.md` Phase 1 so a later edit can't
+`docs/Archive/PLAN-notes-pipeline-improvements.md` Phase 1 so a later edit can't
 silently revert them:
 
 1.1 PDF-page citation pin — every notes prompt must tell the model to cite
@@ -56,7 +56,7 @@ def test_base_prompt_has_schedules_section():
     real tables rather than replacing them with policy prose.
 
     Note: the schedule rendering format moved from ASCII to HTML as
-    part of the rich-editor pipeline (docs/PLAN-NOTES-RICH-EDITOR.md);
+    part of the rich-editor pipeline (docs/Archive/PLAN-NOTES-RICH-EDITOR.md);
     the "schedules render, don't get paraphrased" invariant is the
     stable part, and that's what this test pins."""
     base = (_PROMPT_DIR / "_notes_base.md").read_text(encoding="utf-8")

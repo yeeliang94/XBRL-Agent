@@ -1,6 +1,6 @@
 """HTML → Excel-plaintext renderer for the notes rich-editor pipeline.
 
-Every notes cell is authored as HTML (per docs/PLAN-NOTES-RICH-EDITOR.md).
+Every notes cell is authored as HTML (per docs/Archive/PLAN-NOTES-RICH-EDITOR.md).
 Excel does not preserve HTML formatting when pasted from a cell, so the
 canonical payload lives in the DB and the download path flattens HTML to
 plain text at write time. This module is the flattener.

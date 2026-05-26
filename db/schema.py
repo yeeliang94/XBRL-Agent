@@ -22,7 +22,20 @@ from pathlib import Path
 # post-run editor edits the HTML in place. Additive-only — rollback is a
 # code revert; the stray table is harmless (no FK points at it from any
 # legacy reader).
-CURRENT_SCHEMA_VERSION = 3
+# v4 (canonical-concept-model Phase 1, docs/PRD-canonical-concept-model):
+# adds seven additive tables that back the new concept tree, fact store,
+# audit log, and reconciliation queue. The legacy direct-Excel-write path
+# stays operational; canonical mode is gated by env-var
+# `XBRL_CANONICAL_MODE`.
+# v5 (canonical-concept-model Phase 5, SOCIE matrix variant): adds one
+# nullable column `concept_nodes.matrix_col` carrying the equity-component
+# column label on MATRIX_CELL concepts. NULL on every linear concept, so
+# the migration is a single idempotent ALTER TABLE (same shape as v2).
+# v6 (canonical-concept-model Phase 7, notes integration): adds one
+# nullable column `notes_cells.concept_uuid` so a notes row can be linked
+# to the canonical concept store. NULL preserves back-compat for the
+# coordinator's existing notes-write path. Single idempotent ALTER.
+CURRENT_SCHEMA_VERSION = 6
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -134,6 +147,128 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     )
     """,
 
+    # -----------------------------------------------------------------
+    # v4: canonical concept model — read-mostly template registry +
+    # per-run fact store + audit log + reconciliation queue. Every CREATE
+    # is guarded with IF NOT EXISTS so fresh-init unions v1..v4 cleanly.
+    # -----------------------------------------------------------------
+
+    # One row per parsed template. `source_path` is the on-disk xlsx;
+    # `imported_at` lets us audit when a template was last refreshed.
+    """
+    CREATE TABLE IF NOT EXISTS concept_templates (
+        template_id   TEXT PRIMARY KEY,
+        source_path   TEXT NOT NULL,
+        imported_at   TEXT,
+        shape         TEXT NOT NULL DEFAULT 'linear'  -- 'linear' | 'matrix' (P5)
+    )
+    """,
+
+    # One row per concept in the tree. `concept_uuid` is the immutable
+    # PK; `display_label` is the UI-overridable label (NULL = use
+    # canonical). `render_*` is the canonical cell coordinate for the
+    # exporter; `concept_targets` carries per-scope columns (Phase 4).
+    """
+    CREATE TABLE IF NOT EXISTS concept_nodes (
+        concept_uuid     TEXT PRIMARY KEY,
+        template_id      TEXT NOT NULL REFERENCES concept_templates(template_id) ON DELETE CASCADE,
+        parent_uuid      TEXT REFERENCES concept_nodes(concept_uuid) ON DELETE SET NULL,
+        kind             TEXT NOT NULL,           -- 'ABSTRACT' | 'LEAF' | 'COMPUTED' | 'MATRIX_CELL' (P5)
+        canonical_label  TEXT NOT NULL,
+        display_label    TEXT,                    -- UI override; NULL = use canonical
+        render_sheet     TEXT NOT NULL,
+        render_row       INTEGER NOT NULL,
+        render_col       TEXT NOT NULL,
+        matrix_col       TEXT                     -- P5: equity-component column on MATRIX_CELL; NULL on linear concepts
+    )
+    """,
+
+    # Directed edges from a parent COMPUTED concept to its summands.
+    # `coefficient` is signed (+1, -1, etc.). One row per edge.
+    """
+    CREATE TABLE IF NOT EXISTS concept_edges (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_uuid      TEXT NOT NULL REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
+        child_uuid       TEXT NOT NULL REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
+        coefficient      REAL NOT NULL DEFAULT 1.0,
+        UNIQUE(parent_uuid, child_uuid)
+    )
+    """,
+
+    # Per-scope render targets — Phase 4 fills the Company / Group
+    # columns and (eventually) SOCIE matrix cells. Phase 1 is allowed to
+    # leave this empty for Company-only filings (render_col on
+    # concept_nodes is sufficient).
+    """
+    CREATE TABLE IF NOT EXISTS concept_targets (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        concept_uuid     TEXT NOT NULL REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
+        entity_scope     TEXT NOT NULL,           -- 'Company' | 'Group'
+        period           TEXT NOT NULL,           -- 'CY' | 'PY'
+        target_sheet     TEXT NOT NULL,
+        target_row       INTEGER NOT NULL,
+        target_col       TEXT NOT NULL,
+        UNIQUE(concept_uuid, entity_scope, period)
+    )
+    """,
+
+    # Per-run facts (the heart of the canonical model). Composite key:
+    # (run_id, concept_uuid, period, entity_scope). Two status axes:
+    #   value_status     — observed | explicit_zero | not_disclosed | user_override | conflict
+    #   children_status  — itemised | aggregate_only | partial (only on COMPUTED concepts)
+    """
+    CREATE TABLE IF NOT EXISTS run_concept_facts (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id           INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        concept_uuid     TEXT NOT NULL REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
+        period           TEXT NOT NULL,
+        entity_scope     TEXT NOT NULL,
+        value            REAL,
+        value_status     TEXT NOT NULL,
+        children_status  TEXT,
+        source           TEXT,                    -- free-form provenance
+        evidence         TEXT,                    -- pdf page + quoted text
+        updated_at       TEXT NOT NULL DEFAULT '',
+        UNIQUE(run_id, concept_uuid, period, entity_scope)
+    )
+    """,
+
+    # Append-only audit log: every change to run_concept_facts lands a
+    # row here. Used by the reconciliation queue UI and by any future
+    # "show me what the correction agent did" view.
+    """
+    CREATE TABLE IF NOT EXISTS concept_fact_events (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id           INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        concept_uuid     TEXT NOT NULL,
+        period           TEXT NOT NULL,
+        entity_scope     TEXT NOT NULL,
+        actor            TEXT,                    -- agent name | 'user' | 'cascade'
+        turn             INTEGER,
+        ts               TEXT NOT NULL,
+        before_json      TEXT,
+        after_json       TEXT
+    )
+    """,
+
+    # Reconciliation queue — anything the auto-correction agent (Phase 3+)
+    # or the cascade can't resolve lands here for the user to triage.
+    """
+    CREATE TABLE IF NOT EXISTS run_concept_conflicts (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id           INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        concept_uuid     TEXT NOT NULL,
+        period           TEXT NOT NULL,
+        entity_scope     TEXT NOT NULL,
+        kind             TEXT NOT NULL,           -- 'parent_child_disagree' | 'partial_state' | 'cross_check_failure'
+        residual         REAL,
+        detail           TEXT,
+        status           TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'resolved' | 'dismissed'
+        created_at       TEXT NOT NULL DEFAULT '',
+        resolved_at      TEXT
+    )
+    """,
+
     # v3: canonical per-run store for notes HTML payloads. Every notes
     # agent write lands here; the Excel download path flattens HTML to
     # plaintext on demand, and the post-run editor reads/writes HTML
@@ -150,6 +285,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         evidence      TEXT,
         source_pages  TEXT,
         updated_at    TEXT NOT NULL,
+        concept_uuid  TEXT,                    -- P7: link to canonical concept store; NULL = legacy notes write
         UNIQUE(run_id, sheet, row)
     )
     """,
@@ -165,6 +301,14 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_cross_checks_run_id ON cross_checks(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_runs_created_at ON runs(created_at DESC)",
     "CREATE INDEX IF NOT EXISTS ix_notes_cells_run_id ON notes_cells(run_id)",
+    # v4 indexes — every per-run query the canonical model needs.
+    "CREATE INDEX IF NOT EXISTS ix_concept_nodes_template_id ON concept_nodes(template_id)",
+    "CREATE INDEX IF NOT EXISTS ix_concept_edges_parent_uuid ON concept_edges(parent_uuid)",
+    "CREATE INDEX IF NOT EXISTS ix_concept_edges_child_uuid ON concept_edges(child_uuid)",
+    "CREATE INDEX IF NOT EXISTS ix_concept_targets_concept_uuid ON concept_targets(concept_uuid)",
+    "CREATE INDEX IF NOT EXISTS ix_run_concept_facts_run_id ON run_concept_facts(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_concept_fact_events_run_id ON concept_fact_events(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_run_concept_conflicts_run_id ON run_concept_conflicts(run_id)",
 )
 
 
@@ -180,6 +324,21 @@ _V2_MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
     ("scout_enabled",          "INTEGER NOT NULL DEFAULT 0"),
     ("started_at",             "TEXT NOT NULL DEFAULT ''"),
     ("ended_at",               "TEXT"),
+)
+
+
+# v5 columns added via ALTER TABLE when migrating an existing v4 database.
+# Nullable (no default) so SQLite's ALTER TABLE accepts them and existing
+# linear concepts read NULL.
+_V5_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("concept_nodes", "matrix_col", "TEXT"),
+)
+
+
+# v6 columns added via ALTER TABLE when migrating an existing v5 database.
+# Nullable so existing notes rows read NULL.
+_V6_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("notes_cells", "concept_uuid", "TEXT"),
 )
 
 
@@ -287,6 +446,110 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (3,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v3 → v4: the seven concept-model tables were already created
+        # above via CREATE TABLE IF NOT EXISTS; we only need to walk the
+        # schema_version marker forward. Same BEGIN IMMEDIATE pattern as
+        # the v2→v3 block so concurrent starters serialise cleanly.
+        if current_version is not None and current_version < 4:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 4:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (4,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v4→v5 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v4 → v5: add the nullable `matrix_col` column to concept_nodes
+        # (SOCIE matrix variant). The CREATE TABLE above already carries
+        # the column on fresh DBs; this ALTER walks an existing v4 DB
+        # forward. Same BEGIN IMMEDIATE + duplicate-column tolerance as the
+        # v1→v2 block so concurrent starters serialise cleanly.
+        if current_version is not None and current_version < 5:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 5:
+                    for table, col_name, col_ddl in _V5_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                # A racing starter added it between our
+                                # PRAGMA and ALTER — idempotent success.
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (5,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v5→v6 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v5 → v6: add the nullable `concept_uuid` column to notes_cells
+        # (notes integration). Fresh DBs already carry it via CREATE TABLE
+        # above; this ALTER walks an existing v5 DB forward. Same
+        # BEGIN IMMEDIATE + duplicate-column tolerance as v1→v2.
+        if current_version is not None and current_version < 6:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 6:
+                    for table, col_name, col_ddl in _V6_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (6,),
                     )
                 conn.commit()
             except Exception:

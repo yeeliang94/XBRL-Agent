@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRD — Review Workspace (Evidence-Synced Verification)</title>
+<style>
+  :root {
+    --navy: #1F3864;
+    --blue: #4F81BD;
+    --light-blue: #DAE3F3;
+    --green: #16A34A;
+    --green-bg: #DCFCE7;
+    --amber: #F59E0B;
+    --amber-bg: #FEF3C7;
+    --red: #DC2626;
+    --red-bg: #FEE2E2;
+    --grey: #6B7280;
+    --grey-bg: #F3F4F6;
+    --border: #E5E7EB;
+    --text: #111827;
+    --muted: #6B7280;
+    --surface: #FFFFFF;
+    --bg: #FAFAFA;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 32px 48px 80px;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.6;
+    font-size: 15px;
+  }
+  h1 { font-size: 30px; color: var(--navy); margin: 0 0 8px; letter-spacing: -0.5px; }
+  h2 { font-size: 22px; color: var(--navy); margin: 48px 0 12px; padding-top: 16px; border-top: 1px solid var(--border); letter-spacing: -0.3px; }
+  h3 { font-size: 17px; color: var(--navy); margin: 28px 0 8px; }
+  h4 { font-size: 14px; color: var(--muted); margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+  .tldr { background: var(--light-blue); border-left: 4px solid var(--navy); padding: 16px 20px; margin: 24px 0; border-radius: 4px; }
+  .tldr strong { color: var(--navy); }
+  .nav { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 16px 20px; margin: 24px 0 32px; font-size: 13px; }
+  .nav ol { margin: 0; padding-left: 20px; }
+  .nav a { color: var(--blue); text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+  code { font-family: "SF Mono", "Monaco", "Cascadia Code", monospace; background: var(--grey-bg); padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+  pre { background: #1E293B; color: #E2E8F0; padding: 16px 20px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  pre code { background: transparent; padding: 0; color: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; background: var(--surface); font-size: 14px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--grey-bg); font-weight: 600; color: var(--navy); }
+  tr:last-child td { border-bottom: none; }
+  .callout { background: var(--amber-bg); border-left: 4px solid var(--amber); padding: 12px 16px; margin: 16px 0; border-radius: 4px; font-size: 14px; }
+  .callout-red { background: var(--red-bg); border-left: 4px solid var(--red); padding: 12px 16px; margin: 16px 0; border-radius: 4px; font-size: 14px; }
+  .callout-green { background: var(--green-bg); border-left: 4px solid var(--green); padding: 12px 16px; margin: 16px 0; border-radius: 4px; font-size: 14px; }
+  ul, ol { margin: 8px 0; padding-left: 24px; }
+  li { margin: 4px 0; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; letter-spacing: 0.3px; text-transform: uppercase; vertical-align: middle; }
+  .b-p0 { background: var(--red-bg); color: var(--red); }
+  .b-p1 { background: var(--amber-bg); color: #92400E; }
+  .b-p2 { background: var(--grey-bg); color: var(--grey); }
+  .b-green { background: var(--green-bg); color: var(--green); }
+  .muted { color: var(--muted); }
+  /* simple wireframe */
+  .wire { display: flex; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--surface); margin: 16px 0; min-height: 260px; }
+  .wire-col { border: 1px dashed var(--blue); border-radius: 6px; padding: 10px; font-size: 12px; background: var(--bg); }
+  .wire-nav { flex: 0 0 180px; }
+  .wire-main { flex: 1; }
+  .wire-pdf { flex: 0 0 300px; background: var(--light-blue); }
+  .wire-label { font-weight: 700; color: var(--navy); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; display: block; }
+  .wire-row { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; margin: 4px 0; }
+  .wire-row.sel { border-color: var(--blue); border-width: 2px; background: #EFF4FB; }
+  .pill { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 8px; }
+  .pill-red { background: var(--red-bg); color: var(--red); }
+  footer { margin-top: 64px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<h1>Review Workspace — Evidence-Synced Verification</h1>
+<div class="subtitle">PRD · Draft for review · 2026-05-26 · Owner: William Chen</div>
+
+<div class="tldr">
+  <strong>TL;DR.</strong> The post-run review screens <em>report</em> findings but never <em>take you to them</em>. A cross-check says two figures don't reconcile, but you can't click it; a value is shown, but its source PDF page is in a file you'd open by hand; the sheet dropdown makes you go hunting. This PRD reshapes review around one principle — <strong>every finding is a link to its evidence</strong> — by adding a server-rendered PDF pane, a clickable-finding selection model, and a navigator that replaces the dropdown. We build these as reusable parts and land them on the <strong>ConceptsPage (canonical mode)</strong> first, then reuse on History detail and the run-complete summary.
+</div>
+
+<div class="nav">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#problem">Problem &amp; background</a></li>
+    <li><a href="#goals">Goals &amp; non-goals</a></li>
+    <li><a href="#users">Users &amp; primary journey</a></li>
+    <li><a href="#layout">Target layout</a></li>
+    <li><a href="#requirements">Functional requirements</a></li>
+    <li><a href="#tech">Technical design notes</a></li>
+    <li><a href="#phasing">Phasing &amp; milestones</a></li>
+    <li><a href="#metrics">Success metrics</a></li>
+    <li><a href="#risks">Risks &amp; open questions</a></li>
+    <li><a href="#oos">Out of scope</a></li>
+  </ol>
+</div>
+
+<h2 id="problem">1. Problem &amp; background</h2>
+<p>After a run finishes, a reviewer has to confirm that the extracted figures are correct against the source financial-statement PDF, and resolve anything the cross-checks flagged. Today that work is spread across three disconnected surfaces:</p>
+<table>
+  <tr><th>Surface</th><th>File</th><th>What it does today</th></tr>
+  <tr><td>Run-complete summary</td><td><code>web/src/components/ResultsView.tsx</code></td><td>Summary metrics, JSON data preview, download buttons.</td></tr>
+  <tr><td>History run detail</td><td><code>web/src/components/RunDetailView.tsx</code></td><td>Run config, agent timelines, notes review, cross-check table.</td></tr>
+  <tr><td>Canonical mode</td><td><code>web/src/pages/ConceptsPage.tsx</code></td><td>Concept tree-grid, template-selector dropdown, ReconciliationQueue side panel.</td></tr>
+</table>
+
+<h4>The five reported pains</h4>
+<ul>
+  <li><strong>Reconciliation is a dead end.</strong> <code>ValidatorTab.tsx</code> and <code>ReconciliationQueue.tsx</code> list problems but offer no click-through to the cell they're talking about.</li>
+  <li><strong>No source visible.</strong> There is no PDF viewer anywhere in review; verifying a value means opening the original PDF by hand and scrolling.</li>
+  <li><strong>Sheet navigation is unfriendly.</strong> Switching template sheets goes through a dropdown rather than a fast, always-visible navigator.</li>
+  <li><strong>The side panel feels inert.</strong> The ReconciliationQueue surfaces conflicts but its actions don't move you to the issue.</li>
+  <li><strong>Visual clutter.</strong> Animations, spacing, and where the content sits could be calmer and more deliberate.</li>
+</ul>
+
+<div class="callout-green">
+  <strong>Feasibility: green.</strong> The hard parts already exist. The source PDF is retained per run at <code>output/{id}/uploaded.pdf</code> (never cleaned up). <code>tools/pdf_viewer.py::render_pages_to_png_bytes()</code> already renders any page to a PNG, with an LRU page cache in <code>tools/page_cache.py</code>. Every extracted value carries an <code>evidence</code> string like <code>"Page 14, Note 1"</code>, and notes cells additionally store a parsed <code>source_pages</code> integer list. The only missing backend piece is an HTTP route that serves a rendered page.
+</div>
+
+<h2 id="goals">2. Goals &amp; non-goals</h2>
+<h4>Goals</h4>
+<ul>
+  <li>Let a reviewer verify any extracted value against its source PDF page <strong>without leaving the review screen</strong>.</li>
+  <li>Make every flagged finding (cross-check failure, reconciliation conflict) a <strong>link that selects the offending value</strong> — driving both the data grid and the PDF pane.</li>
+  <li>Replace the sheet/template dropdown with an always-visible <strong>navigator</strong>.</li>
+  <li>Reduce visual noise — calmer animation, clearer hierarchy, stable content placement.</li>
+  <li>Build the PDF pane and the selection model as <strong>reusable parts</strong> so the same pattern can later extend to History detail and the run-complete summary.</li>
+</ul>
+<h4>Non-goals (this PRD)</h4>
+<ul>
+  <li>Not building an in-browser <em>Excel</em> preview — we review values via the concept grid + notes editor, and verify against the PDF.</li>
+  <li>Not changing the extraction pipeline, agents, prompts, or the canonical concept model itself.</li>
+  <li>Not unifying all three surfaces into one route in a single release (that is the eventual end-state, reached incrementally).</li>
+  <li>Not adding PDF text search / OCR / highlight-the-exact-number overlays (possible later; see open questions).</li>
+</ul>
+
+<h2 id="users">3. Users &amp; primary journey</h2>
+<p><strong>Primary user:</strong> the reviewer/preparer checking a filled MBRS workbook before filing. They trust nothing until they've eyeballed it against the audited PDF.</p>
+<p><strong>Primary journey (target):</strong></p>
+<ol>
+  <li>Open a completed run's review workspace.</li>
+  <li>Glance at the findings strip — "3 cross-checks failed, 1 conflict open."</li>
+  <li>Click the first failed check → the offending value is selected in the grid <em>and</em> the PDF pane flips to its evidence page.</li>
+  <li>Eyeball the figure against the page. Either it's right (dismiss the flag) or it's wrong (correct it, or note it).</li>
+  <li>Use the navigator to step through sheets; the PDF pane follows each selected value.</li>
+</ol>
+
+<h2 id="layout">4. Target layout</h2>
+<p>A three-region workspace. Selecting anything in the navigator or the findings strip updates the main grid <em>and</em> the PDF pane together.</p>
+
+<div class="wire">
+  <div class="wire-col wire-nav">
+    <span class="wire-label">Navigator</span>
+    <div class="wire-row sel">SOFP</div>
+    <div class="wire-row">SOPL</div>
+    <div class="wire-row">SOCI</div>
+    <div class="wire-row">Notes 10–14</div>
+    <div style="margin-top:10px;" class="wire-label">Findings</div>
+    <div class="wire-row"><span class="pill pill-red">FAIL</span> Assets ≠ E+L</div>
+    <div class="wire-row"><span class="pill pill-red">CONF</span> Residual 1,200</div>
+  </div>
+  <div class="wire-col wire-main">
+    <span class="wire-label">Value grid (selected sheet)</span>
+    <div class="wire-row">Property, plant &amp; equipment … 12,400</div>
+    <div class="wire-row sel">Total assets … 48,900 &nbsp; <span class="muted">ev: Page 14</span></div>
+    <div class="wire-row">Trade receivables … 9,100</div>
+    <div class="wire-row">Cash &amp; equivalents … 3,200</div>
+  </div>
+  <div class="wire-col wire-pdf">
+    <span class="wire-label">Source PDF — Page 14</span>
+    <div style="background:#fff;border:1px solid var(--border);border-radius:4px;height:180px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;">rendered page image<br>(follows selection)</div>
+  </div>
+</div>
+<p class="muted" style="font-size:13px;">On narrow screens the PDF pane collapses to a toggle/overlay rather than a third column.</p>
+
+<h2 id="requirements">5. Functional requirements</h2>
+
+<h3>5.1 PDF page-serving endpoint <span class="badge b-p0">P0</span></h3>
+<ul>
+  <li>New FastAPI route, e.g. <code>GET /api/runs/{run_id}/pdf/page/{page}.png?dpi=150</code>, returns a rendered PNG of that 1-indexed page.</li>
+  <li>Resolves the PDF from the run's session dir (<code>output/{id}/uploaded.pdf</code>); 404 if absent (e.g. legacy/CLI runs with no stored copy).</li>
+  <li>Reuses <code>render_pages_to_png_bytes()</code> and the existing <code>page_cache</code>; validates <code>1 ≤ page ≤ N</code>; clamps DPI to a sane range.</li>
+  <li>Served as an image response with cache headers so the browser can cache pages.</li>
+</ul>
+<div class="callout">Mirror the safety posture of the existing <code>/api/result/{session_id}/{filename}</code> route — the current download whitelist deliberately excludes the PDF, so this is a <em>new, explicit</em> read path scoped to page images, not raw-file access.</div>
+
+<h3>5.2 Evidence → page resolution <span class="badge b-p0">P0</span></h3>
+<ul>
+  <li>A shared parser maps a value's evidence to one or more page numbers. Prefer <code>notes_cells.source_pages</code> (already a clean int list) when present; otherwise regex the evidence string (<code>Page 14</code>, <code>p.42</code>, <code>Pages 19-20</code>, <code>Page 3; Page 4</code>).</li>
+  <li>If multiple pages, the pane shows the first and offers prev/next within the cited set.</li>
+  <li>If a value has no parseable page, the pane shows an empty state with a manual page jumper — it must never break selection.</li>
+</ul>
+
+<h3>5.3 PDF pane component <span class="badge b-p0">P0</span></h3>
+<ul>
+  <li>Reusable React component: given <code>runId</code> + page (and optional cited-page set), renders the page image with prev/next, a page-number jump, and zoom-to-fit / zoom-in.</li>
+  <li>Server-rendered images via <code>&lt;img&gt;</code> — <strong>not</strong> a browser PDF library (see <a href="#tech">§6</a>). Inline styles, per gotcha #7.</li>
+  <li>Loading + error states are quiet (no spinner thrash); a failed page render shows a retry, not a crash.</li>
+</ul>
+
+<h3>5.4 Selection model — "what's selected" <span class="badge b-p0">P0</span></h3>
+<ul>
+  <li>A single source of truth for the currently selected value (sheet + row/concept + evidence pages). Setting it drives the grid scroll/highlight and the PDF pane together.</li>
+  <li>Lightweight (component state or a small context/store) — no heavy state-management dependency.</li>
+</ul>
+
+<h3>5.5 Clickable findings <span class="badge b-p0">P0</span></h3>
+<ul>
+  <li><code>ValidatorTab.tsx</code> cross-check rows become clickable where the check identifies a target concept/row → sets selection.</li>
+  <li><code>ReconciliationQueue.tsx</code> conflict rows become clickable → sets selection; Resolve/Dismiss stay as-is.</li>
+  <li>Checks that genuinely have no single target (e.g. a whole-statement balance) select the most relevant anchor row and say so.</li>
+</ul>
+
+<h3>5.6 Navigator (replace dropdown) <span class="badge b-p1">P1</span></h3>
+<ul>
+  <li>Always-visible list of sheets/templates (sorted by MBRS slot order, reusing existing sort) replacing the <code>ConceptsPage</code> template-selector dropdown.</li>
+  <li>Per-sheet finding counts (e.g. a red dot with "2") so reviewers triage where to look first.</li>
+</ul>
+
+<h3>5.7 Visual cleanup <span class="badge b-p2">P2</span></h3>
+<ul>
+  <li>Audit existing animations in <code>index.css</code> (<code>pulse-subtle</code>, <code>glyph-pulse</code>, <code>fade-in</code>, <code>slide-down</code>); keep purposeful ones, drop noise in the review context.</li>
+  <li>Stabilize content placement (no layout jumps as panes load); tighten spacing/hierarchy for the three-region layout.</li>
+</ul>
+
+<h2 id="tech">6. Technical design notes</h2>
+<h4>Why server-rendered page images, not a browser PDF library</h4>
+<p>The obvious alternative is PDF.js / react-pdf in the browser. We reject it for this codebase because: (a) it ships a separate worker file and heavier bundle; (b) it has a history of being finicky on the Windows/enterprise target (same family of trouble as the Tailwind issue in gotcha #7, which is why the frontend uses inline styles); and (c) we already have <code>render_pages_to_png_bytes()</code> proven in the scout, correction, and extraction agents, with caching. Server-rendered <code>&lt;img&gt;</code> is the boring, robust choice.</p>
+
+<h4>Reuse, don't rebuild</h4>
+<ul>
+  <li><strong>Rendering:</strong> <code>tools/pdf_viewer.py::render_pages_to_png_bytes()</code> + <code>tools/page_cache.py</code>.</li>
+  <li><strong>Evidence:</strong> <code>notes_cells.source_pages</code> (DB, parsed ints) and the <code>evidence</code> TEXT columns on <code>extracted_fields</code> / <code>run_concept_facts</code>.</li>
+  <li><strong>Sheet ordering:</strong> existing <code>sortSheetsBySlot</code> used by the notes review tab.</li>
+</ul>
+
+<div class="callout">
+  <strong>Page hints are NOT persisted.</strong> Scout <code>page_hints</code> (face/note pages) live in-memory during a run and never reach the DB. They are a <em>nice-to-have fallback</em> for values with no evidence page — out of scope for P0. If we want them post-run, that's a one-column migration on <code>runs</code> (schema is version-stepped per gotcha #11), tracked as an open question, not a requirement.
+</div>
+
+<h2 id="phasing">7. Phasing &amp; milestones</h2>
+<table>
+  <tr><th>Phase</th><th>Deliverable</th><th>Demoable outcome</th></tr>
+  <tr><td><span class="badge b-p0">M1</span></td><td>PDF endpoint (5.1) + evidence parser (5.2) + PDF pane (5.3) wired into ConceptsPage; selecting a concept row shows its page.</td><td>"Click a value, see its source page." The anchor pain, solved on one screen.</td></tr>
+  <tr><td><span class="badge b-p0">M2</span></td><td>Selection model (5.4) + clickable findings (5.5) in ValidatorTab &amp; ReconciliationQueue.</td><td>"Click a failed check, jump to the cell and its page." The dead-end disconnect, solved.</td></tr>
+  <tr><td><span class="badge b-p1">M3</span></td><td>Navigator (5.6) replaces the dropdown, with per-sheet finding counts.</td><td>Fast triage; the unfriendly dropdown is gone.</td></tr>
+  <tr><td><span class="badge b-p2">M4</span></td><td>Visual cleanup (5.7); responsive collapse of the PDF pane.</td><td>Calmer, more deliberate review surface.</td></tr>
+  <tr><td><span class="badge b-p2">later</span></td><td>Reuse the PDF pane + selection model on History detail (<code>RunDetailView</code>) and the run-complete summary (<code>ResultsView</code>).</td><td>One consistent verification pattern everywhere — the eventual unified workspace.</td></tr>
+</table>
+
+<h2 id="metrics">8. Success metrics</h2>
+<ul>
+  <li><strong>Primary (qualitative):</strong> a reviewer can verify a flagged value against its source page without opening the PDF separately. Validate by watching one real review session per phase.</li>
+  <li>Every failed cross-check / open conflict that has a target concept is clickable and lands on the right row.</li>
+  <li>PDF page loads feel instant on a second view (cache hit).</li>
+  <li>No reliance on the sheet dropdown remains on ConceptsPage after M3.</li>
+</ul>
+
+<h2 id="risks">9. Risks &amp; open questions</h2>
+<table>
+  <tr><th>#</th><th>Item</th><th>Disposition</th></tr>
+  <tr><td>1</td><td>CLI runs don't copy the PDF into the run dir, so no source to serve.</td><td>Acceptable: feature targets web runs. PDF pane degrades to an empty state for runs without a stored PDF.</td></tr>
+  <tr><td>2</td><td>Evidence strings may be missing, vague, or cite the wrong page.</td><td>Pane never blocks on this — manual page jumper + prev/next always available. Bad evidence becomes visible (a review win), not a crash.</td></tr>
+  <tr><td>3</td><td>Some cross-checks have no single target row.</td><td>Select the most relevant anchor and label it; don't force a false target.</td></tr>
+  <tr><td>4 <span class="badge b-p2">open</span></td><td>Should we persist scout <code>page_hints</code> for a smarter fallback page?</td><td>Decide after M2. One-column migration if yes.</td></tr>
+  <tr><td>5 <span class="badge b-p2">open</span></td><td>Do reviewers want the exact number highlighted on the page, not just the right page?</td><td>Out of scope for now; revisit if "right page" proves insufficient.</td></tr>
+  <tr><td>6 <span class="badge b-p2">open</span></td><td>DPI / image-size tradeoff for legibility vs. payload.</td><td>Start at ~150 DPI; tune against a real statement page.</td></tr>
+</table>
+
+<h2 id="oos">10. Out of scope</h2>
+<ul>
+  <li>In-browser Excel/workbook preview.</li>
+  <li>PDF text layer, search, OCR, or number-level highlighting.</li>
+  <li>Pipeline / agent / prompt / canonical-model changes.</li>
+  <li>A single merged review route (reached incrementally via the "later" phase, not built up front).</li>
+</ul>
+
+<footer>
+  Draft PRD for review. Open questions in §9 are intentionally deferred, not decided. Next step after sign-off: a phased implementation plan (M1 first).
+</footer>
+
+</body>
+</html>

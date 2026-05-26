@@ -34,6 +34,11 @@ export interface RunDetailViewProps {
    *  endpoint. Optional — legacy callers without Step 12 UX still
    *  render the detail view unchanged. */
   onRegenerateNotes?: (runId: number) => void;
+  /** Gate the review link on canonical mode so legacy runs (which
+   *  have no concept tree) don't link to an empty page — matches the TopNav
+   *  / Results gating (peer-review F6). Defaults to false: hidden unless the
+   *  parent explicitly enables it. */
+  canonicalEnabled?: boolean;
 }
 
 /** Render a status badge from a precomputed display. Caller picks
@@ -234,7 +239,7 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
 }
 
 export function RunDetailView({
-  detail, onDownload, onDelete, onRegenerateNotes,
+  detail, onDownload, onDelete, onRegenerateNotes, canonicalEnabled = false,
 }: RunDetailViewProps) {
   // Notes review is a heavy sub-tree (one TipTap editor per cell). Keep
   // it unmounted until the operator opens the section so a detail view
@@ -297,6 +302,15 @@ export function RunDetailView({
           >
             Download filled workbook
           </button>
+          {canonicalEnabled && (
+            <a
+              href={`/concepts/${detail.id}`}
+              style={styles.secondaryLinkButton}
+              title="Review this run's extracted values and reconciliation queue"
+            >
+              Review values
+            </a>
+          )}
           <button
             type="button"
             onClick={handleDelete}
@@ -432,6 +446,19 @@ const styles = {
     border: "none",
     borderRadius: pwc.radius.sm,
     cursor: "not-allowed",
+  } as React.CSSProperties,
+  secondaryLinkButton: {
+    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: 600,
+    color: pwc.orange500,
+    background: pwc.white,
+    border: `1px solid ${pwc.orange500}`,
+    borderRadius: pwc.radius.sm,
+    cursor: "pointer",
+    textDecoration: "none",
+    display: "inline-block",
   } as React.CSSProperties,
   dangerButton: {
     padding: `${pwc.space.sm}px ${pwc.space.lg}px`,

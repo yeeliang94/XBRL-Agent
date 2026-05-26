@@ -1,6 +1,6 @@
 """Tests for schema v3 — `notes_cells` table backing the rich-editor payloads.
 
-Step 2 of docs/PLAN-NOTES-RICH-EDITOR.md. Adds a durable per-run notes-cell
+Step 2 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md. Adds a durable per-run notes-cell
 store so the post-run editor has a canonical payload to read/write and the
 Excel download path can regenerate sheets from JSON rather than patching
 the original xlsx in place.

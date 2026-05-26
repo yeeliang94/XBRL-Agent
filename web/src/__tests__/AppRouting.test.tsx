@@ -175,6 +175,29 @@ describe("App routing", () => {
     ).toBe("true");
   });
 
+  test("initial /concepts/42 URL survives mount (not rewritten to /)", async () => {
+    // Peer-review (2026-05-22): the pushState sync effect had no `concepts`
+    // branch, so booting from /concepts/42 fell through to "/" and the
+    // deep link was pushed away on first render — breaking refresh / share
+    // / back for the canonical-mode tree view. This pins the new branch.
+    // ConceptsPage fetches /api/runs/{id}/concepts via global fetch on
+    // mount; stub it so the effect doesn't throw.
+    const fetchStub = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ run_id: 42, concepts: [] }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchStub);
+    try {
+      window.history.replaceState({}, "", "/concepts/42");
+      const { default: App } = await import("../App");
+      render(<App />);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(window.location.pathname).toBe("/concepts/42");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("visiting /run/42 fetches the run and restores filename + sessionId", async () => {
     // Refresh / shareable-link contract: ExtractPage must rehydrate from
     // GET /api/runs/{id}. Filename in the upload card and sessionId on

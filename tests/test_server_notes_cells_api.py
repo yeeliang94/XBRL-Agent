@@ -1,4 +1,4 @@
-"""Step 8 of docs/PLAN-NOTES-RICH-EDITOR.md — GET/PATCH notes_cells API.
+"""Step 8 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md — GET/PATCH notes_cells API.
 
 Red tests encode the wire contract the editor (Step 9+) talks to:
 

@@ -51,6 +51,9 @@ export interface ExtractPageProps {
    *  keep working (the no-PATCH path is still valid for ad-hoc
    *  legacy `/` uploads where there's no run id to update). */
   handleConfigChange?: (config: RunConfigPayload) => void;
+  /** Canonical-mode gate (peer-review finding 5): only show the post-run
+   *  "View Concepts" link when the backend is in canonical mode. */
+  canonicalEnabled?: boolean;
 }
 
 export function ExtractPage({
@@ -63,6 +66,7 @@ export function ExtractPage({
   handleRerunAgent,
   handleReset,
   handleConfigChange,
+  canonicalEnabled = false,
 }: ExtractPageProps) {
   // PLAN-persistent-draft-uploads.md (Phase C): when the URL is /run/{id}
   // (currentRunId is non-null on mount) and we have not yet loaded that
@@ -356,6 +360,11 @@ export function ExtractPage({
           sessionId={state.sessionId!}
           runStartTime={state.runStartTime}
           getResultJson={getResultJson}
+          runId={canonicalEnabled ? state.complete.runId ?? state.currentRunId : null}
+          onViewConcepts={(id) => {
+            dispatch({ type: "SET_VIEW", payload: "concepts" });
+            dispatch({ type: "SET_SELECTED_RUN_ID", payload: id });
+          }}
         />
       )}
 

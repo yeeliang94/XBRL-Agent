@@ -2,7 +2,7 @@ import { pwc } from "../lib/theme";
 import type { AppView } from "../lib/appReducer";
 
 // ---------------------------------------------------------------------------
-// TopNav — SPA-style top navigation with two buttons: Extract and History.
+// TopNav — SPA-style top navigation with top-level app destinations.
 //
 // Inline styles (per CLAUDE.md #7: Tailwind didn't load reliably on Windows,
 // so the entire frontend uses inline style props). Uses ARIA role="tablist"
@@ -12,17 +12,23 @@ import type { AppView } from "../lib/appReducer";
 export interface TopNavProps {
   view: AppView;
   onViewChange: (view: AppView) => void;
+  // Canonical mode gate: hide the Concepts tab when the backend isn't
+  // running in canonical mode (peer-review finding 5). Defaults to true so
+  // callers that don't yet know the flag keep showing it.
+  showConcepts?: boolean;
 }
 
 const ITEMS: { id: AppView; label: string }[] = [
   { id: "extract", label: "Extract" },
   { id: "history", label: "History" },
+  { id: "concepts", label: "Review" },
 ];
 
-export function TopNav({ view, onViewChange }: TopNavProps) {
+export function TopNav({ view, onViewChange, showConcepts = true }: TopNavProps) {
+  const items = showConcepts ? ITEMS : ITEMS.filter((i) => i.id !== "concepts");
   return (
     <nav style={styles.nav} role="tablist" aria-label="Main navigation">
-      {ITEMS.map((item) => {
+      {items.map((item) => {
         const active = item.id === view;
         return (
           <button

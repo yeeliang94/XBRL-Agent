@@ -258,6 +258,13 @@ export interface CompleteData {
   // "Completed" badge. Optional for backward compatibility — older events
   // (and face-statement agents) don't carry it.
   warnings?: string[];
+  // Phase E: canonical-mode unresolved-conflict count (mirrored from
+  // RunCompleteData.open_conflicts) so ResultsView can prompt the user to
+  // reconcile in the Concepts page. 0 / absent in legacy mode.
+  openConflicts?: number;
+  // Backend run id for the completed audit row. Used by the post-run review
+  // action even when the extraction began from the legacy bare "/" flow.
+  runId?: number;
 }
 
 /** Per-agent completion event emitted by multi-agent runs. */
@@ -307,6 +314,12 @@ export interface RunCompleteData {
   // NotesTemplateType enum (CORP_INFO, ACC_POLICIES, …).
   notes_completed?: string[];
   notes_failed?: string[];
+  // Phase E (canonical mode): number of reconciliation conflicts still open
+  // after the correction pass. >0 means the run needs human reconciliation in
+  // the Concepts page. Absent / 0 in legacy mode.
+  open_conflicts?: number;
+  // Audit run id emitted on the aggregate completion event.
+  run_id?: number;
 }
 
 export interface ToolTimelineEntry {

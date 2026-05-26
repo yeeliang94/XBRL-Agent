@@ -409,6 +409,7 @@ def create_correction_agent(
             stmt,
             variant="",  # verifier auto-detects from sheet names
             filing_level=ctx.deps.filing_level,
+            filing_standard=ctx.deps.filing_standard,
         )
         lines = [
             f"Statement: {statement}",

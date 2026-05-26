@@ -57,10 +57,389 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 ENV_FILE = BASE_DIR / ".env"
+# Load .env into the process environment at import time so startup-time reads
+# — the lifespan handler's canonical bootstrap and `_canonical_mode_enabled()`
+# / `/api/config` — see values like XBRL_CANONICAL_MODE that the user set in
+# .env. Without this, those flags were only loaded inside individual request
+# handlers (override=True), so the Concepts UI never lit up from .env alone.
+# override=False keeps an explicitly exported shell var winning over .env.
+load_dotenv(ENV_FILE, override=False)
 CONFIG_DIR = BASE_DIR / "config"
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 # Shared SQLite audit store (one file per installation, grows over time).
 AUDIT_DB_PATH = OUTPUT_DIR / "xbrl_agent.db"
+
+# Canonical-mode health: set in the lifespan handler after the face-template
+# bootstrap runs. None = not yet attempted (or canonical mode off); True =
+# trees imported; False = import failed (Concepts UI will be empty, fact
+# projection will no-op). Used to surface a clear error instead of a silent
+# empty run (peer-review HIGH, finding 1).
+_CANONICAL_BOOTSTRAP_OK: Optional[bool] = None
+
+
+def _canonical_mode_enabled() -> bool:
+    """Feature flag: when XBRL_CANONICAL_MODE is truthy (1/true/yes/on)
+    the concept-model surfaces (facts API, concept tree, reconciliation
+    queue) are active.
+
+    Current state: the full canonical pipeline is wired — extraction
+    fact-projection (Phase B), the DB-backed exporter (Phase C), and the
+    canonical correction agent (Phase D, correction/canonical_agent.py).
+    In canonical mode the correction agent operates on the concept tree
+    (open conflicts in run_concept_conflicts), writes resolutions through
+    the facts API, and the workbook is re-exported + re-merged from facts —
+    so the download and the Concepts UI stay in sync (no xlsx split-brain).
+    The LEGACY .xlsx correction pass runs only in non-canonical mode.
+    """
+    import os
+    raw = os.environ.get("XBRL_CANONICAL_MODE", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _canonical_facts_enabled() -> bool:
+    """True when canonical mode is on AND the startup tree bootstrap
+    succeeded — i.e. fact projection can actually resolve concepts. When the
+    bootstrap failed (``_CANONICAL_BOOTSTRAP_OK is False``) we keep canonical
+    mode "on" for UI/error surfacing but stop threading run_id/db_path into
+    extraction so projection no-ops cleanly instead of skipping every cell
+    (peer-review finding 1).
+    """
+    return _canonical_mode_enabled() and _CANONICAL_BOOTSTRAP_OK is not False
+
+
+def _export_canonical_workbooks(
+    *,
+    run_id,
+    agent_results,
+    all_workbook_paths,
+    session_dir,
+    filing_level: str,
+    filing_standard: str,
+    db_path,
+):
+    """Phase C — replace agent-written workbooks with DB-exported ones.
+
+    For every *succeeded* statement, copy its master template into the run's
+    output dir and fill it from ``run_concept_facts`` via
+    ``export_run_to_xlsx``, then repoint ``all_workbook_paths`` at the export
+    so the merge (and the download) reflect the authoritative DB facts rather
+    than the scratch xlsx the agent wrote.
+
+    Best-effort per statement: if a single export fails we log it and leave
+    that statement's agent workbook in place, so one bad template can't sink
+    the whole download. Returns the list of StatementTypes actually exported.
+    """
+    import shutil
+    from statement_types import template_path as _tpl_path
+    from concept_model.exporter import export_run_to_xlsx
+    from concept_model.parser import _derive_template_id
+
+    exported = []
+    for ar in agent_results:
+        if ar.status != "succeeded":
+            continue
+        stmt = ar.statement_type
+        try:
+            master = _tpl_path(
+                stmt, ar.variant, level=filing_level, standard=filing_standard,
+            )
+        except ValueError:
+            # NotPrepared / standard-variant mismatch — nothing to export.
+            continue
+        canon_path = Path(session_dir) / f"{stmt.value}_canonical.xlsx"
+        try:
+            shutil.copyfile(master, canon_path)
+            applied = export_run_to_xlsx(
+                db_path, run_id, canon_path,
+                filing_level=filing_level,
+                template_id=_derive_template_id(Path(master)),
+            )
+        except Exception:
+            logger.exception(
+                "canonical export failed for %s — keeping agent workbook",
+                stmt.value,
+            )
+            continue
+        # Peer-review finding 1: only repoint the download at the DB export
+        # when it actually carries facts. A zero-fact export is a blank
+        # template — keep the agent's scratch workbook (which has values)
+        # rather than clobbering the download with an empty sheet.
+        if applied <= 0:
+            logger.warning(
+                "canonical export for %s applied 0 facts — keeping agent "
+                "workbook (Concepts UI may be incomplete for this statement)",
+                stmt.value,
+            )
+            continue
+        all_workbook_paths[stmt] = str(canon_path)
+        exported.append(stmt)
+    return exported
+
+
+def _run_has_facts(db_path, run_id: int) -> bool:
+    """True when the run has any canonical fact rows.
+
+    The download re-export path keys on this: a run with facts came through
+    canonical mode and its authoritative values live in the DB (including any
+    user edits from the review UI). A run with none is a legacy / non-canonical
+    run whose on-disk merged workbook is already authoritative — we leave it
+    untouched.
+    """
+    import sqlite3
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            return conn.execute(
+                "SELECT 1 FROM run_concept_facts WHERE run_id = ? LIMIT 1",
+                (run_id,),
+            ).fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — a probe failure must not block download
+        logger.warning("fact-presence probe failed for run %s", run_id,
+                       exc_info=True)
+        return False
+
+
+def _reexport_and_remerge_from_facts(run_id: int) -> Optional[Path]:
+    """Rebuild a run's merged workbook from the DB facts into a temp file.
+
+    Phase 1.3 of the editable-review plan, and the structural fix for the
+    "manual edit doesn't refresh the download" gap: the DB is the single
+    source of truth, so every download rebuilds the face-statement workbooks
+    from ``run_concept_facts`` (which already carries cascaded totals + any
+    user edits) and re-merges. The on-disk ``merged_workbook_path`` is left
+    untouched as the durable fallback — we write to a fresh temp file.
+
+    Returns the temp merged path, or ``None`` when re-export isn't applicable
+    (no facts, missing run context, or any failure) so the caller falls back
+    to the on-disk workbook. Best-effort by design: a re-export bug must never
+    block a download.
+    """
+    import tempfile
+    from types import SimpleNamespace
+    from db import repository as repo
+    from statement_types import StatementType
+    from notes_types import NotesTemplateType
+    from workbook_merger import merge as merge_workbooks
+
+    try:
+        conn = _open_audit_conn()
+        try:
+            run = repo.fetch_run(conn, run_id)
+            agents = repo.fetch_run_agents(conn, run_id)
+        finally:
+            conn.close()
+        if run is None or not run.merged_workbook_path:
+            return None
+        session_dir = Path(run.merged_workbook_path).parent
+        if not session_dir.exists():
+            return None
+
+        config = run.config or {}
+        filing_level = config.get("filing_level", "company")
+        filing_standard = config.get("filing_standard", "mfrs")
+
+        # Synthesize the agent_results shape _export_canonical_workbooks needs
+        # (status / statement_type enum / variant) from the persisted
+        # run_agents rows — the in-memory coordinator result is long gone by
+        # download time.
+        agent_results = []
+        for a in agents:
+            if a.status != "succeeded":
+                continue
+            try:
+                stmt = StatementType(a.statement_type)
+            except ValueError:
+                continue
+            agent_results.append(
+                SimpleNamespace(
+                    status="succeeded", statement_type=stmt, variant=a.variant
+                )
+            )
+        if not agent_results:
+            return None
+
+        # Seed face-statement inputs from whatever is on disk, then let the
+        # canonical export repoint each succeeded statement at a DB-filled copy.
+        all_workbook_paths: Dict[StatementType, str] = {}
+        for stmt in StatementType:
+            wb = session_dir / f"{stmt.value}_filled.xlsx"
+            if wb.exists():
+                all_workbook_paths[stmt] = str(wb)
+
+        _export_canonical_workbooks(
+            run_id=run_id,
+            agent_results=agent_results,
+            all_workbook_paths=all_workbook_paths,
+            session_dir=session_dir,
+            filing_level=filing_level,
+            filing_standard=filing_standard,
+            db_path=AUDIT_DB_PATH,
+        )
+
+        # Notes sheets are sourced from their on-disk per-template workbooks
+        # the same way the original merge did; the notes_cells overlay still
+        # runs afterward in the download endpoint for edited HTML.
+        all_notes_workbook_paths: Dict[NotesTemplateType, str] = {}
+        for nt in NotesTemplateType:
+            wb = session_dir / f"NOTES_{nt.value}_filled.xlsx"
+            if wb.exists():
+                all_notes_workbook_paths[nt] = str(wb)
+
+        fd, tmp_name = tempfile.mkstemp(suffix=".xlsx", prefix=f"reexport_{run_id}_")
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        result = merge_workbooks(
+            all_workbook_paths,
+            str(tmp_path),
+            notes_workbook_paths=all_notes_workbook_paths,
+            skip_recalc=True,
+        )
+        if not getattr(result, "success", False):
+            tmp_path.unlink(missing_ok=True)
+            logger.warning(
+                "download re-export merge failed for run %s: %s",
+                run_id, getattr(result, "errors", None),
+            )
+            return None
+        return tmp_path
+    except Exception:  # noqa: BLE001 — never let re-export block a download
+        logger.exception(
+            "download re-export from facts failed for run %s — serving "
+            "on-disk workbook", run_id,
+        )
+        return None
+
+
+def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
+    """Phase 4.3 — re-run the cross-checks against the current DB facts.
+
+    Cross-checks normally run once during the pipeline on the agent-written
+    workbooks. After a user edits values in the review UI those results go
+    stale. This rebuilds each succeeded statement's workbook from
+    ``run_concept_facts`` (so edits + cascaded totals are reflected) and
+    re-runs the same default cross-check registry, returning serialised
+    results. Returns ``None`` when the run has no facts / context to check.
+    Best-effort: never raises into the request handler.
+    """
+    from types import SimpleNamespace
+    from db import repository as repo
+    from statement_types import StatementType
+    from cross_checks.framework import (
+        run_all as run_cross_checks,
+        build_default_cross_checks,
+    )
+
+    try:
+        conn = _open_audit_conn()
+        try:
+            run = repo.fetch_run(conn, run_id)
+            agents = repo.fetch_run_agents(conn, run_id)
+        finally:
+            conn.close()
+        if run is None or not run.merged_workbook_path:
+            return None
+        session_dir = Path(run.merged_workbook_path).parent
+        if not session_dir.exists():
+            return None
+
+        config = run.config or {}
+        filing_level = config.get("filing_level", "company")
+        filing_standard = config.get("filing_standard", "mfrs")
+
+        agent_results = []
+        variants: dict = {}
+        statements_to_run: set = set()
+        for a in agents:
+            if a.status != "succeeded":
+                continue
+            try:
+                stmt = StatementType(a.statement_type)
+            except ValueError:
+                continue
+            agent_results.append(
+                SimpleNamespace(
+                    status="succeeded", statement_type=stmt, variant=a.variant
+                )
+            )
+            variants[stmt] = a.variant
+            statements_to_run.add(stmt)
+        if not agent_results:
+            return None
+
+        all_workbook_paths: Dict[StatementType, str] = {}
+        for stmt in StatementType:
+            wb = session_dir / f"{stmt.value}_filled.xlsx"
+            if wb.exists():
+                all_workbook_paths[stmt] = str(wb)
+
+        # Repoint each succeeded statement at a fresh DB-exported workbook so
+        # the checks see the edited figures, not the agent's scratch values.
+        _export_canonical_workbooks(
+            run_id=run_id,
+            agent_results=agent_results,
+            all_workbook_paths=all_workbook_paths,
+            session_dir=session_dir,
+            filing_level=filing_level,
+            filing_standard=filing_standard,
+            db_path=AUDIT_DB_PATH,
+        )
+
+        check_config = {
+            "statements_to_run": statements_to_run,
+            "variants": variants,
+            "filing_level": filing_level,
+            "filing_standard": filing_standard,
+        }
+        tolerance = float(os.environ.get("XBRL_TOLERANCE_RM", "1.0"))
+        results = run_cross_checks(
+            build_default_cross_checks(), all_workbook_paths, check_config,
+            tolerance=tolerance,
+        )
+        return [
+            {
+                "name": r.name,
+                "status": r.status,
+                "expected": r.expected,
+                "actual": r.actual,
+                "diff": r.diff,
+                "tolerance": r.tolerance,
+                "message": r.message,
+            }
+            for r in results
+        ]
+    except Exception:  # noqa: BLE001 — a re-check must never 500 the page
+        logger.exception("on-demand re-check failed for run %s", run_id)
+        return None
+
+
+def _open_conflict_count(db_path, run_id) -> int:
+    """Count unresolved reconciliation conflicts for a run (canonical mode).
+
+    Excludes the ``correction_exhausted`` sentinel — that outcome is already
+    surfaced via the dedicated ``correction_exhausted`` run status, so
+    counting it here too would double-signal. A non-zero count means the
+    canonical facts still carry partial-state / parent-child disagreements a
+    human needs to reconcile, which flips the run to completed_with_errors
+    (peer-review finding 4 / Phase E).
+    """
+    import sqlite3
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            return conn.execute(
+                "SELECT COUNT(*) FROM run_concept_conflicts "
+                "WHERE run_id = ? AND status = 'open' "
+                "AND kind != 'correction_exhausted'",
+                (run_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — telemetry must never sink a run
+        logger.warning("open-conflict count failed for run %s", run_id,
+                       exc_info=True)
+        return 0
 
 # Phase mapping: tool name → EventPhase
 PHASE_MAP = {
@@ -611,6 +990,219 @@ async def _run_correction_pass(
     return outcome
 
 
+async def _run_canonical_correction_pass(
+    *,
+    conflicts: list,
+    model,
+    filing_level: str,
+    event_queue,
+    db_path,
+    run_id: int,
+    pdf_path: Optional[str] = None,
+    agent_id: str = CORRECTION_AGENT_ID,
+) -> dict:
+    """Phase D — canonical-mode correction against the concept tree.
+
+    Drives the canonical correction agent (correction/canonical_agent.py)
+    over the run's OPEN conflicts. Its tools write resolutions through the
+    facts API into run_concept_facts, so the fix lands in the authoritative
+    store (no xlsx split-brain — peer-review finding 2). After the agent
+    finishes, the cascade re-runs so corrected leaves propagate to parent
+    totals. The caller then re-exports + re-merges so the download reflects
+    the corrected facts.
+
+    Returns the same outcome shape as ``_run_correction_pass`` so the
+    downstream re-check + audit-backfill machinery is reused unchanged.
+    """
+    import asyncio as _asyncio
+    import time as _wc_time
+    import server as _server_self
+    from notes.coordinator import _iter_with_turn_timeout
+    from pydantic_ai import Agent
+    from pydantic_ai.messages import (
+        FunctionToolCallEvent, FunctionToolResultEvent,
+    )
+    from correction.canonical_agent import (
+        create_canonical_correction_agent,
+        compute_canonical_turn_cap,
+        record_correction_exhaustion,
+    )
+
+    outcome: dict = {
+        "invoked": False, "writes_performed": 0, "error": None,
+        "total_tokens": 0, "total_cost": 0.0, "exhausted": False,
+        "turns_used": 0, "max_turns": 0,
+    }
+    if not conflicts:
+        return outcome
+    outcome["invoked"] = True
+
+    max_turns = compute_canonical_turn_cap(
+        filing_level=filing_level, n_conflicts=len(conflicts),
+    )
+    outcome["max_turns"] = max_turns
+
+    async def _emit(event_type: str, data: dict) -> None:
+        if event_queue is None:
+            return
+        await event_queue.put({
+            "event": event_type,
+            "data": {**data, "agent_id": agent_id, "agent_role": agent_id},
+        })
+
+    try:
+        agent, deps = create_canonical_correction_agent(
+            model=model, db_path=db_path, run_id=run_id,
+            filing_level=filing_level, pdf_path=pdf_path, conflicts=conflicts,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Canonical correction agent construction failed")
+        outcome["error"] = f"agent construction failed: {type(e).__name__}: {e}"
+        await _emit("error", {"message": outcome["error"]})
+        await _emit("complete", {"success": False, "error": outcome["error"]})
+        return outcome
+
+    prompt = (
+        "Resolve every OPEN CONFLICT listed in your system prompt using the "
+        "concept tree. Prefer revise_leaf when a leaf is wrong or missing; use "
+        "mark_aggregate_only when the parent total is right but its breakdown "
+        "isn't disclosed; use mark_not_disclosed only when the source truly "
+        f"omits a leaf. You have at most {max_turns} turns. Never invent a "
+        "residual plug to silence a mismatch."
+    )
+    await _emit("status", {
+        "phase": "started",
+        "message": (
+            f"Canonical correction started for {len(conflicts)} open "
+            f"conflict(s); turn budget {max_turns}."
+        ),
+    })
+
+    turn_count = 0
+    _wc_start = _wc_time.monotonic()
+    _wallclock_cap = float(getattr(
+        _server_self, "CORRECTION_WALLCLOCK_TIMEOUT", CORRECTION_WALLCLOCK_TIMEOUT,
+    ))
+
+    class _WallclockExceeded(Exception):
+        pass
+
+    try:
+        async with agent.iter(prompt, deps=deps) as agent_run:
+            async for node in _iter_with_turn_timeout(
+                agent_run,
+                _wallclock_cap if _wallclock_cap < CORRECTION_TURN_TIMEOUT
+                else CORRECTION_TURN_TIMEOUT,
+            ):
+                if _wc_time.monotonic() - _wc_start > _wallclock_cap:
+                    raise _WallclockExceeded(
+                        f"Canonical correction exceeded wall-clock cap of "
+                        f"{_wallclock_cap}s after {deps.writes_performed} write(s)."
+                    )
+                if Agent.is_call_tools_node(node):
+                    turn_count += 1
+                    if turn_count > max_turns:
+                        msg = (
+                            f"Canonical correction exhausted its turn budget "
+                            f"({max_turns}) after {deps.writes_performed} "
+                            f"write(s); {len(conflicts)} conflict(s) seen."
+                        )
+                        logger.warning(msg)
+                        outcome.update({
+                            "error": "correction_exhausted", "exhausted": True,
+                            "turns_used": turn_count - 1,
+                            "writes_performed": deps.writes_performed,
+                        })
+                        try:
+                            record_correction_exhaustion(
+                                db_path=db_path, run_id=run_id,
+                                unresolved_conflict_ids=[
+                                    c.get("id") for c in conflicts if c.get("id")
+                                ],
+                                turns_used=turn_count - 1, max_turns=max_turns,
+                            )
+                        except Exception:  # noqa: BLE001
+                            logger.warning("record_correction_exhaustion failed",
+                                           exc_info=True)
+                        await _emit("error", {"message": msg})
+                        await _emit("complete", {
+                            "success": False, "error": "correction_exhausted",
+                            "writes_performed": deps.writes_performed,
+                            "turns_used": turn_count - 1, "max_turns": max_turns,
+                        })
+                        return outcome
+                    async with node.stream(agent_run.ctx) as tool_stream:
+                        async for event in tool_stream:
+                            if isinstance(event, FunctionToolCallEvent):
+                                args = event.part.args
+                                if isinstance(args, str):
+                                    try:
+                                        parsed = json.loads(args)
+                                    except (json.JSONDecodeError, TypeError):
+                                        parsed = {}
+                                elif isinstance(args, dict):
+                                    parsed = args
+                                else:
+                                    parsed = {}
+                                await _emit("tool_call", {
+                                    "tool_name": event.part.tool_name,
+                                    "tool_call_id": event.part.tool_call_id,
+                                    "args": parsed,
+                                })
+                            elif isinstance(event, FunctionToolResultEvent):
+                                content = event.result.content
+                                summary = str(content)[:800] if content else ""
+                                await _emit("tool_result", {
+                                    "tool_name": event.result.tool_name,
+                                    "tool_call_id": event.result.tool_call_id,
+                                    "result_summary": summary,
+                                    "duration_ms": 0,
+                                })
+        outcome["writes_performed"] = deps.writes_performed
+        outcome["turns_used"] = turn_count
+        try:
+            from pricing import estimate_cost as _ec
+            _u = agent_run.usage()
+            outcome["total_tokens"] = int(_u.total_tokens or 0)
+            outcome["total_cost"] = _ec(
+                int(_u.request_tokens or 0), int(_u.response_tokens or 0), 0, model)
+        except Exception:  # noqa: BLE001
+            logger.debug("canonical correction token capture skipped")
+        await _emit("complete", {
+            "success": True, "writes_performed": deps.writes_performed,
+            "turns_used": turn_count, "max_turns": max_turns,
+        })
+    except _asyncio.CancelledError:
+        await _emit("complete", {"success": False, "error": "Cancelled by user"})
+        outcome["error"] = "cancelled"
+        raise
+    except _WallclockExceeded as wc:
+        msg = str(wc)
+        logger.warning(msg)
+        outcome["error"] = "correction_wallclock_exceeded"
+        outcome["writes_performed"] = deps.writes_performed
+        await _emit("error", {"type": "correction_wallclock_exceeded", "message": msg})
+        await _emit("complete", {
+            "success": False, "error": "correction_wallclock_exceeded",
+            "writes_performed": deps.writes_performed,
+        })
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Canonical correction run failed")
+        outcome["error"] = str(e)
+        await _emit("error", {"message": str(e)})
+        await _emit("complete", {"success": False, "error": str(e)})
+
+    # Re-cascade so corrected leaves propagate to parent totals before the
+    # caller re-exports + re-merges from facts.
+    try:
+        from concept_model.cascade import recompute_after_turn
+        recompute_after_turn(db_path, run_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("post-correction cascade failed for run %s", run_id)
+
+    return outcome
+
+
 async def _run_notes_validator_pass(
     merged_workbook_path: str,
     pdf_path: str,
@@ -942,6 +1534,28 @@ async def _lifespan(app: FastAPI):
     """
     from db.schema import init_db
     init_db(AUDIT_DB_PATH)
+    # Canonical mode: import every face template's concept tree so the
+    # Concepts UI has a tree to render and the facts API can resolve
+    # concept_uuids. Idempotent (deterministic UUID5), so it's safe on
+    # every boot; gated on the flag to keep legacy startup fast.
+    if _canonical_mode_enabled():
+        global _CANONICAL_BOOTSTRAP_OK
+        try:
+            from concept_model.bootstrap import import_all_face_templates
+            ids = import_all_face_templates(AUDIT_DB_PATH)
+            _CANONICAL_BOOTSTRAP_OK = True
+            logger.info("canonical mode: imported %d face templates", len(ids))
+        except Exception:
+            # Don't hard-crash the server — the legacy UI / History share this
+            # process. But mark canonical mode unhealthy and log at ERROR so a
+            # silent empty-Concepts-UI run is impossible to miss (peer-review).
+            _CANONICAL_BOOTSTRAP_OK = False
+            logger.error(
+                "canonical mode: face-template bootstrap FAILED — concept "
+                "trees are not imported; Concepts UI will be empty and fact "
+                "projection will skip every cell. Fix the import and restart.",
+                exc_info=True,
+            )
     yield
 
 
@@ -949,6 +1563,17 @@ app = FastAPI(title="XBRL Agent", version="0.3.0", lifespan=_lifespan)
 
 # Track active extraction runs by session_id
 active_runs: set[str] = set()
+
+
+# Canonical concept-model facts API (Phase 1).  Mounted unconditionally:
+# the endpoint sits idle when XBRL_CANONICAL_MODE=0 and the legacy
+# direct-Excel-write path handles all writes (gotcha #15-style fallback).
+# The router uses a getter for AUDIT_DB_PATH so tests can swap the
+# module attribute at runtime.
+from concept_model.facts_api import register_facts_routes as _register_facts_routes
+_register_facts_routes(app, lambda: AUDIT_DB_PATH)
+from concept_model.concepts_routes import register_concept_routes as _register_concept_routes
+_register_concept_routes(app, lambda: AUDIT_DB_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -1067,6 +1692,19 @@ def _load_extended_settings() -> dict:
 
 
 # --- Settings endpoints ---
+
+@app.get("/api/config")
+async def get_config():
+    """Lightweight feature-flag surface for the frontend. Lets the SPA hide
+    canonical-mode UI (the Concepts tab + per-run links) when the backend
+    isn't running in canonical mode (peer-review finding 5)."""
+    return {
+        "canonical_mode": _canonical_mode_enabled(),
+        # False only when canonical mode is on but the startup tree bootstrap
+        # failed — the UI can warn instead of showing an empty Concepts page.
+        "canonical_ready": _CANONICAL_BOOTSTRAP_OK is not False,
+    }
+
 
 @app.get("/api/settings")
 async def get_settings():
@@ -1946,7 +2584,26 @@ async def run_multi_agent_stream(
             models=models,
             filing_level=run_config.filing_level,
             filing_standard=run_config.filing_standard,
+            # Canonical mode: hand the run_id + DB to the coordinator so
+            # extraction agents project their writes into run_concept_facts —
+            # but only when the startup bootstrap actually imported the trees
+            # (peer-review finding 1). If it failed, leave these None so
+            # projection cleanly no-ops instead of skipping every cell, and
+            # surface a clear warning below.
+            run_id=run_id if _canonical_facts_enabled() else None,
+            db_path=str(AUDIT_DB_PATH) if _canonical_facts_enabled() else None,
         )
+
+        if _canonical_mode_enabled() and _CANONICAL_BOOTSTRAP_OK is False:
+            yield {"event": "error", "data": {
+                "type": "canonical_bootstrap_failed",
+                "message": (
+                    "Canonical mode is on but the concept-tree import failed "
+                    "at startup — this run will still produce a workbook, but "
+                    "the Concepts UI won't populate. Check server logs and "
+                    "restart."
+                ),
+            }}
 
         yield {"event": "status", "data": {
             "phase": "starting",
@@ -2332,6 +2989,19 @@ async def run_multi_agent_stream(
                 yield {"event": "error", "data": {"message": f"Coordinator error: {e}"}}
             return
 
+        # Canonical mode (Phase B7): now that every extraction agent has
+        # projected its leaf facts into run_concept_facts, recompute the
+        # COMPUTED parents (subtotals/totals) from the leaves so the
+        # Concepts UI and the DB exporter (Phase C) see complete figures.
+        # Best-effort — a cascade failure must not sink an otherwise good
+        # run; the leaves are still persisted.
+        if _canonical_facts_enabled():
+            try:
+                from concept_model.cascade import recompute_after_turn
+                recompute_after_turn(AUDIT_DB_PATH, run_id)
+            except Exception:
+                logger.exception("canonical cascade failed for run %s", run_id)
+
         # Peer-review C1: the main drain loop has exited (it stopped when
         # the fan-in sentinel arrived). The post-pipeline stages below —
         # correction agent + notes post-validator — still push events into
@@ -2431,6 +3101,28 @@ async def run_multi_agent_stream(
                 all_workbook_paths[stmt] = str(wb_path)
         # Override with any just-completed workbooks from this run
         all_workbook_paths.update(coordinator_result.workbook_paths)
+
+        # Phase C: in canonical mode the DB (run_concept_facts) is the
+        # authoritative store — export each succeeded statement's workbook
+        # from the facts and repoint the merge inputs at it, so the
+        # downloaded filled.xlsx reflects the cascaded DB values (and any
+        # later canonical correction) rather than the agent's scratch xlsx.
+        if _canonical_facts_enabled():
+            try:
+                _export_canonical_workbooks(
+                    run_id=run_id,
+                    agent_results=coordinator_result.agent_results,
+                    all_workbook_paths=all_workbook_paths,
+                    session_dir=session_dir,
+                    filing_level=run_config.filing_level,
+                    filing_standard=run_config.filing_standard,
+                    db_path=AUDIT_DB_PATH,
+                )
+            except Exception:
+                logger.exception(
+                    "canonical export pass failed for run %s — falling back "
+                    "to agent-written workbooks", run_id,
+                )
 
         # Same pattern for notes workbooks — pick up prior partial runs + this run's output.
         all_notes_workbook_paths: Dict[NotesTemplateType, str] = {}
@@ -2677,6 +3369,12 @@ async def run_multi_agent_stream(
         correction_outcome: Optional[dict] = None
         validator_outcome: Optional[dict] = None
         correction_run_agent_id: Optional[int] = None
+        # Phase D/E: set when the post-correction canonical re-export or
+        # re-merge fails. The facts are corrected but the downloadable
+        # workbook would be stale — a split-brain. We force the run to
+        # completed_with_errors and surface an SSE error rather than
+        # silently shipping a stale download (peer-review finding 4).
+        canonical_reexport_failed = False
         validator_run_agent_id: Optional[int] = None
 
         # Phase 3: if any hard cross-check failed, spawn the correction
@@ -2687,7 +3385,24 @@ async def run_multi_agent_stream(
         # review, they do NOT retry.
         if merge_result.success:
             hard_failures = [cr for cr in cross_check_results if cr.status == "failed"]
-            if hard_failures:
+            # Phase D: in canonical mode the correction agent operates on the
+            # concept tree, driven by OPEN conflicts in run_concept_conflicts
+            # (cascade-detected partial-state / parent-child disagreements),
+            # NOT by xlsx cross-check failures. Its tools write resolutions
+            # through the facts API, so the fix lands in the authoritative
+            # store and the download is re-exported from facts afterwards —
+            # closing the legacy split-brain (peer-review finding 2). The
+            # legacy .xlsx correction pass runs only in non-canonical mode.
+            canonical = _canonical_facts_enabled()
+            canonical_conflicts: list = []
+            if canonical:
+                from correction.canonical_agent import _load_open_conflicts
+                canonical_conflicts = [
+                    c for c in _load_open_conflicts(AUDIT_DB_PATH, run_id)
+                    if c.get("kind") != "correction_exhausted"
+                ]
+            should_correct = bool(hard_failures) or bool(canonical_conflicts)
+            if should_correct:
                 # Create + register the CORRECTION run_agent row lazily —
                 # only when we actually launch the agent — so runs without
                 # failures don't churn out a "skipped" audit row and the
@@ -2714,19 +3429,31 @@ async def run_multi_agent_stream(
                 # historically; this label tells the UI the "10-min
                 # silent gap" everyone reports is correction running.
                 _emit_stage("correcting")
-                correction_task = asyncio.create_task(_run_correction_pass(
-                    failed_checks=hard_failures,
-                    merged_workbook_path=merged_path,
-                    pdf_path=str(session_dir / "uploaded.pdf"),
-                    infopack=infopack,
-                    filing_level=run_config.filing_level,
-                    filing_standard=run_config.filing_standard,
-                    model=model,
-                    output_dir=output_dir,
-                    event_queue=event_queue,
-                    statements_to_run=set(statements_to_run),
-                    variants={stmt: v for stmt, v in variants.items()},
-                ))
+                if canonical:
+                    correction_task = asyncio.create_task(
+                        _run_canonical_correction_pass(
+                            conflicts=canonical_conflicts,
+                            model=model,
+                            filing_level=run_config.filing_level,
+                            event_queue=event_queue,
+                            db_path=AUDIT_DB_PATH,
+                            run_id=run_id,
+                            pdf_path=str(session_dir / "uploaded.pdf"),
+                        ))
+                else:
+                    correction_task = asyncio.create_task(_run_correction_pass(
+                        failed_checks=hard_failures,
+                        merged_workbook_path=merged_path,
+                        pdf_path=str(session_dir / "uploaded.pdf"),
+                        infopack=infopack,
+                        filing_level=run_config.filing_level,
+                        filing_standard=run_config.filing_standard,
+                        model=model,
+                        output_dir=output_dir,
+                        event_queue=event_queue,
+                        statements_to_run=set(statements_to_run),
+                        variants={stmt: v for stmt, v in variants.items()},
+                    ))
                 async for event in _drain_while_running(correction_task):
                     persist_event(event)
                     if client_connected:
@@ -2736,6 +3463,73 @@ async def run_multi_agent_stream(
                             client_connected = False
                 correction_outcome = await correction_task
                 if correction_outcome.get("writes_performed", 0) > 0:
+                    # Canonical mode: the agent edited FACTS, not the xlsx.
+                    # Re-export each statement from the corrected facts and
+                    # re-merge so the downloaded workbook matches the Concepts
+                    # UI (finding 2). The cascade already re-ran inside the
+                    # canonical pass, so facts are consistent here.
+                    if canonical:
+                        try:
+                            _export_canonical_workbooks(
+                                run_id=run_id,
+                                agent_results=coordinator_result.agent_results,
+                                all_workbook_paths=all_workbook_paths,
+                                session_dir=session_dir,
+                                filing_level=run_config.filing_level,
+                                filing_standard=run_config.filing_standard,
+                                db_path=AUDIT_DB_PATH,
+                            )
+                            remerge = merge_workbooks(
+                                all_workbook_paths, merged_path,
+                                notes_workbook_paths=all_notes_workbook_paths,
+                                skip_recalc=True,
+                            )
+                            if remerge.success:
+                                if db_conn is not None and run_id is not None:
+                                    repo.mark_run_merged(db_conn, run_id, merged_path)
+                            else:
+                                # Re-merge failed: the download would be stale
+                                # relative to the corrected facts.
+                                canonical_reexport_failed = True
+                                _enqueue_system_error({
+                                    "type": "canonical_reexport_failed",
+                                    "message": (
+                                        "Post-correction re-merge failed; the "
+                                        "downloaded workbook may not reflect the "
+                                        "corrected facts. Errors: "
+                                        + "; ".join(remerge.errors or ["unknown"])
+                                    ),
+                                })
+                        except Exception as _rx:  # noqa: BLE001
+                            logger.exception(
+                                "post-correction re-export/re-merge failed "
+                                "for run %s", run_id,
+                            )
+                            canonical_reexport_failed = True
+                            _enqueue_system_error({
+                                "type": "canonical_reexport_failed",
+                                "message": (
+                                    f"Post-correction re-export crashed "
+                                    f"({type(_rx).__name__}); the downloaded "
+                                    f"workbook may not reflect the corrected "
+                                    f"facts."
+                                ),
+                            })
+                        # Drain the error event(s) we may have enqueued so the
+                        # client + DB see them in order.
+                        while True:
+                            try:
+                                _evt = event_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
+                            if _evt is None:
+                                continue
+                            persist_event(_evt)
+                            if client_connected:
+                                try:
+                                    yield _evt
+                                except (asyncio.CancelledError, GeneratorExit):
+                                    client_connected = False
                     # Phase 6: stage boundary — correction edited the
                     # workbook, time to re-run cross-checks against the
                     # corrected state.
@@ -3125,9 +3919,23 @@ async def run_multi_agent_stream(
         correction_exhausted = bool(
             correction_outcome and correction_outcome.get("exhausted")
         )
+        # Phase E (folds peer-review finding 4): in canonical mode the DB is
+        # the authoritative store, so unresolved reconciliation conflicts mean
+        # the run isn't clean even if the xlsx cross-checks pass. Surface the
+        # count and let it tip an otherwise-green run to completed_with_errors.
+        open_conflicts = (
+            _open_conflict_count(AUDIT_DB_PATH, run_id)
+            if _canonical_facts_enabled() else 0
+        )
         if all_agents_ok and merge_result.success and correction_exhausted:
             overall_status = "correction_exhausted"
-        elif all_agents_ok and merge_result.success and not any_check_failed and not cross_check_crashed:
+        elif canonical_reexport_failed:
+            # Facts were corrected but the workbook couldn't be regenerated —
+            # the download is stale relative to the Concepts UI. Never report
+            # this as a clean success (peer-review finding 4).
+            overall_status = "completed_with_errors"
+        elif (all_agents_ok and merge_result.success and not any_check_failed
+              and not cross_check_crashed and open_conflicts == 0):
             # Peer-review fix (2026-04-27): a cross-check pass that
             # crashed produced an empty results list, so
             # ``any_check_failed`` is misleadingly False. Without the
@@ -3135,6 +3943,10 @@ async def run_multi_agent_stream(
             # crashes silently became "completed" runs.
             overall_status = "completed"
         elif all_agents_ok and not merge_result.success:
+            overall_status = "completed_with_errors"
+        elif all_agents_ok and merge_result.success and open_conflicts > 0:
+            # Agents, merge and xlsx cross-checks are clean, but the
+            # canonical store still has unreconciled conflicts → needs review.
             overall_status = "completed_with_errors"
         elif all_agents_ok and (any_check_failed or cross_check_crashed):
             overall_status = "completed_with_errors"
@@ -3185,7 +3997,12 @@ async def run_multi_agent_stream(
                 )
         if client_connected:
             yield {"event": "run_complete", "data": {
-                "success": all_agents_ok and merge_result.success and not any_check_failed and not cross_check_crashed,
+                # Derive success from the single authoritative terminal status
+                # so the live UI can't show a green badge next to a
+                # reconciliation warning (peer-review). overall_status already
+                # folds in merge, cross-checks, correction_exhausted, and
+                # open canonical conflicts.
+                "success": overall_status == "completed",
                 "merged_workbook": merged_path if merge_result.success else None,
                 "merge_errors": merge_result.errors,
                 "cross_checks": checks_data,
@@ -3201,6 +4018,11 @@ async def run_multi_agent_stream(
                 # that connected mid-stream and missed the starting event
                 # can still pick up the new run id to navigate to.
                 "run_id": run_id,
+                # Phase E: canonical-mode reconciliation signal — how many
+                # conflicts remain open after correction. 0 in legacy mode.
+                # The Concepts UI / results banner surfaces this so the user
+                # knows the run needs human reconciliation.
+                "open_conflicts": open_conflicts,
             }}
     except BaseException:
         # Belt-and-braces: if we reach the outer except without having
@@ -4118,7 +4940,7 @@ async def delete_run_endpoint(run_id: int):
 
 
 # ---------------------------------------------------------------------------
-# Step 8 (docs/PLAN-NOTES-RICH-EDITOR.md): notes_cells GET/PATCH contract.
+# Step 8 (docs/Archive/PLAN-NOTES-RICH-EDITOR.md): notes_cells GET/PATCH contract.
 #
 # The post-run editor reads rich HTML payloads per cell via GET (grouped by
 # sheet) and saves edits via PATCH. The wire contract is the one asserted
@@ -4335,7 +5157,7 @@ async def patch_notes_cell_endpoint(
 
 @app.get("/api/runs/{run_id}/notes_cells/edited_count")
 async def notes_cells_edited_count_endpoint(run_id: int):
-    """Step 12 of docs/PLAN-NOTES-RICH-EDITOR.md — count how many
+    """Step 12 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md — count how many
     ``notes_cells`` rows were touched *after* the run finished.
 
     The Regenerate-notes confirm dialog opens only when this returns
@@ -4364,6 +5186,67 @@ async def notes_cells_edited_count_endpoint(run_id: int):
     finally:
         conn.close()
     return {"count": int(row[0]) if row else 0}
+
+
+@app.get("/api/runs/{run_id}/facts/edited_count")
+async def facts_edited_count_endpoint(run_id: int):
+    """Phase 2.3 — count face-statement values the user edited after the
+    run finished (the face-statement analogue of notes_cells/edited_count).
+
+    Mirrors the notes contract: a re-run / correction pass clobbers user
+    edits, so the confirm dialog opens only when this returns ``count > 0``.
+    A user edit is a ``run_concept_facts`` row stamped ``source='manual edit'``
+    (set only by ``patch_fact_value``) whose ``updated_at`` is after the run's
+    terminal event. Keying on ``source`` rather than ``value_status`` catches
+    BOTH a typed override (``user_override``) and a cleared cell
+    (``not_disclosed``) — keying on ``user_override`` alone silently missed
+    clears. The extraction writer/cascade use other source tags, so this can't
+    false-positive. Running runs (no ``ended_at``) report 0.
+    """
+    from db import repository as repo
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if not run.ended_at:
+            return {"count": 0}
+        row = conn.execute(
+            "SELECT COUNT(*) FROM run_concept_facts "
+            "WHERE run_id = ? AND source = 'manual edit' "
+            "AND updated_at > ?",
+            (run_id, run.ended_at),
+        ).fetchone()
+    finally:
+        conn.close()
+    return {"count": int(row[0]) if row else 0}
+
+
+@app.get("/api/runs/{run_id}/recheck")
+async def recheck_endpoint(run_id: int):
+    """Phase 4.3 — re-run cross-checks against the current (edited) DB facts.
+
+    Lets the review UI refresh validation after manual edits without a full
+    pipeline re-run. Returns the serialised cross-check results, or 404 if the
+    run is unknown / has nothing to check. Heavy (openpyxl) work runs off the
+    event loop.
+    """
+    from db import repository as repo
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    results = await asyncio.to_thread(_recheck_from_facts, run_id)
+    if results is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No facts to re-check for this run (canonical mode off, or "
+                   "no succeeded statements).",
+        )
+    return {"run_id": run_id, "results": results}
 
 
 @app.get("/api/runs/{run_id}/download/filled")
@@ -4400,32 +5283,76 @@ async def download_filled_endpoint(run_id: int):
             status_code=404,
             detail=f"Merged workbook file no longer exists on disk: {wb_path}",
         )
+
+    # Phase 1.3: when the run has canonical facts, the DB is authoritative
+    # (it carries cascaded totals + any review-UI edits). Rebuild the merged
+    # workbook from those facts into a temp file so the download reflects the
+    # latest edits without a manual "regenerate" step. Falls back to the
+    # on-disk workbook when re-export isn't applicable or fails. Temp files
+    # are tracked for cleanup after streaming; the on-disk file is never
+    # deleted.
+    temp_paths: list[Path] = []
+    base_path = wb_path
+    if _run_has_facts(AUDIT_DB_PATH, run_id):
+        reexported = await asyncio.to_thread(
+            _reexport_and_remerge_from_facts, run_id
+        )
+        if reexported is not None:
+            base_path = reexported
+            temp_paths.append(reexported)
+        elif run.ended_at:
+            # Re-export failed. The on-disk workbook reflects facts AS OF the
+            # pipeline run but NOT post-run manual edits — serving it silently
+            # would hand the user a file missing their edits. Fail closed when
+            # such edits exist (peer-review): a clear error beats a stale file.
+            conn2 = _open_audit_conn()
+            try:
+                edited = conn2.execute(
+                    "SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ? "
+                    "AND source = 'manual edit' AND updated_at > ?",
+                    (run_id, run.ended_at),
+                ).fetchone()[0]
+            finally:
+                conn2.close()
+            if edited:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Could not regenerate the workbook from your edited "
+                        "values. To avoid downloading a file that omits those "
+                        "edits, the download was blocked. Please retry; if it "
+                        "persists, check the server logs."
+                    ),
+                )
+
     # Overlay runs synchronously (openpyxl is blocking); push it off
     # the event loop so concurrent downloads don't serialise. Returns
-    # the original path unchanged when notes_cells is empty, so the
+    # the base path unchanged when notes_cells is empty, so the
     # pre-rich-editor behaviour is preserved on older runs.
     try:
         from notes.persistence import overlay_notes_cells_into_workbook
         served_path = await asyncio.to_thread(
             overlay_notes_cells_into_workbook,
-            xlsx_path=wb_path,
+            xlsx_path=base_path,
             run_id=run_id,
             db_path=str(AUDIT_DB_PATH),
         )
-    except Exception:  # noqa: BLE001 — fall back to on-disk file
+    except Exception:  # noqa: BLE001 — fall back to the base file
         logger.exception(
             "notes_cells overlay failed for run_id=%s; serving stale xlsx",
             run_id,
         )
-        served_path = wb_path
-    # The overlay helper either returns the original path unchanged
-    # (nothing to clean up) or a new temp file in the system temp dir
-    # (must be deleted after streaming completes). Attach a background
-    # task only in the second case — never delete the authoritative
-    # `merged_workbook_path` on disk.
+        served_path = base_path
+    # The overlay helper either returns the base path unchanged (nothing new
+    # to clean up) or a fresh temp file. Track every temp file we created
+    # (the re-export and/or the notes overlay) for deletion after streaming;
+    # never delete the authoritative `merged_workbook_path` on disk.
+    if served_path != base_path:
+        temp_paths.append(Path(served_path))
     cleanup: Optional[BackgroundTask] = None
-    if served_path != wb_path:
-        cleanup = BackgroundTask(_remove_overlay_tempfile, str(served_path))
+    if temp_paths:
+        cleanup = BackgroundTask(_remove_overlay_tempfiles,
+                                 [str(p) for p in temp_paths])
     return FileResponse(
         str(served_path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -4434,16 +5361,18 @@ async def download_filled_endpoint(run_id: int):
     )
 
 
-def _remove_overlay_tempfile(path: str) -> None:
-    """Best-effort cleanup of a notes-overlay temp file after the
-    FileResponse has finished streaming. Run as a Starlette
-    BackgroundTask; errors are logged but never raised — the response
-    has already been sent.
+def _remove_overlay_tempfiles(paths: list[str]) -> None:
+    """Best-effort cleanup of download temp files (re-export + notes overlay)
+    after the FileResponse has finished streaming. Run as a Starlette
+    BackgroundTask; errors are logged but never raised — the response has
+    already been sent.
     """
-    try:
-        Path(path).unlink(missing_ok=True)
-    except OSError:
-        logger.debug("Failed to remove overlay temp file %s", path, exc_info=True)
+    for path in paths:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Failed to remove download temp file %s", path,
+                         exc_info=True)
 
 
 # --- Download endpoints ---

@@ -1,6 +1,6 @@
 // Notes Review tab — post-run WYSIWYG editor for notes_cells rows.
 //
-// Covers Steps 9–12 of docs/PLAN-NOTES-RICH-EDITOR.md:
+// Covers Steps 9–12 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md:
 //
 //   9.  Read-only render of every cell's HTML grouped by sheet.
 //  10.  Per-cell edit mode with a formatting toolbar and a debounced

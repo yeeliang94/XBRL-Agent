@@ -306,7 +306,7 @@ def test_rerun_rejects_zero_and_multi_agent_payloads(tmp_path: Path, monkeypatch
 def test_rerun_endpoint_includes_warning_when_notes_cells_exist(
     tmp_path: Path, monkeypatch,
 ):
-    """Step 12 of docs/PLAN-NOTES-RICH-EDITOR.md — the edited_count
+    """Step 12 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md — the edited_count
     endpoint is the backend for the Regenerate-notes confirm dialog.
     Returns how many cells have been edited post-run so the UI can
     decide whether to prompt before clobbering.

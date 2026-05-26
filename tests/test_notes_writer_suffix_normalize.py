@@ -2,7 +2,7 @@
 type suffixes (`[text block]`, `[abstract]`, `[axis]`, `[member]`,
 `[table]`) before comparing labels.
 
-Red tests for `docs/PLAN-mpers-notes-hardening.md` Phase 2.
+Red tests for `docs/Archive/PLAN-mpers-notes-hardening.md` Phase 2.
 
 The bug from run #105: MFRS template labels are bare ("Disclosure of
 other income"), MPERS template labels carry the SSM ReportingLabel

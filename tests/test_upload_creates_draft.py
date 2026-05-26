@@ -1,6 +1,6 @@
 """POST /api/upload must immediately persist a draft `runs` row.
 
-Plan: docs/PLAN-persistent-draft-uploads.md — Phase A.
+Plan: docs/Archive/PLAN-persistent-draft-uploads.md — Phase A.
 
 These tests pin the contract that every upload becomes a shareable run on
 disk-write success: the response includes a `run_id`, a row exists in the

@@ -1,4 +1,4 @@
-"""HTML sanitiser for notes payloads (docs/PLAN-NOTES-RICH-EDITOR.md Step 5).
+"""HTML sanitiser for notes payloads (docs/Archive/PLAN-NOTES-RICH-EDITOR.md Step 5).
 
 Notes payloads are agent-authored HTML. The prompt declares a fixed
 whitelist, but the model can regress — producing plaintext, Markdown

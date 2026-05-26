@@ -1,6 +1,6 @@
 """Layout tests for the MPERS Group SOCIE template.
 
-These tests are red until Phase 3 of `docs/PLAN-mpers-group-socie-formulas.md`
+These tests are red until Phase 3 of `docs/Archive/PLAN-mpers-group-socie-formulas.md`
 lands. They pin the four-block layout (rows 3-25, 27-49, 51-73, 75-97)
 emitted by `scripts/generate_mpers_templates.py::_apply_group_socie_layout`
 to:

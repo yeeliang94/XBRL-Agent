@@ -1,6 +1,6 @@
 """Mocked LLM models for CORRECTION agent regression tests.
 
-Built for Phase 2 of `docs/PLAN-run-review-fixes.md` — the CORRECTION
+Built for Phase 2 of `docs/Archive/PLAN-run-review-fixes.md` — the CORRECTION
 turn-flood fixture. Each model is a `FunctionModel` that scripts a
 specific sequence of tool calls so we can pin the new iteration-cap +
 diff-first behaviour without burning real LLM budget.

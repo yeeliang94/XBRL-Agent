@@ -1,7 +1,7 @@
 """Phase 1 MPERS hardening — `render_notes_prompt` must branch on
 `filing_standard` and emit the correct sheet numbering per standard.
 
-Red tests for `docs/PLAN-mpers-notes-hardening.md` Phase 1. The failing
+Red tests for `docs/Archive/PLAN-mpers-notes-hardening.md` Phase 1. The failing
 run (#105, 2026-04-23) skipped MPERS notes citing MFRS sheet numbers
 because the prompt was hardcoded to MFRS 10-14 regardless of standard.
 """

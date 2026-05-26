@@ -11,6 +11,7 @@ import { SuccessToast } from "./components/SuccessToast";
 import { SettingsIcon } from "./components/icons";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
+import { ConceptsPage } from "./pages/ConceptsPage";
 import "./index.css";
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,22 @@ const styles = {
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, undefined, bootState);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Canonical-mode feature flag from the backend (peer-review finding 5).
+  // Defaults to false so the Concepts tab stays hidden until /api/config
+  // confirms canonical mode is on; a failed fetch leaves it hidden.
+  const [canonicalEnabled, setCanonicalEnabled] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/config")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => {
+        if (!cancelled && cfg) setCanonicalEnabled(Boolean(cfg.canonical_mode));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Hold the SSE controller so we can abort it on reset/unmount.
   // Without this, an in-flight stream would keep dispatching stale events
@@ -118,7 +135,14 @@ export default function App() {
   // instead of being rewritten back to /.
   useEffect(() => {
     let expected: string;
-    if (state.view === "history") {
+    if (state.view === "concepts") {
+      // Keep /concepts/<id> in the URL so refresh / share / back work for
+      // the canonical-mode tree view. Without this branch the effect falls
+      // through to "/" and immediately pushes the deep link away on boot.
+      expected = state.selectedRunId != null
+        ? `/concepts/${state.selectedRunId}`
+        : "/";
+    } else if (state.view === "history") {
       expected = state.selectedRunId != null
         ? `/history/${state.selectedRunId}`
         : "/history";
@@ -144,7 +168,9 @@ export default function App() {
   // multiple review tabs open can tell them apart without switching.
   useEffect(() => {
     document.title =
-      state.view === "history" && state.selectedRunId != null
+      state.view === "concepts" && state.selectedRunId != null
+        ? `XBRL Agent — Review ${state.selectedRunId}`
+        : state.view === "history" && state.selectedRunId != null
         ? `XBRL Agent — Run ${state.selectedRunId}`
         : "XBRL Agent";
   }, [state.view, state.selectedRunId]);
@@ -394,6 +420,7 @@ export default function App() {
           <h1 style={styles.headerTitle}>XBRL Agent</h1>
           <TopNav
             view={state.view}
+            showConcepts={canonicalEnabled}
             onViewChange={(v) => {
               // Tabs are "go to the top of that section" — clicking
               // History from anywhere must show the list, not the last
@@ -419,13 +446,17 @@ export default function App() {
 
       <main
         style={
-          state.view === "history" && state.selectedRunId != null
+          state.view === "concepts" ||
+          (state.view === "history" && state.selectedRunId != null)
             ? styles.mainWide
             : styles.main
         }
       >
-        {state.view === "history" ? (
+        {state.view === "concepts" ? (
+          <ConceptsPage runId={state.selectedRunId} />
+        ) : state.view === "history" ? (
           <HistoryPage
+            canonicalEnabled={canonicalEnabled}
             selectedId={state.selectedRunId}
             onSelectRun={(id) =>
               dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
@@ -451,6 +482,7 @@ export default function App() {
             handleRerunAgent={handleRerunAgent}
             handleReset={handleReset}
             handleConfigChange={handleDraftConfigChange}
+            canonicalEnabled={canonicalEnabled}
           />
         )}
       </main>

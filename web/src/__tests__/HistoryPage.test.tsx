@@ -475,7 +475,7 @@ describe("HistoryPage", () => {
   // non-destructive — rows stay visible, error shows inline.
   // ---------------------------------------------------------------------------
   // ---------------------------------------------------------------------------
-  // Full-page run detail — Phase 3 of docs/PLAN.md. HistoryPage now swaps
+  // Full-page run detail. HistoryPage now swaps
   // out the old modal for a RunDetailPage when a run is selected. Selection
   // state can be driven externally (App.tsx owns it so the URL can round-
   // trip) or fall back to internal state so legacy render calls still work.

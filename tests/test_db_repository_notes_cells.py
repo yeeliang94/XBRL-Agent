@@ -1,6 +1,6 @@
 """Repository helpers for the `notes_cells` table.
 
-Step 2 of docs/PLAN-NOTES-RICH-EDITOR.md. The server and the notes
+Step 2 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md. The server and the notes
 coordinator both round-trip HTML payloads through these helpers —
 raw SQL stays confined to db/repository.py the same way the v2 history
 helpers are structured.
