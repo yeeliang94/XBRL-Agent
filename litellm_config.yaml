@@ -4,6 +4,10 @@ model_list:
   # re-routes each Windows-style ID to the direct provider API.
 
   # --- Gemini (via direct Google API, GEMINI_API_KEY) ---
+  - model_name: vertex_ai.gemini-3.5-flash
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY
   - model_name: vertex_ai.gemini-3-flash-preview
     litellm_params:
       model: gemini/gemini-3-flash-preview
@@ -24,6 +28,8 @@ model_list:
 
   # --- OpenAI (OPENAI_API_KEY) ---
   # Windows-enterprise-style IDs (openai.*) — these are what config/models.json serves
+  - model_name: openai.gpt-5.5
+    litellm_params: { model: openai/gpt-5.5, api_key: os.environ/OPENAI_API_KEY }
   - model_name: openai.gpt-5.4
     litellm_params: { model: openai/gpt-5.4, api_key: os.environ/OPENAI_API_KEY }
   - model_name: openai.gpt-5.4-mini
@@ -39,6 +45,8 @@ model_list:
     litellm_params: { model: openai/gpt-5.1, api_key: os.environ/OPENAI_API_KEY }
   - model_name: gpt-5.2
     litellm_params: { model: openai/gpt-5.2, api_key: os.environ/OPENAI_API_KEY }
+  - model_name: gpt-5.5
+    litellm_params: { model: openai/gpt-5.5, api_key: os.environ/OPENAI_API_KEY }
   - model_name: gpt-5.4
     litellm_params: { model: openai/gpt-5.4, api_key: os.environ/OPENAI_API_KEY }
   - model_name: gpt-5.4-mini
@@ -55,6 +63,8 @@ model_list:
   # Locally we route them to the direct Anthropic API instead of Bedrock.
   - model_name: bedrock.anthropic.claude-sonnet-4-6
     litellm_params: { model: anthropic/claude-sonnet-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
+  - model_name: bedrock.anthropic.claude-opus-4-7
+    litellm_params: { model: anthropic/claude-opus-4-7, api_key: os.environ/ANTHROPIC_API_KEY }
   - model_name: bedrock.anthropic.claude-opus-4-6
     litellm_params: { model: anthropic/claude-opus-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
   - model_name: bedrock.anthropic.claude-haiku-4-5
@@ -62,6 +72,8 @@ model_list:
   # Legacy bare names, kept for backward compat
   - model_name: claude-sonnet-4-6
     litellm_params: { model: anthropic/claude-sonnet-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
+  - model_name: claude-opus-4-7
+    litellm_params: { model: anthropic/claude-opus-4-7, api_key: os.environ/ANTHROPIC_API_KEY }
   - model_name: claude-opus-4-6
     litellm_params: { model: anthropic/claude-opus-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
   - model_name: claude-haiku-4-5

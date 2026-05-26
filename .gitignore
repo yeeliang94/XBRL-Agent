@@ -19,6 +19,11 @@ dist/
 # Output (regenerated per run)
 output/
 
+# SQLite databases (may contain extracted financial figures + run history)
+*.db
+*.db-wal
+*.db-shm
+
 # Data (large files, may be confidential)
 data/
 
