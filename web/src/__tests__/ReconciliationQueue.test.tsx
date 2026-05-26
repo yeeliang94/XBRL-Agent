@@ -89,6 +89,39 @@ describe("ReconciliationQueue", () => {
     expect(screen.queryByTestId("conflict-7")).not.toBeNull();
   });
 
+  test("clicking a conflict row calls onSelectConcept (M2)", async () => {
+    mockFetch(() => ({ conflicts: [conflict] }));
+    const onSelectConcept = vi.fn();
+    render(
+      <ReconciliationQueue runId={42} onSelectConcept={onSelectConcept} />
+    );
+    const row = await waitFor(() => screen.getByTestId("conflict-7"));
+    fireEvent.click(row);
+    expect(onSelectConcept).toHaveBeenCalledWith("leaf-1");
+  });
+
+  test("clicking Resolve does NOT trigger selection (M2 propagation stop)", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/resolve")) {
+          return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ conflicts: [conflict] }),
+        } as Response;
+      }
+    );
+    const onSelectConcept = vi.fn();
+    render(
+      <ReconciliationQueue runId={42} onSelectConcept={onSelectConcept} />
+    );
+    const btn = await waitFor(() => screen.getByTestId("resolve-btn-7"));
+    fireEvent.click(btn);
+    expect(onSelectConcept).not.toHaveBeenCalled();
+  });
+
   test("clicking Resolve calls endpoint and removes the row", async () => {
     let resolvedCalled = false;
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(

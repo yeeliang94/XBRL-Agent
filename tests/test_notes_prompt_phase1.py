@@ -275,6 +275,23 @@ def test_notes_accounting_policies_prompt_calls_out_subsection_preservation():
     )
 
 
+def test_accounting_policies_prompt_uses_chunked_read_write_cycles():
+    """Cost lever (run 127 review): the ACC_POLICIES prompt should drive small
+    read->write cycles (view 2-3 pages, write found policies, continue) so
+    post-write image trimming kicks in early — not one big batch at the end.
+    Notes-only pilot; the all-LLM-judgement design (gotcha #14) is untouched."""
+    body = (_PROMPT_DIR / "notes_accounting_policies.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "read" in flat and "write" in flat
+    assert "small" in flat and ("cycle" in flat or "batch" in flat)
+    # Explicit small page batch + incremental write.
+    assert "2-3 pages" in flat
+    # Continuation safety: don't write a policy that runs onto an unviewed page.
+    assert "truncated" in flat or "continues onto a page you have not" in flat
+    # Re-write supersedes — calling write_notes again is safe.
+    assert "supersede" in flat
+
+
 def test_listofnotes_prompt_warns_hierarchy_beats_visual_granularity():
     """Sheet-12 matching prompt needs the same parent-note hierarchy guardrail."""
     body = (_PROMPT_DIR / "notes_listofnotes.md").read_text(encoding="utf-8")

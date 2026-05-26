@@ -134,6 +134,13 @@ def _build_scoped_navigation(page_hints: dict) -> str:
     lines.append("Start by viewing the face page to see the statement.")
     lines.append("Then view note pages as needed for breakdowns.")
     lines.append("These are recommended starting points. You may view other pages if needed (e.g. adjacent pages for context or pages the scout missed).")
+    lines.append("")
+    # Cost + focus nudge: SOPL once swept pages 12-25 when the scout had already
+    # pinned the note pages. Anchor on the hints; expand only on a *visible*
+    # reference, not speculatively. These remain soft hints — there is NO page
+    # restriction (CLAUDE.md gotcha #13); you may still view any page you need.
+    lines.append("Be economical with page views — each page you view is re-sent on every later turn, so unnecessary views add cost on every step that follows.")
+    lines.append("Anchor on the scout pages above. Only view a further page when a line item or note reference you can actually see on a page you've already viewed points to it. Do NOT sweep a range of pages speculatively just to check what's there.")
     return "\n".join(lines)
 
 

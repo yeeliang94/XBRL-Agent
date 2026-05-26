@@ -10,7 +10,8 @@ from typing import Dict
 from statement_types import StatementType
 from cross_checks.framework import CrossCheckResult
 from cross_checks.util import (
-    open_workbook, find_sheet, find_value_by_label, filing_level_prefix,
+    open_workbook, find_sheet, find_value_by_label, find_label_row,
+    filing_level_prefix,
 )
 
 
@@ -37,6 +38,11 @@ class SOFPBalanceCheck:
 
         assets_cy = find_value_by_label(ws, "total assets", col=2, wb=wb)
         eq_liab_cy = find_value_by_label(ws, "total equity and liabilities", col=2, wb=wb)
+
+        # Click-to-cell target: a balance failure is most actionable at the
+        # equity+liabilities total (the side the reviewer compares to assets).
+        target_sheet = ws.title
+        target_row = find_label_row(ws, "total equity and liabilities")
 
         # Group filing: also read Company columns (D=4)
         co_assets_cy = None
@@ -89,4 +95,6 @@ class SOFPBalanceCheck:
             diff=diff,
             tolerance=tolerance,
             message="; ".join(parts),
+            target_sheet=target_sheet,
+            target_row=target_row,
         )

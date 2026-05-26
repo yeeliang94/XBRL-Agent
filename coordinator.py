@@ -57,6 +57,53 @@ PHASE_MAP = {
 FACE_TURN_TIMEOUT: float = 180.0
 
 
+class _IterationLimitReached(RuntimeError):
+    """Agent exceeded MAX_AGENT_ITERATIONS.
+
+    A dedicated exception type (rather than a bare RuntimeError) so the
+    coordinator can salvage a clean post-write result instead of hard-failing —
+    parity with the asyncio.TimeoutError path. The message text is unchanged so
+    the structured 'Hit iteration limit' SSE surfacing (gotcha #18) is preserved.
+    """
+
+
+def _safe_usage_backfill(agent_run, model, label: str) -> tuple[int, float]:
+    """Best-effort (tokens, cost) capture from a finished-or-aborted run.
+
+    Telemetry is advisory — a usage-read failure must never mask the real
+    result. Used by the success path AND the failure/timeout/iteration-limit
+    paths so a failed agent still reports the tokens it actually burned
+    (run_id=126 showed 0 tokens on failed agents because only the success
+    path backfilled). Returns (0, 0.0) when usage is unreachable.
+    """
+    try:
+        u = agent_run.usage()
+        prompt = int(u.request_tokens or 0)
+        completion = int(u.response_tokens or 0)
+        return int(u.total_tokens or 0), estimate_cost(prompt, completion, 0, model)
+    except Exception:  # noqa: BLE001 — telemetry is advisory
+        logger.debug("agent token backfill skipped for %s", label)
+        return 0, 0.0
+
+
+def _verify_is_clean(verify_result) -> bool:
+    """True when the agent's last verify_totals shows no outstanding problem.
+
+    Used to decide whether a post-write run that hit the iteration cap is
+    salvageable. Requires an actual verification — a never-verified run is not
+    'clean' even if a workbook exists.
+    """
+    if verify_result is None:
+        return False
+    if verify_result.is_balanced is False:
+        return False
+    if getattr(verify_result, "mandatory_unfilled", None):
+        return False
+    if getattr(verify_result, "mismatches", None):
+        return False
+    return True
+
+
 async def _iter_with_turn_timeout(async_iterable, timeout: float):
     """Yield nodes from ``async_iterable`` with a per-step timeout.
 
@@ -456,7 +503,7 @@ async def _run_single_agent(
                 # save_result attempts.
                 deps.turn_counter = _iteration_count
                 if _iteration_count > MAX_AGENT_ITERATIONS:
-                    raise RuntimeError(
+                    raise _IterationLimitReached(
                         f"Hit iteration limit ({MAX_AGENT_ITERATIONS}). "
                         f"Agent appears stuck in a loop."
                     )
@@ -576,16 +623,9 @@ async def _run_single_agent(
         # with real token / cost numbers (gotcha #6 — per-turn zeros are
         # internal). best-effort: if usage is unavailable for any reason,
         # we still return success with zeros rather than failing the run.
-        final_tokens = 0
-        final_cost = 0.0
-        try:
-            _u = agent_run.usage()
-            _prompt = int(_u.request_tokens or 0)
-            _completion = int(_u.response_tokens or 0)
-            final_tokens = int(_u.total_tokens or 0)
-            final_cost = estimate_cost(_prompt, _completion, 0, model)
-        except Exception:  # noqa: BLE001 — telemetry is advisory
-            logger.debug("agent token backfill skipped for %s", statement_type.value)
+        final_tokens, final_cost = _safe_usage_backfill(
+            agent_run, model, statement_type.value
+        )
 
         # Peer-review (2026-05-21): coordinator used to return
         # status="succeeded" even when the agent finished without ever
@@ -630,6 +670,7 @@ async def _run_single_agent(
         # node iteration past FACE_TURN_TIMEOUT. Mirror the notes
         # coordinator's policy — if a workbook already landed on disk
         # the result is salvageable; otherwise it's a hard failure.
+        _tokens, _cost = _safe_usage_backfill(agent_run, model, statement_type.value)
         if deps.filled_path:
             logger.warning(
                 "%s/%s: LLM stalled past %ss after write — treating as done "
@@ -647,6 +688,8 @@ async def _run_single_agent(
                 variant=variant,
                 status="succeeded",
                 workbook_path=deps.filled_path,
+                total_tokens=_tokens,
+                total_cost=_cost,
             )
         err_msg = (
             f"{statement_type.value}: LLM stalled past {FACE_TURN_TIMEOUT}s "
@@ -660,6 +703,46 @@ async def _run_single_agent(
             variant=variant,
             status="failed",
             error=err_msg,
+            total_tokens=_tokens,
+            total_cost=_cost,
+        )
+
+    except _IterationLimitReached as e:
+        # The agent burned its whole iteration budget. If a workbook already
+        # landed AND the last verify was clean, the work is done — salvage it
+        # as succeeded (parity with the TimeoutError path) rather than throwing
+        # away a balanced statement (run_id=126 SOPL). Otherwise hard-fail, but
+        # still surface the structured "Hit iteration limit" message.
+        _tokens, _cost = _safe_usage_backfill(agent_run, model, statement_type.value)
+        if deps.filled_path and _verify_is_clean(deps.last_verify_result):
+            logger.warning(
+                "%s/%s: hit iteration cap after a clean write — salvaging "
+                "(workbook at %s).",
+                statement_type.value, variant, deps.filled_path,
+            )
+            await _emit("complete", {
+                "success": True,
+                "workbook_path": deps.filled_path,
+                "iteration_capped_after_write": True,
+            })
+            return AgentResult(
+                statement_type=statement_type,
+                variant=variant,
+                status="succeeded",
+                workbook_path=deps.filled_path,
+                total_tokens=_tokens,
+                total_cost=_cost,
+            )
+        logger.warning("Agent %s/%s hit iteration limit", statement_type.value, variant)
+        await _emit("error", {"message": str(e)})
+        await _emit("complete", {"success": False, "error": str(e)})
+        return AgentResult(
+            statement_type=statement_type,
+            variant=variant,
+            status="failed",
+            error=str(e),
+            total_tokens=_tokens,
+            total_cost=_cost,
         )
 
     except asyncio.CancelledError:
@@ -677,6 +760,14 @@ async def _run_single_agent(
     except Exception as e:
         logger.exception("Agent %s/%s failed", statement_type.value, variant,
                          extra={"statement_type": statement_type.value, "variant": variant})
+        # Backfill tokens if the run got far enough to bind agent_run (the
+        # failure may have happened before agent.iter() opened, e.g. in
+        # create_extraction_agent — guard accordingly).
+        _run = locals().get("agent_run")
+        _tokens, _cost = (
+            _safe_usage_backfill(_run, model, statement_type.value)
+            if _run is not None else (0, 0.0)
+        )
         await _emit("error", {"message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
         return AgentResult(
@@ -684,4 +775,6 @@ async def _run_single_agent(
             variant=variant,
             status="failed",
             error=str(e),
+            total_tokens=_tokens,
+            total_cost=_cost,
         )

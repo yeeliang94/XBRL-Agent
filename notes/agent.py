@@ -36,6 +36,7 @@ from token_tracker import TokenReport
 from tools import page_cache
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from tools.template_reader import TemplateField, read_template as _read_template_impl
+from extraction.history_processors import strip_stale_images
 
 logger = logging.getLogger(__name__)
 
@@ -1138,6 +1139,11 @@ def create_notes_agent(
         deps_type=NotesDeps,
         system_prompt=system_prompt,
         model_settings=ModelSettings(temperature=1.0),
+        # Token-cost reduction: strip stale page-image blobs (from
+        # view_pdf_pages) out of the outbound request each turn. Transport
+        # hygiene only — the notes all-LLM-judgement design (CLAUDE.md #14) is
+        # untouched. See extraction/history_processors.py.
+        history_processors=[strip_stale_images],
     )
 
     # --- Tools ---

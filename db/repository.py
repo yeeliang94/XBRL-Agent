@@ -150,6 +150,9 @@ class CrossCheck:
     diff: Optional[float] = None
     tolerance: Optional[float] = None
     message: Optional[str] = None
+    # Review Workspace Step 8 — click-to-cell target (nullable).
+    target_sheet: Optional[str] = None
+    target_row: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -505,11 +508,15 @@ def save_cross_check(
     diff: float | None = None,
     tolerance: float | None = None,
     message: str | None = None,
+    target_sheet: str | None = None,
+    target_row: int | None = None,
 ) -> int:
     cur = conn.execute(
         "INSERT INTO cross_checks(run_id, check_name, status, expected, actual, diff, "
-        "tolerance, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (run_id, check_name, status, expected, actual, diff, tolerance, message),
+        "tolerance, message, target_sheet, target_row) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_id, check_name, status, expected, actual, diff, tolerance, message,
+         target_sheet, target_row),
     )
     return int(cur.lastrowid)
 
@@ -777,6 +784,8 @@ def fetch_cross_checks(conn: sqlite3.Connection, run_id: int) -> list[CrossCheck
             id=r["id"], run_id=r["run_id"], check_name=r["check_name"],
             status=r["status"], expected=r["expected"], actual=r["actual"],
             diff=r["diff"], tolerance=r["tolerance"], message=r["message"],
+            target_sheet=(r["target_sheet"] if "target_sheet" in r.keys() else None),
+            target_row=(r["target_row"] if "target_row" in r.keys() else None),
         )
         for r in rows
     ]

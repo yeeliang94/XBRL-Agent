@@ -179,6 +179,10 @@ export interface CrossCheckResultEventData {
   diff: number | null;
   tolerance: number | null;
   message: string;
+  // Review Workspace Step 8 — click-to-cell target (null when the check has
+  // no natural anchor).
+  target_sheet?: string | null;
+  target_row?: number | null;
 }
 
 /** Pass-level summary — emitted once at the end of each cross-check
@@ -292,6 +296,9 @@ export interface CrossCheckResult {
   diff: number | null;
   tolerance: number | null;
   message: string;
+  // Review Workspace Step 8 — click-to-cell target (null when no anchor).
+  target_sheet?: string | null;
+  target_row?: number | null;
 }
 
 /** Final aggregate event for multi-agent runs. */
@@ -560,6 +567,9 @@ export interface RunCrossCheckJson {
   diff: number | null;
   tolerance: number | null;
   message: string;
+  // Review Workspace Step 8 — click-to-cell target (null when no anchor).
+  target_sheet?: string | null;
+  target_row?: number | null;
 }
 
 export interface RunDetailJson {

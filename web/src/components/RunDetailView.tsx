@@ -1,5 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { pwc } from "../lib/theme";
+import { PdfSourcePane } from "./PdfSourcePane";
+import { parseEvidencePages } from "../lib/evidencePages";
+import type { ConceptRow } from "../pages/ConceptsPage";
 import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
@@ -133,6 +136,11 @@ function crossChecksForValidator(
     diff: r.diff,
     tolerance: r.tolerance,
     message: r.message,
+    // Step 8 — carry the click-to-cell target through so a targeted check
+    // is actually clickable on the History detail surface. Dropping these
+    // (the original bug) left every row non-clickable despite backend support.
+    target_sheet: r.target_sheet,
+    target_row: r.target_row,
   }));
 }
 
@@ -245,6 +253,56 @@ export function RunDetailView({
   // it unmounted until the operator opens the section so a detail view
   // with a dozen notes doesn't spin up a dozen editors on first paint.
   const [notesExpanded, setNotesExpanded] = useState(false);
+
+  // Step 8/12 — clicking a failed cross-check drives the source-PDF pane to
+  // the cited page(s) of the cell it targets. We resolve (target_sheet,
+  // target_row) → the concept's evidence string → page numbers via a
+  // per-run concept map fetched from /concepts. We store the *selected
+  // target* (not the resolved pages) so the pane recomputes once the map
+  // arrives — a fast click before the fetch lands isn't lost.
+  const [selectedTarget, setSelectedTarget] = useState<{ sheet: string; row: number } | null>(
+    null
+  );
+  const [evidenceByCell, setEvidenceByCell] = useState<Map<string, string | null>>(
+    new Map()
+  );
+  // Keyed on detail.id so switching runs (RunDetailView is NOT remounted per
+  // run — no key in HistoryPage) refetches and clears stale state, instead of
+  // resolving run B's targets against run A's concept map.
+  useEffect(() => {
+    let cancelled = false;
+    setEvidenceByCell(new Map());
+    setSelectedTarget(null);
+    fetch(`/api/runs/${detail.id}/concepts`)
+      .then((r) => (r.ok ? r.json() : { concepts: [] }))
+      .then((data) => {
+        if (cancelled) return;
+        const map = new Map<string, string | null>();
+        for (const c of (data.concepts || []) as ConceptRow[]) {
+          map.set(`${c.render_sheet}:${c.render_row}`, c.evidence);
+        }
+        setEvidenceByCell(map);
+      })
+      .catch(() => {
+        if (!cancelled) setEvidenceByCell(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detail.id]);
+
+  // Derived: the pages for the currently selected target. Recomputes when the
+  // concept map finishes loading, so an early click resolves correctly.
+  const pdfPages = useMemo(() => {
+    if (!selectedTarget) return [];
+    const evidence = evidenceByCell.get(`${selectedTarget.sheet}:${selectedTarget.row}`) ?? null;
+    return parseEvidencePages(evidence);
+  }, [selectedTarget, evidenceByCell]);
+
+  const handleSelectTarget = (sheet: string, row: number) => {
+    setSelectedTarget({ sheet, row });
+  };
+
   const canDownload = !!detail.merged_workbook_path;
   // Legacy detection: rows created before the v2 schema never captured a
   // run_config, merged_workbook_path, or per-agent token counts. Rather
@@ -372,8 +430,20 @@ export function RunDetailView({
             table past the available width; the scroller keeps the column
             readable instead of letting it get clipped. */}
         <div style={styles.crossCheckScroller}>
-          <ValidatorTab crossChecks={crossChecksForValidator(detail.cross_checks)} />
+          <ValidatorTab
+            crossChecks={crossChecksForValidator(detail.cross_checks)}
+            onSelectTarget={handleSelectTarget}
+          />
         </div>
+        {/* Source-PDF verification for the selected check's target cell.
+            Rendered only once a target is selected — otherwise the pane would
+            eagerly default to page 1 (and fetch its image) before the reviewer
+            has chosen anything to verify. */}
+        {selectedTarget && (
+          <div style={{ marginTop: pwc.space.md }}>
+            <PdfSourcePane runId={detail.id} pages={pdfPages} />
+          </div>
+        )}
       </section>
     </div>
   );

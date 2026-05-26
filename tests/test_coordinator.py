@@ -226,3 +226,87 @@ class TestCoordinator:
 
         assert mock_factory.call_count == 5
         assert len(result.agent_results) == 5
+
+
+# ---------------------------------------------------------------------------
+# run_id=126 regression: iteration-limit salvage + failure-path telemetry
+# ---------------------------------------------------------------------------
+
+def _make_node_yielding_agent(n_nodes: int, total_tokens: int = 150):
+    """Mock agent whose iter() yields `n_nodes` plain nodes (neither tool nor
+    model-request nodes), so the coordinator's iteration counter climbs and
+    eventually trips MAX_AGENT_ITERATIONS."""
+    mock_agent = MagicMock()
+    mock_run = MagicMock()
+    mock_run.result = MagicMock(output="done")
+    mock_run.usage = MagicMock(return_value=MagicMock(
+        request_tokens=100, response_tokens=50, total_tokens=total_tokens,
+    ))
+
+    async def many_nodes(self_ignored=None):
+        for _ in range(n_nodes):
+            yield MagicMock()  # not a call-tools/model-request node
+
+    mock_run.__aiter__ = many_nodes
+
+    @asynccontextmanager
+    async def iter_cm(*args, **kwargs):
+        yield mock_run
+
+    mock_agent.iter = iter_cm
+    return mock_agent
+
+
+@pytest.mark.asyncio
+async def test_iteration_limit_salvages_clean_post_write_run():
+    """A clean, written workbook that hits the iteration cap is salvaged as
+    succeeded — not hard-failed (run_id=126 SOPL)."""
+    import coordinator
+    from tools.verifier import VerificationResult
+
+    agent = _make_node_yielding_agent(coordinator.MAX_AGENT_ITERATIONS + 2)
+    deps = MagicMock()
+    deps.filled_path = "/tmp/SOPL_filled.xlsx"
+    deps.last_verify_result = VerificationResult(
+        is_balanced=None, matches_pdf=None, mismatches=[], mandatory_unfilled=[],
+    )
+
+    with patch("coordinator.create_extraction_agent", return_value=(agent, deps)):
+        result = await coordinator._run_single_agent(
+            statement_type=StatementType.SOPL,
+            variant="Function",
+            pdf_path="/tmp/x.pdf",
+            template_path="/tmp/t.xlsx",
+            model="test-model",
+            output_dir="/tmp",
+        )
+
+    assert result.status == "succeeded"
+    assert result.workbook_path == "/tmp/SOPL_filled.xlsx"
+    # Telemetry must reflect real spend, not 0 (failure-path backfill fix).
+    assert result.total_tokens == 150
+
+
+@pytest.mark.asyncio
+async def test_iteration_limit_without_clean_verify_still_fails_with_tokens():
+    """No clean verify → still a hard failure, but tokens are now backfilled."""
+    import coordinator
+
+    agent = _make_node_yielding_agent(coordinator.MAX_AGENT_ITERATIONS + 2)
+    deps = MagicMock()
+    deps.filled_path = "/tmp/SOPL_filled.xlsx"
+    deps.last_verify_result = None  # never verified → not salvageable
+
+    with patch("coordinator.create_extraction_agent", return_value=(agent, deps)):
+        result = await coordinator._run_single_agent(
+            statement_type=StatementType.SOPL,
+            variant="Function",
+            pdf_path="/tmp/x.pdf",
+            template_path="/tmp/t.xlsx",
+            model="test-model",
+            output_dir="/tmp",
+        )
+
+    assert result.status == "failed"
+    assert "iteration limit" in (result.error or "").lower()
+    assert result.total_tokens == 150

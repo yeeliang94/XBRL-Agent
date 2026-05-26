@@ -313,4 +313,61 @@ describe("App routing", () => {
 
     expect(window.location.pathname).toBe("/run/99");
   });
+
+  test("clicking Extract after an upload returns to an empty upload box", async () => {
+    // Regression: clicking the Extract tab re-showed the LAST run instead of
+    // a fresh upload box, because the tab handler cleared selectedRunId but
+    // left currentRunId + sessionId + the completed/loaded run state intact.
+    // The Extract tab must reset to the bare extract page (URL "/", filename
+    // gone) when no run is actively streaming.
+    vi.resetModules();
+    vi.doMock("../lib/api", async () => {
+      const actual = await vi.importActual<typeof import("../lib/api")>(
+        "../lib/api",
+      );
+      return {
+        ...actual,
+        getSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+        })),
+        getExtendedSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+          available_models: [], default_models: {},
+          scout_enabled_default: false, tolerance_rm: 1,
+        })),
+        fetchRuns: vi.fn(async () => ({ runs: [], total: 0 })),
+        uploadPdf: vi.fn(async () => ({
+          session_id: "sess_99",
+          filename: "Z.pdf",
+          run_id: 99,
+        })) as unknown as typeof import("../lib/api").uploadPdf,
+        fetchRunDetail: vi.fn(async () => {
+          throw new Error("not expected in this test");
+        }),
+      };
+    });
+    window.history.replaceState({}, "", "/");
+    const { default: App } = await import("../App");
+    const { getByRole } = render(<App />);
+
+    const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+    const file = new File(["x"], "Z.pdf", { type: "application/pdf" });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Sanity: the upload landed — URL is /run/99 and the filename shows.
+    expect(window.location.pathname).toBe("/run/99");
+    expect(screen.getByText("Z.pdf")).toBeInTheDocument();
+
+    // Click Extract → fresh, empty box: URL back to "/" and filename gone.
+    await act(async () => {
+      fireEvent.click(getByRole("tab", { name: /extract/i }));
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(window.location.pathname).toBe("/");
+    expect(screen.queryByText("Z.pdf")).toBeNull();
+  });
 });

@@ -154,3 +154,19 @@ class TestGroupPromptOverlay:
             assert "group" in prompt.lower(), (
                 f"Group overlay missing for {stmt.value}/{variants[0].name}"
             )
+
+
+def test_scoped_navigation_nudges_against_speculative_page_sweeps():
+    """Cost lever (run 127 review): when scout hints exist, the prompt must
+    nudge the agent to anchor on them and not sweep page ranges speculatively
+    — while keeping hints SOFT (no hard page restriction, gotcha #13)."""
+    prompt = render_prompt(
+        StatementType.SOPL, "Function",
+        page_hints={"face_page": 12, "note_pages": [22, 23, 24]},
+    )
+    low = prompt.lower()
+    assert "speculativ" in low  # "do NOT sweep ... speculatively"
+    assert "economical with page views" in low
+    # Still soft — recommended starting points, may view other pages.
+    assert "recommended starting points" in low
+    assert "may view other pages" in low

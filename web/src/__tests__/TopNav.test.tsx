@@ -3,23 +3,23 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { TopNav } from "../components/TopNav";
 
 describe("TopNav", () => {
-  test("renders Extract, History and Review buttons", () => {
+  test("renders Extract, History and Template buttons", () => {
     render(<TopNav view="extract" onViewChange={() => {}} />);
     expect(screen.getByRole("tab", { name: /extract/i })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /history/i })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: /review/i })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /template/i })).toBeTruthy();
   });
 
-  test("clicking Review fires onViewChange with 'concepts'", () => {
+  test("clicking Template fires onViewChange with 'concepts'", () => {
     const onViewChange = vi.fn();
     render(<TopNav view="extract" onViewChange={onViewChange} />);
-    fireEvent.click(screen.getByRole("tab", { name: /review/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /template/i }));
     expect(onViewChange).toHaveBeenCalledWith("concepts");
   });
 
-  test("hides Review tab when showConcepts=false", () => {
+  test("hides Template tab when showConcepts=false", () => {
     render(<TopNav view="extract" onViewChange={() => {}} showConcepts={false} />);
-    expect(screen.queryByRole("tab", { name: /review/i })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /template/i })).toBeNull();
     expect(screen.getByRole("tab", { name: /extract/i })).toBeTruthy();
   });
 

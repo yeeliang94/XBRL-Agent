@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XBRL Agent Prompt Review Recommendations</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #5f6b7a;
+      --line: #d8dde6;
+      --soft: #eef3f7;
+      --accent: #0f766e;
+      --accent-dark: #115e59;
+      --warn: #a16207;
+      --danger: #b42318;
+      --ok: #166534;
+      --code: #f4f6f8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+      font-size: 15px;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 24px 56px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 22px;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 32px;
+      line-height: 1.16;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 34px 0 14px;
+      padding-top: 8px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 24px 0 10px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+
+    p { margin: 0 0 12px; }
+
+    a { color: var(--accent-dark); }
+
+    .lede {
+      max-width: 920px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      color: #314154;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0 26px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .card h3 { margin-top: 0; }
+
+    .priority {
+      display: inline-flex;
+      min-width: 42px;
+      justify-content: center;
+      padding: 2px 8px;
+      border-radius: 5px;
+      color: #fff;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: .02em;
+    }
+
+    .p0 { background: var(--danger); }
+    .p1 { background: var(--warn); }
+    .p2 { background: var(--accent); }
+    .p3 { background: #475569; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      margin: 12px 0 22px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #edf2f7;
+      color: #263548;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    code {
+      background: var(--code);
+      border: 1px solid #e2e8f0;
+      border-radius: 4px;
+      padding: 1px 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+
+    pre {
+      overflow: auto;
+      background: #111827;
+      color: #eef2ff;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 13px;
+      line-height: 1.5;
+      border: 1px solid #0f172a;
+    }
+
+    pre code {
+      background: transparent;
+      border: 0;
+      padding: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .note {
+      border-left: 4px solid var(--accent);
+      background: #ecfdf5;
+      padding: 12px 14px;
+      border-radius: 0 8px 8px 0;
+      margin: 14px 0;
+    }
+
+    .warning {
+      border-left-color: var(--warn);
+      background: #fffbeb;
+    }
+
+    .toc {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin: 18px 0 26px;
+    }
+
+    .toc a {
+      display: inline-block;
+      margin: 4px 14px 4px 0;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    .status {
+      font-weight: 700;
+      color: var(--ok);
+    }
+
+    .small { color: var(--muted); font-size: 13px; }
+
+    ul { margin: 8px 0 16px 22px; padding: 0; }
+    li { margin: 5px 0; }
+
+    @media (max-width: 860px) {
+      main { padding: 22px 14px 42px; }
+      h1 { font-size: 26px; }
+      .grid { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>XBRL Agent System Prompt Review</h1>
+    <p class="lede">
+      Recommendations to improve extraction accuracy, note inspection depth,
+      and failure handling for the scout, face-statement extraction agents,
+      and notes extraction agents. Merge, validation, reconciliation, and
+      correction agents are intentionally out of scope for this review.
+    </p>
+    <div class="meta">
+      <span class="pill">Repository: /Users/user/Desktop/xbrl-agent</span>
+      <span class="pill">Review date: 2026-05-26</span>
+      <span class="pill">Scope: prompts only, conservative first</span>
+      <span class="pill">Priority focus: accuracy and retries</span>
+    </div>
+  </header>
+
+  <section class="toc">
+    <a href="#summary">Summary</a>
+    <a href="#current-state">Current State</a>
+    <a href="#priority-recommendations">Priority Recommendations</a>
+    <a href="#agent-by-agent">Agent-by-Agent Review</a>
+    <a href="#suggested-wording">Suggested Wording</a>
+    <a href="#consider-later">Consider Later</a>
+    <a href="#implementation-plan">Implementation Plan</a>
+  </section>
+
+  <section id="summary">
+    <h2>Executive Summary</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Most Important Change</h3>
+        <p>
+          Add a mandatory "evidence ledger before write" discipline to the
+          face-statement prompts. The current prompts say to inspect linked
+          notes, but agents can still rush from face line to workbook write.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Highest Risk Behavior</h3>
+        <p>
+          Catch-all rows remain necessary, but the model needs a stronger
+          precondition checklist before using any "Other" row. This directly
+          targets the shortcut of combining unresolved differences into a
+          single other field.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Best Existing Defense</h3>
+        <p>
+          The repo already has strong guards: no-residual rules, save gates,
+          Sheet-12 coverage receipts, label catalogs, and retry loops. The
+          recommendations should reinforce those instead of replacing them.
+        </p>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Priority</th>
+          <th>Recommendation</th>
+          <th>Why It Matters</th>
+          <th>Prompt Surface</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="priority p0">P0</span></td>
+          <td>Add an evidence-ledger step before any first <code>fill_workbook</code> call.</td>
+          <td>Prevents jumping to conclusions and makes note inspection explicit.</td>
+          <td><code>prompts/_base.md</code>, plus SOFP/SOPL examples</td>
+        </tr>
+        <tr>
+          <td><span class="priority p0">P0</span></td>
+          <td>Strengthen catch-all and "Other" row preconditions.</td>
+          <td>Directly addresses residual stuffing and single-bucket shortcuts.</td>
+          <td><code>prompts/_base.md</code>, <code>sofp.md</code>, <code>sopl.md</code>, notes LoN</td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Add a retry playbook for failed verification, refused writes, and label errors.</td>
+          <td>Improves recovery after tool feedback instead of letting agents spin or finish early.</td>
+          <td><code>prompts/_base.md</code>, notes base, notes LoN</td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Make notes extraction require complete note-page review before writing.</td>
+          <td>Targets insufficient note checking, especially schedules that continue to the next page.</td>
+          <td><code>prompts/_notes_base.md</code>, <code>notes_listofnotes.md</code></td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Add Malaysia-specific mapping guidance beyond SOFP.</td>
+          <td>Improves mappings for Malaysian AFS terminology without adding deterministic synonym code.</td>
+          <td>SOPL, SOCF, SOCIE, notes prompts</td>
+        </tr>
+        <tr>
+          <td><span class="priority p2">P2</span></td>
+          <td>Make scout emit or preserve more confidence and note-reference evidence.</td>
+          <td>Helps downstream agents know when page hints are weak and need expansion.</td>
+          <td><code>scout/agent.py</code> prompt, possibly Infopack schema later</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="current-state">
+    <h2>Current State</h2>
+    <p>
+      The prompt system is already stronger than a generic extraction prompt.
+      It has explicit Malaysian XBRL framing, template-first instructions,
+      sign-convention guidance, and multiple safeguards against formula-cell
+      writes and residual plugs.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Strength</th>
+          <th>Evidence in Current Repo</th>
+          <th>Review Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Template-first extraction</td>
+          <td><code>prompts/_base.md:58-70</code>, <code>prompts/sofp.md:29-44</code>, <code>prompts/sopl.md:24-36</code></td>
+          <td>Good foundation. The gap is making the model prove it followed this before writing.</td>
+        </tr>
+        <tr>
+          <td>No residual plugging</td>
+          <td><code>prompts/_base.md:30-52</code>, <code>prompts/sofp.md:109-129</code>, <code>prompts/sopl.md:84-102</code></td>
+          <td>Strong wording. Add operational preconditions for when an "Other" row is legitimate.</td>
+        </tr>
+        <tr>
+          <td>Notes hierarchy and provenance</td>
+          <td><code>prompts/_notes_base.md:23-52</code>, <code>prompts/_notes_base.md:54-112</code></td>
+          <td>Good. Add a "pages viewed and boundary reached" discipline before write.</td>
+        </tr>
+        <tr>
+          <td>Sheet-12 coverage receipts</td>
+          <td><code>prompts/notes_listofnotes.md:57-99</code></td>
+          <td>Excellent guard against silent skips. It does not prove the pages were read deeply enough.</td>
+        </tr>
+        <tr>
+          <td>Retry infrastructure exists</td>
+          <td><code>extraction/agent.py:173-236</code>, <code>notes/listofnotes_subcoordinator.py:360-510</code>, <code>notes/coordinator.py:831-833</code></td>
+          <td>Prompt side should teach agents how to use retry feedback from tools.</td>
+        </tr>
+        <tr>
+          <td>Scout note inventory is mandatory</td>
+          <td><code>scout/agent.py:136-153</code></td>
+          <td>Good. Add second-pass expectations when note references are visible but hints are incomplete.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note warning">
+      <p><strong>Important constraint:</strong> do not implement the Malaysia-specific guidance as deterministic label matching, OCR, or synonym dictionaries in the notes pipeline. Keep it as prompt examples and accountant judgement, consistent with the repo invariant.</p>
+    </div>
+  </section>
+
+  <section id="priority-recommendations">
+    <h2>Priority Recommendations</h2>
+
+    <h3><span class="priority p0">P0</span> Require an Evidence Ledger Before Writing</h3>
+    <p>
+      Current prompts tell agents to read the template, face statement, and
+      linked notes, but there is no explicit "do not write until you have a
+      ledger" rule. This is the most direct fix for agents that jump to a
+      conclusion after seeing the face statement.
+    </p>
+    <ul>
+      <li>For each face line with a note reference, the agent should identify the face page, note number, note pages viewed, scale/unit, target template row(s), and whether it is split or rolled up.</li>
+      <li>Only then should it call <code>fill_workbook</code>.</li>
+      <li>Evidence should cite both the face page and note page for note-derived values.</li>
+    </ul>
+
+    <h3><span class="priority p0">P0</span> Add Catch-All Row Preconditions</h3>
+    <p>
+      The prompts already say not to plug residuals. The failure pattern you
+      described is more subtle: the model may use "Other" as a convenience
+      bucket before it has exhausted the note and template granularity. Add a
+      checklist that must be satisfied before any catch-all row is used.
+    </p>
+    <ul>
+      <li>The PDF itself uses an "Other" or coarse category, or the template has no more specific row.</li>
+      <li>The agent has checked the relevant note continuation pages and sub-schedules.</li>
+      <li>The evidence names the PDF label that justifies the catch-all row.</li>
+      <li>The value is not equal to an unexplained difference between a face total and the filled breakdown.</li>
+    </ul>
+
+    <h3><span class="priority p1">P1</span> Add a Retry Playbook to Tool Feedback</h3>
+    <p>
+      The code has retry and save-gate mechanics, but prompts should teach the
+      model how to respond when a tool refuses a save, flags an imbalance, or
+      rejects a label. This should reduce "finish anyway" behavior.
+    </p>
+    <ul>
+      <li>For <code>verify_totals</code> failure: re-check scale, sign, current vs non-current section, group vs company column, note continuation, and formula direction before changing labels.</li>
+      <li>For writer warnings or fuzzy matches: use the returned closest labels verbatim, or skip honestly if none fit.</li>
+      <li>For mandatory unfilled rows: search face statement and linked notes first; do not fabricate a zero or "not applicable" unless the PDF explicitly discloses it.</li>
+    </ul>
+
+    <h3><span class="priority p1">P1</span> Make Notes Review Depth Observable</h3>
+    <p>
+      The notes prompts are careful about hierarchy and schedules, but the
+      model can still view the first page of a note and write too early. Add a
+      prompt-side requirement to read until the next top-level note heading or
+      end of schedule, then make the evidence reflect the full range.
+    </p>
+    <ul>
+      <li>Require <code>source_pages</code> to include every page used for the note, not only the first page.</li>
+      <li>When an inventory range is extended, evidence should say why, such as "continued schedule to Page 34".</li>
+      <li>For Sheet-12 catch-all, require a skip or catch-all reason that names the candidate labels considered.</li>
+    </ul>
+
+    <h3><span class="priority p1">P1</span> Expand Malaysia-Specific Prompt Examples</h3>
+    <p>
+      SOFP already has useful Malaysian AFS examples. Similar examples should
+      be added to SOPL, SOCF, SOCIE, and notes. Keep these as examples, not a
+      deterministic dictionary.
+    </p>
+    <ul>
+      <li>SOPL: EPF/SOCSO/EIS under employee benefits, directors' fees vs directors' remuneration, unrealised/realised foreign exchange gain or loss, gain or loss on disposal, management fee income or expense.</li>
+      <li>SOCF: deposits pledged to licensed banks, hire purchase and lease principal, interest paid classification, fixed deposits with maturity beyond three months.</li>
+      <li>SOCIE: bonus issue, rights issue, share premium transition, treasury shares, non-distributable reserves, revaluation reserve, foreign currency translation reserve.</li>
+      <li>Notes: distinguish policies from disclosure notes, and distinguish related-party transactions from balances due from or due to related parties on SOFP.</li>
+    </ul>
+  </section>
+
+  <section id="agent-by-agent">
+    <h2>Agent-by-Agent Review</h2>
+
+    <h3>Scout Agent</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Finding</th>
+          <th>Recommendation</th>
+          <th>Conservative or Later</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>The prompt asks scout to capture note-reference columns and discover notes, but it does not require a completeness reconciliation between visible face note refs and discovered note pages.</td>
+          <td>Add a rule: if the face page has note refs and <code>discover_notes</code> returns empty or sparse pages, view the notes start page and adjacent pages before saving.</td>
+          <td>Conservative prompt edit</td>
+        </tr>
+        <tr>
+          <td>The prompt says to trust visual judgment when variant signals disagree, but does not require confidence or why.</td>
+          <td>Ask scout to include low-confidence indicators in the saved rationale where the schema allows, or in the agent text if not.</td>
+          <td>Conservative now, schema later</td>
+        </tr>
+        <tr>
+          <td>MPERS SOCIE variant detection is partly deterministic, but the prompt still says SOCIE is always Default.</td>
+          <td>Review whether the system prompt should mention MPERS SoRE when filing standard is MPERS, because the code has MPERS-specific SOCIE/SoRE prompt files.</td>
+          <td>Potential change for consideration</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Face-Statement Agents</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Current Strength</th>
+          <th>Main Gap</th>
+          <th>Recommended Prompt Change</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>SOFP</td>
+          <td>Strong sub-sheet-first and Malaysia-specific mapping guidance.</td>
+          <td>Needs an explicit pre-write ledger and catch-all preconditions.</td>
+          <td>Add the ledger block to base and add one SOFP worked example where the model must choose between dedicated rows and "Other".</td>
+        </tr>
+        <tr>
+          <td>SOPL</td>
+          <td>Good Analysis sub-sheet instructions and sign rules.</td>
+          <td>Less Malaysia-specific than SOFP, and the "admin expenses" catch-all could still tempt shortcutting.</td>
+          <td>Add Malaysian P&amp;L terms and a rule to inspect expense notes before using Administrative expenses or Other expenses.</td>
+        </tr>
+        <tr>
+          <td>SOCI</td>
+          <td>Clear OCI sign and before-tax/net-of-tax separation.</td>
+          <td>May assume no OCI too quickly for simple entities.</td>
+          <td>Require checking the SOCI page and SOCIE total comprehensive income row before concluding "no OCI".</td>
+        </tr>
+        <tr>
+          <td>SOCF</td>
+          <td>Clear sign conventions for inflows and outflows.</td>
+          <td>Could benefit from Malaysia-specific cash equivalents and lease/hire purchase guidance.</td>
+          <td>Add examples for fixed deposits, pledged deposits, hire purchase, lease interest/principal, and bank overdrafts.</td>
+        </tr>
+        <tr>
+          <td>SOCIE and SoRE</td>
+          <td>Strong formula-aware dividend guidance and MPERS-specific layout prompt.</td>
+          <td>Needs a retry checklist for mismatches to SOFP equity rather than guessing a reserve movement.</td>
+          <td>Add "do not invent reserve movements" and require checking SOCIE note/equity note before using other reserves.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Notes Extraction Agents</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Area</th>
+          <th>Finding</th>
+          <th>Recommendation</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Notes base</td>
+          <td>Strong hierarchy, HTML, schedule, and provenance rules already exist.</td>
+          <td>Add a "read boundary before write" rule: no payload until next top-level note heading or schedule end has been seen.</td>
+        </tr>
+        <tr>
+          <td>List of Notes</td>
+          <td>The catch-all row is a legitimate sink, but can invite shortcut aggregation.</td>
+          <td>Add preconditions for catch-all use and require the coverage receipt reason to name candidate labels considered.</td>
+        </tr>
+        <tr>
+          <td>Accounting policies</td>
+          <td>Good separation of policy prose from disclosure notes.</td>
+          <td>Add examples of Malaysian policy subtopics that should remain policies, such as EPF contributions, MFRS 16 leases, SST where relevant, and foreign currency translation.</td>
+        </tr>
+        <tr>
+          <td>Issued capital and related party</td>
+          <td>Current prompts are concise and may under-specify Malaysian disclosures.</td>
+          <td>Add examples for ordinary shares, bonus issues, rights issues, directors/key management compensation, subsidiaries, holding companies, and amount owing balances.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="suggested-wording">
+    <h2>Suggested Wording Blocks</h2>
+    <p>
+      These are draft blocks to insert into existing prompts. They are written
+      to preserve the current architecture and avoid deterministic matching.
+    </p>
+
+    <h3>1. Add to <code>prompts/_base.md</code>: Evidence Ledger Before Write</h3>
+    <pre><code>=== PRE-WRITE EVIDENCE LEDGER ===
+
+Before your first fill_workbook call, build a brief internal ledger for every
+face-statement line you will write:
+
+- face page and face label
+- note reference, if any
+- note page(s) viewed, including continuation pages
+- PDF unit or scale, e.g. RM, RM'000
+- target sheet, section, row label, and CY/PY or Group/Company column
+- decision: split into component rows, roll up to a coarser template row, or
+  write a direct face value because no relevant sub-sheet or analysis row exists
+
+Do not write a note-referenced face line until you have viewed the linked note
+or made a documented best-effort search for it. Evidence must cite both the
+face page and the note page when a value comes from a note breakdown.</code></pre>
+
+    <h3>2. Add to <code>prompts/_base.md</code>: Catch-All Preconditions</h3>
+    <pre><code>=== CATCH-ALL ROW PRECONDITIONS ===
+
+Before using any row labelled "Other", "Miscellaneous", "Administrative
+expenses", "Other income", "Other expenses", or similar:
+
+1. Confirm the PDF itself discloses the amount as an "other" or coarse category,
+   OR confirm the live template has no more specific row for the disclosed item.
+2. Confirm you checked the linked note, continuation page, and relevant
+   sub-table before deciding no specific row exists.
+3. In evidence, name the PDF label that justifies the catch-all row.
+4. Never write a value that is merely the difference between a face total and
+   the rows you already filled.
+
+If these preconditions are not met, leave the specific rows as found and let
+verification flag the gap for human review.</code></pre>
+
+    <h3>3. Add to <code>prompts/_base.md</code>: Retry Playbook</h3>
+    <pre><code>=== RETRY PLAYBOOK AFTER TOOL FEEDBACK ===
+
+If fill_workbook, verify_totals, or save_result returns errors or warnings,
+do not finish immediately. Read the tool feedback and retry only the smallest
+necessary correction.
+
+- Label or section error: use read_template and the tool's closest labels,
+  then retry with a real label copied from the template.
+- Formula or abstract-row refusal: choose a data-entry leaf row below the
+  section header; never force a write to the refused row.
+- Balance or subtotal mismatch: check scale, sign, CY/PY column, Group/Company
+  column, current/non-current section, linked note continuation pages, and
+  whether the template formula adds or subtracts the row.
+- Mandatory row blank: search the face statement and linked notes before
+  entering zero. Use zero only when the PDF explicitly discloses zero.
+
+Do not solve a failed verification by plugging a catch-all row.</code></pre>
+
+    <h3>4. Add to <code>prompts/_notes_base.md</code>: Complete Note Boundary</h3>
+    <pre><code>=== COMPLETE NOTE BOUNDARY BEFORE WRITE ===
+
+For each note you write, read until you can see the next top-level note heading
+or the relevant schedule clearly ends. If the inventory page range ends while a
+table, paragraph, or sub-note is still continuing, view the next page or two.
+
+Your source_pages must include every PDF page you relied on, not only the first
+page of the note. If you extended beyond the inventory range, mention that in
+evidence, e.g. "Pages 31-33, Note 8, schedule continues to Page 33".</code></pre>
+
+    <h3>5. Add to <code>prompts/notes_listofnotes.md</code>: Catch-All Is Not a Shortcut</h3>
+    <pre><code>=== CATCH-ALL IS NOT A SHORTCUT ===
+
+Use the catch-all row only when the note's topic genuinely has no row in the
+seeded label catalog. Do not use the catch-all row to avoid splitting a mixed
+note into its proper rows, and do not use it because the first candidate label
+was rejected by the writer.
+
+Before routing a note to catch-all:
+- check the seeded label catalog for a specific topic row;
+- if a writer rejection occurred, retry using one of the closest labels if it
+  genuinely fits;
+- include a short reason in the coverage receipt naming the candidate topic
+  you considered, e.g. "no MPERS row for capital management disclosure".</code></pre>
+  </section>
+
+  <section id="consider-later">
+    <h2>Potential Changes for Consideration</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Idea</th>
+          <th>Benefit</th>
+          <th>Risk or Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Structured evidence ledger tool</td>
+          <td>Turns the proposed ledger from prompt-only behavior into auditable run data.</td>
+          <td>Requires a new tool or schema and tests. More work than a conservative prompt edit.</td>
+        </tr>
+        <tr>
+          <td>Scout infopack includes face-note-ref map</td>
+          <td>Downstream agents can compare "face Note 7 exists" against note pages supplied.</td>
+          <td>Requires Infopack schema changes and UI/history compatibility checks.</td>
+        </tr>
+        <tr>
+          <td>Post-write coverage audit per statement</td>
+          <td>Detects note-referenced face lines that never had note-page evidence.</td>
+          <td>May need canonical fact mapping and careful false-positive handling.</td>
+        </tr>
+        <tr>
+          <td>Provider-specific prompt tail</td>
+          <td>Could adapt wording for Gemini/OpenAI/Anthropic tendencies, such as shorter retry instructions or stricter JSON reminders.</td>
+          <td>More prompt variants to maintain and test.</td>
+        </tr>
+        <tr>
+          <td>Prompt regression suite using real PDFs</td>
+          <td>Measures whether prompt changes improve accuracy on FINCO and problem filings.</td>
+          <td>LLM tests can be slower, cost money, and require careful reproducibility expectations.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="implementation-plan">
+    <h2>Implementation Plan</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Step</th>
+          <th>Files</th>
+          <th>Tests to Add or Update</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1. Add base evidence ledger, catch-all preconditions, and retry playbook.</td>
+          <td><code>prompts/_base.md</code></td>
+          <td>Add prompt-contract tests in <code>tests/test_prompt_residual_plug_rule.py</code> or a new <code>tests/test_prompt_evidence_ledger.py</code>.</td>
+        </tr>
+        <tr>
+          <td>2. Add SOPL, SOCF, SOCIE Malaysia-specific examples.</td>
+          <td><code>prompts/sopl.md</code>, <code>prompts/socf.md</code>, <code>prompts/socie.md</code>, <code>prompts/socie_mpers.md</code></td>
+          <td>Prompt tests that pin examples without overfitting exact wording.</td>
+        </tr>
+        <tr>
+          <td>3. Add notes complete-boundary and catch-all-not-shortcut rules.</td>
+          <td><code>prompts/_notes_base.md</code>, <code>prompts/notes_listofnotes.md</code></td>
+          <td>Extend <code>tests/test_notes_prompt_phase1.py</code> with boundary and catch-all precondition assertions.</td>
+        </tr>
+        <tr>
+          <td>4. Add scout completeness prompt.</td>
+          <td><code>scout/agent.py</code></td>
+          <td>Extend <code>tests/test_scout_agent.py</code> or add a prompt-sentinel test for note-ref completeness.</td>
+        </tr>
+        <tr>
+          <td>5. Run focused tests.</td>
+          <td>Prompt and scout tests only at first</td>
+          <td><code>python -m pytest tests/test_prompt_residual_plug_rule.py tests/test_notes_prompt_phase1.py tests/test_prompts.py tests/test_scout_agent.py -v</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <p><strong>Recommended order:</strong> implement the prompt-only P0/P1 changes first, with prompt-contract tests. Defer schema/tool changes until after one or two benchmark filings show which remaining failures are not prompt-solvable.</p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

@@ -35,7 +35,7 @@ from pathlib import Path
 # nullable column `notes_cells.concept_uuid` so a notes row can be linked
 # to the canonical concept store. NULL preserves back-compat for the
 # coordinator's existing notes-write path. Single idempotent ALTER.
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -136,7 +136,13 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         actual          REAL,
         diff            REAL,
         tolerance       REAL,
-        message         TEXT
+        message         TEXT,
+        -- Review Workspace M2/Step 8: the cell a failed check points at, so
+        -- the validator UI can jump straight to it. Nullable — most check
+        -- statuses (pending/not_applicable) and checks without a natural
+        -- anchor leave these NULL.
+        target_sheet    TEXT,
+        target_row      INTEGER
     )
     """,
 
@@ -339,6 +345,14 @@ _V5_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # Nullable so existing notes rows read NULL.
 _V6_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("notes_cells", "concept_uuid", "TEXT"),
+)
+
+
+# v7 columns: the click-to-cell target on a failed cross-check. Nullable so
+# existing cross_checks rows read NULL.
+_V7_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("cross_checks", "target_sheet", "TEXT"),
+    ("cross_checks", "target_row", "INTEGER"),
 )
 
 
@@ -550,6 +564,46 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (6,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v6→v7 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v6 → v7: add the nullable click-to-cell target columns to
+        # cross_checks. Fresh DBs already carry them via CREATE TABLE above;
+        # this ALTER walks an existing v6 DB forward. Same BEGIN IMMEDIATE +
+        # duplicate-column tolerance as the earlier steps.
+        if current_version is not None and current_version < 7:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 7:
+                    for table, col_name, col_ddl in _V7_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (7,),
                     )
                 conn.commit()
             except Exception:

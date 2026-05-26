@@ -103,7 +103,8 @@ ANTHROPIC_API_KEY=
 
 # Proxy (set by start.sh on Mac, manual on Windows)
 LLM_PROXY_URL=                 # empty = direct mode
-GOOGLE_API_KEY=                # also used as proxy auth key on Windows
+LLM_PROXY_API_KEY=             # proxy auth key; start.sh sets the local-dev master key here
+GOOGLE_API_KEY=                # real Google key; also the proxy auth key on Windows (no LLM_PROXY_API_KEY there)
 
 # Model defaults
 TEST_MODEL=google-gla:gemini-3-flash-preview

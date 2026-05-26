@@ -41,36 +41,52 @@ Why: policy prose and disclosure figures map to distinct MBRS XBRL
 concepts. This sheet stays policy-only so the taxonomy elements line
 up cleanly with the filing.
 
-=== STRATEGY ===
+=== STRATEGY — WORK IN SMALL READ→WRITE CYCLES ===
+
+This note spans 5-15 pages, but you do NOT need to hold all of them in
+view at once. Work through it in small batches and write as you go.
+(This overrides the general "request all pages in one call" tip in the
+base prompt — for this long, page-independent note, chunked read→write
+is cheaper: pages you've already written from stop being re-sent on
+later turns.)
 
 1. Call `read_template` ONCE to capture every target row label.
-2. Locate the accounting-policies note in the PDF. It's typically Note 2
-   or Note 3 and spans 5-15 pages. Use the scout inventory if available;
-   otherwise view the first page of the notes section and scan for a
-   "Material Accounting Policies" / "Summary of Material Accounting
-   Policies" heading.
-3. Read the entire note. Sub-policies usually have sub-headings like
-   "2.1 Basis of preparation", "2.7 Property, plant and equipment".
-4. For each sub-policy:
-   - Decide which template row matches. Match by topic ("property, plant
-     and equipment" → row 48). Fuzzy matches are fine — the writer does
-     label resolution.
-   - Copy the full paragraph(s) verbatim, preserving ordering and
-     semantics.
-   - **Preserve any "(a)/(b)/(i)/(ii)" sub-section labels verbatim** as
-     bold paragraph headers (e.g. `<p><strong>(a) Short term
-     benefits</strong></p>`) before the paragraphs they introduce. A
-     policy split into "(a)" / "(b)" sub-clauses stays in one cell —
-     keep both labels and both bodies, do not flatten them into one
-     undifferentiated paragraph block. See `_notes_base.md` "NOTE
-     HIERARCHY AND GRANULARITY" for the full rule.
-   - Emit a NotesPayload with `content` = the paragraph text (with
-     sub-section labels included as above).
-5. Skip sub-policies that genuinely do not match any of the 53 labels.
+2. Locate the start of the accounting-policies note. It's typically Note 2
+   or Note 3. Use the scout inventory / page hints if available; otherwise
+   view the first page of the notes section and scan for a "Material
+   Accounting Policies" / "Summary of Material Accounting Policies" heading.
+3. Then repeat the following cycle until you reach the next note header
+   (the end of the policies section):
+   a. View the next **2-3 pages** of the note (e.g. `[16, 17, 18]`).
+   b. For each sub-policy that is COMPLETE within the pages you can
+      currently see (sub-policies usually have sub-headings like
+      "2.1 Basis of preparation", "2.7 Property, plant and equipment"):
+      - Decide which template row matches. Match by topic ("property,
+        plant and equipment" → row 48). Fuzzy matches are fine — the
+        writer does label resolution.
+      - Copy the full paragraph(s) verbatim, preserving ordering and
+        semantics.
+      - **Preserve any "(a)/(b)/(i)/(ii)" sub-section labels verbatim** as
+        bold paragraph headers (e.g. `<p><strong>(a) Short term
+        benefits</strong></p>`) before the paragraphs they introduce. A
+        policy split into "(a)" / "(b)" sub-clauses stays in one cell —
+        keep both labels and both bodies, do not flatten them into one
+        undifferentiated paragraph block. See `_notes_base.md` "NOTE
+        HIERARCHY AND GRANULARITY" for the full rule.
+      - Emit a NotesPayload with `content` = the paragraph text (with
+        sub-section labels included as above).
+      - If a sub-policy clearly continues onto a page you have NOT yet
+        viewed, do NOT write a truncated version — defer it and pick it
+        up in the next cycle once you've viewed its continuation.
+   c. Call `write_notes` with the payloads for THIS batch.
+   d. Move on to the next 2-3 pages. You may safely call `write_notes`
+      again — later writes to the same row supersede earlier ones, so a
+      policy you re-write after seeing its continuation is handled cleanly.
+4. Skip sub-policies that genuinely do not match any of the 53 labels.
    Do NOT redirect unmatched policies to row 57 ("Description of other
    material accounting policies…") — that row is only for policies the
    auditors explicitly labelled "other".
-6. Call `write_notes` with the full batch, then `save_result`.
+5. When you reach the end of the policies section, call `save_result`.
 
 === NOTES ===
 

@@ -55,7 +55,9 @@ export const pwc = {
 
   // Shadows
   shadow: {
-    card: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06)',
+    // Flatter, single soft shadow — stacked cards (the review workspace nests
+    // several) read cleaner without the heavier double drop-shadow.
+    card: '0 1px 2px rgba(0,0,0,0.04)',
     elevated: '0 4px 12px rgba(0,0,0,0.1)',
     modal: '0 20px 60px rgba(0,0,0,0.2)',
   },

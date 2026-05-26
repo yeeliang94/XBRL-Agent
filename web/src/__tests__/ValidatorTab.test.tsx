@@ -1,5 +1,5 @@
-import { describe, test, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, test, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ValidatorTab } from "../components/ValidatorTab";
 import type { CrossCheckResult } from "../lib/types";
 
@@ -21,6 +21,26 @@ describe("ValidatorTab", () => {
     expect(screen.getByText("sopl_to_socie_profit")).toBeTruthy();
     expect(screen.getByText("soci_to_socie_tci")).toBeTruthy();
     expect(screen.getByText("socf_to_sofp_cash")).toBeTruthy();
+  });
+
+  test("clicking a check with a target calls onSelectTarget (Step 8)", () => {
+    const checks: CrossCheckResult[] = [
+      { name: "sofp_balance", status: "failed", expected: 1000, actual: 990, diff: 10, tolerance: 1, message: "off", target_sheet: "SOFP-CuNonCu", target_row: 42 },
+    ];
+    const onSelectTarget = vi.fn();
+    render(<ValidatorTab crossChecks={checks} onSelectTarget={onSelectTarget} />);
+    fireEvent.click(screen.getByTestId("cross-check-row-sofp_balance"));
+    expect(onSelectTarget).toHaveBeenCalledWith("SOFP-CuNonCu", 42);
+  });
+
+  test("a check without a target is not clickable", () => {
+    const checks: CrossCheckResult[] = [
+      { name: "sofp_balance", status: "failed", expected: 1000, actual: 990, diff: 10, tolerance: 1, message: "off" },
+    ];
+    const onSelectTarget = vi.fn();
+    render(<ValidatorTab crossChecks={checks} onSelectTarget={onSelectTarget} />);
+    fireEvent.click(screen.getByTestId("cross-check-row-sofp_balance"));
+    expect(onSelectTarget).not.toHaveBeenCalled();
   });
 
   test("passed row shows pass badge", () => {

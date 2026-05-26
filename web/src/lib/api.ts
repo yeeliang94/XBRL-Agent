@@ -147,3 +147,44 @@ export function downloadFilledUrl(runId: number): string {
   }
   return `/api/runs/${runId}/download/filled`;
 }
+
+// ---------------------------------------------------------------------------
+// Source-PDF viewer (Review Workspace M1)
+//
+// Page images are served as plain PNGs so the viewer can use them as an
+// `<img src>` directly — same rationale as downloadFilledUrl (no fetch+Blob
+// dance). URL building lives here so the path format stays in one place.
+// ---------------------------------------------------------------------------
+
+function assertRunId(fn: string, runId: number): void {
+  if (!Number.isInteger(runId) || runId <= 0) {
+    throw new Error(`${fn}: runId must be a positive integer (got ${runId})`);
+  }
+}
+
+/** URL for the source PDF's page-count metadata. */
+export function pdfInfoUrl(runId: number): string {
+  assertRunId("pdfInfoUrl", runId);
+  return `/api/runs/${runId}/pdf/info`;
+}
+
+/** Build the `<img src>` URL for one rendered source-PDF page (1-indexed). */
+export function pdfPageUrl(runId: number, page: number, dpi?: number): string {
+  assertRunId("pdfPageUrl", runId);
+  if (!Number.isInteger(page) || page < 1) {
+    throw new Error(`pdfPageUrl: page must be a positive integer (got ${page})`);
+  }
+  const qs = dpi != null ? `?dpi=${dpi}` : "";
+  return `/api/runs/${runId}/pdf/page/${page}.png${qs}`;
+}
+
+/** Fetch the source PDF's page count, or null when the run has no stored PDF
+ *  (legacy / CLI runs). The viewer treats null as "no source available". */
+export async function fetchPdfPageCount(runId: number): Promise<number | null> {
+  try {
+    const data = await apiFetch<{ pages: number }>(pdfInfoUrl(runId));
+    return data.pages;
+  } catch {
+    return null;
+  }
+}
