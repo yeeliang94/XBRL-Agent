@@ -1,4 +1,5 @@
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 import type { CrossCheckResult } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -210,13 +211,11 @@ const styles = {
   rowMuted: {
     opacity: 0.5,
   } as React.CSSProperties,
+  // Status pill (PASS / FAIL / WARNING). Geometry comes from the shared
+  // pill primitive; the dynamic colour/background is overridden per status
+  // at the call sites.
   badge: {
-    display: "inline-block",
-    padding: `2px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.sm,
-    fontSize: 12,
-    fontWeight: 600,
-    lineHeight: 1.5,
+    ...ui.badge,
   } as React.CSSProperties,
   empty: {
     padding: pwc.space.xl,

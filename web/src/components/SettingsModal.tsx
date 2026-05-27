@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { SettingsResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 
 interface Props {
   isOpen: boolean;
@@ -130,46 +131,16 @@ const styles = {
     borderTop: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   cancelButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    color: pwc.grey700,
-    background: "none",
-    border: "none",
-    cursor: "pointer",
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
   } as React.CSSProperties,
   saveButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.white,
-    background: pwc.orange500,
-    border: "none",
-    borderRadius: pwc.radius.md,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  saveButtonDisabled: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.white,
-    background: pwc.grey300,
-    border: "none",
-    borderRadius: pwc.radius.md,
-    cursor: "not-allowed",
+    ...ui.buttonPrimary,
+    ...ui.buttonSm,
   } as React.CSSProperties,
   testButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 500,
-    color: pwc.grey900,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    cursor: "pointer",
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
   } as React.CSSProperties,
   testResult: {
     fontFamily: pwc.fontBody,
@@ -434,6 +405,7 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
           <button
             onClick={handleTestConnection}
             disabled={testing}
+            className={uiClass.btnSecondary}
             style={styles.testButton}
           >
             {testing ? (
@@ -464,13 +436,14 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
         {/* Actions */}
         <div style={styles.actions}>
           {saved && <span style={styles.savedBadge}>Saved!</span>}
-          <button onClick={onClose} style={styles.cancelButton}>
+          <button onClick={onClose} className={uiClass.btnSecondary} style={styles.cancelButton}>
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={saving || hasErrors}
-            style={hasErrors || saving ? styles.saveButtonDisabled : styles.saveButton}
+            className={uiClass.btnPrimary}
+            style={styles.saveButton}
           >
             {saving ? "Saving..." : "Save"}
           </button>

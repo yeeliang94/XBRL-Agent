@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { ConceptsPage } from "../pages/ConceptsPage";
@@ -56,7 +57,7 @@ function statusBadge(display: RunStatusDisplay) {
   return (
     <span
       style={{
-        ...styles.badge,
+        ...ui.badge,
         color: display.color,
         background: display.bg,
       }}
@@ -428,7 +429,8 @@ export function RunDetailView({
             type="button"
             onClick={() => onDownload(detail.id)}
             disabled={!canDownload}
-            style={canDownload ? styles.primaryButton : styles.primaryButtonDisabled}
+            className={uiClass.btnPrimary}
+            style={ui.buttonPrimary}
             title={
               canDownload
                 ? "Download merged workbook"
@@ -441,7 +443,8 @@ export function RunDetailView({
             <button
               type="button"
               onClick={() => setTab("values")}
-              style={styles.secondaryButton}
+              className={uiClass.btnGhost}
+              style={ui.buttonGhost}
               title="Review this run's extracted values and reconciliation queue"
             >
               Review values
@@ -451,7 +454,8 @@ export function RunDetailView({
             type="button"
             onClick={handleDelete}
             disabled={!canDelete}
-            style={canDelete ? styles.dangerButton : styles.dangerButtonDisabled}
+            className={uiClass.btnDanger}
+            style={ui.buttonDanger}
             title={
               canDelete
                 ? "Delete run from history (on-disk files are kept)"
@@ -634,39 +638,6 @@ const styles = {
     display: "flex",
     gap: pwc.space.sm,
   } as React.CSSProperties,
-  primaryButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.white,
-    background: pwc.orange500,
-    border: "none",
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  primaryButtonDisabled: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.grey500,
-    background: pwc.grey100,
-    border: "none",
-    borderRadius: pwc.radius.sm,
-    cursor: "not-allowed",
-  } as React.CSSProperties,
-  secondaryButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.orange500,
-    background: pwc.white,
-    border: `1px solid ${pwc.orange500}`,
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
-  } as React.CSSProperties,
   // Tab bar: a thin row of buttons with the active one underlined in the
   // brand orange. Data-dense chrome — keep it tight, not airy.
   tabBar: {
@@ -734,28 +705,6 @@ const styles = {
     textTransform: "uppercase" as const,
     letterSpacing: 0.5,
     color: pwc.grey500,
-  } as React.CSSProperties,
-  dangerButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.error,
-    background: pwc.white,
-    border: `1px solid ${pwc.error}`,
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  dangerButtonDisabled: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.grey500,
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    cursor: "not-allowed",
   } as React.CSSProperties,
   section: {
     display: "flex",
@@ -882,23 +831,9 @@ const styles = {
   agentTokens: {
     marginLeft: "auto",
   } as React.CSSProperties,
-  badge: {
-    display: "inline-block",
-    padding: `2px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.sm,
-    fontSize: 12,
-    fontWeight: 600,
-    lineHeight: 1.6,
-  } as React.CSSProperties,
   legacyBadge: {
-    display: "inline-block",
-    padding: `2px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.sm,
+    ...ui.badgeNeutral,
     fontSize: 11,
-    fontWeight: 600,
-    lineHeight: 1.6,
-    color: pwc.grey700,
-    background: pwc.grey100,
     border: `1px solid ${pwc.grey200}`,
     textTransform: "uppercase" as const,
     letterSpacing: 0.3,

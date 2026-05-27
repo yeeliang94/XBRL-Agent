@@ -93,10 +93,15 @@ textarea:focus {
 .pwc-btn-ghost:hover:not(:disabled) {
   background: #FFF5ED !important; /* orange50 */
 }
+.pwc-btn-danger:hover:not(:disabled) {
+  background: #FBE9E9 !important; /* errorBg */
+  border-color: #DC2626 !important; /* error */
+}
 .pwc-btn-primary:disabled,
 .pwc-btn-secondary:disabled,
 .pwc-btn-subtle:disabled,
-.pwc-btn-ghost:disabled {
+.pwc-btn-ghost:disabled,
+.pwc-btn-danger:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -150,9 +155,4 @@ textarea:focus {
 .agent-tab:hover:not([aria-selected="true"]):not([aria-disabled="true"]) {
   background: #FAFAFA; /* grey50 */
   color: #1A1A1A; /* grey900 */
-}
-
-/* Download button hover states — scoped to avoid affecting all buttons */
-.dl-btn:hover {
-  filter: brightness(0.97);
 }

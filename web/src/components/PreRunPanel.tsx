@@ -18,7 +18,7 @@ import {
   variantsFor,
 } from "../lib/types";
 import { pwc } from "../lib/theme";
-import { uiClass } from "../lib/uiStyles";
+import { ui, uiClass } from "../lib/uiStyles";
 import { abortAgent, updateSettings } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { ScoutToggle } from "./ScoutToggle";
@@ -97,27 +97,8 @@ const styles = {
     margin: 0,
   } as React.CSSProperties,
   runButton: {
-    padding: `${pwc.space.md}px ${pwc.space.xl}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 15,
-    fontWeight: 600,
-    color: pwc.white,
-    background: pwc.orange500,
-    border: "none",
-    borderRadius: pwc.radius.md,
-    cursor: "pointer",
-    alignSelf: "flex-end" as const,
-  } as React.CSSProperties,
-  runButtonDisabled: {
-    padding: `${pwc.space.md}px ${pwc.space.xl}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 15,
-    fontWeight: 600,
-    color: pwc.white,
-    background: pwc.grey300,
-    border: "none",
-    borderRadius: pwc.radius.md,
-    cursor: "not-allowed",
+    ...ui.buttonPrimary,
+    ...ui.buttonLg,
     alignSelf: "flex-end" as const,
   } as React.CSSProperties,
   loadingText: {
@@ -1207,7 +1188,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         onClick={handleRun}
         disabled={!canRun}
         className={uiClass.btnPrimary}
-        style={canRun ? styles.runButton : styles.runButtonDisabled}
+        style={styles.runButton}
       >
         Run Extraction
       </button>

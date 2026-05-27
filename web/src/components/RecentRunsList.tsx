@@ -180,12 +180,7 @@ const styles = {
     gap: pwc.space.sm,
   } as React.CSSProperties,
   badge: {
-    display: "inline-block",
-    padding: `1px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.lg,
-    fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    lineHeight: 1.5,
+    ...ui.badge,
   } as React.CSSProperties,
   date: {
     fontFamily: pwc.fontBody,

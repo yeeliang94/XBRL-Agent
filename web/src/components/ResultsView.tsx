@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import type { CompleteData } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import { formatElapsedMs } from "../lib/time";
 
 interface Props {
@@ -87,16 +88,7 @@ const styles = {
     color: pwc.grey900,
   } as React.CSSProperties,
   successBadge: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: pwc.space.xs,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
-    color: pwc.success,
-    background: pwc.successBg,
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    borderRadius: pwc.radius.md,
+    ...ui.badgeSuccess,
   } as React.CSSProperties,
   successDot: {
     width: 8,
@@ -107,16 +99,7 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   failBadge: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: pwc.space.xs,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
-    color: pwc.error,
-    background: pwc.errorBg,
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    borderRadius: pwc.radius.md,
+    ...ui.badgeError,
   } as React.CSSProperties,
   failDot: {
     width: 8,
@@ -185,36 +168,10 @@ const styles = {
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   downloadButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 500,
-    color: pwc.grey900,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    textDecoration: "none",
-    display: "inline-flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-    cursor: "pointer",
-    transition: "background 0.15s, border-color 0.15s",
+    ...ui.buttonSecondary,
   } as React.CSSProperties,
   downloadPrimary: {
-    padding: `${pwc.space.md}px ${pwc.space.xl}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.white,
-    background: pwc.orange500,
-    border: `1px solid ${pwc.orange500}`,
-    borderRadius: pwc.radius.md,
-    textDecoration: "none",
-    display: "inline-flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-    cursor: "pointer",
-    transition: "background 0.15s",
+    ...ui.buttonPrimary,
   } as React.CSSProperties,
   downloadSection: {
     marginBottom: pwc.space.lg,
@@ -258,15 +215,8 @@ const styles = {
     color: pwc.grey800,
   } as React.CSSProperties,
   reviewActionButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
-    color: pwc.white,
-    background: pwc.orange500,
-    border: `1px solid ${pwc.orange500}`,
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
+    ...ui.buttonPrimary,
+    ...ui.buttonSm,
   } as React.CSSProperties,
   downloadSectionLabel: {
     fontFamily: pwc.fontHeading,
@@ -338,6 +288,7 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
           </span>
           <button
             onClick={() => onViewConcepts(runId)}
+            className={uiClass.btnPrimary}
             style={styles.reviewActionButton}
           >
             Review extracted values
@@ -541,7 +492,7 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
       {/* Primary action — merged workbook */}
       <div style={styles.downloadSection}>
         <button
-          className="dl-btn"
+          className={uiClass.btnPrimary}
           onClick={() => handleDownload("filled.xlsx")}
           style={styles.downloadPrimary}
         >
@@ -556,13 +507,13 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
           <div key={stmt} style={styles.downloadSection}>
             <div style={styles.downloadSectionLabel}>{stmt}</div>
             <div style={styles.downloadRow}>
-              <button onClick={() => handleDownload(`${stmt}_filled.xlsx`)} className="dl-btn" style={styles.downloadButton}>
+              <button onClick={() => handleDownload(`${stmt}_filled.xlsx`)} className={uiClass.btnSecondary} style={styles.downloadButton}>
                 <span>📊</span> Excel
               </button>
-              <button onClick={() => handleDownload(`${stmt}_result.json`)} className="dl-btn" style={styles.downloadButton}>
+              <button onClick={() => handleDownload(`${stmt}_result.json`)} className={uiClass.btnSecondary} style={styles.downloadButton}>
                 <span>📄</span> JSON
               </button>
-              <button onClick={() => handleDownload(`${stmt}_conversation_trace.json`)} className="dl-btn" style={styles.downloadButton}>
+              <button onClick={() => handleDownload(`${stmt}_conversation_trace.json`)} className={uiClass.btnSecondary} style={styles.downloadButton}>
                 <span>🔍</span> Trace
               </button>
             </div>
@@ -571,10 +522,10 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
       ) : (
         <div style={styles.downloadSection}>
           <div style={styles.downloadRow}>
-            <button onClick={() => handleDownload("result.json")} style={styles.downloadButton}>
+            <button onClick={() => handleDownload("result.json")} className={uiClass.btnSecondary} style={styles.downloadButton}>
               <span>📄</span> Download JSON
             </button>
-            <button onClick={() => handleDownload("conversation_trace.json")} style={styles.downloadButton}>
+            <button onClick={() => handleDownload("conversation_trace.json")} className={uiClass.btnSecondary} style={styles.downloadButton}>
               <span>🔍</span> Download Trace
             </button>
           </div>

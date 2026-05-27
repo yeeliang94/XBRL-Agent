@@ -129,6 +129,16 @@ export const ui = {
     background: "transparent",
   } as CSSProperties,
 
+  // Destructive action (delete / abort). Outline style so it stays quiet
+  // until hovered — destructive buttons shouldn't compete with the primary
+  // CTA for attention. Hover fill lives in index.css (.pwc-btn-danger).
+  buttonDanger: {
+    ...buttonBase,
+    color: pwc.error,
+    background: pwc.white,
+    borderColor: pwc.error,
+  } as CSSProperties,
+
   // Size modifiers — spread after a variant: { ...ui.buttonPrimary, ...ui.buttonSm }
   buttonSm: {
     minHeight: 36,
@@ -238,6 +248,7 @@ export const uiClass = {
   btnSecondary: "pwc-btn-secondary",
   btnSubtle: "pwc-btn-subtle",
   btnGhost: "pwc-btn-ghost",
+  btnDanger: "pwc-btn-danger",
   card: "pwc-card",
   tableRow: "pwc-table-row",
 } as const;
