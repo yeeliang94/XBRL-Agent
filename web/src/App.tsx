@@ -483,7 +483,28 @@ export default function App() {
         }
       >
         {state.view === "concepts" ? (
-          <ConceptsPage runId={state.selectedRunId} />
+          // `/concepts/{id}` is now an alias that opens the unified run page
+          // on the Values tab (the standalone full-page Concepts surface was
+          // folded into the tabbed run detail — see
+          // docs/PLAN-run-page-and-telemetry.md). The bare Template landing
+          // (no run id) still shows the ConceptsPage empty/select state.
+          state.selectedRunId != null ? (
+            <HistoryPage
+              canonicalEnabled={canonicalEnabled}
+              selectedId={state.selectedRunId}
+              initialRunTab="values"
+              onSelectRun={(id) =>
+                dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
+              }
+              onResumeDraft={(id) => {
+                dispatch({ type: "SET_VIEW", payload: "extract" });
+                dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
+                dispatch({ type: "SET_CURRENT_RUN_ID", payload: id });
+              }}
+            />
+          ) : (
+            <ConceptsPage runId={state.selectedRunId} />
+          )
         ) : state.view === "history" ? (
           <HistoryPage
             canonicalEnabled={canonicalEnabled}

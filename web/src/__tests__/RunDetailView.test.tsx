@@ -739,6 +739,33 @@ describe("RunDetailView", () => {
     expect(screen.getByText("$0.0060")).toBeTruthy();
   });
 
+  test("initialTab='values' opens the Values tab (the /concepts/{id} alias)", () => {
+    // The /concepts/{id} route now opens the unified run page directly on
+    // Values. ConceptsPage fetches on mount, so stub fetch.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ concepts: [] }),
+    })) as unknown as typeof fetch;
+    try {
+      render(
+        <RunDetailView
+          detail={makeDetail()}
+          onDelete={() => {}}
+          onDownload={() => {}}
+          canonicalEnabled
+          initialTab="values"
+        />,
+      );
+      const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+      const valuesTab = within(tablist).getByRole("tab", { name: /^values$/i });
+      expect(valuesTab.getAttribute("aria-selected")).toBe("true");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("arrow keys move between run-detail tabs (WAI-ARIA tabs pattern)", () => {
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });

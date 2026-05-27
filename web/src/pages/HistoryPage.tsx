@@ -4,6 +4,7 @@ import { PageHeader } from "../components/PageHeader";
 import { HistoryFilters } from "../components/HistoryFilters";
 import { HistoryList } from "../components/HistoryList";
 import { RunDetailPage } from "../components/RunDetailPage";
+import type { RunTabKey } from "../components/RunDetailView";
 import { fetchRuns, fetchRunDetail, deleteRun, downloadFilledUrl } from "../lib/api";
 import type { RunDetailJson, RunSummaryJson, RunsFilterParams } from "../lib/types";
 
@@ -40,9 +41,12 @@ export interface HistoryPageProps {
   /** Gates the run-detail "View Concepts" link on canonical mode
    *  (peer-review F6). Forwarded straight to RunDetailPage. */
   canonicalEnabled?: boolean;
+  /** Initial run-detail tab. The `/concepts/{id}` alias passes "values" so
+   *  the deep link lands on the values review. Forwarded to RunDetailPage. */
+  initialRunTab?: RunTabKey;
 }
 
-export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeDraft, canonicalEnabled = false }: HistoryPageProps = {}) {
+export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeDraft, canonicalEnabled = false, initialRunTab }: HistoryPageProps = {}) {
   const [filters, setFilters] = useState<RunsFilterParams>({});
   const [runs, setRuns] = useState<RunSummaryJson[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -351,6 +355,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           isLoading={isDetailLoading}
           error={detailError}
           canonicalEnabled={canonicalEnabled}
+          initialTab={initialRunTab}
           onBack={() => {
             // Always clear selection directly — window.history.back()
             // is *not* a safe shortcut, because history.length > 1

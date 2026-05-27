@@ -1,6 +1,6 @@
 # Implementation Plan: Unified Run Page + Deep Telemetry
 
-**Overall Progress:** `~75%`
+**Overall Progress:** `100%` (all phases landed; routing alias completed)
 **Design reference:** [docs/pwc-design-system.html](pwc-design-system.html) · memory `pwc-design-system`
 **Last Updated:** 2026-05-27
 
@@ -19,12 +19,12 @@
 > - 🟩 **Phase 6** — a11y roles (tablist/tab/tabpanel) + roving-tabindex
 >   keyboard arrow-nav; CLAUDE.md gotcha #6 (per-turn deltas / hybrid trace)
 >   and gotcha #7 (tabbed run page + role=tab scoping) updated.
-> - 🟥 **Phase 1 Step 2 (routing) — DEFERRED:** `/concepts/{id}` is still a
->   separate App-level view + TopNav link. The core nav fix (Review-values as
->   an in-place tab) is done; fully folding the `/concepts` *route* into a
->   `/history/{id}` tab-deep-link needs an `initialTab` prop threaded through
->   App→HistoryPage→RunDetailPage and a redirect — lower value now, left as a
->   follow-up.
+> - 🟩 **Phase 1 Step 2 (routing)** — DONE. `/concepts/{id}` is now an alias
+>   that opens the unified run page on the Values tab: `initialRunTab` is
+>   threaded App → HistoryPage → RunDetailPage → RunDetailView, and App routes
+>   the concepts-view-with-id through the tabbed run detail. The URL is
+>   preserved (AppRouting deep-link test still green); the bare Template
+>   top-nav landing keeps the standalone ConceptsPage.
 > - **Verification:** `tsc --noEmit` clean; **608/608 frontend tests pass**
 >   (incl. new telemetry-tab, metric-strip, and keyboard-nav tests). **Not yet
 >   verified in a live browser** — no running app/LLM in this environment.

@@ -1,5 +1,6 @@
 import { pwc } from "../lib/theme";
 import { RunDetailView } from "./RunDetailView";
+import type { RunDetailViewProps } from "./RunDetailView";
 import type { RunDetailJson } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,9 @@ export interface RunDetailPageProps {
   /** Forwarded to RunDetailView to gate the "View Concepts" link on
    *  canonical mode (peer-review F6). */
   canonicalEnabled?: boolean;
+  /** Forwarded to RunDetailView — initial tab (the `/concepts/{id}` alias
+   *  passes "values"). */
+  initialTab?: RunDetailViewProps["initialTab"];
 }
 
 export function RunDetailPage({
@@ -45,6 +49,7 @@ export function RunDetailPage({
   onDelete,
   onRegenerateNotes,
   canonicalEnabled = false,
+  initialTab,
 }: RunDetailPageProps) {
   return (
     <div style={styles.root}>
@@ -80,6 +85,7 @@ export function RunDetailPage({
           onDelete={onDelete}
           onRegenerateNotes={onRegenerateNotes}
           canonicalEnabled={canonicalEnabled}
+          initialTab={initialTab}
         />
       )}
     </div>
