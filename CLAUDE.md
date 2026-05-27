@@ -205,14 +205,23 @@ in the live path. The live coordinator loop derives a per-turn figure by
 `run_agent_turns` (schema v8) along with exact timing + tool activity; the
 prompt/completion split is therefore best-effort, while duration and tool
 calls are exact. The Telemetry tab labels this honestly. After completion,
-`server.py` also backfills run-level totals from `result.usage`.
+`server.py` also backfills run-level totals from `result.usage`. Both the
+**face coordinator** (`coordinator.py`) **and the single-agent notes path**
+(`notes/coordinator.py`) capture this; the Sheet-12 fan-out leaves per-turn
+rows empty (its sub-agents merge into one row) — rollups still populate.
 
 **Verbatim content lives on disk, not the DB.** `save_agent_trace`
 (`agent_tracing.py`) writes the full request/response transcript to
 `{output_dir}/{stmt}_conversation_trace.json` — text kept verbatim (single
 payloads capped at 100 KB; binary elided) — served on demand by
-`GET /api/runs/{id}/agents/{stmt}/trace`. Don't move that heavy content into
+`GET /api/runs/{id}/agents/{stmt}/trace` (which verifies the resolved path
+stays under the run's `output_dir`). Don't move that heavy content into
 SQLite (hybrid-storage decision; see docs/PLAN-run-page-and-telemetry.md).
+**Failed agents save a trace too:** the timeout / iteration-cap / cancel /
+exception paths call a best-effort helper that falls back to
+`agent_run.ctx.state.message_history` (a partial run has no `.result`), via
+`save_messages_trace` — so the trace viewer is useful exactly when debugging
+a failure. Pinned by `tests/test_agent_tracing.py`.
 
 ### 7. Frontend uses inline styles, not Tailwind
 

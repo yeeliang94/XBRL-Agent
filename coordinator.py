@@ -26,7 +26,7 @@ from pydantic_ai.messages import (
     ThinkingPartDelta,
 )
 
-from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace
+from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace, save_messages_trace
 from statement_types import (
     StatementType,
     get_variant,
@@ -501,6 +501,34 @@ async def _run_single_agent(
             logger.debug("turn telemetry finalize skipped for %s", agent_role)
         return result
 
+    def _save_trace_best_effort(run_obj) -> None:
+        """Persist the conversation trace from a finished OR partial run.
+
+        On the failure paths `agent_run.result` is None (the run never
+        produced a final result), so fall back to the messages accumulated
+        on the run's graph state. This keeps failed agents debuggable — the
+        trace viewer's most valuable case (peer-review [1]). Fully guarded:
+        a trace-save hiccup must never change the agent's outcome."""
+        if run_obj is None:
+            return
+        try:
+            res = getattr(run_obj, "result", None)
+            if res is not None and hasattr(res, "all_messages"):
+                save_agent_trace(res, output_dir, statement_type.value, turns=_turn_records)
+                return
+            # Partial run — pull whatever messages were exchanged so far.
+            msgs = None
+            try:
+                msgs = run_obj.ctx.state.message_history
+            except Exception:  # noqa: BLE001 — defensive: internal shape
+                msgs = None
+            if msgs:
+                save_messages_trace(
+                    msgs, output_dir, statement_type.value, turns=_turn_records
+                )
+        except Exception:  # noqa: BLE001 — telemetry is advisory
+            logger.debug("best-effort trace save skipped for %s", agent_role)
+
     try:
         agent, deps = create_extraction_agent(
             statement_type=statement_type,
@@ -702,8 +730,9 @@ async def _run_single_agent(
 
         # Save per-statement conversation trace for debugging/audit. Pass the
         # captured per-turn metrics so the trace lines up token deltas + timing
-        # with the verbatim request/response content (v8).
-        save_agent_trace(result, output_dir, statement_type.value, turns=_turn_records)
+        # with the verbatim request/response content (v8). Routed through the
+        # best-effort helper so the success and failure paths share one writer.
+        _save_trace_best_effort(agent_run)
 
         # Capture end-of-run usage so the run_agents row can be backfilled
         # with real token / cost numbers (gotcha #6 — per-turn zeros are
@@ -757,6 +786,7 @@ async def _run_single_agent(
         # coordinator's policy — if a workbook already landed on disk
         # the result is salvageable; otherwise it's a hard failure.
         _tokens, _cost = _safe_usage_backfill(agent_run, model, statement_type.value)
+        _save_trace_best_effort(agent_run)
         if deps.filled_path:
             logger.warning(
                 "%s/%s: LLM stalled past %ss after write — treating as done "
@@ -800,6 +830,7 @@ async def _run_single_agent(
         # away a balanced statement (run_id=126 SOPL). Otherwise hard-fail, but
         # still surface the structured "Hit iteration limit" message.
         _tokens, _cost = _safe_usage_backfill(agent_run, model, statement_type.value)
+        _save_trace_best_effort(agent_run)
         if deps.filled_path and _verify_is_clean(deps.last_verify_result):
             logger.warning(
                 "%s/%s: hit iteration cap after a clean write — salvaging "
@@ -835,6 +866,7 @@ async def _run_single_agent(
         # Per-agent cancellation from the abort API. CancelledError is a
         # BaseException in Python 3.9+, so it must be caught separately.
         logger.info("Agent %s/%s cancelled by user", statement_type.value, variant)
+        _save_trace_best_effort(locals().get("agent_run"))
         await _emit("complete", {"success": False, "error": "Cancelled by user"})
         return _finalize(AgentResult(
             statement_type=statement_type,
@@ -854,6 +886,7 @@ async def _run_single_agent(
             _safe_usage_backfill(_run, model, statement_type.value)
             if _run is not None else (0, 0.0)
         )
+        _save_trace_best_effort(_run)
         await _emit("error", {"message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
         return _finalize(AgentResult(

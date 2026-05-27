@@ -128,46 +128,78 @@ def strip_binary(obj: Any) -> None:
             strip_binary(item)
 
 
+def _write_trace(
+    messages: list,
+    output_dir: str,
+    prefix: str,
+    turns: list[dict] | None,
+) -> None:
+    """Serialize a message list (+ optional per-turn metrics) to the trace
+    file. Text content is preserved verbatim (capped per cell); true binary
+    is elided. Shared by `save_agent_trace` (finished run) and
+    `save_messages_trace` (partial / failed run)."""
+    dicts: list[dict] = []
+    for msg in messages:
+        if hasattr(msg, "model_dump"):
+            msg_dict = msg.model_dump(mode="json")
+        elif dataclasses.is_dataclass(msg):
+            msg_dict = dataclasses.asdict(msg)
+        else:
+            msg_dict = {"raw": str(msg)}
+        _sanitize_for_trace(msg_dict)
+        dicts.append(msg_dict)
+
+    payload: dict[str, Any] = {"messages": dicts}
+    if turns is not None:
+        # Strip the coordinator-internal `_n_tool_calls` helper key so the
+        # trace carries only the user-meaningful per-turn metrics.
+        payload["turns"] = [
+            {k: v for k, v in t.items() if not k.startswith("_")}
+            for t in turns
+        ]
+
+    trace_path = Path(output_dir) / f"{prefix}_conversation_trace.json"
+    trace_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+
+
 def save_agent_trace(
     result: Any,
     output_dir: str,
     prefix: str,
     turns: list[dict] | None = None,
 ) -> None:
-    """Dump an agent's `all_messages()` to `{output_dir}/{prefix}_conversation_trace.json`.
+    """Dump a finished agent's `all_messages()` to
+    `{output_dir}/{prefix}_conversation_trace.json`.
 
-    Text content is preserved verbatim (capped per cell) so the trace shows
-    exactly what was sent and returned each turn; true binary is elided. When
-    `turns` is supplied (v8 per-turn metrics), it is written alongside the
-    messages so a reader can line up token deltas + timing with the
+    When `turns` is supplied (v8 per-turn metrics), it is written alongside
+    the messages so a reader can line up token deltas + timing with the
     conversation. Best-effort — errors are logged but not raised, so
     trace-save failures never mask the underlying run result.
     """
     try:
-        messages: list[dict] = []
-        for msg in result.all_messages():
-            if hasattr(msg, "model_dump"):
-                msg_dict = msg.model_dump(mode="json")
-            elif dataclasses.is_dataclass(msg):
-                msg_dict = dataclasses.asdict(msg)
-            else:
-                msg_dict = {"raw": str(msg)}
-            _sanitize_for_trace(msg_dict)
-            messages.append(msg_dict)
-
-        payload: dict[str, Any] = {"messages": messages}
-        if turns is not None:
-            # Strip the coordinator-internal `_n_tool_calls` helper key so the
-            # trace carries only the user-meaningful per-turn metrics.
-            payload["turns"] = [
-                {k: v for k, v in t.items() if not k.startswith("_")}
-                for t in turns
-            ]
-
-        trace_path = Path(output_dir) / f"{prefix}_conversation_trace.json"
-        trace_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
+        _write_trace(result.all_messages(), output_dir, prefix, turns)
     except Exception as e:
         logger.warning("Failed to save trace for %s: %s", prefix, e)
+
+
+def save_messages_trace(
+    messages: list,
+    output_dir: str,
+    prefix: str,
+    turns: list[dict] | None = None,
+) -> None:
+    """Dump a PARTIAL run's accumulated message history to the trace file.
+
+    Used on failure/timeout/iteration-cap/cancel paths where the run never
+    produced a final result (`agent_run.result is None`) but the messages
+    sent/returned so far still live on the run's graph state. This keeps
+    failed agents debuggable — the trace viewer's most valuable case
+    (peer-review [1]). Best-effort, same as `save_agent_trace`.
+    """
+    try:
+        _write_trace(messages, output_dir, prefix, turns)
+    except Exception as e:
+        logger.warning("Failed to save partial trace for %s: %s", prefix, e)

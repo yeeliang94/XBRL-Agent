@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import { fetchAgentTrace } from "../lib/api";
 import { displayModelId } from "../lib/modelId";
@@ -45,13 +45,26 @@ function TraceViewer({ runId, statement }: { runId: number; statement: string })
   const [trace, setTrace] = useState<AgentTraceJson | null>(null);
   const [error, setError] = useState<string>("");
 
+  // Guard against setState after unmount — the user can switch tabs while a
+  // trace is still loading (peer-review [7]). fetchAgentTrace has no signal
+  // param, so a mounted flag is the lightest correct fix.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const load = async () => {
     setState("loading");
     try {
       const t = await fetchAgentTrace(runId, statement);
+      if (!mounted.current) return;
       setTrace(t);
       setState("loaded");
     } catch (e) {
+      if (!mounted.current) return;
       setError(e instanceof Error ? e.message : "Failed to load trace");
       setState("error");
     }

@@ -204,7 +204,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
 
   const handleRunSelected = useCallback((id: number) => {
     setSelectedId(id);
-  }, []);
+  }, [setSelectedId]);
 
   // Delete from the detail panel: hit the API, clear the selection, and
   // bump `refetchKey` so the list reloads without the deleted row. If the
@@ -220,7 +220,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
       const msg = err instanceof Error ? err.message : "Delete failed";
       setDetailError(msg);
     }
-  }, []);
+  }, [setSelectedId]);
 
   // Download: navigate the top-level window to the streaming endpoint. The
   // browser treats this as an xlsx attachment (via Content-Disposition on the
@@ -251,11 +251,11 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           method: "POST",
         });
         if (!resp.ok || !resp.body) {
-          const msg = await resp.text().catch(() => "");
+          // Drain the body so the failure isn't silently lost, but surface it
+          // through the UI banner (regenStatus) rather than console output
+          // (peer-review [4]).
+          await resp.text().catch(() => "");
           setRegenStatus("failed");
-          console.error(
-            `[regenerate-notes] ${resp.status}: ${msg || "empty body"}`,
-          );
           return;
         }
         // Consume the SSE stream until `run_complete` arrives. We don't
@@ -309,9 +309,10 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
             /* leave stale detail — user can refresh manually */
           }
         }
-      } catch (err) {
+      } catch {
+        // Network/transport failure — surfaced via the regenStatus banner
+        // (peer-review [4]); no console output in production UI.
         setRegenStatus("failed");
-        console.error("[regenerate-notes] network error:", err);
       }
     },
     [],

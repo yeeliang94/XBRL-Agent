@@ -766,6 +766,30 @@ describe("RunDetailView", () => {
     }
   });
 
+  test("initialTab='values' with canonical OFF falls back to Overview (no blank page)", () => {
+    // Peer-review [6]: if the alias requests Values but canonical mode is off
+    // or still loading, the tab isn't available — clamp to Overview rather
+    // than rendering no active tab and no panel (a blank page).
+    render(
+      <RunDetailView
+        detail={makeDetail()}
+        onDelete={() => {}}
+        onDownload={() => {}}
+        initialTab="values"
+      />,
+    );
+    // A panel IS rendered (not blank), and it's the Overview config.
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getByText("Run configuration")).toBeTruthy();
+    // No Values tab exists (canonical off), so none can be selected.
+    const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+    expect(within(tablist).queryByRole("tab", { name: /^values$/i })).toBeNull();
+    // Overview tab is the active one.
+    expect(
+      within(tablist).getByRole("tab", { name: /^overview$/i }).getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
   test("arrow keys move between run-detail tabs (WAI-ARIA tabs pattern)", () => {
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });

@@ -3904,7 +3904,24 @@ async def run_multi_agent_stream(
                         # RUN-REVIEW P2-3: notes agents also backfill.
                         total_tokens=notes_agent_result.total_tokens,
                         total_cost=notes_agent_result.total_cost,
+                        # v8 per-turn telemetry rollups (peer-review [2]).
+                        prompt_tokens=getattr(notes_agent_result, "prompt_tokens", 0),
+                        completion_tokens=getattr(notes_agent_result, "completion_tokens", 0),
+                        turn_count=getattr(notes_agent_result, "turn_count", 0),
+                        tool_call_count=getattr(notes_agent_result, "tool_call_count", 0),
                     )
+                    # v8: persist per-turn metrics rows for notes agents too.
+                    # Advisory — never fault the run on a telemetry write.
+                    try:
+                        repo.insert_agent_turns(
+                            db_conn, run_agent_id,
+                            getattr(notes_agent_result, "turns", []) or [],
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to persist notes per-turn telemetry for %s",
+                            notes_agent_result.template_type.value, exc_info=True,
+                        )
 
                 # Peer-review C1: finalise pseudo-agent rows so History
                 # doesn't show them stuck at the initial "running" status.
@@ -4953,7 +4970,15 @@ async def get_agent_trace_endpoint(run_id: int, statement: str):
     if not output_dir:
         raise HTTPException(status_code=404, detail="Run has no output directory")
 
-    trace_path = Path(output_dir) / f"{statement}_conversation_trace.json"
+    # Defence-in-depth (peer-review [3]): `statement` is already whitelisted
+    # against this run's agents above, and statement_type is system-generated,
+    # so a traversal isn't reachable in normal operation. But a corrupt DB row
+    # shouldn't be able to read outside the run's output dir — confirm the
+    # resolved path stays under output_dir before touching the filesystem.
+    out_root = Path(output_dir).resolve()
+    trace_path = (out_root / f"{statement}_conversation_trace.json").resolve()
+    if not trace_path.is_relative_to(out_root):
+        raise HTTPException(status_code=400, detail="Invalid trace path")
     if not trace_path.exists():
         raise HTTPException(
             status_code=404,

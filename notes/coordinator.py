@@ -171,6 +171,14 @@ class NotesAgentResult:
     # / total_cost. Mirrors the face-coordinator AgentResult addition.
     total_tokens: int = 0
     total_cost: float = 0.0
+    # v8 per-turn telemetry (peer-review [2]) — same shape as the face
+    # AgentResult. Populated for the single-agent notes path; the Sheet-12
+    # fan-out leaves these empty (its sub-agents merge into one row).
+    turns: list = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    turn_count: int = 0
+    tool_call_count: int = 0
 
 
 @dataclass
@@ -421,6 +429,11 @@ class _SingleAgentOutcome:
     # is reachable after a mid-turn timeout).
     total_tokens: int = 0
     total_cost: float = 0.0
+    # v8 per-turn telemetry (peer-review [2]); bubbles into NotesAgentResult.
+    turns: list = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    tool_call_count: int = 0
 
 
 async def _run_single_notes_agent(
@@ -563,6 +576,12 @@ async def _run_single_notes_agent(
                 cells_written=list(outcome.cells_written),
                 total_tokens=outcome.total_tokens,
                 total_cost=outcome.total_cost,
+                # v8 per-turn telemetry (peer-review [2]).
+                turns=list(outcome.turns),
+                prompt_tokens=outcome.prompt_tokens,
+                completion_tokens=outcome.completion_tokens,
+                turn_count=len(outcome.turns),
+                tool_call_count=outcome.tool_call_count,
             )
         except asyncio.CancelledError:
             # Never retry on user cancellation — propagate the cancellation
@@ -683,6 +702,12 @@ async def _invoke_single_notes_agent_once(
     iteration = 0
     tool_start: dict[str, float] = {}
     thinking_counter = 0
+    # v8 per-turn telemetry capture (peer-review [2]) — mirrors the face
+    # coordinator. Deltas vs the previous node's cumulative usage.
+    _turn_records: list[dict] = []
+    _prev_prompt = 0
+    _prev_completion = 0
+    _prev_total = 0
 
     async with agent.iter(prompt, deps=deps) as agent_run:
         try:
@@ -698,10 +723,19 @@ async def _invoke_single_notes_agent_once(
                     raise RuntimeError(
                         f"Hit iteration limit ({MAX_AGENT_ITERATIONS}) — agent may be stuck."
                     )
+                # v8 telemetry: per-node timing + tool capture.
+                _node_start = time.monotonic()
+                _node_tool_names: list[str] = []
+                _node_kind = (
+                    "call_tools" if Agent.is_call_tools_node(node)
+                    else "model_request" if Agent.is_model_request_node(node)
+                    else None
+                )
                 if Agent.is_call_tools_node(node):
                     async with node.stream(agent_run.ctx) as tool_stream:
                         async for event in tool_stream:
                             if isinstance(event, FunctionToolCallEvent):
+                                _node_tool_names.append(event.part.tool_name)
                                 phase = NOTES_PHASE_MAP.get(event.part.tool_name)
                                 if phase:
                                     await emit("status", {
@@ -775,6 +809,30 @@ async def _invoke_single_notes_agent_once(
                     "cumulative": total,
                     "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
                 })
+
+                # v8 telemetry: record this node as a per-turn metrics row
+                # (deltas vs the previous node). Guarded — advisory only.
+                try:
+                    d_prompt = max(prompt_t - _prev_prompt, 0)
+                    d_completion = max(completion_t - _prev_completion, 0)
+                    d_total = max(total - _prev_total, 0)
+                    _turn_records.append({
+                        "turn_index": iteration,
+                        "node_kind": _node_kind,
+                        "tool_names": ",".join(_node_tool_names) or None,
+                        "_n_tool_calls": len(_node_tool_names),
+                        "prompt_tokens": d_prompt,
+                        "completion_tokens": d_completion,
+                        "total_tokens": d_total,
+                        "cumulative_tokens": total,
+                        "cost_estimate": estimate_cost(d_prompt, d_completion, 0, model),
+                        "duration_ms": int((time.monotonic() - _node_start) * 1000),
+                    })
+                    _prev_prompt, _prev_completion, _prev_total = (
+                        prompt_t, completion_t, total
+                    )
+                except Exception:  # noqa: BLE001 — telemetry is advisory
+                    logger.debug("notes per-turn telemetry capture skipped for %s", template_type.value)
         except asyncio.TimeoutError:
             # LLM stalled past NOTES_TURN_TIMEOUT. If the agent already
             # wrote a workbook, the rows are on disk — treat as done so
@@ -804,7 +862,9 @@ async def _invoke_single_notes_agent_once(
             )
 
     result = agent_run.result
-    save_agent_trace(result, output_dir, f"NOTES_{template_type.value}")
+    save_agent_trace(
+        result, output_dir, f"NOTES_{template_type.value}", turns=_turn_records
+    )
 
     # Phase 5.1 + peer-review #2: backfill the cost report totals from
     # the final aggregate usage. Extracted into a helper so it can be
@@ -840,6 +900,10 @@ async def _invoke_single_notes_agent_once(
         cells_written=list(deps.cells_written),
         total_tokens=_agent_tokens,
         total_cost=_agent_cost,
+        turns=list(_turn_records),
+        prompt_tokens=sum(int(t.get("prompt_tokens") or 0) for t in _turn_records),
+        completion_tokens=sum(int(t.get("completion_tokens") or 0) for t in _turn_records),
+        tool_call_count=sum(int(t.get("_n_tool_calls") or 0) for t in _turn_records),
     )
 
 
