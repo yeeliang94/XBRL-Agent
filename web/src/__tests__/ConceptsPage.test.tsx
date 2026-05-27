@@ -358,6 +358,7 @@ describe("ConceptsPage", () => {
         render_row: 11,
         render_col: "B",
         matrix_col: "B",
+        matrix_col_label: "Issued capital",
         shape: "matrix",
         template_id: "mfrs-company-socie-v1",
         value: 11.0,
@@ -376,6 +377,7 @@ describe("ConceptsPage", () => {
         render_row: 11,
         render_col: "C",
         matrix_col: "C",
+        matrix_col_label: "Retained earnings",
         shape: "matrix",
         template_id: "mfrs-company-socie-v1",
         value: 22.0,
@@ -561,9 +563,9 @@ describe("ConceptsPage", () => {
     });
     render(<ConceptsPage runId={7} />);
     const grid = await waitFor(() => screen.getByTestId("concept-matrix-grid"));
-    // Column headers carry the equity-component column letters.
-    expect(grid.textContent).toMatch(/B/);
-    expect(grid.textContent).toMatch(/C/);
+    // Column headers carry the equity-component labels, not raw Excel letters.
+    expect(grid.textContent).toMatch(/Issued capital/);
+    expect(grid.textContent).toMatch(/Retained earnings/);
     // The two seeded cells render their values.
     expect(screen.getByTestId("matrix-cell-11-B").textContent).toMatch(/11/);
     expect(screen.getByTestId("matrix-cell-11-C").textContent).toMatch(/22/);

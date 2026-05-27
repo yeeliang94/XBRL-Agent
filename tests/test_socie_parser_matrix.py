@@ -57,6 +57,21 @@ def test_mfrs_company_emits_full_component_columns() -> None:
     assert len(cols) == 23
 
 
+def test_mfrs_company_emits_component_header_labels() -> None:
+    path = SOCIE_FIXTURES["mfrs_company"]
+    if not path.exists():
+        pytest.skip("fixture missing")
+    tree = cp.parse_template(str(path))
+    by_col = {
+        n.render_key.get("matrix_col"): n.render_key.get("matrix_col_label")
+        for n in tree.concepts
+        if n.kind == "MATRIX_CELL" and n.render_key.get("row") == 11
+    }
+    assert by_col["B"] == "Issued capital"
+    assert by_col["C"] == "Retained earnings"
+    assert by_col["X"] == "Total"
+
+
 def test_mfrs_company_profit_row_has_matrix_cells() -> None:
     path = SOCIE_FIXTURES["mfrs_company"]
     if not path.exists():
@@ -105,6 +120,7 @@ def test_mpers_company_single_value_column() -> None:
     assert cols == {"B"}
     # Period maps to a column (B=CY, C=PY) within the single block.
     cell = next(n for n in tree.concepts if n.kind == "MATRIX_CELL")
+    assert cell.render_key.get("matrix_col_label") == "Value"
     targets = {(t["period"], t["col"]) for t in cell.render_key["targets"]}
     assert ("CY", "B") in targets
     assert ("PY", "C") in targets

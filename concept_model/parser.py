@@ -217,6 +217,19 @@ def _socie_component_cols(ws: Worksheet) -> list[str]:
     return cols or ["B"]
 
 
+def _socie_component_label(ws: Worksheet, col: str) -> str:
+    """Human label for one SOCIE component column.
+
+    ``matrix_col`` remains the spreadsheet column letter used for routing.
+    This companion label is what the review UI should display as the column
+    header. MPERS SOCIE has no row-2 component headers, so its single column
+    is intentionally labelled as a generic value column.
+    """
+    value = ws.cell(2, get_col_index(col)).value
+    label = str(value or "").strip()
+    return label or "Value"
+
+
 def _socie_block_dims(n_blocks: int, idx: int) -> tuple[str, str] | None:
     """Map a stacked-block index to its (period, entity_scope).
 
@@ -288,6 +301,7 @@ def _parse_socie_matrix(path: Path, template_id: str) -> ConceptTree:
             continue
 
         for col in components:
+            component_label = _socie_component_label(ws, col)
             targets = _socie_targets_for(
                 sheet_name, row, col, blocks, base_begin,
                 single_block,
@@ -305,6 +319,7 @@ def _parse_socie_matrix(path: Path, template_id: str) -> ConceptTree:
                     "row": row,
                     "col": col,
                     "matrix_col": col,
+                    "matrix_col_label": component_label,
                     "targets": targets,
                 },
             )

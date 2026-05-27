@@ -46,7 +46,11 @@ from pathlib import Path
 # on-disk `{stmt}_conversation_trace.json` (hybrid storage; see
 # docs/PLAN-run-page-and-telemetry.md). Additive: rollback is a code revert
 # and the orphaned table/columns are harmless to legacy readers.
-CURRENT_SCHEMA_VERSION = 8
+# v9 (SOCIE review labels): adds nullable `concept_nodes.matrix_col_label`,
+# the human row-2 SOCIE component header displayed in the review grid. The
+# routing key remains `matrix_col` (Excel column letter), so existing facts
+# and exporters keep their geometry unchanged.
+CURRENT_SCHEMA_VERSION = 9
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -225,7 +229,8 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         render_sheet     TEXT NOT NULL,
         render_row       INTEGER NOT NULL,
         render_col       TEXT NOT NULL,
-        matrix_col       TEXT                     -- P5: equity-component column on MATRIX_CELL; NULL on linear concepts
+        matrix_col       TEXT,                    -- P5: equity-component column letter on MATRIX_CELL; NULL on linear concepts
+        matrix_col_label TEXT                     -- P9: human SOCIE component header; NULL on linear concepts
     )
     """,
 
@@ -407,6 +412,13 @@ _V8_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("run_agents", "completion_tokens", "INTEGER DEFAULT 0"),
     ("run_agents", "turn_count", "INTEGER DEFAULT 0"),
     ("run_agents", "tool_call_count", "INTEGER DEFAULT 0"),
+)
+
+
+# v9 column: nullable so existing concepts read NULL until the startup
+# bootstrap re-imports templates and hydrates it from SOCIE row-2 headers.
+_V9_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("concept_nodes", "matrix_col_label", "TEXT"),
 )
 
 
@@ -698,6 +710,45 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (8,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v8→v9 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v8 → v9: add the nullable human SOCIE component header column to
+        # concept_nodes. Fresh DBs already carry it via CREATE TABLE above;
+        # existing DBs get NULL until startup bootstrap re-imports templates.
+        if current_version is not None and current_version < 9:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 9:
+                    for table, col_name, col_ddl in _V9_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (9,),
                     )
                 conn.commit()
             except Exception:

@@ -214,6 +214,8 @@ def test_socie_concepts_carry_matrix_shape(tmp_path: Path, monkeypatch) -> None:
     assert mx, "no MATRIX_CELL concepts returned"
     assert all(c["shape"] == "matrix" for c in payload["concepts"])
     assert any(c["matrix_col"] == "C" for c in mx)
+    retained = next(c for c in mx if c["matrix_col"] == "C")
+    assert retained["matrix_col_label"] == "Retained earnings"
 
 
 def test_patch_display_label(client: TestClient) -> None:

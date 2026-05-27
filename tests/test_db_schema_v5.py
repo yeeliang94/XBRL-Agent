@@ -2,9 +2,9 @@
 
 v5 is purely additive:
   * `concept_nodes.matrix_col` — nullable column carrying the equity-
-    component column label (e.g. 'C' for Retained earnings) on
-    MATRIX_CELL concepts. NULL for every linear LEAF/COMPUTED/ABSTRACT
-    concept, so the migration is a single idempotent ALTER TABLE.
+    component column letter (e.g. 'C') on MATRIX_CELL concepts. NULL for
+    every linear LEAF/COMPUTED/ABSTRACT concept, so the migration is a
+    single idempotent ALTER TABLE.
   * `MATRIX_CELL` becomes a legal `kind` value (no CHECK constraint, so
     no DDL change beyond the column — pinned here so the importer can
     rely on it).
