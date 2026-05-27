@@ -1,4 +1,5 @@
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import { RunDetailView } from "./RunDetailView";
 import type { RunDetailViewProps } from "./RunDetailView";
 import type { RunDetailJson } from "../lib/types";
@@ -57,6 +58,7 @@ export function RunDetailPage({
         <button
           type="button"
           onClick={onBack}
+          className={uiClass.btnGhost}
           style={styles.backButton}
           aria-label="Back to history"
         >
@@ -107,15 +109,8 @@ const styles = {
     borderBottom: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   backButton: {
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
-    color: pwc.orange500,
-    background: pwc.white,
-    border: `1px solid ${pwc.orange500}`,
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
+    ...ui.buttonGhost,
+    ...ui.buttonSm,
   } as React.CSSProperties,
   runTitle: {
     fontFamily: pwc.fontMono,

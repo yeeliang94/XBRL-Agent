@@ -243,20 +243,11 @@ const styles = {
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   badge: {
-    display: "inline-block",
-    padding: `2px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.lg,
-    fontSize: 13,
-    fontWeight: pwc.weight.medium,
-    lineHeight: 1.6,
+    ...ui.badge,
   } as React.CSSProperties,
   inlineBadge: {
-    display: "inline-block",
+    ...ui.badge,
     marginLeft: pwc.space.sm,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.md,
-    fontSize: 12,
-    fontWeight: pwc.weight.medium,
     verticalAlign: "middle",
   } as React.CSSProperties,
   placeholder: {

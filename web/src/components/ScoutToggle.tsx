@@ -1,4 +1,5 @@
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import type { ModelEntry } from "../lib/types";
 
 interface Props {
@@ -51,32 +52,8 @@ const styles = {
     boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
   } as React.CSSProperties,
   detectButton: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 500,
-    color: pwc.grey900,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.xs,
-  } as React.CSSProperties,
-  detectButtonDisabled: {
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 500,
-    color: pwc.grey300,
-    background: pwc.grey50,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    cursor: "not-allowed",
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.xs,
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
   } as React.CSSProperties,
   spinner: {
     width: 12,
@@ -169,11 +146,8 @@ export function ScoutToggle({
         <button
           onClick={onAutoDetect}
           disabled={!canAutoDetect || isDetecting}
-          style={
-            !canAutoDetect || isDetecting
-              ? styles.detectButtonDisabled
-              : styles.detectButton
-          }
+          className={uiClass.btnSecondary}
+          style={styles.detectButton}
         >
           {isDetecting ? (
             <>

@@ -28,6 +28,7 @@ import { TableRow } from "@tiptap/extension-table-row";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import {
   fetchNotesCells,
   patchNotesCell,
@@ -173,6 +174,7 @@ export function NotesReviewTab({ runId, onRegenerate }: NotesReviewTabProps) {
       <header style={styles.topBar}>
         <button
           type="button"
+          className={uiClass.btnGhost}
           style={styles.regenerateButton}
           onClick={handleRegenerateClick}
         >
@@ -716,6 +718,7 @@ function ConfirmRegenerateModal({
         <div style={styles.modalActions}>
           <button
             type="button"
+            className={uiClass.btnSecondary}
             style={styles.modalCancelButton}
             onClick={onCancel}
           >
@@ -723,6 +726,7 @@ function ConfirmRegenerateModal({
           </button>
           <button
             type="button"
+            className={uiClass.btnPrimary}
             style={styles.modalConfirmButton}
             onClick={onConfirm}
           >
@@ -752,15 +756,8 @@ const styles = {
     alignItems: "center",
   } as React.CSSProperties,
   regenerateButton: {
-    padding: "8px 14px",
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
-    color: pwc.orange500,
-    background: pwc.white,
-    border: `1px solid ${pwc.orange500}`,
-    borderRadius: 4,
-    cursor: "pointer",
+    ...ui.buttonGhost,
+    ...ui.buttonSm,
   } as React.CSSProperties,
   errorBanner: {
     padding: "8px 12px",
@@ -1007,23 +1004,11 @@ const styles = {
     gap: 8,
   } as React.CSSProperties,
   modalCancelButton: {
-    padding: "8px 14px",
-    fontSize: 13,
-    fontWeight: 600,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 4,
-    color: pwc.grey700,
-    cursor: "pointer",
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
   } as React.CSSProperties,
   modalConfirmButton: {
-    padding: "8px 14px",
-    fontSize: 13,
-    fontWeight: 600,
-    background: pwc.orange500,
-    border: `1px solid ${pwc.orange500}`,
-    borderRadius: 4,
-    color: pwc.white,
-    cursor: "pointer",
+    ...ui.buttonPrimary,
+    ...ui.buttonSm,
   } as React.CSSProperties,
 } as const;

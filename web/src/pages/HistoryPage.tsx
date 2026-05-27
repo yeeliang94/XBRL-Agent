@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
 import { HistoryFilters } from "../components/HistoryFilters";
 import { HistoryList } from "../components/HistoryList";
@@ -404,6 +405,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           type="button"
           onClick={handleLoadMore}
           disabled={isLoadingMore}
+          className={uiClass.btnGhost}
           style={styles.loadMoreBtn}
         >
           {isLoadingMore
@@ -446,16 +448,8 @@ const styles = {
     fontSize: 13,
   } as React.CSSProperties,
   loadMoreBtn: {
+    ...ui.buttonGhost,
     marginTop: pwc.space.md,
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
-    color: pwc.orange500,
-    background: pwc.white,
-    border: `1px solid ${pwc.orange500}`,
-    borderRadius: pwc.radius.md,
-    cursor: "pointer",
     width: "100%",
   } as React.CSSProperties,
   loadMoreError: {

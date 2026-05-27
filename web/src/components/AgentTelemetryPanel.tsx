@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import { fetchAgentTrace } from "../lib/api";
 import { displayModelId } from "../lib/modelId";
 import { notesTabLabel } from "../lib/appReducer";
@@ -72,7 +73,7 @@ function TraceViewer({ runId, statement }: { runId: number; statement: string })
 
   if (state === "idle") {
     return (
-      <button type="button" onClick={load} style={styles.traceButton}>
+      <button type="button" onClick={load} className={uiClass.btnGhost} style={styles.traceButton}>
         View full request / response trace
       </button>
     );
@@ -279,16 +280,9 @@ const styles = {
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   traceButton: {
+    ...ui.buttonGhost,
+    ...ui.buttonSm,
     alignSelf: "flex-start" as const,
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: 600,
-    color: pwc.orange500,
-    background: pwc.white,
-    border: `1px solid ${pwc.orange500}`,
-    borderRadius: pwc.radius.sm,
-    cursor: "pointer",
   } as React.CSSProperties,
   traceError: {
     padding: pwc.space.sm,
