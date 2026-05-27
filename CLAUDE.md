@@ -281,7 +281,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **3**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **8**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -290,17 +290,21 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   from `created_at` (`_V2_MIGRATION_COLUMNS`).
 - **v2 → v3:** adds the `notes_cells` table — the canonical per-cell notes
   store (see gotcha #16).
+- **v3 → v6:** canonical concept-model tables (v4), `concept_nodes.matrix_col`
+  (v5), `notes_cells.concept_uuid` (v6) — see gotcha #21.
+- **v6 → v7:** adds `cross_checks.target_sheet` / `target_row` (review-workspace
+  click-to-cell).
+- **v7 → v8:** adds the `run_agent_turns` per-turn telemetry metrics table +
+  four rollup columns on `run_agents` (`prompt_tokens`, `completion_tokens`,
+  `turn_count`, `tool_call_count`). Metrics only — verbatim per-iteration
+  request/response content stays in `{stmt}_conversation_trace.json` on disk
+  (hybrid storage; see docs/PLAN-run-page-and-telemetry.md and gotcha #6).
+  Pinned by `tests/test_db_schema_v8.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
 The `status` column has no `CHECK` constraint on purpose: adding a new status
 value should not require a full-table migration.
-
-> **In-flight:** the canonical-concept-model work (gotcha #21, uncommitted)
-> pushes the working-tree schema to **v6** (v4 concept-model tables, v5
-> `matrix_col`, v6 `concept_uuid` on `notes_cells`). Those steps follow the
-> same version-stepped pattern but are not yet shipped — don't treat v4–v6 as
-> stable until that work lands.
 
 ### 12. Filing level — Company vs Group
 

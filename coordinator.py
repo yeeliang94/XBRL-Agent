@@ -169,12 +169,22 @@ class AgentResult:
     status: str
     workbook_path: Optional[str] = None
     error: Optional[str] = None
-    # End-of-run usage from `agent_run.usage()`. Per CLAUDE.md gotcha #6
-    # per-turn counts are zero (PydanticAI counts internally) — this is
-    # the aggregate. The coordinator captures it on the success path so
-    # server.py can persist into run_agents.total_tokens / total_cost.
+    # End-of-run usage from `agent_run.usage()`. This is the aggregate the
+    # coordinator captures on every exit path so server.py can persist into
+    # run_agents.total_tokens / total_cost.
     total_tokens: int = 0
     total_cost: float = 0.0
+    # v8 per-turn telemetry (docs/PLAN-run-page-and-telemetry.md). `turns` is
+    # a list of metric dicts (one per agent.iter() node) keyed to the
+    # run_agent_turns columns; the split + counts are run-level rollups
+    # derived from those turns. Per-turn token figures are deltas of the
+    # cumulative usage PydanticAI exposes after each node — exact for timing
+    # and tool activity, best-effort for the prompt/completion split.
+    turns: list = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    turn_count: int = 0
+    tool_call_count: int = 0
 
 
 @dataclass
@@ -460,6 +470,37 @@ async def _run_single_agent(
         if event_queue is not None:
             await event_queue.put(_build_event(event_type, agent_id, agent_role, data))
 
+    # v8 telemetry: per-turn metrics captured during the agent.iter() loop
+    # below. Attached to every AgentResult via `_finalize`, so the success
+    # path AND the salvage/failure paths report whatever turns actually ran.
+    # Each dict mirrors the run_agent_turns columns plus `_n_tool_calls`
+    # (used only for the run-level rollup, ignored by the DB writer).
+    _turn_records: list[dict] = []
+
+    def _finalize(result: AgentResult) -> AgentResult:
+        """Attach captured per-turn metrics + rollups to an AgentResult.
+
+        Best-effort: a telemetry-shaping bug must never change the run
+        outcome, so any failure here is swallowed and the result is
+        returned with whatever was already set."""
+        try:
+            result.turns = list(_turn_records)
+            result.turn_count = len(_turn_records)
+            result.tool_call_count = sum(
+                int(t.get("_n_tool_calls") or 0) for t in _turn_records
+            )
+            # Run-level split = sum of the per-turn deltas, which is always
+            # internally consistent with the rows we persist.
+            result.prompt_tokens = sum(
+                int(t.get("prompt_tokens") or 0) for t in _turn_records
+            )
+            result.completion_tokens = sum(
+                int(t.get("completion_tokens") or 0) for t in _turn_records
+            )
+        except Exception:  # noqa: BLE001 — telemetry is advisory
+            logger.debug("turn telemetry finalize skipped for %s", agent_role)
+        return result
+
     try:
         agent, deps = create_extraction_agent(
             statement_type=statement_type,
@@ -487,6 +528,11 @@ async def _run_single_agent(
         _tool_start_times: dict[str, float] = {}
         _thinking_counter = 0
         _iteration_count = 0
+        # Running cumulative usage so each node's per-turn token figure can be
+        # computed as a delta (PydanticAI's usage() is cumulative).
+        _prev_prompt = 0
+        _prev_completion = 0
+        _prev_total = 0
 
         # Use agent.iter() for granular streaming instead of agent.run().
         # Wrapped with `_iter_with_turn_timeout` so one stalled provider
@@ -507,6 +553,16 @@ async def _run_single_agent(
                         f"Hit iteration limit ({MAX_AGENT_ITERATIONS}). "
                         f"Agent appears stuck in a loop."
                     )
+                # v8 telemetry: capture this node's wall-clock + which tools it
+                # invoked, so the per-turn metrics row written after the node
+                # completes carries exact timing + tool activity.
+                _node_start = time.monotonic()
+                _node_tool_names: list[str] = []
+                _node_kind = (
+                    "call_tools" if Agent.is_call_tools_node(node)
+                    else "model_request" if Agent.is_model_request_node(node)
+                    else None
+                )
                 if Agent.is_call_tools_node(node):
                     # Stream tool call/result events as they happen.
                     # Bound the *inner* event iteration too (peer-review):
@@ -520,6 +576,8 @@ async def _run_single_agent(
                         ):
                             if isinstance(event, FunctionToolCallEvent):
                                 tool_name = event.part.tool_name
+                                # v8 telemetry: record the tool this turn fired.
+                                _node_tool_names.append(tool_name)
                                 # Emit phase change based on which tool is being called
                                 phase = PHASE_MAP.get(tool_name)
                                 if phase:
@@ -613,11 +671,39 @@ async def _run_single_agent(
                     "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
                 })
 
+                # v8 telemetry: record this node as a per-turn metrics row.
+                # The token figures are deltas vs the previous node's
+                # cumulative usage; cost is the marginal cost of this turn.
+                # Guarded so a telemetry hiccup never breaks streaming.
+                try:
+                    d_prompt = max(prompt_t - _prev_prompt, 0)
+                    d_completion = max(completion_t - _prev_completion, 0)
+                    d_total = max(total - _prev_total, 0)
+                    _turn_records.append({
+                        "turn_index": _iteration_count,
+                        "node_kind": _node_kind,
+                        "tool_names": ",".join(_node_tool_names) or None,
+                        "_n_tool_calls": len(_node_tool_names),
+                        "prompt_tokens": d_prompt,
+                        "completion_tokens": d_completion,
+                        "total_tokens": d_total,
+                        "cumulative_tokens": total,
+                        "cost_estimate": estimate_cost(d_prompt, d_completion, 0, model),
+                        "duration_ms": int((time.monotonic() - _node_start) * 1000),
+                    })
+                    _prev_prompt, _prev_completion, _prev_total = (
+                        prompt_t, completion_t, total
+                    )
+                except Exception:  # noqa: BLE001 — telemetry is advisory
+                    logger.debug("per-turn telemetry capture skipped for %s", agent_role)
+
         # Get the final result — same RunResult as agent.run() returned
         result = agent_run.result
 
-        # Save per-statement conversation trace for debugging/audit
-        save_agent_trace(result, output_dir, statement_type.value)
+        # Save per-statement conversation trace for debugging/audit. Pass the
+        # captured per-turn metrics so the trace lines up token deltas + timing
+        # with the verbatim request/response content (v8).
+        save_agent_trace(result, output_dir, statement_type.value, turns=_turn_records)
 
         # Capture end-of-run usage so the run_agents row can be backfilled
         # with real token / cost numbers (gotcha #6 — per-turn zeros are
@@ -642,28 +728,28 @@ async def _run_single_agent(
             logger.warning(err_msg)
             await _emit("error", {"message": err_msg})
             await _emit("complete", {"success": False, "error": err_msg})
-            return AgentResult(
+            return _finalize(AgentResult(
                 statement_type=statement_type,
                 variant=variant,
                 status="failed",
                 error=err_msg,
                 total_tokens=final_tokens,
                 total_cost=final_cost,
-            )
+            ))
 
         await _emit("complete", {
             "success": True,
             "workbook_path": deps.filled_path,
         })
 
-        return AgentResult(
+        return _finalize(AgentResult(
             statement_type=statement_type,
             variant=variant,
             status="succeeded",
             workbook_path=deps.filled_path,
             total_tokens=final_tokens,
             total_cost=final_cost,
-        )
+        ))
 
     except asyncio.TimeoutError:
         # _iter_with_turn_timeout fired: the LLM stalled on a single
@@ -683,14 +769,14 @@ async def _run_single_agent(
                 "workbook_path": deps.filled_path,
                 "stalled_after_write": True,
             })
-            return AgentResult(
+            return _finalize(AgentResult(
                 statement_type=statement_type,
                 variant=variant,
                 status="succeeded",
                 workbook_path=deps.filled_path,
                 total_tokens=_tokens,
                 total_cost=_cost,
-            )
+            ))
         err_msg = (
             f"{statement_type.value}: LLM stalled past {FACE_TURN_TIMEOUT}s "
             "without writing a workbook."
@@ -698,14 +784,14 @@ async def _run_single_agent(
         logger.warning(err_msg)
         await _emit("error", {"message": err_msg, "type": "turn_timeout"})
         await _emit("complete", {"success": False, "error": err_msg})
-        return AgentResult(
+        return _finalize(AgentResult(
             statement_type=statement_type,
             variant=variant,
             status="failed",
             error=err_msg,
             total_tokens=_tokens,
             total_cost=_cost,
-        )
+        ))
 
     except _IterationLimitReached as e:
         # The agent burned its whole iteration budget. If a workbook already
@@ -725,37 +811,37 @@ async def _run_single_agent(
                 "workbook_path": deps.filled_path,
                 "iteration_capped_after_write": True,
             })
-            return AgentResult(
+            return _finalize(AgentResult(
                 statement_type=statement_type,
                 variant=variant,
                 status="succeeded",
                 workbook_path=deps.filled_path,
                 total_tokens=_tokens,
                 total_cost=_cost,
-            )
+            ))
         logger.warning("Agent %s/%s hit iteration limit", statement_type.value, variant)
         await _emit("error", {"message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
-        return AgentResult(
+        return _finalize(AgentResult(
             statement_type=statement_type,
             variant=variant,
             status="failed",
             error=str(e),
             total_tokens=_tokens,
             total_cost=_cost,
-        )
+        ))
 
     except asyncio.CancelledError:
         # Per-agent cancellation from the abort API. CancelledError is a
         # BaseException in Python 3.9+, so it must be caught separately.
         logger.info("Agent %s/%s cancelled by user", statement_type.value, variant)
         await _emit("complete", {"success": False, "error": "Cancelled by user"})
-        return AgentResult(
+        return _finalize(AgentResult(
             statement_type=statement_type,
             variant=variant,
             status="cancelled",
             error="Cancelled by user",
-        )
+        ))
 
     except Exception as e:
         logger.exception("Agent %s/%s failed", statement_type.value, variant,
@@ -770,11 +856,11 @@ async def _run_single_agent(
         )
         await _emit("error", {"message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
-        return AgentResult(
+        return _finalize(AgentResult(
             statement_type=statement_type,
             variant=variant,
             status="failed",
             error=str(e),
             total_tokens=_tokens,
             total_cost=_cost,
-        )
+        ))

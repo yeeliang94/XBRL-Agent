@@ -321,3 +321,82 @@ def test_fetch_run_returns_new_fields(db_path: Path) -> None:
     assert run.scout_enabled is False
     assert run.started_at
     assert run.ended_at
+
+
+def test_finish_run_agent_persists_v8_rollups(db_path: Path) -> None:
+    """v8: finish_run_agent writes the prompt/completion split + turn/tool
+    counts onto run_agents so the Telemetry tab can read them back."""
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf")
+        agent_id = repo.create_run_agent(conn, run_id, "SOFP", "CuNonCu", "gpt-5.4")
+        repo.finish_run_agent(
+            conn, agent_id,
+            status="succeeded",
+            total_tokens=1500,
+            total_cost=0.012,
+            prompt_tokens=1200,
+            completion_tokens=300,
+            turn_count=7,
+            tool_call_count=5,
+        )
+
+    with repo.db_session(db_path) as conn:
+        row = conn.execute(
+            "SELECT total_tokens, total_cost, prompt_tokens, completion_tokens, "
+            "turn_count, tool_call_count FROM run_agents WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+
+    assert tuple(row) == (1500, 0.012, 1200, 300, 7, 5)
+
+
+def test_insert_agent_turns_roundtrip(db_path: Path) -> None:
+    """v8: insert_agent_turns persists one metrics row per turn, ignoring
+    coordinator-internal helper keys like `_n_tool_calls`."""
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf")
+        agent_id = repo.create_run_agent(conn, run_id, "SOFP", None, "gpt-5.4")
+        turns = [
+            {
+                "turn_index": 1, "node_kind": "model_request", "tool_names": None,
+                "_n_tool_calls": 0, "prompt_tokens": 800, "completion_tokens": 40,
+                "total_tokens": 840, "cumulative_tokens": 840,
+                "cost_estimate": 0.004, "duration_ms": 1200,
+            },
+            {
+                "turn_index": 2, "node_kind": "call_tools",
+                "tool_names": "view_pdf_pages,read_template",
+                "_n_tool_calls": 2, "prompt_tokens": 50, "completion_tokens": 120,
+                "total_tokens": 170, "cumulative_tokens": 1010,
+                "cost_estimate": 0.001, "duration_ms": 300,
+            },
+        ]
+        repo.insert_agent_turns(conn, agent_id, turns)
+
+    with repo.db_session(db_path) as conn:
+        rows = conn.execute(
+            "SELECT turn_index, node_kind, tool_names, prompt_tokens, "
+            "completion_tokens, cumulative_tokens, duration_ms "
+            "FROM run_agent_turns WHERE run_agent_id = ? ORDER BY turn_index",
+            (agent_id,),
+        ).fetchall()
+
+    assert [tuple(r) for r in rows] == [
+        (1, "model_request", None, 800, 40, 840, 1200),
+        (2, "call_tools", "view_pdf_pages,read_template", 50, 120, 1010, 300),
+    ]
+
+
+def test_insert_agent_turns_empty_is_noop(db_path: Path) -> None:
+    """Empty turn list writes nothing (legacy/failed-early runs)."""
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf")
+        agent_id = repo.create_run_agent(conn, run_id, "SOFP", None, "gpt-5.4")
+        repo.insert_agent_turns(conn, agent_id, [])
+
+    with repo.db_session(db_path) as conn:
+        (count,) = conn.execute(
+            "SELECT COUNT(*) FROM run_agent_turns WHERE run_agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+    assert count == 0

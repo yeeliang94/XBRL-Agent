@@ -35,7 +35,18 @@ from pathlib import Path
 # nullable column `notes_cells.concept_uuid` so a notes row can be linked
 # to the canonical concept store. NULL preserves back-compat for the
 # coordinator's existing notes-write path. Single idempotent ALTER.
-CURRENT_SCHEMA_VERSION = 7
+# v7 (review-workspace): adds the nullable `cross_checks.target_sheet` /
+# `target_row` click-to-cell columns so the validator UI can jump from a
+# failed check straight to the offending cell.
+# v8 (run-page-and-telemetry): adds the `run_agent_turns` per-turn metrics
+# table (one row per agent iteration: token delta, node kind, tool names,
+# duration) and four nullable rollup columns on `run_agents`
+# (prompt_tokens, completion_tokens, turn_count, tool_call_count). Metrics
+# only — the full per-iteration request/response content stays in the
+# on-disk `{stmt}_conversation_trace.json` (hybrid storage; see
+# docs/PLAN-run-page-and-telemetry.md). Additive: rollback is a code revert
+# and the orphaned table/columns are harmless to legacy readers.
+CURRENT_SCHEMA_VERSION = 8
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -93,7 +104,36 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         ended_at        TEXT,
         workbook_path   TEXT,
         total_tokens    INTEGER DEFAULT 0,
-        total_cost      REAL DEFAULT 0
+        total_cost      REAL DEFAULT 0,
+        -- v8 rollups: prompt/completion split + iteration counters so the
+        -- telemetry UI can show cost breakdown and turn/tool activity without
+        -- re-summing the per-turn rows. Default 0 keeps legacy rows readable.
+        prompt_tokens     INTEGER DEFAULT 0,
+        completion_tokens INTEGER DEFAULT 0,
+        turn_count        INTEGER DEFAULT 0,
+        tool_call_count   INTEGER DEFAULT 0
+    )
+    """,
+
+    # v8: one row per agent iteration ("turn"). Metrics only — the full
+    # request/response content for a turn lives in the on-disk conversation
+    # trace, not here (hybrid storage keeps the SQLite DB small). token deltas
+    # are this turn's contribution; cumulative_tokens is the running total
+    # after the turn so the UI can plot a trend without re-summing.
+    """
+    CREATE TABLE IF NOT EXISTS run_agent_turns (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_agent_id      INTEGER NOT NULL REFERENCES run_agents(id) ON DELETE CASCADE,
+        turn_index        INTEGER NOT NULL,        -- 1-based iteration number
+        node_kind         TEXT,                    -- 'model_request' | 'call_tools'
+        tool_names        TEXT,                    -- comma-joined tool names invoked this turn; NULL for pure model turns
+        prompt_tokens     INTEGER DEFAULT 0,       -- delta vs previous turn
+        completion_tokens INTEGER DEFAULT 0,       -- delta vs previous turn
+        total_tokens      INTEGER DEFAULT 0,       -- delta vs previous turn
+        cumulative_tokens INTEGER DEFAULT 0,       -- running total after this turn
+        cost_estimate     REAL DEFAULT 0,          -- delta cost for this turn
+        duration_ms       INTEGER DEFAULT 0,
+        ts                TEXT NOT NULL
     )
     """,
 
@@ -315,6 +355,8 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_run_concept_facts_run_id ON run_concept_facts(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_concept_fact_events_run_id ON concept_fact_events(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_concept_conflicts_run_id ON run_concept_conflicts(run_id)",
+    # v8: per-turn metrics are always queried by their owning agent.
+    "CREATE INDEX IF NOT EXISTS ix_run_agent_turns_run_agent_id ON run_agent_turns(run_agent_id)",
 )
 
 
@@ -353,6 +395,18 @@ _V6_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 _V7_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("cross_checks", "target_sheet", "TEXT"),
     ("cross_checks", "target_row", "INTEGER"),
+)
+
+
+# v8 columns: per-agent token-split + iteration rollups. The `run_agent_turns`
+# table itself is created via CREATE TABLE IF NOT EXISTS above; only these
+# ALTERs are needed to walk an existing v7 DB forward. Each has a default so
+# SQLite's ALTER TABLE accepts it and legacy rows read 0.
+_V8_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("run_agents", "prompt_tokens", "INTEGER DEFAULT 0"),
+    ("run_agents", "completion_tokens", "INTEGER DEFAULT 0"),
+    ("run_agents", "turn_count", "INTEGER DEFAULT 0"),
+    ("run_agents", "tool_call_count", "INTEGER DEFAULT 0"),
 )
 
 
@@ -604,6 +658,46 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (7,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v7→v8 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v7 → v8: add the per-agent token-split + iteration rollup columns to
+        # run_agents. The run_agent_turns table is created by CREATE TABLE
+        # above on fresh DBs; this ALTER walks an existing v7 DB forward. Same
+        # BEGIN IMMEDIATE + duplicate-column tolerance as the earlier steps.
+        if current_version is not None and current_version < 8:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 8:
+                    for table, col_name, col_ddl in _V8_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (8,),
                     )
                 conn.commit()
             except Exception:

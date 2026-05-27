@@ -19,6 +19,42 @@ logger = logging.getLogger(__name__)
 # written JSON (keeps traces human-readable in the face of image payloads).
 _STRIP_THRESHOLD_BYTES = 500
 
+# v8 (docs/PLAN-run-page-and-telemetry.md): the run-page Telemetry feature
+# serves these traces so the user can read the exact request/response per
+# agent. That requires keeping TEXT content verbatim — unlike the legacy
+# 500-byte elision which hid tool results and prompts. We still strip true
+# binary (image bytes) and cap any single oversized string at 100 KB so a
+# pathological payload can't bloat the trace without bound (full-verbatim
+# decision with a per-cell cap).
+_MAX_TRACE_STR_CHARS = 100_000
+
+
+def _sanitize_for_trace(obj: Any) -> None:
+    """Recursively make a message-dict tree safe + bounded for trace JSON.
+
+    - Raw `bytes` anywhere are replaced with a size marker (never human
+      readable, usually image payloads).
+    - Any string longer than `_MAX_TRACE_STR_CHARS` is truncated with a
+      marker so the verbatim text stays useful without growing unbounded.
+    Text content is otherwise preserved so the trace shows exactly what was
+    sent and returned.
+    """
+    if isinstance(obj, dict):
+        for key in list(obj.keys()):
+            value = obj[key]
+            if isinstance(value, bytes):
+                obj[key] = f"<{len(value)} bytes stripped>"
+            elif isinstance(value, str) and len(value) > _MAX_TRACE_STR_CHARS:
+                obj[key] = (
+                    value[:_MAX_TRACE_STR_CHARS]
+                    + f"...[truncated {len(value) - _MAX_TRACE_STR_CHARS} chars]"
+                )
+            else:
+                _sanitize_for_trace(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            _sanitize_for_trace(item)
+
 # Single source of truth for the "how many node iterations before we give
 # up and assume the agent is stuck" cap. Used by face/notes coordinators
 # and scout.
@@ -92,11 +128,20 @@ def strip_binary(obj: Any) -> None:
             strip_binary(item)
 
 
-def save_agent_trace(result: Any, output_dir: str, prefix: str) -> None:
+def save_agent_trace(
+    result: Any,
+    output_dir: str,
+    prefix: str,
+    turns: list[dict] | None = None,
+) -> None:
     """Dump an agent's `all_messages()` to `{output_dir}/{prefix}_conversation_trace.json`.
 
-    Binary image data is elided. Best-effort — errors are logged but not
-    raised, so trace-save failures never mask the underlying run result.
+    Text content is preserved verbatim (capped per cell) so the trace shows
+    exactly what was sent and returned each turn; true binary is elided. When
+    `turns` is supplied (v8 per-turn metrics), it is written alongside the
+    messages so a reader can line up token deltas + timing with the
+    conversation. Best-effort — errors are logged but not raised, so
+    trace-save failures never mask the underlying run result.
     """
     try:
         messages: list[dict] = []
@@ -107,12 +152,21 @@ def save_agent_trace(result: Any, output_dir: str, prefix: str) -> None:
                 msg_dict = dataclasses.asdict(msg)
             else:
                 msg_dict = {"raw": str(msg)}
-            strip_binary(msg_dict)
+            _sanitize_for_trace(msg_dict)
             messages.append(msg_dict)
+
+        payload: dict[str, Any] = {"messages": messages}
+        if turns is not None:
+            # Strip the coordinator-internal `_n_tool_calls` helper key so the
+            # trace carries only the user-meaningful per-turn metrics.
+            payload["turns"] = [
+                {k: v for k, v in t.items() if not k.startswith("_")}
+                for t in turns
+            ]
 
         trace_path = Path(output_dir) / f"{prefix}_conversation_trace.json"
         trace_path.write_text(
-            json.dumps({"messages": messages}, indent=2, ensure_ascii=False, default=str),
+            json.dumps(payload, indent=2, ensure_ascii=False, default=str),
             encoding="utf-8",
         )
     except Exception as e:
