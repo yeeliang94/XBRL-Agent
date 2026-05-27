@@ -686,6 +686,70 @@ describe("RunDetailView", () => {
     expect(screen.getByText("Notes Validator")).toBeTruthy();
   });
 
+  test("Telemetry tab renders per-turn metrics from the agent payload", () => {
+    const detail = makeDetail({
+      agents: [
+        makeAgent({
+          token_breakdown: {
+            prompt_tokens: 900,
+            completion_tokens: 300,
+            turn_count: 2,
+            tool_call_count: 1,
+          },
+          turns: [
+            {
+              turn_index: 1, node_kind: "model_request", tool_names: null,
+              prompt_tokens: 800, completion_tokens: 40, total_tokens: 840,
+              cumulative_tokens: 840, cost_estimate: 0.004, duration_ms: 1200,
+            },
+            {
+              turn_index: 2, node_kind: "call_tools", tool_names: "read_template",
+              prompt_tokens: 100, completion_tokens: 260, total_tokens: 360,
+              cumulative_tokens: 1200, cost_estimate: 0.002, duration_ms: 300,
+            },
+          ],
+        }),
+      ],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    clickRunTab(/^telemetry$/i);
+    const panel = screen.getByTestId("run-detail-telemetry");
+    // Tool name from a turn row is shown, proving the per-turn table rendered.
+    expect(within(panel).getByText("read_template")).toBeTruthy();
+    // The on-demand trace button is offered.
+    expect(
+      within(panel).getByRole("button", { name: /view full request \/ response trace/i }),
+    ).toBeTruthy();
+  });
+
+  test("Overview metric strip shows the run-level telemetry rollup", () => {
+    const detail = makeDetail({
+      telemetry_rollup: {
+        total_tokens: 2000,
+        total_cost: 0.006,
+        prompt_tokens: 1700,
+        completion_tokens: 300,
+        turn_count: 9,
+        tool_call_count: 4,
+      },
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    // Overview is the default tab — the strip is visible immediately.
+    expect(screen.getByText("2,000")).toBeTruthy();
+    expect(screen.getByText("$0.0060")).toBeTruthy();
+  });
+
+  test("arrow keys move between run-detail tabs (WAI-ARIA tabs pattern)", () => {
+    render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
+    const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+    const overviewTab = within(tablist).getByRole("tab", { name: /^overview$/i });
+    // ArrowRight from Overview selects + focuses Agents.
+    fireEvent.keyDown(overviewTab, { key: "ArrowRight" });
+    const agentsTab = within(tablist).getByRole("tab", { name: /^agents$/i });
+    expect(agentsTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("run-detail-agents")).toBeTruthy();
+  });
+
   test("Delete button is enabled for terminal statuses", () => {
     // Sanity check: the disable must NOT bleed into completed / failed /
     // aborted statuses. Each of these represents a terminal run and

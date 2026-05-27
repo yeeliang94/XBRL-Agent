@@ -195,12 +195,24 @@ Keychain). `truststore` is in `requirements.txt`; reinstall deps after a
 pull if you see this error. Requires Python ≥ 3.10 — older interpreters
 silently skip the inject and need `SSL_CERT_FILE` set manually.
 
-### 6. Per-turn token counts are approximate
+### 6. Per-turn token counts are deltas of cumulative usage (approximate)
 
-`_track_turn()` in `extraction/agent.py` records zeros for per-turn tokens
-because PydanticAI handles counting internally. After completion, `server.py`
-backfills totals from `result.usage`. The token dashboard shows real numbers
-only after the run finishes.
+PydanticAI counts tokens internally and exposes only a **cumulative**
+`agent_run.usage()` after each node — there is no true per-turn split.
+`TokenReport.add_turn()` in `token_tracker.py` is **only used in tests**, never
+in the live path. The live coordinator loop derives a per-turn figure by
+**subtracting the previous node's cumulative usage** and persists it to
+`run_agent_turns` (schema v8) along with exact timing + tool activity; the
+prompt/completion split is therefore best-effort, while duration and tool
+calls are exact. The Telemetry tab labels this honestly. After completion,
+`server.py` also backfills run-level totals from `result.usage`.
+
+**Verbatim content lives on disk, not the DB.** `save_agent_trace`
+(`agent_tracing.py`) writes the full request/response transcript to
+`{output_dir}/{stmt}_conversation_trace.json` — text kept verbatim (single
+payloads capped at 100 KB; binary elided) — served on demand by
+`GET /api/runs/{id}/agents/{stmt}/trace`. Don't move that heavy content into
+SQLite (hybrid-storage decision; see docs/PLAN-run-page-and-telemetry.md).
 
 ### 7. Frontend uses inline styles, not Tailwind
 
@@ -218,6 +230,18 @@ is the single cascade point); shared component primitives in
 tests assert exact RGB values derived from `theme.ts` tokens — change a token
 and its pinning test in the same commit. Clipboard styling
 (`web/src/lib/clipboard.ts`) is intentionally NOT tokenised (gotcha #16).
+
+**Run-detail is one tabbed surface** (`RunDetailView.tsx`): Overview · Agents ·
+Notes · Cross-checks · Telemetry · Values (Values gated on canonical mode).
+The tab bar uses `role="tablist"`/`tab`/`tabpanel` with roving-tabindex arrow
+nav, and **collides by role with the Notes-12 `NotesSubTabBar`** (also
+`role="tab"`). Tests querying tabs must scope with `within(...)` by the
+tablist's `aria-label` (`"Run detail sections"` vs `"Sheet-12 sub-agents"`),
+never a bare `getAllByRole("tab")`. "Review values" switches to the Values tab
+in-place — do **not** revert it to an `<a href="/concepts/{id}">` page jump
+(that was the disjointed-nav bug). Tab content is lazy: heavy sub-trees
+(NotesReviewTab editor, ConceptsPage workspace, PdfSourcePane) mount only when
+their tab is active.
 
 ### 8. Node.js may not be on PATH (Windows)
 

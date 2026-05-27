@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
@@ -146,6 +146,24 @@ function crossChecksForValidator(
   }));
 }
 
+/** Wall-clock duration between two ISO timestamps, as a terse "1m 02s" /
+ *  "850 ms" string. Returns "—" when either bound is missing (legacy rows,
+ *  or an agent that never reached a terminal state). */
+function formatAgentDuration(
+  started: string | null,
+  ended: string | null,
+): string {
+  if (!started || !ended) return "—";
+  const ms = new Date(ended).getTime() - new Date(started).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return `${ms} ms`;
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
 // Phase 9: one card per agent. Header shows statement, status, model,
 // total tokens; body is an AgentTimeline fed by the persisted events so
 // past runs replay the same ToolCallCard rows as a live run.
@@ -221,10 +239,18 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
         </div>
         <div style={styles.agentMetaRow}>
           <span>{displayModelId(agent.model)}</span>
+          {agent.token_breakdown && (
+            <span>
+              {agent.token_breakdown.turn_count} turns ·{" "}
+              {agent.token_breakdown.tool_call_count} tool calls
+            </span>
+          )}
+          <span>{formatAgentDuration(agent.started_at, agent.ended_at)}</span>
           <span style={styles.agentTokens}>
             {agent.total_tokens != null
               ? `${agent.total_tokens.toLocaleString()} tokens`
               : "— tokens"}
+            {agent.total_cost != null ? ` · $${agent.total_cost.toFixed(4)}` : ""}
           </span>
         </div>
       </button>
@@ -347,6 +373,24 @@ export function RunDetailView({
 
   const rollup = detail.telemetry_rollup;
 
+  // Roving keyboard navigation for the tab bar (WAI-ARIA tabs pattern):
+  // Arrow keys move between tabs, Home/End jump to ends, and focus follows
+  // selection. Inline styles can't express this, so it lives here.
+  const tabBarRef = useRef<HTMLDivElement>(null);
+  const onTabKeyDown = (e: React.KeyboardEvent, index: number) => {
+    let next = index;
+    if (e.key === "ArrowRight") next = (index + 1) % tabs.length;
+    else if (e.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = tabs.length - 1;
+    else return;
+    e.preventDefault();
+    setTab(tabs[next].key);
+    const btns =
+      tabBarRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    btns?.[next]?.focus();
+  };
+
   return (
     <div style={styles.container}>
       <header style={styles.header}>
@@ -410,8 +454,13 @@ export function RunDetailView({
 
       {/* Tab bar — one shared navigation for the whole run, replacing the
           old long scroll of stacked sections + the disjointed /concepts jump. */}
-      <div style={styles.tabBar} role="tablist" aria-label="Run detail sections">
-        {tabs.map((t) => {
+      <div
+        ref={tabBarRef}
+        style={styles.tabBar}
+        role="tablist"
+        aria-label="Run detail sections"
+      >
+        {tabs.map((t, i) => {
           const active = t.key === tab;
           return (
             <button
@@ -419,7 +468,11 @@ export function RunDetailView({
               type="button"
               role="tab"
               aria-selected={active}
+              // Roving tabindex: only the active tab is in the tab order;
+              // arrow keys reach the others (WAI-ARIA tabs pattern).
+              tabIndex={active ? 0 : -1}
               onClick={() => setTab(t.key)}
+              onKeyDown={(e) => onTabKeyDown(e, i)}
               style={active ? styles.tabActive : styles.tab}
             >
               {t.label}
