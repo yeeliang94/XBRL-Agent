@@ -183,10 +183,12 @@ export default function App() {
   // Reflect the selected run in the browser tab title so a user with
   // multiple Template tabs open can tell them apart without switching.
   useEffect(() => {
+    // A run id under either `history` OR the `concepts` alias is the unified
+    // run page — title it "Run N". The bare Template landing (concepts, no id)
+    // keeps the generic title.
     document.title =
-      state.view === "concepts" && state.selectedRunId != null
-        ? `XBRL Agent — Template ${state.selectedRunId}`
-        : state.view === "history" && state.selectedRunId != null
+      state.selectedRunId != null &&
+      (state.view === "history" || state.view === "concepts")
         ? `XBRL Agent — Run ${state.selectedRunId}`
         : "XBRL Agent";
   }, [state.view, state.selectedRunId]);
@@ -435,7 +437,15 @@ export default function App() {
         <div style={styles.headerLeft}>
           <h1 style={styles.headerTitle}>XBRL Agent</h1>
           <TopNav
-            view={state.view}
+            // The `concepts` view with a run id is the unified run page (a
+            // History activity reached via "Review values" / the /concepts
+            // alias), so highlight History — not Template. "Template" stays
+            // highlighted only for the bare concept landing (no run id).
+            view={
+              state.view === "concepts" && state.selectedRunId != null
+                ? "history"
+                : state.view
+            }
             showConcepts={canonicalEnabled}
             onViewChange={(v) => {
               // Tabs are "go to the top of that section" — clicking
@@ -493,9 +503,16 @@ export default function App() {
               canonicalEnabled={canonicalEnabled}
               selectedId={state.selectedRunId}
               initialRunTab="values"
-              onSelectRun={(id) =>
-                dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
-              }
+              onSelectRun={(id) => {
+                // Back from a /concepts/{id} run page (id === null) should
+                // land on the History list, not the empty Template landing —
+                // the run page belongs to History. Switch the view so the
+                // user ends up where the nav already says they are.
+                if (id == null) {
+                  dispatch({ type: "SET_VIEW", payload: "history" });
+                }
+                dispatch({ type: "SET_SELECTED_RUN_ID", payload: id });
+              }}
               onResumeDraft={(id) => {
                 dispatch({ type: "SET_VIEW", payload: "extract" });
                 dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
