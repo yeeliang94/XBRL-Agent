@@ -75,28 +75,20 @@ export function HistoryList({
     <div style={styles.container}>
       <table style={styles.table}>
         {/* Fixed column widths — without these the browser picks column
-            widths from content, so a long filename would squash the chip
-            columns and vice versa. `table-layout: fixed` plus <col>
+            widths from content, so a long filename could squash the
+            timestamp/status columns. `table-layout: fixed` plus <col>
             widths makes the layout predictable regardless of content. */}
         <colgroup>
-          <col style={{ width: "30%" }} />
-          <col style={{ width: "14%" }} />
-          <col style={{ width: "14%" }} />
-          <col style={{ width: "14%" }} />
+          <col style={{ width: "44%" }} />
+          <col style={{ width: "18%" }} />
+          <col style={{ width: "18%" }} />
           <col style={{ width: "20%" }} />
-          <col style={{ width: "8%" }} />
         </colgroup>
         <thead>
           <tr>
             <th style={styles.th}>Filename</th>
             <th style={styles.th}>When</th>
             <th style={styles.th}>Status</th>
-            <th style={styles.th}>Statements</th>
-            {/* Model column surfaces `models_used` so the Phase 10.4
-                Codex-fix-#1 audit ("real model ids, not class reprs")
-                can be performed at a glance without drilling into each
-                row. The backend dedupes `models_used` per run. */}
-            <th style={styles.th}>Model</th>
             <th style={{ ...styles.th, textAlign: "right" }}>Duration</th>
           </tr>
         </thead>
@@ -164,28 +156,6 @@ export function HistoryList({
                   >
                     {display.label}
                   </span>
-                </td>
-                <td style={styles.td}>
-                  <div style={styles.chipRow}>
-                    {run.statements_run.map((st) => (
-                      <span key={st} style={styles.chip}>
-                        {st}
-                      </span>
-                    ))}
-                  </div>
-                </td>
-                <td style={styles.td}>
-                  {run.models_used.length === 0 ? (
-                    <span style={styles.dim}>—</span>
-                  ) : (
-                    <div style={styles.chipRow}>
-                      {run.models_used.map((m) => (
-                        <span key={m} style={styles.modelChip} title={m}>
-                          {m}
-                        </span>
-                      ))}
-                    </div>
-                  )}
                 </td>
                 <td style={{ ...styles.td, textAlign: "right" }}>
                   <span style={styles.dim}>{formatDuration(run.duration_seconds)}</span>
@@ -288,40 +258,6 @@ const styles = {
     fontSize: 12,
     fontWeight: pwc.weight.medium,
     verticalAlign: "middle",
-  } as React.CSSProperties,
-  chipRow: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    gap: pwc.space.sm,
-  } as React.CSSProperties,
-  chip: {
-    display: "inline-block",
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.md,
-    fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    background: pwc.grey100,
-    color: pwc.grey800,
-    fontFamily: pwc.fontMono,
-  } as React.CSSProperties,
-  // Model chips use the PwC orange tint to visually distinguish them
-  // from the grey statement chips in the same row — users scanning the
-  // list can spot "which model did this run use" without parsing text.
-  // `maxWidth` + ellipsis keeps long IDs from spilling into adjacent
-  // columns; full name is in the title attribute.
-  modelChip: {
-    display: "inline-block",
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.md,
-    fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    background: pwc.orange50,
-    color: pwc.orange700,
-    fontFamily: pwc.fontMono,
-    whiteSpace: "nowrap" as const,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    maxWidth: "100%",
   } as React.CSSProperties,
   placeholder: {
     padding: pwc.space.xl,

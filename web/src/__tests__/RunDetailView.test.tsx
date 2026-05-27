@@ -1,7 +1,16 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import { RunDetailView } from "../components/RunDetailView";
 import type { RunDetailJson, RunAgentJson, SSEEvent } from "../lib/types";
+
+// The run-detail surface is now tabbed (Overview default). Content for
+// Agents / Cross-checks / Notes / Telemetry lives behind its tab, so tests
+// click the relevant top-level tab first. Scoped to the run-detail tablist
+// so it doesn't collide with the Notes-12 sub-tab bar (also role="tab").
+function clickRunTab(name: RegExp) {
+  const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+  fireEvent.click(within(tablist).getByRole("tab", { name }));
+}
 
 // A tool_call / tool_result pair used across the fixture so each agent
 // renders a non-empty timeline.
@@ -111,13 +120,18 @@ describe("RunDetailView", () => {
     expect(screen.getAllByText(/completed/i).length).toBeGreaterThan(0);
   });
 
-  test("Review values link is gated on canonical mode (peer-review F6)", () => {
-    // Default (canonical disabled) → no link, matching TopNav/Results gating.
+  test("Review values is gated on canonical mode (peer-review F6)", () => {
+    // Default (canonical disabled) → no Review-values action and no Values
+    // tab, matching TopNav/Results gating.
     const { rerender } = render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
     expect(screen.queryByText("Review values")).toBeNull();
-    // Canonical enabled → link appears, pointing at this run's concepts page.
+    const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+    expect(within(tablist).queryByRole("tab", { name: /^values$/i })).toBeNull();
+
+    // Canonical enabled → Review-values action + a Values tab appear. The
+    // values now open in-place as a tab (no /concepts page jump).
     rerender(
       <RunDetailView
         detail={makeDetail()}
@@ -126,8 +140,9 @@ describe("RunDetailView", () => {
         canonicalEnabled
       />,
     );
-    const link = screen.getByText("Review values") as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe("/concepts/42");
+    expect(screen.getByText("Review values")).toBeTruthy();
+    const tablist2 = screen.getByRole("tablist", { name: /run detail sections/i });
+    expect(within(tablist2).getByRole("tab", { name: /^values$/i })).toBeTruthy();
   });
 
   test("renders run config: statements, variants, models, scout flag", () => {
@@ -149,6 +164,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
     // The agents section should list both SOFP (completed) and SOPL (failed)
+    clickRunTab(/^agents$/i);
     const agentsSection = screen.getByTestId("run-detail-agents");
     expect(agentsSection.textContent).toContain("SOFP");
     expect(agentsSection.textContent).toContain("SOPL");
@@ -160,6 +176,7 @@ describe("RunDetailView", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
+    clickRunTab(/cross-checks/i);
     expect(screen.getByText("sofp_balance")).toBeTruthy();
     expect(screen.getByText("Passed")).toBeTruthy();
   });
@@ -210,6 +227,7 @@ describe("RunDetailView", () => {
         <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
       );
       // Wait for the concept map to load, then click the failed check.
+      clickRunTab(/cross-checks/i);
       const row = await screen.findByTestId("cross-check-row-sofp_balance");
       fireEvent.click(row);
       // The pane resolves the target's evidence ("Page 7") and shows page 7.
@@ -274,6 +292,7 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
+    clickRunTab(/^agents$/i);
     const agentsSection = screen.getByTestId("run-detail-agents");
     // Friendly label appears
     expect(agentsSection.textContent?.toLowerCase()).toContain("completed");
@@ -370,6 +389,7 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
+    clickRunTab(/^agents$/i);
     const agentsSection = screen.getByTestId("run-detail-agents");
     expect(agentsSection.textContent).toContain("gemini-3-flash-preview");
     expect(agentsSection.textContent).not.toContain("GoogleModel(");
@@ -385,6 +405,7 @@ describe("RunDetailView", () => {
     );
     // Agent cards default to collapsed — expand each before asserting on
     // timeline contents so the tool rows are mounted.
+    clickRunTab(/^agents$/i);
     const agentCards = container.querySelectorAll("[data-testid='run-detail-agent']");
     expect(agentCards.length).toBe(2);
     agentCards.forEach((card) => {
@@ -407,6 +428,7 @@ describe("RunDetailView", () => {
     );
     // Expand the (default-collapsed) card so the timeline empty-state
     // copy is rendered.
+    clickRunTab(/^agents$/i);
     const toggle = container
       .querySelector("[data-testid='run-detail-agent']")
       ?.querySelector("button");
@@ -427,6 +449,7 @@ describe("RunDetailView", () => {
       />,
     );
     expect(screen.getByText(/legacy run/i)).toBeTruthy();
+    clickRunTab(/^agents$/i);
     expect(screen.getByText(/No agents were recorded/i)).toBeTruthy();
   });
 
@@ -453,6 +476,7 @@ describe("RunDetailView", () => {
       ],
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    clickRunTab(/^agents$/i);
     expect(screen.getByText("Notes 10: Corp Info")).toBeTruthy();
     expect(screen.getByText("Notes 12: List of Notes")).toBeTruthy();
     // Ensure the raw enum isn't leaking through anywhere.
@@ -471,11 +495,14 @@ describe("RunDetailView", () => {
       },
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    // Scope to the active (Overview) tabpanel so the "Notes" tab in the tab
+    // bar isn't mistaken for the config dt label.
+    const panel = screen.getByRole("tabpanel");
     // dt label present
-    expect(screen.getByText("Notes")).toBeTruthy();
+    expect(within(panel).getByText("Notes")).toBeTruthy();
     // values rendered as the friendly labels, joined
     expect(
-      screen.getByText(/Notes 10: Corp Info.*Notes 12: List of Notes/),
+      within(panel).getByText(/Notes 10: Corp Info.*Notes 12: List of Notes/),
     ).toBeTruthy();
   });
 
@@ -492,7 +519,9 @@ describe("RunDetailView", () => {
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     // No dt "Notes" row added for empty arrays — avoids "Notes: —" noise.
-    expect(screen.queryByText(/^Notes$/)).toBeNull();
+    // Scope to the Overview tabpanel so the "Notes" tab isn't counted.
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).queryByText(/^Notes$/)).toBeNull();
   });
 
   test("Notes-12 replay renders sub-tab bar derived from persisted events + filters", () => {
@@ -560,13 +589,16 @@ describe("RunDetailView", () => {
     );
     // Expand the (default-collapsed) agent card so the sub-tab bar
     // and timeline mount.
+    clickRunTab(/^agents$/i);
     const toggle = container
       .querySelector("[data-testid='run-detail-agent']")
       ?.querySelector("button");
     if (toggle) fireEvent.click(toggle);
 
-    // Sub-tab bar appears: "All" chip + one chip per sub-agent (2).
-    const tabs = screen.getAllByRole("tab");
+    // Sub-tab bar appears: "All" chip + one chip per sub-agent (2). Scope to
+    // the Sheet-12 sub-tab bar so the run-detail top tabs aren't counted.
+    const subTablist = screen.getByRole("tablist", { name: /sheet-12 sub-agents/i });
+    const tabs = within(subTablist).getAllByRole("tab");
     expect(tabs).toHaveLength(3);
     expect(tabs[0]).toHaveTextContent(/all/i);
 
@@ -601,6 +633,7 @@ describe("RunDetailView", () => {
     // Expand the agent card so we're actually testing "sub-tab bar
     // absent after mount" and not just "body not rendered because
     // collapsed".
+    clickRunTab(/^agents$/i);
     const toggle = container
       .querySelector("[data-testid='run-detail-agent']")
       ?.querySelector("button");
@@ -628,6 +661,7 @@ describe("RunDetailView", () => {
     render(
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
+    clickRunTab(/^agents$/i);
     expect(screen.getByText("Correction")).toBeTruthy();
   });
 
@@ -648,6 +682,7 @@ describe("RunDetailView", () => {
     render(
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
+    clickRunTab(/^agents$/i);
     expect(screen.getByText("Notes Validator")).toBeTruthy();
   });
 

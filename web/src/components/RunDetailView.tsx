@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { pwc } from "../lib/theme";
 import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
+import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
 import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
+import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
 import { ValidatorTab } from "./ValidatorTab";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
@@ -246,13 +248,16 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
   );
 }
 
+// Tab identity for the run-detail surface. Values is gated on canonical mode.
+type RunTabKey = "overview" | "agents" | "notes" | "checks" | "telemetry" | "values";
+
 export function RunDetailView({
   detail, onDownload, onDelete, onRegenerateNotes, canonicalEnabled = false,
 }: RunDetailViewProps) {
-  // Notes review is a heavy sub-tree (one TipTap editor per cell). Keep
-  // it unmounted until the operator opens the section so a detail view
-  // with a dozen notes doesn't spin up a dozen editors on first paint.
-  const [notesExpanded, setNotesExpanded] = useState(false);
+  // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
+  // PDF panes) only mounts when its tab is active, so opening a run doesn't
+  // spin up a dozen TipTap editors or fetch concept trees up front.
+  const [tab, setTab] = useState<RunTabKey>("overview");
 
   // Step 8/12 — clicking a failed cross-check drives the source-PDF pane to
   // the cited page(s) of the cell it targets. We resolve (target_sheet,
@@ -326,6 +331,22 @@ export function RunDetailView({
     }
   };
 
+  // Tab definitions. Values is hidden unless canonical mode is on (the
+  // concept tree doesn't exist for legacy runs). Order encodes the ranked
+  // emphasis: audit (overview) → debug (agents/telemetry) → review (values).
+  const tabs: { key: RunTabKey; label: string }[] = [
+    { key: "overview", label: "Overview" },
+    { key: "agents", label: "Agents" },
+    { key: "notes", label: "Notes" },
+    { key: "checks", label: "Cross-checks" },
+    { key: "telemetry", label: "Telemetry" },
+    ...(canonicalEnabled
+      ? [{ key: "values" as RunTabKey, label: "Values" }]
+      : []),
+  ];
+
+  const rollup = detail.telemetry_rollup;
+
   return (
     <div style={styles.container}>
       <header style={styles.header}>
@@ -362,13 +383,14 @@ export function RunDetailView({
             Download filled workbook
           </button>
           {canonicalEnabled && (
-            <a
-              href={`/concepts/${detail.id}`}
-              style={styles.secondaryLinkButton}
+            <button
+              type="button"
+              onClick={() => setTab("values")}
+              style={styles.secondaryButton}
               title="Review this run's extracted values and reconciliation queue"
             >
               Review values
-            </a>
+            </button>
           )}
           <button
             type="button"
@@ -386,66 +408,101 @@ export function RunDetailView({
         </div>
       </header>
 
-      <section style={styles.section}>
-        <h4 style={styles.sectionHeading}>Run configuration</h4>
-        <ConfigBlock config={detail.config} />
-      </section>
+      {/* Tab bar — one shared navigation for the whole run, replacing the
+          old long scroll of stacked sections + the disjointed /concepts jump. */}
+      <div style={styles.tabBar} role="tablist" aria-label="Run detail sections">
+        {tabs.map((t) => {
+          const active = t.key === tab;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(t.key)}
+              style={active ? styles.tabActive : styles.tab}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
 
-      <section style={styles.section} data-testid="run-detail-agents">
-        <h4 style={styles.sectionHeading}>Agents</h4>
-        {detail.agents.length === 0 ? (
-          <p style={styles.dim}>No agents were recorded for this run.</p>
-        ) : (
-          <div style={styles.agentStack}>
-            {detail.agents.map((agent) => (
-              <AgentCard key={agent.id} agent={agent} />
-            ))}
+      {tab === "overview" && (
+        <section style={styles.section} role="tabpanel">
+          {rollup && (
+            <div style={styles.metricStrip}>
+              <MetricTile label="Total tokens" value={rollup.total_tokens.toLocaleString()} />
+              <MetricTile label="Est. cost" value={`$${rollup.total_cost.toFixed(4)}`} />
+              <MetricTile label="Turns" value={String(rollup.turn_count)} />
+              <MetricTile label="Tool calls" value={String(rollup.tool_call_count)} />
+              <MetricTile label="Agents" value={String(detail.agents.length)} />
+            </div>
+          )}
+          <h4 style={styles.sectionHeading}>Run configuration</h4>
+          <ConfigBlock config={detail.config} />
+        </section>
+      )}
+
+      {tab === "agents" && (
+        <section style={styles.section} role="tabpanel" data-testid="run-detail-agents">
+          {detail.agents.length === 0 ? (
+            <p style={styles.dim}>No agents were recorded for this run.</p>
+          ) : (
+            <div style={styles.agentStack}>
+              {detail.agents.map((agent) => (
+                <AgentCard key={agent.id} agent={agent} />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {tab === "notes" && (
+        <section style={styles.section} role="tabpanel" data-testid="run-detail-notes-review">
+          <NotesReviewTab runId={detail.id} onRegenerate={onRegenerateNotes} />
+        </section>
+      )}
+
+      {tab === "checks" && (
+        <section style={styles.section} role="tabpanel">
+          <div style={styles.crossCheckScroller}>
+            <ValidatorTab
+              crossChecks={crossChecksForValidator(detail.cross_checks)}
+              onSelectTarget={handleSelectTarget}
+            />
           </div>
-        )}
-      </section>
+          {/* Source-PDF verification for the selected check's target cell.
+              Rendered only once a target is selected. */}
+          {selectedTarget && (
+            <div style={{ marginTop: pwc.space.md }}>
+              <PdfSourcePane runId={detail.id} pages={pdfPages} />
+            </div>
+          )}
+        </section>
+      )}
 
-      <section style={styles.section} data-testid="run-detail-notes-review">
-        <button
-          type="button"
-          onClick={() => setNotesExpanded((prev) => !prev)}
-          aria-expanded={notesExpanded}
-          style={styles.collapsibleSectionHeading}
-        >
-          <span style={styles.agentChevron} aria-hidden="true">
-            {notesExpanded ? "▾" : "▸"}
-          </span>
-          Notes review
-        </button>
-        {notesExpanded && (
-          <NotesReviewTab
-            runId={detail.id}
-            onRegenerate={onRegenerateNotes}
-          />
-        )}
-      </section>
+      {tab === "telemetry" && (
+        <section style={styles.section} role="tabpanel" data-testid="run-detail-telemetry">
+          <AgentTelemetryPanel detail={detail} />
+        </section>
+      )}
 
-      <section style={styles.section}>
-        <h4 style={styles.sectionHeading}>Cross-checks</h4>
-        {/* Horizontal scroll fallback for the 6-column cross-check table.
-            Even in the 920px modal, a long "message" column can push the
-            table past the available width; the scroller keeps the column
-            readable instead of letting it get clipped. */}
-        <div style={styles.crossCheckScroller}>
-          <ValidatorTab
-            crossChecks={crossChecksForValidator(detail.cross_checks)}
-            onSelectTarget={handleSelectTarget}
-          />
-        </div>
-        {/* Source-PDF verification for the selected check's target cell.
-            Rendered only once a target is selected — otherwise the pane would
-            eagerly default to page 1 (and fetch its image) before the reviewer
-            has chosen anything to verify. */}
-        {selectedTarget && (
-          <div style={{ marginTop: pwc.space.md }}>
-            <PdfSourcePane runId={detail.id} pages={pdfPages} />
-          </div>
-        )}
-      </section>
+      {tab === "values" && canonicalEnabled && (
+        <section style={styles.sectionFull} role="tabpanel" data-testid="run-detail-values">
+          <ConceptsPage runId={detail.id} />
+        </section>
+      )}
+    </div>
+  );
+}
+
+/** A single labelled metric in the Overview strip. */
+function MetricTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={styles.metricTile}>
+      <div style={styles.metricValue}>{value}</div>
+      <div style={styles.metricLabel}>{label}</div>
     </div>
   );
 }
@@ -535,7 +592,7 @@ const styles = {
     borderRadius: pwc.radius.sm,
     cursor: "not-allowed",
   } as React.CSSProperties,
-  secondaryLinkButton: {
+  secondaryButton: {
     padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
     fontFamily: pwc.fontHeading,
     fontSize: 14,
@@ -545,8 +602,74 @@ const styles = {
     border: `1px solid ${pwc.orange500}`,
     borderRadius: pwc.radius.sm,
     cursor: "pointer",
-    textDecoration: "none",
-    display: "inline-block",
+  } as React.CSSProperties,
+  // Tab bar: a thin row of buttons with the active one underlined in the
+  // brand orange. Data-dense chrome — keep it tight, not airy.
+  tabBar: {
+    display: "flex",
+    gap: pwc.space.xs,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    flexWrap: "wrap" as const,
+  } as React.CSSProperties,
+  tab: {
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    fontFamily: pwc.fontHeading,
+    fontSize: 13,
+    fontWeight: 600,
+    color: pwc.grey500,
+    background: "transparent",
+    border: "none",
+    borderBottom: "2px solid transparent",
+    marginBottom: -1,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  tabActive: {
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    fontFamily: pwc.fontHeading,
+    fontSize: 13,
+    fontWeight: 600,
+    color: pwc.orange500,
+    background: "transparent",
+    border: "none",
+    borderBottom: `2px solid ${pwc.orange500}`,
+    marginBottom: -1,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  // Full-bleed panel for the Values (Concepts) tab — its 3-column workspace
+  // wants the whole width, unlike the prose-width Overview/Agents panels.
+  sectionFull: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  metricStrip: {
+    display: "flex",
+    gap: pwc.space.md,
+    flexWrap: "wrap" as const,
+    marginBottom: pwc.space.md,
+  } as React.CSSProperties,
+  metricTile: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 2,
+    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    background: pwc.white,
+    minWidth: 110,
+  } as React.CSSProperties,
+  metricValue: {
+    fontFamily: pwc.fontMono,
+    fontSize: 20,
+    fontWeight: pwc.weight.light,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  metricLabel: {
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.5,
+    color: pwc.grey500,
   } as React.CSSProperties,
   dangerButton: {
     padding: `${pwc.space.sm}px ${pwc.space.lg}px`,

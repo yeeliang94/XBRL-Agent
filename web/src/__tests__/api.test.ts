@@ -4,6 +4,8 @@ import {
   getSettings,
   updateSettings,
   fetchRuns,
+  fetchRecentRuns,
+  fetchHomeStats,
   fetchRunDetail,
   deleteRun,
   downloadFilledUrl,
@@ -112,6 +114,61 @@ describe("API client", () => {
       const calledUrl = mockFetch.mock.calls[0][0] as string;
       expect(calledUrl).not.toContain("q=");
       expect(calledUrl).not.toContain("status=");
+    });
+  });
+
+  // --- Homepage split-hero helpers (PLAN-homepage-redesign.md) ---
+  describe("fetchRecentRuns", () => {
+    beforeEach(() => mockFetch.mockClear());
+
+    test("requests a single capped page and returns its rows", async () => {
+      const rows = [{ id: 2 }, { id: 1 }];
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: rows, total: 2, limit: 5, offset: 0 }),
+      });
+      const result = await fetchRecentRuns(5);
+      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      expect(calledUrl).toContain("limit=5");
+      // No status/date filters — recents is the unfiltered newest-first page.
+      expect(calledUrl).not.toContain("status=");
+      expect(result).toEqual(rows);
+    });
+
+    test("defaults to a limit of 5 when none is given", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [], total: 0, limit: 5, offset: 0 }),
+      });
+      await fetchRecentRuns();
+      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      expect(calledUrl).toContain("limit=5");
+    });
+  });
+
+  describe("fetchHomeStats", () => {
+    beforeEach(() => mockFetch.mockClear());
+
+    test("derives the three counts from each filter's server total", async () => {
+      // Three parallel calls, each reading `total` off a limit=1 page.
+      // Resolve in the same order fetchHomeStats issues them: all, draft,
+      // completed-this-month.
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 42, limit: 1, offset: 0 }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 3, limit: 1, offset: 0 }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 7, limit: 1, offset: 0 }) });
+
+      const stats = await fetchHomeStats();
+      expect(stats).toEqual({ total: 42, drafts: 3, completedThisMonth: 7 });
+
+      const urls = mockFetch.mock.calls.map((c) => c[0] as string);
+      // Drafts call carries the status filter.
+      expect(urls.some((u) => u.includes("status=draft"))).toBe(true);
+      // Completed-this-month call carries the completed status AND a
+      // first-of-month date floor (sent as the `from` alias).
+      const completedUrl = urls.find((u) => u.includes("status=completed"));
+      expect(completedUrl).toBeDefined();
+      expect(completedUrl).toMatch(/from=\d{4}-\d{2}-01/);
     });
   });
 

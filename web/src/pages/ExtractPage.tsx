@@ -6,6 +6,7 @@ import { notesTabLabel, agentSubAgentSummary } from "../lib/appReducer";
 import { fetchRunDetail, getResultJson, getExtendedSettings } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
 import { UploadPanel } from "../components/UploadPanel";
+import { HomeHero } from "../components/HomeHero";
 import { PreRunPanel } from "../components/PreRunPanel";
 import { PipelineStages } from "../components/PipelineStages";
 import { AgentTimeline } from "../components/AgentTimeline";
@@ -55,6 +56,13 @@ export interface ExtractPageProps {
   /** Canonical-mode gate (peer-review finding 5): only show the post-run
    *  "View Concepts" link when the backend is in canonical mode. */
   canonicalEnabled?: boolean;
+  /** Homepage split hero (PLAN-homepage-redesign.md): navigation callbacks
+   *  for the home-base column. Optional so legacy/test callers that don't
+   *  wire them still mount — the column simply won't navigate. App supplies
+   *  the same dispatch actions History uses for these jumps. */
+  onResumeDraft?: (runId: number) => void;
+  onOpenRun?: (runId: number) => void;
+  onViewAllRuns?: () => void;
 }
 
 export function ExtractPage({
@@ -68,6 +76,9 @@ export function ExtractPage({
   handleReset,
   handleConfigChange,
   canonicalEnabled = false,
+  onResumeDraft,
+  onOpenRun,
+  onViewAllRuns,
 }: ExtractPageProps) {
   // PLAN-persistent-draft-uploads.md (Phase C): when the URL is /run/{id}
   // (currentRunId is non-null on mount) and we have not yet loaded that
@@ -192,13 +203,25 @@ export function ExtractPage({
     <>
       <PageHeader title="Extract" />
 
-      {/* Upload + Run */}
-      <UploadPanel
-        onUpload={handleUpload}
-        isRunning={state.isRunning}
-        filename={state.filename}
-        startTime={state.runStartTime}
-      />
+      {/* Upload + Run. In the empty landing state the upload card sits in
+          the left column of HomeHero, with the "home base" (recent runs +
+          stat tiles) on the right. Once an upload exists or a run starts
+          (`active` goes false), HomeHero collapses to just the upload card
+          at full width — and crucially keeps UploadPanel mounted in the same
+          tree position so its internal upload state survives the transition. */}
+      <HomeHero
+        active={state.sessionId == null && !state.isRunning}
+        onResumeDraft={onResumeDraft ?? (() => {})}
+        onOpenRun={onOpenRun ?? (() => {})}
+        onViewAllRuns={onViewAllRuns ?? (() => {})}
+      >
+        <UploadPanel
+          onUpload={handleUpload}
+          isRunning={state.isRunning}
+          filename={state.filename}
+          startTime={state.runStartTime}
+        />
+      </HomeHero>
 
       {/* Pre-run configuration panel — shown after upload, hidden once running.
           A `key` tied to currentRunId forces a remount when the page navigates

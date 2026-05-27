@@ -41,12 +41,11 @@ describe("HistoryList", () => {
     expect(screen.getByText(/failed/i)).toBeTruthy();
   });
 
-  test("renders statement chips for each run", () => {
+  test("does not render statements in the list row", () => {
     render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
-    // First run has SOFP and SOPL chips; both substrings should be present
     const row1 = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
-    expect(row1.textContent).toContain("SOFP");
-    expect(row1.textContent).toContain("SOPL");
+    expect(row1.textContent).not.toContain("SOFP");
+    expect(row1.textContent).not.toContain("SOPL");
   });
 
   test("empty state message when list is empty", () => {
@@ -193,11 +192,7 @@ describe("HistoryList", () => {
     expect(onRunSelected).toHaveBeenCalledWith(1);
   });
 
-  // Peer-review [MEDIUM] regression: the list used to drop `models_used`
-  // entirely, so the Phase 10.4 Codex-fix-#1 audit ("verify model strings
-  // show as gpt-5.4 etc., not OpenAIChatModel()") couldn't be done from
-  // the list view. Now each row renders a chip for every distinct model.
-  test("renders a model chip for each model_used on the row", () => {
+  test("does not render models in the list row", () => {
     const runs: RunSummaryJson[] = [
       {
         ...makeRuns()[0],
@@ -207,23 +202,24 @@ describe("HistoryList", () => {
     render(<HistoryList runs={runs} onRunSelected={() => {}} />);
 
     const row = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
-    expect(row.textContent).toContain("gpt-5.4");
-    expect(row.textContent).toContain("gemini-3-flash-preview");
+    expect(row.textContent).not.toContain("gpt-5.4");
+    expect(row.textContent).not.toContain("gemini-3-flash-preview");
   });
 
-  test("Model column header is present in the table", () => {
+  test("Statements and Model column headers are absent from the table", () => {
     const { container } = render(
       <HistoryList runs={makeRuns()} onRunSelected={() => {}} />,
     );
     const headers = Array.from(container.querySelectorAll("th")).map(
       (th) => th.textContent?.trim().toLowerCase() ?? "",
     );
-    expect(headers).toContain("model");
+    expect(headers).not.toContain("statements");
+    expect(headers).not.toContain("model");
   });
 
   test("row with empty models_used gracefully renders a dash", () => {
     // Failed runs can have an empty models_used list. The row should
-    // still render — with a placeholder — not crash.
+    // still render even though models are hidden from the list view.
     const runs: RunSummaryJson[] = [
       { ...makeRuns()[0], models_used: [] },
     ];
