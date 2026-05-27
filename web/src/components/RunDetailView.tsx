@@ -376,6 +376,12 @@ export function RunDetailView({
       : []),
   ];
 
+  // Clamp to a renderable tab. `initialTab="values"` (the /concepts/{id}
+  // alias) can point at a tab that isn't available when canonical mode is off
+  // or still loading — without this, no tab is active and no panel renders,
+  // leaving a blank page below the tab bar (peer-review [6]).
+  const activeTab: RunTabKey = tabs.some((t) => t.key === tab) ? tab : "overview";
+
   const rollup = detail.telemetry_rollup;
 
   // Roving keyboard navigation for the tab bar (WAI-ARIA tabs pattern):
@@ -466,7 +472,7 @@ export function RunDetailView({
         aria-label="Run detail sections"
       >
         {tabs.map((t, i) => {
-          const active = t.key === tab;
+          const active = t.key === activeTab;
           return (
             <button
               key={t.key}
@@ -486,7 +492,7 @@ export function RunDetailView({
         })}
       </div>
 
-      {tab === "overview" && (
+      {activeTab === "overview" && (
         <section style={styles.section} role="tabpanel">
           {rollup && (
             <div style={styles.metricStrip}>
@@ -502,7 +508,7 @@ export function RunDetailView({
         </section>
       )}
 
-      {tab === "agents" && (
+      {activeTab === "agents" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-agents">
           {detail.agents.length === 0 ? (
             <p style={styles.dim}>No agents were recorded for this run.</p>
@@ -516,13 +522,13 @@ export function RunDetailView({
         </section>
       )}
 
-      {tab === "notes" && (
+      {activeTab === "notes" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-notes-review">
           <NotesReviewTab runId={detail.id} onRegenerate={onRegenerateNotes} />
         </section>
       )}
 
-      {tab === "checks" && (
+      {activeTab === "checks" && (
         <section style={styles.section} role="tabpanel">
           <div style={styles.crossCheckScroller}>
             <ValidatorTab
@@ -540,13 +546,13 @@ export function RunDetailView({
         </section>
       )}
 
-      {tab === "telemetry" && (
+      {activeTab === "telemetry" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-telemetry">
           <AgentTelemetryPanel detail={detail} />
         </section>
       )}
 
-      {tab === "values" && canonicalEnabled && (
+      {activeTab === "values" && canonicalEnabled && (
         <section style={styles.sectionFull} role="tabpanel" data-testid="run-detail-values">
           <ConceptsPage runId={detail.id} />
         </section>
