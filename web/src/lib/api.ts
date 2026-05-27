@@ -3,10 +3,12 @@ import type {
   SettingsResponse,
   ExtendedSettingsResponse,
   RunListResponse,
+  RunSummaryJson,
   RunDetailJson,
   RunAgentJson,
   RunsFilterParams,
   SSEEvent,
+  AgentTraceJson,
 } from "./types";
 
 // Shared fetch helper — parses JSON error bodies for useful messages
@@ -116,6 +118,60 @@ export async function fetchRuns(params: RunsFilterParams): Promise<RunListRespon
   return apiFetch<RunListResponse>(url);
 }
 
+// ---------------------------------------------------------------------------
+// Homepage split-hero data (PLAN-homepage-redesign.md)
+//
+// The Extract landing page surfaces a small "home base" beside the upload
+// card: four headline counts plus the few most-recent runs. Both build on
+// the existing `GET /api/runs` endpoint — no new backend route — so the URL
+// format and error handling stay in one place (`fetchRuns`).
+// ---------------------------------------------------------------------------
+
+/** Headline counts shown in the homepage stat tiles.
+ *
+ *  `lastStatus` is intentionally NOT computed here — it comes from the
+ *  most-recent run in `fetchRecentRuns`, so the homepage derives it from
+ *  that list rather than paying for a fourth round-trip. */
+export interface HomeStats {
+  total: number;
+  drafts: number;
+  completedThisMonth: number;
+}
+
+/** The few most-recent runs, newest first. Reuses the runs list (which is
+ *  already ordered `created_at DESC` server-side) capped to `limit`. */
+export async function fetchRecentRuns(limit = 5): Promise<RunSummaryJson[]> {
+  const res = await fetchRuns({ limit });
+  return res.runs;
+}
+
+/** First day of the current month as `YYYY-MM-01`, in the browser's local
+ *  timezone. The backend expands a bare date to `…T00:00:00Z`, so the
+ *  "this month" boundary is evaluated in UTC — close enough for a dashboard
+ *  count, and the only place a month-edge run could be miscounted. */
+function currentMonthStart(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-01`;
+}
+
+/** Fetch the three headline counts in parallel. Each call asks for a single
+ *  row (`limit: 1`) purely to read the server's `total` for that filter —
+ *  we never use the returned rows, so this stays cheap regardless of how
+ *  many runs match. */
+export async function fetchHomeStats(): Promise<HomeStats> {
+  const [all, drafts, completed] = await Promise.all([
+    fetchRuns({ limit: 1 }),
+    fetchRuns({ status: "draft", limit: 1 }),
+    fetchRuns({ status: "completed", dateFrom: currentMonthStart(), limit: 1 }),
+  ]);
+  return {
+    total: all.total,
+    drafts: drafts.total,
+    completedThisMonth: completed.total,
+  };
+}
+
 /** Fetch the hydrated detail view for a single run.
  *
  *  Legacy rows (pre-Phase-6.5) may omit the per-agent `events` array
@@ -127,8 +183,24 @@ export async function fetchRunDetail(runId: number): Promise<RunDetailJson> {
   const agents: RunAgentJson[] = (raw.agents ?? []).map((a) => ({
     ...a,
     events: Array.isArray(a.events) ? (a.events as SSEEvent[]) : [],
+    // v8: default the telemetry fields so consumers can read them without
+    // null-checking against legacy payloads.
+    turns: Array.isArray(a.turns) ? a.turns : [],
   }));
   return { ...raw, agents };
+}
+
+/** Fetch the verbatim conversation trace for one agent of a run (v8).
+ *  Returns the full request/response messages plus per-turn metrics so the
+ *  Telemetry tab can show exactly what was sent and returned each turn. */
+export async function fetchAgentTrace(
+  runId: number,
+  statement: string,
+): Promise<AgentTraceJson> {
+  assertRunId("fetchAgentTrace", runId);
+  return apiFetch<AgentTraceJson>(
+    `/api/runs/${runId}/agents/${encodeURIComponent(statement)}/trace`,
+  );
 }
 
 /** Hard-delete a run row (DB only — the on-disk output folder is left alone). */

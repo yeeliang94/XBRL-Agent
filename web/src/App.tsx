@@ -83,7 +83,7 @@ const styles = {
   mainHistory: {
     maxWidth: "100%",
     margin: "0 auto",
-    padding: `${pwc.space.xxl}px ${pwc.space.xl}px`,
+    padding: `${pwc.space.xxl}px clamp(${pwc.space.xxl}px, 3vw, ${pwc.space.xxxl}px)`,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xxl,
@@ -513,6 +513,22 @@ export default function App() {
             handleReset={handleReset}
             handleConfigChange={handleDraftConfigChange}
             canonicalEnabled={canonicalEnabled}
+            // Homepage home-base navigation. Drafts resume at /run/{id}
+            // (same as History's draft click); finished runs open in
+            // History's detail; "View all" jumps to the History list.
+            onResumeDraft={(id) => {
+              dispatch({ type: "SET_VIEW", payload: "extract" });
+              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
+              dispatch({ type: "SET_CURRENT_RUN_ID", payload: id });
+            }}
+            onOpenRun={(id) => {
+              dispatch({ type: "SET_VIEW", payload: "history" });
+              dispatch({ type: "SET_SELECTED_RUN_ID", payload: id });
+            }}
+            onViewAllRuns={() => {
+              dispatch({ type: "SET_VIEW", payload: "history" });
+              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
+            }}
           />
         )}
       </main>

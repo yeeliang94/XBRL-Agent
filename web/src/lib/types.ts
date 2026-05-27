@@ -543,6 +543,29 @@ export interface RunListResponse {
   offset: number;
 }
 
+// v8 telemetry: per-agent token split + iteration counts.
+export interface AgentTokenBreakdown {
+  prompt_tokens: number;
+  completion_tokens: number;
+  turn_count: number;
+  tool_call_count: number;
+}
+
+// v8 telemetry: one per-turn metrics row (a single agent.iter() node).
+// Token figures are deltas vs the prior turn; cumulative_tokens is the
+// running total after the turn. Content lives in the trace, not here.
+export interface AgentTurnJson {
+  turn_index: number;
+  node_kind: string | null;        // 'model_request' | 'call_tools'
+  tool_names: string | null;       // comma-joined; null for pure model turns
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cumulative_tokens: number;
+  cost_estimate: number;
+  duration_ms: number;
+}
+
 export interface RunAgentJson {
   id: number;
   statement_type: string;
@@ -554,9 +577,31 @@ export interface RunAgentJson {
   workbook_path: string | null;
   total_tokens: number | null;
   total_cost: number | null;
+  // v8 telemetry. Optional so a legacy detail payload (or an older backend)
+  // still type-checks; the API client defaults them.
+  token_breakdown?: AgentTokenBreakdown;
+  turns?: AgentTurnJson[];
   // Phase 8: persisted SSE-equivalent events. The API client normalises
   // a missing field to [] so downstream consumers never have to null-check.
   events: SSEEvent[];
+}
+
+// v8 run-level rollup returned on the detail payload.
+export interface TelemetryRollupJson {
+  total_tokens: number;
+  total_cost: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  turn_count: number;
+  tool_call_count: number;
+}
+
+// v8 conversation trace served by GET /api/runs/{id}/agents/{stmt}/trace.
+// `messages` is the verbatim pydantic-ai message list; `turns` mirrors the
+// per-turn metrics so a viewer can line up tokens/timing with content.
+export interface AgentTraceJson {
+  messages: unknown[];
+  turns?: AgentTurnJson[];
 }
 
 export interface RunCrossCheckJson {
@@ -588,6 +633,8 @@ export interface RunDetailJson {
   filing_standard?: FilingStandard;
   agents: RunAgentJson[];
   cross_checks: RunCrossCheckJson[];
+  // v8 telemetry rollup. Optional for back-compat with older payloads.
+  telemetry_rollup?: TelemetryRollupJson;
 }
 
 export interface RunsFilterParams {

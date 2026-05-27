@@ -1,8 +1,33 @@
 # Implementation Plan: Unified Run Page + Deep Telemetry
 
-**Overall Progress:** `23%` (Phase 2 complete; Phases 1, 3–6 remaining)
+**Overall Progress:** `~75%`
 **Design reference:** [docs/pwc-design-system.html](pwc-design-system.html) · memory `pwc-design-system`
 **Last Updated:** 2026-05-27
+
+> **Status 2026-05-27:**
+> - 🟩 **Phase 2** (telemetry backend) — committed `1acbe97`.
+> - 🟩 **Phase 1 shell** — `RunDetailView` is now a tabbed surface (Overview ·
+>   Agents · Notes · Cross-checks · Telemetry · Values) with one shared header
+>   + a `role=tablist` tab bar. "Review values" opens the **Values** tab
+>   in-place (was an `<a href="/concepts/{id}">` full-page jump) — the core
+>   "disjointed navigation" fix.
+> - 🟩 **Phase 4** — Telemetry tab (`AgentTelemetryPanel`): per-agent per-turn
+>   metrics table + on-demand verbatim trace viewer + Overview metric strip.
+> - 🟩 **Phase 5** — Values tab embeds `ConceptsPage`; Cross-checks is its own tab.
+> - 🟨 **Phase 3** — Overview metric strip done; deeper agent-card restyle (cost
+>   + duration on the card face) still TODO.
+> - 🟥 **Phase 1 Step 2 (routing)** — deferred: `/concepts/{id}` is still a
+>   separate App-level view + TopNav link. Folding it into a `/history/{id}`
+>   tab-deep-link touches `App.tsx`, which carries the in-flight homepage
+>   redesign — left for a coordinated pass.
+> - 🟥 **Phase 6** — a11y roles added (tablist/tab/tabpanel); keyboard arrow-nav,
+>   CLAUDE.md run-page invariant, and memory note still TODO.
+> - **Verification:** `tsc --noEmit` clean; **605/605 frontend tests pass**
+>   (RunDetailView pinning tests updated for the tabbed DOM). **Not yet
+>   verified in a live browser** — no running app/LLM in this environment.
+> - **Commit note:** the frontend run-page work is entangled in the working
+>   tree with the uncommitted homepage redesign (shared `App.tsx`, `api.ts`),
+>   so it is **not yet committed** — needs a coordinated commit with that work.
 
 ## Summary
 

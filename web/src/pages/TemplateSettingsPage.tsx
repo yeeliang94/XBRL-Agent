@@ -225,7 +225,7 @@ function TemplateConceptRow({
 
 const styles = {
   page: {
-    padding: pwc.space.xl,
+    padding: `${pwc.space.lg}px calc(clamp(${pwc.space.xxl}px, 3vw, ${pwc.space.xxxl}px) - ${pwc.space.lg}px)`,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xxl,
