@@ -3839,7 +3839,25 @@ async def run_multi_agent_stream(
                         # so run_agents stops shipping zeros (gotcha #6).
                         total_tokens=agent_result.total_tokens,
                         total_cost=agent_result.total_cost,
+                        # v8 per-turn telemetry rollups.
+                        prompt_tokens=getattr(agent_result, "prompt_tokens", 0),
+                        completion_tokens=getattr(agent_result, "completion_tokens", 0),
+                        turn_count=getattr(agent_result, "turn_count", 0),
+                        tool_call_count=getattr(agent_result, "tool_call_count", 0),
                     )
+                    # v8: persist the per-turn metrics rows. Telemetry is
+                    # advisory — a write failure here must never fault the
+                    # run, so swallow and log (mirrors _safe_usage_backfill).
+                    try:
+                        repo.insert_agent_turns(
+                            db_conn, run_agent_id,
+                            getattr(agent_result, "turns", []) or [],
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to persist per-turn telemetry for %s",
+                            agent_result.statement_type.value, exc_info=True,
+                        )
 
                     # Persist extracted fields from per-statement result.json
                     result_json_path = Path(output_dir) / f"{agent_result.statement_type.value}_result.json"
@@ -4860,10 +4878,29 @@ async def get_run_detail_endpoint(run_id: int):
                 "workbook_path": a.workbook_path,
                 "total_tokens": a.total_tokens,
                 "total_cost": a.total_cost,
+                # v8 telemetry: per-agent token split + iteration counts, and
+                # the per-turn metrics rows the Telemetry tab renders.
+                "token_breakdown": {
+                    "prompt_tokens": a.prompt_tokens,
+                    "completion_tokens": a.completion_tokens,
+                    "turn_count": a.turn_count,
+                    "tool_call_count": a.tool_call_count,
+                },
+                "turns": a.turns,
                 "events": [_serialize_event(e) for e in a.events],
             }
             for a in detail.agents
         ],
+        # v8 run-level rollup so the Overview metric strip + Telemetry tab can
+        # show totals without re-summing per-agent on the client.
+        "telemetry_rollup": {
+            "total_tokens": sum(a.total_tokens or 0 for a in detail.agents),
+            "total_cost": sum(a.total_cost or 0.0 for a in detail.agents),
+            "prompt_tokens": sum(a.prompt_tokens or 0 for a in detail.agents),
+            "completion_tokens": sum(a.completion_tokens or 0 for a in detail.agents),
+            "turn_count": sum(a.turn_count or 0 for a in detail.agents),
+            "tool_call_count": sum(a.tool_call_count or 0 for a in detail.agents),
+        },
         "cross_checks": [
             {
                 "name": c.check_name,
@@ -4879,6 +4916,57 @@ async def get_run_detail_endpoint(run_id: int):
             for c in detail.cross_checks
         ],
     }
+
+
+@app.get("/api/runs/{run_id}/agents/{statement}/trace")
+async def get_agent_trace_endpoint(run_id: int, statement: str):
+    """Serve the verbatim conversation trace for one agent of a run (v8).
+
+    The trace holds exactly what was sent and returned each turn (text
+    verbatim, binary elided, oversized cells capped) plus the per-turn token
+    deltas. It lives on disk at `{output_dir}/{statement}_conversation_trace.json`
+    — the hybrid-storage half that keeps heavy content out of SQLite.
+
+    Security: `statement` is validated against the run's actual agent
+    statement_types before touching the filesystem, so a caller can't
+    path-traverse via the URL (e.g. `../../etc/passwd`).
+    """
+    from db import repository as repo
+
+    conn = _open_audit_conn()
+    try:
+        detail = repo.get_run_detail(conn, run_id)
+    finally:
+        conn.close()
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Only statement_types that actually belong to this run are addressable.
+    known = {a.statement_type for a in detail.agents}
+    if statement not in known:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No agent '{statement}' in run {run_id}",
+        )
+
+    output_dir = detail.run.output_dir
+    if not output_dir:
+        raise HTTPException(status_code=404, detail="Run has no output directory")
+
+    trace_path = Path(output_dir) / f"{statement}_conversation_trace.json"
+    if not trace_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No trace captured for {statement} (older run or failed early)",
+        )
+
+    try:
+        payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Could not read trace: {exc}"
+        )
+    return payload
 
 
 @app.patch("/api/runs/{run_id}")
