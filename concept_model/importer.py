@@ -99,8 +99,8 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                 INSERT INTO concept_nodes(
                     concept_uuid, template_id, parent_uuid, kind,
                     canonical_label, render_sheet, render_row, render_col,
-                    matrix_col
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    matrix_col, matrix_col_label
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(concept_uuid) DO UPDATE SET
                     template_id = excluded.template_id,
                     parent_uuid = excluded.parent_uuid,
@@ -109,7 +109,8 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                     render_sheet = excluded.render_sheet,
                     render_row = excluded.render_row,
                     render_col = excluded.render_col,
-                    matrix_col = excluded.matrix_col
+                    matrix_col = excluded.matrix_col,
+                    matrix_col_label = excluded.matrix_col_label
                 """,
                 (
                     uid,
@@ -121,6 +122,7 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                     int(rk.get("row", 0) or 0),
                     rk.get("col", "B"),
                     rk.get("matrix_col"),
+                    rk.get("matrix_col_label"),
                 ),
             )
 

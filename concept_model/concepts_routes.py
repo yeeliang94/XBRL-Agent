@@ -95,7 +95,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
                 SELECT n.concept_uuid, n.parent_uuid, n.kind,
                        n.canonical_label, n.display_label,
                        n.render_sheet, n.render_row, n.render_col,
-                       n.matrix_col, n.template_id, tpl.shape,
+                       n.matrix_col, n.matrix_col_label, n.template_id, tpl.shape,
                        f.value, f.value_status, f.children_status,
                        f.source, f.evidence,
                        (SELECT COUNT(*) FROM concept_edges e
@@ -108,7 +108,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
                   AND f.period = 'CY'
                   AND f.entity_scope = 'Company'
                 WHERE n.template_id IN ({placeholders})
-                ORDER BY n.template_id, n.render_sheet, n.render_row
+                ORDER BY n.template_id, n.render_sheet, n.render_row, n.render_col
                 """,
                 (run_id, *template_ids),
             ).fetchall()
@@ -144,6 +144,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
                         "render_row": r["render_row"],
                         "render_col": r["render_col"],
                         "matrix_col": r["matrix_col"],
+                        "matrix_col_label": r["matrix_col_label"],
                         "shape": r["shape"],
                         "template_id": r["template_id"],
                         "value": r["value"],
@@ -208,8 +209,8 @@ def register_concept_routes(app, audit_db_getter) -> None:
             rows = conn.execute(
                 "SELECT concept_uuid, parent_uuid, kind, canonical_label, "
                 "display_label, render_sheet, render_row, render_col, "
-                "matrix_col FROM concept_nodes WHERE template_id = ? "
-                "ORDER BY render_sheet, render_row",
+                "matrix_col, matrix_col_label FROM concept_nodes WHERE template_id = ? "
+                "ORDER BY render_sheet, render_row, render_col",
                 (template_id,),
             ).fetchall()
             return {

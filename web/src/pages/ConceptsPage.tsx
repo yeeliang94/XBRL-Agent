@@ -51,6 +51,7 @@ export interface ConceptRow {
   // Phase 5 — equity-component column on MATRIX_CELL concepts (SOCIE);
   // null on linear concepts. `shape` is the owning template's layout.
   matrix_col?: string | null;
+  matrix_col_label?: string | null;
   shape?: string;
   template_id: string;
   value: number | null;
@@ -1019,6 +1020,16 @@ type MatrixCell = {
   mandatory: boolean;
 };
 
+function excelColumnIndex(col: string): number {
+  let index = 0;
+  for (const char of col.toUpperCase()) {
+    const code = char.charCodeAt(0);
+    if (code < 65 || code > 90) return Number.MAX_SAFE_INTEGER;
+    index = index * 26 + (code - 64);
+  }
+  return index;
+}
+
 function ConceptMatrixGrid({
   rows,
   onEditValue,
@@ -1038,10 +1049,14 @@ function ConceptMatrixGrid({
 }) {
   // Distinct component columns, in spreadsheet order (B, C, …).
   const cols: string[] = [];
+  const colLabels = new Map<string, string>();
   for (const r of rows) {
     if (r.matrix_col && !cols.includes(r.matrix_col)) cols.push(r.matrix_col);
+    if (r.matrix_col && r.matrix_col_label) {
+      colLabels.set(r.matrix_col, r.matrix_col_label);
+    }
   }
-  cols.sort();
+  cols.sort((a, b) => excelColumnIndex(a) - excelColumnIndex(b));
 
   // Movement rows, in render order. Each cell keeps its concept_uuid +
   // editable flag so an edit can be routed through the facts PATCH endpoint.
@@ -1073,7 +1088,10 @@ function ConceptMatrixGrid({
           PY: periodValue(r, activeScope, "PY"),
         },
         editable: r.editable === true,
-        mandatory: isMandatoryConcept(r),
+        // In SOCIE, leading "*" marks the movement row, not every component
+        // intersection. Highlighting every blank component as mandatory turns
+        // the matrix into a wall of orange even when blanks are legitimate.
+        mandatory: false,
       });
     }
   }
@@ -1099,7 +1117,8 @@ function ConceptMatrixGrid({
   const valueColumns = cols.flatMap((c) =>
     visiblePeriods.map((period) => ({ col: c, period }))
   );
-  const gridCols = `minmax(220px, 1fr) repeat(${valueColumns.length}, 112px)`;
+  const periodColWidth = 136;
+  const gridCols = `minmax(240px, 300px) repeat(${valueColumns.length}, ${periodColWidth}px)`;
 
   return (
     <div
@@ -1108,25 +1127,49 @@ function ConceptMatrixGrid({
       style={styles.matrixShell}
     >
       <div
-        role="row"
+        role="rowgroup"
         style={{
           display: "grid",
           gridTemplateColumns: gridCols,
           background: pwc.grey100,
           fontWeight: 600,
           fontSize: 12,
+          borderBottom: `1px solid ${pwc.grey200}`,
         }}
       >
-        <div style={{ padding: `${pwc.space.sm}px ${pwc.space.md}px` }}>
+        <div
+          style={{
+            ...styles.matrixHeaderMovement,
+            gridRow: showPeriods ? "1 / span 2" : undefined,
+          }}
+        >
           Movement
         </div>
-        {valueColumns.map(({ col, period }) => (
+        {cols.map((col, idx) => {
+          const label = colLabels.get(col) || col;
+          const start = 2 + idx * visiblePeriods.length;
+          return (
+            <div
+              key={col}
+              style={{
+                ...styles.matrixComponentHeader,
+                gridColumn: showPeriods
+                  ? `${start} / span ${visiblePeriods.length}`
+                  : undefined,
+              }}
+              title={`Column ${col}: ${label}`}
+            >
+              {label}
+            </div>
+          );
+        })}
+        {showPeriods && valueColumns.map(({ col, period }) => (
           <div
             key={`${col}-${period}`}
-            style={{ padding: pwc.space.sm, textAlign: "right" }}
-            title={`column ${col} ${period}`}
+            style={styles.matrixPeriodHeader}
+            title={`${col} ${period}`}
           >
-            {showPeriods ? `${col} ${period}` : col}
+            {period}
           </div>
         ))}
       </div>
@@ -1164,7 +1207,7 @@ function ConceptMatrixGrid({
               alignItems: "center",
             }}
           >
-            <div style={{ padding: `${pwc.space.sm}px ${pwc.space.md}px` }}>
+            <div style={styles.matrixMovementCell}>
               {g.label}
             </div>
             {valueColumns.map(({ col, period }) => {
@@ -1181,11 +1224,12 @@ function ConceptMatrixGrid({
                   data-testid={testId}
                   onClick={() => cell && onSelectRow(cell.uuid)}
                   style={{
-                    padding: pwc.space.sm,
+                    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
                     textAlign: "right",
+                    minWidth: 0,
                     background: selected ? pwc.orange50 : "transparent",
                     boxShadow: selected
-                      ? `inset 0 0 0 1px ${pwc.orange400}`
+                      ? `inset 0 -2px 0 ${pwc.orange400}`
                       : undefined,
                     cursor: cell ? "pointer" : "default",
                   }}
@@ -1199,6 +1243,7 @@ function ConceptMatrixGrid({
                       period={showPeriods ? period : undefined}
                       scope={activeScope}
                       highlight={highlightEmpty}
+                      compact
                     />
                   ) : (
                     <ReadOnlyValue
@@ -1691,10 +1736,12 @@ function ConceptEvidenceBody({
 }
 
 // ---------------------------------------------------------------------------
-// EditableValueCell — a number input for a LEAF value with a debounced save
-// and a per-cell status badge (Saving / Saved / Failed). Mirrors the notes
-// editor: debounce while typing, flush on blur, and flush any pending edit
-// with `keepalive` on unmount so navigating away mid-edit never loses a save.
+// EditableValueCell — a number input for a LEAF value with a debounced save.
+// Saving / failed states are visible because they require attention; saved
+// state is intentionally quiet so dense matrices don't collect status text.
+// Mirrors the notes editor's save timing: debounce while typing, flush on
+// blur, and flush any pending edit with `keepalive` on unmount so navigating
+// away mid-edit never loses a save.
 // ---------------------------------------------------------------------------
 
 const SAVE_DEBOUNCE_MS = 800;
@@ -1707,6 +1754,7 @@ function EditableValueCell({
   period,
   scope,
   highlight = false,
+  compact = false,
 }: {
   uuid: string;
   value: number | null;
@@ -1715,6 +1763,7 @@ function EditableValueCell({
   period?: Period;
   scope: "Company" | "Group";
   highlight?: boolean;
+  compact?: boolean;
 }) {
   const [draft, setDraft] = useState(value == null ? "" : String(value));
   const [focused, setFocused] = useState(false);
@@ -1785,8 +1834,6 @@ function EditableValueCell({
   const badge =
     status === "saving"
       ? "Saving…"
-      : status === "saved"
-      ? "Saved"
       : status === "error"
       ? "Save failed"
       : "";
@@ -1800,8 +1847,17 @@ function EditableValueCell({
   const highlightEmpty = highlight && draft.trim() === "";
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: pwc.space.sm }}>
-      {badge && (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: compact ? "flex-end" : "center",
+        flexDirection: compact ? "column" : "row",
+        gap: compact ? 2 : pwc.space.sm,
+        width: compact ? "100%" : undefined,
+        maxWidth: "100%",
+      }}
+    >
+      {badge && !compact && (
         <span
           data-testid={statusTestId}
           style={{
@@ -1815,6 +1871,7 @@ function EditableValueCell({
       <input
         data-testid={inputTestId}
         inputMode="decimal"
+        title={status === "saved" ? "Saved" : undefined}
         value={draft}
         onChange={(e) => {
           setDraft(e.target.value);
@@ -1826,7 +1883,8 @@ function EditableValueCell({
           flush(e.target.value);
         }}
         style={{
-          width: 148,
+          width: compact ? "100%" : 148,
+          minWidth: 0,
           textAlign: "right",
           padding: `${pwc.space.sm}px ${pwc.space.md}px`,
           border: `1px solid ${
@@ -1842,6 +1900,18 @@ function EditableValueCell({
           background: highlightEmpty ? pwc.orange50 : pwc.white,
         }}
       />
+      {badge && compact && (
+        <span
+          data-testid={statusTestId}
+          style={{
+            fontSize: 11,
+            lineHeight: 1,
+            color: status === "error" ? pwc.error : pwc.grey500,
+          }}
+        >
+          {badge}
+        </span>
+      )}
     </span>
   );
 }
@@ -2230,7 +2300,7 @@ const styles = {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "flex-end",
-    width: 148,
+    width: "100%",
     minHeight: 32,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     border: `1px solid ${pwc.grey200}`,
@@ -2255,5 +2325,48 @@ const styles = {
   matrixShell: {
     ...ui.card,
     overflowX: "auto",
+  } as React.CSSProperties,
+  matrixHeaderMovement: {
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    display: "flex",
+    alignItems: "center",
+    position: "sticky" as const,
+    left: 0,
+    zIndex: 3,
+    background: pwc.grey100,
+    borderRight: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  matrixComponentHeader: {
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    textAlign: "center" as const,
+    lineHeight: 1.25,
+    whiteSpace: "normal" as const,
+    overflowWrap: "anywhere" as const,
+    borderLeft: `1px solid ${pwc.grey200}`,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    minHeight: 42,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  } as React.CSSProperties,
+  matrixPeriodHeader: {
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    textAlign: "right" as const,
+    color: pwc.grey500,
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: 600,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0,
+    borderLeft: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  matrixMovementCell: {
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    position: "sticky" as const,
+    left: 0,
+    zIndex: 2,
+    background: pwc.white,
+    borderRight: `1px solid ${pwc.grey100}`,
+    lineHeight: 1.35,
   } as React.CSSProperties,
 };

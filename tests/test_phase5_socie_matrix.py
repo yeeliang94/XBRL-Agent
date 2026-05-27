@@ -84,6 +84,27 @@ def test_import_populates_matrix_col(tmp_path: Path) -> None:
     assert "B" in cols and "X" in cols and len(cols) == 23
 
 
+def test_import_populates_matrix_col_label(tmp_path: Path) -> None:
+    db = tmp_path / "x.db"
+    init_db(db)
+    tid = _import(db, SOCIE["mfrs_company"], tmp_path)
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = dict(conn.execute(
+            "SELECT matrix_col, matrix_col_label FROM concept_nodes "
+            "WHERE template_id = ? AND render_row = 11 "
+            "AND matrix_col IN ('B', 'C', 'X')",
+            (tid,),
+        ).fetchall())
+    finally:
+        conn.close()
+    assert rows == {
+        "B": "Issued capital",
+        "C": "Retained earnings",
+        "X": "Total",
+    }
+
+
 def test_import_writes_matrix_targets(tmp_path: Path) -> None:
     db = tmp_path / "x.db"
     init_db(db)
