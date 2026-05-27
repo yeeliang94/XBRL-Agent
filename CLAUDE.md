@@ -238,8 +238,11 @@ nav, and **collides by role with the Notes-12 `NotesSubTabBar`** (also
 `role="tab"`). Tests querying tabs must scope with `within(...)` by the
 tablist's `aria-label` (`"Run detail sections"` vs `"Sheet-12 sub-agents"`),
 never a bare `getAllByRole("tab")`. "Review values" switches to the Values tab
-in-place — do **not** revert it to an `<a href="/concepts/{id}">` page jump
-(that was the disjointed-nav bug). Tab content is lazy: heavy sub-trees
+in-place — do **not** revert it to an `<a href>` page jump (that was the
+disjointed-nav bug). `/concepts/{id}` is now an **alias**: App routes it to the
+unified run page with `initialRunTab="values"` (threaded App → HistoryPage →
+RunDetailPage → RunDetailView); the bare Template top-nav (no run id) still
+renders the standalone `ConceptsPage`. Tab content is lazy: heavy sub-trees
 (NotesReviewTab editor, ConceptsPage workspace, PdfSourcePane) mount only when
 their tab is active.
 

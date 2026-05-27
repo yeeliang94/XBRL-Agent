@@ -44,6 +44,9 @@ export interface RunDetailViewProps {
    *  / Results gating (peer-review F6). Defaults to false: hidden unless the
    *  parent explicitly enables it. */
   canonicalEnabled?: boolean;
+  /** Which tab to open on first render. Used by the `/concepts/{id}` alias
+   *  to land directly on the Values tab. Defaults to "overview". */
+  initialTab?: RunTabKey;
 }
 
 /** Render a status badge from a precomputed display. Caller picks
@@ -275,15 +278,17 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
 }
 
 // Tab identity for the run-detail surface. Values is gated on canonical mode.
-type RunTabKey = "overview" | "agents" | "notes" | "checks" | "telemetry" | "values";
+export type RunTabKey = "overview" | "agents" | "notes" | "checks" | "telemetry" | "values";
 
 export function RunDetailView({
   detail, onDownload, onDelete, onRegenerateNotes, canonicalEnabled = false,
+  initialTab = "overview",
 }: RunDetailViewProps) {
   // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
   // PDF panes) only mounts when its tab is active, so opening a run doesn't
   // spin up a dozen TipTap editors or fetch concept trees up front.
-  const [tab, setTab] = useState<RunTabKey>("overview");
+  // `initialTab` lets the /concepts/{id} alias open straight on Values.
+  const [tab, setTab] = useState<RunTabKey>(initialTab);
 
   // Step 8/12 — clicking a failed cross-check drives the source-PDF pane to
   // the cited page(s) of the cell it targets. We resolve (target_sheet,
