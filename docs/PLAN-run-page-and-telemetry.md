@@ -14,20 +14,23 @@
 > - 🟩 **Phase 4** — Telemetry tab (`AgentTelemetryPanel`): per-agent per-turn
 >   metrics table + on-demand verbatim trace viewer + Overview metric strip.
 > - 🟩 **Phase 5** — Values tab embeds `ConceptsPage`; Cross-checks is its own tab.
-> - 🟨 **Phase 3** — Overview metric strip done; deeper agent-card restyle (cost
->   + duration on the card face) still TODO.
-> - 🟥 **Phase 1 Step 2 (routing)** — deferred: `/concepts/{id}` is still a
->   separate App-level view + TopNav link. Folding it into a `/history/{id}`
->   tab-deep-link touches `App.tsx`, which carries the in-flight homepage
->   redesign — left for a coordinated pass.
-> - 🟥 **Phase 6** — a11y roles added (tablist/tab/tabpanel); keyboard arrow-nav,
->   CLAUDE.md run-page invariant, and memory note still TODO.
-> - **Verification:** `tsc --noEmit` clean; **605/605 frontend tests pass**
->   (RunDetailView pinning tests updated for the tabbed DOM). **Not yet
+> - 🟩 **Phase 3** — Overview metric strip + agent-card face now show cost,
+>   duration, and turn/tool counts.
+> - 🟩 **Phase 6** — a11y roles (tablist/tab/tabpanel) + roving-tabindex
+>   keyboard arrow-nav; CLAUDE.md gotcha #6 (per-turn deltas / hybrid trace)
+>   and gotcha #7 (tabbed run page + role=tab scoping) updated.
+> - 🟥 **Phase 1 Step 2 (routing) — DEFERRED:** `/concepts/{id}` is still a
+>   separate App-level view + TopNav link. The core nav fix (Review-values as
+>   an in-place tab) is done; fully folding the `/concepts` *route* into a
+>   `/history/{id}` tab-deep-link needs an `initialTab` prop threaded through
+>   App→HistoryPage→RunDetailPage and a redirect — lower value now, left as a
+>   follow-up.
+> - **Verification:** `tsc --noEmit` clean; **608/608 frontend tests pass**
+>   (incl. new telemetry-tab, metric-strip, and keyboard-nav tests). **Not yet
 >   verified in a live browser** — no running app/LLM in this environment.
-> - **Commit note:** the frontend run-page work is entangled in the working
->   tree with the uncommitted homepage redesign (shared `App.tsx`, `api.ts`),
->   so it is **not yet committed** — needs a coordinated commit with that work.
+> - **Commits:** `1acbe97` (backend telemetry), `1758a09` (tabbed run page +
+>   telemetry tab + bundled homepage redesign); Phase 3/6 polish committed
+>   after.
 
 ## Summary
 
