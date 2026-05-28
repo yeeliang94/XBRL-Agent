@@ -659,6 +659,8 @@ def _collect_unfilled_mandatory(
     wb: openpyxl.Workbook,
     ws,
     filing_level: str,
+    statement_name: str = "",
+    filing_standard: str = "mfrs",
 ) -> list[str]:
     """Return mandatory (`*`-prefixed) row labels whose CY cells are blank.
 
@@ -669,9 +671,26 @@ def _collect_unfilled_mandatory(
     Formulas that resolve to a real number — including 0 from a genuine
     sum — count as filled, so agents aren't nagged into fabricating a
     non-zero value for a legitimately zero line item.
+
+    Peer-review (Edge AFS, 2026-05-28): MFRS SOCIE is a 24-column matrix.
+    Valid activity can sit in any of cols C (retained earnings), G (FCTR),
+    V (head office account), X (total) etc. while col B is legitimately
+    blank — the old col-B/D scan systematically false-positived sparse
+    SOCIE matrices and blocked save_result on balanced statements. For
+    MFRS SOCIE the scan widens to cols B..X (2..24); MPERS SOCIE / SoRE
+    is a flat two-column layout and keeps the original behaviour.
     """
     unfilled: list[str] = []
-    cy_cols = [c for c, _ in _cy_columns(filing_level)]
+    is_mfrs_socie_matrix = (
+        statement_name == "SOCIE" and filing_standard == "mfrs"
+    )
+    if is_mfrs_socie_matrix:
+        # Matrix layout: B..X. Any component column with a value means the
+        # row was entered — block boundaries don't matter because each
+        # mandatory row only lives in one block.
+        cy_cols = list(range(2, 25))
+    else:
+        cy_cols = [c for c, _ in _cy_columns(filing_level)]
     for row in range(1, ws.max_row + 1):
         raw = ws.cell(row=row, column=1).value
         if raw is None:
@@ -679,10 +698,31 @@ def _collect_unfilled_mandatory(
         label = str(raw).strip()
         if not label.startswith("*"):
             continue
-        # Treat a row as filled if ANY CY column carries a non-empty value
-        # (literal or formula-resolved). Note: for group, we require BOTH
-        # Group CY and Company CY to be populated — a group filing with a
-        # blank Company column is exactly the gap we want to surface.
+        # Two different semantics live here:
+        #
+        # Default (SOFP / SOPL / SOCI / SOCF, plus MPERS SOCIE/SoRE):
+        # ALL CY columns must be populated. A blank in any cy_col means
+        # the row is unfilled. For group filings this enforces that both
+        # Group CY and Company CY columns carry a value — a blank in
+        # either is exactly the gap we want to surface.
+        #
+        # MFRS SOCIE matrix: the row is filled if ANY column in B..X has
+        # a value, because the row's data can sit in any of the 24
+        # component columns. Inverted predicate.
+        if is_mfrs_socie_matrix:
+            row_filled = False
+            for col in cy_cols:
+                val = ws.cell(row=row, column=col).value
+                if val is None:
+                    continue
+                if isinstance(val, str) and not val.strip():
+                    continue
+                # Any non-blank — literal or formula — counts as filled.
+                row_filled = True
+                break
+            if not row_filled:
+                unfilled.append(label)
+            continue
         row_unfilled = False
         for col in cy_cols:
             cell = ws.cell(row=row, column=col)
@@ -872,7 +912,11 @@ def _verify_socie(
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
 
-    mandatory_unfilled = _collect_unfilled_mandatory(wb, ws, filing_level)
+    mandatory_unfilled = _collect_unfilled_mandatory(
+        wb, ws, filing_level,
+        statement_name="SOCIE",
+        filing_standard=filing_standard,
+    )
 
     wb.close()
 

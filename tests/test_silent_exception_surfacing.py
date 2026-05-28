@@ -48,6 +48,17 @@ def session_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key-12345")
     monkeypatch.setenv("TEST_MODEL", "test-model-default")
     monkeypatch.setenv("LLM_PROXY_URL", "")
+    # These tests pin the LEGACY (non-canonical) correction/cross-check
+    # path: ``_run_correction_pass`` + post-correction ``run_cross_checks``
+    # re-run. When the project .env sets ``XBRL_CANONICAL_MODE=1`` the
+    # production code routes correction through
+    # ``_run_canonical_correction_pass`` and the patched legacy stub
+    # never runs — symptom is the stage trace jumping
+    # ``correcting → done`` without ever firing the post-correction
+    # cross-check pass (and therefore never raising the test's
+    # injected RuntimeError). Force canonical mode off so the legacy
+    # path is exercised.
+    monkeypatch.setenv("XBRL_CANONICAL_MODE", "0")
 
     return TestClient(server.app), session_id, out
 

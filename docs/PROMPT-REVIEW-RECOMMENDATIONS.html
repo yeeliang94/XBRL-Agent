@@ -249,6 +249,7 @@
     <a href="#summary">Summary</a>
     <a href="#current-state">Current State</a>
     <a href="#priority-recommendations">Priority Recommendations</a>
+    <a href="#additional-improvements">Additional Improvements</a>
     <a href="#agent-by-agent">Agent-by-Agent Review</a>
     <a href="#suggested-wording">Suggested Wording</a>
     <a href="#consider-later">Consider Later</a>
@@ -330,6 +331,18 @@
           <td>Make scout emit or preserve more confidence and note-reference evidence.</td>
           <td>Helps downstream agents know when page hints are weak and need expansion.</td>
           <td><code>scout/agent.py</code> prompt, possibly Infopack schema later</td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Tighten Group vs Company column discipline.</td>
+          <td>Reduces the risk of copying consolidated figures into company columns.</td>
+          <td><code>prompts/_group_overlay.md</code>, <code>prompts/_group_socie_overlay.md</code></td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Define evidence quality, zero/blank handling, and prompt-test coverage.</td>
+          <td>Turns "has evidence" into reviewable evidence and prevents silent prompt regressions.</td>
+          <td>Base prompts, notes prompts, prompt-contract tests</td>
         </tr>
       </tbody>
     </table>
@@ -458,6 +471,139 @@
       <li>SOCIE: bonus issue, rights issue, share premium transition, treasury shares, non-distributable reserves, revaluation reserve, foreign currency translation reserve.</li>
       <li>Notes: distinguish policies from disclosure notes, and distinguish related-party transactions from balances due from or due to related parties on SOFP.</li>
     </ul>
+  </section>
+
+  <section id="additional-improvements">
+    <h2>Additional Improvements</h2>
+    <p>
+      These items go beyond the initially reported issues, but they follow
+      directly from the current architecture and prompt/test surfaces. Most
+      are still conservative prompt or test changes; a few are better treated
+      as later instrumentation work.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Priority</th>
+          <th>Improvement</th>
+          <th>Recommendation</th>
+          <th>Where It Fits</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Scout confidence and completeness</td>
+          <td>
+            Make scout explicitly compare visible face-statement note
+            references against discovered note pages. If note refs are seen
+            but note pages are incomplete, the infopack or prompt output should
+            mark the hints as weak so extraction agents expand their search.
+          </td>
+          <td><code>scout/agent.py</code>; possible future Infopack schema</td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Prompt-test coverage</td>
+          <td>
+            Add prompt-contract tests for the new behavior: evidence ledger,
+            catch-all preconditions, note-boundary review, scout note-ref
+            completeness, Group/Company column discipline, and MPERS/MFRS
+            prompt separation.
+          </td>
+          <td><code>tests/test_prompts.py</code>, <code>tests/test_notes_prompt_phase1.py</code>, new focused tests</td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Group vs Company extraction risk</td>
+          <td>
+            Strengthen group overlays so agents must identify whether each
+            source column is Group, Company, or consolidated-only before
+            writing. If only Group figures are disclosed, Company columns
+            should stay blank rather than being copied across.
+          </td>
+          <td><code>prompts/_group_overlay.md</code>, <code>prompts/_group_socie_overlay.md</code></td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>MPERS vs MFRS prompt drift</td>
+          <td>
+            Keep reminding agents that the live template label catalog wins
+            over training memory. MPERS has fewer disclosure rows, so agents
+            should not invent MFRS concepts when an MPERS row is absent.
+          </td>
+          <td>Notes prompt renderer, <code>prompts/notes_listofnotes.md</code>, MPERS overlays</td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>SOCF and SOCIE recovery playbooks</td>
+          <td>
+            Add targeted mismatch recovery checklists. SOCF should re-check
+            opening/closing cash, overdrafts, pledged deposits, fixed-deposit
+            maturity, and lease or hire-purchase principal vs interest. SOCIE
+            should re-check dividends, reserve movements, treasury shares,
+            NCI, bonus issues, and rights issues before using other reserves.
+          </td>
+          <td><code>prompts/socf.md</code>, <code>prompts/socie.md</code>, <code>prompts/socie_mpers.md</code></td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Evidence quality</td>
+          <td>
+            Define good evidence, not just evidence presence: cite face page
+            plus note page when both were used, include scale/unit where
+            relevant, name the PDF label that justifies the mapping, and avoid
+            vague citations such as "from financial statements".
+          </td>
+          <td><code>prompts/_base.md</code>, <code>prompts/_notes_base.md</code></td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">P1</span></td>
+          <td>Zero, blank, and not applicable</td>
+          <td>
+            Make the prompts distinguish blank from zero. Blank means absent,
+            not disclosed, or no activity. Zero should be written only when the
+            PDF explicitly discloses zero. "N/A" should not be used as padding.
+          </td>
+          <td>Shared face-statement prompt and notes base prompt</td>
+        </tr>
+        <tr>
+          <td><span class="priority p2">P2</span></td>
+          <td>Trace-based review metrics</td>
+          <td>
+            Use existing traces to measure whether prompt changes actually
+            make agents more careful: pages viewed before first write, note
+            pages viewed per note-referenced face line, writer rejections,
+            fuzzy matches, catch-all usage, save refusals, and verification
+            retries.
+          </td>
+          <td>Run traces, UI/history analytics, later tooling</td>
+        </tr>
+        <tr>
+          <td><span class="priority p2">P2</span></td>
+          <td>Prompt length and instruction priority</td>
+          <td>
+            Keep new wording short and place high-priority behavioral rules
+            where models are most likely to follow them: near the top of the
+            shared base prompt, inside statement-specific strategy sections,
+            and near the tail of notes prompts.
+          </td>
+          <td>All prompt files</td>
+        </tr>
+        <tr>
+          <td><span class="priority p2">P2</span></td>
+          <td>Benchmark filing set</td>
+          <td>
+            Evaluate prompt changes on a small set of representative filings:
+            simple MFRS company, MFRS group, MPERS company, long-notes filing,
+            and at least one known problem filing where catch-all or note
+            shortcutting occurred.
+          </td>
+          <td>Manual benchmark pack or future LLM regression harness</td>
+        </tr>
+      </tbody>
+    </table>
   </section>
 
   <section id="agent-by-agent">
@@ -693,6 +839,16 @@ Before routing a note to catch-all:
           <td>Measures whether prompt changes improve accuracy on FINCO and problem filings.</td>
           <td>LLM tests can be slower, cost money, and require careful reproducibility expectations.</td>
         </tr>
+        <tr>
+          <td>Trace-quality dashboard</td>
+          <td>Shows whether agents are reviewing notes before writing, retrying correctly, and avoiding catch-all shortcuts.</td>
+          <td>Requires trace aggregation and UI/history work; best after prompt-only changes land.</td>
+        </tr>
+        <tr>
+          <td>Benchmark filing pack</td>
+          <td>Creates a repeatable accuracy yardstick across MFRS, MPERS, Company, Group, and long-notes filings.</td>
+          <td>Needs curated PDFs and expected-observation notes; avoid making it brittle on exact LLM wording.</td>
+        </tr>
       </tbody>
     </table>
   </section>
@@ -729,15 +885,30 @@ Before routing a note to catch-all:
           <td>Extend <code>tests/test_scout_agent.py</code> or add a prompt-sentinel test for note-ref completeness.</td>
         </tr>
         <tr>
-          <td>5. Run focused tests.</td>
+          <td>5. Strengthen Group/Company, evidence-quality, and zero-vs-blank prompt rules.</td>
+          <td><code>prompts/_group_overlay.md</code>, <code>prompts/_group_socie_overlay.md</code>, <code>prompts/_base.md</code>, <code>prompts/_notes_base.md</code></td>
+          <td>Add prompt tests for Group-only filings, evidence-quality language, and zero/blank handling.</td>
+        </tr>
+        <tr>
+          <td>6. Pin MPERS/MFRS drift protections and SOCF/SOCIE recovery guidance.</td>
+          <td>Notes prompt renderer, <code>prompts/notes_listofnotes.md</code>, <code>prompts/socf.md</code>, <code>prompts/socie*.md</code></td>
+          <td>Extend MPERS prompt tests and statement-prompt tests with targeted sentinel phrases.</td>
+        </tr>
+        <tr>
+          <td>7. Run focused tests.</td>
           <td>Prompt and scout tests only at first</td>
           <td><code>python -m pytest tests/test_prompt_residual_plug_rule.py tests/test_notes_prompt_phase1.py tests/test_prompts.py tests/test_scout_agent.py -v</code></td>
+        </tr>
+        <tr>
+          <td>8. Benchmark on representative filings.</td>
+          <td>Selected PDFs and run traces</td>
+          <td>Manual review first; later automate trace metrics such as pages viewed before first write and catch-all usage.</td>
         </tr>
       </tbody>
     </table>
 
     <div class="note">
-      <p><strong>Recommended order:</strong> implement the prompt-only P0/P1 changes first, with prompt-contract tests. Defer schema/tool changes until after one or two benchmark filings show which remaining failures are not prompt-solvable.</p>
+      <p><strong>Recommended order:</strong> implement the prompt-only P0/P1 changes first, with prompt-contract tests. Then run a small benchmark filing set and inspect traces before adding schema, dashboard, or workflow changes.</p>
     </div>
   </section>
 </main>
