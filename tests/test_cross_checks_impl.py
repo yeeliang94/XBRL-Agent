@@ -392,6 +392,39 @@ class TestSOCFToSOFPCash:
         )
         assert result.status == "failed"
 
+    def test_zero_sofp_cash_surfaces_actionable_hint(self, tmp_dir):
+        """Peer-review (Edge AFS, 2026-05-28): when SOFP cash is 0 and SOCF
+        closing cash is non-zero, the failure message must carry an
+        actionable lineage hint so the correction agent doesn't rework
+        SOCF when the real fix is filling SOFP cash from the face."""
+        socf_path = os.path.join(tmp_dir, "socf.xlsx")
+        sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
+
+        _make_workbook({
+            "SOCF-Indirect": [
+                ["*Cash and cash equivalents at end of period", 21352.0],
+            ],
+        }, socf_path)
+
+        _make_workbook({
+            "SOFP-CuNonCu": [
+                ["*Cash and cash equivalents", 0.0],
+            ],
+        }, sofp_path)
+
+        result = SOCFToSOFPCashCheck().run(
+            {StatementType.SOCF: socf_path, StatementType.SOFP: sofp_path},
+            tolerance=1.0,
+        )
+        assert result.status == "failed"
+        # The actionable hint must travel in the message — without it the
+        # correction agent has no signal about which side to fix.
+        assert "SOFP cash is 0" in result.message
+        assert "SOCF closing cash is non-zero" in result.message
+        # And the suggested action (fill SOFP cash) must be present so the
+        # correction prompt has a directive hook.
+        assert "Fill SOFP cash" in result.message
+
     def test_matching_order_of_liquidity_variant(self, tmp_dir):
         """OrdOfLiq SOFP labels the cash row 'Total Cash and bank balances',
         not 'Cash and cash equivalents'. The check must still pass."""

@@ -766,6 +766,43 @@ async def _run_single_agent(
                 total_cost=final_cost,
             ))
 
+        # Peer-review (Edge AFS, 2026-05-28): a workbook on disk is not
+        # the same as a completed extraction. If every save_result attempt
+        # was refused by the gate (mandatory rows still blank, unbalanced
+        # totals) the agent may write a workbook and then end with prose.
+        # The merger will still consume the workbook (it reads from disk
+        # by filename), but the run_agents row must reflect "workbook
+        # written but extraction not finalised" so the run lands as
+        # completed_with_errors and the trace surfaces last_save_error.
+        if not deps.result_saved:
+            err_msg = (
+                f"{statement_type.value}: workbook written but save_result "
+                "never succeeded — extraction did not finalise."
+            )
+            if deps.last_save_error:
+                err_msg += f" Last refusal: {deps.last_save_error}"
+            if deps.last_fill_errors:
+                err_msg += (
+                    f" Unresolved fill errors: "
+                    f"{'; '.join(deps.last_fill_errors)}"
+                )
+            logger.warning(err_msg)
+            await _emit("error", {"message": err_msg, "type": "save_result_not_called"})
+            await _emit("complete", {
+                "success": False,
+                "error": err_msg,
+                "workbook_path": deps.filled_path,
+            })
+            return _finalize(AgentResult(
+                statement_type=statement_type,
+                variant=variant,
+                status="failed",
+                workbook_path=deps.filled_path,
+                error=err_msg,
+                total_tokens=final_tokens,
+                total_cost=final_cost,
+            ))
+
         await _emit("complete", {
             "success": True,
             "workbook_path": deps.filled_path,

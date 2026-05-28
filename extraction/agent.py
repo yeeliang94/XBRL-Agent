@@ -84,6 +84,20 @@ class ExtractionDeps:
         # a "forced" save even if verify failed — used only by the edge
         # case where the PDF genuinely cannot be balanced (gotcha #6).
         self.save_attempts = 0
+        # Peer-review (Edge AFS, 2026-05-28): coordinator success contract.
+        # `filled_path` alone is too weak — an agent can write a workbook,
+        # have every save_result attempt refused by the gate, and end the
+        # run with prose. `result_saved` flips to True only inside a
+        # successful save_result path, after `{stmt}_result.json` lands on
+        # disk. `last_save_error` carries the most recent gate-refusal
+        # message so the coordinator can attribute the failure. The
+        # `last_fill_errors` list accumulates unresolved blocking errors
+        # from fill_workbook so a partial success doesn't ride through
+        # silently.
+        self.result_saved: bool = False
+        self.result_json_path: Optional[str] = None
+        self.last_save_error: Optional[str] = None
+        self.last_fill_errors: list[str] = []
 
 
 def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
@@ -515,6 +529,14 @@ def create_extraction_agent(
             # Phase 1.3: any write invalidates the previous verification.
             # Forces the agent to call verify_totals again before save.
             ctx.deps.last_verify_result = None
+            # Peer-review (Edge AFS): a fresh write also invalidates the
+            # previous save — the JSON on disk no longer matches the
+            # workbook content. The agent must call save_result again.
+            ctx.deps.result_saved = False
+            # Track unresolved blocking errors from this fill so the
+            # coordinator can see them even if a later save_result lands.
+            # Empty list when the fill is clean.
+            ctx.deps.last_fill_errors = list(result.errors)
             projection_warning = _project_facts_if_canonical(ctx.deps, result)
 
         if result.success:
@@ -572,6 +594,7 @@ def create_extraction_agent(
         ctx.deps.save_attempts += 1
         gate_error = _check_save_gate(ctx.deps)
         if gate_error is not None:
+            ctx.deps.last_save_error = gate_error
             return gate_error
         fields = json.loads(fields_json)
         stmt_prefix = ctx.deps.statement_type.value
@@ -581,6 +604,14 @@ def create_extraction_agent(
         report = ctx.deps.token_report.format_table()
         report_path = Path(ctx.deps.output_dir) / f"{stmt_prefix}_cost_report.txt"
         report_path.write_text(report, encoding="utf-8")
+
+        # Peer-review (Edge AFS): record that save actually succeeded so the
+        # coordinator can distinguish "workbook exists" from "extraction
+        # declared complete". `last_save_error` is cleared because we are no
+        # longer in a refused state.
+        ctx.deps.result_saved = True
+        ctx.deps.result_json_path = str(json_path)
+        ctx.deps.last_save_error = None
 
         # Phase 4 (token-cost): write the cost-report body to file only —
         # the agent does not act on it, so don't re-bill it in the tool return.

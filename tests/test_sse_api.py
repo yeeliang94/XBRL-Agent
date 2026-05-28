@@ -4,7 +4,7 @@ from unittest.mock import patch, AsyncMock
 
 import server
 from fastapi.testclient import TestClient
-from server import active_runs, app
+from server import app
 from coordinator import AgentResult, CoordinatorResult
 from cross_checks.framework import CrossCheckResult
 from statement_types import StatementType
@@ -108,7 +108,15 @@ def test_sse_rejects_concurrent_run(tmp_path, monkeypatch):
     (session_dir / "uploaded.pdf").write_bytes(b"%PDF-1.4 fake")
     monkeypatch.setattr(server, "OUTPUT_DIR", output_dir)
 
-    active_runs.add("dup-session")
+    # Re-read `active_runs` from the module each time. Other tests
+    # (e.g. test_recheck_endpoint, test_phase6_mpers) call
+    # ``importlib.reload(server)`` which swaps ``server.active_runs``
+    # for a fresh empty set. If we kept a module-level
+    # ``from server import active_runs`` import, that name would still
+    # point at the *pre-reload* set object — our ``add()`` would land
+    # there, but the endpoint reads the new ``server.active_runs`` and
+    # returns 200 instead of the expected 409.
+    server.active_runs.add("dup-session")
 
     run_config = {
         "statements": ["SOFP"],
@@ -119,4 +127,4 @@ def test_sse_rejects_concurrent_run(tmp_path, monkeypatch):
     }
     resp = client.post("/api/run/dup-session", json=run_config)
     assert resp.status_code == 409
-    active_runs.discard("dup-session")
+    server.active_runs.discard("dup-session")

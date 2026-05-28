@@ -57,6 +57,17 @@ class SOCFToSOFPCashCheck:
         # Reconciliation check — see cross_checks.util.filing_level_prefix.
         primary_label = filing_level_prefix(filing_level, with_period=False)
         parts = [f"{primary_label}: SOCF ({socf_cash}) vs SOFP ({sofp_cash}), diff={diff:.2f}"]
+        # Peer-review (Edge AFS, 2026-05-28): when one side is 0 and the
+        # other is non-trivial, the failure is almost always a missing
+        # SOFP fill (face line with no note) rather than a balance mismatch.
+        # Surface that lineage so the correction agent treats it as a
+        # targeted SOFP-cash fill, not a SOCF rework.
+        if not group_passed and sofp_cash == 0 and socf_cash != 0:
+            parts.append(
+                "SOFP cash is 0 but SOCF closing cash is non-zero — the "
+                "SOFP face likely has a cash line with no separate note. "
+                "Fill SOFP cash from the face statement; do not rework SOCF."
+            )
 
         # Group filings must carry Company totals — see sofp_balance.py for
         # the peer-review background on the old silent-pass default.
