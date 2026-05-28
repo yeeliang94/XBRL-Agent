@@ -405,7 +405,7 @@ export default function App() {
       config = {
         statements: [role as RunConfigPayload["statements"][0]],
         variants: prev?.variants[role] ? { [role]: prev.variants[role] } : {},
-        models: prev?.models[role] ? { [role]: prev.models[role] } : {},
+        models: prev?.models?.[role] ? { [role]: prev.models[role] } : {},
         infopack: prev?.infopack || null,
         use_scout: false,
         filing_level: prev?.filing_level || "company",
