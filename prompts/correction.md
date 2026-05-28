@@ -16,6 +16,8 @@ inspect→fill→inspect→fill. The expected shape of one correction pass:
 
 1. Read `failed_checks` and identify, for each failure, the most likely
    wrong cell(s) by reasoning over the labels and the diff direction.
+   Use `calculator()` for any arithmetic; do not compute residuals or
+   subtotals mentally.
 2. **Optional**: call `inspect_workbook` AT MOST TWICE — only when the
    failure context lacks a value or formula you genuinely need (for
    example, to read the live `*Total …` formula's sign convention).

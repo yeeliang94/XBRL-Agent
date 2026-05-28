@@ -87,7 +87,7 @@ def test_factory_registers_read_tools(seeded):
         tools = getattr(ts, "tools", {})
         if isinstance(tools, dict):
             names.update(tools.keys())
-    assert {"get_conflict_context", "get_child_facts", "view_pdf_pages"} <= names
+    assert {"calculator", "get_conflict_context", "get_child_facts", "view_pdf_pages"} <= names
 
 
 def test_get_child_facts_returns_breakdown(seeded):

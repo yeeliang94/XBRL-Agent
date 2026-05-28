@@ -9,6 +9,7 @@
 /** Friendly labels for every extraction and scout tool. */
 export const TOOL_LABELS: Record<string, string> = {
   // Extraction agent tools
+  calculator: "Calculating",
   read_template: "Reading template",
   view_pdf_pages: "Checking PDF pages",
   fill_workbook: "Filling workbook",
@@ -124,6 +125,13 @@ export function argsPreview(toolName: string, args: Record<string, unknown>): st
     return "";
   }
 
+  if (toolName === "calculator") {
+    const expression = args.expression as string | undefined;
+    if (!expression) return "";
+    const MAX = 48;
+    return expression.length > MAX ? `${expression.slice(0, MAX)}...` : expression;
+  }
+
   if (toolName === "read_template") {
     const path = args.path as string | undefined;
     if (path) return path.split("/").pop() || path;
@@ -212,6 +220,17 @@ export function resultSummary(toolName: string, summary: string): ResultSummary 
     if (toolName === "save_infopack") {
       // Any non-empty summary means scout persisted its infopack successfully.
       return { text: "saved", tone: "success" };
+    }
+
+    if (toolName === "calculator") {
+      const parsed = JSON.parse(summary) as { result?: unknown; error?: unknown };
+      if (typeof parsed.result === "string") {
+        return { text: parsed.result, tone: "success" };
+      }
+      if (typeof parsed.error === "string") {
+        return { text: "error", tone: "warn" };
+      }
+      return null;
     }
 
     return null;

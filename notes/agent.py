@@ -34,6 +34,7 @@ from notes_types import (
 from scout.notes_discoverer import NoteInventoryEntry
 from token_tracker import TokenReport
 from tools import page_cache
+from tools.calculator import calculator_result_json as _calculator_impl
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from tools.template_reader import TemplateField, read_template as _read_template_impl
 from extraction.history_processors import strip_stale_images
@@ -1147,6 +1148,18 @@ def create_notes_agent(
     )
 
     # --- Tools ---
+
+    @agent.tool
+    def calculator(ctx: RunContext[NotesDeps], expression: str) -> str:
+        """Evaluate arithmetic exactly.
+
+        Use this when building numeric schedules (movement tables,
+        opening/additions/closing roll-forwards, maturity analyses) so
+        column totals tie. Supports numbers, parentheses, unary signs,
+        and + - * /. Use explicit negatives such as -123; accounting
+        parentheses are treated as ordinary grouping.
+        """
+        return _calculator_impl(expression)
 
     @agent.tool
     async def read_template(ctx: RunContext[NotesDeps]) -> str:

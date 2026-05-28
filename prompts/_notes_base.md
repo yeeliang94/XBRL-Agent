@@ -121,6 +121,9 @@ downstream reader loses the numbers. When the note has BOTH policy prose
 and a schedule (common for Leases, Receivables, Property plant and
 equipment), include both: prose first (in `<p>` blocks), then the table.
 
+Use `calculator()` for any column-total or roll-forward arithmetic in
+these schedules. Do not compute subtotals or reconciliations mentally.
+
 === CELL FORMAT ===
 
 **Output is HTML.** The post-run editor renders your content as rich

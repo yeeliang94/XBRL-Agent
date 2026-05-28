@@ -52,6 +52,7 @@ class TestCorrectionAgentFactory:
         tool_names = _agent_tool_names(agent)
         assert "view_pdf_pages" in tool_names
         assert "inspect_workbook" in tool_names
+        assert "calculator" in tool_names
         assert "fill_workbook" in tool_names
         assert "verify_totals" in tool_names
         assert "run_cross_checks" in tool_names

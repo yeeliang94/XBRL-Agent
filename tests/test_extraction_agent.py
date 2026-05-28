@@ -62,6 +62,16 @@ class TestCreateExtractionAgent:
         agent, deps = self._make_agent(StatementType.SOPL, "Function")
         assert deps.statement_type.value in deps.output_dir or "SOPL" in deps.output_dir or deps.output_dir == "/tmp/output"
 
+    def test_registers_calculator_tool(self):
+        """Face agents can do exact arithmetic without relying on model math."""
+        agent, _deps = self._make_agent(StatementType.SOFP, "CuNonCu")
+        tool_names = set()
+        for ts in getattr(agent, "toolsets", []) or []:
+            tools = getattr(ts, "tools", {}) or {}
+            if isinstance(tools, dict):
+                tool_names.update(tools.keys())
+        assert "calculator" in tool_names
+
 
 # ---------------------------------------------------------------------------
 # Phase 1.2: mandatory_unfilled surfaces through verify_totals feedback

@@ -99,6 +99,7 @@ def test_create_notes_agent_returns_agent_and_deps(tmp_path: Path):
     assert "read_template" in tool_names
     assert "write_notes" in tool_names
     assert "save_result" in tool_names
+    assert "calculator" in tool_names
 
 
 def test_notes_deps_defaults_wrote_once_false(tmp_path: Path):

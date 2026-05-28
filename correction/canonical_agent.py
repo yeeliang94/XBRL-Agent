@@ -23,6 +23,8 @@ from typing import Any, Callable, Sequence
 # globals). pydantic_ai is a third-party dep — no import cycle.
 from pydantic_ai import Agent, RunContext
 
+from tools.calculator import calculator_result_json as _calculator_impl
+
 
 _PROMPT_PATH = (
     Path(__file__).resolve().parent.parent
@@ -273,6 +275,16 @@ def create_canonical_correction_agent(
         system_prompt=system_prompt,
         model_settings=ModelSettings(temperature=1.0),
     )
+
+    @agent.tool
+    def calculator(ctx: RunContext[CanonicalCorrectionDeps], expression: str) -> str:
+        """Evaluate arithmetic exactly before writing corrected facts.
+
+        Supports numbers, parentheses, unary signs, and + - * /. Use explicit
+        negatives such as -123; accounting parentheses are treated as ordinary
+        grouping.
+        """
+        return _calculator_impl(expression)
 
     @agent.tool
     def get_conflict_context(
