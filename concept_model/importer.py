@@ -80,6 +80,16 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
             return "sub-" in s or "analysis" in s
 
         seen: dict[str, dict[str, object]] = {}
+        # Any concept whose render_key isn't picked as the primary lands
+        # here as an alias. The motivating producer is the parser's
+        # cross-sheet linkage step: a face row inherits the sub-sheet
+        # concept's UUID but keeps its own render_key. Dedup picks the
+        # sub-sheet entry as primary (it owns the formula); the face
+        # entry's coords get preserved as an alias so the Review/Values
+        # page can mirror the workbook (one face row + one sub row,
+        # same concept) and so the edge-resolution coord map below can
+        # still translate face refs to the canonical UUID.
+        alias_records: list[tuple[str, str, int, str]] = []
         for c in concepts:
             uid = c["concept_uuid"]
             existing = seen.get(uid)
@@ -89,7 +99,19 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
             this_sheet = (c.get("render_key") or {}).get("sheet", "")
             prev_sheet = (existing.get("render_key") or {}).get("sheet", "")
             if _is_canonical_home(this_sheet) and not _is_canonical_home(prev_sheet):
+                # Promote sub-sheet entry to primary; demote the
+                # previous (face) entry to an alias.
+                demoted = existing
                 seen[uid] = c
+            else:
+                demoted = c
+            d_rk = (demoted.get("render_key") or {})
+            alias_records.append((
+                uid,
+                d_rk.get("sheet", ""),
+                int(d_rk.get("row", 0) or 0),
+                d_rk.get("col", "B"),
+            ))
 
         for c in seen.values():
             uid = c["concept_uuid"]
@@ -126,9 +148,49 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                 ),
             )
 
-        # 3. Edges — flush + reinsert is simpler than diffing.  Because
+        # 3a. Render aliases — flush + reinsert (same idempotency
+        # discipline as edges). Scope the DELETE to this template by
+        # joining through concept_nodes so a multi-template DB doesn't
+        # cross-pollute.
+        conn.execute(
+            "DELETE FROM concept_render_aliases WHERE concept_uuid IN ("
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?"
+            ")",
+            (template_id,),
+        )
+        for uid, a_sheet, a_row, a_col in alias_records:
+            conn.execute(
+                "INSERT OR IGNORE INTO concept_render_aliases("
+                "concept_uuid, alias_sheet, alias_row, alias_col) "
+                "VALUES (?, ?, ?, ?)",
+                (uid, a_sheet, a_row, a_col),
+            )
+
+        # 3b. Edges — flush + reinsert is simpler than diffing. Because
         # the importer is idempotent on the same JSON, the result is
         # the same as the previous run.
+        #
+        # Edge ``ref`` coords may point at a FACE-sheet row whose
+        # render_key was demoted to an alias above (the cross-sheet
+        # rollup case). The dedup makes that face coord invisible to a
+        # concept_nodes lookup, so the SQL fallback alone silently
+        # dropped every cross-sheet child edge — face computed totals
+        # then understated. Build a coord→uuid map from the FULL
+        # concepts list (which still carries each face entry with the
+        # shared canonical UUID) and check it first; the SQL fallback
+        # below stays as a safety net for any non-cross-sheet edges the
+        # JSON happens to omit from the in-memory map.
+        coord_to_uuid: dict[tuple[str, int, str], str] = {}
+        coord_to_uuid_no_col: dict[tuple[str, int], str] = {}
+        for c in concepts:
+            rk = c.get("render_key") or {}
+            c_sheet = rk.get("sheet", "")
+            c_row = int(rk.get("row", 0) or 0)
+            c_col = rk.get("col", "B")
+            c_uid = c["concept_uuid"]
+            coord_to_uuid[(c_sheet, c_row, c_col)] = c_uid
+            coord_to_uuid_no_col.setdefault((c_sheet, c_row), c_uid)
+
         conn.execute(
             "DELETE FROM concept_edges WHERE parent_uuid IN ("
             "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?"
@@ -140,33 +202,44 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
             for edge in c.get("edges", []) or []:
                 child_uuid = edge.get("child_uuid")
                 if child_uuid is None:
-                    # Phase-0 parser uses "ref" coordinates for the
-                    # majority of edges; we resolve them to UUIDs by
-                    # looking up (sheet, row, col) in concept_nodes.
                     ref = edge.get("ref") or {}
+                    r_sheet = ref.get("sheet", "")
+                    r_row = int(ref.get("row", 0) or 0)
+                    r_col = ref.get("col", "")
                     if is_matrix:
                         # Matrix cells share (sheet, row) across columns —
                         # disambiguate by the formula's column so a
                         # within-column SOCIE sum (=B6+B7) wires to the
                         # right component cell, not a sibling column.
-                        row = conn.execute(
-                            "SELECT concept_uuid FROM concept_nodes "
-                            "WHERE template_id = ? AND render_sheet = ? "
-                            "AND render_row = ? AND render_col = ?",
-                            (template_id, ref.get("sheet", ""),
-                             int(ref.get("row", 0) or 0), ref.get("col", "")),
-                        ).fetchone()
+                        child_uuid = coord_to_uuid.get((r_sheet, r_row, r_col))
+                        if child_uuid is None:
+                            row = conn.execute(
+                                "SELECT concept_uuid FROM concept_nodes "
+                                "WHERE template_id = ? AND render_sheet = ? "
+                                "AND render_row = ? AND render_col = ?",
+                                (template_id, r_sheet, r_row, r_col),
+                            ).fetchone()
+                            if row is not None:
+                                child_uuid = row[0]
                     else:
-                        row = conn.execute(
-                            "SELECT concept_uuid FROM concept_nodes "
-                            "WHERE template_id = ? AND render_sheet = ? "
-                            "AND render_row = ?",
-                            (template_id, ref.get("sheet", ""),
-                             int(ref.get("row", 0) or 0)),
-                        ).fetchone()
-                    if row is None:
+                        # Linear: try exact (sheet, row, col); fall back
+                        # to (sheet, row) since linear concepts anchor
+                        # at col B but a formula ref may carry whatever
+                        # column letter the cell happened to use.
+                        child_uuid = coord_to_uuid.get((r_sheet, r_row, r_col))
+                        if child_uuid is None:
+                            child_uuid = coord_to_uuid_no_col.get((r_sheet, r_row))
+                        if child_uuid is None:
+                            row = conn.execute(
+                                "SELECT concept_uuid FROM concept_nodes "
+                                "WHERE template_id = ? AND render_sheet = ? "
+                                "AND render_row = ?",
+                                (template_id, r_sheet, r_row),
+                            ).fetchone()
+                            if row is not None:
+                                child_uuid = row[0]
+                    if child_uuid is None:
                         continue
-                    child_uuid = row[0]
                 if not child_uuid or child_uuid == parent_uid:
                     continue
                 conn.execute(

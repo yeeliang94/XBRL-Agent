@@ -1008,4 +1008,73 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("value-input-abs-1")).toBeNull();
   });
 
+  test("alias view-rows render with (linked) marker and stay read-only", async () => {
+    // Cross-sheet rollup: a sub-sheet concept (e.g. *Total PPE) shares
+    // its concept_uuid with a face-sheet row. The backend emits one
+    // extra view-row per alias so the page mirrors the workbook.
+    const withAlias = {
+      run_id: 42,
+      concepts: [
+        // Primary sub-sheet row — owns the formula, carries the value.
+        {
+          concept_uuid: "ppe-1",
+          parent_uuid: null,
+          kind: "COMPUTED",
+          canonical_label: "*Total Property, plant and equipment",
+          display_label: null,
+          render_sheet: "SOFP-Sub-CuNonCu",
+          render_row: 39,
+          render_col: "B",
+          template_id: "mfrs-company-sofp-cunoncu-v1",
+          value: 5_000_000.0,
+          value_status: "observed",
+          children_status: "itemised",
+          source: "cascade",
+          evidence: null,
+          editable: false,
+          is_alias: false,
+        },
+        // Alias view — same concept_uuid, rendered at the face coord.
+        {
+          concept_uuid: "ppe-1",
+          parent_uuid: null,
+          kind: "COMPUTED",
+          canonical_label: "*Total Property, plant and equipment",
+          display_label: null,
+          render_sheet: "SOFP-CuNonCu",
+          render_row: 8,
+          render_col: "B",
+          template_id: "mfrs-company-sofp-cunoncu-v1",
+          value: 5_000_000.0,
+          value_status: "observed",
+          children_status: "itemised",
+          source: "cascade",
+          evidence: null,
+          editable: false,
+          is_alias: true,
+        },
+      ],
+    };
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return withAlias;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    // Both primary and alias view-rows share concept_uuid, so two
+    // DOM elements carry data-testid="concept-row-ppe-1". The page
+    // must render BOTH (not collapse them into one) so the workbook
+    // layout is mirrored — pinning that with getAllByTestId.
+    await waitFor(() => {
+      const rows = screen.getAllByTestId("concept-row-ppe-1");
+      expect(rows.length).toBeGreaterThanOrEqual(2);
+    });
+    // The (linked) marker appears on the alias view-row.
+    const marker = screen.getByTestId("alias-marker-ppe-1");
+    expect(marker.textContent).toContain("linked");
+    // Neither view-row offers a value input — primary is COMPUTED,
+    // alias is never editable.
+    expect(screen.queryByTestId("value-input-ppe-1")).toBeNull();
+  });
+
 });

@@ -81,6 +81,54 @@ def test_get_concepts_returns_tree_with_facts(client: TestClient) -> None:
     assert leaf["value"] == 42.0
 
 
+def test_get_concepts_emits_alias_rows_with_face_coords(
+    client: TestClient,
+) -> None:
+    """Cross-sheet rollup: a sub-sheet concept (e.g. *Total PPE at
+    SOFP-Sub-CuNonCu row 39) shares its concept_uuid with a face-sheet
+    row. The face coord lives in concept_render_aliases, and the
+    endpoint must surface it as an extra view-row with the SAME
+    concept_uuid + value, ``is_alias: true``, and render coords swapped
+    to the face sheet. Pre-fix the face row simply wasn't shown,
+    leaving the SOFP-CuNonCu face statement looking incomplete.
+    """
+    conn = sqlite3.connect(str(client.db_path))
+    try:
+        sub_uid_row = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE render_sheet = 'SOFP-Sub-CuNonCu' AND render_row = 39"
+        ).fetchone()
+        assert sub_uid_row is not None
+        sub_uid = sub_uid_row[0]
+        # Seed a fact on *Total PPE so the alias row carries a value too.
+        conn.execute(
+            "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
+            "entity_scope, value, value_status, source, updated_at) "
+            "VALUES (?, ?, 'CY', 'Company', 5000000.0, 'observed', 'pdf', ?)",
+            (client.run_id, sub_uid, "2026-05-28Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    payload = client.get(f"/api/runs/{client.run_id}/concepts").json()
+    matching = [c for c in payload["concepts"] if c["concept_uuid"] == sub_uid]
+    # One primary (sub-sheet) + at least one alias (face-sheet) view.
+    assert len(matching) >= 2, (
+        f"expected ≥2 view-rows for shared concept {sub_uid} (one sub "
+        f"+ ≥1 face alias); saw {len(matching)}"
+    )
+    primary = next(c for c in matching if not c["is_alias"])
+    alias = next(c for c in matching if c["is_alias"])
+    assert primary["render_sheet"] == "SOFP-Sub-CuNonCu"
+    assert primary["editable"] is False  # COMPUTED (formula owner)
+    assert alias["render_sheet"] == "SOFP-CuNonCu"
+    assert alias["value"] == 5_000_000.0
+    # Alias rows are never directly editable — the workbook's
+    # cross-sheet formula owns the value at that coord.
+    assert alias["editable"] is False
+
+
 def test_list_templates_and_template_concepts_run_independent(
     client: TestClient,
 ) -> None:

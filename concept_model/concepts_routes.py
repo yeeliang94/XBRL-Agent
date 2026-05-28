@@ -131,44 +131,82 @@ def register_concept_routes(app, audit_db_getter) -> None:
                 scope = bucket.setdefault(f["entity_scope"], {})
                 scope[f["period"]] = f["value"]
 
-            return {
-                "run_id": run_id,
-                "concepts": [
-                    {
-                        "concept_uuid": r["concept_uuid"],
-                        "parent_uuid": r["parent_uuid"],
-                        "kind": r["kind"],
-                        "canonical_label": r["canonical_label"],
-                        "display_label": r["display_label"],
-                        "render_sheet": r["render_sheet"],
-                        "render_row": r["render_row"],
-                        "render_col": r["render_col"],
-                        "matrix_col": r["matrix_col"],
-                        "matrix_col_label": r["matrix_col_label"],
-                        "shape": r["shape"],
-                        "template_id": r["template_id"],
-                        "value": r["value"],
-                        "value_status": r["value_status"],
-                        "children_status": r["children_status"],
-                        "source": r["source"],
-                        "evidence": r["evidence"],
-                        # A cell is user-editable when it's a data-entry node
-                        # (LEAF or a MATRIX_CELL with no outgoing edges) — i.e.
-                        # not a section header (ABSTRACT) and not a formula
-                        # total (COMPUTED / matrix total with edges). Mirrors
-                        # the facts-API PATCH guard so the UI only offers an
-                        # input where the backend will accept the write.
-                        "editable": (
-                            r["kind"] in ("LEAF", "MATRIX_CELL")
-                            and (r["edge_count"] or 0) == 0
-                        ),
-                        "scope_facts": scope_facts_by_uuid.get(
-                            r["concept_uuid"], {}
-                        ),
-                    }
-                    for r in rows
-                ],
-            }
+            # Aliases — secondary physical render coords for a single
+            # canonical concept. The cross-sheet rollup case (face row
+            # pointing at a sub-sheet *Total via formula) demotes the
+            # face coord to an alias; emitting one extra view-row per
+            # alias makes the Review/Values page mirror the workbook
+            # (one face row + one sub row, same concept). The alias row
+            # carries the SAME concept payload (value, scope_facts,
+            # editability) but with render coords swapped to the alias
+            # location and ``is_alias: true`` so the UI can label it.
+            alias_rows = conn.execute(
+                f"""
+                SELECT a.concept_uuid, a.alias_sheet, a.alias_row, a.alias_col
+                FROM concept_render_aliases a
+                JOIN concept_nodes n ON n.concept_uuid = a.concept_uuid
+                WHERE n.template_id IN ({placeholders})
+                """,
+                tuple(template_ids),
+            ).fetchall()
+            aliases_by_uuid: dict[str, list[sqlite3.Row]] = {}
+            for ar in alias_rows:
+                aliases_by_uuid.setdefault(ar["concept_uuid"], []).append(ar)
+
+            def _to_view(r, *, alias=None) -> dict:
+                rs = r["render_sheet"] if alias is None else alias["alias_sheet"]
+                rr = r["render_row"] if alias is None else int(alias["alias_row"])
+                rc = r["render_col"] if alias is None else alias["alias_col"]
+                return {
+                    "concept_uuid": r["concept_uuid"],
+                    "parent_uuid": r["parent_uuid"],
+                    "kind": r["kind"],
+                    "canonical_label": r["canonical_label"],
+                    "display_label": r["display_label"],
+                    "render_sheet": rs,
+                    "render_row": rr,
+                    "render_col": rc,
+                    "matrix_col": r["matrix_col"],
+                    "matrix_col_label": r["matrix_col_label"],
+                    "shape": r["shape"],
+                    "template_id": r["template_id"],
+                    "value": r["value"],
+                    "value_status": r["value_status"],
+                    "children_status": r["children_status"],
+                    "source": r["source"],
+                    "evidence": r["evidence"],
+                    # A cell is user-editable when it's a data-entry
+                    # node (LEAF or a MATRIX_CELL with no outgoing
+                    # edges). Mirrors the facts-API PATCH guard so the
+                    # UI only offers an input where the backend will
+                    # accept the write. Alias rows are NEVER editable:
+                    # the workbook's cross-sheet formula owns the value
+                    # at the alias coord, so writing there would clash
+                    # with the formula on the next export.
+                    "editable": (
+                        alias is None
+                        and r["kind"] in ("LEAF", "MATRIX_CELL")
+                        and (r["edge_count"] or 0) == 0
+                    ),
+                    "is_alias": alias is not None,
+                    "scope_facts": scope_facts_by_uuid.get(
+                        r["concept_uuid"], {}
+                    ),
+                }
+
+            concept_views: list[dict] = []
+            for r in rows:
+                concept_views.append(_to_view(r))
+                for a in aliases_by_uuid.get(r["concept_uuid"], []):
+                    concept_views.append(_to_view(r, alias=a))
+            # Resort so alias rows land in their face-sheet section
+            # naturally (same ORDER BY as the SQL query).
+            concept_views.sort(key=lambda v: (
+                v["template_id"], v["render_sheet"], v["render_row"],
+                v["render_col"] or "",
+            ))
+
+            return {"run_id": run_id, "concepts": concept_views}
         finally:
             conn.close()
 

@@ -65,7 +65,23 @@ def resolve_cell(
         (template_id, sheet, row),
     ).fetchone()
     if node is None:
-        return None
+        # 2b. Alias fallback — a concept that surfaces on more than one
+        # physical sheet (the cross-sheet rollup case: face row anchors
+        # the same canonical concept as a sub-sheet *Total) stores the
+        # demoted face coord in ``concept_render_aliases``. Without
+        # this lookup an agent write to the face cell would be silently
+        # skipped even though the canonical UUID exists. Join through
+        # concept_nodes so the template_id scope is honoured.
+        alias = conn.execute(
+            "SELECT a.concept_uuid FROM concept_render_aliases a "
+            "JOIN concept_nodes n ON n.concept_uuid = a.concept_uuid "
+            "WHERE n.template_id = ? "
+            "AND a.alias_sheet = ? AND a.alias_row = ?",
+            (template_id, sheet, row),
+        ).fetchone()
+        if alias is None:
+            return None
+        node = alias
     if col_num == 2:
         period = "CY"
     elif col_num == 3:
