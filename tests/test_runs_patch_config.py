@@ -180,6 +180,58 @@ class patch_target:
         setattr(self.target, self.attr, self.original)
 
 
+def _read_column(output_dir: Path, run_id: int, column: str):
+    """Read a single column directly from the runs row."""
+    conn = sqlite3.connect(str(output_dir / "xbrl_agent.db"))
+    try:
+        row = conn.execute(
+            f"SELECT {column} FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+def test_patch_orchestration_mirrors_to_canonical_column(draft_session):
+    """Peer-review HIGH #1 (2026-05-28): list/detail source orchestration
+    from `runs.orchestration`, NOT from `run_config_json`. The PATCH
+    endpoint must mirror the orchestration choice to the column,
+    otherwise a draft-started monolith run is mislabeled in History.
+    """
+    client, run_id, output_dir = draft_session
+
+    # Pre-state: fresh upload starts at 'split' (default).
+    assert _read_column(output_dir, run_id, "orchestration") == "split"
+
+    resp = client.patch(
+        f"/api/runs/{run_id}", json={"orchestration": "monolith"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # The canonical column reflects the patched choice.
+    assert _read_column(output_dir, run_id, "orchestration") == "monolith"
+    # And the JSON still carries it (round-trip via merged config).
+    persisted = _read_config(output_dir, run_id)
+    assert persisted["orchestration"] == "monolith"
+
+    # Flipping back to 'split' must also propagate to the column.
+    resp = client.patch(
+        f"/api/runs/{run_id}", json={"orchestration": "split"},
+    )
+    assert resp.status_code == 200
+    assert _read_column(output_dir, run_id, "orchestration") == "split"
+
+
+def test_patch_without_orchestration_leaves_column_default(draft_session):
+    """A PATCH that doesn't carry `orchestration` must not clobber the
+    column. (Idempotent on the default 'split' value.)"""
+    client, run_id, output_dir = draft_session
+
+    resp = client.patch(f"/api/runs/{run_id}", json={"filing_level": "group"})
+    assert resp.status_code == 200
+    assert _read_column(output_dir, run_id, "orchestration") == "split"
+
+
 def test_patch_404_on_missing_run(tmp_path, monkeypatch):
     """A PATCH against a non-existent run id returns 404 (not 500)."""
     output_dir = tmp_path / "output"

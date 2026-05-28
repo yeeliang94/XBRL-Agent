@@ -178,6 +178,13 @@ function _seedFilingStandard(cfg: Record<string, unknown> | null | undefined): F
   return v === "mpers" ? "mpers" : "mfrs";
 }
 
+function _seedOrchestration(
+  cfg: Record<string, unknown> | null | undefined,
+): "split" | "monolith" {
+  const v = cfg?.orchestration;
+  return v === "monolith" ? "monolith" : "split";
+}
+
 function _seedStatementsEnabled(
   cfg: Record<string, unknown> | null | undefined,
 ): Record<StatementType, boolean> {
@@ -278,6 +285,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // change we fire updateSettings() to write through, matching how the
   // Settings page has always done it.
   const [scoutModel, setScoutModel] = useState<string>("");
+  // Monolith single-agent model. When orchestration === "monolith" the
+  // run uses ONE agent across all 5 face statements; the per-statement
+  // model dropdowns (StatementRunConfig) are hidden and this picker
+  // takes their place. Seeded from the run config blob on rehydrate,
+  // else from the run-wide default model in settings. Posted as the
+  // top-level `model` field on the RunConfigRequest.
+  const [monolithModel, setMonolithModel] = useState<string>(
+    () => (
+      typeof initialConfig?.model === "string" ? (initialConfig.model as string) : ""
+    ),
+  );
   // Tracks the in-flight POST /api/settings from a dropdown change. Peer-
   // review [HIGH]: without this, a fast change-then-click flow lets the
   // scout endpoint read the stale .env because the browser fired the scout
@@ -327,6 +345,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     filingStandardTouchedRef.current = true;
     setFilingStandard(next);
   }, []);
+  // Monolith experiment toggle (docs/PLAN-monolith-face-experiment.md).
+  // Disabled when any disqualifying combo is selected; switching to a
+  // disqualifying combo reverts the value to "split" automatically (via
+  // the effect below) and an inline note explains why.
+  const [orchestration, setOrchestration] = useState<"split" | "monolith">(
+    () => _seedOrchestration(initialConfig),
+  );
   const [variantSelections, setVariantSelections] = useState(
     () => _seedVariantSelections(initialConfig),
   );
@@ -427,6 +452,18 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             : (settings.default_models[stmt] || settings.model);
         }
         setModelOverrides(overrides);
+        // Monolith model fallback chain: saved on draft → run-wide
+        // default `settings.model` → first available. Mirrors the scout
+        // picker's defensive fallback above so a stale model id from
+        // an older session doesn't render a blank <select>.
+        const savedMono = (seedSrc.model as string | undefined) || "";
+        if (knownIds.has(savedMono)) {
+          setMonolithModel(savedMono);
+        } else if (knownIds.has(settings.model)) {
+          setMonolithModel(settings.model);
+        } else if (settings.available_models.length > 0) {
+          setMonolithModel(settings.available_models[0].id);
+        }
         // Notes use the same default-model fallback chain: per-template
         // default_models entry → global `settings.model`. The backend
         // accepts partial notes_models, so we only send explicit overrides
@@ -824,6 +861,27 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     [],
   );
 
+  // Auto-revert monolith → split when the current selection becomes
+  // disqualifying (MPERS, Group, notes added, fewer than 5 face
+  // statements). The UI block below renders the inline note explaining
+  // why. The server validates the same rules independently.
+  useEffect(() => {
+    if (orchestration !== "monolith") return;
+    const enabledStmtsCount = STATEMENT_TYPES.filter(
+      (s) => statementsEnabled[s],
+    ).length;
+    const notesPicked = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
+    const disabled =
+      filingStandard !== "mfrs" ||
+      filingLevel !== "company" ||
+      notesPicked ||
+      enabledStmtsCount < 5;
+    if (disabled) setOrchestration("split");
+  }, [
+    orchestration, statementsEnabled, notesEnabled,
+    filingStandard, filingLevel,
+  ]);
+
   // Peer-review #4 (MEDIUM): build the live RunConfigPayload from
   // the current state. Extracted from handleRun so the debounced
   // auto-save effect can re-use the exact same shape the user
@@ -846,17 +904,32 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     return {
       statements: enabledStmts,
       variants,
-      models,
+      // Omit the per-statement `models` dict on monolith: the server
+      // ignores it on that path, and shipping it would (a) clutter the
+      // persisted run_config_json with dead state and (b) — historically
+      // — risk a stale id crashing _create_proxy_model BEFORE the
+      // monolith branch was reached. The server now also defensively
+      // skips that block on monolith, but stripping the field here is
+      // the cleaner contract.
+      ...(orchestration === "monolith" ? {} : { models }),
       infopack: scoutEnabled ? infopack : null,
       use_scout: scoutEnabled,
       filing_level: filingLevel,
       filing_standard: filingStandard,
       notes_to_run,
       notes_models,
+      orchestration,
+      // Only post a top-level `model` on the monolith path. On split
+      // it would be ignored (split uses per-statement `models`) but
+      // sending it would clutter the persisted run_config_json.
+      ...(orchestration === "monolith" && monolithModel
+        ? { model: monolithModel }
+        : {}),
     };
   }, [
     statementsEnabled, variantSelections, modelOverrides, infopack,
     scoutEnabled, filingLevel, filingStandard, notesEnabled, notesModelOverrides,
+    orchestration, monolithModel,
   ]);
 
   const handleRun = useCallback(() => {
@@ -981,6 +1054,104 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           })}
         </div>
       </div>
+
+      {/* Orchestration (monolith experiment) — gated to MFRS Company face-only.
+          See docs/PLAN-monolith-face-experiment.md. The server validates the
+          same rules; this is UX. */}
+      {(() => {
+        const enabledStmtsCount = STATEMENT_TYPES.filter(
+          (s) => statementsEnabled[s],
+        ).length;
+        const notesPicked = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
+        const monolithDisabled =
+          filingStandard !== "mfrs" ||
+          filingLevel !== "company" ||
+          notesPicked ||
+          enabledStmtsCount < 5;
+        const monolithDisableReasons: string[] = [];
+        if (filingStandard !== "mfrs")
+          monolithDisableReasons.push("requires MFRS");
+        if (filingLevel !== "company")
+          monolithDisableReasons.push("requires Company filing level");
+        if (notesPicked)
+          monolithDisableReasons.push("not available with notes templates");
+        if (enabledStmtsCount < 5)
+          monolithDisableReasons.push(
+            "all 5 face statements must be selected",
+          );
+        return (
+          <div style={styles.section}>
+            <span style={styles.sectionLabel}>Orchestration</span>
+            <div
+              role="radiogroup"
+              aria-label="Orchestration"
+              style={{
+                display: "inline-flex",
+                alignSelf: "flex-start",
+                border: `1px solid ${pwc.grey200}`,
+                borderRadius: pwc.radius.md,
+                overflow: "hidden",
+              }}
+            >
+              {(["split", "monolith"] as const).map((opt) => {
+                const isMonolith = opt === "monolith";
+                const active = orchestration === opt;
+                const optDisabled = isMonolith && monolithDisabled;
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    aria-disabled={optDisabled || undefined}
+                    disabled={optDisabled}
+                    onClick={() => !optDisabled && setOrchestration(opt)}
+                    style={{
+                      fontFamily: pwc.fontHeading,
+                      fontSize: 13,
+                      fontWeight: active ? 600 : 500,
+                      padding: "8px 24px",
+                      border: "none",
+                      borderRight:
+                        opt === "split" ? `1px solid ${pwc.grey200}` : "none",
+                      borderRadius: 0,
+                      background: active
+                        ? pwc.orange500
+                        : optDisabled
+                          ? pwc.grey50
+                          : pwc.white,
+                      color: active
+                        ? pwc.white
+                        : optDisabled
+                          ? pwc.grey300
+                          : pwc.grey700,
+                      cursor: optDisabled ? "not-allowed" : "pointer",
+                      transition: "background 0.15s, color 0.15s",
+                    }}
+                  >
+                    {opt === "split"
+                      ? "Split (default)"
+                      : "Experimental: single-agent monolith"}
+                  </button>
+                );
+              })}
+            </div>
+            {monolithDisabled && (
+              <p
+                role="status"
+                style={{
+                  fontFamily: pwc.fontBody,
+                  fontSize: 12,
+                  color: pwc.grey500,
+                  margin: 0,
+                }}
+              >
+                Monolith disabled: {monolithDisableReasons.join("; ")}.
+              </p>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Scout toggle + auto-detect */}
       <div style={styles.section}>
@@ -1154,13 +1325,69 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       {/* Statement selection + model overrides */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Statements & Models</span>
+        <span style={styles.sectionLabel}>
+          {orchestration === "monolith" ? "Statements" : "Statements & Models"}
+        </span>
+        {orchestration === "monolith" && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: pwc.space.md,
+              marginBottom: pwc.space.sm,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: pwc.fontBody,
+                fontSize: 13,
+                color: pwc.grey800,
+                whiteSpace: "nowrap",
+              }}
+            >
+              Monolith model
+            </span>
+            <select
+              role="combobox"
+              aria-label="Monolith model"
+              value={monolithModel}
+              onChange={(e) => setMonolithModel(e.target.value)}
+              style={{
+                padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+                border: `1px solid ${pwc.grey200}`,
+                borderRadius: pwc.radius.sm,
+                fontFamily: pwc.fontBody,
+                fontSize: 13,
+                color: pwc.grey900,
+                background: pwc.white,
+                outline: "none",
+                minWidth: 240,
+              }}
+            >
+              {availableModels.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.display_name}
+                </option>
+              ))}
+            </select>
+            <span
+              style={{
+                fontFamily: pwc.fontBody,
+                fontSize: 12,
+                color: pwc.grey500,
+              }}
+            >
+              one agent fills all 5 face statements
+            </span>
+          </div>
+        )}
         <StatementRunConfig
           enabled={statementsEnabled}
           modelOverrides={modelOverrides}
           availableModels={availableModels}
           onToggleStatement={handleToggleStatement}
           onModelChange={handleModelChange}
+          singleModelMode={orchestration === "monolith"}
         />
       </div>
 
