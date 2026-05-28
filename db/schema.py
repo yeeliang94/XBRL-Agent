@@ -56,7 +56,18 @@ from pathlib import Path
 # (default) and the experimental single-agent monolith path. Nullable
 # with a safe default keeps legacy rows readable; SQLite ALTER TABLE
 # can't add NOT NULL without a default anyway (gotcha #11).
-CURRENT_SCHEMA_VERSION = 10
+# v11 (concept_render_aliases): a single concept_uuid can have more than
+# one physical render coord on a workbook. The motivating case is face-
+# sheet rows whose value cross-rolls-up from a sub-sheet total (e.g.
+# SOFP-CuNonCu "Property, plant and equipment" with formula
+# ='SOFP-Sub-CuNonCu'!Bn). Parser already shares one concept_uuid across
+# both render keys; v11 introduces a secondary table so the dedup'd
+# face render coord is preserved alongside the primary sub coord. The
+# importer reads it during edge resolution (fixes silently-dropped
+# cross-sheet child edges), cell_resolver consults it on miss, and the
+# concepts endpoint emits one row per alias so the Review/Values page
+# mirrors the workbook (one face row + one sub row, same concept).
+CURRENT_SCHEMA_VERSION = 11
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -273,6 +284,29 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     )
     """,
 
+    # v11: secondary render coordinates for a concept that surfaces on
+    # more than one physical sheet/row. Today the only producer is the
+    # importer's cross-sheet linkage step: when a face row points at a
+    # sub-sheet total via ='Sub-Sheet'!Bn, both rows share one
+    # concept_uuid but live at different (sheet, row) coordinates. The
+    # primary coord stays on concept_nodes (anchored at the formula-
+    # owning sub-sheet row); every other physical location for the same
+    # concept lands here. Consumers: importer edge resolver (so face
+    # coords still resolve to the canonical UUID), cell_resolver (so an
+    # agent write to a face cell still maps to the canonical UUID), and
+    # the concepts endpoint (emits one extra view-row per alias so the
+    # Review/Values page mirrors the workbook).
+    """
+    CREATE TABLE IF NOT EXISTS concept_render_aliases (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        concept_uuid     TEXT NOT NULL REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
+        alias_sheet      TEXT NOT NULL,
+        alias_row        INTEGER NOT NULL,
+        alias_col        TEXT NOT NULL,
+        UNIQUE(concept_uuid, alias_sheet, alias_row, alias_col)
+    )
+    """,
+
     # Per-run facts (the heart of the canonical model). Composite key:
     # (run_id, concept_uuid, period, entity_scope). Two status axes:
     #   value_status     — observed | explicit_zero | not_disclosed | user_override | conflict
@@ -367,6 +401,12 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_concept_edges_parent_uuid ON concept_edges(parent_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_concept_edges_child_uuid ON concept_edges(child_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_concept_targets_concept_uuid ON concept_targets(concept_uuid)",
+    # v11: aliases are queried two ways — by uuid (concepts endpoint
+    # joins from concept_nodes to emit alias view-rows) and by
+    # (alias_sheet, alias_row) (cell_resolver fallback + importer edge
+    # resolution build a coord→uuid map). Index the join key; the
+    # composite UNIQUE constraint already serves the coord lookup.
+    "CREATE INDEX IF NOT EXISTS ix_concept_render_aliases_concept_uuid ON concept_render_aliases(concept_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_run_concept_facts_run_id ON run_concept_facts(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_concept_fact_events_run_id ON concept_fact_events(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_concept_conflicts_run_id ON run_concept_conflicts(run_id)",
@@ -808,6 +848,34 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (10,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v10→v11 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v10 → v11: add the concept_render_aliases table. The CREATE
+        # TABLE at the top of init_db is idempotent, so older DBs that
+        # walk through this block just confirm the table exists and bump
+        # the marker. Same BEGIN IMMEDIATE discipline as earlier steps.
+        if current_version is not None and current_version < 11:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 11:
+                    # Table is already created above (idempotent
+                    # CREATE TABLE IF NOT EXISTS); this block just
+                    # advances the marker so future migrations see v11.
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (11,),
                     )
                 conn.commit()
             except Exception:

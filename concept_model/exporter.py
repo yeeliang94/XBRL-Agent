@@ -122,10 +122,21 @@ def export_run_to_xlsx(
                 continue
             sheet, row, col = r["target_sheet"], int(r["target_row"]), r["target_col"]
         else:
-            # Linear Company filing: only CY/Company, render_col fallback.
-            if r["period"] != "CY" or r["entity_scope"] != "Company":
+            # Linear Company filing: render_col fallback. Two-column
+            # convention: CY → render_col (default B), PY → C. Mirrors
+            # cell_resolver.resolve_cell's column convention so writes
+            # and reads stay symmetric. Group-scope facts are dropped —
+            # they only apply to Group filings (which take the
+            # concept_targets branch above).
+            if r["entity_scope"] != "Company":
                 continue
-            sheet, row, col = r["render_sheet"], int(r["render_row"]), r["render_col"]
+            if r["period"] == "CY":
+                col = r["render_col"]
+            elif r["period"] == "PY":
+                col = "C"
+            else:
+                continue
+            sheet, row = r["render_sheet"], int(r["render_row"])
         routed.append({
             "sheet": sheet, "row": row, "col": col,
             "concept_uuid": r["concept_uuid"],

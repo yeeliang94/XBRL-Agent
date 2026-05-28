@@ -161,6 +161,72 @@ def test_aggregate_only_replaces_parent_formula_with_literal(seeded) -> None:
     assert "aggregate_only" in source_col_text
 
 
+def test_py_facts_export_to_col_c_on_linear_company(seeded) -> None:
+    """PY/Company facts on a linear Company filing must render in
+    col C, mirroring cell_resolver.resolve_cell's CY=B / PY=C
+    convention. Regression: pre-fix the exporter dropped every
+    non-(CY, Company) fact, so the downloaded canonical xlsx had
+    empty PY columns even when run_concept_facts carried the data.
+    """
+    db, run_id, _template_id, work = seeded
+    leaf = _uuid_for_row(db, "SOFP-CuNonCu", 10)
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.executemany(
+            "INSERT OR REPLACE INTO run_concept_facts("
+            "run_id, concept_uuid, period, entity_scope, value, "
+            "value_status, source, updated_at) "
+            "VALUES (?, ?, ?, 'Company', ?, 'observed', 'pdf p.1', "
+            "'2026-05-21Z')",
+            [
+                (run_id, leaf, "CY", 111.0),
+                (run_id, leaf, "PY", 222.0),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    export_run_to_xlsx(db, run_id, str(work))
+
+    wb = openpyxl.load_workbook(str(work), data_only=False)
+    assert wb["SOFP-CuNonCu"]["B10"].value == 111.0
+    assert wb["SOFP-CuNonCu"]["C10"].value == 222.0
+
+
+def test_group_facts_dropped_on_company_filing(seeded) -> None:
+    """A Group-scope fact on a Company filing has no place to land
+    (Group columns D/E only exist on Group templates), so the linear-
+    Company exporter drops it. Pinning so a future widening of the
+    routing rule can't silently leak Group values into Company B/C.
+    """
+    db, run_id, _template_id, work = seeded
+    leaf = _uuid_for_row(db, "SOFP-CuNonCu", 10)
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO run_concept_facts("
+            "run_id, concept_uuid, period, entity_scope, value, "
+            "value_status, source, updated_at) "
+            "VALUES (?, ?, 'CY', 'Group', 999.0, 'observed', "
+            "'pdf p.1', '2026-05-21Z')",
+            (run_id, leaf),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    export_run_to_xlsx(db, run_id, str(work))
+
+    wb = openpyxl.load_workbook(str(work), data_only=False)
+    # Col B (CY) and C (PY) must be untouched on a Company filing
+    # when the only fact is Group-scope.
+    assert wb["SOFP-CuNonCu"]["B10"].value != 999.0
+    assert wb["SOFP-CuNonCu"]["C10"].value != 999.0
+
+
 def test_not_disclosed_leaves_remain_blank_in_excel(seeded) -> None:
     """not_disclosed leaves render as blank cells; a side-channel JSON
     documents which leaves were intentionally blank."""

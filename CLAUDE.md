@@ -663,6 +663,60 @@ still change. Treat the plan docs as the source of truth, not this file:
 [docs/PRD-canonical-concept-model.html](docs/PRD-canonical-concept-model.html).
 Promote a proper invariant section here once the work lands.
 
+**Cross-sheet rollup linkage (2026-05-28, schema v11, "render twice"):**
+Face statement rows that pull their value from a sub-sheet total via
+a cross-sheet formula (`='SOFP-Sub-CuNonCu'!Bn`) share ONE
+`concept_uuid` with the sub-sheet's `*Total` row. The parser already
+emits both nodes with that shared UUID; v11 adds
+`concept_render_aliases` so the face render coord is preserved
+alongside the sub coord, instead of being dropped during importer
+dedup.
+
+- **Importer (`concept_model/importer.py`):** demoted face entries
+  land in `concept_render_aliases`. Edge resolution now builds a
+  `coord→uuid` map from the FULL `concepts` list (not the dedup'd
+  `seen`), so face-sheet COMPUTED rows like *Total non-current
+  assets* still wire their child edges to PPE — pre-fix every
+  cross-sheet rolled-up child was silently dropped and cascade
+  understated every face total.
+- **Cell resolver (`concept_model/cell_resolver.py`):** an agent write
+  to a face coord falls back to the alias table on miss, preserving
+  the canonical UUID instead of silently skipping the write.
+- **Concepts endpoint (`concept_model/concepts_routes.py`
+  `/api/runs/{id}/concepts`):** emits ONE extra view-row per alias,
+  with `is_alias: true` and render coords swapped to the alias
+  location. Sorted into its face-sheet section so the Review/Values
+  page mirrors the workbook (one face row + one sub row, same
+  concept).
+- **Exporter (`concept_model/exporter.py`):** facts only route to the
+  primary `concept_nodes.render_*` coord. Alias coords are **never**
+  written — the workbook's cross-sheet formula stays live so Excel
+  recomputes the value. (Pre-existing code; pinned now by
+  `tests/test_canonical_cross_sheet_rollup.py::test_exporter_preserves_cross_sheet_formula_on_alias_coord`.)
+- **Frontend (`web/src/pages/ConceptsPage.tsx`):** `ConceptRow` carries
+  `is_alias?`. Alias rows render with an italic "(linked)" marker and
+  are never editable (the backend already drops `editable`, frontend
+  enforces it defensively). React keys are composite
+  (`${concept_uuid}@${sheet}:${row}:${col}`) so primary + alias don't
+  collide.
+
+Pinned by `tests/test_db_schema_v11.py`,
+`tests/test_canonical_cross_sheet_rollup.py` (5 tests),
+`tests/test_concepts_routes.py::test_get_concepts_emits_alias_rows_with_face_coords`,
+`web/src/__tests__/ConceptsPage.test.tsx::"alias view-rows render
+with (linked) marker and stay read-only"`.
+
+**PY columns in canonical download (2026-05-28):**
+Linear Company filings in `concept_model/exporter.py` previously
+dropped every fact that wasn't `(CY, Company)`, so the downloaded
+canonical xlsx had empty col C (PY) on every face statement even
+though `run_concept_facts` carried the PY data. Routing now mirrors
+`cell_resolver.resolve_cell`: CY → `render_col` (default B), PY → C,
+Group facts dropped (they only apply to Group filings, which use the
+`concept_targets` branch). Pinned by
+`tests/test_canonical_export.py::test_py_facts_export_to_col_c_on_linear_company`
+and `::test_group_facts_dropped_on_company_filing`.
+
 ## Testing
 
 ```bash

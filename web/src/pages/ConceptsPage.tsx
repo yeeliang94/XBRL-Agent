@@ -62,6 +62,13 @@ export interface ConceptRow {
   // True for data-entry cells (LEAF / matrix component) the user may edit;
   // false for section headers and formula totals. Set by the backend.
   editable?: boolean;
+  // True when this view-row is an alias for another physical location
+  // of the same concept (the cross-sheet rollup case: a face-sheet row
+  // that shares its concept_uuid with a sub-sheet *Total). Aliases are
+  // never directly editable — the workbook's cross-sheet formula owns
+  // the value at the alias coord. Backend emits one view-row per alias
+  // so the page can mirror the workbook layout.
+  is_alias?: boolean;
   // Phase 4 — per-(scope, period) facts for Group runs.
   // Shape: {Company: {CY: 100, PY: 110}, Group: {CY: 200, PY: 220}}.
   // Absent (or single-scope) on Company runs.
@@ -990,7 +997,11 @@ function ConceptTree({
       </div>
       {rows.map((r) => (
         <ConceptRowView
-          key={r.concept_uuid}
+          // Composite key: alias rows share concept_uuid with their
+          // primary, so a uuid-only key would collide and React would
+          // render one view-row instead of two. (sheet, row, col)
+          // disambiguates without relying on array index.
+          key={`${r.concept_uuid}@${r.render_sheet}:${r.render_row}:${r.render_col}`}
           row={r}
           depth={depthByUuid.get(r.concept_uuid) || 0}
           onEditValue={onEditValue}
@@ -1296,9 +1307,13 @@ function ConceptRowView({
   const isAbstract = row.kind === "ABSTRACT";
   const isComputed = row.kind === "COMPUTED";
   const isMandatory = isMandatoryConcept(row);
+  const isAlias = row.is_alias === true;
   // Phase 2.1 — only genuine LEAF rows are editable. COMPUTED totals are
   // owned by the cascade; ABSTRACT rows are section headers (gotcha #17).
-  const isEditable = row.kind === "LEAF";
+  // Alias view-rows are NEVER editable (the workbook formula owns the
+  // value at the alias coord); the backend already drops `editable` on
+  // them, this is defence-in-depth in case the backend ever forgets.
+  const isEditable = row.kind === "LEAF" && !isAlias;
   const cyValue = periodValue(row, activeScope, "CY");
   const pyValue = periodValue(row, activeScope, "PY");
   const cyIncompleteMandatory = isMandatory && isBlankValue(cyValue);
@@ -1349,7 +1364,11 @@ function ConceptRowView({
       }}
     >
       <div
-        title={`canonical: ${row.canonical_label}`}
+        title={
+          isAlias
+            ? `canonical: ${row.canonical_label} — linked to value from another sheet`
+            : `canonical: ${row.canonical_label}`
+        }
         style={{
           paddingLeft: depth * 14,
           display: "flex",
@@ -1358,7 +1377,30 @@ function ConceptRowView({
           lineHeight: 1.55,
         }}
       >
-        <span data-testid={`label-${row.concept_uuid}`}>{label}</span>
+        <span
+          data-testid={`label-${row.concept_uuid}`}
+          style={
+            isAlias
+              ? { fontStyle: "italic", color: pwc.grey700 }
+              : undefined
+          }
+        >
+          {label}
+          {isAlias && (
+            <span
+              data-testid={`alias-marker-${row.concept_uuid}`}
+              style={{
+                marginLeft: pwc.space.sm,
+                fontSize: 12,
+                fontStyle: "italic",
+                color: pwc.grey700,
+                fontWeight: pwc.weight.regular,
+              }}
+            >
+              (linked)
+            </span>
+          )}
+        </span>
       </div>
       {!isAbstract && (
         <>
