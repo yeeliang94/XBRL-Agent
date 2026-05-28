@@ -142,6 +142,21 @@ export function HistoryList({
                       MPERS
                     </span>
                   )}
+                  {run.orchestration === "monolith" && (
+                    // Experimental monolith path — only labelled when it
+                    // actually ran. Split (default) is implied to keep the
+                    // History row tidy.
+                    <span
+                      style={{
+                        ...styles.inlineBadge,
+                        background: pwc.grey100,
+                        color: pwc.grey700,
+                      }}
+                      title="Monolith orchestration (experimental)"
+                    >
+                      Monolith
+                    </span>
+                  )}
                 </td>
                 <td style={styles.td}>
                   <span style={styles.dim}>{formatDate(run.created_at)}</span>

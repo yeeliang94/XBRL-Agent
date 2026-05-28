@@ -8,6 +8,13 @@ interface Props {
   availableModels: ModelEntry[];
   onToggleStatement: (stmt: StatementType, enabled: boolean) => void;
   onModelChange: (stmt: StatementType, modelId: string) => void;
+  /** When true, the per-row model dropdown column is hidden. Used by the
+   *  monolith orchestration path where a single agent fills all 5
+   *  statements — see PreRunPanel's "Monolith model" picker rendered
+   *  above this table. The per-statement `modelOverrides` then have no
+   *  effect on the run (server ignores them on monolith); hiding them
+   *  prevents the operator from thinking they do. */
+  singleModelMode?: boolean;
 }
 
 const styles = {
@@ -84,6 +91,7 @@ export function StatementRunConfig({
   availableModels,
   onToggleStatement,
   onModelChange,
+  singleModelMode = false,
 }: Props) {
   return (
     <table style={styles.table}>
@@ -103,21 +111,23 @@ export function StatementRunConfig({
                   <span style={styles.stmtName}>{STATEMENT_LABELS[stmt]}</span>
                 </label>
               </td>
-              <td style={styles.cell}>
-                <select
-                  role="combobox"
-                  value={modelOverrides[stmt]}
-                  disabled={!isEnabled}
-                  onChange={(e) => onModelChange(stmt, e.target.value)}
-                  style={isEnabled ? styles.select : styles.selectDisabled}
-                >
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.display_name}
-                    </option>
-                  ))}
-                </select>
-              </td>
+              {!singleModelMode && (
+                <td style={styles.cell}>
+                  <select
+                    role="combobox"
+                    value={modelOverrides[stmt]}
+                    disabled={!isEnabled}
+                    onChange={(e) => onModelChange(stmt, e.target.value)}
+                    style={isEnabled ? styles.select : styles.selectDisabled}
+                  >
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              )}
             </tr>
           );
         })}

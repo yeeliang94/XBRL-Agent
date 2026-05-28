@@ -74,6 +74,10 @@ class Run:
     scout_enabled: bool = False
     started_at: str = ""
     ended_at: Optional[str] = None
+    # v10: monolith experiment orchestration flag. Sourced from the
+    # `runs.orchestration` column — the canonical store. Defaults to
+    # 'split' for legacy rows without the column.
+    orchestration: str = "split"
 
 
 @dataclass
@@ -190,6 +194,9 @@ class RunSummary:
     # Which taxonomy the templates came from. Stored on runs.run_config_json
     # under the same key; legacy rows (pre-MPERS wiring) default to MFRS.
     filing_standard: str = "mfrs"
+    # v10 monolith experiment: orchestration path used for this run.
+    # 'split' (default) or 'monolith'. Sourced from `runs.orchestration`.
+    orchestration: str = "split"
 
 
 @dataclass
@@ -262,6 +269,7 @@ def create_run(
     config: Optional[dict[str, Any]] = None,
     scout_enabled: bool = False,
     status: str = "running",
+    orchestration: str = "split",
 ) -> int:
     """Insert a new run row and return its id.
 
@@ -288,12 +296,14 @@ def create_run(
     started_at = "" if status == "draft" else now
     cur = conn.execute(
         "INSERT INTO runs(created_at, pdf_filename, status, notes, "
-        "session_id, output_dir, run_config_json, scout_enabled, started_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "session_id, output_dir, run_config_json, scout_enabled, started_at, "
+        "orchestration) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             now, pdf_filename, status, notes or None,
             session_id, output_dir, config_json,
             1 if scout_enabled else 0, started_at,
+            orchestration or "split",
         ),
     )
     return int(cur.lastrowid)
@@ -368,9 +378,19 @@ def update_run_config(
         # is a strictly newer source of truth than the unparseable record.
         existing = {}
     merged = {**existing, **patch}
+    # Mirror `orchestration` from the merged config into the canonical
+    # `runs.orchestration` column (peer-review HIGH #1, 2026-05-28).
+    # History list/detail source orchestration from the column, NOT the
+    # JSON — see fetch_run/list_runs at the bottom of this file. Without
+    # this mirror a user who picks 'monolith' in the pre-run panel sees
+    # their started run mislabeled as 'split' in History, and the
+    # coordinator dispatcher's read of the column would route the run
+    # back to the split path even though the config says monolith.
+    new_orchestration = merged.get("orchestration") or "split"
     cur = conn.execute(
-        "UPDATE runs SET run_config_json = ? WHERE id = ? AND status = 'draft'",
-        (json.dumps(merged), run_id),
+        "UPDATE runs SET run_config_json = ?, orchestration = ? "
+        "WHERE id = ? AND status = 'draft'",
+        (json.dumps(merged), new_orchestration, run_id),
     )
     if cur.rowcount == 0:
         # Race window between SELECT and UPDATE — another request flipped
@@ -773,6 +793,7 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         scout_enabled=bool(_get("scout_enabled", 0)),
         started_at=_get("started_at", "") or "",
         ended_at=_get("ended_at"),
+        orchestration=_get("orchestration", "split") or "split",
     )
 
 
@@ -1035,6 +1056,11 @@ def list_runs(
                     merged_workbook_path=run.merged_workbook_path,
                     filing_level=(run.config or {}).get("filing_level", "company"),
                     filing_standard=(run.config or {}).get("filing_standard", "mfrs"),
+                    # Source orchestration from the canonical `runs.orchestration`
+                    # column (via Run.orchestration), NOT from the config JSON.
+                    # A row with a corrupt or pre-v10 config still surfaces the
+                    # right path via the dedicated column.
+                    orchestration=run.orchestration,
                 )
             )
         return summaries

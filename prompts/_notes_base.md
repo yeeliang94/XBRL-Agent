@@ -223,6 +223,13 @@ need in a single call (e.g. `[30, 31, 32]` in one request) rather than
 one page per turn. The tool renders them in parallel and the vision
 model sees them together, so batching is both faster and cheaper.
 
+When two tool calls are independent, issue them in the same response
+instead of waiting one turn at a time. For example, if you already need
+both the live row-label catalog and specific PDF pages, you may call
+`read_template` and `view_pdf_pages` together. Keep dependent steps
+sequential: call `save_result` only after the relevant `write_notes`
+call has returned successfully.
+
 === MULTI-PAGE CONTINUATION ===
 
 If a note's content runs off the page range the inventory gives you,

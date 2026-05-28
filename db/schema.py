@@ -50,7 +50,13 @@ from pathlib import Path
 # the human row-2 SOCIE component header displayed in the review grid. The
 # routing key remains `matrix_col` (Excel column letter), so existing facts
 # and exporters keep their geometry unchanged.
-CURRENT_SCHEMA_VERSION = 9
+# v10 (monolith experiment, docs/PLAN-monolith-face-experiment.md): adds
+# nullable `runs.orchestration` (TEXT DEFAULT 'split'). The
+# orchestration flag selects between the split-pipeline coordinator
+# (default) and the experimental single-agent monolith path. Nullable
+# with a safe default keeps legacy rows readable; SQLite ALTER TABLE
+# can't add NOT NULL without a default anyway (gotcha #11).
+CURRENT_SCHEMA_VERSION = 10
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -90,7 +96,11 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         run_config_json       TEXT,
         scout_enabled         INTEGER NOT NULL DEFAULT 0,
         started_at            TEXT NOT NULL DEFAULT '',
-        ended_at              TEXT
+        ended_at              TEXT,
+        -- v10: monolith experiment flag. NULL on rows created before v10
+        -- (and SQLite default 'split' for new rows under v10) so legacy
+        -- readers ignore an unknown value and keep working.
+        orchestration         TEXT DEFAULT 'split'
     )
     """,
 
@@ -422,6 +432,14 @@ _V9_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+# v10 column: monolith experiment orchestration flag. Nullable with a
+# safe default ('split') keeps every existing run readable and routes
+# legacy callers through the default split-pipeline coordinator.
+_V10_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("runs", "orchestration", "TEXT DEFAULT 'split'"),
+)
+
+
 def init_db(path: str | Path) -> None:
     """Create (or open) the SQLite database and ensure all tables exist.
 
@@ -749,6 +767,47 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (9,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v9→v10 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v9 → v10: add the nullable `runs.orchestration` flag for the
+        # monolith experiment. Default 'split' keeps every legacy reader
+        # routed through the existing coordinator. Fresh DBs already carry
+        # it via CREATE TABLE above. Same BEGIN IMMEDIATE +
+        # duplicate-column tolerance as the earlier steps.
+        if current_version is not None and current_version < 10:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 10:
+                    for table, col_name, col_ddl in _V10_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (10,),
                     )
                 conn.commit()
             except Exception:

@@ -67,8 +67,18 @@ function statusBadge(display: RunStatusDisplay) {
   );
 }
 
-/** Render a nested config key/value section in a compact form. */
-function ConfigBlock({ config }: { config: Record<string, unknown> | null }) {
+/** Render a nested config key/value section in a compact form.
+ *
+ *  `orchestration` is passed separately because it is canonically
+ *  stored in the `runs.orchestration` column (DB schema v10), not the
+ *  `run_config_json` blob — so we don't want to read it from `config`. */
+function ConfigBlock({
+  config,
+  orchestration,
+}: {
+  config: Record<string, unknown> | null;
+  orchestration?: string;
+}) {
   if (!config) {
     return <p style={styles.dim}>No run config captured for this run.</p>;
   }
@@ -103,6 +113,19 @@ function ConfigBlock({ config }: { config: Record<string, unknown> | null }) {
   entries.push({
     label: "Filing level",
     value: (config.filing_level === "group" ? "Group" : "Company"),
+  });
+  // Orchestration badge — surfaced for every run so operators can tell
+  // at a glance which path produced it. Sourced from the top-level
+  // detail prop (canonical `runs.orchestration` column); falls back to
+  // the config blob, then 'split'.
+  const orchestrationValue =
+    orchestration ??
+    (config.orchestration === "monolith" ? "monolith" : "split");
+  entries.push({
+    label: "Orchestration",
+    value: orchestrationValue === "monolith"
+      ? "Monolith (experimental)"
+      : "Split (default)",
   });
   // Notes — only surface when the run actually selected any. Empty lists
   // would render as "Notes: —" for every face-only run, which is noise.
@@ -508,7 +531,10 @@ export function RunDetailView({
             </div>
           )}
           <h4 style={styles.sectionHeading}>Run configuration</h4>
-          <ConfigBlock config={detail.config} />
+          <ConfigBlock
+            config={detail.config}
+            orchestration={detail.orchestration}
+          />
         </section>
       )}
 
