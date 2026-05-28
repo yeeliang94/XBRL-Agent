@@ -62,6 +62,29 @@ MONOLITH_PROMPT_BYTE_CEILING: int = int(
     os.environ.get("XBRL_MONOLITH_PROMPT_BYTE_CEILING", str(200 * 1024))
 )
 
+# Vision preload caps for scanned / mixed-PDF runs. The opening user
+# message attaches one PNG per blank page; without caps a 100-page
+# annual report would push tens of MB of base64 on every turn and may
+# fail at the proxy. Peer-review HIGH #2 (2026-05-28).
+#
+# - DPI 150 is comfortably above what vision models need for accountant
+#   tables (200 DPI on FINCO averaged 750 KB/page; 150 ≈ 420 KB/page).
+# - Page cap is a backstop on top of the byte cap so a single oddly
+#   compressed page can't blow the budget on its own.
+# - Byte cap targets raw PNG total (base64 ≈ 1.33×; provider input
+#   payload includes that overhead). 25 MB raw ≈ 33 MB on the wire.
+MONOLITH_VISION_PRELOAD_DPI: int = int(
+    os.environ.get("XBRL_MONOLITH_VISION_PRELOAD_DPI", "150")
+)
+MONOLITH_VISION_PRELOAD_MAX_PAGES: int = int(
+    os.environ.get("XBRL_MONOLITH_VISION_PRELOAD_MAX_PAGES", "60")
+)
+MONOLITH_VISION_PRELOAD_MAX_BYTES: int = int(
+    os.environ.get(
+        "XBRL_MONOLITH_VISION_PRELOAD_MAX_BYTES", str(25 * 1024 * 1024),
+    )
+)
+
 
 def validate_monolith_compatibility(
     *,

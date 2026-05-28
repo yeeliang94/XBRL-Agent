@@ -11,7 +11,7 @@ cache pressure.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -58,6 +58,18 @@ class RenderedPrompt:
     full: str                      # concatenated cached chunk
     byte_size: int
     trimmed: bool
+    # Page numbers (1-indexed) where PyMuPDF returned an empty string.
+    # Empty list = clean text PDF. Full list = scanned / image-only PDF.
+    # Mixed (some entries) = text cover + scanned tables, the case
+    # peer-review HIGH-#3 flagged as previously silent. The coordinator
+    # consults this list to decide which pages to preload as PNG vision
+    # in the opening user message — gotcha #14 parity for the monolith.
+    blank_pages: list[int] = field(default_factory=list)
+    # Convenience: True iff every page is blank (the original
+    # `pdf_text_empty` signal). Kept on the dataclass so the existing
+    # text-vs-vision branch in the coordinator stays readable. The
+    # mixed-PDF case uses `blank_pages` directly.
+    pdf_text_empty: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +106,26 @@ def render(
         filing_standard=filing_standard,
         filing_level=filing_level,
     )
-    pdf_text_full = _extract_pdf_text(pdf_path)
+    pdf_text_full, blank_pages = _extract_pdf_text(pdf_path)
+    total_pages = pdf_text_full.count("=== page ")
+    pdf_text_empty = total_pages > 0 and len(blank_pages) == total_pages
+
+    if pdf_text_empty:
+        # Image-only / scanned PDF. Skip the trim path entirely; the
+        # coordinator will front-load every page as vision in the opening
+        # user message.
+        full = _assemble_vision_only(rules_block, template_structure)
+        byte_size = _byte_length(full)
+        return RenderedPrompt(
+            rules_block=rules_block,
+            template_structure=template_structure,
+            pdf_text="",
+            full=full,
+            byte_size=byte_size,
+            trimmed=False,
+            blank_pages=list(blank_pages),
+            pdf_text_empty=True,
+        )
 
     # First-pass assemble; if too large, trim PDF text.
     overhead = _byte_length(rules_block + template_structure) + _byte_length(
@@ -105,13 +136,14 @@ def render(
         pdf_text_full, pdf_budget, page_hints=page_hints,
     )
 
-    full = _assemble(rules_block, template_structure, pdf_trimmed, trimmed=trimmed)
+    full = _assemble(
+        rules_block,
+        template_structure,
+        pdf_trimmed,
+        trimmed=trimmed,
+        blank_pages=blank_pages,
+    )
     byte_size = _byte_length(full)
-    # If the prompt is still over the ceiling — usually because the
-    # template-structure block alone exceeds it — flag `trimmed=True` so
-    # the operator knows the cache budget is exceeded. The PDF text was
-    # already squeezed; further trimming would mean cutting structure,
-    # which we won't do silently.
     over_budget = byte_size > byte_ceiling
     return RenderedPrompt(
         rules_block=rules_block,
@@ -120,6 +152,8 @@ def render(
         full=full,
         byte_size=byte_size,
         trimmed=trimmed or over_budget,
+        blank_pages=list(blank_pages),
+        pdf_text_empty=False,
     )
 
 
@@ -257,8 +291,15 @@ def _row_kind(ws, row: int, *, is_abstract: bool) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _extract_pdf_text(pdf_path: str) -> str:
+def _extract_pdf_text(pdf_path: str) -> tuple[str, list[int]]:
     """Page-marked PyMuPDF extract of the PDF.
+
+    Returns (text, blank_page_numbers). `blank_page_numbers` is the
+    1-indexed list of pages where PyMuPDF returned an empty string. The
+    caller derives `all_blank` from `len(blank) == total_pages`. The
+    full list (not just an all/nothing flag) lets the coordinator
+    preload the right subset as vision on mixed-text-and-scanned PDFs
+    (peer-review #3).
 
     Format:
         === page 1 ===
@@ -267,22 +308,40 @@ def _extract_pdf_text(pdf_path: str) -> str:
         === page 2 ===
         ...
     """
+    if not pdf_path:
+        return "", []
     try:
         import fitz  # PyMuPDF
     except ImportError:
         logger.warning("PyMuPDF not available — PDF text will be empty.")
-        return ""
+        return "", []
 
     out: list[str] = []
+    blank_pages: list[int] = []
     doc = fitz.open(pdf_path)
     try:
-        for i in range(len(doc)):
+        page_count = len(doc)
+        for i in range(page_count):
             page = doc[i]
-            text = page.get_text("text") or ""
-            out.append(f"=== page {i + 1} ===\n{text.rstrip()}")
+            text = (page.get_text("text") or "").rstrip()
+            if not text:
+                blank_pages.append(i + 1)
+            out.append(f"=== page {i + 1} ===\n{text}")
     finally:
         doc.close()
-    return "\n\n".join(out)
+    if blank_pages and len(blank_pages) == page_count:
+        logger.warning(
+            "PDF %s has no text layer — every page returned 0 chars from "
+            "PyMuPDF. Monolith coordinator will preload pages as vision.",
+            pdf_path,
+        )
+    elif blank_pages:
+        logger.info(
+            "PDF %s has %d/%d blank pages (text + scanned mix). "
+            "Coordinator will preload the blank pages as vision.",
+            pdf_path, len(blank_pages), page_count,
+        )
+    return "\n\n".join(out), blank_pages
 
 
 def _maybe_trim_pdf_text(
@@ -378,7 +437,12 @@ def _byte_length(s: str) -> int:
 
 
 def _assemble(
-    rules: str, structure: str, pdf_text: str, *, trimmed: bool,
+    rules: str,
+    structure: str,
+    pdf_text: str,
+    *,
+    trimmed: bool,
+    blank_pages: Optional[Iterable[int]] = None,
 ) -> str:
     parts: list[str] = [rules.strip(), "", structure.strip(), ""]
     parts.append("## PDF TEXT (cached)")
@@ -388,6 +452,41 @@ def _assemble(
             "_NOTE: PDF text trimmed to fit the cached-prefix byte ceiling._"
             " Use `view_pdf_pages` for any page not below."
         )
+    if blank_pages:
+        # Mixed-PDF case (peer-review #3). Surface the blank page numbers
+        # so the agent doesn't silently swallow the empty markers — those
+        # pages have been pre-rendered as PNG and attached to the opening
+        # user message.
+        pages_str = ", ".join(str(p) for p in blank_pages)
+        parts.append("")
+        parts.append(
+            f"_NOTE: pages {pages_str} returned 0 chars from PyMuPDF and "
+            "are attached as PNG images on the opening user message. Use "
+            "those images as the authoritative source for those pages; "
+            "the text section below shows their headers but no body._"
+        )
     parts.append("")
     parts.append(pdf_text.strip())
+    return "\n".join(parts).strip() + "\n"
+
+
+def _assemble_vision_only(rules: str, structure: str) -> str:
+    """Variant used when the PDF has no text layer.
+
+    Replaces the PDF TEXT block with a banner pointing at the opening
+    user message, where the coordinator front-loads every page as a
+    PNG vision payload. The agent's `view_pdf_pages` tool is still
+    available for re-fetching a specific page mid-run.
+    """
+    parts: list[str] = [rules.strip(), "", structure.strip(), ""]
+    parts.append("## PDF (vision-only — image-only / scanned PDF)")
+    parts.append("")
+    parts.append(
+        "_NOTE: PyMuPDF returned 0 chars for every page — this PDF has no "
+        "text layer. Every page has been pre-rendered as a PNG and is "
+        "attached to the opening user message; treat those images as the "
+        "authoritative source. You may still call `view_pdf_pages` to "
+        "re-fetch a specific page at higher attention, but do NOT bail "
+        "out citing empty text — the data is in the images._"
+    )
     return "\n".join(parts).strip() + "\n"
