@@ -28,6 +28,7 @@ from pydantic_ai.settings import ModelSettings
 
 from cross_checks.framework import CrossCheckResult
 from statement_types import StatementType
+from tools.calculator import calculator_result_json as _calculator_impl
 from tools.fill_workbook import fill_workbook as _fill_workbook_impl
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from tools.verifier import verify_statement as _verify_statement_impl
@@ -234,6 +235,17 @@ def create_correction_agent(
         system_prompt=system_prompt,
         model_settings=ModelSettings(temperature=1.0),
     )
+
+    @agent.tool
+    def calculator(ctx: RunContext[CorrectionAgentDeps], expression: str) -> str:
+        """Evaluate arithmetic exactly.
+
+        Use this before changing values when a failed cross-check requires
+        a subtotal, residual, or movement calculation. Supports numbers,
+        parentheses, unary signs, and + - * /. Use explicit negatives such as
+        -123; accounting parentheses are treated as ordinary grouping.
+        """
+        return _calculator_impl(expression)
 
     @agent.tool
     def inspect_workbook(

@@ -2,8 +2,9 @@
 
 Replaces the SOFP-specific create_sofp_agent with a parametric factory that works
 for all 5 statement types. Each agent gets a statement-specific system prompt built
-from the prompts/ directory, the same set of tools (view_pdf_pages, fill_workbook,
-verify_totals, save_result, read_template), and optional page hints from scout.
+from the prompts/ directory, the same set of tools (calculator, view_pdf_pages,
+fill_workbook, verify_totals, save_result, read_template), and optional page
+hints from scout.
 """
 
 import json
@@ -19,6 +20,7 @@ from pydantic_ai.settings import ModelSettings
 
 from statement_types import StatementType
 from token_tracker import TokenReport
+from tools.calculator import calculator_result_json as _calculator_impl
 from tools.template_reader import read_template as _read_template_impl, TemplateField
 from tools.pdf_viewer import render_pages_to_png_bytes, count_pdf_pages
 from tools.fill_workbook import fill_workbook as _fill_workbook_impl
@@ -440,6 +442,17 @@ def create_extraction_agent(
     )
 
     # --- Tools ---
+
+    @agent.tool
+    def calculator(ctx: RunContext[ExtractionDeps], expression: str) -> str:
+        """Evaluate arithmetic exactly.
+
+        Use this for subtotal checks and reconciliations after reading numbers
+        from the PDF. Supports numbers, parentheses, unary signs, and + - * /.
+        Use explicit negatives such as -123; accounting parentheses are
+        treated as ordinary grouping.
+        """
+        return _calculator_impl(expression)
 
     @agent.tool
     def read_template(ctx: RunContext[ExtractionDeps]) -> str:

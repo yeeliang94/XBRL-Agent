@@ -9,6 +9,9 @@ describe("humanToolName", () => {
   test("read_template → 'Reading template'", () => {
     expect(humanToolName("read_template")).toBe("Reading template");
   });
+  test("calculator → 'Calculating'", () => {
+    expect(humanToolName("calculator")).toBe("Calculating");
+  });
   test("view_pdf_pages → 'Checking PDF pages'", () => {
     expect(humanToolName("view_pdf_pages")).toBe("Checking PDF pages");
   });
@@ -85,6 +88,10 @@ describe("argsPreview", () => {
     }));
     const args = { fields_json: JSON.stringify({ fields }) };
     expect(argsPreview("fill_workbook", args)).toBe("24 fields → SOFP-Sub-CuNonCu");
+  });
+
+  test("calculator shows a short expression preview", () => {
+    expect(argsPreview("calculator", { expression: "1,234 + 66" })).toBe("1,234 + 66");
   });
 
   // read_template — shows just the filename, not the full path.
@@ -175,6 +182,18 @@ describe("resultSummary", () => {
     expect(resultSummary("save_infopack", "ok")).toEqual({
       text: "saved",
       tone: "success",
+    });
+  });
+  test("calculator result JSON → success / exact result", () => {
+    expect(resultSummary("calculator", '{"result":"0.3"}')).toEqual({
+      text: "0.3",
+      tone: "success",
+    });
+  });
+  test("calculator error JSON → warn / error", () => {
+    expect(resultSummary("calculator", '{"error":"Division by zero."}')).toEqual({
+      text: "error",
+      tone: "warn",
     });
   });
   test("unknown tool / unparseable summary → null (caller falls back to duration)", () => {
