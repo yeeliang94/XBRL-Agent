@@ -186,6 +186,43 @@ def _eq_lenient(a: Any, b: Any) -> bool:
         return a == b
 
 
+def _workbook_has_explicit_numerics(workbook_path: str) -> bool:
+    """True if any data column on any sheet carries a non-formula numeric.
+
+    Templates ship with formulas + labels only — zero numeric values in
+    columns B+. After a successful `write_cells` batch the writer
+    deposits real numbers. This is the persisted-state half of the
+    empty-workbook guard (peer-review HIGH #1): on a resumed run, the
+    in-memory `_writes_by_cell` tracker is empty, but the workbook
+    already has data — the guard must not refuse `done` in that case.
+
+    Reads with `data_only=False` so formula cells appear as their
+    formula string (skipped) rather than their cached value.
+    """
+    try:
+        wb = openpyxl.load_workbook(workbook_path, data_only=False)
+    except Exception as exc:
+        logger.debug(
+            "Could not open %s to check pre-existing writes: %s",
+            workbook_path, exc,
+        )
+        return False
+    try:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.column < 2:
+                        # Col A is labels; never a data write.
+                        continue
+                    v = cell.value
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        return True
+        return False
+    finally:
+        wb.close()
+
+
 # ---------------------------------------------------------------------------
 # get_state
 # ---------------------------------------------------------------------------
@@ -658,6 +695,32 @@ def done(
         history_hints=ctx.history_hints(),
     )
     ctx.last_snapshot = snap
+
+    # Empty-workbook guard. An effectively-blank workbook makes most
+    # cross-checks pass vacuously (0 == 0), which means a single weak
+    # accept_imbalance could rubber-stamp a completely empty filling.
+    # Refuse `done` when neither the current agent has written nor the
+    # workbook on disk contains any explicit numeric data — regardless
+    # of cross-check state. The 2026-05-28 scanned-PDF incident (run
+    # 82dd3ac8) triggered exactly this exit path. Reading persisted
+    # data (not just in-memory) covers the resumed-run path documented
+    # at `_materialise_workbook` and flagged by peer-review HIGH #1.
+    if not ctx._writes_by_cell and not _workbook_has_explicit_numerics(
+        ctx.workbook_path,
+    ):
+        return CompletionResult(
+            status="not_done",
+            failing_checks=sorted(
+                {c.id for c in snap.cross_checks if not c.pass_}
+                | {c.id for c in snap.verifier if not c.pass_}
+            ),
+            accepted_residuals=[],
+            message=(
+                "Cannot finalise — the workbook has no cell writes yet. "
+                "Extract values from the PDF and call write_cells before "
+                "calling done."
+            ),
+        ).to_dict()
 
     failing_now = {
         c.id for c in snap.cross_checks if not c.pass_

@@ -64,6 +64,23 @@ def _ctx(tmp_path: Path, **kw) -> MonolithToolContext:
     )
 
 
+def _seed_one_write(ctx: MonolithToolContext) -> None:
+    """Land one accepted write so `done()` clears the empty-workbook guard.
+
+    The accept_imbalance validation tests must hit the per-entry
+    validation branch, not the empty-workbook short-circuit added for
+    the 2026-05-28 scanned-PDF incident — seed a minimal write first.
+    """
+    snap = get_state(ctx)
+    leaf = next(
+        r for r in snap["sheets"]["SOFP"]["rows"] if r["kind"] == "leaf"
+    )
+    write_cells(ctx, [
+        {"sheet": "SOFP-CuNonCu", "row": leaf["row"], "col": "cy",
+         "value": 1, "evidence": "seed for done() validation tests"},
+    ])
+
+
 # -----------------------------------------------------------------------------
 # get_state
 # -----------------------------------------------------------------------------
@@ -204,8 +221,75 @@ def test_done_on_blank_workbook_returns_not_done(tmp_path):
     assert out["failing_checks"], "expected at least one failing check"
 
 
+def test_done_clears_guard_when_workbook_has_pre_existing_numerics(tmp_path):
+    """Peer-review HIGH #1: a resumed run starts with an empty
+    `_writes_by_cell` tracker but an already-written workbook. The
+    empty-workbook guard must not refuse `done` in that case — read
+    the persisted file, not just memory.
+    """
+    ctx = _ctx(tmp_path)
+    # Plant a numeric directly on disk to simulate a previous run's
+    # accepted writes. Don't go through write_cells — that would
+    # populate `_writes_by_cell` and bypass the half of the guard we
+    # want to exercise.
+    wb = openpyxl.load_workbook(ctx.workbook_path, data_only=False)
+    try:
+        wb["SOFP-CuNonCu"].cell(row=5, column=2, value=12345)
+        wb.save(ctx.workbook_path)
+    finally:
+        wb.close()
+    assert not ctx._writes_by_cell, (
+        "test setup invariant: tracker must stay empty so we exercise "
+        "the persisted-data half of the guard"
+    )
+    snap = get_state(ctx)
+    failing_ids = [c["id"] for c in snap["cross_checks"] if not c["pass"]]
+    failing_ids.extend([c["id"] for c in snap["verifier"] if not c["pass"]])
+    out = done(ctx, accept_imbalance=[
+        {
+            "check_id": cid,
+            "reason": "resumed-run continuation",
+            "pdf_page": 1,
+            "evidence_excerpt": "stub",
+        }
+        for cid in failing_ids
+    ])
+    assert out["status"] == "done", (
+        f"expected done to honour pre-existing writes; got: {out}"
+    )
+
+
+def test_done_refuses_when_workbook_has_no_writes(tmp_path):
+    """Empty-workbook guard (2026-05-28 scanned-PDF incident).
+
+    Even when the agent supplies an `accept_imbalance` entry for every
+    currently-failing check, `done` must refuse if no `write_cells` has
+    ever landed — otherwise a vacuous all-zero workbook gets
+    rubber-stamped because most cross-checks pass trivially (0 == 0).
+    """
+    ctx = _ctx(tmp_path)
+    snap = get_state(ctx)
+    failing_ids = [c["id"] for c in snap["cross_checks"] if not c["pass"]]
+    failing_ids.extend([c["id"] for c in snap["verifier"] if not c["pass"]])
+    out = done(ctx, accept_imbalance=[
+        {
+            "check_id": cid,
+            "reason": "would-be rubber-stamp",
+            "pdf_page": 1,
+            "evidence_excerpt": "stub excerpt",
+        }
+        for cid in failing_ids
+    ])
+    assert out["status"] == "not_done"
+    assert "no cell writes" in out["message"].lower()
+    # accept_imbalance entries are NOT promoted to accepted_residuals
+    # when the guard fires — the agent must write first, then accept.
+    assert out["accepted_residuals"] == []
+
+
 def test_done_rejects_accept_with_passing_check_id(tmp_path):
     ctx = _ctx(tmp_path)
+    _seed_one_write(ctx)
     out = done(ctx, accept_imbalance=[{
         "check_id": "definitely_not_a_real_check",
         "reason": "made up",
@@ -223,6 +307,7 @@ def test_done_rejects_accept_with_passing_check_id(tmp_path):
 
 def test_done_rejects_accept_with_out_of_range_page(tmp_path):
     ctx = _ctx(tmp_path)
+    _seed_one_write(ctx)
     snap = get_state(ctx)
     failing_id = next(
         c["id"] for c in snap["cross_checks"] if not c["pass"]
@@ -242,6 +327,7 @@ def test_done_rejects_accept_with_out_of_range_page(tmp_path):
 
 def test_done_rejects_accept_with_empty_excerpt(tmp_path):
     ctx = _ctx(tmp_path)
+    _seed_one_write(ctx)
     snap = get_state(ctx)
     failing_id = next(
         c["id"] for c in snap["cross_checks"] if not c["pass"]
@@ -261,6 +347,7 @@ def test_done_rejects_accept_with_empty_excerpt(tmp_path):
 
 def test_done_accepts_when_every_failing_check_is_named(tmp_path):
     ctx = _ctx(tmp_path)
+    _seed_one_write(ctx)
     snap = get_state(ctx)
     failing_ids = [c["id"] for c in snap["cross_checks"] if not c["pass"]]
     failing_ids.extend([c["id"] for c in snap["verifier"] if not c["pass"]])

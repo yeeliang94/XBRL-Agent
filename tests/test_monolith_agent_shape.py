@@ -233,7 +233,9 @@ def test_run_monolith_passes_usage_limits_to_agent_iter(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mc,
         "render_monolith_prompt",
-        lambda *a, **k: type("R", (), {"full": "stub"})(),
+        lambda *a, **k: type(
+            "R", (), {"full": "stub", "pdf_text_empty": False},
+        )(),
     )
 
     config = MonolithRunConfig(

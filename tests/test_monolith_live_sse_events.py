@@ -206,7 +206,9 @@ async def test_monolith_emits_tool_call_and_tool_result_events(tmp_path):
          patch.object(mc, "_snapshot_workbook", lambda _p: None), \
          patch.object(
              mc, "render_monolith_prompt",
-             lambda *a, **k: type("R", (), {"full": "stub"})(),
+             lambda *a, **k: type(
+                 "R", (), {"full": "stub", "pdf_text_empty": False},
+             )(),
          ):
         cfg = MonolithRunConfig(
             pdf_path=str(pdf),

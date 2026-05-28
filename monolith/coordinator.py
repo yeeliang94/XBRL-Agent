@@ -49,6 +49,9 @@ from monolith.config import (
     MAX_AGENT_ITERATIONS_MONOLITH,
     MONOLITH_REQUEST_LIMIT,
     MONOLITH_TURN_TIMEOUT,
+    MONOLITH_VISION_PRELOAD_DPI,
+    MONOLITH_VISION_PRELOAD_MAX_BYTES,
+    MONOLITH_VISION_PRELOAD_MAX_PAGES,
     MONOLITH_WALLCLOCK_SECONDS,
     MONOLITH_WALLCLOCK_WARNING_SECONDS,
 )
@@ -182,6 +185,16 @@ async def run_monolith(
         page_hints=config.page_hints or {},
     )
 
+    # Scanned-PDF fallback (gotcha #14 parity): when PyMuPDF returned no
+    # text layer, front-load every page as PNG vision in the opening
+    # user message. The system prompt already carries the matching
+    # banner; the agent gets pixels instead of an empty cache.
+    initial_user_prompt = _build_initial_user_prompt(
+        rendered=rendered,
+        pdf_path=config.pdf_path,
+        pdf_page_count=pdf_page_count,
+    )
+
     agent, deps = _build_agent(
         model=config.model,
         rendered_prompt=rendered.full,
@@ -221,7 +234,7 @@ async def run_monolith(
         from pydantic_ai.usage import UsageLimits
 
         async with agent.iter(
-            "Begin. Call get_state() and follow the workflow contract.",
+            initial_user_prompt,
             deps=deps,
             usage_limits=UsageLimits(request_limit=MONOLITH_REQUEST_LIMIT),
         ) as agent_run:
@@ -638,6 +651,195 @@ def _build_agent(
         return results
 
     return agent, deps
+
+
+# ---------------------------------------------------------------------------
+# Initial user prompt
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_BEGIN = "Begin. Call get_state() and follow the workflow contract."
+
+
+def _build_initial_user_prompt(
+    *,
+    rendered,
+    pdf_path: str,
+    pdf_page_count: int,
+):
+    """Return the user prompt for the agent's opening turn.
+
+    Normal path: a plain text instruction (string). The cached PDF text
+    in the system prompt is the agent's source.
+
+    Vision-preload path (any blank pages — scanned PDF, or text+scan
+    mix): a list mixing a text banner with one `BinaryContent` PNG per
+    blank page. Matches the shape `view_pdf_pages` returns mid-run, so
+    PydanticAI binds the image bytes into the opening turn's message
+    envelope. Provider-side prompt caches see the same bytes on every
+    subsequent turn, so the cost is paid once.
+
+    Page rendering honours the budget caps in `monolith/config.py`:
+    DPI is lowered from 200 → 150, and pages over the count / byte
+    budget are dropped from the tail and surfaced in the banner so the
+    agent knows to call `view_pdf_pages` mid-run for them.
+    """
+    blank_pages = list(getattr(rendered, "blank_pages", []) or [])
+    if not blank_pages or pdf_page_count <= 0:
+        return _DEFAULT_BEGIN
+
+    preloaded, dropped = _select_and_render_blank_pages(
+        pdf_path=pdf_path, blank_pages=blank_pages,
+    )
+    if not preloaded:
+        # Pathological: every blank page exceeded the budget on its
+        # own. Fall back to the plain string prompt — the system
+        # prompt's banner still tells the agent which pages are blank
+        # and `view_pdf_pages` is always available.
+        return _DEFAULT_BEGIN
+
+    banner = _vision_preload_banner(
+        all_blank=rendered.pdf_text_empty,
+        preloaded_pages=[p for p, _ in preloaded],
+        dropped_pages=dropped,
+        pdf_page_count=pdf_page_count,
+    )
+    parts: list = [banner]
+    for page_num, png in preloaded:
+        parts.append(f"=== page {page_num} ===")
+        parts.append(BinaryContent(data=png, media_type="image/png"))
+    return parts
+
+
+def _select_and_render_blank_pages(
+    *, pdf_path: str, blank_pages: list[int],
+) -> tuple[list[tuple[int, bytes]], list[int]]:
+    """Render PNGs page-by-page up to the byte + count cap.
+
+    Returns (preloaded, dropped) where `preloaded` is the list of
+    (page_num, png_bytes) that fit and `dropped` is the page numbers
+    we couldn't fit. The cap is page-count first (cheap), then
+    cumulative byte budget; we drop from the tail of `blank_pages`
+    so the earliest pages of the financial statements are kept
+    (Malaysian audited reports lead with the directors' report and
+    auditor's letter, so the face statements live in the middle —
+    but tail-drop still beats arbitrary mid-document drops for
+    debuggability).
+    """
+    # Page-count cap first — saves the PyMuPDF render work entirely.
+    candidates = blank_pages[: MONOLITH_VISION_PRELOAD_MAX_PAGES]
+    dropped_by_count = blank_pages[MONOLITH_VISION_PRELOAD_MAX_PAGES :]
+
+    preloaded: list[tuple[int, bytes]] = []
+    dropped: list[int] = list(dropped_by_count)
+    used_bytes = 0
+    for page_num in candidates:
+        try:
+            pngs = render_pages_to_png_bytes(
+                pdf_path,
+                start=page_num,
+                end=page_num,
+                dpi=MONOLITH_VISION_PRELOAD_DPI,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Vision preload skipped page %d: %s", page_num, exc,
+            )
+            dropped.append(page_num)
+            continue
+        if not pngs:
+            dropped.append(page_num)
+            continue
+        png = pngs[0]
+        if used_bytes + len(png) > MONOLITH_VISION_PRELOAD_MAX_BYTES:
+            # Drop this page and every subsequent one — the byte
+            # budget governs the rest of the loop.
+            idx = candidates.index(page_num)
+            dropped.extend(candidates[idx:])
+            break
+        preloaded.append((page_num, png))
+        used_bytes += len(png)
+    return preloaded, dropped
+
+
+def _vision_preload_banner(
+    *,
+    all_blank: bool,
+    preloaded_pages: list[int],
+    dropped_pages: list[int],
+    pdf_page_count: int,
+) -> str:
+    """Text portion of the opening user message in vision-preload mode.
+
+    The wording surfaces (a) why images are attached, (b) which pages
+    the agent can find in the message, and (c) which pages it must
+    fetch on demand via `view_pdf_pages` — the budget-overflow case.
+    """
+    if all_blank:
+        intro = (
+            f"PDF text extraction returned 0 chars for every page of this "
+            f"{pdf_page_count}-page PDF. The pages listed below are "
+            "attached as PNG images on this message."
+        )
+    else:
+        intro = (
+            "Some pages of this PDF have no text layer (the cached PDF "
+            "text in the system prompt shows their headers but no body). "
+            "The pages listed below are attached as PNG images on this "
+            "message; treat them as the authoritative source for those "
+            "pages."
+        )
+    pages_str = _summarise_page_list(preloaded_pages) or "none"
+    lines = [
+        "Begin. Call get_state() and follow the workflow contract.",
+        "",
+        intro,
+        "",
+        f"Attached pages (PNG): {pages_str}.",
+    ]
+    if dropped_pages:
+        dropped_str = _summarise_page_list(dropped_pages)
+        lines.append("")
+        lines.append(
+            f"NOT attached (budget cap): {dropped_str}. Call "
+            "view_pdf_pages(start, end) when you need any of those — "
+            "the budget covers a bounded preload, not the whole PDF."
+        )
+    lines.append("")
+    lines.append(
+        "Do NOT bail out citing empty cached text — the data is in the "
+        "attached images."
+    )
+    return "\n".join(lines)
+
+
+def _summarise_page_list(pages: list[int]) -> str:
+    """Render a sorted list of page numbers as compact ranges.
+
+    `[1,2,3,7,8,10]` → `"1-3, 7-8, 10"`. Keeps the banner readable
+    on long PDFs where a flat comma list would dominate the message.
+    """
+    if not pages:
+        return ""
+    sorted_pages = sorted(set(pages))
+    ranges: list[str] = []
+    run_start = sorted_pages[0]
+    run_end = run_start
+    for p in sorted_pages[1:]:
+        if p == run_end + 1:
+            run_end = p
+            continue
+        ranges.append(
+            str(run_start) if run_start == run_end
+            else f"{run_start}-{run_end}"
+        )
+        run_start = p
+        run_end = p
+    ranges.append(
+        str(run_start) if run_start == run_end
+        else f"{run_start}-{run_end}"
+    )
+    return ", ".join(ranges)
 
 
 # ---------------------------------------------------------------------------
