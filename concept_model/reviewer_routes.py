@@ -1,4 +1,4 @@
-"""Reviewer-tab API — read surface + flag triage (docs/PLAN-reviewer-agent.md).
+"""Reviewer-tab API — read surface + flag triage (docs/Archive/PLAN-reviewer-agent.md).
 
 Two endpoints register cleanly as a standalone module (no server import,
 mirroring ``concepts_routes.py`` / ``facts_api.py``):

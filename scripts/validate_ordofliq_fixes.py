@@ -9,7 +9,7 @@ After applying fixes to the template, run this script to verify that:
 4. Row 295 (Total payables) only sums subtotals, not leaf items
 
 Usage:
-  python validate_ordofliq_fixes.py [path_to_fixed_template.xlsx]
+  python scripts/validate_ordofliq_fixes.py [path_to_fixed_template.xlsx]
 
 Defaults to: /sessions/happy-zealous-dirac/mnt/xbrl-agent/XBRL-template-MFRS/02-SOFP-OrderOfLiquidity.xlsx
 """

@@ -2,7 +2,7 @@
 
 These pin the purity contract (input list never mutated) and the
 last-batch-only retention rule for images, plus the keep-first-only rule for
-duplicate template summaries. See docs/PLAN-token-cost-reduction.md.
+duplicate template summaries. See docs/Archive/PLAN-token-cost-reduction.md.
 """
 
 import copy

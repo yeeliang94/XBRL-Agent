@@ -19,7 +19,7 @@ Output:
       - Cell content overlap between visible "[Text block added]" rows
         and hidden footnote rows
       - A summary verdict that's safe to copy into
-        `docs/SSM-NOTES-FORMAT-INVESTIGATION.md`
+        `docs/Archive/SSM-NOTES-FORMAT-INVESTIGATION.md`
 
 Investigation-only — does not modify the input file.
 """
@@ -188,7 +188,7 @@ def render_report(summary: Dict[str, Any]) -> str:
             "present. RUN-REVIEW P0-2 should be closed as not-actionable "
             "in this checkout — the inline-HTML output the codebase "
             "produces today is appropriate. Document the finding in "
-            "docs/SSM-NOTES-FORMAT-INVESTIGATION.md."
+            "docs/Archive/SSM-NOTES-FORMAT-INVESTIGATION.md."
         )
 
     return "\n".join(lines)

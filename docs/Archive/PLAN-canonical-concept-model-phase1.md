@@ -86,7 +86,7 @@ the four-statement multi-template case.
 
 ## Deviations from the plan
 
-- **Step 0.10 PLAN.md status flips**: the on-disk `docs/PLAN.md` carries
+- **Step 0.10 PLAN.md status flips**: the on-disk `docs/Archive/PLAN-editable-review-and-template-settings.md` carries
   a different (MPERS abstract-row) plan unrelated to the canonical
   concept model.  Progress tracking for canonical-concept-model phases
   lives in this doc instead.

@@ -45,7 +45,7 @@ Every agent talks to the same LLM backend through `_create_proxy_model()` in
 | `token_tracker.py` | Accumulates token usage per agent for the dashboard. |
 | `task_registry.py` | In-memory task registry for SSE event routing. |
 | `compare_results.py` | Manual diff script for validating a filled workbook against a reference file. See CLAUDE.md gotcha #4. |
-| `validate_ordofliq_fixes.py` | One-off validator for SOFP OrderOfLiquidity formula fixes. |
+| `scripts/validate_ordofliq_fixes.py` | One-off validator for SOFP OrderOfLiquidity formula fixes. |
 | `litellm_config.yaml` | LiteLLM proxy config (Mac-local dev proxy). |
 | `start.sh` | Mac/Linux launch — starts local LiteLLM (`:4000`) + server (`:8002`). |
 | `start.bat` | Windows launch — uses enterprise proxy directly (no local LiteLLM). |

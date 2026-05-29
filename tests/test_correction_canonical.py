@@ -338,7 +338,7 @@ def test_correction_exhausted_routes_to_reconciliation_queue(
 
 def test_canonical_mode_invokes_reviewer_when_imbalance_present() -> None:
     """Canonical mode runs the REVIEWER pass on an imbalance
-    (docs/PLAN-reviewer-agent.md, Step 9/10) — the reviewer replaced the
+    (docs/Archive/PLAN-reviewer-agent.md, Step 9/10) — the reviewer replaced the
     autonomous canonical correction pass.
 
     Pinned via source inspection: the canonical branch at the

@@ -1143,7 +1143,7 @@ async def _run_reviewer_pass(
     guidance: Optional[str] = None,
     agent_id: str = CORRECTION_AGENT_ID,
 ) -> dict:
-    """Reviewer pass (docs/PLAN-reviewer-agent.md) — replaces the autonomous
+    """Reviewer pass (docs/Archive/PLAN-reviewer-agent.md) — replaces the autonomous
     canonical correction pass.
 
     The reviewer investigates the root cause of each failing cross-check /
@@ -1792,7 +1792,7 @@ from concept_model.facts_api import register_facts_routes as _register_facts_rou
 _register_facts_routes(app, lambda: AUDIT_DB_PATH)
 from concept_model.concepts_routes import register_concept_routes as _register_concept_routes
 _register_concept_routes(app, lambda: AUDIT_DB_PATH)
-# Reviewer tab read surface (docs/PLAN-reviewer-agent.md): GET /review +
+# Reviewer tab read surface (docs/Archive/PLAN-reviewer-agent.md): GET /review +
 # POST /flags/{id}/answer. The heavier re-review / revert endpoints that
 # need server orchestration are defined further down in this module.
 from concept_model.reviewer_routes import register_reviewer_routes as _register_reviewer_routes
@@ -1976,7 +1976,7 @@ def _load_extended_settings() -> dict:
         "default_models": default_models,
         "scout_enabled_default": scout_enabled,
         "tolerance_rm": tolerance,
-        # Reviewer pass auto-trigger (docs/PLAN-reviewer-agent.md). Default on.
+        # Reviewer pass auto-trigger (docs/Archive/PLAN-reviewer-agent.md). Default on.
         "auto_review": _auto_review_enabled(),
     }
 
@@ -4176,7 +4176,7 @@ async def run_multi_agent_stream(
                 # non-canonical path keeps "correcting".
                 _emit_stage("reviewing" if canonical else "correcting")
                 if canonical:
-                    # Reviewer pass (docs/PLAN-reviewer-agent.md) replaces
+                    # Reviewer pass (docs/Archive/PLAN-reviewer-agent.md) replaces
                     # the autonomous canonical correction pass. It is
                     # driven by BOTH failing cross-checks and open
                     # conflicts, snapshots the original facts first (the
@@ -5362,7 +5362,7 @@ async def rerun_agent(session_id: str, body: RunConfigRequest):
 
 
 # ---------------------------------------------------------------------------
-# Reviewer-tab orchestration endpoints (docs/PLAN-reviewer-agent.md, Steps
+# Reviewer-tab orchestration endpoints (docs/Archive/PLAN-reviewer-agent.md, Steps
 # 13-14). The read surface (GET /review, POST /flags/{id}/answer) lives in
 # concept_model/reviewer_routes.py; these two need server orchestration
 # (model creation, the reviewer pass, workbook re-export) so they live here.
