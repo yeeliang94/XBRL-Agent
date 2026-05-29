@@ -107,8 +107,12 @@ LLM_PROXY_API_KEY=             # proxy auth key; start.sh sets the local-dev mas
 GOOGLE_API_KEY=                # real Google key; also the proxy auth key on Windows (no LLM_PROXY_API_KEY there)
 
 # Model defaults
-TEST_MODEL=google-gla:gemini-3-flash-preview
-SCOUT_MODEL=google-gla:gemini-3-flash-preview
+TEST_MODEL=openai.gpt-5.4
+SCOUT_MODEL=openai.gpt-5.4     # falls back to TEST_MODEL when blank
+
+# Canonical concept model — DEFAULT-ON for this project (see gotcha #21).
+# Set empty / 0 / false to fall back to the legacy direct-xlsx pipeline.
+XBRL_CANONICAL_MODE=1
 ```
 
 ### PydanticAI Model Creation (v1.77+)
@@ -317,7 +321,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **8**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **11**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -336,6 +340,17 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   request/response content stays in `{stmt}_conversation_trace.json` on disk
   (hybrid storage; see docs/PLAN-run-page-and-telemetry.md and gotcha #6).
   Pinned by `tests/test_db_schema_v8.py`.
+- **v8 → v9:** adds `concept_nodes.matrix_col_label` — hydrated from SOCIE
+  row-2 headers at template-import time. Nullable; existing concepts read
+  NULL until the startup bootstrap re-imports.
+- **v9 → v10:** adds `runs.orchestration` (`TEXT DEFAULT 'split'`) — the
+  monolith-experiment orchestration flag. Legacy runs default to `'split'`
+  (current coordinator path).
+- **v10 → v11:** adds the `concept_render_aliases` table — secondary render
+  coords for concepts that occupy more than one physical cell (face-sheet
+  rows whose value cross-rolls-up from a sub-sheet total). See the
+  cross-sheet rollup linkage note in gotcha #21. Pinned by
+  `tests/test_db_schema_v11.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -645,23 +660,45 @@ Two paths used to swallow errors silently (2026-04-27 fix):
   whole pipeline. Pinned by
   `tests/test_silent_exception_surfacing.py`.
 
-### 21. Canonical concept model — WORK IN PROGRESS (uncommitted)
+### 21. Canonical concept model — DEFAULT-ON pipeline
 
-A new `concept_model/` subsystem is under active development: a read-mostly
-canonical concept registry (parser, importer, exporter, cell resolver,
-cascade recompute, group checks, facts API) plus a canonical correction
-agent (`correction/canonical_agent.py`, `prompts/correction_canonical.md`).
-It carries the working-tree DB schema to v6 (see gotcha #11) and adds a
-`tests/test_concept_*` / `tests/test_canonical_*` / `tests/test_facts_api*`
-suite.
+The `concept_model/` subsystem (parser, importer, exporter, cell resolver,
+cascade recompute, group checks, facts API) plus the canonical correction
+agent (`correction/canonical_agent.py`, `prompts/correction_canonical.md`)
+is the **default extraction → correction → export pipeline** for this
+project. The project's checked-in `.env` ships with `XBRL_CANONICAL_MODE=1`,
+and every code path downstream of that flag is fully wired:
 
-**This is not shipped yet** — the plan notes real-PDF validation and
-correction-agent wiring are still owed, so its interfaces and invariants may
-still change. Treat the plan docs as the source of truth, not this file:
+- **Extraction (Phase B):** `coordinator.py` threads `run_id` + `db_path`
+  into the extraction tools so writes project into `run_concept_facts` as
+  they happen.
+- **Export (Phase C):** `_export_canonical_workbooks` (server.py) re-renders
+  each succeeded statement from `run_concept_facts` via
+  `concept_model/exporter.py::export_run_to_xlsx`, then merges. The download
+  reflects the authoritative DB facts, not the scratch xlsx the agent wrote.
+  Falls back to the agent workbook per-statement when an export applies
+  zero facts (peer-review finding 1).
+- **Correction (Phase D):** `_run_canonical_correction_pass` operates on
+  open conflicts in `run_concept_conflicts`, writes resolutions through the
+  facts API, and re-exports + re-merges the workbook so the download and
+  the Concepts UI stay in sync (no xlsx split-brain). The legacy
+  `correction.md` / `_run_correction_pass` path only runs in non-canonical
+  mode.
+- **Frontend:** the Values tab (`RunDetailView.tsx`) and the `/concepts/{id}`
+  alias are visible whenever `/api/config` reports `canonical_mode: true`.
+
+**Disabling canonical mode** (for legacy-pipeline debugging only): unset or
+set falsy `XBRL_CANONICAL_MODE` in `.env`. The legacy direct-xlsx pipeline
+still works — both branches are exercised by tests
+(`tests/test_canonical_mode_flag.py` pins the fallback contract). But
+**don't** ship a default-off change without updating this gotcha and
+`.env`; the Values tab, concept-tree review UI, and the canonical
+correction agent all silently disappear when the flag is off.
+
+Plan / PRD docs (historical context, not API contracts):
 [docs/PLAN-canonical-concept-model.md](docs/PLAN-canonical-concept-model.md),
 [docs/PLAN-canonical-concept-model-phase1.md](docs/PLAN-canonical-concept-model-phase1.md),
 [docs/PRD-canonical-concept-model.html](docs/PRD-canonical-concept-model.html).
-Promote a proper invariant section here once the work lands.
 
 **Cross-sheet rollup linkage (2026-05-28, schema v11, "render twice"):**
 Face statement rows that pull their value from a sub-sheet total via
