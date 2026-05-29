@@ -1,5 +1,8 @@
-"""Correction-agent package.
+"""Correction package.
 
-Holds the factory + deps for the Phase 3 cross-check correction agent.
-See `correction.agent` and `docs/Archive/PLAN-extraction-hardening.md`.
+Home of the reviewer agent (`correction.reviewer_agent`) — the canonical
+review/correction pass that investigates failing cross-checks + open
+conflicts and applies grounded fixes through the facts API. The legacy
+direct-xlsx correction agent was removed in the first-principles rewrite
+(Phase 1.1); see `docs/PLAN-first-principles-rewrite.md`.
 """
