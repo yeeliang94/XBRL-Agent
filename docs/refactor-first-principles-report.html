@@ -1,0 +1,1227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XBRL Agent Refactor From First Principles</title>
+  <style>
+    :root {
+      --ink: #232323;
+      --muted: #66615c;
+      --paper: #fffaf5;
+      --panel: #ffffff;
+      --line: #ded6ce;
+      --amber: #d85604;
+      --rose: #b52b2b;
+      --blue: #24627a;
+      --green: #41724b;
+      --violet: #574b90;
+      --code: #f4efe9;
+      --shadow: 0 16px 40px rgba(35, 35, 35, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    a { color: var(--blue); }
+
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 24px 80px;
+    }
+
+    header {
+      padding: 42px 0 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--amber);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 920px;
+      font-size: 44px;
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 850px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      gap: 34px;
+      margin-top: 30px;
+    }
+
+    nav {
+      position: sticky;
+      top: 16px;
+      align-self: start;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: var(--shadow);
+    }
+
+    nav h2 {
+      margin: 0 0 10px;
+      font-size: 14px;
+    }
+
+    nav a {
+      display: block;
+      padding: 7px 0;
+      color: var(--muted);
+      font-size: 14px;
+      text-decoration: none;
+    }
+
+    nav a:hover { color: var(--ink); }
+
+    section {
+      margin-bottom: 28px;
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 25px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+
+    p { margin: 0 0 12px; }
+
+    ul, ol {
+      margin: 10px 0 18px 22px;
+      padding: 0;
+    }
+
+    li { margin: 7px 0; }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 14px 0;
+      padding: 16px;
+      border-radius: 8px;
+      background: #272421;
+      color: #f8f2eb;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fffdf9;
+    }
+
+    .card h3 {
+      margin-top: 0;
+      color: var(--ink);
+    }
+
+    .metric {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 15px;
+      border-left: 4px solid var(--blue);
+      border-radius: 6px;
+      background: #f7fbfc;
+    }
+
+    .metric strong {
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .callout {
+      margin: 16px 0;
+      padding: 16px;
+      border-left: 5px solid var(--amber);
+      border-radius: 6px;
+      background: #fff4e8;
+    }
+
+    .callout.good {
+      border-left-color: var(--green);
+      background: #eef8f0;
+    }
+
+    .callout.risk {
+      border-left-color: var(--rose);
+      background: #fff0ef;
+    }
+
+    .tag {
+      display: inline-block;
+      margin: 0 6px 6px 0;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--code);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    table {
+      width: 100%;
+      margin: 14px 0 18px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #f7f0e8;
+      color: #3a342f;
+      font-weight: 700;
+    }
+
+    .diagram {
+      display: grid;
+      gap: 10px;
+      margin: 16px 0;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .box {
+      min-height: 76px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fffdf9;
+      font-size: 13px;
+    }
+
+    .box strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--blue);
+      font-size: 14px;
+    }
+
+    .arrow {
+      position: relative;
+    }
+
+    .arrow::after {
+      content: ">";
+      position: absolute;
+      right: -10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--amber);
+      font-weight: 800;
+    }
+
+    .ladder {
+      counter-reset: step;
+      display: grid;
+      gap: 12px;
+    }
+
+    .step {
+      position: relative;
+      padding: 14px 14px 14px 52px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fffdf9;
+    }
+
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .verdict {
+      padding: 18px;
+      border-radius: 8px;
+      background: #302a25;
+      color: #fff8f0;
+    }
+
+    .verdict h2 { color: #ffffff; }
+    .verdict p { color: #f3e7db; }
+
+    .small { color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 980px) {
+      main { grid-template-columns: 1fr; }
+      nav { position: static; }
+      .grid.two, .grid.three, .grid.four, .flow { grid-template-columns: 1fr; }
+      .arrow::after { display: none; }
+      h1 { font-size: 34px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <p class="eyebrow">Architecture Refactor Report</p>
+      <h1>XBRL Agent From First Principles</h1>
+      <p class="subtitle">
+        A practical rewrite and refactor blueprint for the Malaysian financial statement PDF
+        extraction system, written after reviewing the current repository structure, docs, tests,
+        orchestration paths, canonical concept model, notes pipeline, monolith experiment, and web UI.
+      </p>
+      <div class="meta">
+        <span class="pill">Repository: /Users/user/Desktop/xbrl-agent</span>
+        <span class="pill">Date: 2026-05-29</span>
+        <span class="pill">Scope: architecture, migration, code organization</span>
+      </div>
+    </header>
+
+    <main>
+      <nav aria-label="Table of contents">
+        <h2>Contents</h2>
+        <a href="#executive-summary">Executive Summary</a>
+        <a href="#current-state">Current State</a>
+        <a href="#diagnosis">Diagnosis</a>
+        <a href="#first-principles">First Principles</a>
+        <a href="#target-architecture">Target Architecture</a>
+        <a href="#module-plan">Module Plan</a>
+        <a href="#rewrite-plan">Rewrite Plan</a>
+        <a href="#refactor-plan">Incremental Refactor</a>
+        <a href="#data-model">Data Model</a>
+        <a href="#llm-strategy">LLM Strategy</a>
+        <a href="#frontend">Frontend</a>
+        <a href="#testing">Testing</a>
+        <a href="#risks">Risks</a>
+        <a href="#recommendation">Recommendation</a>
+      </nav>
+
+      <div>
+        <section id="executive-summary" class="verdict">
+          <h2>Executive Summary</h2>
+          <p>
+            If by "AI slot" you mean the software now feels like AI slop or a slot-machine
+            around an LLM, the root cause is not that it uses agents. The root cause is that
+            too much product-critical state still flows through workbook side effects, long
+            orchestrator functions, duplicate agent loops, and post-hoc reconciliation.
+          </p>
+          <p>
+            I would not rewrite the whole system in one shot. The domain assets are valuable:
+            SSM templates, formula constraints, concept parser, fact store, notes HTML store,
+            cross-checks, test suite, and Windows/provider invariants. The right move is a
+            strangler refactor: make the canonical concept model the only authoritative
+            extraction target, isolate LLM interaction behind a typed "evidence to fact"
+            interface, and split the current server/orchestrator into small bounded services.
+          </p>
+          <p>
+            The desired end state is: PDF evidence in, typed facts out, deterministic validation
+            and export after that. The LLM should judge evidence and disclose uncertainty; it
+            should not be responsible for workbook mechanics, retry policy, lifecycle status,
+            audit persistence, or cross-statement accounting consistency.
+          </p>
+        </section>
+
+        <section id="current-state">
+          <h2>Current State</h2>
+          <div class="grid four">
+            <div class="metric">
+              <strong>6,853</strong>
+              <span>lines in <code>server.py</code>, mixing API, orchestration, downloads, DB lifecycle, model creation, and SSE.</span>
+            </div>
+            <div class="metric">
+              <strong>296</strong>
+              <span>test files across backend and frontend, a real asset for safe migration.</span>
+            </div>
+            <div class="metric">
+              <strong>12</strong>
+              <span>SQLite schema versions, with canonical facts, notes cells, telemetry, monolith, aliases, and reviewer tables.</span>
+            </div>
+            <div class="metric">
+              <strong>5 + 5</strong>
+              <span>face statements plus notes templates, across MFRS/MPERS and Company/Group axes.</span>
+            </div>
+          </div>
+
+          <h3>What the product is actually doing</h3>
+          <p>
+            The application converts Malaysian financial statement PDFs into SSM MBRS XBRL Excel
+            templates. The business problem is not "fill cells"; it is "produce a defensible,
+            auditable filing artifact from a messy source document."
+          </p>
+          <div class="diagram">
+            <div class="flow">
+              <div class="box arrow"><strong>Evidence</strong>PDF pages, TOC, statement pages, notes inventory, visual renders.</div>
+              <div class="box arrow"><strong>Interpretation</strong>LLM extracts values, prose, periods, entity scope, and evidence.</div>
+              <div class="box arrow"><strong>Canonicalization</strong>Facts mapped to SSM concepts, periods, scopes, statuses.</div>
+              <div class="box arrow"><strong>Validation</strong>Formula cascades, cross-checks, reviewer flags, conflicts.</div>
+              <div class="box"><strong>Export</strong>XLSX templates, notes overlays, downloads, audit history.</div>
+            </div>
+          </div>
+
+          <h3>Important existing strengths</h3>
+          <ul>
+            <li><strong>Canonical concept model exists.</strong> The project already has <code>concept_model/parser.py</code>, <code>facts_api.py</code>, <code>exporter.py</code>, concept targets, conflict rows, aliases, and versioning.</li>
+            <li><strong>Domain invariants are documented.</strong> <code>AGENTS.md</code> and <code>CLAUDE.md</code> encode real failures: provider setup, Gemini temperature, pydantic-ai API changes, Windows UTF-8, template formulas, notes rules, lifecycle status, and canonical mode.</li>
+            <li><strong>Tests pin behavior.</strong> The test suite covers schema migrations, canonical export, notes HTML, scout, provider routing, run lifecycle, SSE, cross-checks, MPERS, Group, SOCIE matrix, monolith, and reviewer flows.</li>
+            <li><strong>Notes DB design is sound.</strong> Notes HTML in <code>notes_cells</code> as canonical source and XLSX as render target is the right pattern.</li>
+            <li><strong>Cross-check framework captures accounting semantics.</strong> Those checks should become first-class validation rules, not afterthoughts.</li>
+          </ul>
+
+          <h3>Important existing liabilities</h3>
+          <ul>
+            <li><strong>One file is doing too much.</strong> <code>server.py</code> is API layer, environment loader, model factory, SSE broker, coordinator, correction runner, download exporter, PDF endpoint, and history controller.</li>
+            <li><strong>There are multiple orchestration loops.</strong> Split face agents, notes agents, notes sub-agents, correction, reviewer, validator, scout, and monolith each have overlapping timeout, event, usage, trace, and failure logic.</li>
+            <li><strong>Workbook writes still leak into the core loop.</strong> Canonical mode projects from resolved workbook writes into facts. That is transitional, not first-principles.</li>
+            <li><strong>The UI carries large local state reducers.</strong> <code>web/src/lib/appReducer.ts</code>, <code>PreRunPanel.tsx</code>, <code>ConceptsPage.tsx</code>, and review components are large enough that behavior is harder to reason about.</li>
+            <li><strong>Model/provider behavior is embedded in runtime paths.</strong> Provider routing is centralized, but model capability, temperature, parallelism, and proxy limits are still scattered across config, docs, prompts, and callers.</li>
+          </ul>
+        </section>
+
+        <section id="diagnosis">
+          <h2>Diagnosis</h2>
+          <div class="callout risk">
+            <p>
+              The core architectural smell is <strong>side-effect orchestration</strong>: agents act on
+              XLSX files, server code observes many event streams, persistence happens during
+              streaming, and later phases infer truth from artifacts. That creates a large
+              surface for stuck runs, stale downloads, split-brain between DB and workbook,
+              and "AI did something plausible" failures.
+            </p>
+          </div>
+
+          <h3>Where complexity is accidental</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th>Current shape</th>
+                <th>Why it hurts</th>
+                <th>First-principles replacement</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Run lifecycle</td>
+                <td>Lifecycle logic is embedded in <code>server.py</code> around SSE generators and many try/except paths.</td>
+                <td>Hard to prove every path terminalizes a run, especially disconnects and partial failures.</td>
+                <td>A dedicated run state machine with explicit transitions and durable job events.</td>
+              </tr>
+              <tr>
+                <td>Agent outputs</td>
+                <td>Face agents write workbooks, then canonical mode projects resolved writes into facts.</td>
+                <td>The workbook remains a hidden source of truth and a debugging substrate.</td>
+                <td>Agents emit typed fact proposals directly; XLSX export happens only after validation.</td>
+              </tr>
+              <tr>
+                <td>Progress events</td>
+                <td>Each coordinator manually builds SSE events and persistence filters.</td>
+                <td>Event shape drift and duplication across face, notes, scout, monolith, correction.</td>
+                <td>A single event bus with typed event contracts and adapters for SSE/history.</td>
+              </tr>
+              <tr>
+                <td>Validation</td>
+                <td>Verifier, cross-checks, canonical cascade, correction, reviewer, and notes validator run as separate passes.</td>
+                <td>The system discovers inconsistencies late and asks LLMs to repair them after the fact.</td>
+                <td>A validation engine that runs continuously against fact proposals and returns structured blocking issues.</td>
+              </tr>
+              <tr>
+                <td>Frontend state</td>
+                <td>Large reducer handles live run, history replay, notes sub-tabs, validator, concepts, and telemetry.</td>
+                <td>UI behavior couples to backend event quirks.</td>
+                <td>Server-side run projection API plus smaller frontend stores per screen.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>Where complexity is essential</h3>
+          <p>
+            Some complexity is real and should not be "simplified away":
+          </p>
+          <ul>
+            <li>SSM template formulas and linkbase-derived structure.</li>
+            <li>MFRS versus MPERS filing standards.</li>
+            <li>Company versus Group entity scope, including different column geometry.</li>
+            <li>SOCIE matrix geometry and MPERS SoRE behavior.</li>
+            <li>Notes pipeline as pure LLM judgement, with no deterministic label dictionaries.</li>
+            <li>Provider quirks, especially Windows enterprise proxy, Gemini temperature, and pydantic-ai version behavior.</li>
+            <li>Auditability: traces, per-turn telemetry, event history, terminal run statuses.</li>
+          </ul>
+        </section>
+
+        <section id="first-principles">
+          <h2>First Principles</h2>
+          <p>
+            A clean design starts by naming the invariants that should survive any implementation.
+          </p>
+
+          <div class="grid two">
+            <div class="card">
+              <h3>1. Evidence is immutable</h3>
+              <p>
+                Uploaded PDF, rendered pages, PyMuPDF text, scout output, and template versions should
+                be content-addressed or snapshotted per run. Every fact must point back to evidence.
+              </p>
+            </div>
+            <div class="card">
+              <h3>2. Facts are authoritative</h3>
+              <p>
+                The canonical DB should be the only source of truth for extracted face-statement values
+                and notes HTML. XLSX is an export, not working memory.
+              </p>
+            </div>
+            <div class="card">
+              <h3>3. LLMs propose, validators dispose</h3>
+              <p>
+                LLMs should propose fact writes with evidence and uncertainty. Deterministic validators
+                decide formula consistency, dimensions, writable rows, periods, scopes, and exportability.
+              </p>
+            </div>
+            <div class="card">
+              <h3>4. Every run is a state machine</h3>
+              <p>
+                A run moves through known states: draft, preparing, extracting, validating, reviewing,
+                exporting, completed, completed_with_errors, failed, aborted. No path should infer status.
+              </p>
+            </div>
+            <div class="card">
+              <h3>5. Domain model beats prompt text</h3>
+              <p>
+                Concepts, templates, dimensions, statuses, cross-checks, and formulas should be code/data.
+                Prompts should render from that model instead of carrying duplicated accounting rules.
+              </p>
+            </div>
+            <div class="card">
+              <h3>6. Provider differences are policy</h3>
+              <p>
+                Model routing, temperature, parallelism, retries, cache behavior, and token budgets should
+                be a model policy layer, not embedded in each agent loop.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="target-architecture">
+          <h2>Target Architecture</h2>
+          <p>
+            The target architecture is a small domain core with adapters around it. The adapters may use
+            FastAPI, PydanticAI, OpenPyXL, SQLite, React, and LiteLLM; the core should not care.
+          </p>
+
+          <pre><code>src/
+  xbrl_agent/
+    domain/
+      concepts.py          # Concept, ConceptTarget, dimensions, statuses
+      evidence.py          # PDF evidence refs, page refs, excerpts
+      filings.py           # FilingStandard, FilingLevel, Statement, Variant
+      facts.py             # FactProposal, Fact, FactConflict
+      validations.py       # ValidationResult, CrossCheckResult
+      runs.py              # Run aggregate and state transitions
+    application/
+      run_service.py       # Start/cancel/rerun/review/export use cases
+      extraction_service.py# Coordinates extraction tasks
+      validation_service.py# Formula cascade, cross-checks, conflict queue
+      export_service.py    # XLSX render from facts only
+      settings_service.py  # Provider/model settings
+    infrastructure/
+      db/                  # Repositories and migrations
+      pdf/                 # PyMuPDF rendering/text/scout adapters
+      xlsx/                # Template import/export adapters
+      llm/                 # PydanticAI adapter, model policy, tracing
+      events/              # Event bus, SSE adapter, history recorder
+    agents/
+      face/                # Prompt renderers and typed extraction tasks
+      notes/               # Notes extraction tasks, still LLM-judgement only
+      reviewer/            # Human/AI review over conflicts
+    api/
+      app.py               # FastAPI creation only
+      routes/              # Thin controllers
+    web/                   # Keep current Vite app, but consume cleaner APIs</code></pre>
+
+          <h3>Pipeline in the target design</h3>
+          <div class="flow">
+            <div class="box arrow"><strong>Prepare</strong>Snapshot PDF, templates, scout, model policy, and run config.</div>
+            <div class="box arrow"><strong>Extract</strong>Agents emit <code>FactProposal</code> and <code>NotesProposal</code> objects.</div>
+            <div class="box arrow"><strong>Adjudicate</strong>Validate writability, formulas, dimensions, evidence, conflicts.</div>
+            <div class="box arrow"><strong>Review</strong>Human or reviewer agent resolves open conflicts using facts API.</div>
+            <div class="box"><strong>Export</strong>Render facts/notes into XLSX, persist artifact pointer, serve download.</div>
+          </div>
+
+          <h3>Bounded contexts</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Context</th>
+                <th>Owns</th>
+                <th>Does not own</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Filing taxonomy</td>
+                <td>Templates, concepts, targets, aliases, formula graph, standard/level variants.</td>
+                <td>Run state, LLM prompts, UI layout.</td>
+              </tr>
+              <tr>
+                <td>Evidence</td>
+                <td>PDF pages, text extraction, renders, scout info, page references.</td>
+                <td>Accounting validation or workbook export.</td>
+              </tr>
+              <tr>
+                <td>Extraction</td>
+                <td>LLM prompts, model calls, proposal parsing, evidence citation.</td>
+                <td>Direct DB mutations or XLSX writes.</td>
+              </tr>
+              <tr>
+                <td>Fact store</td>
+                <td>Accepted facts, statuses, events, snapshots, conflicts, notes cells.</td>
+                <td>LLM retries, provider setup, Excel formulas.</td>
+              </tr>
+              <tr>
+                <td>Validation</td>
+                <td>Cascade recompute, cross-checks, unresolved residuals, reviewer flags.</td>
+                <td>PDF rendering or route auth.</td>
+              </tr>
+              <tr>
+                <td>Export</td>
+                <td>XLSX rendering, note overlays, not-disclosed sidecars, download artifacts.</td>
+                <td>Extraction decisions.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="module-plan">
+          <h2>Module Plan</h2>
+
+          <h3>Replace <code>server.py</code> with thin routes and use cases</h3>
+          <p>
+            The biggest immediate improvement is to turn <code>server.py</code> into composition code.
+            FastAPI routes should validate request shape, call an application service, and translate
+            domain errors to HTTP responses.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Extract from <code>server.py</code></th>
+                <th>New home</th>
+                <th>Responsibility</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Model creation and provider detection</td>
+                <td><code>infrastructure/llm/model_factory.py</code></td>
+                <td>OpenAI/Gemini/Anthropic/LiteLLM provider setup, temperature policy, model id normalization.</td>
+              </tr>
+              <tr>
+                <td>Run lifecycle and active run locking</td>
+                <td><code>application/run_service.py</code></td>
+                <td>Create/start/cancel/rerun state transitions and terminalization guarantees.</td>
+              </tr>
+              <tr>
+                <td>SSE queue and event persistence</td>
+                <td><code>infrastructure/events/</code></td>
+                <td>Typed events, bounded queue, recorder, SSE adapter, history replay projection.</td>
+              </tr>
+              <tr>
+                <td>Correction/reviewer/validator orchestration</td>
+                <td><code>application/review_service.py</code></td>
+                <td>Conflict review, re-review, revert, edited counts, reviewer status.</td>
+              </tr>
+              <tr>
+                <td>Download re-export and notes overlay</td>
+                <td><code>application/export_service.py</code></td>
+                <td>Rebuild merged workbook from canonical facts and notes, manage temp files.</td>
+              </tr>
+              <tr>
+                <td>PDF info/page endpoints</td>
+                <td><code>infrastructure/pdf/routes.py</code></td>
+                <td>Resolve uploaded PDF safely, render pages, cache if needed.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>Unify the agent runtime loop</h3>
+          <p>
+            Face, notes, notes sub-agents, scout, correction, reviewer, validator, and monolith all
+            repeat the same concerns: model call, iteration cap, per-turn timeout, usage deltas,
+            tool events, trace saving, cancellation, and structured exhaustion. Build one runner.
+          </p>
+          <pre><code>class AgentRuntime:
+    async def run(
+        self,
+        spec: AgentSpec,
+        deps: object,
+        events: EventSink,
+        limits: AgentLimits,
+    ) -> AgentRunOutcome:
+        ...</code></pre>
+          <p>
+            Each agent supplies only a prompt renderer, tools, deps, and output parser. The runtime
+            supplies telemetry and safety. This will remove a surprising amount of bespoke code.
+          </p>
+
+          <h3>Change agent output from workbook writes to fact proposals</h3>
+          <p>
+            Today, face extraction still centers on <code>fill_workbook</code>. In the target design,
+            a face agent proposes facts:
+          </p>
+          <pre><code>{
+  "concept_uuid": "uuid",
+  "period": "CY",
+  "entity_scope": "Company",
+  "value": 123456.0,
+  "value_status": "observed",
+  "children_status": null,
+  "evidence": {
+    "pages": [12, 34],
+    "excerpt": "Cash and bank balances ...",
+    "confidence": 0.82
+  }
+}</code></pre>
+          <p>
+            The facts API already contains much of the validation surface. Promote it from route helper
+            to application service and call it from every extraction path.
+          </p>
+        </section>
+
+        <section id="rewrite-plan">
+          <h2>Rewrite Plan</h2>
+          <p>
+            A true rewrite should be measured in vertical slices, not modules. Each slice must preserve
+            an executable product path.
+          </p>
+
+          <div class="ladder">
+            <div class="step">
+              <h3>Slice 1: Domain package and adapters</h3>
+              <p>
+                Create a new package beside the existing code. Move enums and value objects first:
+                filing standard, filing level, statements, variants, concept kind, fact status, run
+                status. Add zero behavior changes.
+              </p>
+              <p><strong>Exit:</strong> existing tests pass with compatibility imports.</p>
+            </div>
+            <div class="step">
+              <h3>Slice 2: Run lifecycle service</h3>
+              <p>
+                Extract run creation, draft start, terminal status, active lock, abort, and failure
+                handling into <code>RunService</code>. Keep the same DB schema and endpoints.
+              </p>
+              <p><strong>Exit:</strong> lifecycle tests still prove failed/disconnected/cancelled runs never remain running.</p>
+            </div>
+            <div class="step">
+              <h3>Slice 3: Event bus</h3>
+              <p>
+                Replace ad hoc queue event dicts with typed event classes. Provide two subscribers:
+                SSE stream and audit recorder.
+              </p>
+              <p><strong>Exit:</strong> live UI and history replay render the same event projections.</p>
+            </div>
+            <div class="step">
+              <h3>Slice 4: Fact-first face extraction</h3>
+              <p>
+                Introduce a new face extraction tool, <code>propose_facts</code>, that resolves labels/concepts
+                before persistence. Keep legacy workbook write path behind a fallback flag.
+              </p>
+              <p><strong>Exit:</strong> SOFP Company canonical E2E passes without writing a scratch workbook.</p>
+            </div>
+            <div class="step">
+              <h3>Slice 5: Export-only workbook rendering</h3>
+              <p>
+                Make all face-statement downloads rebuild from facts. Remove scratch workbook dependency
+                from merge for canonical-mode runs.
+              </p>
+              <p><strong>Exit:</strong> downloads, recheck, manual edits, and review UI all agree because they read the same facts.</p>
+            </div>
+            <div class="step">
+              <h3>Slice 6: Unified agent runtime</h3>
+              <p>
+                Port face, notes, scout, reviewer, validator, and monolith loops onto one runtime.
+                Do this after facts are stable so there are fewer moving parts.
+              </p>
+              <p><strong>Exit:</strong> timeout, iteration cap, trace, usage, and cancellation code exists once.</p>
+            </div>
+            <div class="step">
+              <h3>Slice 7: UI projection API</h3>
+              <p>
+                Add a run projection endpoint that returns the current run page model: agents, events,
+                stages, facts, conflicts, notes cells, telemetry, downloads. The frontend stops rebuilding
+                so much meaning from raw events.
+              </p>
+              <p><strong>Exit:</strong> live and history screens share one data shape.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="refactor-plan">
+          <h2>Incremental Refactor</h2>
+          <p>
+            If the goal is to improve the current codebase without pausing feature work, prioritize
+            these changes in order.
+          </p>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Priority</th>
+                <th>Refactor</th>
+                <th>Why first</th>
+                <th>Blast radius</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>P0</td>
+                <td>Extract <code>model_factory</code> from <code>server.py</code>.</td>
+                <td>Provider setup is load-bearing and referenced by CLI/web/scout/tests.</td>
+                <td>Low if tests cover provider routing.</td>
+              </tr>
+              <tr>
+                <td>P0</td>
+                <td>Extract <code>RunService</code> and lifecycle transitions.</td>
+                <td>Protects the most important operational invariant: terminal run status.</td>
+                <td>Medium, but tests already exist.</td>
+              </tr>
+              <tr>
+                <td>P1</td>
+                <td>Introduce typed event objects.</td>
+                <td>Reduces SSE/history/live replay coupling.</td>
+                <td>Medium. Do it with a dict compatibility layer.</td>
+              </tr>
+              <tr>
+                <td>P1</td>
+                <td>Move download/re-export/overlay into <code>ExportService</code>.</td>
+                <td>DB-as-canonical promise needs one owner.</td>
+                <td>Low to medium.</td>
+              </tr>
+              <tr>
+                <td>P1</td>
+                <td>Convert facts API helpers into a repository-backed service.</td>
+                <td>Fact validation should not depend on FastAPI route shape.</td>
+                <td>Medium.</td>
+              </tr>
+              <tr>
+                <td>P2</td>
+                <td>Unify agent runtime loops.</td>
+                <td>Large duplication reduction, but needs stable event contracts first.</td>
+                <td>High.</td>
+              </tr>
+              <tr>
+                <td>P2</td>
+                <td>Split large React screens and reducers around API projections.</td>
+                <td>Improves UI maintainability once backend shapes stabilize.</td>
+                <td>Medium.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="data-model">
+          <h2>Data Model</h2>
+          <p>
+            The current DB is moving in the right direction. The next simplification is conceptual:
+            one canonical write path for face facts and notes cells, with XLSX export as a deterministic
+            projection.
+          </p>
+
+          <h3>Recommended fact lifecycle</h3>
+          <ol>
+            <li><strong>Proposed:</strong> An agent produces a fact proposal with evidence and confidence.</li>
+            <li><strong>Accepted:</strong> The validation service accepts it into <code>run_concept_facts</code>.</li>
+            <li><strong>Derived:</strong> Cascade recompute creates or updates computed facts.</li>
+            <li><strong>Conflicted:</strong> Parent/child or cross-check residuals create conflict rows.</li>
+            <li><strong>Resolved:</strong> Human or reviewer agent marks aggregate-only, not-disclosed, user override, or corrected observed value.</li>
+            <li><strong>Exported:</strong> Export service snapshots the final XLSX artifact.</li>
+          </ol>
+
+          <h3>Schema direction</h3>
+          <ul>
+            <li>Keep <code>concept_nodes</code>, <code>concept_targets</code>, <code>concept_render_aliases</code>, and <code>run_concept_facts</code>.</li>
+            <li>Keep <code>notes_cells</code>, but expose it through the same "fact proposal" mental model for orchestration.</li>
+            <li>Add an explicit <code>fact_proposals</code> or <code>agent_observations</code> table only if you need to preserve rejected writes for audit. Otherwise, keep rejected writes in trace/event history.</li>
+            <li>Keep schema migrations additive until a dedicated migration tool is adopted. Current SQLite walk-forward pattern is tedious but safe.</li>
+            <li>Consider splitting migrations out of <code>db/schema.py</code> after v12. A single schema file is becoming an archaeological layer.</li>
+          </ul>
+        </section>
+
+        <section id="llm-strategy">
+          <h2>LLM Strategy</h2>
+          <p>
+            The cleanest mental model is "small number of specialized LLM tasks, all surrounded by typed
+            deterministic boundaries."
+          </p>
+
+          <div class="grid three">
+            <div class="card">
+              <h3>Scout</h3>
+              <p>
+                Finds structure: TOC, pages, variants, notes inventory, standard, periods, currency,
+                entity. It should output only typed context, never extraction facts.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Extractor</h3>
+              <p>
+                Reads evidence and proposes facts. It should not write Excel. It should not decide
+                whether a formula total can be overwritten.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Reviewer</h3>
+              <p>
+                Works only on conflicts and flags. It sees the fact graph, evidence, and validation
+                residuals, then proposes resolutions.
+              </p>
+            </div>
+          </div>
+
+          <h3>Split versus monolith</h3>
+          <p>
+            The monolith experiment asks a good question: does shared context improve first-pass
+            cross-statement consistency? I would keep it as an experiment, but not make it the main
+            architecture yet. The main architecture should make cross-statement state shared through
+            the fact graph and validation engine, not by putting all responsibility into one giant prompt.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Approach</th>
+                <th>Use it for</th>
+                <th>Risk</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Split specialist agents</td>
+                <td>Parallel extraction with small context windows and simpler prompts.</td>
+                <td>Weak first-pass cross-statement consistency unless fact graph feedback is strong.</td>
+              </tr>
+              <tr>
+                <td>Monolith agent</td>
+                <td>Experimental benchmark and maybe complex filings where cross-statement coherence dominates.</td>
+                <td>Large prompt, provider limits, harder debugging, possible wrong-but-consistent outputs.</td>
+              </tr>
+              <tr>
+                <td>Hybrid fact-graph loop</td>
+                <td>Recommended target: specialists extract, shared validator returns conflicts, reviewer resolves.</td>
+                <td>Requires good typed proposal/validation APIs.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>Prompt policy</h3>
+          <ul>
+            <li>Prompts should be generated from the concept model, not hand-maintained per rule where possible.</li>
+            <li>Every prompt should describe allowed statuses: observed, explicit_zero, not_disclosed, aggregate_only, user_override.</li>
+            <li>Every agent should have a typed output contract and a rejection feedback loop.</li>
+            <li>Provider model policy should own temperature, retry, request limits, notes parallelism, and body-size limits.</li>
+          </ul>
+        </section>
+
+        <section id="frontend">
+          <h2>Frontend</h2>
+          <p>
+            Keep React and the inline-style constraint. The frontend problem is not styling technology;
+            it is state shape and screen responsibilities.
+          </p>
+
+          <h3>Recommended UI split</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Screen</th>
+                <th>Backend projection</th>
+                <th>Frontend responsibility</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Extract</td>
+                <td><code>RunDraftProjection</code>, model policy, available templates.</td>
+                <td>Configure draft, upload PDF, start run, show live progress.</td>
+              </tr>
+              <tr>
+                <td>Run Detail</td>
+                <td><code>RunProjection</code>: agents, stages, events, telemetry, checks, artifacts.</td>
+                <td>Render state, not reconstruct state from raw low-level events.</td>
+              </tr>
+              <tr>
+                <td>Review</td>
+                <td><code>ReviewProjection</code>: conflicts, facts, evidence, reviewer flags.</td>
+                <td>Let humans resolve conflict states and inspect evidence.</td>
+              </tr>
+              <tr>
+                <td>Concepts</td>
+                <td><code>ConceptTreeProjection</code> filtered by run/template/scope/period.</td>
+                <td>Tree/grid navigation, edits, comparison, source links.</td>
+              </tr>
+              <tr>
+                <td>Notes</td>
+                <td><code>NotesCellsProjection</code>.</td>
+                <td>Rich editing, copy-to-M-Tool, evidence display.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>Component refactor targets</h3>
+          <ul>
+            <li><code>ConceptsPage.tsx</code>: split data loading, tree/grid rendering, conflict queue, edit controls, and PDF source pane.</li>
+            <li><code>PreRunPanel.tsx</code>: split statement selection, notes selection, model settings, scout settings, orchestration mode.</li>
+            <li><code>appReducer.ts</code>: reduce to live-run event ingestion only, or replace with screen-specific stores fed by projection APIs.</li>
+            <li><code>RunDetailView.tsx</code>: use the same projection as live run after completion, so history is not a second app.</li>
+          </ul>
+        </section>
+
+        <section id="testing">
+          <h2>Testing Strategy</h2>
+          <p>
+            The test suite is already a major advantage. The goal is to reorganize tests around the new
+            boundaries while preserving all current regression pins.
+          </p>
+
+          <h3>Test pyramid for the refactor</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Layer</th>
+                <th>Examples</th>
+                <th>Rule</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Domain unit</td>
+                <td>Concept identity, fact status validation, run state transitions, period/scope geometry.</td>
+                <td>Fast, pure, no SQLite/OpenPyXL/LLM.</td>
+              </tr>
+              <tr>
+                <td>Adapter contract</td>
+                <td>Template parser, exporter, PDF renderer, model factory, event recorder.</td>
+                <td>Use fixtures and golden outputs.</td>
+              </tr>
+              <tr>
+                <td>Application service</td>
+                <td>Start run, cancel run, fact proposal acceptance, export from facts, review resolution.</td>
+                <td>Use SQLite temp DB and mocked LLM adapters.</td>
+              </tr>
+              <tr>
+                <td>End-to-end</td>
+                <td>FINCO canonical extraction, MPERS, Group, notes, SOCIE, monolith experiment.</td>
+                <td>Small number of high-value journeys, mostly mocked model calls except live-marked tests.</td>
+              </tr>
+              <tr>
+                <td>Frontend</td>
+                <td>Projection rendering, edit flows, disabled controls, live event ingestion.</td>
+                <td>Prefer projection fixtures over manually simulating hundreds of low-level events.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>Non-negotiable regression suite for each major slice</h3>
+          <ul>
+            <li><code>tests/test_provider_routing.py</code> and connection tests after model factory changes.</li>
+            <li>Run lifecycle tests after any <code>RunService</code> extraction.</li>
+            <li>Canonical fact API, cascade, export, and download tests after fact-first changes.</li>
+            <li>Notes HTML, sanitization, writer, and overlay tests after notes unification.</li>
+            <li>MPERS, Group, SOCIE matrix, and template formula tests after template/fact/export changes.</li>
+            <li>Frontend vitest suite after projection API changes.</li>
+          </ul>
+        </section>
+
+        <section id="risks">
+          <h2>Risks</h2>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Risk</th>
+                <th>Impact</th>
+                <th>Mitigation</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Big-bang rewrite loses edge cases.</td>
+                <td>High</td>
+                <td>Use strangler slices. Keep old path as fallback until canonical E2E is proven on real PDFs.</td>
+              </tr>
+              <tr>
+                <td>Fact-first extraction initially underperforms workbook-writing agents.</td>
+                <td>Medium</td>
+                <td>Run both paths in shadow mode and compare exported workbooks/cross-checks before switching default.</td>
+              </tr>
+              <tr>
+                <td>Monolith prompt hides wrong-but-consistent facts.</td>
+                <td>High</td>
+                <td>Keep evidence-sampled accuracy protocol and tri-state residual metrics.</td>
+              </tr>
+              <tr>
+                <td>Event contract changes break live UI.</td>
+                <td>Medium</td>
+                <td>Introduce typed events with a legacy dict adapter first.</td>
+              </tr>
+              <tr>
+                <td>SQLite migrations become too hard to maintain.</td>
+                <td>Medium</td>
+                <td>Move future migrations into numbered files or migration classes after v12, keeping idempotence.</td>
+              </tr>
+              <tr>
+                <td>Provider policy drifts again.</td>
+                <td>Medium</td>
+                <td>Make model policy executable config with tests for Gemini temperature, prefix stripping, notes parallelism, and proxy mode.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="recommendation">
+          <h2>Recommendation</h2>
+          <div class="callout good">
+            <p>
+              Do a refactor, not a clean-room rewrite. The best new architecture is already half-born
+              inside the current one: canonical concepts, DB-backed notes, formula/cross-check validation,
+              and a serious regression suite. The job is to make that architecture explicit and remove
+              the old workbook-side-effect control plane.
+            </p>
+          </div>
+
+          <h3>Decision</h3>
+          <p>
+            Make <strong>canonical facts the center</strong>. Treat Excel as a renderer. Treat LLMs as
+            evidence interpreters. Treat server orchestration as an application service with explicit
+            states and typed events.
+          </p>
+
+          <h3>First 30 days</h3>
+          <ol>
+            <li>Extract model factory and run lifecycle service from <code>server.py</code>.</li>
+            <li>Introduce typed event classes with compatibility to current SSE payloads.</li>
+            <li>Move export/download/remerge logic into an <code>ExportService</code>.</li>
+            <li>Promote facts API internals into a <code>FactService</code> usable outside FastAPI.</li>
+            <li>Build a single SOFP Company fact-first extraction path in shadow mode.</li>
+          </ol>
+
+          <h3>First 90 days</h3>
+          <ol>
+            <li>Expand fact-first extraction to all Company face statements.</li>
+            <li>Port Group, SOCIE matrix, and MPERS only after Company is stable.</li>
+            <li>Unify agent runtime loops once typed events and fact writes are stable.</li>
+            <li>Add projection APIs for live/history/review screens.</li>
+            <li>Run the monolith experiment as a benchmark, not as the architectural foundation.</li>
+          </ol>
+
+          <h3>What I would not do</h3>
+          <ul>
+            <li>I would not delete the existing split pipeline until fact-first canonical mode has real-PDF proof.</li>
+            <li>I would not simplify notes matching with deterministic dictionaries, because the project explicitly forbids that and tests pin the philosophy.</li>
+            <li>I would not hand-edit SSM template formulas.</li>
+            <li>I would not convert the frontend back to Tailwind/className while Windows support is a known constraint.</li>
+            <li>I would not make the monolith agent the default based on intuition. Measure it with the existing experiment plan.</li>
+          </ul>
+
+          <p class="small">
+            Report generated from local repository inspection. No production code was changed by this report.
+          </p>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

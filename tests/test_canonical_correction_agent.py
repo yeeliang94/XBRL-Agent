@@ -179,7 +179,7 @@ def test_mark_aggregate_only_writes_fact_and_closes_conflict(seeded):
 
 
 
-# NOTE (docs/PLAN-reviewer-agent.md, Step 10): the two server-integration
+# NOTE (docs/Archive/PLAN-reviewer-agent.md, Step 10): the two server-integration
 # tests that drove the now-deleted ``server._run_canonical_correction_pass``
 # were removed when the reviewer pass replaced the autonomous canonical
 # correction pass. The canonical-agent *factory* tests above still stand

@@ -179,7 +179,7 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
   const [proxyUrl, setProxyUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyPreview, setApiKeyPreview] = useState("");
-  // Reviewer auto-trigger toggle (docs/PLAN-reviewer-agent.md). Default on.
+  // Reviewer auto-trigger toggle (docs/Archive/PLAN-reviewer-agent.md). Default on.
   const [autoReview, setAutoReview] = useState(true);
 
   const [saving, setSaving] = useState(false);

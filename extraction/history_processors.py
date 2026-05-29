@@ -8,7 +8,7 @@ extraction logic, the in-memory conversation, or the saved traces.
 Why this exists: agent runs re-send the entire conversation history on every
 turn (no trimming). The dominant waste is old image blobs and the one-time
 template summary being re-billed on every subsequent turn. See
-`docs/PLAN-token-cost-reduction.md`.
+`docs/Archive/PLAN-token-cost-reduction.md`.
 
 Both processors are generic over tool name — scout's image tool is
 `view_pages`, extraction/notes use `view_pdf_pages`, and `read_template`

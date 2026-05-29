@@ -733,7 +733,7 @@ path downstream of that flag is fully wired:
   zero facts (peer-review finding 1).
 - **Review / correction (Phase D) — the REVIEWER pass:** the autonomous
   canonical correction pass (`_run_canonical_correction_pass`) was
-  **replaced** by the reviewer (docs/PLAN-reviewer-agent.md,
+  **replaced** by the reviewer (docs/Archive/PLAN-reviewer-agent.md,
   `correction/reviewer_agent.py`, `prompts/reviewer.md`,
   `server.py::_run_reviewer_pass`). The reviewer investigates the root cause
   of failing cross-checks + open conflicts down the face→sub→PDF chain, applies

@@ -1,7 +1,7 @@
 """DB migration v11 → v12: reviewer-agent backing tables.
 
 v12 adds two additive tables for the reviewer pass that replaces the
-autonomous canonical correction pass (docs/PLAN-reviewer-agent.md):
+autonomous canonical correction pass (docs/Archive/PLAN-reviewer-agent.md):
 
 * ``run_fact_snapshots`` — the ORIGINAL extraction facts, snapshotted
   once before the reviewer writes anything. "Revert to original"

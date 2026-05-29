@@ -1,4 +1,4 @@
-"""Reviewer agent (docs/PLAN-reviewer-agent.md, Phase 3).
+"""Reviewer agent (docs/Archive/PLAN-reviewer-agent.md, Phase 3).
 
 The reviewer replaces the autonomous canonical correction pass. Instead
 of nudging totals to balance, it *investigates the root cause* of a

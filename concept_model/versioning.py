@@ -1,4 +1,4 @@
-"""Reviewer-agent versioning core (docs/PLAN-reviewer-agent.md, Phase 2).
+"""Reviewer-agent versioning core (docs/Archive/PLAN-reviewer-agent.md, Phase 2).
 
 The reviewer pass writes its grounded fixes directly into the live
 ``run_concept_facts`` store — there is no write-gating. Safety comes

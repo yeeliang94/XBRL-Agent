@@ -3,7 +3,7 @@ import { pwc } from "../lib/theme";
 import type { ModelEntry } from "../lib/types";
 
 /**
- * Review tab (docs/PLAN-reviewer-agent.md, Step 16).
+ * Review tab (docs/Archive/PLAN-reviewer-agent.md, Step 16).
  *
  * Surfaces the reviewer pass's work for a run: the original → reviewer diff,
  * the narrow flag list (stuck / disputes_prior), a one-click "Revert to

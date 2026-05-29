@@ -82,7 +82,7 @@ def test_get_settings_shows_masked_key(tmp_path, monkeypatch):
 
 def test_auto_review_toggle_round_trips(tmp_path, monkeypatch):
     """The Settings auto-review toggle persists to XBRL_AUTO_REVIEW and is
-    reflected by GET /api/settings + /api/config (docs/PLAN-reviewer-agent.md)."""
+    reflected by GET /api/settings + /api/config (docs/Archive/PLAN-reviewer-agent.md)."""
     env_file = tmp_path / ".env"
     monkeypatch.setattr(server, "ENV_FILE", env_file)
     monkeypatch.delenv("XBRL_AUTO_REVIEW", raising=False)

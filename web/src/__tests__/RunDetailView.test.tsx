@@ -145,7 +145,7 @@ describe("RunDetailView", () => {
     expect(within(tablist2).getByRole("tab", { name: /^values$/i })).toBeTruthy();
   });
 
-  test("Review tab is gated on canonical mode (docs/PLAN-reviewer-agent.md)", () => {
+  test("Review tab is gated on canonical mode (docs/Archive/PLAN-reviewer-agent.md)", () => {
     // Canonical off → no Review tab.
     const { rerender } = render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,

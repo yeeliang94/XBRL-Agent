@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from validate_ordofliq_fixes import categorize_reference, validate_template
+from scripts.validate_ordofliq_fixes import categorize_reference, validate_template
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

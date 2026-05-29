@@ -538,7 +538,7 @@ def create_extraction_agent(
         # Token-cost reduction: strip re-billed payloads from the outbound
         # request each turn — stale page images and the repeated template
         # summary. Pure functions over the message list; see
-        # extraction/history_processors.py and docs/PLAN-token-cost-reduction.md.
+        # extraction/history_processors.py and docs/Archive/PLAN-token-cost-reduction.md.
         history_processors=[strip_stale_images, strip_duplicate_template],
     )
 

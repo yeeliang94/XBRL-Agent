@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XBRL Agent — First-Principles Rewrite of the AI Processing Pipeline</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --muted:#5b5b5b; --faint:#8a8a8a;
+    --line:#e3e3e0; --bg:#fbfbfa; --card:#ffffff;
+    --accent:#d04a02;        /* PwC orange */
+    --accent-soft:#fbe9df;
+    --good:#1a7f4b; --good-soft:#e6f3ec;
+    --bad:#b3261e;  --bad-soft:#fbe8e7;
+    --warn:#9a6700; --warn-soft:#fdf3d8;
+    --code-bg:#f4f4f2; --code-ink:#2a2a2a;
+    --mono:"SF Mono",ui-monospace,"Menlo",Consolas,monospace;
+    --sans:-apple-system,"Helvetica Neue",Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:920px; margin:0 auto; padding:0 28px}
+  .hero{
+    border-bottom:1px solid var(--line); background:var(--card);
+    padding:56px 0 40px;
+  }
+  .hero .wrap{max-width:920px}
+  .kicker{
+    font-size:12px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent); font-weight:700; margin:0 0 14px;
+  }
+  h1{font-size:34px; line-height:1.18; margin:0 0 16px; font-weight:700; letter-spacing:-.01em}
+  .lede{font-size:18px; color:var(--muted); margin:0; max-width:42em}
+  .meta{margin-top:24px; font-size:13px; color:var(--faint); display:flex; gap:20px; flex-wrap:wrap}
+  .meta b{color:var(--muted); font-weight:600}
+
+  main{padding:48px 0 80px}
+  h2{
+    font-size:24px; margin:56px 0 8px; padding-top:16px;
+    font-weight:700; letter-spacing:-.01em;
+  }
+  h2 .num{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+  h3{font-size:18px; margin:32px 0 6px; font-weight:650}
+  h4{font-size:15px; margin:22px 0 4px; font-weight:650; color:var(--ink)}
+  p{margin:12px 0}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono); font-size:.86em; background:var(--code-bg); color:var(--code-ink); padding:.1em .38em; border-radius:4px}
+  pre{
+    background:#1e1e1c; color:#e6e6e3; font-family:var(--mono); font-size:13px;
+    line-height:1.55; padding:18px 20px; border-radius:10px; overflow-x:auto; margin:16px 0;
+  }
+  pre .c{color:#7d8a76} /* comment */
+  pre .k{color:#c9a26d} /* keyword */
+  pre .s{color:#9fc28a} /* string */
+  pre .d{color:#d98b6a} /* emphasis */
+
+  .toc{
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:22px 26px; margin:36px 0 8px;
+  }
+  .toc h4{margin:0 0 12px; text-transform:uppercase; letter-spacing:.1em; font-size:11.5px; color:var(--faint)}
+  .toc ol{margin:0; padding-left:20px; columns:2; column-gap:36px}
+  .toc li{margin:5px 0; break-inside:avoid}
+  .toc a{color:var(--ink); font-size:14.5px}
+
+  .callout{border-radius:10px; padding:16px 20px; margin:20px 0; border:1px solid; font-size:15px}
+  .callout p:first-child{margin-top:0}.callout p:last-child{margin-bottom:0}
+  .callout .tag{font-weight:700; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; display:block; margin-bottom:6px}
+  .c-principle{background:var(--accent-soft); border-color:#f1cbb4}
+  .c-principle .tag{color:var(--accent)}
+  .c-bad{background:var(--bad-soft); border-color:#f1c9c6}
+  .c-bad .tag{color:var(--bad)}
+  .c-good{background:var(--good-soft); border-color:#bfe0cd}
+  .c-good .tag{color:var(--good)}
+  .c-warn{background:var(--warn-soft); border-color:#ecdca0}
+  .c-warn .tag{color:var(--warn)}
+
+  table{border-collapse:collapse; width:100%; margin:20px 0; font-size:14px}
+  th,td{text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-size:11.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--faint); font-weight:700}
+  td code{font-size:.82em}
+  tbody tr:hover{background:#faf7f4}
+
+  .pill{display:inline-block; font-size:11px; font-weight:700; padding:2px 9px; border-radius:20px; letter-spacing:.03em; white-space:nowrap}
+  .p-high{background:var(--bad-soft); color:var(--bad)}
+  .p-med{background:var(--warn-soft); color:var(--warn)}
+  .p-low{background:var(--good-soft); color:var(--good)}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin:18px 0}
+  .panel{border:1px solid var(--line); border-radius:10px; padding:16px 18px; background:var(--card)}
+  .panel h4{margin-top:0}
+  .panel.now{border-left:3px solid var(--bad)}
+  .panel.then{border-left:3px solid var(--good)}
+  .panel .lbl{font-size:11px; text-transform:uppercase; letter-spacing:.1em; font-weight:700; margin-bottom:8px}
+  .panel.now .lbl{color:var(--bad)}
+  .panel.then .lbl{color:var(--good)}
+  ul,ol{margin:12px 0; padding-left:24px}
+  li{margin:6px 0}
+  .fileref{font-family:var(--mono); font-size:12.5px; color:var(--faint)}
+  hr{border:none; border-top:1px solid var(--line); margin:48px 0}
+  .ascii{background:#1e1e1c; color:#cfcfca; font-family:var(--mono); font-size:12.5px; line-height:1.5; padding:18px 20px; border-radius:10px; overflow-x:auto; white-space:pre}
+  .footnote{font-size:13px; color:var(--faint); border-top:1px solid var(--line); margin-top:60px; padding-top:20px}
+  .num-badge{display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; background:var(--accent); color:#fff; font-size:13px; font-weight:700; margin-right:10px; flex:0 0 auto}
+  .prob{display:flex; gap:0; align-items:baseline}
+  blockquote{margin:16px 0; padding:8px 18px; border-left:3px solid var(--accent); color:var(--muted); font-style:italic}
+</style>
+</head>
+<body>
+
+<div class="hero" role="banner">
+  <div class="wrap">
+    <p class="kicker">Engineering Design Report</p>
+    <h1>Rewriting the AI Processing Pipeline from First Principles</h1>
+    <p class="lede">A diagnosis of the current PDF&nbsp;&rarr;&nbsp;XBRL extraction pipeline, the irreducible problem it actually solves, and a target architecture derived from that problem rather than accreted around it.</p>
+    <div class="meta">
+      <span><b>Scope</b> coordinator · extraction · notes · scout · concept&nbsp;model · reviewer · server orchestration</span>
+      <span><b>Method</b> evidence-based code audit (3 parallel passes)</span>
+      <span><b>Date</b> 2026-05-29</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" role="main">
+
+<div class="callout c-principle">
+  <span class="tag">How to read this</span>
+  <p>This is not a list of nits. It is an argument that the pipeline grew by <em>accretion</em> — each feature bolted onto the last — and that several of its hardest-to-maintain parts exist because the <em>shape</em> of the system never matched the shape of the problem. First-principles means: throw out what's there, write down what the task irreducibly requires, and only then ask what code that implies. The diagnosis is grounded in real <span class="fileref">file:line</span> evidence; the proposal is opinionated on purpose.</p>
+</div>
+
+<div class="toc">
+  <h4>Contents</h4>
+  <ol>
+    <li><a href="#problem">The irreducible problem</a></li>
+    <li><a href="#ideal">The minimal machine</a></li>
+    <li><a href="#diagnosis">Where the code diverged</a></li>
+    <li><a href="#target">Target architecture</a></li>
+    <li><a href="#modules">Module-by-module redesign</a></li>
+    <li><a href="#keep">What to keep, untouched</a></li>
+    <li><a href="#migration">Migration without a big bang</a></li>
+    <li><a href="#scorecard">Problem scorecard</a></li>
+  </ol>
+</div>
+
+<!-- ============================================================= -->
+<h2 id="problem"><span class="num">01</span>The irreducible problem</h2>
+
+<p>Strip away every feature and the system does exactly one thing:</p>
+
+<blockquote>Given a financial-statement PDF, produce a set of <b>(concept, period, scope) &rarr; value</b> facts that are <b>grounded in the PDF</b> and <b>internally consistent</b>, then render those facts into SSM's fixed XBRL templates.</blockquote>
+
+<p>Everything else — agents, tools, scout, notes, the web UI — is <em>machinery for producing and validating that fact set</em>. This framing matters because it tells us what the <b>single source of truth</b> must be: a typed table of facts with provenance. The current codebase half-discovered this (the canonical <code>run_concept_facts</code> store is exactly the right idea) but never committed to it, so it carries the fact store <em>and</em> three older representations of the same data simultaneously.</p>
+
+<p>From the irreducible problem, four invariants fall out that <em>any</em> correct implementation must hold. Worth naming, because the current code enforces each one in an ad-hoc, scattered way:</p>
+
+<table>
+  <thead><tr><th style="width:30%">Invariant</th><th>Why it's irreducible</th></tr></thead>
+  <tbody>
+    <tr><td><b>Facts are the source of truth</b></td><td>The XLSX, the conversation trace, and the cross-check results are all <em>derived</em>. If two representations disagree, you have a bug by construction.</td></tr>
+    <tr><td><b>Every fact carries provenance</b></td><td>"Grounded in the PDF" is meaningless without a page + evidence string attached to each value. This is also the entire audit story.</td></tr>
+    <tr><td><b>Consistency is computed, not asserted</b></td><td>Totals roll up from leaves via the SSM linkbase — a total is recomputed, not extracted, <em>unless</em> the breakdown is genuinely undisclosed, in which case the agent marks the parent <code>aggregate_only</code> and its disclosed literal stands (the cascade stops at that boundary; <span class="fileref">cascade.py:7</span>, <span class="fileref">facts_api.py:316</span>, <span class="fileref">exporter.py:193</span>). The cascade engine owns both behaviours and should be the <em>only</em> way a computed total gets a value.</td></tr>
+    <tr><td><b>The LLM proposes; deterministic code disposes</b></td><td>The model's job is judgement (which line is "Trade receivables"?). Validation, rollup, routing, and persistence are deterministic and must not live in prompts.</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================= -->
+<h2 id="ideal"><span class="num">02</span>The minimal machine</h2>
+
+<p>If you sat down today with the problem statement and nothing else, you would build five components and no more:</p>
+
+<div class="ascii">  PDF ─▶ ┌──────────┐   page map + context    ┌──────────────┐
+         │  SCOUT   │ ───────────────────────▶ │  EXTRACTORS  │  one per statement / note
+         └──────────┘   (advisory hints)       │  (LLM loop)  │  proposes facts w/ evidence
+                                                └──────┬───────┘
+                                                       │ FactWrite(concept, period, scope, value, evidence)
+                                                       ▼
+                                          ┌────────────────────────┐
+                                          │   FACT STORE  (truth)   │  typed table + cascade engine
+                                          │   validate · roll up    │  rejects ungrounded / abstract
+                                          └──────────┬──────────────┘
+                                                     │
+                              ┌──────────────────────┼───────────────────────┐
+                              ▼                       ▼                        ▼
+                        ┌──────────┐          ┌───────────────┐        ┌─────────────┐
+                        │ CHECKER  │          │   REVIEWER    │        │  RENDERER   │
+                        │ consist- │─flags──▶ │  investigates │─fix──▶ │ facts ─▶ xlsx│
+                        │  ency    │          │   &amp; repairs  │        └─────────────┘
+                        └──────────┘          └───────────────┘</div>
+
+<p>Five components, one data structure flowing between them (<code>FactWrite</code>), one store. Note what is <em>absent</em>: a "merger" (facts are already merged in the store), a "legacy xlsx path" (the renderer is the only writer), an "exporter vs. filler" distinction (one renderer), and a separate notes pipeline (notes go through the same fact-write interface, routed to their own backend — see §4.4). The current system has all of these as separate, duplicated subsystems.</p>
+
+<div class="callout c-good">
+  <span class="tag">The good news</span>
+  <p>Three of these five already exist and are <em>well-built</em>: the fact store + cascade (<span class="fileref">concept_model/facts_api.py</span>, <span class="fileref">cascade.py</span>), the reviewer with its deterministic no-plug guard (<span class="fileref">correction/reviewer_agent.py:310</span>), and the cross-check framework. The rewrite is mostly <b>deletion and consolidation</b>, not green-field construction. You are removing the three things that compete with the fact store, not inventing a sixth thing.</p>
+</div>
+
+<!-- ============================================================= -->
+<h2 id="diagnosis"><span class="num">03</span>Where the code diverged from the minimal machine</h2>
+
+<p>The audit surfaced the same root cause from three independent directions. I'll group the findings by the first principle each one violates, rather than by file.</p>
+
+<h3>3.1 — There are four representations of "a fact", not one</h3>
+
+<p>The minimal machine has exactly one place a value lives: the fact store. The current system has the same value living in up to four places, written by different code, kept in sync by hope:</p>
+
+<table>
+  <thead><tr><th>Representation</th><th>Written by</th><th>Problem</th></tr></thead>
+  <tbody>
+    <tr><td>Agent's scratch <code>filled.xlsx</code></td><td><span class="fileref">tools/fill_workbook.py</span></td><td>The thing the LLM thinks it's editing</td></tr>
+    <tr><td><code>run_concept_facts</code> (DB)</td><td><span class="fileref">cell_resolver.project_writes</span></td><td>The actual source of truth — but written as a <em>side effect</em> of the xlsx write, behind an exception swallow (<span class="fileref">extraction/agent.py:192</span>)</td></tr>
+    <tr><td>Re-rendered canonical xlsx</td><td><span class="fileref">concept_model/exporter.py</span></td><td>Overwrites the agent's xlsx at download time — so the agent's view and the user's download <em>differ</em></td></tr>
+    <tr><td>On-disk <code>{stmt}_conversation_trace.json</code></td><td><span class="fileref">agent_tracing.py</span></td><td>A fourth copy of the same numbers, orphaned if <code>output_dir</code> is cleaned</td></tr>
+  </tbody>
+</table>
+
+<p>The most damning symptom: the canonical fact projection — the write to the <em>real</em> source of truth — is best-effort and swallowed:</p>
+
+<pre><span class="c"># extraction/agent.py:188 — the write to the source of truth cannot fail loudly</span>
+<span class="k">except</span> Exception:
+    logger.exception(<span class="s">"canonical fact projection failed for %s"</span>, deps.statement_type.value)
+    <span class="k">return</span> <span class="s">"Canonical projection error: facts may be incomplete (see logs)."</span></pre>
+
+<p>If this fails halfway, the run completes "successfully" with a half-populated fact store, a complete-looking xlsx, and no structured error. The fact store is treated as a derived cache of the xlsx, when the truth is the exact opposite.</p>
+
+<h3>3.2 — Control flow lives in prompt strings and tool error messages</h3>
+
+<p>The fourth invariant — LLM proposes, code disposes — is inverted in several places where <em>deterministic state machines are encoded as English</em> that the model must read and obey across turns.</p>
+
+<div class="grid2">
+  <div class="panel now">
+    <div class="lbl">As built — the save gate</div>
+    <p>The "honest completion" gate is a 4-step state machine implemented as tool-refusal text (<span class="fileref">extraction/agent.py:271–315</span>). The model must: call <code>verify_totals</code> → get refused → call it again → get told to fix-or-acknowledge → call <code>save_result(acknowledge_unresolved=true, reason=…)</code>. Try to acknowledge too early and it's refused with <em>"First contact with the gap — refuse once."</em></p>
+    <p>State lives in ~6 mutable flags on <code>ExtractionDeps</code> (<code>seen_unresolved_refusal</code>, <code>unresolved_reason</code>, …). The transitions are invisible to type-checking and only discoverable by reading prose.</p>
+  </div>
+  <div class="panel then">
+    <div class="lbl">First principles — explicit state</div>
+    <p>The gate is a pure function of typed state, not a conversation:</p>
+    <pre style="font-size:11.5px; margin:6px 0"><span class="k">enum</span> SaveGate:
+  UNVERIFIED → <span class="s">"run verify first"</span>
+  FAILED &amp; ¬ack → <span class="s">"fix or ack"</span>
+  FAILED &amp; ack &amp; reason → OPEN
+  PASSED → OPEN</pre>
+    <p>The LLM still decides <em>whether</em> to acknowledge; the gate is deterministic and unit-testable in isolation, with zero mutable flags threaded through deps.</p>
+  </div>
+</div>
+
+<p>The same anti-pattern recurs in the <b>fill tool's two modes</b> (label-matching vs. explicit coordinates) selected only by a docstring (<span class="fileref">extraction/agent.py:610</span>), and in the <b>evidence-column routing</b> the tool silently overrides regardless of what the agent asked for (<span class="fileref">fill_workbook.py:353</span>).</p>
+
+<h3>3.3 — The agent contract is a stringly-typed JSON blob</h3>
+
+<p>Tools receive <code>fields_json: str</code> and do <code>json.loads()</code> behind a bare <code>except</code> (<span class="fileref">fill_workbook.py:219</span>). pydantic-ai will validate a typed tool signature <em>for free</em> and inject its schema into the prompt — but the code opts out of this, so the model guesses the schema, emits malformed JSON, and learns about it only from a return-string round-trip. This wastes tokens and turns, and it is the direct cause of much of the defensive parsing code.</p>
+
+<h3>3.4 — Two of everything: dual pipelines, dual coordinators, triple correction</h3>
+
+<p>This is the single largest source of bulk and bug-surface. The system maintains parallel implementations of the same job because new approaches were added <em>beside</em> the old ones rather than <em>replacing</em> them:</p>
+
+<table>
+  <thead><tr><th>Duplicated axis</th><th>Variants live in</th><th>Approx. cost</th></tr></thead>
+  <tbody>
+    <tr><td>Extraction coordinator</td><td><span class="fileref">coordinator.py</span> (990) + <span class="fileref">monolith/coordinator.py</span> (1259)</td><td>~400 lines of <em>identical</em> timeout / iteration-cap / telemetry / SSE logic, incl. a duplicated <code>_IterationLimitReached</code> that admits it is a "mirror"</td></tr>
+    <tr><td>Face vs. notes coordinator</td><td><span class="fileref">coordinator.py</span> + <span class="fileref">notes/coordinator.py</span></td><td>~2,000 lines; same retry/backoff/timeout/token patterns. Bug fixes do not propagate between them (the task-registry cleanup had to be re-added by hand to one side)</td></tr>
+    <tr><td>Correction logic</td><td><span class="fileref">correction/agent.py</span> (484, legacy) + <span class="fileref">canonical_agent.py</span> (637, autonomous pass superseded by the reviewer, but its <code>_load_open_conflicts</code> helper is still imported live) + <span class="fileref">reviewer_agent.py</span> (895, live)</td><td>3 system prompts, 3 turn-cap algorithms, 3 wrappers around the <em>same</em> <code>apply_fact()</code></td></tr>
+    <tr><td>Canonical vs. legacy xlsx path</td><td>branch points throughout <span class="fileref">server.py</span></td><td>~3,600 lines gated on <code>XBRL_CANONICAL_MODE</code> / <code>_facts_enabled</code> / <code>_reviewer_enabled</code> — every test runs twice, every feature lands twice</td></tr>
+  </tbody>
+</table>
+
+<div class="callout c-bad">
+  <span class="tag">Root cause</span>
+  <p>None of these dualities is load-bearing. The monolith was an experiment (it loses, predictably: one agent trying to be both <em>greedy extractor</em> and <em>investigative corrector</em> is good at neither). The legacy xlsx path is what the canonical path replaced. The canonical correction agent's autonomous pass is what the reviewer replaced. <b>All three are still in the tree — and not cleanly severable: the legacy path and monolith are flag/branch-gated, while <code>canonical_agent.py</code> still leaks a helper into the live reviewer path.</b> The minimal machine has one coordinator, one correction pass, one rendering path.</p>
+</div>
+
+<h3>3.5 — <code>server.py</code> is a 6,853-line god file</h3>
+
+<p>A single async generator, <code>run_multi_agent_stream</code>, is <b>2,006 lines</b> and inlines validation, extraction launch, merge, canonical export, two cross-check passes, correction/reviewer dispatch, notes validation, and persistence — with 15+ <code>try/except</code> blocks competing for the same scope. Reordering two phases means editing this function. Forty-plus FastAPI routes share the file.</p>
+
+<p>Symptoms of the size: the SSE event vocabulary has sprawled into ad-hoc shapes (<code>pipeline_stage</code>, <code>cross_check_start/result/complete/exception</code>, <code>partial_merge</code>, <code>merge_failed</code>, generic <code>error</code>) with no shared schema, so the frontend pattern-matches on string types. And background re-review is tracked in an <em>in-process dict</em> (<code>_REVIEW_TASKS</code>, <span class="fileref">server.py:5447</span>) that vanishes on restart, silently abandoning any in-flight pass.</p>
+
+<h3>3.6 — Failures are swallowed, not surfaced</h3>
+
+<p>40+ <code>except Exception</code> handlers with <code>noqa: BLE001</code> and a "never let X break Y" comment. The intent (don't let telemetry crash a run) is correct; the execution conflates <em>advisory</em> failures with <em>structural</em> ones. A re-check that fails returns <code>None</code> and the endpoint serves HTTP 200 (<span class="fileref">server.py:2316</span>); the SSE event queue drops events when full and only logs it (<span class="fileref">server.py:3556</span>); a persistence failure in the notes path completes the run "successfully" while leaving the DB stale and skipping the post-validator (<span class="fileref">notes/coordinator.py:389</span>).</p>
+
+<h3>3.7 — Determinism that hides from its own callers</h3>
+
+<p>The scout claims a "PDF-first, no-LLM" inventory, but on a scanned PDF it silently delegates to a vision LLM (<span class="fileref">scout/notes_discoverer_vision.py</span>) with <em>no flag in the <code>Infopack</code></em> recording which path ran. Downstream agents trusting the inventory as deterministic ground truth are, on those runs, trusting an unmarked LLM guess. Conversely, fuzzy label matching at a 0.85 <code>SequenceMatcher</code> threshold (<span class="fileref">notes/writer.py:55</span>) silently routes prose into the wrong row — the comment itself admits the band below was "almost entirely wrong-label cases," yet matches at threshold log at <code>DEBUG</code>.</p>
+
+<!-- ============================================================= -->
+<h2 id="target"><span class="num">04</span>Target architecture</h2>
+
+<p>The rewrite collapses the system onto the minimal machine. One truth store, one path through it, typed contracts at every boundary, deterministic plumbing extracted out of prompts.</p>
+
+<h3>4.1 — One fact store, written first, rendered last</h3>
+
+<div class="callout c-principle">
+  <span class="tag">Principle</span>
+  <p>The fact store is written <b>directly and transactionally</b> by extraction — not as a side effect of an xlsx write. The xlsx <b>does not exist</b> until render time, when it is produced from facts. There is no agent scratch workbook to drift from, no "export overwrites the agent's file" surprise, and the projection write can no longer be a swallowed best-effort because it <em>is</em> the write.</p>
+</div>
+
+<p>This single change deletes an entire class of bug (the four-representations problem) and removes <code>fill_workbook.py</code>'s dual-mode complexity, the exporter's "fall back to the agent workbook when zero facts applied" branch, and the merge step entirely.</p>
+
+<h3>4.2 — One generic agent loop, parameterised</h3>
+
+<p>Face extraction, notes extraction, monolith, and the reviewer are <em>the same loop</em>: build an agent, stream <code>agent.iter()</code> with a per-turn timeout, enforce an iteration cap below pydantic-ai's 50, record telemetry deltas, emit SSE, handle the four terminal exceptions, save a trace. Extract this once:</p>
+
+<pre><span class="c"># agent_runner.py — the ONE place the loop lives</span>
+<span class="k">async def</span> run_agent(spec: AgentSpec, sink: EventSink) -> AgentOutcome:
+    <span class="c"># spec carries: agent factory, prompt, deps, turn_timeout,</span>
+    <span class="c"># max_iters, telemetry recorder. Everything else is shared.</span>
+    ...</pre>
+
+<p>The face coordinator and notes coordinator become thin <em>fan-out planners</em> (which statements / which note sheets, how many Sheet-12 sub-agents) that hand specs to one runner. The ~400 lines of duplicated mechanics and the ~2,000 lines of parallel coordinator logic collapse to a single implementation. The monolith path is <b>deleted</b>, not parameterised.</p>
+
+<h3>4.3 — Typed tool contracts, no JSON strings</h3>
+
+<pre><span class="c"># Before: the model guesses a schema, emits a string, code re-parses</span>
+<span class="k">def</span> fill_workbook(ctx, fields_json: str) -> str: ...
+
+<span class="c"># After: pydantic-ai validates and injects the schema into the prompt</span>
+<span class="k">class</span> FactWrite(BaseModel):
+    concept: str          <span class="c"># resolved against the template's concept set</span>
+    period: Period        <span class="c"># CY | PY</span>
+    scope: EntityScope    <span class="c"># Company | Group</span>
+    value: float | None   <span class="c"># scalar facts</span>
+    html: str | None      <span class="c"># prose-note facts (mutually exclusive w/ value)</span>
+    evidence: Evidence    <span class="c"># {page:int, quote:str} — REQUIRED, not free text</span>
+
+<span class="k">async def</span> write_facts(ctx, facts: list[FactWrite]) -> WriteReport: ...</pre>
+
+<p>Provenance becomes a required, typed field — directly enforcing invariant #2 instead of leaving "evidence" as an optional string the model may omit. Malformed proposals are rejected by the framework before the tool body runs.</p>
+
+<h3>4.4 — One fact-write interface, scalar and notes backends</h3>
+
+<p>Notes extraction is not a different <em>kind</em> of work — it produces facts about template rows, the same as scalar extraction — so it should go through the same write interface and the same runner. It is <b>not</b> the same physical table, and this distinction is load-bearing: scalar facts persist to <code>run_concept_facts</code> (whose <code>value</code> is <code>REAL</code>), while HTML-prose facts persist to <code>notes_cells</code> with their own cap and sanitisation invariants (gotcha #16). The live code already chose this exact shape — <code>apply_fact</code> branches on <code>html</code> and routes to <code>_post_notes_fact</code> (<span class="fileref">facts_api.py:253</span>, the Phase&nbsp;7 design pinned by <span class="fileref">tests/test_phase7_notes_unified.py</span>). The rewrite's contribution is to extend that one <em>interface</em> up through the runner so the parallel <code>notes/coordinator.py</code>, the side-log JSON error channel, and the separate retry budgets disappear — <em>not</em> to collapse the two backends into one table. The notes-specific pieces (sanitisation, 30k rendered-char cap, cross-sheet dedup) survive as backend behaviour behind that interface.</p>
+
+<h3>4.5 — Orchestration as an explicit phase pipeline</h3>
+
+<p>Replace the 2,006-line generator with a declared sequence of phases, each a small unit with one job, one structured result, and one consistent error contract:</p>
+
+<pre><span class="k">PHASES</span> = [Validate, Extract, Cascade, Check, Review, Render]
+
+<span class="k">async for</span> phase <span class="k">in</span> PHASES:
+    result = <span class="k">await</span> phase.run(ctx, sink)
+    ctx.apply(result)
+    <span class="k">if</span> result.fatal:
+        ctx.mark_terminal(phase.name); <span class="k">break</span>
+    sink.emit(StageComplete(phase.name))     <span class="c"># ONE event schema</span></pre>
+
+<p>This makes the lifecycle (gotcha #10's terminal-status guarantee) a property of the loop, not of try/finally discipline replicated per phase. SSE events get a single typed envelope. Reordering phases is editing a list.</p>
+
+<h3>4.6 — One error taxonomy</h3>
+
+<p>Three buckets, applied everywhere, replacing the 40+ ad-hoc swallows:</p>
+<ul>
+  <li><b>Advisory</b> (telemetry, cost, trace save) — log, continue, emit a low-severity event. Allowed to swallow.</li>
+  <li><b>Recoverable</b> (one statement fails, a cross-check throws) — degrade that unit, emit a typed <code>ErrorEvent</code>, complete the run as <code>completed_with_errors</code>.</li>
+  <li><b>Fatal</b> (cannot write the fact store, cannot create the model) — abort, mark <code>failed</code>, re-raise to the phase loop.</li>
+</ul>
+<p>The rule that distinguishes them is explicit, not implicit in which <code>except</code> happens to wrap the call.</p>
+
+<!-- ============================================================= -->
+<h2 id="modules"><span class="num">05</span>Module-by-module redesign</h2>
+
+<table>
+  <thead><tr><th style="width:24%">Module</th><th>Today</th><th>Target</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Fact store</b><br><span class="fileref">concept_model/</span></td>
+      <td>Correct, but treated as a derived cache; written via swallowed side-effect</td>
+      <td><span class="pill p-low">keep</span> Promote to <em>the</em> write path. Projection becomes the primary transactional write; failure is fatal.</td>
+    </tr>
+    <tr>
+      <td><b>Agent runner</b><br>new</td>
+      <td>Loop logic duplicated across 4 coordinators</td>
+      <td><span class="pill p-high">build</span> One <code>run_agent(spec, sink)</code>. Coordinators become fan-out planners.</td>
+    </tr>
+    <tr>
+      <td><b>Extraction tools</b><br><span class="fileref">tools/fill_workbook.py</span></td>
+      <td>Stringly-typed JSON, dual mode, silent evidence routing, in-place xlsx save (race-prone, gotcha #22)</td>
+      <td><span class="pill p-med">rewrite</span> Typed <code>write_facts(list[FactWrite])</code> straight to the store. No xlsx until render.</td>
+    </tr>
+    <tr>
+      <td><b>Notes</b><br><span class="fileref">notes/</span></td>
+      <td>Full parallel pipeline (~6,400 LOC)</td>
+      <td><span class="pill p-med">fold in</span> Prose facts through the same store/runner. Keep sanitiser, char-cap, dedup as post-processors.</td>
+    </tr>
+    <tr>
+      <td><b>Scout</b><br><span class="fileref">scout/</span></td>
+      <td>Solid, but hides its text-vs-vision path</td>
+      <td><span class="pill p-low">keep+</span> Add <code>inventory_source</code> + <code>face_read_in_detail</code> to <code>Infopack</code>. Honesty over the contract; soft-hint behaviour unchanged.</td>
+    </tr>
+    <tr>
+      <td><b>Correction</b><br><span class="fileref">correction/</span></td>
+      <td>3 agents (legacy + canonical + reviewer)</td>
+      <td><span class="pill p-high">delete 2</span> Keep <b>reviewer</b> only. Its no-plug guard and versioning/snapshot are the model to keep. <em>Precondition:</em> the reviewer path still imports <code>canonical_agent._load_open_conflicts</code> (<span class="fileref">server.py:4130, 5466</span>) — relocate that helper into a reviewer-owned module before deleting <code>canonical_agent.py</code>.</td>
+    </tr>
+    <tr>
+      <td><b>Monolith</b><br><span class="fileref">monolith/</span></td>
+      <td>3,421 LOC reachable-but-dead experiment</td>
+      <td><span class="pill p-high">delete</span> Lift any genuinely useful idea into the runner; drop the rest.</td>
+    </tr>
+    <tr>
+      <td><b>Renderer</b><br><span class="fileref">exporter.py</span></td>
+      <td>3-way routing + alias fallback + "render twice"</td>
+      <td><span class="pill p-med">simplify</span> Precompute value-<em>routing targets</em> into <code>concept_targets</code> at import time; exporter does one lookup. Read/review aliases stay a separate table (formula cells must stay live). (See 5.1.)</td>
+    </tr>
+    <tr>
+      <td><b>Server</b><br><span class="fileref">server.py</span></td>
+      <td>6,853 LOC god file; 2,006-line orchestrator</td>
+      <td><span class="pill p-high">split</span> Routes → <code>api/</code>; orchestration → phase pipeline; SSE → one typed envelope; re-review state → DB table.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3 id="alias">5.1 — Kill "render twice" by precomputing routing</h3>
+
+<p>The v11 cross-sheet alias machinery (a single concept rendering at both a sub-sheet total and a face-sheet rollup coord) forces the importer, cell-resolver, exporter, reviewer, and concepts endpoint to each carry fallback logic — an 8-way test matrix per fact. The first-principles fix turns on a distinction the current model blurs: a coordinate is either a <b>routing target</b> (the exporter writes the fact's value there) or a <b>read/review alias</b> (it exists for agent-write resolution and Review-UI display, but the cell holds a <em>live cross-sheet formula</em> and must never receive an exported value).</p>
+
+<div class="callout c-warn">
+  <span class="tag">Load-bearing invariant — do not collapse these</span>
+  <p>The face rollup cell (e.g. <code>='SOFP-Sub-CuNonCu'!B39</code>) must stay a live formula; writing a literal there leaves Excel showing a stale snapshot and breaks the formula chain. This is pinned by <code>test_exporter_preserves_cross_sheet_formula_on_alias_coord</code> (<span class="fileref">tests/test_canonical_cross_sheet_rollup.py:305</span>) and is the v11 contract in CLAUDE.md gotcha #21. An alias is therefore <b>not</b> a target, and folding aliases into <code>concept_targets</code> as if they were would regress exactly this test.</p>
+</div>
+
+<p>So the fix is: have the importer precompute the <em>routing targets</em> for every <code>(period, scope)</code> into <code>concept_targets</code> up front, so the exporter's <em>value-routing</em> is a single keyed lookup with no fallback. Aliases stay a distinct, clearly-named structure (the v11 <code>concept_render_aliases</code> table is fine) consulted only by cell-resolution and the Review UI — never by the value exporter. The win is that the exporter stops carrying three-way fallback for <em>routing</em>; it is not a license to make formula cells writable.</p>
+
+<!-- ============================================================= -->
+<h2 id="keep"><span class="num">06</span>What to keep, untouched</h2>
+
+<div class="callout c-good">
+  <span class="tag">Do not throw the baby out</span>
+  <p>A first-principles rewrite is not a license to rebuild working subsystems. These are correct, well-tested, and encode hard-won domain knowledge. The rewrite reorganises <em>around</em> them.</p>
+</div>
+
+<ul>
+  <li><b>The cascade engine</b> (<span class="fileref">concept_model/cascade.py</span>) — topological fixed-point recompute that respects <code>aggregate_only</code> and detects partial-state conflicts. This <em>is</em> invariant #3, correctly implemented.</li>
+  <li><b>The reviewer's no-plug guard</b> (<span class="fileref">reviewer_agent.py:310</span>) — deterministic, testable refusal of ungrounded writes and catch-all/abstract plugs (gotcha #17). This is exactly the "code disposes" principle done right.</li>
+  <li><b>Versioning / snapshot / revert</b> (<span class="fileref">concept_model/versioning.py</span>) — safety by reversibility rather than write-gating. Keep verbatim.</li>
+  <li><b>The cross-check framework</b> (<span class="fileref">cross_checks/</span>) — declarative, standard-aware checks. The consistency oracle the whole system needs.</li>
+  <li><b>The SSM template / linkbase derivation</b> (gotcha #3) — never hand-edit; regenerate from the linkbase. Untouched.</li>
+  <li><b>Scout's calibration + TOC offset logic</b> — genuinely hard, genuinely correct. Only the source-honesty flags get added.</li>
+  <li><b>truststore / UTF-8 / temperature constraints</b> (gotchas #1, #5, and the Gemini-3 temp=1.0 rule) — environmental load-bearing facts, not slop.</li>
+</ul>
+
+<!-- ============================================================= -->
+<h2 id="migration"><span class="num">07</span>Migration without a big bang</h2>
+
+<p>A rewrite that requires a flag-day is a rewrite that never ships. Because the fact store already exists and is already on by default, the path is incremental and each step is independently shippable behind its own test.</p>
+
+<table>
+  <thead><tr><th style="width:8%">Step</th><th>Change</th><th>Risk</th><th>Unlocks</th></tr></thead>
+  <tbody>
+    <tr><td><b>0</b></td><td>Make canonical mode <em>mandatory</em>; delete the legacy xlsx path and <code>correction/agent.py</code>. <em>Includes</em> removing the fallback from <code>.env</code>, CLAUDE.md gotcha #21, and the fallback tests (<span class="fileref">test_canonical_mode_flag.py</span>) as first-class work</td><td><span class="pill p-med">med</span></td><td>Removes the dual-pipeline branch matrix; halves the test surface</td></tr>
+    <tr><td><b>1</b></td><td>Delete <code>monolith/</code> (unwired by default). <code>correction/canonical_agent.py</code> is <em>not</em> fully unwired — its <code>_load_open_conflicts</code> is still imported by the reviewer path; relocate that helper first, then delete</td><td><span class="pill p-med">med</span></td><td>~3,400 LOC (monolith) immediately; <code>canonical_agent.py</code> after the helper move</td></tr>
+    <tr><td><b>2</b></td><td>Extract <code>run_agent(spec, sink)</code>; route the face coordinator through it</td><td><span class="pill p-med">med</span></td><td>One loop; pins via existing <span class="fileref">test_e2e.py</span></td></tr>
+    <tr><td><b>3</b></td><td>Route the notes coordinator through the same runner; fold notes into the fact store as prose facts</td><td><span class="pill p-high">high</span></td><td>Retires <code>notes/coordinator.py</code> duplication</td></tr>
+    <tr><td><b>4</b></td><td>Flip extraction to write the store <em>directly</em>; render xlsx only at the end</td><td><span class="pill p-high">high</span></td><td>Collapses the four-representations problem; deletes merge step</td></tr>
+    <tr><td><b>5</b></td><td>Typed tool signatures (<code>write_facts</code>); drop JSON-string parsing</td><td><span class="pill p-low">low</span></td><td>Fewer wasted turns; deletes defensive parse code</td></tr>
+    <tr><td><b>6</b></td><td>Split <code>server.py</code>: routes → <code>api/</code>, orchestration → phase pipeline, re-review state → DB</td><td><span class="pill p-med">med</span></td><td>God file dissolved; durable background tasks</td></tr>
+    <tr><td><b>7</b></td><td>Precompute value-routing targets into <code>concept_targets</code> at import; drop render-time <em>routing</em> fallback (keep aliases separate, formula cells stay live — see §5.1)</td><td><span class="pill p-med">med</span></td><td>Exporter value-routing becomes a single lookup</td></tr>
+    <tr><td><b>8</b></td><td>Apply the 3-bucket error taxonomy; one typed SSE envelope; <code>inventory_source</code> flag</td><td><span class="pill p-low">low</span></td><td>Failures surface; frontend stops string-matching</td></tr>
+  </tbody>
+</table>
+
+<div class="callout c-warn">
+  <span class="tag">Sequencing note</span>
+  <p>Steps 0–1 are mostly subtraction and should land first — they remove the code that would otherwise have to be migrated in every subsequent step. "Subtraction," not "free deletion": Step 0 retires a tested fallback path (so <code>.env</code>, the gotcha-#21 docs, and the fallback tests change with it), and Step 1's <code>canonical_agent.py</code> deletion is gated on first relocating the <code>_load_open_conflicts</code> helper the reviewer still imports. Audit every "delete" against current runtime imports before treating it as zero-behaviour. Step 4 is the keystone and the riskiest; it is safe to attempt only <em>after</em> the runner (2) and notes fold-in (3) have stabilised, because by then the fact store is exercised on every path and any drift between it and the xlsx is already caught by tests. Every step is independently revertable.</p>
+</div>
+
+<!-- ============================================================= -->
+<h2 id="scorecard"><span class="num">08</span>Problem scorecard</h2>
+
+<p>The structural problems, ranked by leverage (how much complexity their fix removes per unit of effort). Estimated LOC deltas are directional, drawn from the audited file sizes.</p>
+
+<table>
+  <thead><tr><th>#</th><th>Problem</th><th>Principle violated</th><th>Fix</th><th>~LOC removed</th><th>Effort</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Dual / triple pipelines (monolith, legacy xlsx, 3 correction agents)</td><td>Minimal machine</td><td>Delete losers</td><td>~7,500</td><td><span class="pill p-med">med</span></td></tr>
+    <tr><td>2</td><td>Four representations of a fact; store written as swallowed side-effect</td><td>Facts are truth</td><td>Write store first, render last</td><td>~800</td><td><span class="pill p-high">high</span></td></tr>
+    <tr><td>3</td><td>Duplicated coordinator loops (face/notes/monolith)</td><td>DRY / one loop</td><td>One <code>run_agent</code></td><td>~2,400</td><td><span class="pill p-med">med</span></td></tr>
+    <tr><td>4</td><td>6,853-line <code>server.py</code>; 2,006-line orchestrator</td><td>Single responsibility</td><td>Phase pipeline + route split</td><td>net &darr;</td><td><span class="pill p-med">med</span></td></tr>
+    <tr><td>5</td><td>Control flow in prompts &amp; tool-error strings (save gate, fill modes)</td><td>Code disposes</td><td>Explicit state machine</td><td>~300</td><td><span class="pill p-low">low</span></td></tr>
+    <tr><td>6</td><td>Stringly-typed JSON tool contract</td><td>Typed boundaries</td><td>Pydantic tool signatures</td><td>~200</td><td><span class="pill p-low">low</span></td></tr>
+    <tr><td>7</td><td>40+ exception swallows; silent failures</td><td>Surface failures</td><td>3-bucket taxonomy</td><td>net &darr;</td><td><span class="pill p-med">med</span></td></tr>
+    <tr><td>8</td><td>"Render twice" cross-sheet alias matrix</td><td>Precompute determinism</td><td>Import-time <code>concept_targets</code></td><td>~250</td><td><span class="pill p-med">med</span></td></tr>
+    <tr><td>9</td><td>In-memory <code>_REVIEW_TASKS</code>; hybrid orphan-prone storage</td><td>Durable state</td><td>DB-backed task table</td><td>~50</td><td><span class="pill p-low">low</span></td></tr>
+    <tr><td>10</td><td>Hidden determinism (scout vision fallback; silent fuzzy 0.85 routing)</td><td>Honest contracts</td><td>Source flags + WARN logging</td><td>~30</td><td><span class="pill p-low">low</span></td></tr>
+  </tbody>
+</table>
+
+<div class="callout c-principle">
+  <span class="tag">The one-sentence version</span>
+  <p>The system already contains the right idea — a typed fact store with a cascade engine and a grounded reviewer — but it was added <em>beside</em> three older designs instead of <em>replacing</em> them; the rewrite is the disciplined act of finishing that migration: <b>commit to the fact store as the only truth, run every agent through one loop, and delete everything that competes.</b></p>
+</div>
+
+<hr>
+
+<h3>Honest caveats on this report</h3>
+<p>Two places where I'd push back on my own findings before anyone acts on them:</p>
+<ul>
+  <li><b>Not all the "slop" is slop.</b> Much of the defensive <code>try/except</code> exists because real Windows incidents (the <code>EOFError</code> race, gotcha #22; the truststore SSL fix, gotcha #5) taught the codebase to distrust its environment. The fix is to <em>classify</em> these handlers, not to remove them wholesale. Deleting a swallow without knowing which incident it commemorates is how regressions return.</li>
+  <li><b>Step 4 (store-first) is a genuine architecture change, not a refactor.</b> It changes when and how the agent sees its own output, which can change extraction <em>quality</em>, not just structure. It needs an A/B against the current pipeline on the real test PDFs before it ships — "fewer lines" is not evidence of "same or better facts."</li>
+</ul>
+
+<p class="footnote">
+Prepared as a design proposal, not an implementation. Evidence gathered by static reading of the repository at <span class="fileref">/Users/user/Desktop/xbrl-agent</span> on 2026-05-29; <span class="fileref">file:line</span> references reflect that snapshot and should be re-confirmed before edits. Nothing in the codebase was modified to produce this report.
+</p>
+
+</div>
+</body>
+</html>

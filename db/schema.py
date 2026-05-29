@@ -67,7 +67,7 @@ from pathlib import Path
 # cross-sheet child edges), cell_resolver consults it on miss, and the
 # concepts endpoint emits one row per alias so the Review/Values page
 # mirrors the workbook (one face row + one sub row, same concept).
-# v12 (reviewer-agent, docs/PLAN-reviewer-agent.md): adds two additive
+# v12 (reviewer-agent, docs/Archive/PLAN-reviewer-agent.md): adds two additive
 # tables backing the reviewer pass that replaces the autonomous
 # canonical correction pass. `run_fact_snapshots` mirrors
 # run_concept_facts and stores the ORIGINAL extraction facts before the
@@ -396,7 +396,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     """,
 
     # -----------------------------------------------------------------
-    # v12: reviewer-agent backing tables (docs/PLAN-reviewer-agent.md).
+    # v12: reviewer-agent backing tables (docs/Archive/PLAN-reviewer-agent.md).
     # -----------------------------------------------------------------
 
     # Original-facts backup. Taken ONCE per run, immediately before the

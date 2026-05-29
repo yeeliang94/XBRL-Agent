@@ -210,7 +210,7 @@ export type PipelineStage =
   | "cross_checking"
   | "correcting"
   // Canonical mode runs the reviewer pass instead of the autonomous
-  // correction pass (docs/PLAN-reviewer-agent.md); it gets its own label.
+  // correction pass (docs/Archive/PLAN-reviewer-agent.md); it gets its own label.
   | "reviewing"
   | "re_checking"
   | "validating_notes"
