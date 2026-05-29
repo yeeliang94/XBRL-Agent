@@ -1,8 +1,10 @@
 # Implementation Plan: First-Principles Rewrite of the AI Processing Pipeline
 
-**Overall Progress:** `0%`
+**Overall Progress:** `~20%` — Phase 0 done; Phase 1 two-thirds done (monolith + canonical_agent deleted, −8,576 LOC); Step 1.1 (canonical-mandatory) remaining.
 **PRD Reference:** [docs/REWRITE-first-principles.html](REWRITE-first-principles.html)
 **Last Updated:** 2026-05-30
+**Branch:** `rewrite/first-principles` (off `main`; baseline tag `pre-rewrite-baseline`)
+**Baseline oracle:** backend 1955 passed / 2 pre-existing doc failures; frontend 636 passed.
 
 ## Summary
 
@@ -68,51 +70,52 @@ fact-store work:
   into Advisory / Recoverable / Fatal, not deleted blind.
 
 ## Pre-Implementation Checklist
-- [ ] 🟥 Questions from exploration resolved (isolation = branch; scope = full)
-- [ ] 🟥 PRD (`REWRITE-first-principles.html`) reviewed and accepted as direction
-- [ ] 🟥 No conflicting in-progress work on `main` (confirm clean tree before branching)
-- [ ] 🟥 Baseline test suite captured green on `main` (backend + frontend) as the regression oracle
+- [x] 🟩 Questions from exploration resolved (isolation = branch; scope = full)
+- [x] 🟩 PRD (`REWRITE-first-principles.html`) reviewed and accepted as direction
+- [x] 🟩 No conflicting in-progress work on `main` (clean tree confirmed; branched off 80e20c7)
+- [x] 🟩 Baseline test suite captured (backend 1955 pass + 2 pre-existing doc failures; frontend 636 pass)
 
 ---
 
 ## Tasks
 
-### Phase 0: Isolation & baseline — *protect the working software first*
+### Phase 0: Isolation & baseline — *protect the working software first* — 🟩 DONE (0.3 deferred into Phase 4)
 
-- [ ] 🟥 **Step 0.0: Get the plan + report out of the throwaway worktree** — they currently live untracked in a linked worktree; a `git checkout main` would lose them.
+- [x] 🟩 **Step 0.0: Get the plan + report out of the throwaway worktree** — committed plan + report onto `rewrite/first-principles` (commit e89d877); no longer strandable.
   - [ ] 🟥 Commit `docs/PLAN-first-principles-rewrite.md` (and `docs/REWRITE-first-principles.html` if not already on `main`) onto the worktree branch, then merge or cherry-pick to `main` — **or** copy both files into the primary checkout
   - [ ] 🟥 Confirm they are present on `main` (or in the primary checkout) before any branch switch
   - **Verify:** `git show main:docs/PLAN-first-principles-rewrite.md` resolves (or the file exists in the primary checkout); switching branches no longer risks losing the plan.
 
-- [ ] 🟥 **Step 0.1: Create the isolated branch** — give the rewrite a home that can't touch `main`.
-  - [ ] 🟥 From a clean `main`, create `rewrite/first-principles` (`git checkout main && git pull && git checkout -b rewrite/first-principles`)
-  - [ ] 🟥 Tag the pre-rewrite state on `main` (e.g. `git tag pre-rewrite-baseline`) so the current version is recoverable by name
-  - **Verify:** `git branch` shows the new branch; `git log main` is unchanged; the tag resolves to the current `main` HEAD.
+- [x] 🟩 **Step 0.1: Create the isolated branch** — `rewrite/first-principles` branched off 80e20c7; `pre-rewrite-baseline` tag set on the current software; `main` untouched.
 
-- [ ] 🟥 **Step 0.2: Capture the baseline regression oracle** — know what "still works" means before changing anything.
-  - [ ] 🟥 Run `python -m pytest tests/ -v` and record pass/skip counts
-  - [ ] 🟥 Run `cd web && npx vitest run` and record results
-  - [ ] 🟥 Save a known-good `filled.xlsx` for the standard test PDF (`data/FINCO-Audited-Financial-Statement-2021.pdf`) for both MFRS Company and Group, as the A/B "before" artifact
-  - **Verify:** baseline suite is green (modulo documented auto-skips); the reference `filled.xlsx` files open in Excel with formulas evaluating.
+- [x] 🟩 **Step 0.2: Capture the baseline regression oracle** — backend `1955 passed, 11 skipped, 2 failed` (the 2 are pre-existing `test_docs_invariants` failures: 80e20c7 archived `NOTES-PIPELINE.md` + `ADR-001` but left the invariant tests pointing at them — orthogonal to the rewrite). Frontend `636 passed (48 files)`. NOTE: the known-good `filled.xlsx` A/B artifact was **not** produced (needs a real LLM run + API key) — folded into Step 0.3/Phase 4.
 
-- [ ] 🟥 **Step 0.3: Stand up the A/B harness** — make "same or better facts" measurable, since Phase 4 depends on it.
+- [ ] 🟥 **Step 0.3: Stand up the A/B harness** — DEFERRED to Phase 4 (needs real-LLM runs). Make "same or better facts" measurable, since Phase 4 depends on it.
   - [ ] 🟥 Script that runs a PDF through old vs new and diffs the resulting fact set (concept/period/scope → value) and the rendered xlsx
   - [ ] 🟥 Decide the acceptance bar up front (e.g. zero regressions on the pinned test PDFs' face statements)
   - **Verify:** harness run on the baseline against itself reports zero diff (proves the diff is trustworthy before it judges a real change).
 
-### Phase 1: Subtraction — *remove what would otherwise be migrated in every later step* (report steps 0–1)
+### Phase 1: Subtraction — *remove what would otherwise be migrated in every later step* (report steps 0–1) — 🟨 IN PROGRESS (1.2 done; 1.1 remaining)
 
-- [ ] 🟥 **Step 1.1: Make canonical mode mandatory; delete the legacy xlsx path** — collapse the dual-pipeline branch matrix (report step 0).
+> **Execution-order note:** the two pure-subtraction pieces (Step 1.2) were
+> done first because they're zero-behaviour-change deletions, verifiable by the
+> test suite alone. Step 1.1 (canonical-mandatory) is sequenced last within the
+> phase because it is a *behavioural* change, not a deletion — it removes the
+> bootstrap-failure fallback (the legacy `_run_correction_pass`), so it needs
+> its own focused review. Same scope as the plan, safer intra-phase order.
+
+- [ ] 🟥 **Step 1.1: Make canonical mode mandatory; delete the legacy xlsx path** — collapse the dual-pipeline branch matrix (report step 0). **NOT YET STARTED.** Scoped: `_canonical_mode_enabled()`/`_canonical_facts_enabled()` (server.py:81/100) + 9 call sites; legacy `_run_correction_pass` (server.py:805) + `correction/agent.py` (484 LOC) dispatched at server.py:3768; `.env` flag; CLAUDE.md gotcha #21; `tests/test_canonical_mode_flag.py` + dual-run assertions in `test_phase*`/`test_silent_exception_surfacing`/`test_correction_canonical` (latter already gone). **Behavioural nuance to resolve first:** when the canonical bootstrap fails, `_canonical_facts_enabled()` currently returns False and the run degrades; today the legacy correction path is the implicit fallback. Removing it means deciding the degraded-mode contract explicitly.
   - [ ] 🟥 Remove `XBRL_CANONICAL_MODE` branching from `server.py` and `db/schema.py`; canonical is the only path
   - [ ] 🟥 Delete `correction/agent.py` (484 LOC, legacy correction) and its wiring
   - [ ] 🟥 Remove the fallback from `.env`, update CLAUDE.md gotcha #21, and remove/retire `tests/test_canonical_mode_flag.py` and the dual-run flag assertions in `test_phase*` / `test_silent_exception_surfacing.py` as first-class work
   - **Verify:** `python -m pytest tests/ -v` green with the fallback tests gone (not skipped); the canonical E2E tests (`test_e2e_canonical_*`) still pass; a CLI run produces a correct `filled.xlsx`.
 
-- [ ] 🟥 **Step 1.2: Relocate `_load_open_conflicts`, then delete the dead correction + monolith code** — clear the experiments (report step 1).
-  - [ ] 🟥 Move `_load_open_conflicts` out of `correction/canonical_agent.py` into a reviewer-owned module; update the two live imports (`server.py:4130`, `server.py:5466`)
-  - [ ] 🟥 Delete `correction/canonical_agent.py` (637 LOC) once nothing imports it
-  - [ ] 🟥 Delete `monolith/` (3,421 LOC); remove its wiring from `run.py` and `server.py`; remove the `runs.orchestration` monolith-experiment usage (keep the column, it's schema v10) and delete `tests/test_monolith_*`
-  - [ ] 🟥 **Remove the monolith/orchestration *frontend* surface too** — the orchestration selector + monolith-model UI in `web/src/components/PreRunPanel.tsx` (~line 1058, plus the `orchestration`/`monolithModel` state and the request-payload branch), references in `StatementRunConfig.tsx`, `RunDetailView.tsx`, and `HistoryList.tsx`, the `orchestration` field in `web/src/lib/types.ts`, and the vitest specs (`PreRunPanelOrchestration.test.tsx`, `PreRunPanelMonolithModel.test.tsx`, `RunDetailViewOrchestration.test.tsx`). Drop the API request/response assumption that a `monolith` orchestration can be submitted, so the UI can't offer a path the backend no longer supports
+- [x] 🟩 **Step 1.2: Relocate `_load_open_conflicts`, then delete the dead correction + monolith code** — DONE in two commits (35f936d monolith, 14fe2a9 canonical_agent). Verified: backend 1836 pass, frontend 626 pass, tsc clean. Net −8,576 LOC.
+  - [x] 🟩 Moved `load_open_conflicts` into `correction/reviewer_agent.py` (public); updated the two live imports (server.py:3685, 5021 — line numbers had shifted from the plan's original 4130/5466).
+  - [x] 🟩 Deleted `correction/canonical_agent.py` (637 LOC) + 2 test files + orphaned `prompts/correction_canonical.md`; fixed stale doc-comments.
+  - [x] 🟩 Deleted `monolith/` (3,421 LOC) + CLI wiring (run.py) + server dispatch (`_run_monolith_path`, `validate_monolith_scope`, 3 branches) + ~19 backend test files. Kept `runs.orchestration` column (schema v10); relaxed request models `Literal[split,monolith]`→`str`.
+  - [x] 🟩 **Removed the monolith/orchestration *frontend* surface** (PreRunPanel selector + monolith-model picker, StatementRunConfig `singleModelMode`, RunDetailView/HistoryList badges, `types.ts` `Orchestration`) + 3 vitest specs. Original below for reference:
+  - [ ] 🟥 ~~Remove the monolith/orchestration *frontend* surface too~~ — the orchestration selector + monolith-model UI in `web/src/components/PreRunPanel.tsx` (~line 1058, plus the `orchestration`/`monolithModel` state and the request-payload branch), references in `StatementRunConfig.tsx`, `RunDetailView.tsx`, and `HistoryList.tsx`, the `orchestration` field in `web/src/lib/types.ts`, and the vitest specs (`PreRunPanelOrchestration.test.tsx`, `PreRunPanelMonolithModel.test.tsx`, `RunDetailViewOrchestration.test.tsx`). Drop the API request/response assumption that a `monolith` orchestration can be submitted, so the UI can't offer a path the backend no longer supports
   - **Verify:** `grep -rn "canonical_agent\|monolith" --include="*.py" .` returns only the relocated helper's new home (and historical docs); `grep -rn "monolith\|orchestration" web/src` returns nothing live; full backend suite green; `cd web && npx vitest run` green with the orchestration specs removed (not skipped); the PreRun panel no longer offers a monolith path and History no longer renders an orchestration badge; the reviewer pass still runs end-to-end on a run with failing cross-checks.
 
 ### Phase 2: One agent loop — *the DRY keystone before store-first* (report steps 2–3)
