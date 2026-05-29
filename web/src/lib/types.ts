@@ -280,6 +280,11 @@ export interface AgentCompleteData {
   error: string | null;
   // Mirror of CompleteData.warnings for per-agent completion events.
   warnings?: string[];
+  // Honest-completion flag: present (non-null) when the agent finalised the
+  // statement via acknowledge_unresolved — the workbook is saved but a known
+  // imbalance / unfilled-mandatory was accepted and needs human review.
+  // success stays true (extraction DID finalise); this string is the reason.
+  flag?: string | null;
 }
 
 /** Cross-check result as emitted in run_complete SSE event.
@@ -314,6 +319,10 @@ export interface RunCompleteData {
   cross_checks_partial?: boolean;
   statements_completed?: string[];
   statements_failed?: string[];
+  // Honest-completion flag (peer-review F1): statements that finalised with an
+  // acknowledged, audited gap. They are ALSO in statements_completed (the data
+  // is saved); this array tells the UI to badge them "needs review".
+  statements_flagged?: string[];
   // Notes-agent rollups. The backend emits these even when the notes
   // coordinator crashed before per-agent `complete` events landed — so
   // the reducer reconciles notes tabs from these arrays to avoid pending
@@ -517,6 +526,10 @@ export interface AgentState {
   tokens: TokenData | null;
   error: ErrorData | null;
   workbookPath: string | null;
+  // Honest-completion flag (peer-review F1): non-null when this agent
+  // finalised with an acknowledged, audited gap. status stays "complete"
+  // (the data is saved) but the UI badges it "needs review".
+  flag?: string | null;
   // Phase 5.2 / peer-review [M1]: when the backend emits a Sheet-12
   // sub-agent `started` event it carries structured batch metadata.
   // We aggregate the ranges across all sub-agents so the Notes-12 tab

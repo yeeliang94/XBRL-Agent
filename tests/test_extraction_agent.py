@@ -335,6 +335,61 @@ def test_fill_workbook_resets_last_verify_result(tmp_path):
     )
 
 
+def test_fill_workbook_clears_stale_completed_flag(tmp_path):
+    """Peer-review: a successful fill after a flagged save must clear
+    completed_with_flag / unresolved_summary so the next clean save doesn't
+    stamp a stale `_unresolved_flag`."""
+    import openpyxl
+    import json as _json
+    from extraction.agent import create_extraction_agent
+    from pydantic_ai.models.test import TestModel as _TM
+
+    template_path = tmp_path / "tmpl.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOFP-CuNonCu"
+    ws["A1"] = "Total assets"
+    ws["B1"] = 0
+    wb.save(str(template_path))
+
+    agent, deps = create_extraction_agent(
+        statement_type=StatementType.SOFP,
+        variant="CuNonCu",
+        pdf_path="/tmp/test.pdf",
+        template_path=str(template_path),
+        model=_TM(),
+        output_dir=str(tmp_path),
+    )
+
+    # Simulate a prior flagged save still hanging around on deps.
+    deps.completed_with_flag = True
+    deps.unresolved_summary = "old imbalance"
+    deps.unresolved_reason = "stale reason"
+
+    fill_tool = None
+    for ts in getattr(agent, "toolsets", []) or []:
+        tools = getattr(ts, "tools", {}) or {}
+        if "fill_workbook" in tools:
+            fill_tool = tools["fill_workbook"]
+            break
+    assert fill_tool is not None
+
+    class _Ctx:
+        pass
+    ctx = _Ctx()
+    ctx.deps = deps
+    fields_json = _json.dumps({"fields": [
+        {"sheet": "SOFP-CuNonCu", "field_label": "Total assets",
+         "col": 2, "value": 100, "evidence": "t"},
+    ]})
+    fn = getattr(fill_tool, "function", None) or getattr(fill_tool, "func", None) or fill_tool
+    fn(ctx, fields_json)
+
+    assert deps.completed_with_flag is False
+    assert deps.unresolved_summary is None
+    assert deps.unresolved_reason is None
+
+
 def test_verify_to_save_loop_end_to_end():
     """Step 1.4: simulate the fill -> verify-fail -> fix -> verify-ok -> save
     loop against the real gate helper. Proves the state machine lets the

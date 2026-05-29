@@ -26,6 +26,48 @@ _VALID_CONFIDENCE: set[str] = {"HIGH", "MEDIUM", "LOW"}
 DetectedStandard = Literal["mfrs", "mpers", "unknown"]
 _VALID_DETECTED_STANDARD: set[str] = {"mfrs", "mpers", "unknown"}
 
+# Phase 2 — units the agent may see on a face page header. "unknown" is
+# the safe default — the prompt renders a loud "VERIFY UNIT" block in
+# that case so the agent always reads the header itself. Putting a
+# wrong value here produces a silent 1000× extraction error, so the
+# resolver is intentionally restrictive about what it accepts.
+ScaleUnit = Literal["units", "thousands", "millions", "unknown"]
+_VALID_SCALE_UNIT: set[str] = {"units", "thousands", "millions", "unknown"}
+
+# Filing-level guess from the cover / face-page header. Group filings
+# show both consolidated and standalone columns; company-only filings
+# show only the company columns. Scout's claim is advisory — the UI
+# toggle wins, but a strong scout signal can preselect.
+ConsolidationLevel = Literal["company", "group", "both", "unknown"]
+_VALID_CONSOLIDATION: set[str] = {"company", "group", "both", "unknown"}
+
+
+@dataclass
+class FaceLineRef:
+    """One line item observed on a statement's face page.
+
+    Carries the label, the cross-reference to a disclosure note number (if
+    the face page cited one), and the section header the line sits under.
+    Populated by the deterministic ``read_face_structure`` parser on text
+    PDFs, or by the scout LLM emitting structured JSON on scanned PDFs
+    (where PyMuPDF returns no text). Soft advisory only — downstream face
+    agents are still required to verify against the PDF.
+    """
+    label: str
+    note_num: Optional[int] = None
+    section: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # Empty label = nothing for the prompt renderer to display; reject
+        # so the failure surfaces in scout rather than producing a blank
+        # bullet downstream.
+        if not self.label or not self.label.strip():
+            raise ValueError("FaceLineRef.label must be non-empty")
+        if self.note_num is not None and self.note_num < 1:
+            raise ValueError(
+                f"FaceLineRef.note_num must be >= 1 when set, got {self.note_num}"
+            )
+
 
 @dataclass
 class StatementPageRef:
@@ -39,11 +81,23 @@ class StatementPageRef:
         note_pages: 1-indexed PDF pages containing notes referenced by
             the statement. All entries must be > 0.
         confidence: how confident the scout is in the page mapping.
+        face_line_refs: structural map of face-page line items to their
+            cited note numbers. Empty when scout did not read the face
+            page in detail (e.g. scanned PDF with no vision-LLM
+            available, or text PDF where the regex parser found
+            nothing). Populated as advisory hints for face agents.
+        face_read_in_detail: True iff scout viewed the face page AND
+            either ``face_line_refs`` was populated by the regex parser
+            or the LLM explicitly confirmed it from a vision read.
+            Downstream agents use this to decide whether to trust the
+            structural hints or fall back to self-discovery.
     """
     variant_suggestion: str
     face_page: int
     note_pages: list[int] = field(default_factory=list)
     confidence: Confidence = "HIGH"
+    face_line_refs: list[FaceLineRef] = field(default_factory=list)
+    face_read_in_detail: bool = False
 
     def __post_init__(self) -> None:
         if self.face_page < 1:
@@ -77,6 +131,18 @@ class Infopack:
     # (note_num, title, page_range) triple describing one disclosure note
     # in the PDF. Consumed by the notes agents / sub-coordinator.
     notes_inventory: list[NoteInventoryEntry] = field(default_factory=list)
+    # Phase 2 — entity / period / unit context observed by scout on the
+    # cover or face-page headers. All optional, all advisory: the prompt
+    # renderer surfaces each value with a loud "VERIFY against the PDF"
+    # framing because a wrong unit produces a silent 1000× error
+    # (gotcha #17's sibling failure mode). Defaults are designed so the
+    # block omits cleanly when scout couldn't enrich.
+    entity_name: Optional[str] = None
+    reporting_period_cy: Optional[str] = None
+    reporting_period_py: Optional[str] = None
+    currency: str = "RM"
+    scale_unit: ScaleUnit = "unknown"
+    consolidation_level: ConsolidationLevel = "unknown"
     # Scout's MFRS-vs-MPERS guess from the TOC / front-matter text. The UI
     # uses this to preselect the filing-standard toggle; the user always
     # wins. "unknown" when the signals are ambiguous (e.g. both MFRS and
@@ -91,12 +157,34 @@ class Infopack:
             "toc_page": self.toc_page,
             "page_offset": self.page_offset,
             "detected_standard": self.detected_standard,
+            # Phase 2 — context fields. Always serialised so the loader
+            # sees the same shape every time; consumers branch on the
+            # values to decide whether to render.
+            "entity_name": self.entity_name,
+            "reporting_period_cy": self.reporting_period_cy,
+            "reporting_period_py": self.reporting_period_py,
+            "currency": self.currency,
+            "scale_unit": self.scale_unit,
+            "consolidation_level": self.consolidation_level,
             "statements": {
                 st.value: {
                     "variant_suggestion": ref.variant_suggestion,
                     "face_page": ref.face_page,
                     "note_pages": ref.note_pages,
                     "confidence": ref.confidence,
+                    # Phase 1a — structural face-page hints. Empty list /
+                    # False are the safe defaults consumers fall back to
+                    # when scout couldn't enrich (scanned PDF without
+                    # vision model, regex returned nothing, etc).
+                    "face_line_refs": [
+                        {
+                            "label": r.label,
+                            "note_num": r.note_num,
+                            "section": r.section,
+                        }
+                        for r in ref.face_line_refs
+                    ],
+                    "face_read_in_detail": ref.face_read_in_detail,
                 }
                 for st, ref in self.statements.items()
             },
@@ -105,6 +193,17 @@ class Infopack:
                     "note_num": e.note_num,
                     "title": e.title,
                     "page_range": list(e.page_range),
+                    # Phase 1b — nested sub-note structure (display-only,
+                    # never participates in Sheet-12 fan-out). Empty list
+                    # is the safe default; existing consumers ignore it.
+                    "subnotes": [
+                        {
+                            "subnote_ref": s.subnote_ref,
+                            "title": s.title,
+                            "page_range": list(s.page_range),
+                        }
+                        for s in getattr(e, "subnotes", []) or []
+                    ],
                 }
                 for e in self.notes_inventory
             ],
@@ -117,12 +216,65 @@ class Infopack:
         statements: dict[StatementType, StatementPageRef] = {}
         for key, ref_data in data.get("statements", {}).items():
             st = StatementType(key)
+            # Decode the optional Phase 1a face_line_refs list. Malformed
+            # entries are skipped with a warning rather than failing the
+            # whole load — same defensive posture as notes_inventory below
+            # so a single bad entry in a persisted infopack doesn't
+            # abort a rerun.
+            face_line_refs: list[FaceLineRef] = []
+            for idx, raw in enumerate(ref_data.get("face_line_refs", []) or []):
+                if not isinstance(raw, dict):
+                    logger.warning(
+                        "Infopack statements[%s].face_line_refs[%d] is not "
+                        "a dict (%r); skipping", key, idx, raw,
+                    )
+                    continue
+                label = raw.get("label", "")
+                if not isinstance(label, str) or not label.strip():
+                    logger.warning(
+                        "Infopack statements[%s].face_line_refs[%d] has "
+                        "empty/non-string label; skipping", key, idx,
+                    )
+                    continue
+                raw_note = raw.get("note_num")
+                note_num: Optional[int]
+                if raw_note is None:
+                    note_num = None
+                else:
+                    try:
+                        note_num = int(raw_note)
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "Infopack statements[%s].face_line_refs[%d] has "
+                            "non-integer note_num %r; treating as None",
+                            key, idx, raw_note,
+                        )
+                        note_num = None
+                section_raw = raw.get("section")
+                section = section_raw if isinstance(section_raw, str) and section_raw else None
+                try:
+                    face_line_refs.append(FaceLineRef(
+                        label=label,
+                        note_num=note_num,
+                        section=section,
+                    ))
+                except ValueError as e:
+                    logger.warning(
+                        "Infopack statements[%s].face_line_refs[%d] rejected: %s",
+                        key, idx, e,
+                    )
             statements[st] = StatementPageRef(
                 variant_suggestion=ref_data["variant_suggestion"],
                 face_page=ref_data["face_page"],
                 note_pages=ref_data.get("note_pages", []),
                 confidence=ref_data.get("confidence", "HIGH"),
+                face_line_refs=face_line_refs,
+                face_read_in_detail=bool(ref_data.get("face_read_in_detail", False)),
             )
+        # Local import keeps the SubNote symbol close to the loader so
+        # operators reading from_json see the exact shape it accepts.
+        from scout.notes_discoverer import SubNoteInventoryEntry
+
         inventory: list[NoteInventoryEntry] = []
         for idx, raw in enumerate(data.get("notes_inventory", []) or []):
             pr = raw.get("page_range", [])
@@ -136,10 +288,42 @@ class Infopack:
                     "defaulting to (0, 0)", idx, pr,
                 )
                 page_range = (0, 0)
+
+            # Phase 1b — decode nested subnotes. Malformed entries are
+            # dropped silently (matching the inventory-level posture)
+            # so a single bad subnote doesn't abort the parent load.
+            subnotes: list[SubNoteInventoryEntry] = []
+            for sidx, sraw in enumerate(raw.get("subnotes", []) or []):
+                if not isinstance(sraw, dict):
+                    continue
+                ref = sraw.get("subnote_ref", "")
+                if not isinstance(ref, str) or not ref.strip():
+                    continue
+                spr = sraw.get("page_range", [])
+                if isinstance(spr, list) and len(spr) == 2:
+                    try:
+                        spage_range = (int(spr[0]), int(spr[1]))
+                    except (TypeError, ValueError):
+                        continue
+                else:
+                    continue
+                try:
+                    subnotes.append(SubNoteInventoryEntry(
+                        subnote_ref=ref,
+                        title=str(sraw.get("title", "")),
+                        page_range=spage_range,
+                    ))
+                except ValueError as e:
+                    logger.warning(
+                        "Infopack notes_inventory[%d].subnotes[%d] rejected: %s",
+                        idx, sidx, e,
+                    )
+
             inventory.append(NoteInventoryEntry(
                 note_num=int(raw["note_num"]),
                 title=str(raw.get("title", "")),
                 page_range=page_range,
+                subnotes=subnotes,
             ))
 
         detected = data.get("detected_standard", "unknown")
@@ -147,12 +331,44 @@ class Infopack:
         # fall back to "unknown" rather than crash Infopack reconstruction.
         if detected not in _VALID_DETECTED_STANDARD:
             detected = "unknown"
+
+        # Phase 2 — context fields. Each is independently optional and
+        # defensively narrowed so a malformed value lands as the safe
+        # default rather than crashing the load.
+        scale_unit = data.get("scale_unit", "unknown")
+        if scale_unit not in _VALID_SCALE_UNIT:
+            logger.warning(
+                "Infopack scale_unit %r unknown; coercing to 'unknown'", scale_unit,
+            )
+            scale_unit = "unknown"
+        consolidation = data.get("consolidation_level", "unknown")
+        if consolidation not in _VALID_CONSOLIDATION:
+            logger.warning(
+                "Infopack consolidation_level %r unknown; coercing to 'unknown'",
+                consolidation,
+            )
+            consolidation = "unknown"
+        entity_name_raw = data.get("entity_name")
+        entity_name = entity_name_raw if isinstance(entity_name_raw, str) and entity_name_raw.strip() else None
+        cy_raw = data.get("reporting_period_cy")
+        reporting_period_cy = cy_raw if isinstance(cy_raw, str) and cy_raw.strip() else None
+        py_raw = data.get("reporting_period_py")
+        reporting_period_py = py_raw if isinstance(py_raw, str) and py_raw.strip() else None
+        currency_raw = data.get("currency", "RM")
+        currency = currency_raw if isinstance(currency_raw, str) and currency_raw.strip() else "RM"
+
         return cls(
             toc_page=data["toc_page"],
             page_offset=data["page_offset"],
             statements=statements,
             notes_inventory=inventory,
             detected_standard=detected,
+            entity_name=entity_name,
+            reporting_period_cy=reporting_period_cy,
+            reporting_period_py=reporting_period_py,
+            currency=currency,
+            scale_unit=scale_unit,
+            consolidation_level=consolidation,
         )
 
     # -- Notes page hints ------------------------------------------------------

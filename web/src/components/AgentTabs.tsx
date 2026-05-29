@@ -183,6 +183,17 @@ function AgentTabsImpl({
             <span style={styles.tabSubLabel}>{agent.subLabel}</span>
           )}
         </span>
+        {agent.flag && (
+          // Honest-completion flag (peer-review F1): finalised but the agent
+          // accepted a known imbalance / unfilled-mandatory — needs review.
+          <span
+            aria-label={`Needs review: ${agent.flag}`}
+            title={`Needs review: ${agent.flag}`}
+            style={{ marginLeft: 4, color: "#b54708", fontSize: 12 }}
+          >
+            ⚠
+          </span>
+        )}
       </button>
     );
   };

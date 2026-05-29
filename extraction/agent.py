@@ -100,6 +100,27 @@ class ExtractionDeps:
         self.result_json_path: Optional[str] = None
         self.last_save_error: Optional[str] = None
         self.last_fill_errors: list[str] = []
+        # Honest-completion path (2026-05-29): the save gate blocks on any
+        # imbalance / unfilled-mandatory, but prompts (gotcha #17) tell the
+        # agent that some discrepancies are genuinely in the source and it
+        # should "finish honestly with the gap flagged". Those two contracts
+        # collided — a compliant agent had no legal way to finalise (can't
+        # plug a catch-all, can't overwrite a formula total, can't save). The
+        # agent may now re-call save_result with `acknowledge_unresolved=True`
+        # AFTER re-examining; the gate then opens and `completed_with_flag`
+        # records that the statement finalised with a known, audited gap so
+        # the coordinator surfaces it instead of hard-failing + discarding the
+        # extracted data.
+        self.completed_with_flag: bool = False
+        self.unresolved_summary: Optional[str] = None
+        # Peer-review hardening: the honest-completion hatch only opens after
+        # the agent has already been refused for THIS gap (so it has seen the
+        # "re-examine / don't plug" guidance) AND supplies its own non-empty
+        # reason. `seen_unresolved_refusal` flips True the first time the gate
+        # refuses for a balance / mandatory gap; `unresolved_reason` is the
+        # agent's own words (kept separate from the verifier-derived summary).
+        self.seen_unresolved_refusal: bool = False
+        self.unresolved_reason: Optional[str] = None
 
 
 def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
@@ -187,7 +208,11 @@ def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]
     return None
 
 
-def _check_save_gate(deps: "ExtractionDeps") -> Optional[str]:
+def _check_save_gate(
+    deps: "ExtractionDeps",
+    acknowledge_unresolved: bool = False,
+    acknowledge_reason: str = "",
+) -> Optional[str]:
     """Return an error string if save_result must be blocked; None if OK.
 
     The gate blocks when (a) verify_totals has never run on the current
@@ -196,6 +221,15 @@ def _check_save_gate(deps: "ExtractionDeps") -> Optional[str]:
     iterations of `MAX_AGENT_ITERATIONS` the gate opens as a last-resort
     escape hatch — a log line records the forced save so the run's
     audit trail captures it.
+
+    Honest-completion path (2026-05-29): a verify-flagged gap is NOT always
+    an extraction error — the source statement may genuinely not reconcile,
+    or the only row that would close it is a protected formula cell. The
+    prompts (gotcha #17) tell the agent to finish honestly with the gap
+    flagged in that case. When `acknowledge_unresolved=True` AND at least one
+    verify has run (so the gap is known, not blind), the gate opens and the
+    statement finalises flagged. The "verify never ran" block is NOT
+    bypassable this way — acknowledging requires a verification to acknowledge.
     """
     result = deps.last_verify_result
     forced_allowed = _is_force_save_allowed(deps)
@@ -234,6 +268,56 @@ def _check_save_gate(deps: "ExtractionDeps") -> Optional[str]:
         )
         return None
 
+    # Honest-completion path: the agent has re-examined and asserts the gap
+    # is genuine (in the source, or unclosable without overwriting a formula
+    # cell). Open the gate and record the flag so the statement finalises with
+    # an audited imbalance rather than hard-failing and discarding the data.
+    #
+    # Two guardrails keep this from becoming a lazy bypass (peer-review):
+    #   1. the agent must already have been refused for this gap
+    #      (`seen_unresolved_refusal`) — so it has seen the "re-examine /
+    #      never plug a catch-all" guidance before it can acknowledge; and
+    #   2. it must supply a non-empty reason of its own.
+    if acknowledge_unresolved:
+        reason = (acknowledge_reason or "").strip()
+        if not deps.seen_unresolved_refusal:
+            # First contact with the gap — refuse once (which sets the flag
+            # below and surfaces the guidance) before honouring an ack.
+            pass
+        elif not reason:
+            return (
+                "save_result refused: acknowledge_unresolved=true requires a "
+                "non-empty unresolved_reason explaining why the gap is genuine "
+                "(which note you re-read, why it cannot reconcile, or which "
+                "formula cell blocks the close). Add it and retry."
+            )
+        else:
+            summary_bits: list[str] = []
+            if balance_bad:
+                summary_bits.append(result.feedback or "unbalanced totals")
+            if mandatory_bad:
+                summary_bits.append(
+                    "unfilled mandatory rows: "
+                    + json.dumps(result.mandatory_unfilled)
+                )
+            deps.completed_with_flag = True
+            deps.unresolved_summary = "; ".join(summary_bits) or "verify gap"
+            deps.unresolved_reason = reason
+            logger.warning(
+                "%s: save_result finalised WITH FLAG via acknowledge_unresolved "
+                "(iter %d, balanced=%s, unfilled=%s, reason=%r)",
+                deps.statement_type.value,
+                deps.turn_counter,
+                result.is_balanced,
+                result.mandatory_unfilled,
+                reason,
+            )
+            return None
+
+    # Record that the agent has now been told about this gap, so a follow-up
+    # acknowledge_unresolved is allowed to finalise it.
+    deps.seen_unresolved_refusal = True
+
     # Compose a targeted error message so the agent knows exactly what to fix.
     # Combined "Action required:" block (peer-review S7) — two separate
     # blocks could leave the agent unsure which issue to address first.
@@ -250,6 +334,18 @@ def _check_save_gate(deps: "ExtractionDeps") -> Optional[str]:
     parts.extend(issues)
     parts.append("Correct the issues with fill_workbook, re-run "
                  "verify_totals, then retry save_result.")
+    # Tell the agent about the honest-completion escape hatch (gotcha #17):
+    # if the gap is genuinely in the source, or the only row that would close
+    # it is a protected formula cell, do NOT plug a catch-all — instead
+    # re-call save_result with acknowledge_unresolved=true to finalise flagged.
+    parts.append(
+        "If you have re-examined the PDF and the discrepancy is genuinely in "
+        "the source (or the only row that would close it is a protected "
+        "formula cell), do NOT plug a catch-all row. Instead call save_result "
+        "again with acknowledge_unresolved=true AND unresolved_reason=\"...\" "
+        "(explain which note you re-read and why it cannot reconcile) to "
+        "finalise with the gap flagged for review."
+    )
     return "\n".join(parts)
 
 
@@ -368,6 +464,7 @@ def create_extraction_agent(
     output_dir: Optional[str] = None,
     cache_template: bool = False,
     page_hints: Optional[dict] = None,
+    scout_context: Optional[dict] = None,
     filing_level: str = "company",
     filing_standard: str = "mfrs",
     run_id: Optional[int] = None,
@@ -423,6 +520,10 @@ def create_extraction_agent(
         # RUN-REVIEW P2-2: pass the live template path so SOCF/SoRE
         # prompts get a per-row sign-from-formula block injected.
         template_path=template_path,
+        # Phase 2 — entity / period / unit context from scout. None /
+        # empty dict means no scout enrichment and the renderer omits
+        # the block (today's behaviour preserved).
+        scout_context=scout_context,
     )
 
     # Pin temperature=1.0 explicitly. CLAUDE.md gotcha #5: Gemini 3 through
@@ -546,6 +647,13 @@ def create_extraction_agent(
             # previous save — the JSON on disk no longer matches the
             # workbook content. The agent must call save_result again.
             ctx.deps.result_saved = False
+            # Peer-review: a fresh write may have closed the gap the agent
+            # previously acknowledged. Clear the flag so a subsequent clean
+            # save doesn't stamp a stale `_unresolved_flag`. A genuinely
+            # still-broken statement re-acknowledges (cheap) after re-verify.
+            ctx.deps.completed_with_flag = False
+            ctx.deps.unresolved_summary = None
+            ctx.deps.unresolved_reason = None
             # Track unresolved blocking errors from this fill so the
             # coordinator can see them even if a later save_result lands.
             # Empty list when the fill is clean.
@@ -596,20 +704,40 @@ def create_extraction_agent(
         return _format_verify_result(result)
 
     @agent.tool
-    def save_result(ctx: RunContext[ExtractionDeps], fields_json: str) -> str:
+    def save_result(
+        ctx: RunContext[ExtractionDeps],
+        fields_json: str,
+        acknowledge_unresolved: bool = False,
+        unresolved_reason: str = "",
+    ) -> str:
         """Save extraction results (JSON + cost report) to the output directory.
 
         Phase 1.3: refuses to finalise unless the most recent verification
         passed AND no mandatory (`*`) rows are unfilled. If verify_totals
         hasn't been called since the last fill_workbook, the save is
         blocked — the agent is told to re-verify.
+
+        Set ``acknowledge_unresolved=True`` (with a non-empty
+        ``unresolved_reason``) ONLY when you have re-examined the PDF and the
+        verify gap is genuinely in the source (or the only row that would close
+        it is a protected formula cell). This finalises the statement WITH the
+        gap flagged for human review (gotcha #17) instead of plugging a
+        catch-all row. It is honoured only after the gate has already refused
+        the same gap once. Never use it to skip legitimate corrections.
         """
         ctx.deps.save_attempts += 1
-        gate_error = _check_save_gate(ctx.deps)
+        gate_error = _check_save_gate(
+            ctx.deps, acknowledge_unresolved, unresolved_reason
+        )
         if gate_error is not None:
             ctx.deps.last_save_error = gate_error
             return gate_error
         fields = json.loads(fields_json)
+        # Stamp the audited-gap metadata onto the persisted result so the
+        # download / review surface can show WHY it was finalised flagged.
+        if ctx.deps.completed_with_flag and isinstance(fields, dict):
+            fields.setdefault("_unresolved_flag", ctx.deps.unresolved_summary)
+            fields.setdefault("_unresolved_reason", ctx.deps.unresolved_reason)
         stmt_prefix = ctx.deps.statement_type.value
         json_path = Path(ctx.deps.output_dir) / f"{stmt_prefix}_result.json"
         json_path.write_text(json.dumps(fields, indent=2), encoding="utf-8")
@@ -628,6 +756,12 @@ def create_extraction_agent(
 
         # Phase 4 (token-cost): write the cost-report body to file only —
         # the agent does not act on it, so don't re-bill it in the tool return.
+        if ctx.deps.completed_with_flag:
+            return (
+                f"Results saved to {json_path} WITH A FLAGGED GAP "
+                f"({ctx.deps.unresolved_summary}). The statement is finalised "
+                f"for human review. Cost report saved to {report_path}."
+            )
         return f"Results saved to {json_path}. Cost report saved to {report_path}."
 
     return agent, deps

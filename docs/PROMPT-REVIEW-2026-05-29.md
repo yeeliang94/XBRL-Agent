@@ -44,13 +44,28 @@ There is **no single "delete this file" win** — the bloat is distributed.
 
 | Agent | Assembled system prompt | Source |
 |---|---|---|
-| Face extraction | `_base.md` + `{stmt}[_variant\|_standard].md` + nav block + [group overlay] + [dynamic sign block for SOCF/SOCIE] | `prompts/__init__.py::render_prompt` |
-| Notes | `_notes_base.md` + `notes_{X}.md` + dynamic (cross-sheet hints, MPERS overlay, seeded labels) | `notes/agent.py::render_notes_prompt` |
-| Notes-12 sub-agent | `_notes_base.md` + `notes_listofnotes.md` + batch inventory | notes Sheet-12 fan-out |
+| Face extraction | `_base.md` + `{stmt}[_variant\|_standard].md` + **[SCOUT-OBSERVED CONTEXT block]** + nav block (**+ [FACE LINE → NOTE REFERENCES block]** when scout enriched) + [group overlay] + [dynamic sign block for SOCF/SOCIE] | `prompts/__init__.py::render_prompt` |
+| Notes | `_notes_base.md` + **sheet-map block** + **target block** + **column-rules block** + `notes_{X}.md` + **[SCOUT-OBSERVED CONTEXT block]** + **inventory block** (now incl. nested `└ sub-note` lines) + [MPERS overlay] + [label catalog] + [page hints + offset] | `notes/agent.py::render_notes_prompt` (the `parts = [...]` assembly, ~line 541) |
+| Notes-12 sub-agent | as above + batch inventory | notes Sheet-12 fan-out |
 | Correction (legacy) | `correction.md` + failed-checks block + hints | `correction/agent.py` |
-| Correction (canonical) | `correction_canonical.md` | `correction/canonical_agent.py` |
+| Correction (canonical) | `correction_canonical.md` + **`=== OPEN CONFLICTS ===` block** | `correction/canonical_agent.py::render_canonical_correction_prompt` (~line 42) |
 | Monolith | `monolith_face.md` (self-contained) | `monolith/coordinator.py` |
 | Scout | inline `_SYSTEM_PROMPT` etc. | `scout/agent.py`, `scout/vision.py`, … |
+
+> **UPDATE 2026-05-29 (scout-coverage diff).** The face and notes assembly
+> rows above were extended by the scout-coverage change
+> (`docs/PLAN-scout-coverage-quality.md`, CLAUDE.md gotcha #13). Two new
+> *conditional* blocks now render when the scout enriched the Infopack:
+> a **`=== SCOUT-OBSERVED CONTEXT (VERIFY EACH BEFORE USING) ===`** block
+> (entity / period / currency / scale-unit / consolidation — face **and**
+> notes prompts) and a **`=== FACE LINE → NOTE REFERENCES ===`** block
+> (face prompts only, inside scoped navigation). Both are generated in
+> `prompts/__init__.py` (`_render_scout_context_block`,
+> `_render_face_line_refs_block`), degrade to empty strings when scout
+> couldn't enrich, and are **test-pinned** — see §7. They add length only on
+> enriched runs, and the scale-unit line deliberately overlaps `_base.md`'s
+> "check the statement header for the unit" guidance (a conditional, defensible
+> redundancy — see §5).
 
 **Key finding that changes the math:** in the live coordinator path,
 `create_extraction_agent` is called **without** `cache_template`
@@ -100,11 +115,22 @@ Consequences:
 | Scout `_VALIDATION_PROMPT` | 0.4 K | ~0.1 K | Leave. |
 
 **Per-agent assembled totals (static, before PDF/tool output):**
-- SOFP face agent ≈ `_base` + `sofp` + nav ≈ **~4.5 K tokens**
-- Accounting-policies notes agent ≈ `_notes_base` + `notes_accounting_policies` ≈ **~5 K tokens**
+- SOFP face agent ≈ `_base` + `sofp` + nav ≈ **~4.5 K tokens** (**+ ~0.2–0.5 K**
+  on scout-enriched runs for the SCOUT-OBSERVED CONTEXT + FACE LINE → NOTE
+  REFERENCES blocks)
+- Accounting-policies notes agent ≈ `_notes_base` + `notes_accounting_policies` **+ sheet-map + target + column-rules + inventory + [MPERS overlay] + [label catalog] + [page hints]** ≈ **~6–7 K tokens** (the notes figure is materially higher than `_notes_base + notes_X` alone — peer-review Finding 5)
 
 These are defensible for meticulous extraction, but both are the prime trim
 targets.
+
+> **Caveat on the percentages (peer-review Finding 5).** The "~25 % off notes
+> prompts" headline measures the trimmable `.md` files (`_notes_base.md` +
+> `notes_{X}.md`) against themselves. Because `render_notes_prompt` also
+> appends several dynamic blocks (sheet map, target, column rules, inventory,
+> MPERS overlay, label catalog, page hints), those `.md` files are a smaller
+> fraction of the *delivered* system prompt than the raw byte counts suggest.
+> The trim targets are still valid; the % saving against the full assembled
+> prompt is lower than against the `.md` files in isolation.
 
 ---
 
@@ -333,23 +359,48 @@ overlay is "reserved / Phase 6.2 … not needed yet" — but `socie_mpers.md` no
 exists and the precedence comment below it documents the real behavior. The
 docstring contradicts the code. Worth a one-line fix while you're in here.
 
+### Scout-coverage blocks (ADDED 2026-05-29) — net-new conditional content
+The scout-coverage diff added two conditional blocks to face prompts (and the
+context block to notes prompts) plus a new `_base.md` bullet about the
+face-line map. Two small redundancies are worth noting, both **defensible**:
+- The SCOUT-OBSERVED CONTEXT block's scale-unit line ("verify the unit … 1000×
+  error") overlaps `_base.md`'s existing "Values are often in RM thousands —
+  check the statement header for the unit". The scout version is conditional
+  (only on enriched runs) and carries the louder, higher-value 1000× warning —
+  keep both; do not try to merge (the scout line is test-pinned, §7).
+- The new `_base.md` bullet ("the scout's face-line map … is a starting index,
+  NOT a substitute for reading the linked note pages") restates the verify
+  framing the FACE LINE → NOTE REFERENCES block already carries. This is the
+  *right* place for it — `_base.md` always loads, the block is conditional — so
+  it's intentional reinforcement, not bloat. No action.
+
+These are flagged for completeness; neither is a trim target.
+
 ---
 
 ## 6. Rule → file duplication map
 
-| Rule | Files that carry it | Land in same context? |
-|---|---|---|
-| No-residual-plug | `_base.md`, `sofp.md`, `sopl.md`, `correction.md`, `correction_canonical.md`, `monolith_face.md` | `_base`+`sofp`+`sopl` → **yes** |
-| Dividends-paid-positive | `_base.md`, `socie.md`, `socie_mpers.md`, `socie_sore.md`, `correction.md`, `monolith_face.md` | `_base`+`socie*` → **yes** |
-| Sign-from-formula (general) | `_base.md`, `sopl.md`, `socf.md`, `socie.md`, `soci.md`, `correction.md`, `monolith_face.md`, `_sign_conventions.py` | `_base`+stmt+dynamic → **yes (3×)** |
-| Extraction procedure / follow notes before lumping | `_base.md`, `sofp.md`, `sopl.md`, `sofp_orderofliquidity.md` | `_base`+stmt → **yes** |
-| `(a)/(b)` preservation | `_notes_base.md` (×3), `notes_accounting_policies.md`, `notes_listofnotes.md` | within `_notes_base` → **yes (3×)** |
-| Cite PDF page not folio | `_notes_base.md`, `notes_listofnotes.md` | Sheet-12 agent → **yes** |
-| Tool-call batching | `_base.md`, `_notes_base.md`, nav block | per agent → **yes** |
-| Use calculator, not mental math | `_base.md`, `_notes_base.md`, `correction.md`, `correction_canonical.md` | occasionally 2× |
+**REVISED 2026-05-29 (peer-review Finding 6):** the "same context" column is
+now scoped **by agent family**. A face agent loads exactly **one** statement
+prompt (`_base` + *one* of `sofp`/`sopl`/…), never two together; and the face
+family (`_base.md`) and notes family (`_notes_base.md`) never co-occur in a
+single agent. The earlier "`_base`+`sofp`+`sopl` → yes" row was wrong.
 
-"Land in same context = yes" marks the genuine in-window duplication worth
-consolidating first.
+| Rule | Files that carry it | True in-window co-occurrence |
+|---|---|---|
+| No-residual-plug | `_base.md`, `sofp.md`, `sopl.md`, `correction.md`, `correction_canonical.md`, `monolith_face.md` | **Yes**, `_base` + the *one* loaded statement file (e.g. `_base`+`sofp`). NOT `sofp`+`sopl` together. |
+| Dividends-paid-positive | `_base.md`, `socie.md`, `socie_mpers.md`, `socie_sore.md`, `correction.md`, `monolith_face.md` | **Yes**, `_base` + the one SOCIE-family file actually loaded (`socie` XOR `socie_mpers` XOR `socie_sore`). |
+| Sign-from-formula | `_base.md`, `sopl.md`, `socf.md`, `socie.md`, `soci.md`, `correction.md`, `monolith_face.md`, `_sign_conventions.py` | **Yes**: `_base` (static) + the one statement file + (SOCF/SOCIE/SoRE only) the dynamic block → up to **3 layers** for those three statements; 2 for others. |
+| Extraction procedure / follow notes before lumping | `_base.md`, `sofp.md`, `sopl.md`, `sofp_orderofliquidity.md` | **Yes**, `_base` + the one loaded statement file. |
+| `(a)/(b)` preservation | `_notes_base.md` (×3 internally), `notes_accounting_policies.md`, `notes_listofnotes.md` | **Yes (3× within `_notes_base.md` itself)**, plus once more in whichever notes file is loaded. |
+| Cite PDF page not folio | `_notes_base.md`, `notes_listofnotes.md` | **Yes** — both load in the Sheet-12 sub-agent. |
+| Tool-call batching | `_base.md` (face), `_notes_base.md` (notes), nav block | Within face agents: `_base`+nav. Within notes agents: `_notes_base`. **`_base` and `_notes_base` never co-occur** — this is cross-family, not same-window. |
+| Use calculator, not mental math | `_base.md` (face), `_notes_base.md` (notes), `correction.md`, `correction_canonical.md` | At most **2× in one agent** (e.g. `_base` repeats it; correction files repeat it). `_base`+`_notes_base` is cross-family, not same-window. |
+
+The genuine in-window duplication worth consolidating first is the
+`_base` + one-statement-file overlap and the 3× internal repetition inside
+`_notes_base.md` — **subject to the §7 pins**, which block most of the
+sign/dividend rows above.
 
 ---
 
@@ -394,25 +445,121 @@ but related): SOFP imbalance feedback must say `assets section is lower` /
 no-plug clause + a leave-the-gap clause; must NOT use the old directive
 `Action:` wording.
 
+**Sign / dividend prose pins (ADDED 2026-05-29 after peer review — these were
+missing from the first draft and are the doc's biggest correction):**
+
+From `tests/test_notes_prompt_phase1.py`:
+- `_base.md` (`test_base_prompt_has_sign_convention_troubleshooting`):
+  `sign-convention troubleshooting`; `do not infer the sign from wording
+  alone`; `foreign exchange loss`; `if the formula subtracts a row`
+- `sopl.md` (`test_sopl_prompt_keeps_loss_expenses_positive`):
+  `loss-labelled expense rows are also positive magnitudes`;
+  `foreign exchange loss`; `impairment loss on trade receivables`
+- `socie.md`, `socie_mpers.md`, `socie_sore.md`
+  (`test_equity_prompts_follow_dividend_formula_sign`, all three files):
+  `do not apply the sopl`; `dividends paid are entered as positive
+  magnitudes`; `subtracts the dividends row`/`formula subtracts it`;
+  `reconciles to sofp`
+- `notes_listofnotes.md` (hierarchy test ~line 295):
+  `one finance-costs payload`; `do not move the lease-interest sub-section`
+- scout `_SYSTEM_PROMPT` (`test_scout_prompt_preserves_face_note_references`):
+  `capture the note-reference column`; `best-effort note page hints`
+
+From `tests/test_socie_prompt_mpers.py`:
+- `socie.md` (MFRS, `TestMfrsSocieDefaultPromptUnchanged`): `matrix`;
+  `6-25`; `30-49`
+- `socie_mpers.md` (`test_mentions_mpers_explicitly`): `mpers` (case-insensitive)
+- `socie_mpers.md` negative pin
+  (`test_socie_mpers_group_section_does_not_advertise_efg_columns`): must NOT
+  contain `additionally use: e (col=5)` or `f (col=6) = evidence`; MUST
+  contain `no additional value columns` or `no e/f`
+- `socie_sore.md` (`TestMpersSoreVariantStillWins`): `Retained Earnings`
+
+From `tests/test_monolith_prompt.py`:
+- `monolith_face.md`: `dividends` + `positive` (SOCIE dividend sign)
+
+From `tests/test_correction_agent.py`:
+- `correction.md`: `dividends as a positive magnitude`;
+  `nearest subtotal formula subtracts a row`
+
+**Implication:** sign/dividend prose is pinned across **seven files**. The §4.1
+"consolidate sign conventions" item is therefore the *most* constrained, not
+the least — almost every copy has a guarding test. Treat §4.1 as a modest
+connective-prose cleanup, not a structural consolidation.
+
+**Generated-block pins (ADDED 2026-05-29 — scout-coverage diff).** These are
+asserted on the *rendered* prompt, not on a `.md` file — they live in
+`prompts/__init__.py`, so a future "trim the prompt blocks" effort must respect
+them too:
+
+- `_render_scout_context_block` (`tests/test_prompts_render_context.py`):
+  `SCOUT-OBSERVED CONTEXT (VERIFY EACH BEFORE USING)`; `thousands (RM '000)`;
+  `1000×`; `UNKNOWN` + `MUST read` (the `scale_unit="unknown"` path);
+  `Currency: USD` only when currency ≠ RM; `Consolidation level: group` only
+  when set; empty dict / all-default → **must return `""`** (degrade-gracefully
+  contract).
+- `_render_face_line_refs_block` / `_build_scoped_navigation`
+  (`tests/test_prompts_render_scout_face_refs.py`):
+  `FACE LINE → NOTE REFERENCES`; `VERIFY against the PDF`; section grouping
+  like `[non-current assets]`; `jump straight to` (when
+  `face_read_in_detail=True`); `starting hypothesis` + `verify` (when False);
+  empty list → **must return `""`**.
+- `_render_inventory_preview` nested sub-notes
+  (`tests/test_inventory_preview_renders_hierarchy.py`): the count line stays
+  top-level-only (`Scout identified N notes`), with `└ Note <subnote_ref>`
+  child lines.
+
 ---
 
 ## 8. Prioritized recommendation
 
-If/when you decide to act, in descending value-per-effort:
+If/when you decide to act, in descending value-per-effort
+(**re-ordered 2026-05-29 after peer review** — sign-convention consolidation
+dropped from #1 to a minor item because §7 pins block most of it; SOCIE
+de-hardcoding removed entirely as test-blocked):
 
-1. **Consolidate sign conventions** (§4.1) — biggest single win; touches the
-   most files; the dynamic block is already the better source.
-2. **De-dupe no-residual-plug** (§4.2) — high value, but mind the pinned
-   strings in §7; tighten `sofp.md`/`sopl.md`, keep `_base.md` canonical.
+1. **Trim `_notes_base.md`** (§4.4, §5) — now the **biggest real win**: the
+   heaviest file, with the `(a)/(b)` rule stated 3× and triple worked
+   examples. Keep the §7-pinned strings (hierarchy phrases, the `2.14` worked
+   example, `pdf page`/`printed folio`); cut the surrounding duplicate prose.
+2. **Trim `sofp.md`** (§5) — consolidate the 4× restatement of "fill sub-sheet
+   first / let template drive granularity"; **keep** the AFS→SSM mapping table
+   and all §7-pinned strings.
 3. **Collapse procedure duplication** (§4.3) — `_base.md` owns generic steps;
-   statement files keep only deltas.
-4. **Trim `_notes_base.md`** (§4.4, §5) — the heaviest file; the 3× `(a)/(b)`
-   prose and triple worked examples are the fat.
-5. **De-hardcode SOCIE coordinates** (§5) — drift safety + length.
-6. **Fix the stale `__init__.py` docstring** (§5) — trivial correctness.
-7. **Defer `monolith_face.md`** unless that path is going to production.
+   statement files keep only deltas. Mind the `_base.md` procedure pins in §7.
+4. **De-dupe no-residual-plug connective prose** (§4.2) — tighten `sofp.md`/
+   `sopl.md` around the pinned sentinels; keep `_base.md` canonical.
+5. **Fix the stale `__init__.py` docstring** (§5) — trivial correctness, no
+   test risk.
+6. **Sign-convention prose cleanup** (§4.1) — **downgraded**: pinned in seven
+   files, so only non-pinned lead-ins/extra examples are touchable. Low
+   value-per-effort; do last, if at all.
+7. **Defer `monolith_face.md`** unless that path is going to production (and
+   note `test_monolith_prompt.py` pins its dividend sign).
+
+**Removed from the plan:** "de-hardcode SOCIE coordinates" — blocked by
+`test_socie_prompt_mpers.py`, which pins `matrix`/`6-25`/`30-49` as an
+intentional MFRS contract. Only revisable by changing test + prompt together.
 
 **Process guardrail (per CLAUDE.md "How to Behave Here"):** every edit near a
-pinned rule is only "done" when `python -m pytest tests/test_prompt_residual_plug_rule.py
-tests/test_notes_prompt_phase1.py tests/test_verifier_feedback_wording.py -v`
-passes. Run it after each file, not at the end.
+pinned rule is only "done" when the **full prompt-pin test set** passes. The
+first draft listed only three files — that was incomplete (peer-review
+Finding 3). The recommended edits touch sign prose, SOCIE/MPERS, monolith, and
+correction prompts, so the command must include all of:
+
+```bash
+python -m pytest \
+  tests/test_prompt_residual_plug_rule.py \
+  tests/test_notes_prompt_phase1.py \
+  tests/test_verifier_feedback_wording.py \
+  tests/test_socf_sign_convention.py \
+  tests/test_socie_prompt_mpers.py \
+  tests/test_monolith_prompt.py \
+  tests/test_correction_agent.py \
+  -v
+```
+
+Run it after each file, not at the end. (If you grep for `_PROMPT_DIR` /
+`read_text` / `_SYSTEM_PROMPT` across `tests/`, add any further files that
+assert prompt strings — the list above is the known set as of this review,
+not a proof of completeness.)

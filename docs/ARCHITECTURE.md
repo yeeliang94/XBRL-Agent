@@ -261,3 +261,89 @@ output/
 
 `run.py` uses `Path(__file__).resolve().parent / "output"` as the base — works
 regardless of caller's CWD.
+
+## Appendix — Scout Infopack Schema
+
+The scout produces a single `Infopack` object that downstream coordinators
+slice into per-agent prompts. Field-by-field reference of what's in the
+`Infopack` after the Phase 1a / 1b / 2 coverage push (May 2026). All
+extensions degrade gracefully — empty / `"unknown"` defaults fall through
+to today's bare hint blocks when scout couldn't enrich.
+
+### Top-level `Infopack` ([scout/infopack.py](scout/infopack.py))
+
+| Field | Type | Populated by | Consumed by | Empty contract |
+|---|---|---|---|---|
+| `toc_page` | `int` | `_find_toc_impl` | (UI display) | required |
+| `page_offset` | `int` | scout LLM | `notes/agent.py::_render_page_offset_block` | `0` → block omitted |
+| `statements` | `dict[StatementType, StatementPageRef]` | `_save_infopack_impl` | `coordinator.py::run_extraction` | empty dict |
+| `notes_inventory` | `list[NoteInventoryEntry]` | `discover_notes_inventory` (regex) or vision fallback | `notes/coordinator.py::run_notes_extraction` | empty list |
+| `detected_standard` | `"mfrs" \| "mpers" \| "unknown"` | `detect_filing_standard` | UI standard preselect | `"unknown"` |
+| `entity_name` | `Optional[str]` (Phase 2) | scout LLM | face + notes prompts | `None` → line omitted |
+| `reporting_period_cy` | `Optional[str]` (Phase 2) | scout LLM | face + notes prompts | `None` → line omitted |
+| `reporting_period_py` | `Optional[str]` (Phase 2) | scout LLM | face + notes prompts | `None` → line omitted |
+| `currency` | `str` (Phase 2) | scout LLM | face + notes prompts (only if ≠ "RM") | defaults to `"RM"` |
+| `scale_unit` | `"units" \| "thousands" \| "millions" \| "unknown"` (Phase 2) | scout LLM | face + notes prompts (loud 1000×-error warning) | `"unknown"` → louder warning fires |
+| `consolidation_level` | `"company" \| "group" \| "both" \| "unknown"` (Phase 2) | scout LLM | face + notes prompts (only if ≠ "unknown") | `"unknown"` → line omitted |
+
+### `StatementPageRef`
+
+| Field | Type | Populated by | Consumed by | Empty contract |
+|---|---|---|---|---|
+| `variant_suggestion` | `str` | scout LLM via `_save_infopack_impl` | `coordinator.py::run_extraction` (variant resolution) | required |
+| `face_page` | `int (>= 1)` | scout LLM | `prompts/__init__._build_scoped_navigation` | required |
+| `note_pages` | `list[int]` | `_discover_notes_impl` or scout LLM | navigation block | empty list |
+| `confidence` | `"HIGH" \| "MEDIUM" \| "LOW"` | scout LLM | UI display | defaults to `"HIGH"` |
+| `face_line_refs` | `list[FaceLineRef]` (Phase 1a) | `read_face_structure` (regex; text PDFs) OR scout LLM (vision; scanned PDFs) | `_build_scoped_navigation` → `_render_face_line_refs_block` | empty list → block omitted |
+| `face_read_in_detail` | `bool` (Phase 1a) | True iff regex produced refs OR scout LLM verified | `_render_face_line_refs_block` (controls "jump straight to" vs "starting hypothesis" wording) | `False` |
+
+### `FaceLineRef` (Phase 1a)
+
+| Field | Type | Empty contract |
+|---|---|---|
+| `label` | `str` (non-empty) | required |
+| `note_num` | `Optional[int]` (>= 1 when set) | `None` for lines without a cited note |
+| `section` | `Optional[str]` | `None` for unclassified lines |
+
+### `NoteInventoryEntry`
+
+| Field | Type | Populated by | Consumed by | Empty contract |
+|---|---|---|---|---|
+| `note_num` | `int` | regex / vision discoverer | Sheet-12 fan-out (`split_inventory_contiguous`, `batch_note_nums`, coverage receipt) | required |
+| `title` | `str` | regex / vision discoverer | inventory preview | (empty allowed) |
+| `page_range` | `tuple[int, int]` | regex / vision discoverer | inventory preview | required |
+| `suggested_row_label` | `Optional[str]` | scout (advisory) | Sheet-12 sub-agent prompt | `None` |
+| `subnotes` | `list[SubNoteInventoryEntry]` (Phase 1b) | `_detect_subnotes_for_parent` (regex) or `_VisionNote.subnotes` (vision) | `_render_inventory_preview` (tree display only) | empty list (Sheet-12 ignores subnotes regardless) |
+
+### `SubNoteInventoryEntry` (Phase 1b)
+
+| Field | Type | Empty contract |
+|---|---|---|
+| `subnote_ref` | `str` (non-empty; "2.1" / "2.14" / "(a)" / "(b)(i)") | required |
+| `title` | `str` | (empty allowed) |
+| `page_range` | `tuple[int, int]` (both >= 1) | required |
+
+### Per-agent slicing
+
+The coordinators read the Infopack and hand each agent only the slice it
+needs — never the whole Infopack object:
+
+- **Face extraction** ([coordinator.py:311](coordinator.py)): builds `page_hints` dict with
+  `face_page`, `note_pages`, `face_line_refs`, `face_read_in_detail`,
+  plus a `scout_context` dict with the six Phase 2 fields. Variant
+  suggestion is applied at variant-resolution time (line ~272), with
+  the standard-applicability filter.
+- **Notes extraction** ([notes/coordinator.py:236](notes/coordinator.py)): full
+  `notes_inventory` (with subnotes), derived `page_hints` list, `page_offset`,
+  same six-field `scout_context`. Plumbed through `_run_single_notes_agent`,
+  `_run_list_of_notes_fanout`, `run_listofnotes_subcoordinator`,
+  `_run_list_of_notes_sub_agent`, `_invoke_sub_agent_once`, `create_notes_agent`.
+- **Cross-checks / correction**: do not consume the Infopack today.
+
+### Sheet-12 invariant (Phase 1b structural guarantee)
+
+`split_inventory_contiguous` iterates `inventory` directly. Sub-notes
+are nested **inside** their parent `NoteInventoryEntry` — they're never
+peer entries. This makes the "Sheet-12 only sees top-level int
+`note_num`s" invariant structurally impossible to violate. Pinned by
+[tests/test_sheet12_ignores_subnotes.py](../tests/test_sheet12_ignores_subnotes.py).

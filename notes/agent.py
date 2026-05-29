@@ -377,11 +377,23 @@ def _render_inventory_preview(inventory: list[NoteInventoryEntry]) -> str:
             "No notes inventory was provided. Use view_pdf_pages to locate "
             "the notes section and identify relevant notes yourself."
         )
+    # Count line uses the top-level note count only — sub-notes are
+    # nested context, not counted as separate notes (the Sheet-12 fan-
+    # out also iterates only the top-level entries; keeping the count
+    # in lockstep avoids "Scout identified 35 notes" turning into 13).
     lines = [f"Scout identified {len(inventory)} notes in the PDF:"]
     for e in inventory:
         start, end = e.page_range
         pages = f"p.{start}" if start == end else f"pp.{start}-{end}"
         lines.append(f"  Note {e.note_num}: {e.title} ({pages})")
+        # Phase 1b — nested sub-note tree rendered as └ children. Each
+        # child line is indented to read as obviously-subordinate to
+        # the parent without changing the parent line format that
+        # existing prompts already match against.
+        for s in getattr(e, "subnotes", []) or []:
+            sstart, send = s.page_range
+            spages = f"p.{sstart}" if sstart == send else f"pp.{sstart}-{send}"
+            lines.append(f"    └ Note {s.subnote_ref}: {s.title} ({spages})")
     return "\n".join(lines)
 
 
@@ -470,6 +482,7 @@ def render_notes_prompt(
     page_offset: int = 0,
     filing_standard: str = "mfrs",
     label_catalog: Optional[list[str]] = None,
+    scout_context: Optional[dict] = None,
 ) -> str:
     """Compose the system prompt for a notes agent.
 
@@ -528,14 +541,24 @@ def render_notes_prompt(
         f"Filing standard: {filing_standard.upper()}"
     )
 
+    # Phase 2 — entity/period/unit context block, rendered before the
+    # inventory so the agent sees the verification framing first.
+    # Empty string when scout couldn't enrich (rendered prompt
+    # unchanged from pre-Phase-2 behaviour).
+    from prompts import _render_scout_context_block
+
+    context_block_str = _render_scout_context_block(scout_context or {})
+
     parts = [
         base,
         _render_sheet_map(filing_standard),
         sheet_line,
         _render_column_rules(filing_level),
         specific,
-        "=== INVENTORY ===\n" + _render_inventory_preview(inventory),
     ]
+    if context_block_str:
+        parts.append(context_block_str)
+    parts.append("=== INVENTORY ===\n" + _render_inventory_preview(inventory))
     # Phase 4: MPERS-specific overlay (suffix convention + narrower
     # taxonomy + SoRE slot note). Rendered after the per-template body
     # but before the label catalog so the agent reads the taxonomy
@@ -1051,6 +1074,7 @@ def create_notes_agent(
     page_offset: int = 0,
     batch_note_nums: Optional[list[int]] = None,
     filing_standard: str = "mfrs",
+    scout_context: Optional[dict] = None,
 ) -> tuple[Agent[NotesDeps, str], NotesDeps]:
     """Create a notes agent for a single template type.
 
@@ -1132,6 +1156,7 @@ def create_notes_agent(
         page_offset=page_offset,
         filing_standard=filing_standard,
         label_catalog=label_catalog,
+        scout_context=scout_context,
     )
 
     # Pin temperature=1.0 (CLAUDE.md gotcha #5).

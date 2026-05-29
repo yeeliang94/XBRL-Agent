@@ -100,6 +100,17 @@ SOCIE is a 24-column equity-component matrix on MFRS. Each write needs a
 `"ShareCapital"` — exact spelling from the row-2 headers). `col: "cy"` /
 `col: "py"` are refused on SOCIE.
 
+**Two period ROW blocks — fill BOTH.** The matrix repeats vertically: the
+first block is the CURRENT year, the next block is the PRIOR year. The two
+blocks carry IDENTICAL row labels, so the period is encoded by WHICH block
+you write into, not by any column. On a Company filing there are two blocks
+(current-period rows ≈ 6–25, prior-period rows ≈ 27–49); on a Group filing
+there are four (Group current, Group prior, Company current, Company prior).
+The structure dump tags each block's rows with its period — read those tags
+and fill the prior-period block too. A SOCIE with only the current year
+filled is INCOMPLETE and fails the SOCIE↔SOFP equity cross-check on the
+comparative column.
+
 Evidence on SOCIE writes lands in the row-1 "Source" column when present
 (MPERS), otherwise col Y. The `evidence` field on every write is
 recommended — it's the audit trail the reviewer reads.

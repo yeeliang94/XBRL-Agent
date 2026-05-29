@@ -383,6 +383,51 @@ starting points. Agents can freely view **any** PDF page — there is no
 "disallowed" filtering). `tests/test_page_hints.py` asserts this with
 negative assertions.
 
+**Scout coverage push (2026-05-29) — soft contract still stands.** The
+scout's `Infopack` was extended with structural hints downstream agents
+read as advisory only:
+
+- **Face-line refs** (`StatementPageRef.face_line_refs`): one
+  `FaceLineRef(label, note_num, section)` per visible face-page line
+  item. Populated by the deterministic `scout/face_structure.py` regex
+  on text PDFs, or by the scout LLM emitting structured JSON on
+  scanned PDFs (vision path). `face_read_in_detail` flags whether
+  scout actually read the face page in detail. Rendered into the
+  face-prompt navigation block with explicit `(scout-observed —
+  VERIFY against the PDF)` framing. Pinned by
+  `tests/test_scout_face_line_refs_schema.py`,
+  `tests/test_scout_face_line_refs_wiring.py`,
+  `tests/test_coordinator_forwards_face_line_refs.py`,
+  `tests/test_prompts_render_scout_face_refs.py`.
+- **Sub-note hierarchy** (`NoteInventoryEntry.subnotes`): nested
+  `SubNoteInventoryEntry(subnote_ref, title, page_range)` capturing
+  2.1, 2.14, (a), (b) sub-headings under each top-level note. Nested
+  (not peer entries) precisely because Sheet-12 fan-out iterates
+  `inventory` directly and validates coverage per int `note_num` —
+  promoting "2.1" to a peer of "2" would double-bill the agent. The
+  structural guarantee is pinned by
+  `tests/test_sheet12_ignores_subnotes.py`. `note_num: int` stays
+  unchanged; sub-notes carry their own `subnote_ref: str` precisely so
+  the `int(item["note_num"])` coercions in `notes/coverage.py:256`
+  and the `Field(ge=1, le=999)` validator in
+  `scout/notes_discoverer_vision.py:58` keep working.
+- **Entity / period / unit context** (top-level `Infopack`):
+  `entity_name`, `reporting_period_cy`, `reporting_period_py`,
+  `currency`, `scale_unit`, `consolidation_level`. Rendered into a
+  `=== SCOUT-OBSERVED CONTEXT (VERIFY EACH BEFORE USING) ===` block in
+  every face and notes prompt. `scale_unit` carries especially loud
+  "verify or 1000× error" wording because a wrong unit silently
+  inflates every extracted value (gotcha #17's sibling failure mode).
+  `scale_unit="unknown"` is the safe default and the prompt block
+  upgrades from "verify" to "MUST read the header" in that case.
+  Pinned by `tests/test_infopack_context_schema.py`,
+  `tests/test_scout_populates_context.py`,
+  `tests/test_prompts_render_context.py`.
+
+All three additions degrade gracefully: empty `face_line_refs` /
+`subnotes` / context fields fall through to today's bare hint blocks.
+Plan: `docs/PLAN-scout-coverage-quality.md`.
+
 ### 14. Notes feature — five supplementary templates (parallel with face)
 
 Notes agents fill MBRS templates 10–14 (MFRS) / 11–15 (MPERS) in parallel

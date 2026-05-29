@@ -132,6 +132,28 @@ def _build_event(event_type: str, agent_id: str, agent_role: str, data: dict) ->
     }
 
 
+def build_face_page_hints(ref) -> dict:
+    """Build the per-agent ``page_hints`` dict from a scout StatementPageRef.
+
+    Phase 1a adds the structural face-line refs and the `face_read_in_detail`
+    flag — consumed by `prompts/__init__._build_scoped_navigation` to render a
+    "skip-to-note" index for face extraction agents. Empty list / False fall
+    through unchanged (today's behaviour preserved when scout couldn't enrich
+    the infopack). Extracted to module scope (peer-review F6) so the wiring
+    test exercises the SAME construction the coordinator runs, instead of a
+    drifting replica.
+    """
+    return {
+        "face_page": ref.face_page,
+        "note_pages": ref.note_pages,
+        "face_line_refs": [
+            {"label": r.label, "note_num": r.note_num, "section": r.section}
+            for r in ref.face_line_refs
+        ],
+        "face_read_in_detail": ref.face_read_in_detail,
+    }
+
+
 @dataclass
 class RunConfig:
     """Configuration for a multi-statement extraction run."""
@@ -169,6 +191,12 @@ class AgentResult:
     status: str
     workbook_path: Optional[str] = None
     error: Optional[str] = None
+    # Honest-completion flag (2026-05-29): set when the agent finalised the
+    # statement via acknowledge_unresolved — the workbook is saved and the
+    # data preserved, but a known verify gap (imbalance / unfilled mandatory)
+    # was accepted and is flagged for human review. status stays "succeeded"
+    # (the extraction DID finalise); this string carries the reason.
+    flag: Optional[str] = None
     # End-of-run usage from `agent_run.usage()`. This is the aggregate the
     # coordinator captures on every exit path so server.py can persist into
     # run_agents.total_tokens / total_cost.
@@ -308,13 +336,28 @@ async def run_extraction(
 
         model = config.models.get(stmt_type, config.model)
 
-        # Build page hints from infopack if available
+        # Build page hints from infopack if available. Phase 1a adds the
+        # structural face-line refs and the face_read_in_detail flag —
+        # consumed by prompts/__init__._build_scoped_navigation to render
+        # a "skip-to-note" index for face extraction agents. Empty list
+        # / False fall through unchanged (today's behaviour preserved
+        # when scout couldn't enrich the infopack).
         page_hints = None
+        scout_context = None
         if infopack is not None and stmt_type in infopack.statements:
             ref = infopack.statements[stmt_type]
-            page_hints = {
-                "face_page": ref.face_page,
-                "note_pages": ref.note_pages,
+            page_hints = build_face_page_hints(ref)
+            # Phase 2 — top-level Infopack context shared by every
+            # face statement. The renderer reads None / "unknown" as
+            # "scout did not observe" and either omits the line or
+            # surfaces a loud verification warning (scale_unit case).
+            scout_context = {
+                "entity_name": infopack.entity_name,
+                "reporting_period_cy": infopack.reporting_period_cy,
+                "reporting_period_py": infopack.reporting_period_py,
+                "currency": infopack.currency,
+                "scale_unit": infopack.scale_unit,
+                "consolidation_level": infopack.consolidation_level,
             }
 
         # Resolve template path for this variant against the requested
@@ -363,6 +406,7 @@ async def run_extraction(
                 model=model,
                 output_dir=config.output_dir,
                 page_hints=page_hints,
+                scout_context=scout_context,
                 event_queue=event_queue,
                 agent_id=agent_id,
                 filing_level=config.filing_level,
@@ -448,6 +492,7 @@ async def _run_single_agent(
     model: Any,
     output_dir: str,
     page_hints: Optional[Dict] = None,
+    scout_context: Optional[Dict] = None,
     event_queue: Optional[asyncio.Queue] = None,
     agent_id: str = "",
     filing_level: str = "company",
@@ -538,6 +583,7 @@ async def _run_single_agent(
             model=model,
             output_dir=output_dir,
             page_hints=page_hints,
+            scout_context=scout_context,
             filing_level=filing_level,
             filing_standard=filing_standard,
             run_id=run_id,
@@ -803,9 +849,16 @@ async def _run_single_agent(
                 total_cost=final_cost,
             ))
 
+        flag = deps.unresolved_summary if deps.completed_with_flag else None
+        if flag:
+            logger.warning(
+                "%s/%s: finalised WITH FLAG — %s",
+                statement_type.value, variant, flag,
+            )
         await _emit("complete", {
             "success": True,
             "workbook_path": deps.filled_path,
+            "flag": flag,
         })
 
         return _finalize(AgentResult(
@@ -813,6 +866,7 @@ async def _run_single_agent(
             variant=variant,
             status="succeeded",
             workbook_path=deps.filled_path,
+            flag=flag,
             total_tokens=final_tokens,
             total_cost=final_cost,
         ))

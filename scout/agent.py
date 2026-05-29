@@ -90,6 +90,12 @@ class ScoutDeps:
     # Populated by _find_toc_impl and attached to the Infopack at save time.
     # "unknown" when the signals are ambiguous or absent.
     detected_standard: str = "unknown"
+    # Phase 1a — cache of deterministic face-structure parses per statement.
+    # Populated by the read_face_structure tool when the LLM calls it.
+    # _save_infopack_impl reads this when the LLM didn't supply face_line_refs
+    # explicitly, so the regex output flows through even when the LLM forgets
+    # to mention it in its save_infopack JSON. Empty dict = no parse run yet.
+    face_line_refs_by_statement: dict[StatementType, list] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +140,14 @@ the presentation variant, and discover related note pages.
       If the face page has visible note references but `discover_notes` returns
       none, use the TOC/inventory context and nearby notes pages to provide
       best-effort note page hints rather than silently dropping the references.
+   f. Call `read_face_structure(statement_type, face_page)` to capture the
+      face-page line items and their cited note numbers. This is a
+      deterministic regex over the PyMuPDF-extracted text — fast and free.
+      On scanned PDFs the regex returns []; in that case, populate
+      `face_line_refs` yourself in the save_infopack JSON from what you
+      see on the rendered face-page image (label, note_num cited, section
+      header it sits under). Downstream face agents use this map to skip
+      re-reading the face page.
 4. Identify the PDF page where the Notes-to-the-Financial-Statements section
    begins (from the TOC or by inspecting pages right after the last face
    statement) and call `discover_notes_inventory` with it. **This step is
@@ -141,6 +155,10 @@ the presentation variant, and discover related note pages.
    For text-based PDFs the tool is fast and deterministic. For scanned PDFs
    it transparently falls back to a vision pass using your own model, so
    you do not need to build the inventory manually — just call the tool.
+   Both paths now also capture sub-note hierarchy (e.g. Note 2 → 2.1,
+   2.2, … 2.14; or (a)/(b)) as nested ``subnotes`` per top-level entry.
+   Sub-notes are display-only metadata for downstream notes agents —
+   Sheet-12 fan-out still iterates only the top-level notes.
 5. When you have all statements mapped AND the inventory built, call
    `save_infopack` with the complete result.
 
@@ -152,6 +170,33 @@ the presentation variant, and discover related note pages.
 - Be efficient: view only the pages you need.
 - Never skip `discover_notes_inventory`. An empty notes_inventory makes
   Sheet-12 fail loud — always call the tool at least once.
+
+## Context fields (Phase 2 — advisory metadata)
+
+While you're already looking at face pages and the cover, capture these
+in the save_infopack JSON. Each is OPTIONAL — leave the default in place
+when you can't see the value confidently. Downstream agents render them
+with a loud "VERIFY against the PDF" framing, so a wrong claim is
+recoverable but a guessed claim wastes their attention.
+
+  - entity_name (str): the legal entity name from the cover or face
+    headers (e.g. "FINCO Berhad").
+  - reporting_period_cy (str): current-year reporting period exactly
+    as the AFS shows it (e.g. "01/01/2022 - 31/12/2022" or
+    "1 January 2022 to 31 December 2022").
+  - reporting_period_py (str): prior-year reporting period.
+  - currency (str): defaults to "RM"; override only if the AFS uses a
+    different reporting currency (rare for Malaysian filings).
+  - scale_unit: one of "units", "thousands", "millions", or
+    "unknown". This is the units the FACE-STATEMENT values are
+    reported in (the AFS header usually says "All values in RM '000"
+    or "RM millions"). NEVER GUESS — leave it "unknown" if you cannot
+    see an explicit declaration; a wrong scale_unit causes a silent
+    1000× error in extraction.
+  - consolidation_level: one of "company", "group", "both",
+    "unknown". "group" when the AFS presents consolidated figures
+    only; "company" when only the parent stand-alone; "both" when
+    Group + Company columns appear side-by-side.
 """
 
 
@@ -246,6 +291,54 @@ def _check_variant_signals_impl(
         "statement_type": statement_type_str,
         "variant": variant,
     }
+
+
+def _read_face_structure_impl(
+    deps: ScoutDeps,
+    statement_type_str: str,
+    face_page: int,
+) -> list[dict]:
+    """Run the deterministic face-structure parser over a face page.
+
+    Pulls the page text directly via PyMuPDF (no LLM call) and feeds it to
+    ``scout.face_structure.read_face_structure``. The result is cached on
+    ``deps.face_line_refs_by_statement`` keyed by StatementType so
+    ``_save_infopack_impl`` can use it as the regex-wins fallback when the
+    LLM doesn't surface face_line_refs in its save_infopack JSON.
+
+    On scanned PDFs PyMuPDF returns empty text, the parser returns ``[]``,
+    and the cache stays empty for this statement — the LLM is then expected
+    to populate face_line_refs from its own vision read.
+    """
+    from scout.face_structure import read_face_structure
+
+    try:
+        st = StatementType(statement_type_str)
+    except ValueError:
+        # Don't crash the agent — return empty so it can recover with a
+        # different argument. PydanticAI surfaces the error message as
+        # the tool result.
+        return []
+
+    if not (1 <= face_page <= deps.pdf_length):
+        return []
+
+    doc = fitz.open(str(deps.pdf_path))
+    try:
+        page_text = doc[face_page - 1].get_text()
+    finally:
+        doc.close()
+
+    refs = read_face_structure(page_text)
+    deps.face_line_refs_by_statement[st] = refs
+    # Return JSON-serialisable dicts so the agent can see exactly what
+    # was captured. The save_infopack stage reads from the cache, not
+    # from this return value — but surfacing the parse to the LLM lets
+    # it verify against its own vision read.
+    return [
+        {"label": r.label, "note_num": r.note_num, "section": r.section}
+        for r in refs
+    ]
 
 
 def _discover_notes_impl(
@@ -379,8 +472,26 @@ async def _discover_notes_inventory_impl(
             "PyMuPDF found no note headers (scanned PDF and no vision model).",
         )
     deps.notes_inventory = inventory
+    # Include sub-note hierarchy in the tool return (matching
+    # Infopack.to_json's shape). The scout echoes this payload into its
+    # save_infopack JSON; without subnotes here, _save_infopack_impl rebuilds
+    # the inventory from a subnote-less echo and silently drops the hierarchy
+    # the scout-coverage work added (the deps fallback only fires when the
+    # echoed inventory is entirely empty).
     return [
-        {"note_num": e.note_num, "title": e.title, "page_range": list(e.page_range)}
+        {
+            "note_num": e.note_num,
+            "title": e.title,
+            "page_range": list(e.page_range),
+            "subnotes": [
+                {
+                    "subnote_ref": s.subnote_ref,
+                    "title": s.title,
+                    "page_range": list(s.page_range),
+                }
+                for s in getattr(e, "subnotes", []) or []
+            ],
+        }
         for e in inventory
     ]
 
@@ -486,12 +597,67 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
                 f"Known variants: {known}"
             )
 
+        # Phase 1a — accept LLM-supplied face_line_refs (vision path)
+        # OR fall back to the cached deterministic parse (text-PDF path).
+        # Resolution rule: regex wins when non-empty (cheap + exact);
+        # vision wins only when regex returned nothing.
+        from scout.infopack import FaceLineRef
+
+        cached_refs = list(deps.face_line_refs_by_statement.get(st, []))
+        llm_refs_raw = ref_data.get("face_line_refs", [])
+        llm_refs: list[FaceLineRef] = []
+        if isinstance(llm_refs_raw, list):
+            for idx, raw in enumerate(llm_refs_raw):
+                if not isinstance(raw, dict):
+                    logger.warning(
+                        "%s face_line_refs[%d] is not a dict; skipping",
+                        key, idx,
+                    )
+                    continue
+                label = raw.get("label", "")
+                if not isinstance(label, str) or not label.strip():
+                    continue
+                raw_note = raw.get("note_num")
+                note_num: Optional[int]
+                if raw_note is None:
+                    note_num = None
+                else:
+                    try:
+                        note_num = int(raw_note)
+                    except (TypeError, ValueError):
+                        note_num = None
+                section_raw = raw.get("section")
+                section = section_raw if isinstance(section_raw, str) and section_raw else None
+                try:
+                    llm_refs.append(FaceLineRef(
+                        label=label,
+                        note_num=note_num,
+                        section=section,
+                    ))
+                except ValueError as e:
+                    logger.warning(
+                        "%s face_line_refs[%d] rejected: %s", key, idx, e,
+                    )
+
+        # Pick the source by the resolution rule and decide the
+        # face_read_in_detail boolean. The flag is True iff at least
+        # one source produced ≥1 ref, OR the LLM explicitly set it
+        # True alongside an empty list (rare — but allows the LLM to
+        # claim "I read the face page in detail and there are no
+        # noted lines" for unusual filings).
+        chosen_refs = cached_refs if cached_refs else llm_refs
+        face_read_in_detail = bool(
+            chosen_refs or ref_data.get("face_read_in_detail", False)
+        )
+
         try:
             statements[st] = StatementPageRef(
                 variant_suggestion=variant,
                 face_page=ref_data["face_page"],
                 note_pages=ref_data.get("note_pages", []),
                 confidence=ref_data.get("confidence", "HIGH"),
+                face_line_refs=chosen_refs,
+                face_read_in_detail=face_read_in_detail,
             )
         except (KeyError, ValueError) as e:
             return f"Error building {key} ref: {e}"
@@ -506,6 +672,12 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
     # JSON) or fall back to the cached inventory built by
     # discover_notes_inventory. If the agent passes malformed entries we
     # skip them silently rather than failing the whole save.
+    #
+    # Phase 1b — each entry may also carry a nested `subnotes` list. Bad
+    # subnotes are dropped silently (matching the entry-level posture);
+    # a bad subnote should never abort the parent inventory save.
+    from scout.notes_discoverer import SubNoteInventoryEntry
+
     inventory: list[NoteInventoryEntry] = []
     skipped = 0
     raw_inventory = data.get("notes_inventory")
@@ -522,10 +694,35 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
                     )
                     skipped += 1
                     continue
+
+                subnotes_payload: list[SubNoteInventoryEntry] = []
+                for sidx, sraw in enumerate(raw.get("subnotes", []) or []):
+                    if not isinstance(sraw, dict):
+                        continue
+                    ref = sraw.get("subnote_ref", "")
+                    if not isinstance(ref, str) or not ref.strip():
+                        continue
+                    spr = sraw.get("page_range", [])
+                    if not (isinstance(spr, (list, tuple)) and len(spr) == 2):
+                        continue
+                    try:
+                        spage_range = (int(spr[0]), int(spr[1]))
+                    except (TypeError, ValueError):
+                        continue
+                    try:
+                        subnotes_payload.append(SubNoteInventoryEntry(
+                            subnote_ref=ref,
+                            title=str(sraw.get("title", "")),
+                            page_range=spage_range,
+                        ))
+                    except ValueError:
+                        continue
+
                 inventory.append(NoteInventoryEntry(
                     note_num=int(raw["note_num"]),
                     title=str(raw.get("title", "")),
                     page_range=page_range,
+                    subnotes=subnotes_payload,
                 ))
             except (KeyError, TypeError, ValueError) as e:
                 logger.warning(
@@ -539,6 +736,27 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
     if not inventory:
         inventory = list(deps.notes_inventory)
 
+    # Phase 2 — pull the LLM-supplied context fields through to the
+    # Infopack constructor. Defensive narrowing is duplicated from
+    # Infopack.from_json so the save-side surface refuses bad values
+    # too (LLMs occasionally return "thousands_of_millions" or other
+    # near-misses; coercing to "unknown" is safer than trusting them).
+    from scout.infopack import _VALID_SCALE_UNIT, _VALID_CONSOLIDATION
+
+    raw_scale = data.get("scale_unit", "unknown")
+    scale_unit = raw_scale if raw_scale in _VALID_SCALE_UNIT else "unknown"
+    raw_consol = data.get("consolidation_level", "unknown")
+    consolidation_level = raw_consol if raw_consol in _VALID_CONSOLIDATION else "unknown"
+
+    def _str_or_none(value: object) -> Optional[str]:
+        return value if isinstance(value, str) and value.strip() else None
+
+    entity_name = _str_or_none(data.get("entity_name"))
+    reporting_period_cy = _str_or_none(data.get("reporting_period_cy"))
+    reporting_period_py = _str_or_none(data.get("reporting_period_py"))
+    raw_currency = data.get("currency", "RM")
+    currency = raw_currency if isinstance(raw_currency, str) and raw_currency.strip() else "RM"
+
     infopack = Infopack(
         toc_page=data.get("toc_page", 1),
         page_offset=data.get("page_offset", 0),
@@ -547,6 +765,12 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
         # Agent can override (rarely useful); otherwise carry the cached
         # deterministic guess built during find_toc / parse_toc_text.
         detected_standard=data.get("detected_standard", deps.detected_standard),
+        entity_name=entity_name,
+        reporting_period_cy=reporting_period_cy,
+        reporting_period_py=reporting_period_py,
+        currency=currency,
+        scale_unit=scale_unit,
+        consolidation_level=consolidation_level,
     )
 
     # Validate page ranges
@@ -706,6 +930,31 @@ def create_scout_agent(
         return json.dumps(result)
 
     @agent.tool
+    def read_face_structure(
+        ctx: RunContext[ScoutDeps],
+        statement_type: str,
+        face_page: int,
+    ) -> str:
+        """Parse a face page's text into a structured list of line items.
+
+        Deterministic — runs a regex over the page text PyMuPDF extracted.
+        No LLM call. Cheap and exact on text PDFs; returns ``[]`` on scanned
+        PDFs (where PyMuPDF text is empty). Downstream face agents read
+        the captured list as advisory hints: "here are the visible line
+        items and their cited note numbers, verify before using."
+
+        Call this once per statement, AFTER confirming the face page with
+        view_pages. On scanned PDFs (empty result), populate face_line_refs
+        yourself in save_infopack from your vision read.
+
+        Args:
+            statement_type: SOFP / SOPL / SOCI / SOCF / SOCIE.
+            face_page: 1-indexed PDF page containing the statement face.
+        """
+        result = _read_face_structure_impl(ctx.deps, statement_type, face_page)
+        return json.dumps(result, indent=2)
+
+    @agent.tool
     def discover_notes(
         ctx: RunContext[ScoutDeps],
         face_text: str,
@@ -764,12 +1013,38 @@ def create_scout_agent(
         {
           "toc_page": <int>,
           "page_offset": <int>,
+          "entity_name": "FINCO Berhad",
+          "reporting_period_cy": "01/01/2022 - 31/12/2022",
+          "reporting_period_py": "01/01/2021 - 31/12/2021",
+          "currency": "RM",
+          "scale_unit": "thousands",
+          "consolidation_level": "company",
           "statements": {
-            "SOFP": {"variant_suggestion": "CuNonCu", "face_page": 5,
-                      "note_pages": [10, 11], "confidence": "HIGH"},
+            "SOFP": {
+              "variant_suggestion": "CuNonCu",
+              "face_page": 5,
+              "note_pages": [10, 11],
+              "confidence": "HIGH",
+              "face_line_refs": [
+                {"label": "Property, plant and equipment", "note_num": 4,
+                 "section": "non-current assets"},
+                {"label": "Trade receivables", "note_num": 7,
+                 "section": "current assets"}
+              ],
+              "face_read_in_detail": true
+            },
             ...
           }
         }
+
+        ``face_line_refs`` is populated by ``read_face_structure`` on text
+        PDFs — call that tool first and the deterministic result will be
+        carried into the infopack automatically. On scanned PDFs (where
+        read_face_structure returns []), include face_line_refs YOURSELF
+        from the rendered face-page image: every visible line item, its
+        cited note number (or null), and the section header it sits
+        under. Set face_read_in_detail = true iff you actually read the
+        face page line-by-line.
 
         Args:
             infopack_json: JSON string with the complete infopack data.
