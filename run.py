@@ -53,7 +53,6 @@ def run_agent(
     filing_level: str = "company",
     notes: Optional[Set[NotesTemplateType]] = None,
     filing_standard: str = "mfrs",
-    orchestration: str = "split",
 ) -> AgentResult:
     """Run extraction via the coordinator for one or more statement types.
 
@@ -80,49 +79,12 @@ def run_agent(
         statements = set(StatementType)
     notes = set(notes or set())
 
-    # CLI parity with the server validator: monolith is MFRS Company face-only
-    # (PRD §3 / plan step 7 disable rules).
-    if orchestration == "monolith":
-        problems = _validate_monolith_scope(
-            filing_standard=filing_standard,
-            filing_level=filing_level,
-            statements=statements,
-            notes=notes,
-        )
-        if problems:
-            raise ValueError(
-                "Monolith orchestration only supports MFRS Company face-only "
-                "with all 5 statements: " + "; ".join(problems)
-            )
-
     # Resolve model through the same proxy/direct routing as the web server
     load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
     api_key = (os.environ.get("GOOGLE_API_KEY", "")
                or os.environ.get("GEMINI_API_KEY", ""))
     resolved_model = _create_proxy_model(model, proxy_url, api_key)
-
-    if orchestration == "monolith":
-        from monolith.coordinator import MonolithRunConfig, run_monolith
-
-        mono_config = MonolithRunConfig(
-            pdf_path=pdf_path,
-            output_dir=output_dir,
-            model=resolved_model,
-            statements=statements,
-            filing_level=filing_level,
-            filing_standard=filing_standard,
-        )
-        mono_result = asyncio.run(run_monolith(mono_config))
-        errors = [mono_result.error] if mono_result.error else []
-        return AgentResult(
-            success=mono_result.status in ("succeeded", "completed_with_residuals"),
-            fields_filled=0,
-            token_report=TokenReport(),
-            output_json_path=str(Path(output_dir) / "result.json"),
-            output_excel_path=mono_result.workbook_path or "",
-            errors=errors,
-        )
 
     config = RunConfig(
         pdf_path=pdf_path,
@@ -176,29 +138,6 @@ def run_agent(
         output_json_path=str(Path(output_dir) / "result.json"),
         output_excel_path=merged_path,
         errors=errors,
-    )
-
-
-def _validate_monolith_scope(
-    *,
-    filing_standard: str,
-    filing_level: str,
-    statements: Set[StatementType],
-    notes: Set[NotesTemplateType],
-) -> list[str]:
-    """Return a list of human-readable scope violations; empty list = OK.
-
-    Thin wrapper around `monolith.config.validate_monolith_compatibility`
-    — the single source of truth shared with the server and frontend
-    disable rules.
-    """
-    from monolith.config import validate_monolith_compatibility
-
-    return validate_monolith_compatibility(
-        filing_standard=filing_standard,
-        filing_level=filing_level,
-        statement_values={s.value for s in statements},
-        notes_values={n.value for n in notes},
     )
 
 
@@ -285,15 +224,6 @@ def build_parser():
                         help="Filing standard: mfrs (default, routes to "
                              "XBRL-template-MFRS/) or mpers (routes to "
                              "XBRL-template-MPERS/ and enables SoRE).")
-    parser.add_argument(
-        "--orchestration", default="split", choices=["split", "monolith"],
-        help=(
-            "Orchestration path: split (default — five specialist agents in "
-            "parallel) or monolith (experimental — single agent across all "
-            "five face statements; MFRS Company face-only, see "
-            "docs/PLAN-monolith-face-experiment.md)."
-        ),
-    )
     return parser
 
 
@@ -321,7 +251,6 @@ if __name__ == "__main__":
         notes=notes_set,
         filing_level=args.level,
         filing_standard=args.standard,
-        orchestration=args.orchestration,
     )
     if args.output_dir:
         kwargs["output_dir"] = args.output_dir
