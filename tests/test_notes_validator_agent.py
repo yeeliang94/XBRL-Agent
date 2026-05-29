@@ -175,6 +175,122 @@ class TestRewriteCellTool:
         assert "Refusing to overwrite formula cell" in msg
 
 
+class TestWorkbookIoRaceSafety:
+    """Windows EOFError race (2026-05-29): pydantic-ai runs batched tool
+    calls on parallel worker threads, so read_cell / rewrite_cell can touch
+    the same merged workbook simultaneously. openpyxl's in-place, non-atomic
+    save left concurrent loaders reading a truncated zip → EOFError. The
+    fix is a per-run io_lock + atomic (tempfile + os.replace) save."""
+
+    def test_deps_carry_an_io_lock(self, tmp_path):
+        import threading
+
+        from notes.validator_agent import NotesValidatorAgentDeps
+
+        deps = NotesValidatorAgentDeps(
+            merged_workbook_path=str(tmp_path / "m.xlsx"),
+            pdf_path="/tmp/x.pdf",
+            sidecar_paths=[],
+            filing_level="company",
+            filing_standard="mfrs",
+            output_dir=str(tmp_path),
+            model=TestModel(),
+        )
+        # A lock instance, not the class — must be a usable mutex.
+        assert isinstance(deps.io_lock, type(threading.Lock()))
+
+    def test_atomic_save_leaves_no_truncated_file(self, tmp_path):
+        """os.replace means a crashing save never overwrites the good file."""
+        from notes.validator_agent import _atomic_save_workbook
+
+        wb = openpyxl.Workbook()
+        wb.active["A1"] = "good"
+        path = tmp_path / "wb.xlsx"
+        wb.save(str(path))
+
+        # A workbook whose save blows up mid-stream must not clobber the
+        # existing file, and must not leave a stray .xlsx tempfile behind.
+        class _Boom(openpyxl.Workbook):
+            def save(self, *a, **k):
+                raise RuntimeError("save exploded")
+
+        boom = _Boom()
+        with pytest.raises(RuntimeError):
+            _atomic_save_workbook(boom, str(path))
+
+        # Original file untouched and still readable.
+        assert openpyxl.load_workbook(str(path)).active["A1"].value == "good"
+        leftovers = list(tmp_path.glob("*.xlsx"))
+        assert leftovers == [path], f"tempfile leaked: {leftovers}"
+
+    def test_concurrent_reads_and_writes_never_see_truncated_zip(self, tmp_path):
+        """Hammer rewrite_cell from several threads while another thread
+        loads the same workbook in a loop. Pre-fix this raised EOFError /
+        BadZipFile intermittently; with io_lock + atomic save it is clean."""
+        import threading
+        import zipfile
+
+        from notes.validator_agent import (
+            NotesValidatorAgentDeps, _rewrite_cell_impl,
+        )
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Notes-Listofnotes"
+        for r in range(2, 12):
+            ws.cell(row=r, column=2, value=f"row {r}")
+        path = tmp_path / "merged.xlsx"
+        wb.save(str(path))
+
+        deps = NotesValidatorAgentDeps(
+            merged_workbook_path=str(path),
+            pdf_path="/tmp/x.pdf",
+            sidecar_paths=[],
+            filing_level="company",
+            filing_standard="mfrs",
+            output_dir=str(tmp_path),
+            model=TestModel(),
+        )
+
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def writer(row: int):
+            try:
+                for i in range(8):
+                    _rewrite_cell_impl(
+                        merged_workbook_path=str(path),
+                        filing_level="company",
+                        sheet="Notes-Listofnotes",
+                        row=row, col=2, content=f"v{i}", evidence=None,
+                        deps=deps,
+                    )
+            except BaseException as e:  # noqa: BLE001
+                errors.append(e)
+            finally:
+                stop.set()
+
+        def reader():
+            try:
+                while not stop.is_set():
+                    with deps.io_lock:
+                        openpyxl.load_workbook(str(path)).close()
+            except (EOFError, zipfile.BadZipFile, OSError) as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer, args=(r,))
+                   for r in range(2, 7)]
+        threads.append(threading.Thread(target=reader))
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert not errors, f"concurrent workbook IO raced: {errors!r}"
+        # File survived and is still a valid workbook.
+        assert openpyxl.load_workbook(str(path)) is not None
+
+
 class TestServerHook:
     """Step 5.5: the server invokes the validator when both sheets ran."""
 

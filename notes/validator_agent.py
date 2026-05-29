@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, List, Optional, Union
@@ -80,6 +83,15 @@ class NotesValidatorAgentDeps:
         # `notes_validator_log.json` next to the merged workbook.
         self.correction_log: list[dict] = []
         self.writes_performed = 0
+        # Serialises every workbook load/save across the validator's tool
+        # calls. pydantic-ai runs batched tool calls in parallel worker
+        # threads (default parallel_execution_mode); without this lock a
+        # `read_cell` load_workbook could hit `merged_workbook_path` mid-way
+        # through a `rewrite_cell` non-atomic `wb.save`, reading a truncated
+        # zip → EOFError. The validator only ever touches this one workbook,
+        # so a single lock is sufficient. See gotcha #6 / Windows race
+        # (2026-05-29). Pinned by tests/test_notes_validator_agent.py.
+        self.io_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +400,9 @@ def create_notes_validator_agent(
         ctx: RunContext[NotesValidatorAgentDeps], sheet: str, row: int, col: int,
     ) -> str:
         """Read the current value of a merged-workbook cell."""
-        wb = openpyxl.load_workbook(ctx.deps.merged_workbook_path)
+        # Serialise against concurrent rewrite_cell saves (see io_lock note).
+        with ctx.deps.io_lock:
+            wb = openpyxl.load_workbook(ctx.deps.merged_workbook_path)
         try:
             if sheet not in wb.sheetnames:
                 return f"Sheet {sheet!r} not found. Available: {wb.sheetnames}"
@@ -453,6 +467,30 @@ def create_notes_validator_agent(
     return agent, deps, context
 
 
+def _atomic_save_workbook(wb: "openpyxl.Workbook", path: str) -> None:
+    """Save `wb` to `path` atomically.
+
+    openpyxl's `save` rewrites the `.xlsx` zip in place, which is not atomic
+    on any platform (Windows surfaces it most readily): a concurrent reader
+    can see a truncated zip and raise EOFError. We write to a sibling
+    tempfile on the same filesystem and `os.replace` it into place —
+    `os.replace` is atomic on POSIX and Windows, so a concurrent reader
+    always sees either the old or the new file, never a partial one.
+    """
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx", dir=directory)
+    os.close(fd)
+    try:
+        wb.save(tmp_path)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def _rewrite_cell_impl(
     merged_workbook_path: str,
     filing_level: str,
@@ -479,35 +517,40 @@ def _rewrite_cell_impl(
             f"{sorted(_REWRITE_ALLOWED_SHEETS)}"
         )
 
-    wb = openpyxl.load_workbook(merged_workbook_path)
-    try:
-        if sheet not in wb.sheetnames:
-            return f"Sheet {sheet!r} not found"
-        ws = wb[sheet]
-        target = ws.cell(row=row, column=col)
-        if isinstance(target.value, str) and target.value.startswith("="):
-            return (
-                f"Refusing to overwrite formula cell "
-                f"{target.coordinate} (formula: {target.value!r})"
-            )
-        # Empty string => explicit deletion (plan Step 5.2).
-        target.value = content if content else None
+    # Hold the run-wide io_lock across the entire read-modify-write so a
+    # concurrent read_cell / rewrite_cell on another worker thread can't
+    # observe the workbook mid-save (truncated zip → EOFError). See the
+    # io_lock note on NotesValidatorAgentDeps.
+    with deps.io_lock:
+        wb = openpyxl.load_workbook(merged_workbook_path)
+        try:
+            if sheet not in wb.sheetnames:
+                return f"Sheet {sheet!r} not found"
+            ws = wb[sheet]
+            target = ws.cell(row=row, column=col)
+            if isinstance(target.value, str) and target.value.startswith("="):
+                return (
+                    f"Refusing to overwrite formula cell "
+                    f"{target.coordinate} (formula: {target.value!r})"
+                )
+            # Empty string => explicit deletion (plan Step 5.2).
+            target.value = content if content else None
 
-        # Sync the evidence column. On deletion we always clear so the
-        # audit trail can't keep a citation pointing at nothing. On an
-        # update we apply the supplied evidence (if any) or leave the
-        # existing value untouched.
-        ev_col = evidence_col_for(filing_level)
-        if col == 2:  # only sync when we're rewriting the primary value col
-            ev_cell = ws.cell(row=row, column=ev_col)
-            if not content:
-                ev_cell.value = None
-            elif evidence is not None:
-                ev_cell.value = evidence
-        wb.save(merged_workbook_path)
-        deps.writes_performed += 1
-    finally:
-        wb.close()
+            # Sync the evidence column. On deletion we always clear so the
+            # audit trail can't keep a citation pointing at nothing. On an
+            # update we apply the supplied evidence (if any) or leave the
+            # existing value untouched.
+            ev_col = evidence_col_for(filing_level)
+            if col == 2:  # only sync when we're rewriting the primary value col
+                ev_cell = ws.cell(row=row, column=ev_col)
+                if not content:
+                    ev_cell.value = None
+                elif evidence is not None:
+                    ev_cell.value = evidence
+            _atomic_save_workbook(wb, merged_workbook_path)
+            deps.writes_performed += 1
+        finally:
+            wb.close()
 
     deps.correction_log.append({
         "operation": "rewrite_cell",
