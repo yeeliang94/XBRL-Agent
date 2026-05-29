@@ -1,6 +1,6 @@
 # Implementation Plan: First-Principles Rewrite of the AI Processing Pipeline
 
-**Overall Progress:** `~20%` — Phase 0 done; Phase 1 two-thirds done (monolith + canonical_agent deleted, −8,576 LOC); Step 1.1 (canonical-mandatory) remaining.
+**Overall Progress:** `~35%` — Phase 0 + Phase 1 COMPLETE (monolith, canonical_agent, and legacy correction all deleted; canonical mode mandatory + fail-fast; ~−9,400 LOC, 6 commits, all green). Phase 2 (one agent runner) is next.
 **PRD Reference:** [docs/REWRITE-first-principles.html](REWRITE-first-principles.html)
 **Last Updated:** 2026-05-30
 **Branch:** `rewrite/first-principles` (off `main`; baseline tag `pre-rewrite-baseline`)
@@ -95,7 +95,7 @@ fact-store work:
   - [ ] 🟥 Decide the acceptance bar up front (e.g. zero regressions on the pinned test PDFs' face statements)
   - **Verify:** harness run on the baseline against itself reports zero diff (proves the diff is trustworthy before it judges a real change).
 
-### Phase 1: Subtraction — *remove what would otherwise be migrated in every later step* (report steps 0–1) — 🟨 IN PROGRESS (1.2 done; 1.1 remaining)
+### Phase 1: Subtraction — *remove what would otherwise be migrated in every later step* (report steps 0–1) — 🟩 COMPLETE
 
 > **Execution-order note:** the two pure-subtraction pieces (Step 1.2) were
 > done first because they're zero-behaviour-change deletions, verifiable by the
@@ -104,7 +104,13 @@ fact-store work:
 > bootstrap-failure fallback (the legacy `_run_correction_pass`), so it needs
 > its own focused review. Same scope as the plan, safer intra-phase order.
 
-- [ ] 🟥 **Step 1.1: Make canonical mode mandatory; delete the legacy xlsx path** — collapse the dual-pipeline branch matrix (report step 0). **NOT YET STARTED.** Scoped: `_canonical_mode_enabled()`/`_canonical_facts_enabled()` (server.py:81/100) + 9 call sites; legacy `_run_correction_pass` (server.py:805) + `correction/agent.py` (484 LOC) dispatched at server.py:3768; `.env` flag; CLAUDE.md gotcha #21; `tests/test_canonical_mode_flag.py` + dual-run assertions in `test_phase*`/`test_silent_exception_surfacing`/`test_correction_canonical` (latter already gone). **Behavioural nuance to resolve first:** when the canonical bootstrap fails, `_canonical_facts_enabled()` currently returns False and the run degrades; today the legacy correction path is the implicit fallback. Removing it means deciding the degraded-mode contract explicitly.
+- [x] 🟩 **Step 1.1: Make canonical mode mandatory; delete the legacy xlsx path** — DONE in two commits (a60f518 behavioural, e9b0e76 deletion).
+  - [x] 🟩 `_canonical_mode_enabled()` → always True; `_canonical_facts_enabled()` → bootstrap-only; dispatch collapsed to reviewer-only (legacy `else` + `if canonical` guards removed).
+  - [x] 🟩 **Degraded-mode contract = FAIL FAST** (user decision): bootstrap failure → `_fail_run`, no silent degrade. (`server.py` guard before config build.)
+  - [x] 🟩 Deleted `_run_correction_pass`, `correction/agent.py`, `prompts/correction.md`, the legacy FunctionModel fixture, and 4 legacy test files; excised 3 legacy tests from `test_peer_review_codex_fixes`.
+  - [x] 🟩 Repointed `test_prompt_residual_plug_rule` (correction.md → reviewer.md) and `test_silent_exception_surfacing` / `test_cross_check_progress_events` to `_run_reviewer_pass`; fixed a latent cross-test `XBRL_AUTO_REVIEW` env leak.
+  - [x] 🟩 Docs: CLAUDE.md gotcha #21 + #11 + .env block updated; `.env.example` carries no flag; code no longer reads `XBRL_CANONICAL_MODE`.
+  - **Verified:** backend 1801 passed (2 pre-existing doc failures only).
   - [ ] 🟥 Remove `XBRL_CANONICAL_MODE` branching from `server.py` and `db/schema.py`; canonical is the only path
   - [ ] 🟥 Delete `correction/agent.py` (484 LOC, legacy correction) and its wiring
   - [ ] 🟥 Remove the fallback from `.env`, update CLAUDE.md gotcha #21, and remove/retire `tests/test_canonical_mode_flag.py` and the dual-run flag assertions in `test_phase*` / `test_silent_exception_surfacing.py` as first-class work
