@@ -58,6 +58,12 @@ or reintroduce documented bugs.
   failures and infinite loops.
 - **Don't assume `Agent._function_tools` exists** — it was removed in
   pydantic-ai 1.77+. Tool event streaming uses `agent.iter()` + `node.stream()`.
+- **Don't flip canonical mode off without updating docs.** `.env` ships with
+  `XBRL_CANONICAL_MODE=1` — canonical concept-model is the **default**
+  extraction → correction → export pipeline. The legacy direct-xlsx path
+  still exists for fallback, but the Values tab, concept-tree review UI, and
+  canonical correction agent (`correction/canonical_agent.py`) silently
+  disappear when the flag is off. See CLAUDE.md gotcha #21.
 
 ## Run Lifecycle Invariant (server.py)
 
