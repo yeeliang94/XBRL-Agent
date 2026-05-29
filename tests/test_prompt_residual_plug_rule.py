@@ -84,18 +84,21 @@ def test_sofp_prompt_forbids_sub_sheet_residual_plug():
     assert "construction in progress" in lower
 
 
-def test_correction_prompt_forbids_residual_plug():
-    """The correction agent runs after merge if cross-checks fail. It
-    must NOT respond to a failed check by plugging a catch-all to make
-    the next run_cross_checks pass. Pinned by sentinel phrase per
-    peer-review #7 (2026-04-26)."""
-    text = (_PROMPTS / "correction.md").read_text(encoding="utf-8")
+def test_reviewer_prompt_forbids_residual_plug():
+    """The reviewer pass runs after merge if cross-checks fail / conflicts
+    are open. It must NOT respond by plugging a catch-all to force a
+    balance. Pinned by sentinel phrase per peer-review #7 (2026-04-26);
+    repointed from the deleted legacy ``correction.md`` to ``reviewer.md``
+    when the legacy correction agent was removed (rewrite Phase 1.1). The
+    reviewer ALSO enforces this deterministically via the apply_fix no-plug
+    guard — see tests/test_reviewer_tools.py."""
+    text = (_PROMPTS / "reviewer.md").read_text(encoding="utf-8")
     assert "NEVER write a residual" in text or "NEVER plug" in text, (
-        "correction.md must contain a strong sentinel forbidding plugs — "
+        "reviewer.md must contain a strong sentinel forbidding plugs — "
         "either 'NEVER write a residual' or 'NEVER plug'"
     )
     lower = text.lower()
     assert "catch-all" in lower, (
-        "correction.md must name 'catch-all' explicitly so the agent "
+        "reviewer.md must name 'catch-all' explicitly so the agent "
         "knows which kind of row this rule refers to"
     )

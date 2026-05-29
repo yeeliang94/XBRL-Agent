@@ -44,6 +44,13 @@ def session_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key-12345")
     monkeypatch.setenv("TEST_MODEL", "test-model-default")
     monkeypatch.setenv("LLM_PROXY_URL", "")
+    # Canonical mode is mandatory (rewrite Phase 1.1). Pin the bootstrap flag
+    # so the fail-fast guard doesn't abort the run, and auto-review on so the
+    # reviewer dispatch fires — order-independent against tests that mutate
+    # these globals (this fixture builds TestClient without a `with` block, so
+    # the lifespan bootstrap never resets the flag here).
+    monkeypatch.setattr(server, "_CANONICAL_BOOTSTRAP_OK", True)
+    monkeypatch.setenv("XBRL_AUTO_REVIEW", "true")
 
     return TestClient(server.app), session_id, out
 
@@ -117,9 +124,9 @@ def test_initial_cross_check_run_emits_progress_events(session_env):
         "use_scout": False,
     }
 
-    # The 'failed' check_b will trigger the correction agent path. Stub
-    # that out so we don't try to build a real PydanticAI agent against
-    # the fake-model string (which pydantic-ai 1.77 rejects).
+    # The 'failed' check_b will trigger the reviewer path. Stub that out so
+    # we don't try to build a real PydanticAI agent against the fake-model
+    # string (which pydantic-ai 1.77 rejects).
     async def _fake_correction(*args, **kwargs):
         return {
             "invoked": True, "writes_performed": 0,
@@ -142,7 +149,7 @@ def test_initial_cross_check_run_emits_progress_events(session_env):
              ),
          ), \
          patch("cross_checks.framework.run_all", side_effect=_fake_run_all), \
-         patch("server._run_correction_pass", side_effect=_fake_correction), \
+         patch("server._run_reviewer_pass", side_effect=_fake_correction), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 

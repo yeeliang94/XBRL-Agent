@@ -110,9 +110,9 @@ GOOGLE_API_KEY=                # real Google key; also the proxy auth key on Win
 TEST_MODEL=openai.gpt-5.4
 SCOUT_MODEL=openai.gpt-5.4     # falls back to TEST_MODEL when blank
 
-# Canonical concept model — DEFAULT-ON for this project (see gotcha #21).
-# Set empty / 0 / false to fall back to the legacy direct-xlsx pipeline.
-XBRL_CANONICAL_MODE=1
+# Canonical concept model is now MANDATORY (rewrite Phase 1.1): the legacy
+# direct-xlsx pipeline and the XBRL_CANONICAL_MODE opt-out were removed.
+# The flag is no longer read (see gotcha #21).
 ```
 
 ### PydanticAI Model Creation (v1.77+)
@@ -344,9 +344,10 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
 - **v8 → v9:** adds `concept_nodes.matrix_col_label` — hydrated from SOCIE
   row-2 headers at template-import time. Nullable; existing concepts read
   NULL until the startup bootstrap re-imports.
-- **v9 → v10:** adds `runs.orchestration` (`TEXT DEFAULT 'split'`) — the
-  monolith-experiment orchestration flag. Legacy runs default to `'split'`
-  (current coordinator path).
+- **v9 → v10:** adds `runs.orchestration` (`TEXT DEFAULT 'split'`) — originally
+  the monolith-experiment flag. The monolith experiment was deleted in the
+  first-principles rewrite (Phase 1); the column is RETAINED (always `'split'`
+  now) so the schema version and History read-back stay stable.
 - **v10 → v11:** adds the `concept_render_aliases` table — secondary render
   coords for concepts that occupy more than one physical cell (face-sheet
   rows whose value cross-rolls-up from a sub-sheet total). See the
@@ -657,10 +658,11 @@ overhead. Operators can override via `XBRL_MAX_AGENT_ITERATIONS` but
 **must not raise it to ≥50** — pinned by
 `tests/test_max_agent_iterations_below_pydantic_cap.py`.
 
-The correction agent has its own dynamic 8-25 turn cap that's much
+The reviewer pass has its own dynamic 8-25 turn cap that's much
 tighter (RUN-REVIEW P0-1) and is independent of MAX_AGENT_ITERATIONS;
-both fire structured `correction_exhausted` outcomes via
-`server._run_correction_pass`.
+it fires structured `correction_exhausted` outcomes via
+`server._run_reviewer_pass`. (The legacy `_run_correction_pass` was
+removed in rewrite Phase 1.1.)
 
 **Wall-clock cap on correction (2026-04-27):**
 `CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
@@ -713,14 +715,18 @@ Two paths used to swallow errors silently (2026-04-27 fix):
   whole pipeline. Pinned by
   `tests/test_silent_exception_surfacing.py`.
 
-### 21. Canonical concept model — DEFAULT-ON pipeline
+### 21. Canonical concept model — the MANDATORY pipeline
 
 The `concept_model/` subsystem (parser, importer, exporter, cell resolver,
 cascade recompute, group checks, facts API, versioning) plus the **reviewer
 agent** (`correction/reviewer_agent.py`, `prompts/reviewer.md`) is the
-**default extraction → review → export pipeline** for this project. The
-project's checked-in `.env` ships with `XBRL_CANONICAL_MODE=1`, and every code
-path downstream of that flag is fully wired:
+**only extraction → review → export pipeline**. As of the first-principles
+rewrite (Phase 1.1) it is MANDATORY: the legacy direct-xlsx pipeline, the
+`XBRL_CANONICAL_MODE` opt-out, the legacy `correction/agent.py`, and the
+superseded `correction/canonical_agent.py` were all deleted. If the startup
+concept-tree bootstrap fails, a run now **fails fast** (`_CANONICAL_BOOTSTRAP_OK
+is False` → `_fail_run`) rather than degrading — there is no fallback. Every
+code path is fully wired:
 
 - **Extraction (Phase B):** `coordinator.py` threads `run_id` + `db_path`
   into the extraction tools so writes project into `run_concept_facts` as
@@ -744,11 +750,12 @@ path downstream of that flag is fully wired:
   `concept_model/versioning.py::snapshot_facts` ONCE (before any write) so
   "Revert to original" (`revert_to_original`) can restore the original
   extraction with one click. It then re-exports + re-merges so the download
-  and Concepts UI stay in sync (no xlsx split-brain). Canonical mode emits the
-  `reviewing` pipeline stage (not `correcting`). The legacy `correction.md` /
-  `_run_correction_pass` path still runs only in non-canonical mode.
-  `correction/canonical_agent.py` remains as a unit-tested module but is no
-  longer wired into the pipeline.
+  and Concepts UI stay in sync (no xlsx split-brain). The pass emits the
+  `reviewing` pipeline stage. The legacy `correction.md` /
+  `_run_correction_pass` / `correction/agent.py` path and
+  `correction/canonical_agent.py` were deleted in rewrite Phase 1.1; the
+  reviewer-owned `load_open_conflicts` helper (formerly in canonical_agent)
+  now lives in `correction/reviewer_agent.py`.
   - **Group / MPERS scoping (reviewer layer).** `concept_nodes` holds EVERY
     imported standard×level (the bootstrap imports all four families), and
     uuids are minted per `(template_id, sheet, row, label)` — so the SAME
@@ -795,13 +802,12 @@ path downstream of that flag is fully wired:
     bound to the loop that uses it. A re-entrancy guard reports an in-flight
     pass instead of double-launching one over the same run's facts.
 
-**Disabling canonical mode** (for legacy-pipeline debugging only): unset or
-set falsy `XBRL_CANONICAL_MODE` in `.env`. The legacy direct-xlsx pipeline
-still works — both branches are exercised by tests
-(`tests/test_canonical_mode_flag.py` pins the fallback contract). But
-**don't** ship a default-off change without updating this gotcha and
-`.env`; the Values tab, concept-tree review UI, and the canonical
-correction agent all silently disappear when the flag is off.
+**Canonical mode cannot be disabled** (rewrite Phase 1.1). There is no
+opt-out flag and no legacy pipeline to fall back to. If the concept-tree
+bootstrap fails at startup, runs fail fast with a clear error instead of
+degrading — fix the bootstrap (check logs, restart) rather than reaching for
+a fallback that no longer exists. The Values tab, concept-tree review UI, and
+reviewer pass are always present.
 
 Plan / PRD docs (historical context, not API contracts):
 [docs/PLAN-canonical-concept-model.md](docs/PLAN-canonical-concept-model.md),
