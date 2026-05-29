@@ -799,6 +799,31 @@ Group facts dropped (they only apply to Group filings, which use the
 `tests/test_canonical_export.py::test_py_facts_export_to_col_c_on_linear_company`
 and `::test_group_facts_dropped_on_company_filing`.
 
+### 22. Agent workbook tools must serialise + atomic-save shared files
+
+pydantic-ai (1.77+, default `parallel_execution_mode`) runs batched
+`@agent.tool` calls as concurrent `asyncio` tasks; **sync** tools dispatch
+onto separate anyio worker threads. openpyxl's `wb.save()` is a non-atomic
+in-place zip rewrite — if a second tool's `load_workbook` hits the same path
+mid-save it reads a truncated zip → `EOFError` (Windows incident,
+2026-05-29). Any agent tool that loads + saves the **same** workbook path is
+exposed.
+
+The notes post-validator (`notes/validator_agent.py`) — whose `read_cell`
+and `rewrite_cell` both target `merged_workbook_path` — is fixed with two
+coupled defences: a per-run `NotesValidatorAgentDeps.io_lock`
+(`threading.Lock`) wrapping every load/save, and `_atomic_save_workbook`
+(tempfile + `os.replace`, atomic on Windows + POSIX) so even an un-locked
+reader sees old-or-new, never partial. The validator's `EOFError` was
+caught at `server.py` (`"Notes validator run failed"`), so it failed soft
+(no dedup) rather than crashing the run. Pinned by
+`tests/test_notes_validator_agent.py::TestWorkbookIoRaceSafety`.
+
+**Latent elsewhere — don't reintroduce the pattern:** `tools/fill_workbook.py`
+and `concept_model/exporter.py` do the same load→save-in-place; they rarely
+race only because agents fill-then-verify across separate turns. If you add
+a tool that writes a workbook another tool reads, serialise + atomic-save.
+
 ## Testing
 
 ```bash
