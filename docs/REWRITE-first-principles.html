@@ -385,7 +385,7 @@
     <tr>
       <td><b>Notes</b><br><span class="fileref">notes/</span></td>
       <td>Full parallel pipeline (~6,400 LOC)</td>
-      <td><span class="pill p-med">fold in</span> Prose facts through the same store/runner. Keep sanitiser, char-cap, dedup as post-processors.</td>
+      <td><span class="pill p-med">fold in</span> Prose facts through the same write <em>interface</em> + runner, but the <code>notes_cells</code> backend stays distinct from <code>run_concept_facts</code> (see §4.4). Keep sanitiser, char-cap, dedup as post-processors.</td>
     </tr>
     <tr>
       <td><b>Scout</b><br><span class="fileref">scout/</span></td>
@@ -455,7 +455,7 @@
     <tr><td><b>0</b></td><td>Make canonical mode <em>mandatory</em>; delete the legacy xlsx path and <code>correction/agent.py</code>. <em>Includes</em> removing the fallback from <code>.env</code>, CLAUDE.md gotcha #21, and the fallback tests (<span class="fileref">test_canonical_mode_flag.py</span>) as first-class work</td><td><span class="pill p-med">med</span></td><td>Removes the dual-pipeline branch matrix; halves the test surface</td></tr>
     <tr><td><b>1</b></td><td>Delete <code>monolith/</code> (unwired by default). <code>correction/canonical_agent.py</code> is <em>not</em> fully unwired — its <code>_load_open_conflicts</code> is still imported by the reviewer path; relocate that helper first, then delete</td><td><span class="pill p-med">med</span></td><td>~3,400 LOC (monolith) immediately; <code>canonical_agent.py</code> after the helper move</td></tr>
     <tr><td><b>2</b></td><td>Extract <code>run_agent(spec, sink)</code>; route the face coordinator through it</td><td><span class="pill p-med">med</span></td><td>One loop; pins via existing <span class="fileref">test_e2e.py</span></td></tr>
-    <tr><td><b>3</b></td><td>Route the notes coordinator through the same runner; fold notes into the fact store as prose facts</td><td><span class="pill p-high">high</span></td><td>Retires <code>notes/coordinator.py</code> duplication</td></tr>
+    <tr><td><b>3</b></td><td>Route the notes coordinator through the same runner; route prose-note facts through the shared fact-write <em>interface</em> (<code>notes_cells</code> backend, <em>not</em> <code>run_concept_facts</code> — see §4.4)</td><td><span class="pill p-high">high</span></td><td>Retires <code>notes/coordinator.py</code> duplication</td></tr>
     <tr><td><b>4</b></td><td>Flip extraction to write the store <em>directly</em>; render xlsx only at the end</td><td><span class="pill p-high">high</span></td><td>Collapses the four-representations problem; deletes merge step</td></tr>
     <tr><td><b>5</b></td><td>Typed tool signatures (<code>write_facts</code>); drop JSON-string parsing</td><td><span class="pill p-low">low</span></td><td>Fewer wasted turns; deletes defensive parse code</td></tr>
     <tr><td><b>6</b></td><td>Split <code>server.py</code>: routes → <code>api/</code>, orchestration → phase pipeline, re-review state → DB</td><td><span class="pill p-med">med</span></td><td>God file dissolved; durable background tasks</td></tr>
