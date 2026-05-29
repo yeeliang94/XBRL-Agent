@@ -79,33 +79,31 @@ _CANONICAL_BOOTSTRAP_OK: Optional[bool] = None
 
 
 def _canonical_mode_enabled() -> bool:
-    """Feature flag: when XBRL_CANONICAL_MODE is truthy (1/true/yes/on)
-    the concept-model surfaces (facts API, concept tree, reconciliation
-    queue) are active.
+    """Canonical mode is now MANDATORY (rewrite Phase 1, step 1.1).
 
-    Current state: the full canonical pipeline is wired — extraction
-    fact-projection (Phase B), the DB-backed exporter (Phase C), and the
-    reviewer pass (Phase D, correction/reviewer_agent.py).
-    In canonical mode the reviewer operates on the concept tree
-    (open conflicts in run_concept_conflicts), writes resolutions through
-    the facts API, and the workbook is re-exported + re-merged from facts —
-    so the download and the Concepts UI stay in sync (no xlsx split-brain).
-    The LEGACY .xlsx correction pass runs only in non-canonical mode.
+    The concept-model pipeline — extraction fact-projection (Phase B), the
+    DB-backed exporter (Phase C), and the reviewer pass (Phase D,
+    correction/reviewer_agent.py) — is the only pipeline. The legacy direct-
+    xlsx path and its `XBRL_CANONICAL_MODE` opt-out have been removed. This
+    helper is retained as a single always-true seam so the many call sites
+    don't have to be inlined in one commit; it will dissolve in the Phase 5
+    server decomposition.
     """
-    import os
-    raw = os.environ.get("XBRL_CANONICAL_MODE", "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    return True
 
 
 def _canonical_facts_enabled() -> bool:
-    """True when canonical mode is on AND the startup tree bootstrap
-    succeeded — i.e. fact projection can actually resolve concepts. When the
-    bootstrap failed (``_CANONICAL_BOOTSTRAP_OK is False``) we keep canonical
-    mode "on" for UI/error surfacing but stop threading run_id/db_path into
-    extraction so projection no-ops cleanly instead of skipping every cell
-    (peer-review finding 1).
+    """True when the startup concept-tree bootstrap succeeded — i.e. fact
+    projection can resolve concepts.
+
+    Bootstrap failure is now FATAL (fail-fast contract, rewrite Phase 1.1):
+    `run_multi_agent_stream` refuses to start a run when
+    ``_CANONICAL_BOOTSTRAP_OK is False`` rather than silently degrading to a
+    correction-less run (the old behaviour, when the legacy xlsx path was the
+    implicit fallback). So at extraction time this is effectively always True;
+    it stays a function because `/api/config` and a few routes report it.
     """
-    return _canonical_mode_enabled() and _CANONICAL_BOOTSTRAP_OK is not False
+    return _CANONICAL_BOOTSTRAP_OK is not False
 
 
 def _export_canonical_workbooks(
@@ -2859,6 +2857,23 @@ async def run_multi_agent_stream(
             terminal_status = new_status or terminal_status
             return
 
+        # Canonical mode is mandatory (rewrite Phase 1.1). The concept tree
+        # MUST have imported at startup for fact projection to resolve
+        # concepts. If the bootstrap failed, fail the run fast with a clear
+        # error instead of degrading to a correction-less workbook — the
+        # legacy direct-xlsx fallback that used to cover this case is gone.
+        if _CANONICAL_BOOTSTRAP_OK is False:
+            events, new_status = _fail_run(
+                db_conn, run_id,
+                "Canonical concept-tree bootstrap failed at startup — cannot "
+                "produce grounded facts. Check the server logs and restart "
+                "the server; no run can proceed until the import succeeds.",
+            )
+            for ev in events:
+                yield ev
+            terminal_status = new_status or terminal_status
+            return
+
         config = RunConfig(
             pdf_path=str(session_dir / "uploaded.pdf"),
             output_dir=output_dir,
@@ -2868,26 +2883,13 @@ async def run_multi_agent_stream(
             models=models,
             filing_level=run_config.filing_level,
             filing_standard=run_config.filing_standard,
-            # Canonical mode: hand the run_id + DB to the coordinator so
-            # extraction agents project their writes into run_concept_facts —
-            # but only when the startup bootstrap actually imported the trees
-            # (peer-review finding 1). If it failed, leave these None so
-            # projection cleanly no-ops instead of skipping every cell, and
-            # surface a clear warning below.
-            run_id=run_id if _canonical_facts_enabled() else None,
-            db_path=str(AUDIT_DB_PATH) if _canonical_facts_enabled() else None,
+            # Canonical mode is mandatory: always thread the run_id + DB into
+            # the coordinator so extraction agents project their writes into
+            # run_concept_facts. Bootstrap success is guaranteed by the
+            # fail-fast guard above.
+            run_id=run_id,
+            db_path=str(AUDIT_DB_PATH),
         )
-
-        if _canonical_mode_enabled() and _CANONICAL_BOOTSTRAP_OK is False:
-            yield {"event": "error", "data": {
-                "type": "canonical_bootstrap_failed",
-                "message": (
-                    "Canonical mode is on but the concept-tree import failed "
-                    "at startup — this run will still produce a workbook, but "
-                    "the Concepts UI won't populate. Check server logs and "
-                    "restart."
-                ),
-            }}
 
         yield {"event": "status", "data": {
             "phase": "starting",
@@ -3671,29 +3673,23 @@ async def run_multi_agent_stream(
         # review, they do NOT retry.
         if merge_result.success:
             hard_failures = [cr for cr in cross_check_results if cr.status == "failed"]
-            # Phase D: in canonical mode the correction agent operates on the
-            # concept tree, driven by OPEN conflicts in run_concept_conflicts
-            # (cascade-detected partial-state / parent-child disagreements),
-            # NOT by xlsx cross-check failures. Its tools write resolutions
-            # through the facts API, so the fix lands in the authoritative
-            # store and the download is re-exported from facts afterwards —
-            # closing the legacy split-brain (peer-review finding 2). The
-            # legacy .xlsx correction pass runs only in non-canonical mode.
-            canonical = _canonical_facts_enabled()
-            canonical_conflicts: list = []
-            if canonical:
-                from correction.reviewer_agent import load_open_conflicts
-                canonical_conflicts = [
-                    c for c in load_open_conflicts(AUDIT_DB_PATH, run_id)
-                    if c.get("kind") != "correction_exhausted"
-                ]
+            # Phase D — the reviewer pass. Driven by OPEN conflicts in
+            # run_concept_conflicts (cascade-detected partial-state /
+            # parent-child disagreements) PLUS failing cross-checks. Its tools
+            # write resolutions through the facts API, so the fix lands in the
+            # authoritative store and the download is re-exported from facts
+            # afterwards (no split-brain). The legacy direct-xlsx correction
+            # pass has been removed (rewrite Phase 1.1).
+            from correction.reviewer_agent import load_open_conflicts
+            canonical_conflicts = [
+                c for c in load_open_conflicts(AUDIT_DB_PATH, run_id)
+                if c.get("kind") != "correction_exhausted"
+            ]
             should_correct = bool(hard_failures) or bool(canonical_conflicts)
-            # Reviewer auto-trigger toggle (Settings → XBRL_AUTO_REVIEW). In
-            # canonical mode the reviewer only auto-runs when the toggle is on;
-            # with it off, a run with failures/conflicts simply finishes and
-            # the user triggers the reviewer manually from the Review tab. The
-            # legacy non-canonical correction path is unaffected by this toggle.
-            if canonical and not _auto_review_enabled():
+            # Reviewer auto-trigger toggle (Settings → XBRL_AUTO_REVIEW). When
+            # off, a run with failures/conflicts simply finishes and the user
+            # triggers the reviewer manually from the Review tab.
+            if not _auto_review_enabled():
                 logger.info(
                     "auto-review disabled (XBRL_AUTO_REVIEW=false) — skipping "
                     "reviewer for run %s; manual re-review still available", run_id,
@@ -3721,62 +3717,42 @@ async def run_multi_agent_stream(
                             "Failed to pre-create correction run_agent row",
                             exc_info=True,
                         )
-                # Phase 6: stage boundary — about to launch the
-                # correction / reviewer agent. The most opaque stage of
-                # the run historically; this label tells the UI the
-                # "10-min silent gap" everyone reports is the agent
-                # running. Canonical mode now runs the REVIEWER (which
-                # snapshots first + investigates root cause), so it gets
-                # its own "reviewing" label (gotcha #19); the legacy
-                # non-canonical path keeps "correcting".
-                _emit_stage("reviewing" if canonical else "correcting")
-                if canonical:
-                    # Reviewer pass (docs/Archive/PLAN-reviewer-agent.md) replaces
-                    # the autonomous canonical correction pass. It is
-                    # driven by BOTH failing cross-checks and open
-                    # conflicts, snapshots the original facts first (the
-                    # reversibility invariant), applies grounded fixes, and
-                    # flags what it's stuck on.
-                    #
-                    # Reviewer model: use the user's dedicated reviewer model
-                    # (Settings → default_models.reviewer) when set; otherwise
-                    # inherit the run's extraction model.
-                    reviewer_model = model
-                    _rm = _reviewer_model_name()
-                    if _rm and _rm != model_name:
-                        try:
-                            reviewer_model = _create_proxy_model(
-                                _rm, proxy_url, api_key)
-                        except Exception:  # noqa: BLE001
-                            logger.warning(
-                                "reviewer model %s failed to build; using the "
-                                "run's model instead", _rm, exc_info=True)
-                            reviewer_model = model
-                    correction_task = asyncio.create_task(
-                        _run_reviewer_pass(
-                            failed_checks=hard_failures,
-                            conflicts=canonical_conflicts,
-                            model=reviewer_model,
-                            filing_level=run_config.filing_level,
-                            filing_standard=run_config.filing_standard,
-                            event_queue=event_queue,
-                            db_path=AUDIT_DB_PATH,
-                            run_id=run_id,
-                            pdf_path=str(session_dir / "uploaded.pdf"),
-                        ))
-                else:
-                    correction_task = asyncio.create_task(_run_correction_pass(
+                # Phase 6: stage boundary — about to launch the reviewer. The
+                # most opaque stage of the run historically; this label tells
+                # the UI the "10-min silent gap" everyone reports is the agent
+                # running. The reviewer snapshots first + investigates root
+                # cause, so it gets its own "reviewing" label (gotcha #19).
+                _emit_stage("reviewing")
+                # Reviewer pass (docs/Archive/PLAN-reviewer-agent.md). Driven by
+                # BOTH failing cross-checks and open conflicts, snapshots the
+                # original facts first (the reversibility invariant), applies
+                # grounded fixes, and flags what it's stuck on.
+                #
+                # Reviewer model: use the user's dedicated reviewer model
+                # (Settings → default_models.reviewer) when set; otherwise
+                # inherit the run's extraction model.
+                reviewer_model = model
+                _rm = _reviewer_model_name()
+                if _rm and _rm != model_name:
+                    try:
+                        reviewer_model = _create_proxy_model(
+                            _rm, proxy_url, api_key)
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "reviewer model %s failed to build; using the "
+                            "run's model instead", _rm, exc_info=True)
+                        reviewer_model = model
+                correction_task = asyncio.create_task(
+                    _run_reviewer_pass(
                         failed_checks=hard_failures,
-                        merged_workbook_path=merged_path,
-                        pdf_path=str(session_dir / "uploaded.pdf"),
-                        infopack=infopack,
+                        conflicts=canonical_conflicts,
+                        model=reviewer_model,
                         filing_level=run_config.filing_level,
                         filing_standard=run_config.filing_standard,
-                        model=model,
-                        output_dir=output_dir,
                         event_queue=event_queue,
-                        statements_to_run=set(statements_to_run),
-                        variants={stmt: v for stmt, v in variants.items()},
+                        db_path=AUDIT_DB_PATH,
+                        run_id=run_id,
+                        pdf_path=str(session_dir / "uploaded.pdf"),
                     ))
                 async for event in _drain_while_running(correction_task):
                     persist_event(event)
@@ -3792,68 +3768,67 @@ async def run_multi_agent_stream(
                     # re-merge so the downloaded workbook matches the Concepts
                     # UI (finding 2). The cascade already re-ran inside the
                     # canonical pass, so facts are consistent here.
-                    if canonical:
-                        try:
-                            _export_canonical_workbooks(
-                                run_id=run_id,
-                                agent_results=coordinator_result.agent_results,
-                                all_workbook_paths=all_workbook_paths,
-                                session_dir=session_dir,
-                                filing_level=run_config.filing_level,
-                                filing_standard=run_config.filing_standard,
-                                db_path=AUDIT_DB_PATH,
-                            )
-                            remerge = merge_workbooks(
-                                all_workbook_paths, merged_path,
-                                notes_workbook_paths=all_notes_workbook_paths,
-                                skip_recalc=True,
-                            )
-                            if remerge.success:
-                                if db_conn is not None and run_id is not None:
-                                    repo.mark_run_merged(db_conn, run_id, merged_path)
-                            else:
-                                # Re-merge failed: the download would be stale
-                                # relative to the corrected facts.
-                                canonical_reexport_failed = True
-                                _enqueue_system_error({
-                                    "type": "canonical_reexport_failed",
-                                    "message": (
-                                        "Post-correction re-merge failed; the "
-                                        "downloaded workbook may not reflect the "
-                                        "corrected facts. Errors: "
-                                        + "; ".join(remerge.errors or ["unknown"])
-                                    ),
-                                })
-                        except Exception as _rx:  # noqa: BLE001
-                            logger.exception(
-                                "post-correction re-export/re-merge failed "
-                                "for run %s", run_id,
-                            )
+                    try:
+                        _export_canonical_workbooks(
+                            run_id=run_id,
+                            agent_results=coordinator_result.agent_results,
+                            all_workbook_paths=all_workbook_paths,
+                            session_dir=session_dir,
+                            filing_level=run_config.filing_level,
+                            filing_standard=run_config.filing_standard,
+                            db_path=AUDIT_DB_PATH,
+                        )
+                        remerge = merge_workbooks(
+                            all_workbook_paths, merged_path,
+                            notes_workbook_paths=all_notes_workbook_paths,
+                            skip_recalc=True,
+                        )
+                        if remerge.success:
+                            if db_conn is not None and run_id is not None:
+                                repo.mark_run_merged(db_conn, run_id, merged_path)
+                        else:
+                            # Re-merge failed: the download would be stale
+                            # relative to the corrected facts.
                             canonical_reexport_failed = True
                             _enqueue_system_error({
                                 "type": "canonical_reexport_failed",
                                 "message": (
-                                    f"Post-correction re-export crashed "
-                                    f"({type(_rx).__name__}); the downloaded "
-                                    f"workbook may not reflect the corrected "
-                                    f"facts."
+                                    "Post-correction re-merge failed; the "
+                                    "downloaded workbook may not reflect the "
+                                    "corrected facts. Errors: "
+                                    + "; ".join(remerge.errors or ["unknown"])
                                 ),
                             })
-                        # Drain the error event(s) we may have enqueued so the
-                        # client + DB see them in order.
-                        while True:
+                    except Exception as _rx:  # noqa: BLE001
+                        logger.exception(
+                            "post-correction re-export/re-merge failed "
+                            "for run %s", run_id,
+                        )
+                        canonical_reexport_failed = True
+                        _enqueue_system_error({
+                            "type": "canonical_reexport_failed",
+                            "message": (
+                                f"Post-correction re-export crashed "
+                                f"({type(_rx).__name__}); the downloaded "
+                                f"workbook may not reflect the corrected "
+                                f"facts."
+                            ),
+                        })
+                    # Drain the error event(s) we may have enqueued so the
+                    # client + DB see them in order.
+                    while True:
+                        try:
+                            _evt = event_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        if _evt is None:
+                            continue
+                        persist_event(_evt)
+                        if client_connected:
                             try:
-                                _evt = event_queue.get_nowait()
-                            except asyncio.QueueEmpty:
-                                break
-                            if _evt is None:
-                                continue
-                            persist_event(_evt)
-                            if client_connected:
-                                try:
-                                    yield _evt
-                                except (asyncio.CancelledError, GeneratorExit):
-                                    client_connected = False
+                                yield _evt
+                            except (asyncio.CancelledError, GeneratorExit):
+                                client_connected = False
                     # Phase 6: stage boundary — correction edited the
                     # workbook, time to re-run cross-checks against the
                     # corrected state.

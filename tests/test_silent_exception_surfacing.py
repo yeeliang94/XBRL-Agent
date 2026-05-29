@@ -48,17 +48,23 @@ def session_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key-12345")
     monkeypatch.setenv("TEST_MODEL", "test-model-default")
     monkeypatch.setenv("LLM_PROXY_URL", "")
-    # These tests pin the LEGACY (non-canonical) correction/cross-check
-    # path: ``_run_correction_pass`` + post-correction ``run_cross_checks``
-    # re-run. When the project .env sets ``XBRL_CANONICAL_MODE=1`` the
-    # production code routes correction through
-    # ``_run_canonical_correction_pass`` and the patched legacy stub
-    # never runs — symptom is the stage trace jumping
-    # ``correcting → done`` without ever firing the post-correction
-    # cross-check pass (and therefore never raising the test's
-    # injected RuntimeError). Force canonical mode off so the legacy
-    # path is exercised.
-    monkeypatch.setenv("XBRL_CANONICAL_MODE", "0")
+    # Canonical mode is mandatory (rewrite Phase 1.1) — correction routes
+    # exclusively through the reviewer pass (``_run_reviewer_pass``); the
+    # post-correction cross-check re-run + structured-exception surfacing
+    # these tests pin behaves identically on that path. The legacy
+    # ``XBRL_CANONICAL_MODE`` opt-out is gone.
+    #
+    # Pin the bootstrap flag to True so the fail-fast guard (which aborts a
+    # run when the concept-tree bootstrap failed) doesn't fire. This fixture
+    # builds TestClient WITHOUT a `with` block, so the lifespan bootstrap
+    # never runs here — without this pin the test inherits whatever a prior
+    # test's lifespan left in the module global (order-dependent flakiness).
+    monkeypatch.setattr(server, "_CANONICAL_BOOTSTRAP_OK", True)
+    # The reviewer pass only auto-runs when XBRL_AUTO_REVIEW is on (default).
+    # Pin it on so the post-correction re-run these tests exercise actually
+    # fires, regardless of a prior test (e.g. test_settings_api) leaving the
+    # env toggled off.
+    monkeypatch.setenv("XBRL_AUTO_REVIEW", "true")
 
     return TestClient(server.app), session_id, out
 
@@ -259,7 +265,7 @@ def test_post_correction_cross_check_exception_finalizes_with_errors(session_env
         # Post-correction re-run: simulate a corrupt corrected workbook.
         raise RuntimeError("Workbook corrupted after correction")
 
-    # Stub the correction pass so it returns "did some writes" without
+    # Stub the reviewer pass so it returns "did some writes" without
     # actually invoking an LLM — just enough to trigger the re-run.
     async def _fake_correction(*args, **kwargs):
         return {
@@ -286,7 +292,7 @@ def test_post_correction_cross_check_exception_finalizes_with_errors(session_env
              "cross_checks.framework.run_all",
              side_effect=_run_all_side_effect,
          ), \
-         patch("server._run_correction_pass", side_effect=_fake_correction), \
+         patch("server._run_reviewer_pass", side_effect=_fake_correction), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
