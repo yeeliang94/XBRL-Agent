@@ -6,8 +6,10 @@ import { ui, uiClass } from "../lib/uiStyles";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  getSettings: () => Promise<SettingsResponse>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string }>) => Promise<{ status: string }>;
+  // The /api/settings response carries the extended fields (incl. auto_review)
+  // at runtime; typed optional so the existing getSettings helper stays assignable.
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
 }
 
@@ -177,6 +179,8 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
   const [proxyUrl, setProxyUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyPreview, setApiKeyPreview] = useState("");
+  // Reviewer auto-trigger toggle (docs/PLAN-reviewer-agent.md). Default on.
+  const [autoReview, setAutoReview] = useState(true);
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -218,6 +222,8 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
         setProxyUrl(s.proxy_url);
         setApiKeyPreview(s.api_key_preview);
         setApiKey("");
+        // Default to on when the field is absent (older backend).
+        setAutoReview(s.auto_review !== false);
       })
       .catch((e) => {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load settings");
@@ -249,6 +255,7 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
       await saveSettings({
         model,
         proxy_url: proxyUrl,
+        auto_review: autoReview,
         ...(apiKey ? { api_key: apiKey } : {}),
       });
       setSaved(true);
@@ -264,7 +271,7 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
     } finally {
       setSaving(false);
     }
-  }, [model, proxyUrl, apiKey, saveSettings]);
+  }, [model, proxyUrl, apiKey, autoReview, saveSettings]);
 
   // --- Test connection ---
   const handleTestConnection = useCallback(async () => {
@@ -398,6 +405,23 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
           ) : (
             <p style={styles.helperText}>e.g., openai.gpt-5.4</p>
           )}
+        </div>
+
+        {/* Reviewer auto-trigger toggle */}
+        <div style={styles.fieldGroup}>
+          <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={autoReview}
+              onChange={(e) => setAutoReview(e.target.checked)}
+              aria-label="Automatically run the reviewer after extraction"
+            />
+            <span style={styles.label}>Automatically run the reviewer after extraction</span>
+          </label>
+          <p style={styles.helperText}>
+            When off, runs with failed cross-checks finish without the reviewer;
+            you can still trigger it manually from a run's Review tab.
+          </p>
         </div>
 
         {/* Test Connection */}

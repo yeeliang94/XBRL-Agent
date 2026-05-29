@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 import traceback
 import uuid
@@ -414,6 +415,94 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
     except Exception:  # noqa: BLE001 — a re-check must never 500 the page
         logger.exception("on-demand re-check failed for run %s", run_id)
         return None
+
+
+def _refresh_persisted_cross_checks(run_id: int) -> bool:
+    """Re-run cross-checks from current facts and REPLACE the stored rows.
+
+    The manual re-review and revert paths mutate facts without touching the
+    persisted ``cross_checks`` table, but the Review tab and a subsequent
+    re-review both read those stored rows — so without a refresh they'd show
+    stale pass/fail state (a manual fix keeps showing old failures; a revert of
+    an auto-fixed run keeps showing passed checks while the restored workbook
+    fails). This re-runs the same default registry against current facts and
+    swaps the run's rows atomically. Best-effort: never raises into a request.
+
+    Returns True when the rows were refreshed, False when there was nothing to
+    re-check (no facts / no succeeded statements) or the refresh failed.
+    """
+    from db import repository as repo
+
+    results = _recheck_from_facts(run_id)
+    if results is None:
+        return False
+    try:
+        conn = _open_audit_conn()
+        try:
+            # Replace, don't append: the run already has one set of rows from
+            # the original pipeline (it persists cross_checks exactly once).
+            conn.execute("DELETE FROM cross_checks WHERE run_id = ?", (run_id,))
+            for r in results:
+                repo.save_cross_check(
+                    conn, run_id, check_name=r["name"], status=r["status"],
+                    expected=r["expected"], actual=r["actual"], diff=r["diff"],
+                    tolerance=r["tolerance"], message=r["message"],
+                    target_sheet=r["target_sheet"], target_row=r["target_row"],
+                )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — a refresh must never break the request
+        logger.exception("cross-check refresh failed for run %s", run_id)
+        return False
+
+
+def _safe_downgrade_run_status(run_id: int) -> bool:
+    """One-directional status refresh after a re-review / revert changes facts.
+
+    Recomputes validation state from the now-refreshed cross_checks + open
+    conflicts and downgrades a ``completed`` run to ``completed_with_errors``
+    when failures exist. The direction is deliberate and SAFE:
+
+    * It fires ONLY when the run is currently ``completed`` — so ``failed`` /
+      ``aborted`` / ``correction_exhausted`` runs, and runs already marked
+      ``completed_with_errors``, are left untouched.
+    * It NEVER promotes a run to ``completed`` — a run that still says
+      ``completed_with_errors`` may carry a failed-agent error unrelated to the
+      cross-checks, and silently upgrading it would hide that. The accurate
+      per-check pass/fail is already visible in the refreshed cross_checks rows.
+
+    Best-effort: never raises into a request. Returns True iff it downgraded.
+    """
+    from db import repository as repo
+    try:
+        conn = _open_audit_conn()
+        try:
+            run = repo.fetch_run(conn, run_id)
+            if run is None or run.status != "completed":
+                return False
+            failed = conn.execute(
+                "SELECT COUNT(*) FROM cross_checks "
+                "WHERE run_id = ? AND status = 'failed'", (run_id,),
+            ).fetchone()[0]
+            # Mirrors _open_conflict_count: the correction_exhausted sentinel is
+            # surfaced via its own status and must not count here.
+            conflicts = conn.execute(
+                "SELECT COUNT(*) FROM run_concept_conflicts WHERE run_id = ? "
+                "AND status = 'open' AND kind != 'correction_exhausted'",
+                (run_id,),
+            ).fetchone()[0]
+            if failed > 0 or conflicts > 0:
+                repo.update_run_status(conn, run_id, "completed_with_errors")
+                conn.commit()
+                return True
+            return False
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — a status refresh must never break a request
+        logger.exception("safe status downgrade failed for run %s", run_id)
+        return False
 
 
 def _open_conflict_count(db_path, run_id) -> int:
@@ -1040,29 +1129,33 @@ async def _run_correction_pass(
     return outcome
 
 
-async def _run_canonical_correction_pass(
+async def _run_reviewer_pass(
     *,
+    failed_checks: list,
     conflicts: list,
     model,
     filing_level: str,
     event_queue,
     db_path,
     run_id: int,
+    filing_standard: str = "mfrs",
     pdf_path: Optional[str] = None,
+    guidance: Optional[str] = None,
     agent_id: str = CORRECTION_AGENT_ID,
 ) -> dict:
-    """Phase D — canonical-mode correction against the concept tree.
+    """Reviewer pass (docs/PLAN-reviewer-agent.md) — replaces the autonomous
+    canonical correction pass.
 
-    Drives the canonical correction agent (correction/canonical_agent.py)
-    over the run's OPEN conflicts. Its tools write resolutions through the
-    facts API into run_concept_facts, so the fix lands in the authoritative
-    store (no xlsx split-brain — peer-review finding 2). After the agent
-    finishes, the cascade re-runs so corrected leaves propagate to parent
-    totals. The caller then re-exports + re-merges so the download reflects
-    the corrected facts.
+    The reviewer investigates the root cause of each failing cross-check /
+    open conflict down the face → sub-sheet → PDF chain, applies grounded
+    fixes through the guarded ``apply_fix`` tool, and flags the cases it's
+    stuck on or disputes. Safety is structural: we SNAPSHOT the original
+    facts FIRST (the load-bearing reversibility invariant), so a misbehaving
+    reviewer can always be reverted with one click — there is no write-gating.
 
-    Returns the same outcome shape as ``_run_correction_pass`` so the
-    downstream re-check + audit-backfill machinery is reused unchanged.
+    Returns the same outcome shape ``_run_canonical_correction_pass`` did so
+    the downstream re-export / re-merge / re-check machinery is reused
+    unchanged. ``writes_performed > 0`` drives the re-export.
     """
     import asyncio as _asyncio
     import time as _wc_time
@@ -1072,25 +1165,34 @@ async def _run_canonical_correction_pass(
     from pydantic_ai.messages import (
         FunctionToolCallEvent, FunctionToolResultEvent,
     )
-    from correction.canonical_agent import (
-        create_canonical_correction_agent,
-        compute_canonical_turn_cap,
-        record_correction_exhaustion,
+    from correction.reviewer_agent import (
+        create_reviewer_agent, compute_reviewer_turn_cap,
     )
+    from concept_model.versioning import snapshot_facts, has_snapshot
 
     outcome: dict = {
-        "invoked": False, "writes_performed": 0, "error": None,
-        "total_tokens": 0, "total_cost": 0.0, "exhausted": False,
-        "turns_used": 0, "max_turns": 0,
+        "invoked": False, "writes_performed": 0, "flags_raised": 0,
+        "error": None, "total_tokens": 0, "total_cost": 0.0,
+        "exhausted": False, "turns_used": 0, "max_turns": 0,
     }
-    if not conflicts:
+    # Normalise the failing cross-checks (CrossCheckResult objects) into the
+    # plain-dict shape the review packet renderer expects.
+    failed_payload = [
+        {
+            "name": getattr(c, "name", None),
+            "expected": getattr(c, "expected", None),
+            "actual": getattr(c, "actual", None),
+            "diff": getattr(c, "diff", None),
+            "message": getattr(c, "message", None),
+            "target_sheet": getattr(c, "target_sheet", None),
+            "target_row": getattr(c, "target_row", None),
+        }
+        for c in (failed_checks or [])
+    ]
+    n_items = len(failed_payload) + len(conflicts or [])
+    if n_items == 0:
         return outcome
     outcome["invoked"] = True
-
-    max_turns = compute_canonical_turn_cap(
-        filing_level=filing_level, n_conflicts=len(conflicts),
-    )
-    outcome["max_turns"] = max_turns
 
     async def _emit(event_type: str, data: dict) -> None:
         if event_queue is None:
@@ -1100,31 +1202,91 @@ async def _run_canonical_correction_pass(
             "data": {**data, "agent_id": agent_id, "agent_role": agent_id},
         })
 
+    # Reversibility guard: the reviewer's safety net is the snapshot of the
+    # ORIGINAL facts, and "snapshot exists" is detected by snapshot ROW
+    # presence. If the run carries ZERO canonical facts (a near-total
+    # extraction failure), the snapshot is empty — indistinguishable from "no
+    # snapshot taken" — so any facts the reviewer then created would be neither
+    # diffable (compute_review_diff short-circuits on an empty snapshot) nor
+    # revertible (revert_to_original returns "no snapshot"), silently breaking
+    # the headline reversibility invariant. The reviewer's job is to fix an
+    # existing extraction, not bootstrap one from nothing — so refuse rather
+    # than make non-revertible writes (peer-review P1). Re-run extraction
+    # first. Checked BEFORE snapshotting so we never write a 0-row snapshot.
+    import sqlite3 as _sqlite3_count
     try:
-        agent, deps = create_canonical_correction_agent(
+        _cc = _sqlite3_count.connect(str(db_path))
+        try:
+            _fact_count = _cc.execute(
+                "SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+        finally:
+            _cc.close()
+    except Exception:  # noqa: BLE001 — a count error must not block the pass
+        _fact_count = 1
+    if _fact_count == 0:
+        outcome["error"] = "no_extracted_facts_to_review"
+        msg = (
+            "No extracted facts to review — the reviewer needs an existing "
+            "extraction to anchor reversible fixes (re-run extraction first)."
+        )
+        await _emit("error", {"type": "reviewer_no_facts", "message": msg})
+        await _emit("complete", {"success": False,
+                                 "error": outcome["error"]})
+        return outcome
+
+    # Snapshot the ORIGINAL facts before the reviewer writes anything. This
+    # is what makes "Revert to original" possible — if it fails we must NOT
+    # run the reviewer, because there'd be no safety net (gotcha #20: surface
+    # the failure structurally instead of silently continuing).
+    #
+    # Take the snapshot ONLY on the first pass. A manual re-review must keep
+    # the ORIGINAL extraction snapshot intact so "revert" always goes back to
+    # the first extraction, never to a prior reviewer state (Step 13 verify).
+    try:
+        if not has_snapshot(db_path, run_id):
+            snapshot_facts(db_path, run_id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Reviewer snapshot failed for run %s", run_id)
+        outcome["error"] = f"snapshot failed: {type(e).__name__}: {e}"
+        await _emit("error", {"type": "reviewer_exception",
+                              "message": outcome["error"]})
+        await _emit("complete", {"success": False, "error": outcome["error"]})
+        return outcome
+
+    max_turns = compute_reviewer_turn_cap(
+        filing_level=filing_level, n_items=n_items,
+    )
+    outcome["max_turns"] = max_turns
+
+    try:
+        agent, deps = create_reviewer_agent(
             model=model, db_path=db_path, run_id=run_id,
-            filing_level=filing_level, pdf_path=pdf_path, conflicts=conflicts,
+            filing_level=filing_level, filing_standard=filing_standard,
+            pdf_path=pdf_path,
+            failed_checks=failed_payload, conflicts=conflicts, guidance=guidance,
         )
     except Exception as e:  # noqa: BLE001
-        logger.exception("Canonical correction agent construction failed")
+        logger.exception("Reviewer agent construction failed")
         outcome["error"] = f"agent construction failed: {type(e).__name__}: {e}"
-        await _emit("error", {"message": outcome["error"]})
+        await _emit("error", {"type": "reviewer_exception",
+                              "message": outcome["error"]})
         await _emit("complete", {"success": False, "error": outcome["error"]})
         return outcome
 
     prompt = (
-        "Resolve every OPEN CONFLICT listed in your system prompt using the "
-        "concept tree. Prefer revise_leaf when a leaf is wrong or missing; use "
-        "mark_aggregate_only when the parent total is right but its breakdown "
-        "isn't disclosed; use mark_not_disclosed only when the source truly "
-        f"omits a leaf. You have at most {max_turns} turns. Never invent a "
-        "residual plug to silence a mismatch."
+        "Investigate every failing cross-check and open conflict in your "
+        "REVIEW PACKET. Trace each failure DOWN to the leaf that's wrong "
+        "(trace_cascade_source_tool), ground the fix in the PDF, then "
+        "apply_fix. Flag only what you're stuck on or dispute. You have at "
+        f"most {max_turns} turns. Never plug a residual to force a balance."
     )
     await _emit("status", {
         "phase": "started",
         "message": (
-            f"Canonical correction started for {len(conflicts)} open "
-            f"conflict(s); turn budget {max_turns}."
+            f"Reviewer started for {len(failed_payload)} failing check(s) + "
+            f"{len(conflicts or [])} conflict(s); turn budget {max_turns}."
         ),
     })
 
@@ -1137,6 +1299,9 @@ async def _run_canonical_correction_pass(
     class _WallclockExceeded(Exception):
         pass
 
+    class _TurnCapExceeded(Exception):
+        pass
+
     try:
         async with agent.iter(prompt, deps=deps) as agent_run:
             async for node in _iter_with_turn_timeout(
@@ -1146,41 +1311,20 @@ async def _run_canonical_correction_pass(
             ):
                 if _wc_time.monotonic() - _wc_start > _wallclock_cap:
                     raise _WallclockExceeded(
-                        f"Canonical correction exceeded wall-clock cap of "
-                        f"{_wallclock_cap}s after {deps.writes_performed} write(s)."
+                        f"Reviewer exceeded wall-clock cap of {_wallclock_cap}s "
+                        f"after {deps.writes_performed} write(s)."
                     )
                 if Agent.is_call_tools_node(node):
                     turn_count += 1
                     if turn_count > max_turns:
-                        msg = (
-                            f"Canonical correction exhausted its turn budget "
-                            f"({max_turns}) after {deps.writes_performed} "
-                            f"write(s); {len(conflicts)} conflict(s) seen."
-                        )
-                        logger.warning(msg)
-                        outcome.update({
-                            "error": "correction_exhausted", "exhausted": True,
-                            "turns_used": turn_count - 1,
-                            "writes_performed": deps.writes_performed,
-                        })
-                        try:
-                            record_correction_exhaustion(
-                                db_path=db_path, run_id=run_id,
-                                unresolved_conflict_ids=[
-                                    c.get("id") for c in conflicts if c.get("id")
-                                ],
-                                turns_used=turn_count - 1, max_turns=max_turns,
-                            )
-                        except Exception:  # noqa: BLE001
-                            logger.warning("record_correction_exhaustion failed",
-                                           exc_info=True)
-                        await _emit("error", {"message": msg})
-                        await _emit("complete", {
-                            "success": False, "error": "correction_exhausted",
-                            "writes_performed": deps.writes_performed,
-                            "turns_used": turn_count - 1, "max_turns": max_turns,
-                        })
-                        return outcome
+                        # Route exhaustion through an exception (mirrors
+                        # _WallclockExceeded) instead of returning here, so the
+                        # shared post-pass cascade at the end of the function
+                        # still runs. Leaf writes the reviewer made BEFORE
+                        # hitting the cap must propagate to parent totals before
+                        # the caller re-exports, or the download ships stale
+                        # totals (peer-review P2).
+                        raise _TurnCapExceeded()
                     async with node.stream(agent_run.ctx) as tool_stream:
                         async for event in tool_stream:
                             if isinstance(event, FunctionToolCallEvent):
@@ -1209,6 +1353,7 @@ async def _run_canonical_correction_pass(
                                     "duration_ms": 0,
                                 })
         outcome["writes_performed"] = deps.writes_performed
+        outcome["flags_raised"] = deps.flags_raised
         outcome["turns_used"] = turn_count
         try:
             from pricing import estimate_cost as _ec
@@ -1217,38 +1362,61 @@ async def _run_canonical_correction_pass(
             outcome["total_cost"] = _ec(
                 int(_u.request_tokens or 0), int(_u.response_tokens or 0), 0, model)
         except Exception:  # noqa: BLE001
-            logger.debug("canonical correction token capture skipped")
+            logger.debug("reviewer token capture skipped")
         await _emit("complete", {
             "success": True, "writes_performed": deps.writes_performed,
+            "flags_raised": deps.flags_raised,
             "turns_used": turn_count, "max_turns": max_turns,
         })
     except _asyncio.CancelledError:
         await _emit("complete", {"success": False, "error": "Cancelled by user"})
         outcome["error"] = "cancelled"
         raise
+    except _TurnCapExceeded:
+        # Exhausted the turn budget. Record + emit here, then fall through to
+        # the shared cascade so pre-exhaustion leaf writes propagate (peer-review
+        # P2). turn_count was incremented past the cap, hence turn_count - 1.
+        msg = (
+            f"Reviewer exhausted its turn budget ({max_turns}) after "
+            f"{deps.writes_performed} write(s)."
+        )
+        logger.warning(msg)
+        outcome.update({
+            "error": "reviewer_exhausted", "exhausted": True,
+            "turns_used": turn_count - 1,
+            "writes_performed": deps.writes_performed,
+            "flags_raised": deps.flags_raised,
+        })
+        await _emit("error", {"message": msg})
+        await _emit("complete", {
+            "success": False, "error": "reviewer_exhausted",
+            "writes_performed": deps.writes_performed,
+            "turns_used": turn_count - 1, "max_turns": max_turns,
+        })
     except _WallclockExceeded as wc:
         msg = str(wc)
         logger.warning(msg)
-        outcome["error"] = "correction_wallclock_exceeded"
+        outcome["error"] = "reviewer_wallclock_exceeded"
         outcome["writes_performed"] = deps.writes_performed
-        await _emit("error", {"type": "correction_wallclock_exceeded", "message": msg})
+        outcome["flags_raised"] = deps.flags_raised
+        await _emit("error", {"type": "reviewer_wallclock_exceeded", "message": msg})
         await _emit("complete", {
-            "success": False, "error": "correction_wallclock_exceeded",
+            "success": False, "error": "reviewer_wallclock_exceeded",
             "writes_performed": deps.writes_performed,
         })
     except Exception as e:  # noqa: BLE001
-        logger.exception("Canonical correction run failed")
+        logger.exception("Reviewer run failed")
         outcome["error"] = str(e)
-        await _emit("error", {"message": str(e)})
+        await _emit("error", {"type": "reviewer_exception", "message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
 
-    # Re-cascade so corrected leaves propagate to parent totals before the
-    # caller re-exports + re-merges from facts.
+    # Re-cascade so the reviewer's leaf fixes propagate to parent totals
+    # before the caller re-exports + re-merges from facts.
     try:
         from concept_model.cascade import recompute_after_turn
         recompute_after_turn(db_path, run_id)
     except Exception:  # noqa: BLE001
-        logger.exception("post-correction cascade failed for run %s", run_id)
+        logger.exception("post-reviewer cascade failed for run %s", run_id)
 
     return outcome
 
@@ -1624,6 +1792,11 @@ from concept_model.facts_api import register_facts_routes as _register_facts_rou
 _register_facts_routes(app, lambda: AUDIT_DB_PATH)
 from concept_model.concepts_routes import register_concept_routes as _register_concept_routes
 _register_concept_routes(app, lambda: AUDIT_DB_PATH)
+# Reviewer tab read surface (docs/PLAN-reviewer-agent.md): GET /review +
+# POST /flags/{id}/answer. The heavier re-review / revert endpoints that
+# need server orchestration are defined further down in this module.
+from concept_model.reviewer_routes import register_reviewer_routes as _register_reviewer_routes
+_register_reviewer_routes(app, lambda: AUDIT_DB_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -1727,7 +1900,34 @@ class RunConfigPatchRequest(BaseModel):
 # --- Settings helpers ---
 
 # Statement type keys used for per-agent model defaults
-_AGENT_ROLES = ("scout", "SOFP", "SOPL", "SOCI", "SOCF", "SOCIE")
+_AGENT_ROLES = ("scout", "reviewer", "SOFP", "SOPL", "SOCI", "SOCF", "SOCIE")
+
+
+def _auto_review_enabled() -> bool:
+    """Whether the reviewer pass auto-runs after extraction (canonical mode).
+
+    Controlled by ``XBRL_AUTO_REVIEW`` (default on). When off, a run with
+    failing cross-checks / open conflicts simply finishes and the user
+    triggers the reviewer manually from the Review tab. Read fresh from the
+    environment each call so a Settings toggle takes effect without restart.
+    """
+    return os.environ.get("XBRL_AUTO_REVIEW", "true").lower() == "true"
+
+
+def _reviewer_model_name() -> Optional[str]:
+    """The configured reviewer model id, or None to inherit the run's model.
+
+    Reads ``XBRL_DEFAULT_MODELS["reviewer"]`` if the user set a dedicated
+    reviewer model; otherwise None so the caller falls back to the run's
+    extraction model (the historical behaviour).
+    """
+    raw = os.environ.get("XBRL_DEFAULT_MODELS", "")
+    try:
+        models = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return None
+    val = models.get("reviewer")
+    return val if isinstance(val, str) and val else None
 
 
 def _load_available_models() -> list[dict]:
@@ -1776,6 +1976,8 @@ def _load_extended_settings() -> dict:
         "default_models": default_models,
         "scout_enabled_default": scout_enabled,
         "tolerance_rm": tolerance,
+        # Reviewer pass auto-trigger (docs/PLAN-reviewer-agent.md). Default on.
+        "auto_review": _auto_review_enabled(),
     }
 
 
@@ -1791,6 +1993,9 @@ async def get_config():
         # False only when canonical mode is on but the startup tree bootstrap
         # failed — the UI can warn instead of showing an empty Concepts page.
         "canonical_ready": _CANONICAL_BOOTSTRAP_OK is not False,
+        # Whether the reviewer pass auto-runs after extraction (Settings
+        # toggle). Surfaced here so the SPA can label the run accordingly.
+        "auto_review": _auto_review_enabled(),
     }
 
 
@@ -1879,6 +2084,9 @@ async def update_settings(body: dict):
     if "scout_enabled_default" in body:
         set_key(str(ENV_FILE), "XBRL_SCOUT_ENABLED_DEFAULT",
                 "true" if body["scout_enabled_default"] else "false")
+    if "auto_review" in body:
+        set_key(str(ENV_FILE), "XBRL_AUTO_REVIEW",
+                "true" if body["auto_review"] else "false")
     if "tolerance_rm" in body:
         set_key(str(ENV_FILE), "XBRL_TOLERANCE_RM", str(body["tolerance_rm"]))
 
@@ -3925,6 +4133,17 @@ async def run_multi_agent_stream(
                     if c.get("kind") != "correction_exhausted"
                 ]
             should_correct = bool(hard_failures) or bool(canonical_conflicts)
+            # Reviewer auto-trigger toggle (Settings → XBRL_AUTO_REVIEW). In
+            # canonical mode the reviewer only auto-runs when the toggle is on;
+            # with it off, a run with failures/conflicts simply finishes and
+            # the user triggers the reviewer manually from the Review tab. The
+            # legacy non-canonical correction path is unaffected by this toggle.
+            if canonical and not _auto_review_enabled():
+                logger.info(
+                    "auto-review disabled (XBRL_AUTO_REVIEW=false) — skipping "
+                    "reviewer for run %s; manual re-review still available", run_id,
+                )
+                should_correct = False
             if should_correct:
                 # Create + register the CORRECTION run_agent row lazily —
                 # only when we actually launch the agent — so runs without
@@ -3948,16 +4167,43 @@ async def run_multi_agent_stream(
                             exc_info=True,
                         )
                 # Phase 6: stage boundary — about to launch the
-                # correction agent. The most opaque stage of the run
-                # historically; this label tells the UI the "10-min
-                # silent gap" everyone reports is correction running.
-                _emit_stage("correcting")
+                # correction / reviewer agent. The most opaque stage of
+                # the run historically; this label tells the UI the
+                # "10-min silent gap" everyone reports is the agent
+                # running. Canonical mode now runs the REVIEWER (which
+                # snapshots first + investigates root cause), so it gets
+                # its own "reviewing" label (gotcha #19); the legacy
+                # non-canonical path keeps "correcting".
+                _emit_stage("reviewing" if canonical else "correcting")
                 if canonical:
+                    # Reviewer pass (docs/PLAN-reviewer-agent.md) replaces
+                    # the autonomous canonical correction pass. It is
+                    # driven by BOTH failing cross-checks and open
+                    # conflicts, snapshots the original facts first (the
+                    # reversibility invariant), applies grounded fixes, and
+                    # flags what it's stuck on.
+                    #
+                    # Reviewer model: use the user's dedicated reviewer model
+                    # (Settings → default_models.reviewer) when set; otherwise
+                    # inherit the run's extraction model.
+                    reviewer_model = model
+                    _rm = _reviewer_model_name()
+                    if _rm and _rm != model_name:
+                        try:
+                            reviewer_model = _create_proxy_model(
+                                _rm, proxy_url, api_key)
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "reviewer model %s failed to build; using the "
+                                "run's model instead", _rm, exc_info=True)
+                            reviewer_model = model
                     correction_task = asyncio.create_task(
-                        _run_canonical_correction_pass(
+                        _run_reviewer_pass(
+                            failed_checks=hard_failures,
                             conflicts=canonical_conflicts,
-                            model=model,
+                            model=reviewer_model,
                             filing_level=run_config.filing_level,
+                            filing_standard=run_config.filing_standard,
                             event_queue=event_queue,
                             db_path=AUDIT_DB_PATH,
                             run_id=run_id,
@@ -5113,6 +5359,316 @@ async def rerun_agent(session_id: str, body: RunConfigRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Reviewer-tab orchestration endpoints (docs/PLAN-reviewer-agent.md, Steps
+# 13-14). The read surface (GET /review, POST /flags/{id}/answer) lives in
+# concept_model/reviewer_routes.py; these two need server orchestration
+# (model creation, the reviewer pass, workbook re-export) so they live here.
+# ---------------------------------------------------------------------------
+
+
+def _reexport_remerge_durable(run_id: int) -> bool:
+    """Rebuild the run's merged workbook from current facts and overwrite the
+    durable ``merged_workbook_path`` so the download reflects the latest facts.
+
+    Best-effort: returns False (and logs) on any failure so a re-export bug
+    never 500s the reviewer endpoints. The download path also re-exports from
+    facts on demand, so a False here degrades gracefully rather than breaking.
+    """
+    import shutil
+    from db import repository as repo
+
+    tmp = _reexport_and_remerge_from_facts(run_id)
+    if tmp is None:
+        return False
+    try:
+        conn = _open_audit_conn()
+        try:
+            run = repo.fetch_run(conn, run_id)
+            if run is not None and run.merged_workbook_path:
+                shutil.copyfile(tmp, run.merged_workbook_path)
+                repo.mark_run_merged(conn, run_id, run.merged_workbook_path)
+                conn.commit()
+                return True
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        logger.exception("durable re-export copy failed for run %s", run_id)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+def _active_flag_guidance(run_id: int) -> str:
+    """Fold the run's ACTIVE flags (open + answered) into a text block the
+    re-review feeds back to the reviewer.
+
+    Includes still-open flags — not just answered ones — so the reviewer
+    keeps its own prior stuck / dispute context on a manual re-review and
+    doesn't repeat dead ends (peer-review LOW). Each line carries the flag's
+    status and reasoning, plus the human's answer when one was given.
+    """
+    conn = _open_audit_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, category, reasoning, status, human_answer "
+            "FROM reviewer_flags WHERE run_id = ? "
+            "AND status IN ('open', 'answered') ORDER BY id",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return ""
+    lines = ["Your earlier flags on this run (re-investigate these):"]
+    for r in rows:
+        line = (
+            f"- flag {r['id']} ({r['category']}, {r['status']}): "
+            f"{r['reasoning']}"
+        )
+        if r["human_answer"]:
+            line += f" → human says: {r['human_answer']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+# In-process registry of running / finished manual re-review passes, keyed by
+# run_id. A re-review can take minutes (it reads the PDF and traces each
+# failure), so the POST launches it as a background task and returns
+# immediately; the Review tab polls GET /re-review/status for the outcome.
+# Only the latest pass per run is tracked — a new POST overwrites the slot.
+# Entries are small (a status string + the outcome dict) and bounded by the
+# number of distinct runs re-reviewed this process lifetime.
+_REVIEW_TASKS: dict[int, dict] = {}
+
+
+@app.post("/api/runs/{run_id}/re-review")
+async def re_review(run_id: int, body: Optional[dict] = None):
+    """Launch a reviewer pass over the run's CURRENT facts in the background.
+
+    Returns ``{ok, status: "running", model}`` immediately; the heavy pass
+    (LLM turns + workbook re-export) runs as a tracked background task. The
+    Review tab polls :func:`re_review_status` for the result. A pass already
+    running for the run is reported back rather than double-launched.
+
+    Optional free-text ``guidance`` plus every active flag's context is folded
+    into the review packet. The original snapshot is preserved
+    (``_run_reviewer_pass`` only snapshots when none exists yet), so a later
+    revert still goes back to the first extraction.
+    """
+    from db import repository as repo
+    from types import SimpleNamespace
+    from correction.canonical_agent import _load_open_conflicts
+
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    config = run.config or {}
+    filing_level = config.get("filing_level", "company")
+    filing_standard = config.get("filing_standard", "mfrs")
+
+    load_dotenv(ENV_FILE, override=True)
+    api_key = _resolve_api_key()
+    proxy_url = os.environ.get("LLM_PROXY_URL", "")
+    # Model precedence: explicit per-request override (the Review-tab picker)
+    # → the configured reviewer default → the run's model → TEST_MODEL.
+    override = (body or {}).get("model") if isinstance(body, dict) else None
+    model_name = (
+        (override if isinstance(override, str) and override else None)
+        or _reviewer_model_name()
+        or config.get("model")
+        or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    )
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API key not set. Check Settings.")
+
+    # Re-entrancy guard: never run two reviewer passes over the same run at
+    # once (they'd race the same facts + snapshot). Report the in-flight pass
+    # instead of launching a second.
+    existing = _REVIEW_TASKS.get(run_id)
+    if existing and existing.get("status") == "running":
+        return {
+            "ok": True, "status": "running", "already_running": True,
+            "model": existing.get("model_name"),
+        }
+
+    # Everything heavy — building the model, gathering the review packet,
+    # running the pass, and re-exporting — runs on a dedicated thread with its
+    # OWN event loop (asyncio.run). This isolates a minutes-long pass from the
+    # request loop: it can't be cancelled by request teardown (a raw
+    # create_task is), can't block other requests, and keeps the model's async
+    # HTTP client bound to the loop that actually uses it.
+    state: dict = {"status": "running", "model_name": model_name, "outcome": None}
+    _REVIEW_TASKS[run_id] = state
+
+    def _gather():
+        # Failing cross-checks come from the run's STORED cross_checks rows —
+        # the exact set the user sees on the Cross-checks / Review tab. Do NOT
+        # re-derive them via _recheck_from_facts: that re-exports only
+        # *succeeded* statements, so a check that failed because its statement
+        # failed to extract (e.g. sopl_to_socie_profit when the SOPL agent
+        # errored) silently becomes not-applicable and the reviewer would see
+        # "nothing to review" even though a failure is plainly listed (run
+        # #146). Reading the authoritative table keeps the reviewer's input
+        # identical to the user's view.
+        conn2 = _open_audit_conn()
+        try:
+            rows = conn2.execute(
+                "SELECT check_name, expected, actual, diff, message, "
+                "target_sheet, target_row FROM cross_checks "
+                "WHERE run_id = ? AND status = 'failed' ORDER BY id",
+                (run_id,),
+            ).fetchall()
+        finally:
+            conn2.close()
+        failed = [
+            SimpleNamespace(
+                name=r["check_name"], expected=r["expected"], actual=r["actual"],
+                diff=r["diff"], message=r["message"],
+                target_sheet=r["target_sheet"], target_row=r["target_row"],
+            )
+            for r in rows
+        ]
+        conflicts = [
+            c for c in _load_open_conflicts(AUDIT_DB_PATH, run_id)
+            if c.get("kind") != "correction_exhausted"
+        ]
+        user_guidance = (
+            (body or {}).get("guidance") if isinstance(body, dict) else None
+        )
+        active = _active_flag_guidance(run_id)
+        combined = "\n\n".join(
+            g for g in (user_guidance, active) if g and g.strip()
+        )
+        # Resolve the source PDF from the run's output dir first — the merged
+        # workbook may be absent on a run that failed before merge, which is
+        # exactly the kind of run most in need of re-review. Without the PDF
+        # the grounding guard would block every non-arithmetic fix. Fall back
+        # to the merged workbook's parent for older rows predating output_dir.
+        pdf_path = None
+        for base in (run.output_dir, getattr(run, "merged_workbook_path", None)):
+            if not base:
+                continue
+            candidate = (
+                Path(base) / "uploaded.pdf" if base == run.output_dir
+                else Path(base).parent / "uploaded.pdf"
+            )
+            if candidate.exists():
+                pdf_path = str(candidate)
+                break
+        return failed, conflicts, combined or None, pdf_path
+
+    async def _runner_async() -> dict:
+        # Build the model inside this loop so its async HTTP client binds here.
+        model = _create_proxy_model(model_name, proxy_url, api_key)
+        failed, conflicts, combined, pdf_path = _gather()
+        outcome = await _run_reviewer_pass(
+            failed_checks=failed, conflicts=conflicts, model=model,
+            filing_level=filing_level, filing_standard=filing_standard,
+            event_queue=None,
+            db_path=AUDIT_DB_PATH, run_id=run_id, pdf_path=pdf_path,
+            guidance=combined,
+        )
+        if outcome.get("writes_performed", 0) > 0:
+            _reexport_remerge_durable(run_id)
+            # The reviewer changed facts — refresh the persisted cross-checks
+            # so the Review tab and any later re-review see current pass/fail
+            # state, not the pre-fix failures (peer-review P1), then safely
+            # downgrade the run badge if failures remain.
+            _refresh_persisted_cross_checks(run_id)
+            _safe_downgrade_run_status(run_id)
+        return outcome
+
+    def _thread_main() -> None:
+        try:
+            outcome = asyncio.run(_runner_async())
+            # Surface reviewer failures honestly: a snapshot/construction
+            # failure, exhaustion, or wall-clock timeout sets
+            # ``outcome["error"]``. ``ok`` reflects the pass outcome (not merely
+            # "the request ran") so the UI never shows a phantom success
+            # (peer-review HIGH). ``model`` echoes which model ran.
+            state["outcome"] = {
+                "ok": not outcome.get("error"), "model": model_name, **outcome,
+            }
+        except Exception as e:  # noqa: BLE001 — record, never lose the thread
+            logger.exception("background re-review failed for run %s", run_id)
+            state["outcome"] = {
+                "ok": False, "model": model_name,
+                "error": f"{type(e).__name__}: {e}",
+            }
+        finally:
+            state["status"] = "done"
+
+    threading.Thread(
+        target=_thread_main, name=f"re-review-{run_id}", daemon=True,
+    ).start()
+    return {"ok": True, "status": "running", "model": model_name}
+
+
+@app.get("/api/runs/{run_id}/re-review/status")
+async def re_review_status(run_id: int):
+    """Poll the latest manual re-review pass for ``run_id``.
+
+    ``idle`` — no pass has been launched (or the process restarted).
+    ``running`` — a pass is in flight; keep polling.
+    ``done`` — the pass finished; the body carries the same outcome the
+    synchronous endpoint used to return (``ok``, ``model``, ``invoked``,
+    ``writes_performed``, ``flags_raised``, ``error``).
+    """
+    state = _REVIEW_TASKS.get(run_id)
+    if state is None:
+        return {"status": "idle"}
+    if state.get("status") == "running":
+        return {"status": "running", "model": state.get("model_name")}
+    return {"status": "done", **(state.get("outcome") or {})}
+
+
+@app.post("/api/runs/{run_id}/revert-to-original")
+async def revert_to_original_endpoint(run_id: int):
+    """Restore the run's facts from the original snapshot (Step 14).
+
+    Calls the versioning revert (which also dismisses reviewer flags and
+    recomputes totals), then re-exports + re-merges so the download equals
+    the original extraction. The revert (DB + cascade) and the heavy openpyxl
+    re-export both run off the event loop via ``asyncio.to_thread`` so a large
+    workbook can't block other requests (mirrors the re-review path).
+    """
+    from db import repository as repo
+    from concept_model.versioning import revert_to_original
+
+    conn = _open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    out = await asyncio.to_thread(revert_to_original, AUDIT_DB_PATH, run_id)
+    if not out.get("reverted"):
+        raise HTTPException(
+            status_code=409,
+            detail="No reviewer version exists for this run — nothing to revert.",
+        )
+    await asyncio.to_thread(_reexport_remerge_durable, run_id)
+    # Facts are back to the original (pre-reviewer) state — refresh the
+    # persisted cross-checks so the Review/Cross-checks tabs don't keep showing
+    # the reviewer's post-fix (e.g. passed) results against restored facts that
+    # may fail again (peer-review P1), then safely downgrade the run badge if
+    # the restored facts re-introduce failures.
+    await asyncio.to_thread(_refresh_persisted_cross_checks, run_id)
+    await asyncio.to_thread(_safe_downgrade_run_status, run_id)
+    return {"ok": True, **out}
 
 
 # --- Test connection endpoint ---

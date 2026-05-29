@@ -268,6 +268,7 @@ export function ExtractPage({
           {state.pipelineStage === "merging" && "Merging per-statement workbooks…"}
           {state.pipelineStage === "cross_checking" && "Running cross-checks…"}
           {state.pipelineStage === "correcting" && "Correction agent investigating failed cross-checks…"}
+          {state.pipelineStage === "reviewing" && "Reviewer investigating the root cause of failed cross-checks…"}
           {state.pipelineStage === "re_checking" && "Re-running cross-checks against the corrected workbook…"}
           {state.pipelineStage === "validating_notes" && "Validating notes templates…"}
         </div>

@@ -43,6 +43,7 @@ const mockSettings: ExtendedSettingsResponse = {
   },
   scout_enabled_default: false,
   tolerance_rm: 1.0,
+  auto_review: true,
 };
 
 

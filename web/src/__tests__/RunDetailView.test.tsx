@@ -145,6 +145,28 @@ describe("RunDetailView", () => {
     expect(within(tablist2).getByRole("tab", { name: /^values$/i })).toBeTruthy();
   });
 
+  test("Review tab is gated on canonical mode (docs/PLAN-reviewer-agent.md)", () => {
+    // Canonical off → no Review tab.
+    const { rerender } = render(
+      <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+    expect(within(tablist).queryByRole("tab", { name: /^review$/i })).toBeNull();
+
+    // Canonical on → Review tab appears, scoped to the run-detail tablist so
+    // it never collides with the Notes-12 sub-tab bar (gotcha #7).
+    rerender(
+      <RunDetailView
+        detail={makeDetail()}
+        onDelete={() => {}}
+        onDownload={() => {}}
+        canonicalEnabled
+      />,
+    );
+    const tablist2 = screen.getByRole("tablist", { name: /run detail sections/i });
+    expect(within(tablist2).getByRole("tab", { name: /^review$/i })).toBeTruthy();
+  });
+
   test("renders run config: statements, variants, models, scout flag", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,

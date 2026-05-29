@@ -10,6 +10,7 @@ import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
 import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
 import { ValidatorTab } from "./ValidatorTab";
+import { ReviewTab } from "./ReviewTab";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 import { NotesReviewTab } from "./NotesReviewTab";
@@ -301,8 +302,9 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
   );
 }
 
-// Tab identity for the run-detail surface. Values is gated on canonical mode.
-export type RunTabKey = "overview" | "agents" | "notes" | "checks" | "telemetry" | "values";
+// Tab identity for the run-detail surface. Review + Values are gated on
+// canonical mode (the reviewer diff + concept tree only exist there).
+export type RunTabKey = "overview" | "agents" | "notes" | "checks" | "telemetry" | "review" | "values";
 
 export function RunDetailView({
   detail, onDownload, onDelete, onRegenerateNotes, canonicalEnabled = false,
@@ -396,7 +398,10 @@ export function RunDetailView({
     { key: "checks", label: "Cross-checks" },
     { key: "telemetry", label: "Telemetry" },
     ...(canonicalEnabled
-      ? [{ key: "values" as RunTabKey, label: "Values" }]
+      ? [
+          { key: "review" as RunTabKey, label: "Review" },
+          { key: "values" as RunTabKey, label: "Values" },
+        ]
       : []),
   ];
 
@@ -579,6 +584,17 @@ export function RunDetailView({
       {activeTab === "telemetry" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-telemetry">
           <AgentTelemetryPanel detail={detail} />
+        </section>
+      )}
+
+      {activeTab === "review" && canonicalEnabled && (
+        <section style={styles.section} role="tabpanel" data-testid="run-detail-review">
+          <ReviewTab runId={detail.id} onSelectTarget={handleSelectTarget} />
+          {selectedTarget && (
+            <div style={{ marginTop: pwc.space.md }}>
+              <PdfSourcePane runId={detail.id} pages={pdfPages} />
+            </div>
+          )}
         </section>
       )}
 

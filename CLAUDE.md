@@ -245,7 +245,8 @@ and its pinning test in the same commit. Clipboard styling
 (`web/src/lib/clipboard.ts`) is intentionally NOT tokenised (gotcha #16).
 
 **Run-detail is one tabbed surface** (`RunDetailView.tsx`): Overview · Agents ·
-Notes · Cross-checks · Telemetry · Values (Values gated on canonical mode).
+Notes · Cross-checks · Telemetry · Review · Values (Review + Values gated on
+canonical mode; Review is the reviewer-pass diff/flags tab — see gotcha #21).
 The tab bar uses `role="tablist"`/`tab`/`tabpanel` with roving-tabindex arrow
 nav, and **collides by role with the Notes-12 `NotesSubTabBar`** (also
 `role="tab"`). Tests querying tabs must scope with `within(...)` by the
@@ -321,7 +322,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **11**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **12**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -351,6 +352,13 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   rows whose value cross-rolls-up from a sub-sheet total). See the
   cross-sheet rollup linkage note in gotcha #21. Pinned by
   `tests/test_db_schema_v11.py`.
+- **v11 → v12:** adds two reviewer-agent tables (gotcha #21, reviewer pass):
+  `run_fact_snapshots` (the ORIGINAL extraction facts, backed up before the
+  reviewer writes — "Revert to original" restores from here) and
+  `reviewer_flags` (the narrow `stuck` / `disputes_prior` user-facing list).
+  Both are new tables → the step is a pure `CREATE TABLE IF NOT EXISTS`
+  walk-forward with no `_V12_MIGRATION_COLUMNS`. Pinned by
+  `tests/test_db_schema_v12.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -708,11 +716,11 @@ Two paths used to swallow errors silently (2026-04-27 fix):
 ### 21. Canonical concept model — DEFAULT-ON pipeline
 
 The `concept_model/` subsystem (parser, importer, exporter, cell resolver,
-cascade recompute, group checks, facts API) plus the canonical correction
-agent (`correction/canonical_agent.py`, `prompts/correction_canonical.md`)
-is the **default extraction → correction → export pipeline** for this
-project. The project's checked-in `.env` ships with `XBRL_CANONICAL_MODE=1`,
-and every code path downstream of that flag is fully wired:
+cascade recompute, group checks, facts API, versioning) plus the **reviewer
+agent** (`correction/reviewer_agent.py`, `prompts/reviewer.md`) is the
+**default extraction → review → export pipeline** for this project. The
+project's checked-in `.env` ships with `XBRL_CANONICAL_MODE=1`, and every code
+path downstream of that flag is fully wired:
 
 - **Extraction (Phase B):** `coordinator.py` threads `run_id` + `db_path`
   into the extraction tools so writes project into `run_concept_facts` as
@@ -723,14 +731,69 @@ and every code path downstream of that flag is fully wired:
   reflects the authoritative DB facts, not the scratch xlsx the agent wrote.
   Falls back to the agent workbook per-statement when an export applies
   zero facts (peer-review finding 1).
-- **Correction (Phase D):** `_run_canonical_correction_pass` operates on
-  open conflicts in `run_concept_conflicts`, writes resolutions through the
-  facts API, and re-exports + re-merges the workbook so the download and
-  the Concepts UI stay in sync (no xlsx split-brain). The legacy
-  `correction.md` / `_run_correction_pass` path only runs in non-canonical
-  mode.
-- **Frontend:** the Values tab (`RunDetailView.tsx`) and the `/concepts/{id}`
-  alias are visible whenever `/api/config` reports `canonical_mode: true`.
+- **Review / correction (Phase D) — the REVIEWER pass:** the autonomous
+  canonical correction pass (`_run_canonical_correction_pass`) was
+  **replaced** by the reviewer (docs/PLAN-reviewer-agent.md,
+  `correction/reviewer_agent.py`, `prompts/reviewer.md`,
+  `server.py::_run_reviewer_pass`). The reviewer investigates the root cause
+  of failing cross-checks + open conflicts down the face→sub→PDF chain, applies
+  grounded fixes through the guarded `apply_fix` tool (a deterministic no-plug
+  guard refuses ungrounded writes + plugs into catch-all/abstract rows,
+  invariant #17), and raises only `stuck`/`disputes_prior` flags. Safety is
+  **versioning, not write-gating**: `_run_reviewer_pass` calls
+  `concept_model/versioning.py::snapshot_facts` ONCE (before any write) so
+  "Revert to original" (`revert_to_original`) can restore the original
+  extraction with one click. It then re-exports + re-merges so the download
+  and Concepts UI stay in sync (no xlsx split-brain). Canonical mode emits the
+  `reviewing` pipeline stage (not `correcting`). The legacy `correction.md` /
+  `_run_correction_pass` path still runs only in non-canonical mode.
+  `correction/canonical_agent.py` remains as a unit-tested module but is no
+  longer wired into the pipeline.
+  - **Group / MPERS scoping (reviewer layer).** `concept_nodes` holds EVERY
+    imported standard×level (the bootstrap imports all four families), and
+    uuids are minted per `(template_id, sheet, row, label)` — so the SAME
+    `(sheet, row)` exists under MFRS/MPERS × Company/Group with different
+    uuids. The reviewer's `(sheet,row)` resolution (`_resolve_concept` /
+    `trace_cascade_source`) MUST therefore be scoped to the run's template
+    family via a `template_prefix` (`"{standard}-{level}-"`), mirroring how
+    `cell_resolver.resolve_cell` scopes by `template_id` — otherwise it
+    resolves an arbitrary template's concept. The reviewer pass threads
+    `filing_standard` (not just `filing_level`) into `ReviewerDeps` for this.
+    On Group filings both `entity_scope`s exist; the tools default to Company,
+    so the review packet surfaces each failing check's `[group]`/`[company]`
+    tag as an explicit `entity_scope='…'` hint and `prompts/reviewer.md`
+    requires the reviewer to honour it. The review diff resolves cells through
+    `concept_targets` (falling back to `render_*`) so Group/SOCIE coordinates
+    display correctly. Pinned by `tests/test_reviewer_tools.py`
+    (`test_resolve_concept_is_template_scoped`, `…surfaces_group_scope`) and
+    `tests/test_reviewer_versioning.py::test_diff_prefers_target_coord_over_render`.
+  - **Auto-trigger toggle:** the automatic reviewer launch is gated on
+    `XBRL_AUTO_REVIEW` (default on; Settings checkbox, surfaced via
+    `/api/settings` + `/api/config`). When off, a run with failures/conflicts
+    finishes without the reviewer and the user triggers it manually.
+  - **Reviewer model:** user-selectable. `XBRL_DEFAULT_MODELS["reviewer"]`
+    (Settings) sets the default for the automatic pass; the Review tab's model
+    dropdown sends a per-request `model` override to `/re-review`. Both fall
+    back to the run's extraction model when unset (`reviewer` is now a member
+    of `_AGENT_ROLES`).
+- **Frontend:** the **Review** tab (reviewer diff + flags + revert/re-review,
+  `web/src/components/ReviewTab.tsx`) and the Values tab (`RunDetailView.tsx`)
+  plus the `/concepts/{id}` alias are visible whenever `/api/config` reports
+  `canonical_mode: true`. Reviewer API: `GET /api/runs/{id}/review`,
+  `POST /api/runs/{id}/flags/{flag_id}/answer`, `POST /api/runs/{id}/re-review`,
+  `GET /api/runs/{id}/re-review/status`, `POST /api/runs/{id}/revert-to-original`.
+  - **Manual re-review is async (background thread + poll).** A pass can run
+    for minutes, so `POST /re-review` only *launches* it — on a dedicated
+    thread with its own event loop (`asyncio.run`), tracked in the in-process
+    `_REVIEW_TASKS` registry keyed by run_id — and returns
+    `{ok, status:"running", model}` immediately. The Review tab polls
+    `GET /re-review/status` (`idle` | `running` | `done` + the finished
+    outcome) for the result. A dedicated thread (not a raw `asyncio.create_task`)
+    is deliberate: a detached create_task is cancelled when the request scope
+    tears down (and silently lost under TestClient), whereas the thread loop is
+    isolated from request teardown and keeps the model's async HTTP client
+    bound to the loop that uses it. A re-entrancy guard reports an in-flight
+    pass instead of double-launching one over the same run's facts.
 
 **Disabling canonical mode** (for legacy-pipeline debugging only): unset or
 set falsy `XBRL_CANONICAL_MODE` in `.env`. The legacy direct-xlsx pipeline

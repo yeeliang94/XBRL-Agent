@@ -336,30 +336,30 @@ def test_correction_exhausted_routes_to_reconciliation_queue(
 # -- Step 3.10: canonical mode invokes correction --------------------
 
 
-def test_canonical_mode_invokes_correction_when_imbalance_present() -> None:
-    """Phase 1 step 1.16 disabled auto-correction in canonical mode
-    because the agent's writer was still Excel-targeted.  Phase 3
-    re-enables it by routing through the canonical correction agent
-    on open conflicts.
+def test_canonical_mode_invokes_reviewer_when_imbalance_present() -> None:
+    """Canonical mode runs the REVIEWER pass on an imbalance
+    (docs/PLAN-reviewer-agent.md, Step 9/10) — the reviewer replaced the
+    autonomous canonical correction pass.
 
-    Pinned via source inspection: the ``_run_correction_pass`` call
-    site in ``server.py`` no longer unconditionally clears
-    ``hard_failures`` when canonical mode is set; instead it branches
-    on whether the canonical correction agent is wired up.
+    Pinned via source inspection: the canonical branch at the
+    correction call site now launches ``_run_reviewer_pass`` and emits the
+    ``reviewing`` pipeline stage (gotcha #19), while the legacy
+    non-canonical path keeps ``_run_correction_pass`` / ``correcting``.
     """
     import inspect
     import server
 
     src = inspect.getsource(server)
-    # The Phase-1 skip message must no longer be unconditional.
-    # We pin a phrase that appears once Phase 3.10 lands the
-    # canonical-aware branch.
-    assert (
-        "canonical correction" in src.lower()
-        or "canonical-mode correction" in src.lower()
-    ), (
-        "server.py doesn't reference canonical correction wiring — "
-        "Phase 3.10 has not landed"
+    assert "_run_reviewer_pass(" in src, (
+        "server.py doesn't wire the reviewer pass — Step 9 has not landed"
+    )
+    assert "reviewing" in src.lower(), (
+        "server.py doesn't emit the 'reviewing' pipeline stage"
+    )
+    # The deleted autonomous canonical correction pass must be gone.
+    assert "async def _run_canonical_correction_pass" not in src, (
+        "the autonomous canonical correction pass should have been removed "
+        "in Step 10"
     )
 
 
