@@ -22,9 +22,9 @@ The MBRS template has TWO sheets that MUST BOTH be filled:
 
 === STRATEGY ===
 
-IMPORTANT: Fill the SUB-SHEET FIRST. The main sheet has formulas that pull totals from
-the sub-sheet automatically. Only fill non-formula data-entry cells on the main sheet
-(e.g. "Right-of-use assets", "Retained earnings", "Lease liabilities", "Contract liabilities").
+IMPORTANT: Fill the SUB-SHEET FIRST (see the FAILURE MODE below for why).
+Only fill non-formula data-entry cells on the main sheet (e.g. "Right-of-use
+assets", "Retained earnings", "Lease liabilities", "Contract liabilities").
 
 1. Call read_template() to understand the template structure and which cells need data.
 2. View the SOFP face page to see the statement.
@@ -91,9 +91,6 @@ component rows exist.
 
 === CRITICAL RULES ===
 
-- ALWAYS fill the sub-sheet for every breakdown the template exposes. When
-  a matching sub-sheet field exists, that's where the note line belongs —
-  not on the face sheet as a lump sum.
 - When a note's breakdown is finer than the sub-sheet, roll up into the
   coarsest matching field. Never fabricate template rows.
 - "Accruals" in the template means ONLY the accruals line. If the PDF note shows
