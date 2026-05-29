@@ -170,6 +170,10 @@ export function ExtractPage({
             // agent `agentSubAgentSummary` returns null and the tab
             // renders as a single-line label as before.
             subLabel: agentSubAgentSummary(a),
+            // Honest-completion flag (peer-review F1): forward the
+            // acknowledged-gap flag so the tab renders the "needs review"
+            // ⚠ chip. Null for the common (clean-completion) case.
+            flag: a.flag ?? null,
           } as AgentTabState,
         ]),
       ),
