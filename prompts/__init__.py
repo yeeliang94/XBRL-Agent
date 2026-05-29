@@ -31,14 +31,15 @@ def render_prompt(
         page_hints: Dict with face_page and note_pages from scout infopack.
                     When None, prompt includes self-navigation instructions.
         filing_level: 'company' (4-col template) or 'group' (6-col / 4-block SOCIE).
-        filing_standard: 'mfrs' (default) or 'mpers'. Reserved for the
-                        optional `_mpers_overlay.md` injection (Phase 6.2 of
-                        the MPERS wiring plan) — kept in the signature so
-                        adding the overlay later doesn't require touching
-                        every caller. Today's variant-file lookup
-                        (`{stmt}_{variant}.md`) already handles the only
-                        MPERS-specific prompt (`socie_sore.md`) without
-                        needing this axis.
+        filing_standard: 'mfrs' (default) or 'mpers'. Selects the
+                        `{stmt}_{standard}.md` prompt tier when one exists
+                        (e.g. `socie_mpers.md`), per the precedence comment
+                        below. Statements with no standard-specific file
+                        fall through to the generic `{stmt}.md`.
+        scout_context: Optional dict of scout-observed entity/period/unit
+                        fields (entity_name, reporting_period_cy/py, currency,
+                        scale_unit, consolidation_level). Rendered as the
+                        SCOUT-OBSERVED CONTEXT block; omitted when empty.
     """
     # Load base persona (shared across all statements)
     base = _load_prompt("_base.md")

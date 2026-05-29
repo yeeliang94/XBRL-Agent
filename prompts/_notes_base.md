@@ -100,12 +100,9 @@ the parent / sub-note heading in `content` too, the cell will ship
 with a duplicate heading. Keep `content` to the note's body text.
 
 This rule is scoped strictly to the parent_note and sub_note `<h3>`
-lines the writer auto-injects. **In-prose sub-section labels** like
-"(a) Short term benefits", "(b) Defined contribution plans", or
-roman-numbered "(i)/(ii)" sub-clauses ARE part of the body and MUST
-be preserved verbatim — render them as `<p><strong>...</strong></p>`
-before the paragraph(s) they introduce. See "NOTE HIERARCHY AND
-GRANULARITY" above for the full rule.
+lines the writer auto-injects. In-prose sub-section labels ("(a)", "(b)",
+"(i)/(ii)") are body content, not headings — preserve them per "NOTE
+HIERARCHY AND GRANULARITY" above.
 
 Every non-empty payload MUST cite at least one source page AND include
 `parent_note`. Both are mandatory provenance — the number/title pair
@@ -152,13 +149,11 @@ download flattens the HTML back to plain text automatically.
 
 === ALLOWED HTML TAGS ===
 
-Allowed: `<p>`, `<br>`, `<strong>`, `<em>`, `<ul>`, `<ol>`, `<li>`,
-`<table>`, `<tr>`, `<th>`, `<td>`, `<h3>`.
-
+Allowed (the complete whitelist): `<p>`, `<br>`, `<strong>`, `<em>`,
+`<ul>`, `<ol>`, `<li>`, `<table>`, `<tr>`, `<th>`, `<td>`, `<h3>`.
 Everything else — `<script>`, `<style>`, `<img>`, event handlers like
-`onclick=`, inline `style=` attributes, class attributes — will be
-stripped by the sanitiser before the payload is persisted. Do not
-rely on them.
+`onclick=`, inline `style=` attributes, class attributes — is stripped
+by the sanitiser before the payload is persisted. Do not rely on them.
 
 Short examples:
 
@@ -183,19 +178,9 @@ Top-level note (Note 5) — only `parent_note`:
 }
 ```
 
-Sub-note (Note 5.4) — both `parent_note` and `sub_note`:
-
-```json
-{
-  "chosen_row_label": "Property, plant and equipment",
-  "parent_note": {"number": "5", "title": "Material Accounting Policies"},
-  "sub_note": {"number": "5.4", "title": "Property, Plant and Equipment"},
-  "content": "<p>Property, plant and equipment are stated at cost less accumulated depreciation.</p>",
-  "evidence": "Page 27, Note 5.4",
-  "source_pages": [27],
-  "source_note_refs": ["5.4"]
-}
-```
+When a payload also carries `sub_note` (e.g. `{"number": "5.4", "title":
+"Property, Plant and Equipment"}` under parent Note 5), the writer prepends
+TWO `<h3>` lines — parent then sub-note — before the body.
 
 Sub-sections within one note (Note 2.14 with (a)/(b) labels) — preserve
 the (a)/(b) labels verbatim in the body as bold paragraph headers, do
@@ -212,12 +197,10 @@ NOT strip them:
 }
 ```
 
-The writer will render the first example with one `<h3>` line
-(`<h3>5 Revenue</h3>`) before the body, the second with two
-(`<h3>5 Material Accounting Policies</h3><h3>5.4 Property, Plant and
-Equipment</h3>`), and the third with one (`<h3>2.14 Employee
-benefits</h3>`) followed by the body — including its `(a)` / `(b)`
-bold sub-headers — verbatim.
+The writer renders the Note 5 example with one `<h3>` line
+(`<h3>5 Revenue</h3>`) before the body, and the Note 2.14 example with
+one (`<h3>2.14 Employee benefits</h3>`) followed by the body — including
+its `(a)` / `(b)` bold sub-headers — verbatim.
 
 === PAGE REQUESTS ===
 

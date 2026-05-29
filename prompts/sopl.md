@@ -95,8 +95,7 @@ same line if no separate "Training" field exists.
     Raw materials when the note itself groups them as "Other". Never use
     it to absorb a balancing figure between the face statement and your
     sub-sheet sum.
-- If the SOPL Analysis sub-sheet sum does not tie to the face statement
-  total, do NOT add a residual to "Other miscellaneous expenses" or any
-  similar bucket. Either find the missing component in the notes or
-  finish with the gap left honestly — verify_totals reporting an
-  imbalance is preferable to a fabricated residual.
+- For EITHER variant: if the Analysis sub-sheet sum doesn't tie to the face
+  total, find the missing component in the notes or finish with the gap
+  flagged honestly — never plug a residual (see the system-prompt
+  INTEGRITY RULE).
