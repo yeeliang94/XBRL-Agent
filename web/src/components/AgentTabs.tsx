@@ -20,6 +20,10 @@ export interface AgentTabState {
   // Kept as a plain string so AgentTabs has no runtime dep on the
   // reducer module.
   subLabel?: string | null;
+  // Honest-completion flag (peer-review F1): non-null when the agent
+  // finalised with an acknowledged, audited gap (status stays "complete").
+  // Mirrors AgentState.flag; renders the "needs review" ⚠ chip below.
+  flag?: string | null;
 }
 
 export interface AgentTabsProps {
