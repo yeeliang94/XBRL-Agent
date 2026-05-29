@@ -116,6 +116,22 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("value-input-abs-1")).toBeNull();
   });
 
+  test("hides the internal 'cascade' provenance tag from the source column", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    // comp-1 carries source: "cascade" — the cascade recompute's internal tag,
+    // redundant with the "Calculated" state badge. It must not be shown.
+    const computedRow = await screen.findByTestId("concept-row-comp-1");
+    expect(computedRow.textContent).not.toMatch(/cascade/i);
+    // A real provenance string (leaf-1, "pdf p.1") is still shown.
+    const leafRow = screen.getByTestId("concept-row-leaf-1");
+    expect(leafRow.textContent).toMatch(/pdf p\.1/);
+  });
+
   test("lists all templates in run via the selector", async () => {
     const multi = {
       run_id: 42,
