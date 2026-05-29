@@ -1824,42 +1824,17 @@ class RunConfigRequest(BaseModel):
     # Unspecified templates fall back to the run's default model. Mirrors
     # ``models`` for face statements.
     notes_models: Dict[str, str] = {}
-    # v10 (monolith experiment): orchestration path. `split` is the
-    # default 5-specialist coordinator; `monolith` routes through the
-    # single-agent monolith path (MFRS Company face-only — server-side
-    # `validate_monolith_scope` rejects unsupported combinations with a
-    # structured 4xx). See docs/PLAN-monolith-face-experiment.md.
-    orchestration: Literal["split", "monolith"] = "split"
-    # Single-agent model override for the monolith path. When unset,
-    # the monolith falls back to the TEST_MODEL env var (the
-    # historical default). The per-statement `models` dict is ignored
-    # on the monolith path — that picker only ever applied to the
-    # split pipeline and the frontend hides it when monolith is
-    # selected (see PreRunPanel).
+    # v10 audit column (kept for schema compatibility). The monolith
+    # experiment that this flag once selected has been removed; only
+    # `split` (the 5-specialist coordinator) is a live path now. Left as a
+    # free-form string rather than dropped so the `runs.orchestration`
+    # column and its History read-back continue to round-trip.
+    orchestration: str = "split"
+    # Optional default-model override carried on the request body. Not read
+    # by the split pipeline (per-statement `models` + the resolved RunConfig
+    # default govern model selection); retained as a benign optional so older
+    # clients posting it don't 422.
     model: Optional[str] = None
-
-
-def validate_monolith_scope(
-    req: "RunConfigRequest",
-) -> list[str]:
-    """Server-side validator for `orchestration='monolith'`.
-
-    Returns a list of human-readable scope violations; empty list = OK.
-    Single source of truth lives in
-    `monolith.config.validate_monolith_compatibility` — this wrapper
-    just adapts the pydantic request shape. The frontend disable rules
-    and the CLI validator in `run.py` route through the same function.
-    """
-    if req.orchestration != "monolith":
-        return []
-    from monolith.config import validate_monolith_compatibility
-
-    return validate_monolith_compatibility(
-        filing_standard=req.filing_standard,
-        filing_level=req.filing_level,
-        statement_values=set(req.statements),
-        notes_values=set(req.notes_to_run or []),
-    )
 
 
 class RunConfigPatchRequest(BaseModel):
@@ -1885,7 +1860,9 @@ class RunConfigPatchRequest(BaseModel):
     filing_standard: Optional[Literal["mfrs", "mpers"]] = None
     notes_to_run: Optional[List[str]] = None
     notes_models: Optional[Dict[str, str]] = None
-    orchestration: Optional[Literal["split", "monolith"]] = None
+    # Free-form to match RunConfigRequest.orchestration (monolith removed);
+    # the column accepts any string and History reads it back verbatim.
+    orchestration: Optional[str] = None
     model: Optional[str] = None
     # `infopack` is the scout-derived inventory the legacy `POST /api/run/
     # {session_id}` endpoint receives in its request body. For the
@@ -2469,358 +2446,6 @@ def _attempt_partial_merge(
         return out
 
 
-async def _run_monolith_path(
-    *,
-    db_conn,
-    run_id: Optional[int],
-    session_id: str,
-    output_dir: str,
-    config,                              # coordinator.RunConfig
-    run_config,                          # server.RunConfigRequest
-    AUDIT_DB_PATH_value,
-    outcome: dict,
-):
-    """Monolith experiment branch — single agent, single workbook.
-
-    Self-contained: pre-creates a MONOLITH run_agents row, runs the
-    `monolith.coordinator.run_monolith`, drains its events as SSE, runs
-    the cross-checks against the single workbook, marks the run
-    complete, and finalizes. Yields SSE-shaped event dicts.
-
-    The caller passes ``outcome`` (a mutable dict). The helper writes
-    ``outcome["terminal_status"]`` to whatever it actually wrote to the
-    DB ("completed" | "completed_with_errors" | "failed" | "aborted") —
-    async generators can't return values via ``return``, so the dict is
-    the hand-off channel. The caller's ``terminal_status`` book-keeping
-    reads it back.
-
-    Mirrors only the parts of `run_multi_agent_stream` we actually need
-    — no correction agent, no notes pipeline, no per-statement
-    pre-creation (PRD §12 Q2 + plan step 4).
-    """
-    # asyncio + json are already at module scope; the rest stay lazy to
-    # keep startup fast (see "Lazy imports" comment near the top of the
-    # file).
-    from db import repository as repo
-    from monolith.coordinator import MonolithRunConfig, run_monolith
-    from statement_types import StatementType
-    from cross_checks.framework import (
-        DEFAULT_TOLERANCE_RM,
-        build_default_cross_checks,
-        run_all as run_cross_checks,
-    )
-
-    monolith_workbook_path = str(Path(output_dir) / "monolith_filled.xlsx")
-
-    monolith_run_agent_id: Optional[int] = None
-    if db_conn is not None and run_id is not None:
-        try:
-            monolith_run_agent_id = repo.create_run_agent(
-                db_conn, run_id,
-                statement_type="MONOLITH",
-                variant=None,
-                model=_model_id(config.model),
-            )
-            db_conn.commit()
-        except Exception:
-            logger.warning(
-                "Failed to pre-create MONOLITH run_agent row for %s",
-                session_id, exc_info=True,
-            )
-
-    yield {"event": "status", "data": {
-        "phase": "starting",
-        "message": "Starting monolith extraction (single agent, 5 face statements).",
-        "agent_id": "monolith",
-        "agent_role": "MONOLITH",
-        "run_id": run_id,
-    }}
-    yield {
-        "event": "pipeline_stage",
-        "data": {"stage": "extracting"},
-    }
-
-    event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
-    mono_config = MonolithRunConfig(
-        pdf_path=config.pdf_path,
-        output_dir=output_dir,
-        model=config.model,
-        statements=set(config.statements_to_run),
-        variants=dict(config.variants),
-        filing_level=config.filing_level,
-        filing_standard=config.filing_standard,
-        # Canonical-mode plumbing — gated on `_canonical_facts_enabled()`
-        # the same way the split pipeline gates `RunConfig.run_id` /
-        # `db_path` (see server.py around line 3028). When canonical
-        # mode is off, monolith write_cells skips the projection
-        # entirely (template_id_by_sheet stays empty).
-        run_id=run_id if _canonical_facts_enabled() else None,
-        db_path=str(AUDIT_DB_PATH_value) if _canonical_facts_enabled() else None,
-    )
-    monolith_task = asyncio.create_task(
-        run_monolith(mono_config, event_queue=event_queue),
-        name=f"monolith-{session_id}",
-    )
-
-    # Sentinel pump
-    async def _push_sentinel() -> None:
-        try:
-            await monolith_task
-        finally:
-            await event_queue.put(None)
-    sentinel_task = asyncio.create_task(_push_sentinel())
-
-    async def _drain_background_tasks() -> None:
-        """Don't orphan ``monolith_task`` / ``sentinel_task`` when we
-        bail early. Cancel each if still pending and await both to
-        completion so the event loop can garbage-collect cleanly
-        (peer-review I2). Swallow every exception — we're cleaning up
-        on an already-failed path."""
-        for t in (monolith_task, sentinel_task):
-            if not t.done():
-                t.cancel()
-        for t in (monolith_task, sentinel_task):
-            try:
-                await t
-            except (asyncio.CancelledError, Exception):
-                pass
-
-    result = None
-    try:
-        client_connected = True
-        try:
-            while True:
-                ev = await event_queue.get()
-                if ev is None:
-                    break
-                if client_connected:
-                    try:
-                        yield ev
-                    except (asyncio.CancelledError, GeneratorExit):
-                        client_connected = False
-                        logger.info(
-                            "Monolith client disconnected; continuing",
-                            extra={"session_id": session_id},
-                        )
-        except Exception as e:
-            _safe_mark_finished(db_conn, run_id, "failed")
-            outcome["terminal_status"] = "failed"
-            if client_connected:
-                yield {"event": "error", "data": {
-                    "message": f"Monolith stream error: {e}",
-                }}
-            return
-
-        try:
-            result = await monolith_task
-        except asyncio.CancelledError:
-            _safe_mark_finished(db_conn, run_id, "aborted")
-            outcome["terminal_status"] = "aborted"
-            if client_connected:
-                yield {"event": "error", "data": {"message": "Run cancelled"}}
-            return
-    finally:
-        # Cancel + await both background tasks on every exit path —
-        # success, exception, generator-close, client disconnect. Without
-        # this the tasks survive `_run_monolith_path` returning and
-        # straddle into the next request's event loop iteration.
-        await _drain_background_tasks()
-
-    # Persist the single run_agents row + per-turn telemetry rows.
-    workbook_for_merge = result.workbook_path or monolith_workbook_path
-    if db_conn is not None and monolith_run_agent_id is not None:
-        try:
-            repo.finish_run_agent(
-                db_conn, monolith_run_agent_id,
-                status="succeeded" if result.status == "succeeded" else "failed",
-                workbook_path=workbook_for_merge,
-                total_tokens=result.total_tokens,
-                total_cost=result.total_cost,
-                prompt_tokens=result.prompt_tokens,
-                completion_tokens=result.completion_tokens,
-                turn_count=result.turn_count,
-                tool_call_count=result.tool_call_count,
-            )
-            if result.turns:
-                repo.insert_agent_turns(
-                    db_conn, monolith_run_agent_id, result.turns,
-                )
-            db_conn.commit()
-        except Exception:
-            logger.warning(
-                "Failed to finalize MONOLITH run_agent row %s",
-                monolith_run_agent_id, exc_info=True,
-            )
-
-    # The "merge" step on monolith is just pointing mark_run_merged at the
-    # single workbook — the workbook IS the merged output.
-    if db_conn is not None and run_id is not None and Path(workbook_for_merge).exists():
-        try:
-            repo.mark_run_merged(db_conn, run_id, workbook_for_merge)
-            db_conn.commit()
-        except Exception:
-            logger.warning(
-                "mark_run_merged failed on monolith path for run %s",
-                run_id, exc_info=True,
-            )
-
-    # Canonical mode: recompute COMPUTED parents (subtotals/totals) from
-    # the leaf facts the monolith projected. Mirror of the split path's
-    # call at the end of extraction (server.py around line 3496). Without
-    # this, the Values / Concepts page shows leaf rows only; COMPUTED
-    # rows like *Total assets* stay blank even though the leaves are
-    # there. Best-effort — a cascade failure must not sink an otherwise
-    # good run, same contract as the split path.
-    if _canonical_facts_enabled() and run_id is not None:
-        try:
-            from concept_model.cascade import recompute_after_turn
-            recompute_after_turn(AUDIT_DB_PATH_value, run_id)
-        except Exception:
-            logger.exception(
-                "monolith canonical cascade failed for run %s", run_id,
-            )
-
-    # Cross-checks against the one workbook. Every required statement
-    # points at the same path; check implementations resolve by sheet name.
-    if client_connected:
-        yield {
-            "event": "pipeline_stage",
-            "data": {"stage": "cross_checking"},
-        }
-    cross_check_results = []
-    cross_check_exception_msg: Optional[str] = None
-    try:
-        wb_paths = {
-            stmt: workbook_for_merge for stmt in config.statements_to_run
-        }
-        cross_check_results = run_cross_checks(
-            build_default_cross_checks(),
-            wb_paths,
-            {
-                "statements_to_run": set(config.statements_to_run),
-                "variants": dict(config.variants),
-                "filing_level": config.filing_level,
-                "filing_standard": config.filing_standard,
-            },
-            tolerance=DEFAULT_TOLERANCE_RM,
-        )
-        if db_conn is not None and run_id is not None:
-            for r in cross_check_results:
-                try:
-                    repo.save_cross_check(
-                        db_conn,
-                        run_id=run_id,
-                        check_name=r.name,
-                        status=r.status,
-                        expected=r.expected,
-                        actual=r.actual,
-                        diff=r.diff,
-                        tolerance=r.tolerance,
-                        message=r.message,
-                        target_sheet=r.target_sheet,
-                        target_row=r.target_row,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to persist cross_check %s", r.name,
-                        exc_info=True,
-                    )
-            try:
-                db_conn.commit()
-            except Exception:
-                pass
-    except Exception as e:
-        cross_check_exception_msg = str(e)
-        if client_connected:
-            yield {"event": "error", "data": {
-                "type": "cross_check_exception",
-                "message": cross_check_exception_msg,
-            }}
-
-    # Cross-check summary — yielded directly (was put_nowait'd onto a
-    # post-drain queue and dropped per peer review). `phase: "initial"`
-    # to keep the frontend's CrossCheckPhase = "initial" | "post_correction"
-    # union honest; the monolith path has only one pass.
-    if client_connected:
-        passed = sum(1 for r in cross_check_results if r.status == "passed")
-        failed = sum(1 for r in cross_check_results if r.status == "failed")
-        warnings_n = sum(1 for r in cross_check_results if r.status == "warning")
-        not_applicable = sum(
-            1 for r in cross_check_results if r.status == "not_applicable"
-        )
-        pending = sum(1 for r in cross_check_results if r.status == "pending")
-        yield {
-            "event": "cross_check_complete",
-            "data": {
-                "phase": "initial",
-                "passed": passed,
-                "failed": failed,
-                "warnings": warnings_n,
-                "not_applicable": not_applicable,
-                "pending": pending,
-                "agent_id": "monolith",
-                "agent_role": "MONOLITH",
-            },
-        }
-
-    # Final status: failed if the run itself failed; completed_with_errors
-    # if any cross-check ended `failed`; completed otherwise.
-    if result.status == "failed":
-        terminal = "failed"
-    elif any(r.status == "failed" for r in cross_check_results):
-        terminal = "completed_with_errors"
-    else:
-        terminal = "completed"
-    _safe_mark_finished(db_conn, run_id, terminal)
-    outcome["terminal_status"] = terminal
-
-    if client_connected:
-        # Match the existing RunCompleteData shape (web/src/lib/types.ts:305):
-        # merged_workbook (not merged_path), cross_checks (full list),
-        # statements_completed / statements_failed for the reducer.
-        statements_completed = (
-            sorted(s.value for s in config.statements_to_run)
-            if result.status != "failed"
-            else []
-        )
-        statements_failed = (
-            sorted(s.value for s in config.statements_to_run)
-            if result.status == "failed"
-            else []
-        )
-        yield {"event": "run_complete", "data": {
-            "success": terminal in ("completed", "completed_with_errors"),
-            "run_id": run_id,
-            "orchestration": "monolith",
-            "merged_workbook": (
-                workbook_for_merge if Path(workbook_for_merge).exists()
-                else None
-            ),
-            "cross_checks": [
-                {
-                    "name": r.name,
-                    "status": r.status,
-                    "expected": r.expected,
-                    "actual": r.actual,
-                    "diff": r.diff,
-                    "tolerance": r.tolerance,
-                    "message": r.message,
-                    "target_sheet": r.target_sheet,
-                    "target_row": r.target_row,
-                }
-                for r in cross_check_results
-            ],
-            "cross_checks_partial": bool(cross_check_exception_msg),
-            "statements_completed": statements_completed,
-            "statements_failed": statements_failed,
-            # Monolith-specific extras the standard reducer ignores but the
-            # Telemetry tab / write-up read.
-            "failing_checks": result.failing_checks,
-            "accepted_residuals": result.accepted_residuals,
-            "message": result.error or None,
-        }}
-
-
 def _emit_cross_check_summary(
     results,
     phase: str,
@@ -3134,19 +2759,6 @@ async def run_multi_agent_stream(
                 return
             notes_to_run.add(parsed_note)
 
-        # Orchestration scope: monolith is MFRS Company face-only (PRD §3
-        # / docs/PLAN-monolith-face-experiment.md). The frontend disable
-        # rules are UX only — this is the load-bearing gate.
-        if getattr(run_config, "orchestration", "split") == "monolith":
-            problems = validate_monolith_scope(run_config)
-            if problems:
-                msg = "Monolith orchestration scope violation: " + "; ".join(problems)
-                events, new_status = _fail_run(db_conn, run_id, msg)
-                for ev in events:
-                    yield ev
-                terminal_status = new_status or terminal_status
-                return
-
         # Build variant map — fall back to first registered variant if not specified
         for stmt in statements_to_run:
             if stmt.value in run_config.variants:
@@ -3189,43 +2801,33 @@ async def run_multi_agent_stream(
         # per-agent overrides use the same proxy/direct wiring as the default.
         # Wrap in try/except so a broken override key also produces a clean
         # failed-row rather than bubbling out of the generator.
-        #
-        # Peer-review fix: SKIP this entire block when orchestration is
-        # monolith. Per-statement and per-notes overrides are ignored on the
-        # monolith path (it uses a single agent + a single top-level `model`
-        # field). Without the guard, a stale id in the payload's per-stmt
-        # `models` dict — which the frontend still persists for back-compat
-        # — would call _create_proxy_model and crash a monolith run BEFORE
-        # the monolith branch even gets a chance to run. The monolith model
-        # override is honored at the monolith branch itself (line ~3060).
         notes_models: Dict[NotesTemplateType, Any] = {}
-        if getattr(run_config, "orchestration", "split") != "monolith":
-            try:
-                for stmt in statements_to_run:
-                    if stmt.value in run_config.models:
-                        override_name = run_config.models[stmt.value]
-                        models[stmt] = _create_proxy_model(override_name, proxy_url, api_key)
-                # Same treatment for per-notes-template overrides. Silently ignore
-                # entries whose key isn't a known NotesTemplateType — they won't
-                # match any requested template and we don't want a typo in the
-                # frontend payload to fail the whole run.
-                for nt_key, nt_model_name in run_config.notes_models.items():
-                    try:
-                        nt_parsed = NotesTemplateType(nt_key)
-                    except ValueError:
-                        continue
-                    notes_models[nt_parsed] = _create_proxy_model(
-                        nt_model_name, proxy_url, api_key,
-                    )
-            except Exception as e:
-                logger.exception(
-                    "Override model construction failed for session %s", session_id,
+        try:
+            for stmt in statements_to_run:
+                if stmt.value in run_config.models:
+                    override_name = run_config.models[stmt.value]
+                    models[stmt] = _create_proxy_model(override_name, proxy_url, api_key)
+            # Same treatment for per-notes-template overrides. Silently ignore
+            # entries whose key isn't a known NotesTemplateType — they won't
+            # match any requested template and we don't want a typo in the
+            # frontend payload to fail the whole run.
+            for nt_key, nt_model_name in run_config.notes_models.items():
+                try:
+                    nt_parsed = NotesTemplateType(nt_key)
+                except ValueError:
+                    continue
+                notes_models[nt_parsed] = _create_proxy_model(
+                    nt_model_name, proxy_url, api_key,
                 )
-                events, new_status = _fail_run(db_conn, run_id, f"Model override failed: {e}")
-                for ev in events:
-                    yield ev
-                terminal_status = new_status or terminal_status
-                return
+        except Exception as e:
+            logger.exception(
+                "Override model construction failed for session %s", session_id,
+            )
+            events, new_status = _fail_run(db_conn, run_id, f"Model override failed: {e}")
+            for ev in events:
+                yield ev
+            terminal_status = new_status or terminal_status
+            return
 
         # Resolve infopack
         infopack = None
@@ -3286,53 +2888,6 @@ async def run_multi_agent_stream(
                     "restart."
                 ),
             }}
-
-        # Monolith experiment branch (PRD §3 / docs/PLAN-monolith-face-experiment.md).
-        # Self-contained: pre-creates a single MONOLITH run_agents row,
-        # runs the monolith coordinator, persists, marks_run_merged, runs
-        # cross-checks, finalizes. Returns terminal status via the helper.
-        if getattr(run_config, "orchestration", "split") == "monolith":
-            # Honor `RunConfigRequest.model` when set — that's the
-            # single-agent override the frontend's "Monolith model"
-            # picker posts. Falls back to the run-wide default
-            # `model` (resolved earlier from TEST_MODEL). The per-
-            # statement `models` dict stays ignored on this path
-            # (the frontend hides those dropdowns when monolith is
-            # selected).
-            mono_model_override = getattr(run_config, "model", None)
-            if mono_model_override:
-                try:
-                    config.model = _create_proxy_model(
-                        mono_model_override, proxy_url, api_key,
-                    )
-                except Exception as e:
-                    events, new_status = _fail_run(
-                        db_conn, run_id,
-                        f"Monolith model setup failed for "
-                        f"{mono_model_override!r}: {e}",
-                    )
-                    for ev in events:
-                        yield ev
-                    terminal_status = new_status or terminal_status
-                    return
-            # Mutable hand-off: the helper writes the terminal status it
-            # ALSO wrote to the DB into `outcome["terminal_status"]` so
-            # the caller's book-keeping matches the DB row. Async
-            # generators can't return values, hence the dict.
-            monolith_outcome: dict = {"terminal_status": None}
-            async for ev in _run_monolith_path(
-                db_conn=db_conn,
-                run_id=run_id,
-                session_id=session_id,
-                output_dir=output_dir,
-                config=config,
-                run_config=run_config,
-                AUDIT_DB_PATH_value=AUDIT_DB_PATH,
-                outcome=monolith_outcome,
-            ):
-                yield ev
-            terminal_status = monolith_outcome.get("terminal_status") or terminal_status
-            return
 
         yield {"event": "status", "data": {
             "phase": "starting",

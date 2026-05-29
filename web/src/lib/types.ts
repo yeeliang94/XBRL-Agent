@@ -472,18 +472,11 @@ export const NOTES_TEMPLATE_LABELS: Record<NotesTemplateType, string> = {
   RELATED_PARTY: "Related Party Transactions (Note 14)",
 };
 
-/** Orchestration path — `split` (default 5-specialist pipeline) or
- *  `monolith` (experimental single-agent path; MFRS Company face-only).
- *  Backed by `runs.orchestration` (DB schema v10). */
-export type Orchestration = "split" | "monolith";
-
 /** Shape sent to POST /api/run/{session_id} */
 export interface RunConfigPayload {
   statements: StatementType[];
   variants: Record<string, string>;
-  /** Per-statement model overrides. Required on the split path; OMITTED
-   *  on monolith (the server ignores them there and the single-agent
-   *  model travels in the top-level `model` field instead). */
+  /** Per-statement model overrides. */
   models?: Record<string, string>;
   infopack: Record<string, unknown> | null;
   use_scout: boolean;
@@ -497,15 +490,6 @@ export interface RunConfigPayload {
    *  explicitly selects notes templates; matches the face-statement
    *  ``models`` field shape for consistency. */
   notes_models?: Partial<Record<NotesTemplateType, string>>;
-  /** Orchestration toggle. Defaults to `split`. The frontend disables the
-   *  `monolith` option when filing_standard !== "mfrs", filing_level !==
-   *  "company", any notes templates are selected, or fewer than 5 face
-   *  statements are picked — same rules the server validates. */
-  orchestration?: Orchestration;
-  /** Single-agent model for the monolith path. Only meaningful when
-   *  `orchestration === "monolith"`; ignored otherwise. When omitted,
-   *  the server falls back to the TEST_MODEL env var. */
-  model?: string;
 }
 
 // --- Phase 10: Per-agent state for tab-based UI ---
@@ -569,9 +553,6 @@ export interface RunSummaryJson {
   has_merged_workbook: boolean;
   filing_level?: FilingLevel;
   filing_standard?: FilingStandard;
-  /** Orchestration path used for this run. Optional for back-compat with
-   *  rows persisted before DB schema v10 (those default to 'split'). */
-  orchestration?: Orchestration;
 }
 
 export interface RunListResponse {
@@ -669,9 +650,6 @@ export interface RunDetailJson {
   config: Record<string, unknown> | null;
   filing_level?: FilingLevel;
   filing_standard?: FilingStandard;
-  /** Orchestration path used for this run. Optional for back-compat with
-   *  pre-v10 rows (defaults to 'split'). */
-  orchestration?: Orchestration;
   agents: RunAgentJson[];
   cross_checks: RunCrossCheckJson[];
   // v8 telemetry rollup. Optional for back-compat with older payloads.

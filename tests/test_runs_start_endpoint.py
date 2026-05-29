@@ -213,17 +213,18 @@ def test_infopack_survives_patch_and_reaches_coordinator(draft_with_config):
 def test_start_persists_orchestration_to_canonical_column(draft_with_config):
     """Peer-review HIGH #1 (2026-05-28): list/detail read orchestration
     from the `runs.orchestration` column, not from `run_config_json`.
-    The existing-draft refresh path (server.py:2782) must include the
-    orchestration column in its UPDATE so a monolith run started from
-    a draft is correctly labelled in History.
+    The existing-draft refresh path must include the orchestration column
+    in its UPDATE so the canonical store reflects the saved config.
 
-    Patches `orchestration: 'monolith'` onto the draft, kicks off the
-    start handler (mocking the coordinator), then reads the column
-    directly to assert the canonical store reflects the choice.
+    The monolith experiment that once gave this column a second value has
+    been removed, so `"monolith"` here is just an arbitrary non-default
+    string exercising the generic mirror — the invariant under test is
+    "the column round-trips whatever config.orchestration holds," not the
+    monolith feature itself.
     """
     client, run_id, session_id, output_dir, db_path = draft_with_config
 
-    # Patch orchestration onto the draft.
+    # Patch a non-default orchestration value onto the draft.
     resp = client.patch(
         f"/api/runs/{run_id}", json={"orchestration": "monolith"},
     )
@@ -234,21 +235,12 @@ def test_start_persists_orchestration_to_canonical_column(draft_with_config):
             await event_queue.put(None)
         return CoordinatorResult(agent_results=[])
 
-    # The monolith coordinator name doesn't matter for this test — the
-    # split path is mocked. We just need /start to flip the row and
-    # exercise the refresh UPDATE that writes back `orchestration`.
-    # Note: the monolith coordinator entry-point is `run_monolith`, but
-    # for this test we only need the SPLIT-path mocks: the test asserts
-    # the column is refreshed in the orchestration-agnostic UPDATE at
-    # server.py:2782, which fires before the dispatcher branches on
-    # orchestration. Mocking `coordinator.run_extraction` is sufficient
-    # because /start in 'monolith' mode could dispatch to monolith.
-    # If the dispatcher routes to monolith first, the test would still
-    # exercise the refresh UPDATE — but to keep the test fast and
-    # decoupled from monolith's own dispatch, we also stub `run_monolith`.
+    # The split path is the only dispatch path now; stubbing
+    # `coordinator.run_extraction` is sufficient. The orchestration column
+    # is refreshed in the orchestration-agnostic UPDATE that fires before
+    # extraction starts, so the value mirrors through regardless.
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=quiet_coordinator), \
-         patch("monolith.coordinator.run_monolith", side_effect=quiet_coordinator), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(output_dir / session_id / "filled.xlsx"), sheets_copied=0)), \
          patch("cross_checks.framework.run_all", return_value=[]):
         resp = client.post(f"/api/runs/{run_id}/start")
@@ -265,8 +257,7 @@ def test_start_persists_orchestration_to_canonical_column(draft_with_config):
     assert row is not None
     assert row["orchestration"] == "monolith", (
         "runs.orchestration column was not refreshed from run_config "
-        "when starting a draft — History/Run-Detail will mislabel the "
-        "run as 'split'."
+        "when starting a draft — History/Run-Detail will mislabel the run."
     )
 
 
