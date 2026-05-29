@@ -622,8 +622,39 @@ describe("appReducer", () => {
 
     expect(state.agents.sofp_0.status).toBe("complete");
     expect(state.agents.sofp_0.workbookPath).toBe("/out/sofp.xlsx");
+    expect(state.agents.sofp_0.flag ?? null).toBeNull();
     // Run should NOT be marked complete (that's run_complete's job)
     expect(state.isComplete).toBe(false);
+  });
+
+  test("Honest-completion flag on a complete event is captured (peer-review F1)", () => {
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: { phase: "reading_template", message: "Start", agent_id: "socf_0", agent_role: "SOCF" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "complete",
+        data: {
+          success: true,
+          agent_id: "socf_0",
+          agent_role: "SOCF",
+          workbook_path: "/out/socf.xlsx",
+          error: null,
+          flag: "Cash at end != beginning + net change",
+        },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+    // Finalised (data saved) but flagged for review — status stays complete.
+    expect(state.agents.socf_0.status).toBe("complete");
+    expect(state.agents.socf_0.flag).toBe("Cash at end != beginning + net change");
   });
 
   test("run_complete stores cross-checks and creates validator tab", () => {

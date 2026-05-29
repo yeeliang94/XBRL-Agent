@@ -386,6 +386,8 @@ export function agentReducer(agent: AgentState, event: SSEEvent): AgentState {
         updates.status = "failed";
       }
       updates.workbookPath = cd.workbook_path ?? null;
+      // Honest-completion flag (peer-review F1): finalised but needs review.
+      updates.flag = cd.flag ?? null;
       if (cd.error && cd.error !== CANCELLED_BY_USER) {
         updates.error = { message: cd.error, traceback: "" };
       }

@@ -20,6 +20,7 @@ def render_prompt(
     filing_level: str = "company",
     filing_standard: str = "mfrs",
     template_path: Optional[str] = None,
+    scout_context: Optional[dict] = None,
 ) -> str:
     """Build the full system prompt for a given statement type and variant.
 
@@ -76,8 +77,14 @@ def render_prompt(
     else:
         nav = _build_self_navigation(statement_type)
 
-    # Assemble full prompt
-    parts = [base, statement_prompt, nav]
+    # Assemble full prompt. Phase 2 — when scout populated context
+    # fields, render them BEFORE navigation so the agent reads the
+    # entity/period/unit framing first and then starts viewing pages.
+    parts = [base, statement_prompt]
+    context_block = _render_scout_context_block(scout_context or {})
+    if context_block:
+        parts.append(context_block)
+    parts.append(nav)
 
     # Group filing overlay — appended after navigation so the agent sees
     # column/block layout instructions after knowing which pages to visit.
@@ -141,6 +148,158 @@ def _build_scoped_navigation(page_hints: dict) -> str:
     # restriction (CLAUDE.md gotcha #13); you may still view any page you need.
     lines.append("Be economical with page views — each page you view is re-sent on every later turn, so unnecessary views add cost on every step that follows.")
     lines.append("Anchor on the scout pages above. Only view a further page when a line item or note reference you can actually see on a page you've already viewed points to it. Do NOT sweep a range of pages speculatively just to check what's there.")
+
+    # Phase 1a — face-line refs block. Render only when scout populated
+    # a non-empty list; otherwise fall back to today's bare hint block
+    # (no regression on scout-couldn't-enrich runs).
+    face_refs_block = _render_face_line_refs_block(
+        page_hints.get("face_line_refs") or [],
+        page_hints.get("face_read_in_detail", False),
+    )
+    if face_refs_block:
+        lines.append("")
+        lines.append(face_refs_block)
+    return "\n".join(lines)
+
+
+def _render_face_line_refs_block(
+    face_line_refs: list,
+    face_read_in_detail: bool,
+) -> str:
+    """Render scout's face-line → note-ref index as advisory hints.
+
+    Empty list returns empty string — caller falls back to the bare
+    navigation block. The "scout-observed — VERIFY against the PDF"
+    framing keeps the soft-advisory contract explicit so the LLM
+    doesn't treat the list as authoritative.
+    """
+    if not face_line_refs:
+        return ""
+    lines = [
+        "=== FACE LINE → NOTE REFERENCES (scout-observed — VERIFY against the PDF) ===",
+    ]
+    # Group by section so the block reads like the face page itself.
+    by_section: dict[str, list[dict]] = {}
+    no_section: list[dict] = []
+    for entry in face_line_refs:
+        sec = entry.get("section") if isinstance(entry, dict) else None
+        if sec:
+            by_section.setdefault(sec, []).append(entry)
+        else:
+            no_section.append(entry)
+    # Preserve insertion order of sections (Python 3.7+ dict ordering
+    # gives us the face-page section ordering "for free" because the
+    # parser walks the page top-to-bottom).
+    for sec, entries in by_section.items():
+        lines.append(f"[{sec}]")
+        for e in entries:
+            lines.append(_format_face_line_ref(e))
+    if no_section:
+        if by_section:
+            lines.append("[unclassified]")
+        for e in no_section:
+            lines.append(_format_face_line_ref(e))
+    lines.append("")
+    if face_read_in_detail:
+        lines.append(
+            "Scout read this face page in detail. Use this map to jump "
+            "straight to the relevant note pages — do NOT re-read the "
+            "face page item-by-item to rediscover what scout already "
+            "captured. Still verify each value against the PDF before "
+            "writing."
+        )
+    else:
+        lines.append(
+            "Scout did NOT confirm this face-line map in detail "
+            "(face_read_in_detail=false). Treat it as a starting "
+            "hypothesis; verify the labels and note references on the "
+            "PDF before relying on them."
+        )
+    return "\n".join(lines)
+
+
+def _format_face_line_ref(entry: dict) -> str:
+    """Render one face-line ref entry as a bullet."""
+    label = entry.get("label", "")
+    note_num = entry.get("note_num")
+    if note_num is not None:
+        return f"  - {label} → Note {note_num}"
+    return f"  - {label} (no note reference)"
+
+
+# Phase 2 — scale-unit display strings. The "thousands" / "millions"
+# labels are framed with "RM '000" / "RM mil" so the prompt mirrors
+# the AFS header text the agent will actually see on the page.
+_SCALE_UNIT_LABELS = {
+    "thousands": "thousands (RM '000)",
+    "millions": "millions (RM mil)",
+    "units": "units (no scaling — values are reported as-is)",
+}
+
+
+def _render_scout_context_block(context: dict) -> str:
+    """Render the Phase 2 entity / period / unit context block.
+
+    Returns an empty string when scout couldn't enrich (no fields set
+    or every field is the default). The block is framed with loud
+    "VERIFY against the PDF" wording on each line because a wrong unit
+    in particular produces a silent 1000× extraction error.
+
+    ``context`` is a dict of the form coordinator.py builds from the
+    Infopack top-level fields. Missing keys / None values are treated
+    as "scout did not observe this" and skipped.
+    """
+    entity = context.get("entity_name")
+    period_cy = context.get("reporting_period_cy")
+    period_py = context.get("reporting_period_py")
+    currency = context.get("currency") or "RM"
+    scale_unit = context.get("scale_unit", "unknown")
+    consolidation = context.get("consolidation_level", "unknown")
+
+    # If absolutely nothing useful was captured, omit the block entirely
+    # so the prompt stays as compact as it was before Phase 2 on
+    # degraded runs (scanned PDF + LLM didn't observe).
+    if (
+        not entity and not period_cy and not period_py
+        and scale_unit == "unknown" and consolidation == "unknown"
+    ):
+        return ""
+
+    lines = ["=== SCOUT-OBSERVED CONTEXT (VERIFY EACH BEFORE USING) ==="]
+    if entity:
+        lines.append(
+            f"Entity (scout claim — verify against PDF cover/header): {entity}"
+        )
+    if period_cy:
+        lines.append(
+            f"Reporting period CY (scout claim — verify against statement header): {period_cy}"
+        )
+    if period_py:
+        lines.append(
+            f"Reporting period PY (scout claim — verify against statement header): {period_py}"
+        )
+    if currency and currency != "RM":
+        lines.append(f"Currency: {currency} (scout claim — verify)")
+    # Scale-unit warning is the load-bearing one. The wording is
+    # deliberately strong because a wrong unit silently inflates every
+    # extracted value by 1000× (gotcha #17's sibling failure mode).
+    if scale_unit in _SCALE_UNIT_LABELS:
+        lines.append(
+            f"Scale: {_SCALE_UNIT_LABELS[scale_unit]} — VERIFY against "
+            f"the statement header before writing any number. A wrong "
+            f"unit produces a 1000× error."
+        )
+    elif scale_unit == "unknown":
+        lines.append(
+            "Scale: UNKNOWN — scout could not confirm. You MUST read "
+            "the statement header (e.g. 'All values in RM '000') before "
+            "writing any number. Do not assume thousands. A wrong unit "
+            "produces a 1000× error."
+        )
+    if consolidation != "unknown":
+        lines.append(
+            f"Consolidation level: {consolidation} (scout claim — verify)"
+        )
     return "\n".join(lines)
 
 

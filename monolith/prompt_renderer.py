@@ -266,13 +266,69 @@ def _describe_sheet_rows(template_path: Path) -> list[str]:
         for sheet_name, rows in by_sheet.items():
             ws = wb[sheet_name]
             rows_out.append(f"[sheet: {sheet_name}]")
-            for row_idx in sorted(rows):
+            sorted_rows = sorted(rows)
+            # SOCIE repeats identical row labels per period block (and per
+            # Group/Company level). Tag each row with its period so the
+            # single monolith agent fills the PRIOR-year block too instead
+            # of stopping after the current-year block (the observed
+            # PY-missing failure mode).
+            period_by_row = (
+                _socie_period_tags(rows, sorted_rows)
+                if sheet_name == "SOCIE" else {}
+            )
+            for row_idx in sorted_rows:
                 meta = rows[row_idx]
                 kind = _row_kind(ws, row_idx, is_abstract=meta["is_abstract"])
-                rows_out.append(f"  {row_idx:>4} | {kind:<14} | {meta['label']}")
+                line = f"  {row_idx:>4} | {kind:<14} | {meta['label']}"
+                tag = period_by_row.get(row_idx)
+                if tag:
+                    line += f"  | period: {tag}"
+                rows_out.append(line)
     finally:
         wb.close()
     return rows_out
+
+
+def _socie_period_tags(
+    rows: dict[int, dict], sorted_rows: list[int]
+) -> dict[int, str]:
+    """Map each SOCIE row to its period-block label.
+
+    Each block opens with an "Equity at beginning of period" row. Two blocks
+    ⇒ Company filing (current / prior); four ⇒ Group filing (Group then
+    Company, each current then prior). Mirrors CLAUDE.md gotcha #12's block
+    layout. Returns {} when the structure isn't recognised so the dump
+    degrades to the untagged form.
+    """
+    # Exact match on the block-opening label. Substring matching would also
+    # catch "*Equity at beginning of period, restated" (the row just below
+    # each opener), doubling the block count and mis-tagging every row.
+    starts = [
+        r for r in sorted_rows
+        if str(rows[r]["label"]).strip().lstrip("*").strip().lower()
+        == "equity at beginning of period"
+    ]
+    if len(starts) == 2:
+        labels = ["CURRENT period", "PRIOR period"]
+    elif len(starts) == 4:
+        labels = [
+            "Group — CURRENT period", "Group — PRIOR period",
+            "Company — CURRENT period", "Company — PRIOR period",
+        ]
+    else:
+        return {}
+    tags: dict[int, str] = {}
+    for r in sorted_rows:
+        # The block a row belongs to is the last start at or before it.
+        block = -1
+        for i, s in enumerate(starts):
+            if r >= s:
+                block = i
+            else:
+                break
+        if 0 <= block < len(labels):
+            tags[r] = labels[block]
+    return tags
 
 
 def _row_kind(ws, row: int, *, is_abstract: bool) -> str:

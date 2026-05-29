@@ -962,26 +962,37 @@ def _verify_socf(
     is_balanced = True
     formula_warnings: list[str] = []
 
-    # Find key rows
+    # Find key rows. `setdefault` (first-match-wins) is load-bearing: the
+    # SOCF-Indirect template carries the label "*Cash and cash equivalents at
+    # end of period" on TWO rows — the statement line (a blank leaf the agent
+    # fills) and, lower down under "Details of cash flows", a reconciliation
+    # total that is a formula reading the optional cash-on-hand / overdraft
+    # breakdown. The old "last assignment wins" bound `cash_end` to the formula
+    # row, whose value is 0 until that optional breakdown is filled — so the
+    # balance identity could never be satisfied with the values the agent is
+    # actually meant to enter, and the agent looped trying to overwrite a
+    # protected formula cell. First-match binds to the statement line, which
+    # is what fill_workbook._find_row_by_label and _collect_unfilled_mandatory
+    # also resolve to. Pinned by tests/test_socf_duplicate_cash_end_label.py.
     rows_by_label: dict[str, int] = {}
     for row in range(1, ws.max_row + 1):
         val = ws.cell(row=row, column=1).value
         if val:
             norm = _normalize_label(str(val))
             if "net cash flows" in norm and "operating" in norm:
-                rows_by_label["net_operating"] = row
+                rows_by_label.setdefault("net_operating", row)
             elif "net cash flows" in norm and "investing" in norm:
-                rows_by_label["net_investing"] = row
+                rows_by_label.setdefault("net_investing", row)
             elif "net cash flows" in norm and "financing" in norm:
-                rows_by_label["net_financing"] = row
+                rows_by_label.setdefault("net_financing", row)
             elif "net increase" in norm and "after" in norm:
-                rows_by_label["net_increase_after_fx"] = row
+                rows_by_label.setdefault("net_increase_after_fx", row)
             elif "net increase" in norm and "before" in norm:
-                rows_by_label["net_increase_before_fx"] = row
+                rows_by_label.setdefault("net_increase_before_fx", row)
             elif "cash and cash equivalents at end" in norm:
-                rows_by_label["cash_end"] = row
+                rows_by_label.setdefault("cash_end", row)
             elif "cash and cash equivalents at beginning" in norm:
-                rows_by_label["cash_beginning"] = row
+                rows_by_label.setdefault("cash_beginning", row)
 
     # Fail closed: require at least operating + net increase rows
     required = ["net_operating", "net_increase_before_fx"]

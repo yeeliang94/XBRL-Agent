@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from scout.toc_parser import TocEntry
@@ -128,6 +128,39 @@ def discover_note_pages(
 # ---------------------------------------------------------------------------
 
 @dataclass
+class SubNoteInventoryEntry:
+    """A sub-numbered heading nested under a top-level NoteInventoryEntry.
+
+    Phase 1b — captures sub-note structure (2.1, 2.2, 2.14, (a), (b))
+    for prompt-rendering context only. Sub-notes do NOT participate in
+    Sheet-12 fan-out / coverage assignment — they're nested under their
+    parent precisely to make that invariant structurally impossible to
+    violate (see `tests/test_sheet12_ignores_subnotes.py`).
+
+    ``subnote_ref`` is a string because sub-references take many shapes
+    in real filings: numeric like "2.1" / "2.14" / "2.1.3", or alpha
+    like "(a)" / "(b)(i)". Keeping it str avoids the type-coercion
+    minefield that promoting ``note_num`` to str would have caused.
+    """
+    subnote_ref: str
+    title: str
+    page_range: tuple[int, int]
+
+    def __post_init__(self) -> None:
+        if not self.subnote_ref or not str(self.subnote_ref).strip():
+            raise ValueError("SubNoteInventoryEntry.subnote_ref must be non-empty")
+        if not isinstance(self.page_range, tuple) or len(self.page_range) != 2:
+            raise ValueError(
+                f"SubNoteInventoryEntry.page_range must be a 2-tuple, got {self.page_range!r}"
+            )
+        start, end = self.page_range
+        if start < 1 or end < 1:
+            raise ValueError(
+                f"SubNoteInventoryEntry.page_range must be >= 1, got ({start}, {end})"
+            )
+
+
+@dataclass
 class NoteInventoryEntry:
     """One note as discovered by walking the notes section of a PDF.
 
@@ -140,11 +173,18 @@ class NoteInventoryEntry:
     decision — the hint is purely soft guidance. Left as None by the
     current deterministic PyMuPDF-regex discoverer; future phases may
     populate it without changing the schema.
+
+    ``subnotes`` (Phase 1b) is the nested list of sub-headings under
+    this top-level note (e.g. Note 2 → 2.1, 2.2, … 2.14). Always
+    iterate the top-level ``NoteInventoryEntry`` list for Sheet-12 fan-
+    out / coverage / batching — sub-notes are display-only metadata
+    used by the prompt renderer to give agents structural context.
     """
     note_num: int
     title: str
     page_range: tuple[int, int]
     suggested_row_label: Optional[str] = None
+    subnotes: list = field(default_factory=list)
 
 
 # Numbered heading: "4. PROPERTY, PLANT AND EQUIPMENT" or
@@ -186,6 +226,71 @@ def _clean_title(raw: str) -> str:
     return t
 
 
+# Phase 1b — sub-numbered heading patterns. Used to detect rows like
+# "2.1 Basis of preparation", "2.14 Employee benefits", or alpha forms
+# like "(a) Short term benefits" that nest under the currently-active
+# top-level note. The numeric form is required to start with a digit
+# matching the parent note's number — that prevents "1.1" sub-notes
+# leaking into a Note 3 that's currently active.
+_NUMERIC_SUBNOTE_RE = re.compile(
+    r"^\s*(\d{1,3}(?:\.\d{1,3}){1,3})\s+([A-Za-z][^\n]{2,120})$",
+    re.MULTILINE,
+)
+# Alpha sub-section heading: "(a) Title" / "(b)(i) Title". Conservative —
+# requires the parenthesised marker at the start of the line and at
+# least one alpha character title.
+_ALPHA_SUBNOTE_RE = re.compile(
+    r"^\s*(\([a-z]+\)(?:\([ivx]+\))?)\s+([A-Za-z][^\n]{2,120})$",
+    re.MULTILINE,
+)
+
+
+def _detect_subnotes_for_parent(
+    page_text: str,
+    parent_num: int,
+    page_num: int,
+) -> list[SubNoteInventoryEntry]:
+    """Scan ``page_text`` for sub-numbered headings belonging to ``parent_num``.
+
+    Returns sub-notes whose numeric ref starts with ``{parent_num}.`` plus
+    any alpha-shaped sub-section headings on the page (those don't carry
+    a parent-number indicator in their text, so we attach them to the
+    currently-active parent on the assumption auditors don't span alpha
+    sections across notes). Both lists are merged in document order.
+    """
+    subnotes: list[SubNoteInventoryEntry] = []
+    parent_prefix = f"{parent_num}."
+
+    # Walk both patterns and keep them in line-order so the prompt
+    # renderer displays them as they appear on the page.
+    matches: list[tuple[int, str, str]] = []
+    for m in _NUMERIC_SUBNOTE_RE.finditer(page_text):
+        ref = m.group(1)
+        # Only accept refs that nest under the active parent. A "3.1"
+        # appearing under Note 2's range is almost always the next
+        # top-level note bleeding in via a layout artefact — leave it
+        # to the top-level walker.
+        if not ref.startswith(parent_prefix):
+            continue
+        matches.append((m.start(), ref, _clean_title(m.group(2))))
+    for m in _ALPHA_SUBNOTE_RE.finditer(page_text):
+        matches.append((m.start(), m.group(1), _clean_title(m.group(2))))
+
+    matches.sort(key=lambda t: t[0])
+    for _, ref, title in matches:
+        try:
+            subnotes.append(SubNoteInventoryEntry(
+                subnote_ref=ref,
+                title=title,
+                page_range=(page_num, page_num),
+            ))
+        except ValueError:
+            # Defensive: a future tightening of the validator must not
+            # crash the whole inventory build.
+            continue
+    return subnotes
+
+
 def extract_inventory_from_pages(
     pages: list[tuple[int, str]],
 ) -> list[NoteInventoryEntry]:
@@ -193,31 +298,52 @@ def extract_inventory_from_pages(
 
     Splitter: when a page contains a note-header match, it starts a new
     entry. Pages without a header extend the current entry's range.
+
+    Phase 1b — every page processed while a top-level note is active is
+    also scanned for sub-numbered headings, which accumulate into the
+    parent's ``subnotes`` list. Sheet-12 fan-out iterates only the
+    top-level entries, so this is purely display-time enrichment.
     """
     entries: list[NoteInventoryEntry] = []
     current: Optional[NoteInventoryEntry] = None
+    # Sub-notes accumulate on a side list because NoteInventoryEntry is
+    # mutated below by re-construction — we splice them into the final
+    # parent when it gets pushed onto ``entries``.
+    current_subnotes: list[SubNoteInventoryEntry] = []
+
+    def _commit(parent: NoteInventoryEntry) -> NoteInventoryEntry:
+        """Attach accumulated subnotes to a parent before pushing."""
+        if current_subnotes:
+            parent.subnotes = list(current_subnotes)
+        return parent
 
     for page_num, text in pages:
         header = _detect_note_header(text)
         if header is not None:
             num, title = header
             if current is not None:
-                entries.append(current)
+                entries.append(_commit(current))
             current = NoteInventoryEntry(
                 note_num=num,
                 title=title,
                 page_range=(page_num, page_num),
             )
+            current_subnotes = _detect_subnotes_for_parent(text, num, page_num)
         elif current is not None:
             current = NoteInventoryEntry(
                 note_num=current.note_num,
                 title=current.title,
                 page_range=(current.page_range[0], page_num),
             )
+            # Look for more sub-notes on this continuation page; their
+            # numeric refs must still nest under the parent.
+            current_subnotes.extend(
+                _detect_subnotes_for_parent(text, current.note_num, page_num)
+            )
         # No header and no current: page precedes any note — skip.
 
     if current is not None:
-        entries.append(current)
+        entries.append(_commit(current))
     return entries
 
 

@@ -4296,6 +4296,14 @@ async def run_multi_agent_stream(
                             model=_model_id(agent_model),
                         )
                     status = agent_result.status
+                    # Honest-completion flag (peer-review F1): a statement the
+                    # agent finalised via acknowledge_unresolved IS saved, but
+                    # carries a known imbalance / unfilled-mandatory that a
+                    # human must review. Persist the row as
+                    # completed_with_errors so History shows "needs review"
+                    # rather than a clean green — the data is still there.
+                    if status == "succeeded" and getattr(agent_result, "flag", None):
+                        status = "completed_with_errors"
                     # Pass the coordinator-resolved variant so runs where
                     # the user didn't specify one still record which
                     # template was actually used. (Phase 6.5 pre-creates
@@ -4489,6 +4497,18 @@ async def run_multi_agent_stream(
             _open_conflict_count(AUDIT_DB_PATH, run_id)
             if _canonical_facts_enabled() else 0
         )
+        # Honest-completion flag (peer-review F1): any face agent that
+        # finalised with an acknowledged gap means the run needs human review,
+        # even when every cross-check is green. Tip an otherwise-clean run to
+        # completed_with_errors so History/the badge never shows a flagged run
+        # as a clean success (mirrors the open_conflicts / correction_exhausted
+        # treatment below).
+        flagged_statements = sorted(
+            r.statement_type.value
+            for r in coordinator_result.agent_results
+            if getattr(r, "flag", None)
+        )
+        any_agent_flagged = bool(flagged_statements)
         if all_agents_ok and merge_result.success and correction_exhausted:
             overall_status = "correction_exhausted"
         elif canonical_reexport_failed:
@@ -4497,7 +4517,8 @@ async def run_multi_agent_stream(
             # this as a clean success (peer-review finding 4).
             overall_status = "completed_with_errors"
         elif (all_agents_ok and merge_result.success and not any_check_failed
-              and not cross_check_crashed and open_conflicts == 0):
+              and not cross_check_crashed and open_conflicts == 0
+              and not any_agent_flagged):
             # Peer-review fix (2026-04-27): a cross-check pass that
             # crashed produced an empty results list, so
             # ``any_check_failed`` is misleadingly False. Without the
@@ -4509,6 +4530,10 @@ async def run_multi_agent_stream(
         elif all_agents_ok and merge_result.success and open_conflicts > 0:
             # Agents, merge and xlsx cross-checks are clean, but the
             # canonical store still has unreconciled conflicts → needs review.
+            overall_status = "completed_with_errors"
+        elif all_agents_ok and merge_result.success and any_agent_flagged:
+            # Everything ran, but at least one statement finalised with an
+            # acknowledged gap (peer-review F1) → needs human review.
             overall_status = "completed_with_errors"
         elif all_agents_ok and (any_check_failed or cross_check_crashed):
             overall_status = "completed_with_errors"
@@ -4575,6 +4600,11 @@ async def run_multi_agent_stream(
                                           if r.status == "succeeded"],
                 "statements_failed": [r.statement_type.value for r in coordinator_result.agent_results
                                        if r.status == "failed"],
+                # Honest-completion flag (peer-review F1): statements that
+                # finalised with an acknowledged, audited gap. They are also
+                # in statements_completed (the data is saved) — this array
+                # tells the UI to badge them "needs review".
+                "statements_flagged": flagged_statements,
                 "notes_completed": notes_completed,
                 "notes_failed": notes_failed,
                 # Peer-review follow-up for regenerate-flow: surface the

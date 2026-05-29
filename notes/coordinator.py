@@ -252,6 +252,21 @@ async def run_notes_extraction(
     if page_offset == 0 and infopack is not None:
         page_offset = infopack.page_offset
 
+    # Phase 2 — entity/period/unit context dict for the notes prompt
+    # renderer. None when scout couldn't enrich; passes through
+    # render_notes_prompt to _render_scout_context_block which omits
+    # the block entirely on degraded runs.
+    scout_context: Optional[dict] = None
+    if infopack is not None:
+        scout_context = {
+            "entity_name": infopack.entity_name,
+            "reporting_period_cy": infopack.reporting_period_cy,
+            "reporting_period_py": infopack.reporting_period_py,
+            "currency": infopack.currency,
+            "scale_unit": infopack.scale_unit,
+            "consolidation_level": infopack.consolidation_level,
+        }
+
     # Launch one task per template.
     ordered = sorted(config.notes_to_run, key=lambda t: list(NotesTemplateType).index(t))
 
@@ -282,6 +297,7 @@ async def run_notes_extraction(
                 page_offset=page_offset,
                 launch_delay=stagger,
                 filing_standard=config.filing_standard,
+                scout_context=scout_context,
             )
         else:
             runner = _run_single_notes_agent(
@@ -297,6 +313,7 @@ async def run_notes_extraction(
                 page_offset=page_offset,
                 launch_delay=stagger,
                 filing_standard=config.filing_standard,
+                scout_context=scout_context,
             )
         task = asyncio.create_task(runner, name=agent_id)
         tasks[template_type] = task
@@ -450,6 +467,7 @@ async def _run_single_notes_agent(
     page_offset: int = 0,
     launch_delay: float = 0.0,
     filing_standard: str = "mfrs",
+    scout_context: Optional[dict] = None,
 ) -> NotesAgentResult:
     """Run one notes agent end-to-end with PLAN §4 E.1 retry budget.
 
@@ -552,6 +570,7 @@ async def _run_single_notes_agent(
                 page_hints=page_hints,
                 page_offset=page_offset,
                 filing_standard=filing_standard,
+                scout_context=scout_context,
             )
             # Success — stop retrying.
             if total_attempts > 1:
@@ -671,6 +690,7 @@ async def _invoke_single_notes_agent_once(
     page_hints: Optional[List[int]] = None,
     page_offset: int = 0,
     filing_standard: str = "mfrs",
+    scout_context: Optional[dict] = None,
 ) -> _SingleAgentOutcome:
     """One invocation of a single-sheet notes agent.
 
@@ -690,6 +710,7 @@ async def _invoke_single_notes_agent_once(
         page_hints=page_hints,
         page_offset=page_offset,
         filing_standard=filing_standard,
+        scout_context=scout_context,
     )
 
     prompt = (
@@ -982,6 +1003,7 @@ async def _run_list_of_notes_fanout(
     page_offset: int = 0,
     launch_delay: float = 0.0,
     filing_standard: str = "mfrs",
+    scout_context: Optional[dict] = None,
 ) -> NotesAgentResult:
     """Drive the Sheet-12 sub-agent fan-out and write the final workbook.
 
@@ -1086,6 +1108,7 @@ async def _run_list_of_notes_fanout(
             parallel=parallel,
             page_hints=page_hints,
             page_offset=page_offset,
+            scout_context=scout_context,
         )
 
         # Total-failure guard: an empty aggregated payload list coming out

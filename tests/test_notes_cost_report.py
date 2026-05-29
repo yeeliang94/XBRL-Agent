@@ -163,6 +163,9 @@ def test_failed_subagent_retains_last_known_token_usage(monkeypatch):
         page_offset,
         usage_out,
         filing_standard="mfrs",
+        # Accept additional kwargs (e.g. Phase 2's scout_context) so a
+        # production-side wiring extension doesn't fail this stub.
+        **_extra,
     ):
         # Simulate real iterations: update the accumulator with partial
         # counts, then raise as if the next model call errored out.

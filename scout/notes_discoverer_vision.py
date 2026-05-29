@@ -27,7 +27,7 @@ from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
-from scout.notes_discoverer import NoteInventoryEntry
+from scout.notes_discoverer import NoteInventoryEntry, SubNoteInventoryEntry
 from tools.pdf_viewer import render_pages_to_png_bytes
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,19 @@ class VisionBatchError(RuntimeError):
     """Raised by `_scan_batch` when the vision call fails even after one retry."""
 
 
+class _VisionSubNote(BaseModel):
+    """A sub-heading nested under a top-level _VisionNote.
+
+    Phase 1b — vision-path parity with the regex sub-note detection.
+    ``subnote_ref`` is a string because real filings mix numeric
+    ("2.1", "2.14") with alpha ("(a)", "(b)(i)") forms freely.
+    """
+
+    subnote_ref: str = Field(min_length=1, max_length=20)
+    title: str = Field(min_length=1, max_length=200)
+    first_page: int = Field(ge=1)
+
+
 class _VisionNote(BaseModel):
     """One note header as seen on a batch of rendered pages."""
 
@@ -63,6 +76,11 @@ class _VisionNote(BaseModel):
     # this from the next note's first_page - 1, so the LLM's answer here
     # is only a fallback for the terminal note.
     last_page: int = Field(ge=1)
+    # Phase 1b — optional list of sub-headings nested under this note.
+    # Defaults to empty so older recorded payloads (and models that
+    # ignore the field) keep deserialising cleanly. Sub-notes are
+    # display-only metadata; they never participate in Sheet-12 fan-out.
+    subnotes: list[_VisionSubNote] = Field(default_factory=list)
 
 
 class _VisionBatch(BaseModel):
@@ -93,6 +111,19 @@ Rules:
     "Directors' Statement", "Statement by Directors", "Statutory
     Declaration", or "Independent Auditors' Report".
   - If you see no note headers on these pages, emit an empty entries list.
+
+Sub-notes:
+  - For each top-level note, also identify sub-numbered headings nested
+    underneath. Common shapes: numeric like "2.1 Basis of preparation",
+    "2.14 Employee benefits", or alpha like "(a) Short term benefits",
+    "(b)(i) Defined contribution plans".
+  - Emit them in the parent note's `subnotes` list with:
+      - subnote_ref: the literal heading marker as it appears
+        ("2.1", "2.14", "(a)", "(b)(i)") — do NOT normalise it.
+      - title: the heading text WITHOUT the marker.
+      - first_page: the PDF page where this sub-heading appears.
+  - If a note has no sub-headings, leave its subnotes list empty —
+    DO NOT invent sub-sections.
 """
 
 
@@ -170,6 +201,17 @@ def _merge_and_stitch(
                 seen[e.note_num] = e
                 continue
             prev = seen[e.note_num]
+            # Phase 1b — union subnotes across overlapping batches,
+            # deduping by subnote_ref. Keep the earlier first_page
+            # when the same ref shows up twice. Sub-notes are display-
+            # only so a near-miss merge has no behavioural cost.
+            merged_subnotes: dict[str, _VisionSubNote] = {
+                s.subnote_ref: s for s in prev.subnotes
+            }
+            for s in e.subnotes:
+                existing = merged_subnotes.get(s.subnote_ref)
+                if existing is None or s.first_page < existing.first_page:
+                    merged_subnotes[s.subnote_ref] = s
             seen[e.note_num] = _VisionNote(
                 note_num=e.note_num,
                 # Prefer the title from the batch that saw the earliest
@@ -177,6 +219,7 @@ def _merge_and_stitch(
                 title=prev.title if prev.first_page <= e.first_page else e.title,
                 first_page=min(prev.first_page, e.first_page),
                 last_page=max(prev.last_page, e.last_page),
+                subnotes=list(merged_subnotes.values()),
             )
 
     ordered = sorted(seen.values(), key=lambda n: n.note_num)
@@ -207,10 +250,36 @@ def _merge_and_stitch(
                 cur.note_num, last_page, cur.first_page,
             )
             continue
+        # Phase 1b — carry the LLM's sub-notes through into the
+        # NoteInventoryEntry. Malformed shapes are skipped silently
+        # (defensive — a Pydantic model already validates the basics
+        # but the downstream dataclass guard rejects empty refs and
+        # bad ranges, which we can hit when the LLM emits an alpha
+        # ref that's only whitespace under length constraints).
+        carried_subnotes: list[SubNoteInventoryEntry] = []
+        for s in cur.subnotes:
+            try:
+                carried_subnotes.append(SubNoteInventoryEntry(
+                    subnote_ref=s.subnote_ref,
+                    title=s.title,
+                    # Vision schema only carries first_page; we mirror
+                    # the regex behaviour and make page_range a 1-page
+                    # span at first_page. Better signal-to-noise than
+                    # asking the LLM to also estimate the sub-note's
+                    # end page, which it would frequently get wrong.
+                    page_range=(s.first_page, s.first_page),
+                ))
+            except ValueError as exc:
+                logger.warning(
+                    "Dropping vision subnote %r under note %d: %s",
+                    s.subnote_ref, cur.note_num, exc,
+                )
+
         out.append(NoteInventoryEntry(
             note_num=cur.note_num,
             title=cur.title,
             page_range=(cur.first_page, last_page),
+            subnotes=carried_subnotes,
         ))
     return out
 
