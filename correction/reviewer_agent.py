@@ -57,6 +57,36 @@ def _open_conn(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def load_open_conflicts(
+    db_path: str | Path, run_id: int
+) -> list[dict[str, Any]]:
+    """Return the run's still-open cascade conflicts, newest-render first.
+
+    Relocated from the now-deleted ``correction/canonical_agent.py`` (rewrite
+    Phase 1, step 1.2): the reviewer pass is the only live consumer, so the
+    helper now lives in the reviewer-owned module. Joins each
+    ``run_concept_conflicts`` row to its ``concept_nodes`` label/render coord
+    so callers can describe the conflict without a second lookup.
+    """
+    conn = _open_conn(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT c.id, c.concept_uuid, c.period, c.entity_scope,
+                   c.kind, c.residual, c.detail,
+                   n.canonical_label, n.render_sheet, n.render_row
+            FROM run_concept_conflicts c
+            LEFT JOIN concept_nodes n ON n.concept_uuid = c.concept_uuid
+            WHERE c.run_id = ? AND c.status = 'open'
+            ORDER BY c.created_at
+            """,
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Step 5 — trace_cascade_source: walk DOWN from a failing face cell.
 # ---------------------------------------------------------------------------
@@ -378,8 +408,7 @@ def apply_reviewer_fix(
     ``fact`` is a ``FactWrite`` (actor should be ``"reviewer"``). Returns a
     short status string for the agent: ``ok: …`` on success, ``rejected: …``
     when the guard or the facts API refuses. Never raises — a rejection is
-    reported so the agent can pick a different target, mirroring
-    ``correction/canonical_agent.py::_apply_correction_fact``.
+    reported so the agent can pick a different target.
 
     Does NOT cascade — the pass recomputes once after the agent finishes
     (Step 9), so individual writes stay cheap.

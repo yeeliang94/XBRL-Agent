@@ -85,8 +85,8 @@ def _canonical_mode_enabled() -> bool:
 
     Current state: the full canonical pipeline is wired — extraction
     fact-projection (Phase B), the DB-backed exporter (Phase C), and the
-    canonical correction agent (Phase D, correction/canonical_agent.py).
-    In canonical mode the correction agent operates on the concept tree
+    reviewer pass (Phase D, correction/reviewer_agent.py).
+    In canonical mode the reviewer operates on the concept tree
     (open conflicts in run_concept_conflicts), writes resolutions through
     the facts API, and the workbook is re-exported + re-merged from facts —
     so the download and the Concepts UI stay in sync (no xlsx split-brain).
@@ -3682,9 +3682,9 @@ async def run_multi_agent_stream(
             canonical = _canonical_facts_enabled()
             canonical_conflicts: list = []
             if canonical:
-                from correction.canonical_agent import _load_open_conflicts
+                from correction.reviewer_agent import load_open_conflicts
                 canonical_conflicts = [
-                    c for c in _load_open_conflicts(AUDIT_DB_PATH, run_id)
+                    c for c in load_open_conflicts(AUDIT_DB_PATH, run_id)
                     if c.get("kind") != "correction_exhausted"
                 ]
             should_correct = bool(hard_failures) or bool(canonical_conflicts)
@@ -5018,7 +5018,7 @@ async def re_review(run_id: int, body: Optional[dict] = None):
     """
     from db import repository as repo
     from types import SimpleNamespace
-    from correction.canonical_agent import _load_open_conflicts
+    from correction.reviewer_agent import load_open_conflicts
 
     conn = _open_audit_conn()
     try:
@@ -5095,7 +5095,7 @@ async def re_review(run_id: int, body: Optional[dict] = None):
             for r in rows
         ]
         conflicts = [
-            c for c in _load_open_conflicts(AUDIT_DB_PATH, run_id)
+            c for c in load_open_conflicts(AUDIT_DB_PATH, run_id)
             if c.get("kind") != "correction_exhausted"
         ]
         user_guidance = (
