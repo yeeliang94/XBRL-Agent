@@ -209,6 +209,9 @@ export type PipelineStage =
   | "merging"
   | "cross_checking"
   | "correcting"
+  // Canonical mode runs the reviewer pass instead of the autonomous
+  // correction pass (docs/PLAN-reviewer-agent.md); it gets its own label.
+  | "reviewing"
   | "re_checking"
   | "validating_notes"
   | "done";
@@ -418,6 +421,8 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   default_models: Record<string, string>;
   scout_enabled_default: boolean;
   tolerance_rm: number;
+  /** Whether the reviewer pass auto-runs after extraction (Settings toggle). */
+  auto_review: boolean;
 }
 
 export type FilingLevel = "company" | "group";

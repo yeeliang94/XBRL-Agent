@@ -34,6 +34,7 @@ const mockSettings: ExtendedSettingsResponse = {
   },
   scout_enabled_default: true,
   tolerance_rm: 1.0,
+  auto_review: true,
 };
 
 describe("PreRunPanel", () => {

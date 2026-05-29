@@ -47,6 +47,7 @@ export async function updateSettings(
     default_models: Record<string, string>;
     scout_enabled_default: boolean;
     tolerance_rm: number;
+    auto_review: boolean;
   }>,
 ): Promise<{ status: string }> {
   return apiFetch<{ status: string }>("/api/settings", {

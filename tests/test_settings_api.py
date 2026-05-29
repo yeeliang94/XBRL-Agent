@@ -78,3 +78,31 @@ def test_get_settings_shows_masked_key(tmp_path, monkeypatch):
     assert data["api_key_set"] is True
     # Key should be partially masked
     assert "..." in data["api_key_preview"]
+
+
+def test_auto_review_toggle_round_trips(tmp_path, monkeypatch):
+    """The Settings auto-review toggle persists to XBRL_AUTO_REVIEW and is
+    reflected by GET /api/settings + /api/config (docs/PLAN-reviewer-agent.md)."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.delenv("XBRL_AUTO_REVIEW", raising=False)
+
+    # Default is on.
+    assert client.get("/api/settings").json()["auto_review"] is True
+    assert client.get("/api/config").json()["auto_review"] is True
+
+    # Turn it off → persisted + re-read fresh from the env file.
+    resp = client.post("/api/settings", json={"auto_review": False})
+    assert resp.status_code == 200
+    assert "XBRL_AUTO_REVIEW" in env_file.read_text()
+    from dotenv import load_dotenv
+    load_dotenv(env_file, override=True)
+    assert client.get("/api/settings").json()["auto_review"] is False
+    assert server._auto_review_enabled() is False
+
+
+def test_reviewer_model_name_reads_default_models(tmp_path, monkeypatch):
+    monkeypatch.delenv("XBRL_DEFAULT_MODELS", raising=False)
+    assert server._reviewer_model_name() is None  # unset → inherit run model
+    monkeypatch.setenv("XBRL_DEFAULT_MODELS", '{"reviewer": "google.gemini-3"}')
+    assert server._reviewer_model_name() == "google.gemini-3"

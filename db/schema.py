@@ -67,7 +67,17 @@ from pathlib import Path
 # cross-sheet child edges), cell_resolver consults it on miss, and the
 # concepts endpoint emits one row per alias so the Review/Values page
 # mirrors the workbook (one face row + one sub row, same concept).
-CURRENT_SCHEMA_VERSION = 11
+# v12 (reviewer-agent, docs/PLAN-reviewer-agent.md): adds two additive
+# tables backing the reviewer pass that replaces the autonomous
+# canonical correction pass. `run_fact_snapshots` mirrors
+# run_concept_facts and stores the ORIGINAL extraction facts before the
+# reviewer touches anything — the one-click "Revert to original" restores
+# from here, which is what makes the reviewer's free writes safe.
+# `reviewer_flags` is the narrow user-facing list of cases the reviewer
+# is stuck on (`stuck`) or where it disputes a prior agent
+# (`disputes_prior`). Both are brand-new tables, so the v11→v12 step is a
+# pure CREATE TABLE IF NOT EXISTS walk-forward with no ALTER columns.
+CURRENT_SCHEMA_VERSION = 12
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -384,6 +394,62 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         UNIQUE(run_id, sheet, row)
     )
     """,
+
+    # -----------------------------------------------------------------
+    # v12: reviewer-agent backing tables (docs/PLAN-reviewer-agent.md).
+    # -----------------------------------------------------------------
+
+    # Original-facts backup. Taken ONCE per run, immediately before the
+    # reviewer pass writes anything, by snapshot_facts(). It mirrors the
+    # run_concept_facts columns the exporter / cascade care about, plus a
+    # snapshot_at stamp. "Revert to original" replaces a run's live facts
+    # with these rows — this is the load-bearing reversibility invariant
+    # that lets the reviewer write freely instead of being write-gated.
+    # No FK to concept_nodes: the snapshot must survive even if a template
+    # is re-imported, and run_id's CASCADE already sweeps it on run delete.
+    """
+    CREATE TABLE IF NOT EXISTS run_fact_snapshots (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id           INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        concept_uuid     TEXT NOT NULL,
+        period           TEXT NOT NULL,
+        entity_scope     TEXT NOT NULL,
+        value            REAL,
+        value_status     TEXT NOT NULL,
+        children_status  TEXT,
+        source           TEXT,
+        evidence         TEXT,
+        snapshot_at      TEXT NOT NULL DEFAULT '',
+        UNIQUE(run_id, concept_uuid, period, entity_scope)
+    )
+    """,
+
+    # Reviewer flags — the only user-facing "needs attention" list. The
+    # reviewer raises one when it is `stuck` (can't reconcile or ground a
+    # figure) or `disputes_prior` (it believes an earlier agent erred).
+    # Grounded fixes are NOT flagged — they just appear in the diff. The
+    # status axis (open → answered → resolved/dismissed) tracks the human's
+    # triage; `human_answer` carries free-text guidance fed back into a
+    # re-review. `applied_fix` optionally references a change the reviewer
+    # made alongside a dispute. concept_uuid is nullable because a stuck
+    # case may not map cleanly to one concept.
+    """
+    CREATE TABLE IF NOT EXISTS reviewer_flags (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        concept_uuid  TEXT,
+        target_sheet  TEXT,
+        target_row    INTEGER,
+        category      TEXT NOT NULL,           -- 'stuck' | 'disputes_prior'
+        reasoning     TEXT,
+        pdf_page      INTEGER,
+        applied_fix   TEXT,                    -- optional ref to a change made alongside a dispute
+        status        TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'answered' | 'resolved' | 'dismissed'
+        human_answer  TEXT,
+        created_at    TEXT NOT NULL DEFAULT '',
+        updated_at    TEXT NOT NULL DEFAULT ''
+    )
+    """,
 )
 
 
@@ -412,6 +478,9 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_run_concept_conflicts_run_id ON run_concept_conflicts(run_id)",
     # v8: per-turn metrics are always queried by their owning agent.
     "CREATE INDEX IF NOT EXISTS ix_run_agent_turns_run_agent_id ON run_agent_turns(run_agent_id)",
+    # v12: both reviewer tables are always queried per-run.
+    "CREATE INDEX IF NOT EXISTS ix_run_fact_snapshots_run_id ON run_fact_snapshots(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_reviewer_flags_run_id ON reviewer_flags(run_id)",
 )
 
 
@@ -876,6 +945,33 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (11,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v11→v12 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v11 → v12: add the reviewer-agent tables (run_fact_snapshots +
+        # reviewer_flags). Both are created above via the idempotent
+        # CREATE TABLE IF NOT EXISTS, so older DBs that walk through this
+        # block just confirm the tables exist and bump the marker — no
+        # ALTER columns needed. Same BEGIN IMMEDIATE discipline as the
+        # earlier additive-table steps (v2→v3, v10→v11).
+        if current_version is not None and current_version < 12:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 12:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (12,),
                     )
                 conn.commit()
             except Exception:
