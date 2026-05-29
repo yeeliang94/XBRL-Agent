@@ -113,6 +113,16 @@ function displayValueStatus(status: string | null): string {
   return status;
 }
 
+// "cascade" is the internal provenance tag the recompute stamps on COMPUTED
+// totals (concept_model/cascade.py). It's redundant with the "Calculated"
+// state badge and means nothing to a reviewer, so it's hidden from display.
+// The stored value is load-bearing (cascade.py branches on source == "cascade"),
+// so it is suppressed only at render time — never removed from the data.
+function displaySource(source: string | null | undefined): string {
+  if (!source) return "";
+  return source.trim().toLowerCase() === "cascade" ? "" : source;
+}
+
 function treeColumns(showPeriods: boolean): string {
   return showPeriods
     ? "minmax(260px, 1fr) minmax(130px, 160px) minmax(130px, 160px) 120px minmax(120px, 180px)"
@@ -1483,7 +1493,7 @@ function ConceptRowView({
               />
             ) : null}
           </div>
-          <div style={styles.sourceCell}>{row.source || ""}</div>
+          <div style={styles.sourceCell}>{displaySource(row.source)}</div>
         </>
       )}
     </div>
@@ -1763,7 +1773,9 @@ function ConceptEvidenceBody({
           </div>
           <div>
             <div style={styles.evidenceLabel}>Source</div>
-            <div style={styles.evidenceText}>{concept.source || "No source recorded"}</div>
+            <div style={styles.evidenceText}>
+              {displaySource(concept.source) || "No source recorded"}
+            </div>
           </div>
           <div>
             <div style={styles.evidenceLabel}>Evidence</div>
@@ -1895,7 +1907,7 @@ function EditableValueCell({
         alignItems: compact ? "flex-end" : "center",
         flexDirection: compact ? "column" : "row",
         gap: compact ? 2 : pwc.space.sm,
-        width: compact ? "100%" : undefined,
+        width: "100%",
         maxWidth: "100%",
       }}
     >
@@ -1925,7 +1937,8 @@ function EditableValueCell({
           flush(e.target.value);
         }}
         style={{
-          width: compact ? "100%" : 148,
+          width: "100%",
+          boxSizing: "border-box",
           minWidth: 0,
           textAlign: "right",
           padding: `${pwc.space.sm}px ${pwc.space.md}px`,
@@ -2322,7 +2335,8 @@ const styles = {
   } as React.CSSProperties,
   emptyValueBox: {
     display: "inline-block",
-    width: 148,
+    width: "100%",
+    boxSizing: "border-box",
     height: 32,
     border: `1px solid ${pwc.grey300}`,
     borderRadius: pwc.radius.md,
@@ -2330,7 +2344,8 @@ const styles = {
   } as React.CSSProperties,
   mandatoryEmptyValueBox: {
     display: "inline-block",
-    width: 148,
+    width: "100%",
+    boxSizing: "border-box",
     height: 32,
     border: `1px solid ${pwc.orange400}`,
     borderRadius: pwc.radius.md,
@@ -2343,6 +2358,7 @@ const styles = {
     alignItems: "center",
     justifyContent: "flex-end",
     width: "100%",
+    boxSizing: "border-box",
     minHeight: 32,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     border: `1px solid ${pwc.grey200}`,
