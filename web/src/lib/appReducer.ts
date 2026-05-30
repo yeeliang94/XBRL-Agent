@@ -813,11 +813,21 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           // on ``data.type``: typed events surface the message but leave
           // ``isRunning=true`` so the spinner keeps spinning while the
           // backend finishes its work.
+          //
+          // Phase 6.2 (rewrite): the backend now stamps an explicit
+          // ``bucket`` on coordinator-level errors. Drive the
+          // running→idle transition off that field — ``fatal`` terminates
+          // the run; ``recoverable``/``advisory`` keep the spinner spinning.
+          // When ``bucket`` is absent (legacy shapes / older tests) fall back
+          // to the original heuristic: untyped == terminal, typed == non-fatal.
           if (!getAgentId(event)) {
             updates.hasError = true;
             updates.error = event.data;
-            const errType = (event.data as { type?: string })?.type;
-            if (!errType) {
+            const data = event.data as { type?: string; bucket?: string };
+            const isFatal = data?.bucket
+              ? data.bucket === "fatal"
+              : !data?.type;
+            if (isFatal) {
               updates.isRunning = false;
             }
           }

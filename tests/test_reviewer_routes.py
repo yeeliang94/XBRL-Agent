@@ -375,6 +375,40 @@ def test_re_review_status_is_idle_before_any_pass(client):
     assert r.json() == {"status": "idle"}
 
 
+def test_re_review_launch_persist_failure_returns_503_and_no_thread(
+    client, monkeypatch
+):
+    """Peer-review MEDIUM: the initial 'running' persist is mandatory. If it
+    fails, the endpoint must 503 and NOT launch the background thread — the
+    re-entrancy guard reads that row, so a swallowed failure would let a
+    second POST launch a duplicate reviewer over the same facts."""
+    tc, db, run_id, srv = client
+    from db import repository as repo
+
+    # Make the launch persist fail. A Thread that did start would call
+    # _create_proxy_model; trip it too so a regression (thread launched
+    # anyway) surfaces loudly rather than silently.
+    def _boom(*a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    launched = {"thread": False}
+
+    def _no_model(*a, **k):
+        launched["thread"] = True
+        raise AssertionError("background thread started despite 503")
+
+    monkeypatch.setattr(repo, "upsert_review_task", _boom)
+    monkeypatch.setattr(srv, "_create_proxy_model", _no_model)
+
+    r = tc.post(f"/api/runs/{run_id}/re-review", json={})
+    assert r.status_code == 503, r.text
+    assert launched["thread"] is False
+    # No durable row was written, so status stays idle (not a phantom running).
+    monkeypatch.undo()
+    s = tc.get(f"/api/runs/{run_id}/re-review/status")
+    assert s.json()["status"] == "idle"
+
+
 def test_re_review_outcome_survives_simulated_restart(client, monkeypatch):
     """Phase 5.3: a FINISHED re-review outcome is durable. The status now
     lives in the run_review_tasks table, not an in-process dict, so the

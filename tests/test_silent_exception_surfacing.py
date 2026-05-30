@@ -140,6 +140,14 @@ def test_merge_failure_emits_sse_error(session_env):
         "Merge-failure SSE error should carry a recognizable type "
         f"discriminator. Body[:600]: {body[:600]!r}"
     )
+    # Phase 6.2 error taxonomy: a merge failure is RECOVERABLE — the run
+    # continues to run_complete (completed_with_errors), so the frontend
+    # keeps the spinner spinning. The bucket field drives that, not the
+    # presence of ``type``.
+    assert '"bucket": "recoverable"' in body, (
+        "Merge-failure SSE error must carry bucket=recoverable so the "
+        f"frontend keeps the run alive. Body[:600]: {body[:600]!r}"
+    )
 
 
 def test_cross_check_exception_emits_sse_error_and_finalizes(session_env):
@@ -196,6 +204,11 @@ def test_cross_check_exception_emits_sse_error_and_finalizes(session_env):
     assert "cross_check_exception" in body, (
         "Cross-check exception SSE error should carry a recognizable "
         f"type discriminator. Body[:800]: {body[:800]!r}"
+    )
+    # Phase 6.2: a cross-check crash is RECOVERABLE — the run finalizes.
+    assert '"bucket": "recoverable"' in body, (
+        "Cross-check-exception SSE error must carry bucket=recoverable. "
+        f"Body[:800]: {body[:800]!r}"
     )
     # Run still finalizes — run_complete event must arrive.
     assert "event: run_complete" in body, (
@@ -325,3 +338,32 @@ def test_post_correction_cross_check_exception_finalizes_with_errors(session_env
         f"run_complete after post-correction crash must report "
         f"success=false. Got: {rc_payload!r}"
     )
+
+
+def test_validation_failure_error_carries_fatal_bucket(session_env):
+    """Phase 6.2: an input-validation failure (here, an unknown statement
+    type) takes the ``_fail_run`` path — the run terminates as ``failed``
+    before any agent launches. Its SSE error must carry ``bucket=fatal`` so
+    the frontend flips the spinner off immediately rather than waiting for a
+    run_complete that signals success."""
+    client, session_id, _out = session_env
+
+    run_config = {
+        "statements": ["NOT_A_REAL_STATEMENT"],
+        "variants": {},
+        "models": {},
+        "infopack": None,
+        "use_scout": False,
+    }
+
+    with patch("server._create_proxy_model", return_value="fake-model"):
+        resp = client.post(f"/api/run/{session_id}", json=run_config)
+
+    assert resp.status_code == 200
+    body = resp.text
+    assert '"bucket": "fatal"' in body, (
+        "A validation-failure error must carry bucket=fatal so the frontend "
+        f"terminates the run. Body[:600]: {body[:600]!r}"
+    )
+    # And the run still finalizes via run_complete (success=false).
+    assert "event: run_complete" in body

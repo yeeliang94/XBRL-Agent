@@ -147,9 +147,21 @@ export interface TokenData {
   cost_estimate: number;
 }
 
+/** Phase 6.2 error taxonomy. `fatal` terminates the run; `recoverable` and
+ *  `advisory` leave it running through to `run_complete`. Absent on legacy
+ *  event shapes — the reducer then falls back to the `type`-presence
+ *  heuristic (untyped == terminal). */
+export type ErrorBucket = "advisory" | "recoverable" | "fatal";
+
 export interface ErrorData {
   message: string;
-  traceback: string;
+  traceback?: string;
+  /** Discriminator for coordinator/sub-pass error shapes (`merge_failed`,
+   *  `cross_check_exception`, `canonical_reexport_failed`, `reviewer_*`,
+   *  `validator_*`). Absent on legacy untyped transport/validation errors. */
+  type?: string;
+  /** Phase 6.2: see {@link ErrorBucket}. */
+  bucket?: ErrorBucket;
 }
 
 /** PLAN-stop-and-validation-visibility Phase 5.1.

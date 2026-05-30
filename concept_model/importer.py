@@ -9,9 +9,12 @@ Reads a concept-tree JSON (the shape emitted by
 
 UPSERT semantics mean re-importing the same JSON is a no-op — the
 deterministic UUID5 keys from the parser are the natural identity.
-``concept_targets`` is left empty in Phase 1 (Company-only filings
-fall back to ``concept_nodes.render_*``); Phase 4 fills it for Group
-templates.
+``concept_targets`` is precomputed for EVERY linear template (rewrite
+Phase 6.1) so the exporter routes each fact via a single keyed lookup:
+:func:`import_company_targets` fills Company B=CY/C=PY,
+:func:`import_group_targets` fills the Group B/C/D/E columns, and
+matrix (SOCIE) templates write per-cell targets inline during import.
+The exporter no longer falls back to ``concept_nodes.render_*``.
 """
 from __future__ import annotations
 
@@ -336,8 +339,17 @@ def import_company_targets(db_path: str | Path, template_id: str) -> int:
 
     Precomputing these lets the exporter route every fact via ONE
     ``concept_targets`` lookup instead of a render_col fallback branch
-    (report §5.1). Idempotent (UNIQUE(concept_uuid, entity_scope, period)).
-    Returns the number of target rows written.
+    (report §5.1). Returns the number of target rows written.
+
+    **Replace-then-insert (peer-review HIGH, 2026-05-30):** this template's
+    existing ``concept_targets`` are DELETED before the fresh insert. A bare
+    ``INSERT OR IGNORE`` left a stale target when a re-import moved a
+    concept's cell (e.g. a render_col shift at a stable
+    ``(sheet, row, label)`` keeps the same uuid, so OR IGNORE skips the new
+    coord) — and bootstrap re-imports on every startup. The delete is scoped
+    to this template's concepts via the ``concept_nodes`` join, so a
+    multi-template DB is unaffected; it also sweeps targets for concepts the
+    edit removed.
 
     Iterates ``concept_nodes`` only — which holds each concept's PRIMARY
     render coord. A cross-sheet rolled-up concept's face *alias* coord
@@ -360,6 +372,15 @@ def import_company_targets(db_path: str | Path, template_id: str) -> int:
         if not rows:
             return 0
 
+        # Wholesale replace so a re-import after a template edit never leaves
+        # a stale target cell behind (see docstring). Scoped to this
+        # template's concepts.
+        conn.execute(
+            "DELETE FROM concept_targets WHERE concept_uuid IN ("
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
+            (template_id,),
+        )
+
         written = 0
         for concept_uuid, sheet, row, render_col in rows:
             # SOCIE matrix carries per-cell targets from import_template.
@@ -368,7 +389,7 @@ def import_company_targets(db_path: str | Path, template_id: str) -> int:
             for period, col in (("CY", render_col or "B"), ("PY", "C")):
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO concept_targets(
+                    INSERT OR REPLACE INTO concept_targets(
                         concept_uuid, entity_scope, period,
                         target_sheet, target_row, target_col
                     ) VALUES (?, 'Company', ?, ?, ?, ?)
@@ -386,9 +407,16 @@ def import_group_targets(db_path: str | Path, template_id: str) -> int:
     """Populate ``concept_targets`` for every LEAF + COMPUTED concept in
     a Group template.
 
-    Idempotent: the unique key on (concept_uuid, entity_scope, period)
-    makes re-imports a no-op.  Returns the number of target rows
-    written (useful for assertions in tests).
+    Returns the number of target rows written (useful for assertions).
+
+    **Replace-then-insert (peer-review HIGH, 2026-05-30):** like
+    :func:`import_company_targets`, this template's existing
+    ``concept_targets`` are DELETED before the fresh insert. A bare
+    ``INSERT OR IGNORE`` left a stale target when a re-import moved a
+    concept's cell at a stable ``(sheet, row, label)`` (same uuid → OR
+    IGNORE skips the new coord); bootstrap re-imports on every startup. The
+    delete is scoped to this template's concepts via the ``concept_nodes``
+    join, so a multi-template DB is unaffected.
 
     Skips ABSTRACT concepts — they're never written to, so they don't
     need per-scope render coordinates.
@@ -404,6 +432,14 @@ def import_group_targets(db_path: str | Path, template_id: str) -> int:
         if not rows:
             return 0
 
+        # Wholesale replace so a re-import after a template edit never leaves
+        # a stale target cell behind. Scoped to this template's concepts.
+        conn.execute(
+            "DELETE FROM concept_targets WHERE concept_uuid IN ("
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
+            (template_id,),
+        )
+
         written = 0
         for concept_uuid, sheet, row in rows:
             # SOCIE skipped — Phase 5 territory.
@@ -412,7 +448,7 @@ def import_group_targets(db_path: str | Path, template_id: str) -> int:
             for period, scope, col in _GROUP_COL_LAYOUT:
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO concept_targets(
+                    INSERT OR REPLACE INTO concept_targets(
                         concept_uuid, entity_scope, period,
                         target_sheet, target_row, target_col
                     ) VALUES (?, ?, ?, ?, ?, ?)

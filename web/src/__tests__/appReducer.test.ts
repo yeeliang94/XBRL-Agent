@@ -138,6 +138,34 @@ describe("appReducer", () => {
     }
   });
 
+  // Phase 6.2 (rewrite): the explicit ``bucket`` field is now authoritative
+  // for the running→idle transition, overriding the legacy type-presence
+  // heuristic. A ``fatal`` error stops the spinner even if it carries a
+  // ``type``; ``recoverable``/``advisory`` keep it spinning even when untyped.
+  test("error bucket drives isRunning (fatal stops, recoverable/advisory continue)", () => {
+    const cases: { bucket: string; type?: string; expectRunning: boolean }[] = [
+      { bucket: "fatal", type: "merge_failed", expectRunning: false },
+      { bucket: "fatal", expectRunning: false },
+      { bucket: "recoverable", type: "merge_failed", expectRunning: true },
+      { bucket: "recoverable", expectRunning: true },
+      { bucket: "advisory", expectRunning: true },
+    ];
+    for (const c of cases) {
+      const running = runningState();
+      const state = appReducer(running, {
+        type: "EVENT",
+        payload: {
+          event: "error",
+          data: { bucket: c.bucket, type: c.type, message: "diagnostic", traceback: "" },
+          timestamp: 1,
+        } as SSEEvent,
+      });
+      expect(state.hasError).toBe(true);
+      expect(state.error?.message).toBe("diagnostic");
+      expect(state.isRunning).toBe(c.expectRunning);
+    }
+  });
+
   test("RESET clears all state", () => {
     const state = appReducer(initialState, {
       type: "UPLOADED",
