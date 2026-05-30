@@ -1,6 +1,6 @@
 # Implementation Plan: First-Principles Rewrite of the AI Processing Pipeline
 
-**Overall Progress:** `~50%` — Phases 0, 1, 2 COMPLETE. Phase 2 extracted the shared `agent_runner.run_agent_loop` and routed both face + notes coordinators through it. Phase 3 (typed `write_facts` contract) in progress.
+**Overall Progress:** `~50%` — Phases 0, 1, 2 COMPLETE (branch green). Phase 3 (typed `write_facts` contract) was STARTED (FactWrite model + typed impl designed) then REVERTED to keep the branch green — see the Phase 3 status note below.
 **PRD Reference:** [docs/REWRITE-first-principles.html](REWRITE-first-principles.html)
 **Last Updated:** 2026-05-30
 **Branch:** `rewrite/first-principles` (off `main`; baseline tag `pre-rewrite-baseline`)
