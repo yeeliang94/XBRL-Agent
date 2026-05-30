@@ -159,13 +159,56 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
 
 - [ ] 🟥 **Step 2.3 (deferred, optional): the Sheet-12 fan-out loop** — `notes/listofnotes_subcoordinator.py` has a THIRD `agent.iter()` loop with load-bearing divergences (namespaced `tool_call_id`s for the frontend dedup; **intentionally no** per-turn telemetry/`token_update` per gotcha #6; dynamic iteration cap; no turn timeout). Forcing it through `run_agent_loop` would change behaviour or bloat the spec with flags — left as a documented exception, not a clean fit.
 
-### Phase 3: Typed tool contract — *build the new agent write path before store-first removes the old one* (report step 5)
+### Phase 3: Typed tool contract — *build the new agent write path before store-first removes the old one* (report step 5) — 🟨 STARTED, REVERTED (clean pickup below)
 
-> **Deliberate reorder:** the report lists store-first (step 4) ahead of typed
-> tools (step 5), but you cannot flip extraction to "write the store directly"
-> until a typed tool that does so exists. Today the live tool is still
-> `fill_workbook(ctx, fields_json: str)` (`extraction/agent.py:610`). This phase
-> creates the replacement; Phase 4 then deletes the old xlsx output path.
+> **Status (this session):** scoped + designed, then backed out to keep the
+> branch green. The full literal rewrite (chosen by the user over the
+> boundary-only option) spans the impl + ~10 impl test files + the agent tool +
+> ~4 prompts + `save_result` references + `PHASE_MAP` — a large core-contract
+> change. Mid-implementation the environment's command/Read output began
+> intermittently corrupting (it had already caused one broken commit earlier
+> this session), making a 15-file change unsafe to verify reliably. The right
+> call was to revert the partial (`tools/fill_workbook.py`) rather than ship a
+> broken/unverifiable branch. **Resolved design + exact steps captured here so
+> the next session is a fast, low-risk pickup.**
+>
+> **Key scoping decision:** the report's `FactWrite(concept, period, scope,
+> html, evidence{page,quote})` is the *store-first* (Phase 4) shape and does NOT
+> fit today's cell-based fill. So `FactWrite` mirrors the real cell contract,
+> typed, with **evidence required**:
+> ```python
+> class FactWrite(BaseModel):           # in tools/fill_workbook.py
+>     sheet: str
+>     col: int            # 2=CY/B, 3=PY/C; group adds D/E; SOCIE matrix = component col
+>     evidence: str       # REQUIRED (invariant #2) — PDF page + short quote
+>     field_label: str = ""   # label-matching mode (preferred)
+>     section: str = ""       # disambiguate duplicate labels
+>     row: Optional[int] = None   # explicit-coordinate mode (SOCIE matrix)
+>     value: Optional[float] = None
+> ```
+> `save_result`'s `fields_json` is the **result-summary artifact** (free-form,
+> written to `{stmt}_result.json`) — semantically NOT a list of cell writes, so
+> it stays a JSON blob; only the *write* path gets typed.
+>
+> **Remaining steps (each verify with `pytest tests/ -q | grep -E "passed|failed" | tail`):**
+> 1. `tools/fill_workbook.py`: add `FactWrite` + `_coerce_facts`; change
+>    `fill_workbook(..., facts: Sequence[FactWrite|dict], ...)`; delete
+>    `_parse_fields_json` + the Invalid-JSON branch; drop `import json` if unused.
+> 2. Migrate the ~10 impl test files (`test_workbook_filler`, `test_fill_workbook_*`,
+>    `test_recalc_post_correction`, `test_workbook_isolation`, `test_integration`,
+>    `test_cell_resolver`, `test_extraction_canonical_projection`): `fields_json='{"fields":[…]}'`
+>    → `facts=[…]`, add `evidence` to each; drop the "not json" error test.
+> 3. `extraction/agent.py`: rename the tool `fill_workbook` → `write_facts(ctx, facts: list[FactWrite])`;
+>    call the impl with `facts=`; keep render path; update `save_result`'s docstring refs.
+> 4. `coordinator.py PHASE_MAP`: key `"fill_workbook"` → `"write_facts"` (and any notes ref).
+> 5. Prompts (`_base.md`, `sofp.md`, `sofp_orderofliquidity.md`, `socie_mpers.md`):
+>    rename the tool + describe the typed schema (pydantic-ai injects it, but the
+>    prose examples must match).
+> 6. `test_extraction_agent.py` + any agent-tool test: update tool name/args.
+>
+> **Deliberate reorder (unchanged):** the report lists store-first (step 4)
+> before typed tools (step 5), but store-first can't "write the store directly"
+> until a typed tool exists. Phase 3 builds it; Phase 4 removes the old path.
 
 - [ ] 🟥 **Step 3.1: Replace stringly-typed JSON tools with typed `write_facts`** — let pydantic-ai validate + inject the schema, and give store-first a write path to build on.
   - [ ] 🟥 Define `FactWrite` (concept, period, scope, value|html mutually exclusive, **required** typed `Evidence{page,quote}`) and `write_facts(ctx, facts: list[FactWrite]) -> WriteReport` as the new agent-facing write path into the fact store
