@@ -69,6 +69,20 @@ fact-store work:
   blocks commemorate real Windows incidents (gotchas #5, #22). Each is sorted
   into Advisory / Recoverable / Fatal, not deleted blind.
 
+## Peer-Review Follow-ups (logged 2026-05-30)
+
+A second team lead reviewed the Phase 1 state. Verdicts after checking against
+HEAD (their line numbers were from an older snapshot). **Tracked here, fixed in
+the phases noted — to be done together, not piecemeal.**
+
+| # | Finding | Verdict | Target | Notes |
+|---|---|---|---|---|
+| PR-1 | **CLI (`run.py`) bypasses the mandatory canonical pipeline** — builds `RunConfig(...)` with no `run_id`/`db_path` ([run.py:101](run.py)), so a CLI run skips fact projection, DB export, the reviewer pass, and fail-fast bootstrap; it just merges scratch workbooks. | ✅ VALID (pre-existing; reviewer said HIGH, I rate **MEDIUM** — `run.py` is a dev/test entrypoint, server is the production path). | **Phase 5** (orchestration unification) | The honest fix = create an audit run + bootstrap the tree + thread `run_id`/`db_path` + export/review/merge — i.e. share the server's phase pipeline. Belongs with Step 5.2. Until then the CLI is extraction-only and inconsistent with "canonical mandatory". |
+| PR-2 | **`orchestration` accepts free-form deleted values** — `RunConfigRequest`/`RunConfigPatchRequest` relaxed `orchestration` to `str`, so a hand-crafted `"monolith"` payload persists + mislabels History. | ✅ VALID (severity **LOW** — cosmetic audit label; split always runs). | **Phase 5** (API/route split) | Normalize to `"split"` at the API boundary (or 422 non-split). Requires updating the 2 mirror tests (`test_runs_patch_config`, `test_runs_start_endpoint`) that currently assert `"monolith"` round-trips; the `test_db_schema_v10` column round-trip stays (it pins schema, not the API). |
+| PR-3 | **`request_tokens`/`response_tokens` pydantic-ai deprecation warnings** (server.py token capture). | ✅ VALID (pre-existing tech debt, orthogonal). | **Phase 6** (cleanup) | Switch to `input_tokens`/`output_tokens` with a `getattr` compat fallback for older pydantic-ai. |
+| PR-4 | AGENTS.md out of sync re: canonical opt-out. | ❌ INVALID | — | No `AGENTS.md` exists in this repo (`find -iname AGENTS.md` → none). The agent reference is `CLAUDE.md`, already updated in Phase 1.1. |
+| PR-5 | Stale "sits idle when `XBRL_CANONICAL_MODE=0`" comments in server.py. | ❌ INVALID at HEAD | — | `grep XBRL_CANONICAL_MODE --include=*.py` (non-test) → zero matches; no such comments remain. Their cited line 1457 is token-counting code in current HEAD. Already handled in Phase 1.1. |
+
 ## Pre-Implementation Checklist
 - [x] 🟩 Questions from exploration resolved (isolation = branch; scope = full)
 - [x] 🟩 PRD (`REWRITE-first-principles.html`) reviewed and accepted as direction
