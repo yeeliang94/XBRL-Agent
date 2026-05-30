@@ -520,6 +520,39 @@ async def build_notes_inventory_async(
     sync sibling's docstring for argument semantics (including
     ``notes_end_page`` and ``force_vision``).
     """
+    entries, _source = await build_notes_inventory_with_source_async(
+        pdf_path,
+        notes_start_page,
+        pdf_length,
+        notes_end_page=notes_end_page,
+        vision_model=vision_model,
+        force_vision=force_vision,
+    )
+    return entries
+
+
+async def build_notes_inventory_with_source_async(
+    pdf_path: str,
+    notes_start_page: int,
+    pdf_length: Optional[int] = None,
+    *,
+    notes_end_page: Optional[int] = None,
+    vision_model: Optional[object] = None,
+    force_vision: bool = False,
+) -> tuple[list[NoteInventoryEntry], str]:
+    """Like ``build_notes_inventory_async`` but also reports HOW the inventory
+    was built (source-honesty, rewrite Phase 6.3):
+
+      * ``"text"``   — the deterministic PyMuPDF-regex fast path produced it.
+      * ``"vision"`` — the LLM vision/OCR fallback path ran (scanned PDF, or
+        ``force_vision``), regardless of whether it found anything (the point
+        is recording that hidden OCR determinism was involved + cost incurred).
+      * ``"none"``   — the regex pass found nothing and no vision path was
+        available (no ``vision_model`` / no resolvable range).
+
+    ``build_notes_inventory_async`` delegates here and drops the source, so the
+    existing list-only contract (and all its callers/tests) is unchanged.
+    """
     vision_range, pages = _resolve_vision_range(
         pdf_path, notes_start_page, pdf_length, notes_end_page,
     )
@@ -532,16 +565,23 @@ async def build_notes_inventory_async(
         )
 
     use_vision_directly = force_vision and vision_model is not None and vision_range is not None
-    inventory = [] if use_vision_directly else extract_inventory_from_pages(pages)
-    if inventory or vision_model is None or vision_range is None:
-        return inventory
+    if not use_vision_directly:
+        text_inventory = extract_inventory_from_pages(pages)
+        if text_inventory:
+            return text_inventory, "text"
+        if vision_model is None or vision_range is None:
+            # Regex found nothing and there's no vision path to fall back to.
+            return text_inventory, "none"
 
     from scout.notes_discoverer_vision import _vision_inventory
 
     start, end = vision_range
-    return await _vision_inventory(
+    entries = await _vision_inventory(
         pdf_path=pdf_path,
         start=start,
         end=end,
         model=vision_model,
     )
+    # The vision path ran (forced or as the text-empty fallback). Record it as
+    # "vision" even when empty — the method, not the yield, is what we report.
+    return entries, "vision"

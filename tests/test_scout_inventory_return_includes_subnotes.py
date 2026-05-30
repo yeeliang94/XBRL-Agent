@@ -36,28 +36,35 @@ def test_tool_return_includes_subnotes(monkeypatch):
     )
 
     async def _fake_build(**kwargs):
-        return [entry]
+        # Phase 6.3: the impl now calls the with-source variant, which returns
+        # (entries, source).
+        return [entry], "text"
 
     monkeypatch.setattr(
-        "scout.notes_discoverer.build_notes_inventory_async", _fake_build
+        "scout.notes_discoverer.build_notes_inventory_with_source_async", _fake_build
     )
-    out = asyncio.run(_discover_notes_inventory_impl(_deps(), notes_start_page=18))
+    deps = _deps()
+    out = asyncio.run(_discover_notes_inventory_impl(deps, notes_start_page=18))
     assert len(out) == 1
     assert out[0]["note_num"] == 2
     subs = out[0].get("subnotes")
     assert isinstance(subs, list) and len(subs) == 2
     assert subs[0] == {"subnote_ref": "2.1", "title": "Basis", "page_range": [18, 18]}
     assert subs[1]["subnote_ref"] == "2.14"
+    # Phase 6.3: the build source is recorded on deps.
+    assert deps.inventory_source == "text"
 
 
 def test_tool_return_empty_subnotes_when_none(monkeypatch):
     entry = NoteInventoryEntry(note_num=3, title="PPE", page_range=(25, 26))
 
     async def _fake_build(**kwargs):
-        return [entry]
+        return [entry], "vision"
 
     monkeypatch.setattr(
-        "scout.notes_discoverer.build_notes_inventory_async", _fake_build
+        "scout.notes_discoverer.build_notes_inventory_with_source_async", _fake_build
     )
-    out = asyncio.run(_discover_notes_inventory_impl(_deps(), notes_start_page=25))
+    deps = _deps()
+    out = asyncio.run(_discover_notes_inventory_impl(deps, notes_start_page=25))
     assert out[0]["subnotes"] == []
+    assert deps.inventory_source == "vision"

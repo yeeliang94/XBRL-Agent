@@ -1,6 +1,6 @@
 # Implementation Plan: First-Principles Rewrite of the AI Processing Pipeline
 
-**Overall Progress:** `~66%` — Phases 0, 1, 2, 3 COMPLETE; Phase 4.1 PARTIAL (branch green, backend 1804 pass). Phase 3 (typed `write_facts`) shipped 2026-05-30. Phase 4.1's **Fatal-projection** core landed (a projection-call failure now fails the run); the **render-last / drop-scratch-xlsx / delete-merge** parts are BLOCKED on the live A/B (4.2) because the exporter drops non-concept cells (row-1 reporting-period dates) — a regression only a real run can validate. 4.2 (live A/B) is a handoff to a session with API keys.
+**Overall Progress:** `~72%` — Phases 0, 1, 2, 3 COMPLETE; Phase 4.1 PARTIAL; Phase 6.3 COMPLETE (branch green, backend 1816 pass). Remaining: 4.1 render-last + 4.2 A/B (live-LLM), 5.1 server route split, 5.2 phase pipeline, 5.3 re-review DB table, 6.1 concept_targets precompute, 6.2 error taxonomy + typed SSE. Phase 3 (typed `write_facts`) shipped 2026-05-30. Phase 4.1's **Fatal-projection** core landed (a projection-call failure now fails the run); the **render-last / drop-scratch-xlsx / delete-merge** parts are BLOCKED on the live A/B (4.2) because the exporter drops non-concept cells (row-1 reporting-period dates) — a regression only a real run can validate. 4.2 (live A/B) is a handoff to a session with API keys.
 **PRD Reference:** [docs/REWRITE-first-principles.html](REWRITE-first-principles.html)
 **Last Updated:** 2026-05-30
 **Branch:** `rewrite/first-principles` (off `main`; baseline tag `pre-rewrite-baseline`)
@@ -336,9 +336,11 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
   - [ ] 🟥 Collapse the ad-hoc SSE shapes (`pipeline_stage`, `cross_check_*`, `partial_merge`, `merge_failed`, `error`) into one typed envelope; update the frontend to read it
   - **Verify:** `test_silent_exception_surfacing.py`, `test_cross_check_progress_events.py` pass; a forced recoverable failure yields `completed_with_errors` with a typed event, a fatal one yields `failed`.
 
-- [ ] 🟥 **Step 6.3: Add scout source-honesty flags** — no hidden LLM determinism (report §3.7).
-  - [ ] 🟥 Add `inventory_source` (text vs vision) and `face_read_in_detail` to `Infopack`; raise fuzzy-match-at-threshold logging from DEBUG to WARN in `notes/writer.py`
-  - **Verify:** scout schema tests pass; a scanned-PDF run records `inventory_source="vision"`; soft-hint behaviour (gotcha #13) is unchanged (negative assertions in `test_page_hints.py` still hold).
+- [x] 🟩 **Step 6.3: Add scout source-honesty flags** — DONE (2026-05-30). No hidden LLM/OCR determinism (report §3.7).
+  - [x] 🟩 `face_read_in_detail` already existed on `StatementPageRef` (2026-05-29 scout-coverage push) — no work needed.
+  - [x] 🟩 Added `inventory_source` ("text" | "vision" | "none" | "unknown") to `Infopack` + `ScoutDeps`. The notes-inventory builder now reports its method via a new `build_notes_inventory_with_source_async` ("text" = PyMuPDF regex, "vision" = LLM/OCR fallback — recorded even when it yields nothing, since the *method* is what matters, "none" = regex empty + no vision). `build_notes_inventory_async` delegates to it and drops the source, so its list-only contract (+ every existing caller/test) is unchanged. Threaded through both agent build sites → `deps.inventory_source` → the `Infopack` constructor; round-trips through `to_json`/`from_json` with defensive coercion to "unknown".
+  - [x] 🟩 Raised the written-fuzzy-match log in `notes/writer.py` from DEBUG (invisible; the old borderline-vs-debug split was dead code since threshold == borderline) to WARNING, so every non-exact row resolution is auditable.
+  - **Verified:** new `tests/test_inventory_source.py` (8 cases: source determination across all branches + Infopack round-trip/coercion); updated scout tests pin source recording; backend 1816 passed; `test_page_hints.py` soft-hint negative assertions still hold (full suite green).
 
 ---
 
