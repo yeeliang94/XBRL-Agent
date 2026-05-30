@@ -14,19 +14,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Dict, Set, List, Union
 
-import json
-
-from pydantic_ai import Agent
 from pricing import estimate_cost
-from pydantic_ai.messages import (
-    FunctionToolCallEvent,
-    FunctionToolResultEvent,
-    PartDeltaEvent,
-    TextPartDelta,
-    ThinkingPartDelta,
-)
 
-from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace, save_messages_trace
+from agent_tracing import save_agent_trace, save_messages_trace
+# MAX_AGENT_ITERATIONS is re-exported here (and used as the AgentLoopSpec
+# default) because the iteration cap is conceptually the face loop's config,
+# and tests/readers reference `coordinator.MAX_AGENT_ITERATIONS`. The loop
+# itself now lives in agent_runner (rewrite Phase 2).
+from agent_tracing import MAX_AGENT_ITERATIONS  # noqa: F401 (re-export)
+from agent_runner import (
+    AgentLoopSpec,
+    IterationLimitReached,
+    run_agent_loop,
+)
 from statement_types import (
     StatementType,
     get_variant,
@@ -55,16 +55,6 @@ PHASE_MAP = {
 # would otherwise pin the coordinator to `running` until MAX_AGENT_ITERATIONS
 # triggers (which only fires *between* iterations, not during one).
 FACE_TURN_TIMEOUT: float = 180.0
-
-
-class _IterationLimitReached(RuntimeError):
-    """Agent exceeded MAX_AGENT_ITERATIONS.
-
-    A dedicated exception type (rather than a bare RuntimeError) so the
-    coordinator can salvage a clean post-write result instead of hard-failing —
-    parity with the asyncio.TimeoutError path. The message text is unchanged so
-    the structured 'Hit iteration limit' SSE surfacing (gotcha #18) is preserved.
-    """
 
 
 def _safe_usage_backfill(agent_run, model, label: str) -> tuple[int, float]:
@@ -102,26 +92,6 @@ def _verify_is_clean(verify_result) -> bool:
     if getattr(verify_result, "mismatches", None):
         return False
     return True
-
-
-async def _iter_with_turn_timeout(async_iterable, timeout: float):
-    """Yield nodes from ``async_iterable`` with a per-step timeout.
-
-    Each call to ``__anext__`` is wrapped in ``asyncio.wait_for`` — if
-    it takes longer than ``timeout`` seconds, ``asyncio.TimeoutError``
-    propagates out and the iterator's pending coroutine is cancelled
-    by ``wait_for`` itself (so we don't leak a background task).
-
-    Mirror of notes.coordinator._iter_with_turn_timeout; kept local so
-    importing one module doesn't drag the other into the call graph.
-    """
-    iterator = async_iterable.__aiter__()
-    while True:
-        try:
-            node = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
-        except StopAsyncIteration:
-            return
-        yield node
 
 
 def _build_event(event_type: str, agent_id: str, agent_role: str, data: dict) -> dict:
@@ -598,178 +568,25 @@ async def _run_single_agent(
 
         await _emit("status", {"phase": "started", "message": f"Starting {agent_role} extraction..."})
 
-        # Track tool call durations and thinking block IDs
-        _tool_start_times: dict[str, float] = {}
-        _thinking_counter = 0
-        _iteration_count = 0
-        # Running cumulative usage so each node's per-turn token figure can be
-        # computed as a delta (PydanticAI's usage() is cumulative).
-        _prev_prompt = 0
-        _prev_completion = 0
-        _prev_total = 0
-
-        # Use agent.iter() for granular streaming instead of agent.run().
-        # Wrapped with `_iter_with_turn_timeout` so one stalled provider
-        # call can't hang the whole face extraction past MAX_AGENT_ITERATIONS
-        # — the iteration cap only fires *between* nodes, not during one.
+        # Stream the agent.iter() run through the shared runner (rewrite
+        # Phase 2): per-turn timeout, iteration cap, tool/model event
+        # streaming, token_update, and v8 per-turn telemetry all live in
+        # agent_runner.run_agent_loop now. The verify/save gate, trace save,
+        # and outcome below stay here — they are face-specific.
+        loop_spec = AgentLoopSpec(
+            agent_role=agent_role,
+            model=model,
+            turn_timeout=FACE_TURN_TIMEOUT,
+            phase_map=PHASE_MAP,
+            phase_message=lambda role, phase: (
+                f"{role}: {phase.replace('_', ' ').title()}"
+            ),
+            set_turn_counter=True,
+        )
         async with agent.iter(prompt, deps=deps) as agent_run:
-            async for node in _iter_with_turn_timeout(agent_run, FACE_TURN_TIMEOUT):
-                _iteration_count += 1
-                # Publish the iteration count onto deps so the save_result
-                # gate in extraction/agent.py can see the real iteration
-                # budget, not a local tool-call counter. Peer-review I1:
-                # the force-save escape hatch must fire near the end of
-                # MAX_AGENT_ITERATIONS (per plan §1.3), not after 3
-                # save_result attempts.
-                deps.turn_counter = _iteration_count
-                if _iteration_count > MAX_AGENT_ITERATIONS:
-                    raise _IterationLimitReached(
-                        f"Hit iteration limit ({MAX_AGENT_ITERATIONS}). "
-                        f"Agent appears stuck in a loop."
-                    )
-                # v8 telemetry: capture this node's wall-clock + which tools it
-                # invoked, so the per-turn metrics row written after the node
-                # completes carries exact timing + tool activity.
-                _node_start = time.monotonic()
-                _node_tool_names: list[str] = []
-                _node_kind = (
-                    "call_tools" if Agent.is_call_tools_node(node)
-                    else "model_request" if Agent.is_model_request_node(node)
-                    else None
-                )
-                if Agent.is_call_tools_node(node):
-                    # Stream tool call/result events as they happen.
-                    # Bound the *inner* event iteration too (peer-review):
-                    # a provider can stall mid-stream on a single node, which
-                    # the outer per-node timeout doesn't cover. Wrapping the
-                    # event loop makes the FACE_TURN_TIMEOUT promise true
-                    # during streaming, not just between nodes.
-                    async with node.stream(agent_run.ctx) as tool_stream:
-                        async for event in _iter_with_turn_timeout(
-                            tool_stream, FACE_TURN_TIMEOUT
-                        ):
-                            if isinstance(event, FunctionToolCallEvent):
-                                tool_name = event.part.tool_name
-                                # v8 telemetry: record the tool this turn fired.
-                                _node_tool_names.append(tool_name)
-                                # Emit phase change based on which tool is being called
-                                phase = PHASE_MAP.get(tool_name)
-                                if phase:
-                                    await _emit("status", {
-                                        "phase": phase,
-                                        "message": f"{agent_role}: {phase.replace('_', ' ').title()}",
-                                    })
-                                # Parse tool args for the frontend timeline
-                                raw_args = event.part.args
-                                if isinstance(raw_args, str):
-                                    try:
-                                        parsed_args = json.loads(raw_args)
-                                    except (json.JSONDecodeError, TypeError):
-                                        parsed_args = {}
-                                elif isinstance(raw_args, dict):
-                                    parsed_args = raw_args
-                                else:
-                                    parsed_args = {}
-                                await _emit("tool_call", {
-                                    "tool_name": tool_name,
-                                    "tool_call_id": event.part.tool_call_id,
-                                    "args": parsed_args,
-                                })
-                                # Track start time for duration calculation
-                                _tool_start_times[event.part.tool_call_id] = time.monotonic()
-
-                            elif isinstance(event, FunctionToolResultEvent):
-                                # Summarize tool result — content may be huge (images, etc.)
-                                content = event.result.content
-                                summary = str(content)[:800] if content else ""
-                                call_id = event.result.tool_call_id
-                                start_t = _tool_start_times.pop(call_id, None)
-                                duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
-                                await _emit("tool_result", {
-                                    "tool_name": event.result.tool_name,
-                                    "tool_call_id": call_id,
-                                    "result_summary": summary,
-                                    "duration_ms": duration_ms,
-                                })
-
-                elif Agent.is_model_request_node(node):
-                    # Stream thinking and text deltas from the model
-                    _thinking_id = f"{agent_id}_think_{_thinking_counter}"
-                    _thinking_active = False
-                    async with node.stream(agent_run.ctx) as model_stream:
-                        # Same bounded iteration as the tool-stream branch —
-                        # a model that stalls mid-token stream is caught by
-                        # FACE_TURN_TIMEOUT instead of hanging indefinitely.
-                        async for event in _iter_with_turn_timeout(
-                            model_stream, FACE_TURN_TIMEOUT
-                        ):
-                            if isinstance(event, PartDeltaEvent):
-                                delta = event.delta
-                                if isinstance(delta, TextPartDelta):
-                                    # If thinking was active, close it before text starts
-                                    if _thinking_active:
-                                        await _emit("thinking_end", {
-                                            "thinking_id": _thinking_id,
-                                            "summary": "",
-                                            "full_length": 0,
-                                        })
-                                        _thinking_active = False
-                                        _thinking_counter += 1
-                                        _thinking_id = f"{agent_id}_think_{_thinking_counter}"
-                                    await _emit("text_delta", {"content": delta.content_delta})
-                                elif isinstance(delta, ThinkingPartDelta):
-                                    _thinking_active = True
-                                    await _emit("thinking_delta", {
-                                        "content": delta.content_delta or "",
-                                        "thinking_id": _thinking_id,
-                                    })
-                    # Close any still-open thinking block at end of model node
-                    if _thinking_active:
-                        await _emit("thinking_end", {
-                            "thinking_id": _thinking_id,
-                            "summary": "",
-                            "full_length": 0,
-                        })
-                        _thinking_counter += 1
-
-                # Emit token usage after each node completes
-                usage = agent_run.usage()
-                total = usage.total_tokens or 0
-                prompt_t = usage.request_tokens or 0
-                completion_t = usage.response_tokens or 0
-                await _emit("token_update", {
-                    "prompt_tokens": prompt_t,
-                    "completion_tokens": completion_t,
-                    "thinking_tokens": 0,  # PydanticAI doesn't separate thinking tokens
-                    "cumulative": total,
-                    "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
-                })
-
-                # v8 telemetry: record this node as a per-turn metrics row.
-                # The token figures are deltas vs the previous node's
-                # cumulative usage; cost is the marginal cost of this turn.
-                # Guarded so a telemetry hiccup never breaks streaming.
-                try:
-                    d_prompt = max(prompt_t - _prev_prompt, 0)
-                    d_completion = max(completion_t - _prev_completion, 0)
-                    d_total = max(total - _prev_total, 0)
-                    _turn_records.append({
-                        "turn_index": _iteration_count,
-                        "node_kind": _node_kind,
-                        "tool_names": ",".join(_node_tool_names) or None,
-                        "_n_tool_calls": len(_node_tool_names),
-                        "prompt_tokens": d_prompt,
-                        "completion_tokens": d_completion,
-                        "total_tokens": d_total,
-                        "cumulative_tokens": total,
-                        "cost_estimate": estimate_cost(d_prompt, d_completion, 0, model),
-                        "duration_ms": int((time.monotonic() - _node_start) * 1000),
-                    })
-                    _prev_prompt, _prev_completion, _prev_total = (
-                        prompt_t, completion_t, total
-                    )
-                except Exception:  # noqa: BLE001 — telemetry is advisory
-                    logger.debug("per-turn telemetry capture skipped for %s", agent_role)
+            await run_agent_loop(
+                agent_run, deps, loop_spec, _emit, _turn_records,
+            )
 
         # Get the final result — same RunResult as agent.run() returned
         result = agent_run.result
@@ -914,7 +731,7 @@ async def _run_single_agent(
             total_cost=_cost,
         ))
 
-    except _IterationLimitReached as e:
+    except IterationLimitReached as e:
         # The agent burned its whole iteration budget. If a workbook already
         # landed AND the last verify was clean, the work is done — salvage it
         # as succeeded (parity with the TimeoutError path) rather than throwing
