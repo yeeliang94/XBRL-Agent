@@ -4839,7 +4839,31 @@ async def re_review(run_id: int, body: Optional[dict] = None):
     # request loop: it can't be cancelled by request teardown (a raw
     # create_task is), can't block other requests, and keeps the model's async
     # HTTP client bound to the loop that actually uses it.
-    _save_review_task(run_id, "running", model_name=model_name)
+    #
+    # The initial 'running' persist is MANDATORY (peer-review MEDIUM), not
+    # best-effort: the re-entrancy guard above reads this row to refuse a
+    # duplicate pass, so a swallowed failure would let a second POST launch a
+    # second reviewer over the same facts. Write it DIRECTLY (not through the
+    # swallowing `_save_review_task`) and 503 on failure — and do NOT start the
+    # background thread unless the row is durable. The terminal 'done' write
+    # later CAN stay best-effort: by then the thread owns the state and a lost
+    # telemetry write is reconciled at startup.
+    launch_conn = _open_audit_conn()
+    try:
+        repo.upsert_review_task(
+            launch_conn, run_id, "running", model_name=model_name
+        )
+        launch_conn.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "re-review launch persist failed for run %s", run_id, exc_info=True
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Could not record the re-review launch; please try again.",
+        ) from e
+    finally:
+        launch_conn.close()
 
     def _gather():
         # Failing cross-checks come from the run's STORED cross_checks rows —

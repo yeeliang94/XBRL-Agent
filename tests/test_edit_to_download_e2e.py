@@ -1,4 +1,3 @@
-from concept_model.importer import import_company_targets
 """Phase 0 validation — the edit→recompute→download loop end to end.
 
 Exercises the real HTTP surface: PATCH a leaf value via the facts endpoint,
@@ -33,7 +32,7 @@ def client(tmp_path: Path, monkeypatch):
 
     from db.schema import init_db
     from concept_model.parser import parse_template
-    from concept_model.importer import import_template
+    from concept_model.importer import import_template, import_company_targets
     init_db(db_path)
     tree = parse_template(str(CO_SOFP))
     jp = tmp_path / "tree.json"

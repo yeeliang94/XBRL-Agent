@@ -28,7 +28,7 @@ CO_SOFP = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 def seeded(tmp_path: Path):
     from db.schema import init_db
     from concept_model.parser import parse_template, _derive_template_id
-    from concept_model.importer import import_template
+    from concept_model.importer import import_template, import_company_targets
     from concept_model.facts_api import write_fact, FactWrite
 
     db_path = tmp_path / "xbrl.db"
@@ -38,6 +38,10 @@ def seeded(tmp_path: Path):
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     import_template(db_path, jp)
     template_id = _derive_template_id(CO_SOFP)
+    # Phase 6.1: the exporter routes every fact via a single concept_targets
+    # lookup and RAISES on an applicable fact with no target (CLAUDE.md gotcha
+    # #21). A hand-rolled Company DB must precompute its targets.
+    import_company_targets(db_path, template_id)
 
     conn = sqlite3.connect(str(db_path))
     run_id = conn.execute(

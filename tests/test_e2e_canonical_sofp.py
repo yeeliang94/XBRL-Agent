@@ -1,4 +1,3 @@
-from concept_model.importer import import_company_targets
 """Phase 1 step 1.21 — end-to-end canonical-mode smoke test.
 
 Composes every Phase-1 layer:
@@ -44,7 +43,7 @@ def canonical_env(tmp_path: Path, monkeypatch) -> dict:
     init_db(db)
 
     from concept_model.parser import parse_template
-    from concept_model.importer import import_template
+    from concept_model.importer import import_template, import_company_targets
     tree = parse_template(str(FIXTURE))
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
