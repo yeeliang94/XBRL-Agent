@@ -1,6 +1,6 @@
 # Implementation Plan: First-Principles Rewrite of the AI Processing Pipeline
 
-**Overall Progress:** `~62%` — Phases 0, 1, 2, 3 COMPLETE (branch green). Phase 3 (typed `write_facts` contract) shipped 2026-05-30: full rename + frontend, backend 1801 pass / frontend 630 pass / tsc clean. Phase 4 (store-first keystone) is next; 4.2 needs a real-LLM A/B run (no API key in this environment).
+**Overall Progress:** `~66%` — Phases 0, 1, 2, 3 COMPLETE; Phase 4.1 PARTIAL (branch green, backend 1804 pass). Phase 3 (typed `write_facts`) shipped 2026-05-30. Phase 4.1's **Fatal-projection** core landed (a projection-call failure now fails the run); the **render-last / drop-scratch-xlsx / delete-merge** parts are BLOCKED on the live A/B (4.2) because the exporter drops non-concept cells (row-1 reporting-period dates) — a regression only a real run can validate. 4.2 (live A/B) is a handoff to a session with API keys.
 **PRD Reference:** [docs/REWRITE-first-principles.html](REWRITE-first-principles.html)
 **Last Updated:** 2026-05-30
 **Branch:** `rewrite/first-principles` (off `main`; baseline tag `pre-rewrite-baseline`)
@@ -267,13 +267,29 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
   - [x] 🟩 **Render/export path unchanged** — still produces the xlsx as today (Phase 4 flips to render-last), so behaviour stays A/B-comparable.
   - **Verified:** `test_fill_workbook_abstract_guard.py`, `test_prompt_residual_plug_rule.py` pass against the new contract; FactWrite rejects evidence-less proposals before the tool body (smoke-tested + pinned by the migrated agent tests); full backend 1801 passed, frontend 630 passed, tsc clean.
 
-### Phase 4: Store-first keystone — *the genuine architecture change* (report step 4) — **gated on Phases 2–3 being stable**
+### Phase 4: Store-first keystone — *the genuine architecture change* (report step 4) — 🟨 4.1 PARTIAL (Fatal-projection landed; render-last/delete-merge A/B-gated), 4.2 HANDOFF
 
-- [ ] 🟥 **Step 4.1: Make the fact-store write primary and transactional** — facts are truth, not a swallowed side-effect.
-  - [ ] 🟥 Using the `write_facts` path from Phase 3, make the store write the **primary, transactional** write to `run_concept_facts` / `notes_cells`; remove the swallow at `extraction/agent.py:188` so a projection failure is **Fatal**, not a best-effort log
-  - [ ] 🟥 Stop writing an agent scratch `filled.xlsx`; the xlsx is produced only at render time from facts (render-last)
-  - [ ] 🟥 Delete the merge step and the exporter's "fall back to the agent workbook when zero facts applied" branch
-  - **Verify:** unit test that a forced projection failure marks the run `failed` (no half-populated success); download reflects DB facts exactly; merge-step tests are removed (not skipped).
+> **Decision (2026-05-30, user-chosen):** implement 4.1 structurally now,
+> verified by unit tests only, and hand 4.2 (the live A/B) off to run with API
+> keys before this merges to `main`. While implementing, a concrete blocker
+> reshaped the safe scope — see the render-last note below.
+
+- [~] 🟨 **Step 4.1: Make the fact-store write primary and transactional** — facts are truth, not a swallowed side-effect.
+  - [x] 🟩 **Fatal projection (landed).** Removed the swallow at the old
+    `extraction/agent.py:188`: `_project_facts_if_canonical` now sets
+    `deps.projection_failed` when the projection CALL raises (DB error, bad
+    template_id, …), and `coordinator.py`'s success contract refuses to mark
+    the statement `succeeded` while that flag is set (mirrors the existing
+    `result_saved` gate). **Crucially scoped to the infra-failure path only** —
+    `proj.has_gaps` (cells that don't map to a concept, e.g. row-1 date cells
+    and the evidence column) stays **advisory**, or every real run would fail.
+    The flag resets per `write_facts` call so a retry-success clears a transient
+    failure. Pinned by `tests/test_extraction_canonical_projection.py`
+    (`test_projection_call_failure_is_fatal`, `test_unmapped_cell_is_not_fatal`,
+    `test_successful_projection_clears_prior_fatal_flag`). Backend 1804 passed.
+  - [ ] 🟥 **Stop writing an agent scratch `filled.xlsx` (render-last) — BLOCKED on the live A/B (4.2).** Concrete finding during implementation: `concept_model/exporter.py::export_run_to_xlsx` fills a fresh **template copy** (placeholder `01/01/YYYY` dates in B1) from `run_concept_facts` only, and **row-1 reporting-period date cells are non-concept writes that do NOT project to facts** (they land in `proj.skipped`). Nothing else stamps the period dates. So a literal "drop the scratch xlsx, render only from facts" would regress the download's reporting-period dates (and any other non-concept cell) — a divergence that ONLY a real-run/A/B can validate, which is exactly what the keystone's A/B gate exists for. Doing it blind under "unit-tests only" would be silently shipping a known regression. Deferred to land **together with** 4.2 (and likely a small exporter change to carry forward non-concept cells, or to project period dates as facts).
+  - [ ] 🟥 **Delete the merge step + the exporter's zero-facts fallback — partially BLOCKED.** The merge is also how face statements + the separate notes pipeline (`notes_cells`) are combined into one `filled.xlsx`; it can't be literally deleted, only have its inputs switched to facts-renders. Removing the zero-facts/`except: continue`/outer fallbacks in `_export_canonical_workbooks` is coupled to the same non-concept-cell (date) wrinkle above, so it rides with 4.2 too.
+  - **Verify:** ✅ unit test that a forced projection failure marks the statement `failed` (no half-populated success) — DONE. ⏳ "download reflects DB facts exactly" + "merge-step tests removed" — deferred to 4.2 (needs the live A/B to confirm no date-cell/non-concept regression).
 
 - [ ] 🟥 **Step 4.2: A/B the store-first change before it stays** — prove quality, not just structure.
   - [ ] 🟥 Run the Phase 0.3 harness: store-first vs the pre-rewrite baseline on the real test PDFs (MFRS Company + Group, at minimum)

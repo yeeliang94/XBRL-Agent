@@ -122,6 +122,7 @@ async def test_face_coordinator_times_out_stalled_turn(tmp_path):
     with patch("coordinator.FACE_TURN_TIMEOUT", 0.05), \
          patch("coordinator.create_extraction_agent") as factory:
         mock_deps = MagicMock()
+        mock_deps.projection_failed = False
         mock_deps.filled_path = ""  # no workbook written
         mock_deps.filled_filename = "SOFP_filled.xlsx"
         mock_deps.statement_type = StatementType.SOFP
@@ -152,6 +153,7 @@ async def test_face_coordinator_keeps_workbook_after_post_write_stall(tmp_path):
     with patch("coordinator.FACE_TURN_TIMEOUT", 0.05), \
          patch("coordinator.create_extraction_agent") as factory:
         mock_deps = MagicMock()
+        mock_deps.projection_failed = False
         # Simulate "a write landed before the stall" — filled_path set.
         mock_deps.filled_path = str(tmp_path / "SOFP_filled.xlsx")
         mock_deps.filled_filename = "SOFP_filled.xlsx"
@@ -186,6 +188,7 @@ async def test_face_coordinator_refuses_success_without_filled_path(tmp_path):
 
     with patch("coordinator.create_extraction_agent") as factory:
         mock_deps = MagicMock()
+        mock_deps.projection_failed = False
         mock_deps.filled_path = ""  # agent never wrote
         mock_deps.filled_filename = "SOFP_filled.xlsx"
         mock_deps.statement_type = StatementType.SOFP
@@ -222,6 +225,7 @@ async def test_notprepared_variant_produces_skipped_result(tmp_path):
 
     with patch("coordinator.create_extraction_agent") as factory:
         mock_deps = MagicMock()
+        mock_deps.projection_failed = False
         mock_deps.filled_path = str(tmp_path / "SOFP_filled.xlsx")
         mock_deps.filled_filename = "SOFP_filled.xlsx"
         mock_deps.statement_type = StatementType.SOFP
@@ -366,6 +370,7 @@ async def test_all_succeeded_treats_skipped_as_success(tmp_path):
     )
     with patch("coordinator.create_extraction_agent") as factory:
         mock_deps = MagicMock()
+        mock_deps.projection_failed = False
         mock_deps.filled_path = str(tmp_path / "SOFP_filled.xlsx")
         mock_deps.filled_filename = "SOFP_filled.xlsx"
         mock_deps.statement_type = StatementType.SOFP

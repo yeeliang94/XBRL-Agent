@@ -665,6 +665,37 @@ async def _run_single_agent(
                 total_cost=final_cost,
             ))
 
+        # Rewrite Phase 4.1 (store-first): the fact store is the primary,
+        # transactional write. If a projection CALL failed (DB error, etc.)
+        # the DB is missing facts the agent believes it wrote — and since the
+        # download + Concepts UI render from the DB, a "succeeded" status here
+        # would be a half-populated lie. Fail the statement instead. This is
+        # the infra-failure path only; unmapped cells (has_gaps) are advisory
+        # and never reach this flag.
+        if deps.projection_failed:
+            err_msg = (
+                f"{statement_type.value}: fact-store projection failed — "
+                f"{deps.projection_error or 'see logs'}. The run cannot "
+                "finalise this statement because the download renders from "
+                "the database, not the scratch workbook."
+            )
+            logger.error(err_msg)
+            await _emit("error", {"message": err_msg, "type": "projection_failed"})
+            await _emit("complete", {
+                "success": False,
+                "error": err_msg,
+                "workbook_path": deps.filled_path,
+            })
+            return _finalize(AgentResult(
+                statement_type=statement_type,
+                variant=variant,
+                status="failed",
+                workbook_path=deps.filled_path,
+                error=err_msg,
+                total_tokens=final_tokens,
+                total_cost=final_cost,
+            ))
+
         flag = deps.unresolved_summary if deps.completed_with_flag else None
         if flag:
             logger.warning(

@@ -121,3 +121,53 @@ def test_projection_warns_on_unmapped_cell(canonical_env, tmp_path):
     warning = _project_facts_if_canonical(deps, result)
     assert warning is not None
     assert "unmapped" in warning.lower() or "0 fact" in warning.lower()
+
+
+# --- Rewrite Phase 4.1: projection-CALL failure is FATAL ---------------------
+
+
+def test_unmapped_cell_is_not_fatal(canonical_env, tmp_path):
+    """`has_gaps` (some cells didn't map to a concept — e.g. row-1 date cells
+    or the evidence column) stays ADVISORY. It must not set the fatal flag, or
+    every real run (which writes date cells) would fail."""
+    db_path, run_id, template_id, leaf = canonical_env
+    deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
+    result = _fill(tmp_path, leaf, col=4, value=1.0)
+    _project_facts_if_canonical(deps, result)
+    assert deps.projection_failed is False
+
+
+def test_projection_call_failure_is_fatal(canonical_env, tmp_path, monkeypatch):
+    """When the projection CALL itself raises (DB error, bad template_id, …)
+    the fact store write did not land. Store-first (Phase 4.1) makes that
+    FATAL: deps.projection_failed flips True so the coordinator refuses to mark
+    the statement succeeded — no half-populated 'success' with missing facts."""
+    db_path, run_id, template_id, leaf = canonical_env
+    deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
+    result = _fill(tmp_path, leaf, value=4321.0)
+
+    import concept_model.cell_resolver as cr
+
+    def _boom(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(cr, "project_writes", _boom)
+
+    warning = _project_facts_if_canonical(deps, result)
+    assert deps.projection_failed is True
+    assert deps.projection_error and "OperationalError" in deps.projection_error
+    assert warning is not None and "FAILED" in warning
+
+
+def test_successful_projection_clears_prior_fatal_flag(canonical_env, tmp_path):
+    """A later successful write_facts clears a transient earlier failure — the
+    flag reflects the OUTCOME OF THE LATEST projection attempt."""
+    db_path, run_id, template_id, leaf = canonical_env
+    deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
+    deps.projection_failed = True  # simulate an earlier failed attempt
+    deps.projection_error = "stale"
+
+    result = _fill(tmp_path, leaf, value=4321.0)
+    _project_facts_if_canonical(deps, result)
+    assert deps.projection_failed is False
+    assert deps.projection_error is None
