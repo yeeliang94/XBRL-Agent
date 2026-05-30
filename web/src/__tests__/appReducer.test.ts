@@ -149,6 +149,11 @@ describe("appReducer", () => {
       { bucket: "recoverable", type: "merge_failed", expectRunning: true },
       { bucket: "recoverable", expectRunning: true },
       { bucket: "advisory", expectRunning: true },
+      // Peer-review MEDIUM: an unknown/typo'd bucket must NOT be silently
+      // treated as non-fatal — it falls back to the legacy heuristic
+      // (untyped == terminal), so an untyped unknown-bucket event still stops.
+      { bucket: "fatl", expectRunning: false },          // typo, untyped → legacy fatal
+      { bucket: "fatl", type: "merge_failed", expectRunning: true }, // typo + typed → legacy non-fatal
     ];
     for (const c of cases) {
       const running = runningState();

@@ -824,9 +824,20 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             updates.hasError = true;
             updates.error = event.data;
             const data = event.data as { type?: string; bucket?: string };
-            const isFatal = data?.bucket
-              ? data.bucket === "fatal"
-              : !data?.type;
+            // Switch on KNOWN buckets so a malformed/typo'd bucket value can't
+            // be silently mistaken for "non-fatal" (peer-review MEDIUM). An
+            // unknown OR absent bucket falls back to the legacy heuristic
+            // (untyped == terminal) — which is still correct because every real
+            // fatal backend event is untyped (validation / stream-drain /
+            // cancel / coordinator-crash), so the fallback stops the spinner.
+            let isFatal: boolean;
+            if (data?.bucket === "fatal") {
+              isFatal = true;
+            } else if (data?.bucket === "recoverable" || data?.bucket === "advisory") {
+              isFatal = false;
+            } else {
+              isFatal = !data?.type;
+            }
             if (isFatal) {
               updates.isRunning = false;
             }

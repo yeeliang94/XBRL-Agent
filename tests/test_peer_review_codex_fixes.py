@@ -155,6 +155,55 @@ async def test_notes_validator_times_out_when_turn_stalls(tmp_path, monkeypatch)
         assert e["data"]["agent_id"] == NOTES_VALIDATOR_AGENT_ID
 
 
+@pytest.mark.asyncio
+async def test_notes_validator_construction_failure_emits_bucketed_error(
+    tmp_path, monkeypatch
+):
+    """Peer-review HIGH: when create_notes_validator_agent raises, the pass
+    used to set outcome["error"] and return SILENTLY — no SSE error, no
+    complete — leaving the Notes Validator tab stranded. It must now surface a
+    recoverable-bucketed error AND a failure-complete so the tab terminates."""
+    from server import _run_notes_validator_pass, NOTES_VALIDATOR_AGENT_ID
+    import notes.validator_agent as validator_mod
+
+    def _boom_create(*args, **kwargs):
+        raise RuntimeError("template not found")
+
+    monkeypatch.setattr(validator_mod, "create_notes_validator_agent", _boom_create)
+
+    notes_outputs = {
+        "ACC_POLICIES": str(tmp_path / "sheet11.xlsx"),
+        "LIST_OF_NOTES": str(tmp_path / "sheet12.xlsx"),
+    }
+    queue: asyncio.Queue = asyncio.Queue()
+
+    outcome = await _run_notes_validator_pass(
+        merged_workbook_path=str(tmp_path / "merged.xlsx"),
+        pdf_path=str(tmp_path / "x.pdf"),
+        notes_template_outputs=notes_outputs,
+        filing_level="company",
+        filing_standard="mfrs",
+        model=TestModel(),
+        output_dir=str(tmp_path),
+        event_queue=queue,
+    )
+
+    assert outcome["error"] is not None
+    assert "construction failed" in outcome["error"]
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    by_kind = {e["event"]: e["data"] for e in events}
+    assert "error" in by_kind, "construction failure must emit an SSE error"
+    assert "complete" in by_kind, "construction failure must emit a complete"
+    # The error is a recoverable-bucketed, typed, agent-scoped event.
+    assert by_kind["error"]["bucket"] == "recoverable"
+    assert by_kind["error"]["type"] == "notes_validator_exception"
+    assert by_kind["error"]["agent_id"] == NOTES_VALIDATOR_AGENT_ID
+    assert by_kind["complete"]["success"] is False
+
+
 def test_notes_validator_turn_timeout_constant_is_reasonable():
     from server import NOTES_VALIDATOR_TURN_TIMEOUT
 
