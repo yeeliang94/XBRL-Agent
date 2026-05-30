@@ -824,6 +824,13 @@ code path is fully wired:
       `tests/test_reviewer_routes.py`
       (`test_re_review_outcome_survives_simulated_restart`,
       `test_stale_running_task_reconciled_at_startup`).
+      The launch's initial `running` write is **mandatory, not best-effort**
+      (peer-review MEDIUM): the re-entrancy guard reads that row, so a
+      swallowed launch-write would let a second POST start a duplicate pass
+      over the same facts. `re_review` writes `running` directly and returns
+      **503** if it fails (no thread started); only the terminal `done`
+      write goes through the swallowing `_save_review_task`. Pinned by
+      `test_re_review_launch_persist_failure_returns_503_and_no_thread`.
 
 **Canonical mode cannot be disabled** (rewrite Phase 1.1). There is no
 opt-out flag and no legacy pipeline to fall back to. If the concept-tree

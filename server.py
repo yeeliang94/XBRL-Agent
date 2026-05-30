@@ -889,6 +889,14 @@ async def _run_reviewer_pass(
     async def _emit(event_type: str, data: dict) -> None:
         if event_queue is None:
             return
+        # Phase 6.2: every sub-pass (reviewer / notes-validator) error is
+        # recoverable — these passes run AFTER extraction and their failure
+        # leaves the run landing ``completed_with_errors``, never terminating
+        # it. Stamp the bucket so the audit DB + any future global consumer
+        # classify it honestly (these errors carry an ``agent_id`` so the
+        # frontend already routes them per-agent, not to the global branch).
+        if event_type == "error":
+            data = {"bucket": ERROR_BUCKET_RECOVERABLE, **data}
         await event_queue.put({
             "event": event_type,
             "data": {**data, "agent_id": agent_id, "agent_role": agent_id},
@@ -1175,6 +1183,14 @@ async def _run_notes_validator_pass(
     async def _emit(event_type: str, data: dict) -> None:
         if event_queue is None:
             return
+        # Phase 6.2: every sub-pass (reviewer / notes-validator) error is
+        # recoverable — these passes run AFTER extraction and their failure
+        # leaves the run landing ``completed_with_errors``, never terminating
+        # it. Stamp the bucket so the audit DB + any future global consumer
+        # classify it honestly (these errors carry an ``agent_id`` so the
+        # frontend already routes them per-agent, not to the global branch).
+        if event_type == "error":
+            data = {"bucket": ERROR_BUCKET_RECOVERABLE, **data}
         await event_queue.put({
             "event": event_type,
             "data": {**data, "agent_id": agent_id, "agent_role": agent_id},
@@ -2222,6 +2238,29 @@ def _emit_cross_check_summary(
         )
 
 
+# ---------------------------------------------------------------------------
+# Error taxonomy (rewrite Phase 6.2)
+# ---------------------------------------------------------------------------
+# Every coordinator-level SSE ``error`` event carries an explicit ``bucket``
+# so the frontend drives the run-still-going-vs-terminate decision off a named
+# field instead of the legacy "is ``data.type`` present?" heuristic.
+#
+#   advisory    — a swallowed/fallback condition that never blocks the run.
+#                 (Most advisory cases are logged, not emitted; the field is
+#                 here for the rare one that surfaces as a non-blocking note.)
+#   recoverable — surface the failure but the run continues to ``run_complete``
+#                 and lands ``completed_with_errors`` (merge_failed,
+#                 cross_check_exception, canonical_reexport_failed, and every
+#                 reviewer/notes-validator sub-pass error — the outer run
+#                 keeps going).
+#   fatal       — the run terminates now → ``failed`` / ``aborted`` (validation
+#                 before agents start, stream-drain failure, coordinator crash,
+#                 user cancel).
+ERROR_BUCKET_ADVISORY = "advisory"
+ERROR_BUCKET_RECOVERABLE = "recoverable"
+ERROR_BUCKET_FATAL = "fatal"
+
+
 def _fail_run(db_conn: "Optional[Any]", run_id: Optional[int], msg: str):
     """Build the error + run_complete SSE events and mark the run row failed.
 
@@ -2249,7 +2288,7 @@ def _fail_run(db_conn: "Optional[Any]", run_id: Optional[int], msg: str):
         return
     """
     events = [
-        {"event": "error", "data": {"message": msg}},
+        {"event": "error", "data": {"message": msg, "bucket": ERROR_BUCKET_FATAL}},
         {"event": "run_complete", "data": {"success": False, "message": msg}},
     ]
     new_status = "failed" if _safe_mark_finished(db_conn, run_id, "failed") else None
@@ -2737,7 +2776,14 @@ async def run_multi_agent_stream(
             persist_event accepts it and History after reload still
             shows the diagnostic. The SYSTEM run_agents row is created
             lazily here on first call.
+
+            Every payload is stamped ``bucket="recoverable"`` (Phase 6.2)
+            unless the caller set one explicitly — this helper is, by
+            construction, only used for coordinator-level errors that DON'T
+            terminate the run (the run continues to ``run_complete``). The
+            field tells the frontend to keep the spinner spinning.
             """
+            payload.setdefault("bucket", ERROR_BUCKET_RECOVERABLE)
             _ensure_system_pseudo_agent()
             # DB persistence — stamped copy, lazily-created SYSTEM row.
             if _system_run_agent_id is not None:
@@ -2961,7 +3007,7 @@ async def run_multi_agent_stream(
             if _safe_mark_finished(db_conn, run_id, "failed"):
                 terminal_status = "failed"
             if client_connected:
-                yield {"event": "error", "data": {"message": f"Stream error: {e}"}}
+                yield {"event": "error", "data": {"message": f"Stream error: {e}", "bucket": ERROR_BUCKET_FATAL}}
             return
 
         # Await the coordinator task to get CoordinatorResult for post-processing
@@ -2991,14 +3037,14 @@ async def run_multi_agent_stream(
                 # workbook" banner alongside the cancellation message.
                 if partial["merged"] or partial["statements_included"] or partial["notes_included"]:
                     yield {"event": "partial_merge", "data": partial}
-                yield {"event": "error", "data": {"message": "Run cancelled"}}
+                yield {"event": "error", "data": {"message": "Run cancelled", "bucket": ERROR_BUCKET_FATAL}}
             return
         except Exception as e:
             logger.exception("Coordinator failed", extra={"session_id": session_id})
             if _safe_mark_finished(db_conn, run_id, "failed"):
                 terminal_status = "failed"
             if client_connected:
-                yield {"event": "error", "data": {"message": f"Coordinator error: {e}"}}
+                yield {"event": "error", "data": {"message": f"Coordinator error: {e}", "bucket": ERROR_BUCKET_FATAL}}
             return
 
         # Canonical mode (Phase B7): now that every extraction agent has
