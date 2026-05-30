@@ -71,9 +71,11 @@ def test_download_rejects_traversal_at_handler_level(tmp_path, monkeypatch):
         "SOFP_/etc/passwd.xlsx",    # absolute-ish
     ):
         try:
-            asyncio.get_event_loop().run_until_complete(
-                server.download_result("sess1", malicious)
-            )
+            # asyncio.run (not get_event_loop().run_until_complete) so the call
+            # is robust to a closed default loop left by a prior in-process test
+            # that used asyncio.run (e.g. the CLI pipeline test). get_event_loop
+            # is deprecated and raises "no current event loop" in that state.
+            asyncio.run(server.download_result("sess1", malicious))
             raise AssertionError(f"expected HTTPException for {malicious!r}")
         except HTTPException as exc:
             assert exc.status_code == 400, f"{malicious!r} returned {exc.status_code}"
@@ -95,9 +97,9 @@ def test_download_rejects_session_id_traversal(tmp_path, monkeypatch):
 
     for session_id in ("..", "../other", "..\\other"):
         try:
-            asyncio.get_event_loop().run_until_complete(
-                server.download_result(session_id, "filled.xlsx")
-            )
+            # asyncio.run (not get_event_loop) — robust to a closed default loop
+            # from a prior asyncio.run-based test; get_event_loop is deprecated.
+            asyncio.run(server.download_result(session_id, "filled.xlsx"))
             raise AssertionError(f"expected HTTPException for session_id={session_id!r}")
         except HTTPException as exc:
             assert exc.status_code == 400, f"session_id={session_id!r} returned {exc.status_code}"
