@@ -756,6 +756,117 @@ def delete_notes_cells_for_run_sheet(
 
 
 # ---------------------------------------------------------------------------
+# run_review_tasks (v13) — durable manual re-review task state
+# ---------------------------------------------------------------------------
+#
+# Replaces the in-process `_REVIEW_TASKS` dict in server.py (Phase 5.3). The
+# status endpoint reads `fetch_review_task`; the POST launcher and the
+# background thread write via `upsert_review_task`; startup calls
+# `reconcile_stale_review_tasks` to retire passes orphaned by a crash.
+
+def upsert_review_task(
+    conn: sqlite3.Connection,
+    run_id: int,
+    status: str,
+    *,
+    model_name: Optional[str] = None,
+    outcome: Optional[dict[str, Any]] = None,
+) -> None:
+    """Insert or update the latest re-review task for a run.
+
+    `run_id` is the PRIMARY KEY, so a fresh launch overwrites any prior
+    pass (mirrors the old dict's ``_REVIEW_TASKS[run_id] = state``). On a
+    'running' upsert `started_at` is (re)stamped; on a 'done' upsert the
+    original `started_at` is preserved if a row already exists. `outcome`
+    is serialised to JSON and stored only when provided (NULL while
+    running).
+    """
+    now = _now()
+    outcome_json = json.dumps(outcome) if outcome is not None else None
+    existing = conn.execute(
+        "SELECT started_at FROM run_review_tasks WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    if existing is not None and status != "running":
+        # Preserve the launch timestamp when transitioning running → done.
+        prior_started = existing[0] if not isinstance(existing, sqlite3.Row) \
+            else existing["started_at"]
+        conn.execute(
+            "UPDATE run_review_tasks SET status = ?, model_name = ?, "
+            "outcome_json = ?, updated_at = ? WHERE run_id = ?",
+            (status, model_name, outcome_json, now, run_id),
+        )
+        return
+    # Fresh launch (or a row that didn't exist) — set started_at = now.
+    conn.execute(
+        "INSERT INTO run_review_tasks(run_id, status, model_name, "
+        "outcome_json, started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(run_id) DO UPDATE SET status = excluded.status, "
+        "model_name = excluded.model_name, outcome_json = excluded.outcome_json, "
+        "started_at = excluded.started_at, updated_at = excluded.updated_at",
+        (run_id, status, model_name, outcome_json, now, now),
+    )
+
+
+def fetch_review_task(
+    conn: sqlite3.Connection, run_id: int
+) -> Optional[dict[str, Any]]:
+    """Return the latest re-review task for a run, or None if none launched.
+
+    The dict carries ``status`` ('running' | 'done'), ``model_name``, and
+    the decoded ``outcome`` (None while running). The status endpoint maps
+    None → {"status": "idle"} (mirrors the old ``_REVIEW_TASKS.get`` miss).
+    """
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT status, model_name, outcome_json FROM run_review_tasks "
+            "WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    finally:
+        conn.row_factory = prior_factory
+    if row is None:
+        return None
+    raw = row["outcome_json"]
+    try:
+        outcome = json.loads(raw) if raw else None
+    except (TypeError, json.JSONDecodeError):
+        outcome = None
+    return {
+        "status": row["status"],
+        "model_name": row["model_name"],
+        "outcome": outcome,
+    }
+
+
+def reconcile_stale_review_tasks(conn: sqlite3.Connection) -> int:
+    """Retire re-review passes orphaned by a process restart (Phase 5.3).
+
+    A pass runs on a daemon thread that dies with the process; a row left
+    `status='running'` after a restart can never complete, so a poll would
+    hang forever and a relaunch would be blocked by the re-entrancy guard.
+    Flip every such row to a terminal `done` carrying an honest error so the
+    poll resolves and the user can relaunch. Returns rows reconciled.
+    Called once at startup, before any request is served.
+    """
+    now = _now()
+    outcome_json = json.dumps({
+        "ok": False,
+        "invoked": False,
+        "error": "Server restarted while the re-review was running. "
+                 "Relaunch it to retry.",
+    })
+    cur = conn.execute(
+        "UPDATE run_review_tasks SET status = 'done', outcome_json = ?, "
+        "updated_at = ? WHERE status = 'running'",
+        (outcome_json, now),
+    )
+    return int(cur.rowcount)
+
+
+# ---------------------------------------------------------------------------
 # Readers
 # ---------------------------------------------------------------------------
 
