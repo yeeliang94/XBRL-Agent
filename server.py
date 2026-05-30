@@ -3681,7 +3681,23 @@ async def run_multi_agent_stream(
                     if result_json_path.exists():
                         try:
                             result_data = json.loads(result_json_path.read_text(encoding="utf-8"))
-                            for field in result_data.get("fields", []):
+                            raw_fields = (
+                                result_data.get("fields", [])
+                                if isinstance(result_data, dict) else []
+                            )
+                            for field in raw_fields:
+                                # Defensive: a malformed result.json can carry a
+                                # non-dict entry in `fields` (observed on
+                                # SOCI/SOCIE), which would raise "'list' object
+                                # has no attribute 'get'" and abort the WHOLE
+                                # per-agent persist loop. Skip the bad entry
+                                # instead of losing every field for the agent.
+                                if not isinstance(field, dict):
+                                    logger.warning(
+                                        "Skipping non-dict field entry in %s result.json",
+                                        agent_result.statement_type.value,
+                                    )
+                                    continue
                                 repo.save_extracted_field(
                                     db_conn, run_agent_id,
                                     sheet=field.get("sheet", ""),
