@@ -41,7 +41,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 # Suppress LiteLLM SSL warnings (enterprise firewall blocks GitHub pricing fetch)
 try:
@@ -59,10 +59,10 @@ BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 ENV_FILE = BASE_DIR / ".env"
 # Load .env into the process environment at import time so startup-time reads
-# — the lifespan handler's canonical bootstrap and `_canonical_mode_enabled()`
-# / `/api/config` — see values like XBRL_CANONICAL_MODE that the user set in
-# .env. Without this, those flags were only loaded inside individual request
-# handlers (override=True), so the Concepts UI never lit up from .env alone.
+# — the lifespan handler's canonical bootstrap, `/api/config`, and settings
+# like XBRL_AUTO_REVIEW / XBRL_DEFAULT_MODELS — see what the user set in .env.
+# Without this, those were only loaded inside individual request handlers
+# (override=True), so the Concepts UI never lit up from .env alone.
 # override=False keeps an explicitly exported shell var winning over .env.
 load_dotenv(ENV_FILE, override=False)
 CONFIG_DIR = BASE_DIR / "config"
@@ -104,6 +104,27 @@ def _canonical_facts_enabled() -> bool:
     it stays a function because `/api/config` and a few routes report it.
     """
     return _CANONICAL_BOOTSTRAP_OK is not False
+
+
+def _in_tokens(u) -> int:
+    """Prompt/input token count from a pydantic-ai Usage, version-tolerant.
+
+    pydantic-ai renamed ``request_tokens`` → ``input_tokens`` (the old names
+    emit DeprecationWarnings). Read the new name first, fall back to the old
+    one so we work across versions. (PR-3.)
+    """
+    val = getattr(u, "input_tokens", None)
+    if val is None:
+        val = getattr(u, "request_tokens", 0)
+    return int(val or 0)
+
+
+def _out_tokens(u) -> int:
+    """Completion/output token count from a pydantic-ai Usage (see _in_tokens)."""
+    val = getattr(u, "output_tokens", None)
+    if val is None:
+        val = getattr(u, "response_tokens", 0)
+    return int(val or 0)
 
 
 def _export_canonical_workbooks(
@@ -178,11 +199,11 @@ def _export_canonical_workbooks(
 def _run_has_facts(db_path, run_id: int) -> bool:
     """True when the run has any canonical fact rows.
 
-    The download re-export path keys on this: a run with facts came through
-    canonical mode and its authoritative values live in the DB (including any
-    user edits from the review UI). A run with none is a legacy / non-canonical
-    run whose on-disk merged workbook is already authoritative — we leave it
-    untouched.
+    The download re-export path keys on this: a run with facts has its
+    authoritative values in the DB (including any user edits from the review
+    UI). A run with none either predates the canonical store or had its
+    projection fail; its on-disk merged workbook is treated as authoritative
+    and left untouched.
     """
     import sqlite3
     try:
@@ -1031,7 +1052,7 @@ async def _run_reviewer_pass(
             _u = agent_run.usage()
             outcome["total_tokens"] = int(_u.total_tokens or 0)
             outcome["total_cost"] = _ec(
-                int(_u.request_tokens or 0), int(_u.response_tokens or 0), 0, model)
+                _in_tokens(_u), _out_tokens(_u), 0, model)
         except Exception:  # noqa: BLE001
             logger.debug("reviewer token capture skipped")
         await _emit("complete", {
@@ -1454,11 +1475,10 @@ app = FastAPI(title="XBRL Agent", version="0.3.0", lifespan=_lifespan)
 active_runs: set[str] = set()
 
 
-# Canonical concept-model facts API (Phase 1).  Mounted unconditionally:
-# the endpoint sits idle when XBRL_CANONICAL_MODE=0 and the legacy
-# direct-Excel-write path handles all writes (gotcha #15-style fallback).
-# The router uses a getter for AUDIT_DB_PATH so tests can swap the
-# module attribute at runtime.
+# Canonical concept-model facts API. Mounted unconditionally and always
+# active — canonical mode is mandatory (rewrite Phase 1.1); there is no
+# legacy direct-Excel-write fallback. The router uses a getter for
+# AUDIT_DB_PATH so tests can swap the module attribute at runtime.
 from concept_model.facts_api import register_facts_routes as _register_facts_routes
 _register_facts_routes(app, lambda: AUDIT_DB_PATH)
 from concept_model.concepts_routes import register_concept_routes as _register_concept_routes
@@ -1497,10 +1517,18 @@ class RunConfigRequest(BaseModel):
     notes_models: Dict[str, str] = {}
     # v10 audit column (kept for schema compatibility). The monolith
     # experiment that this flag once selected has been removed; only
-    # `split` (the 5-specialist coordinator) is a live path now. Left as a
-    # free-form string rather than dropped so the `runs.orchestration`
-    # column and its History read-back continue to round-trip.
+    # `split` (the 5-specialist coordinator) is a live path now.
     orchestration: str = "split"
+
+    @field_validator("orchestration")
+    @classmethod
+    def _normalize_orchestration(cls, v: str) -> str:
+        # Only the split pipeline exists (monolith removed, rewrite Phase 1).
+        # Coerce any other/legacy value — e.g. a pre-rewrite draft persisted
+        # with "monolith" — to "split" so History never reports a path that
+        # cannot actually run. (PR-2.)
+        return "split"
+
     # Optional default-model override carried on the request body. Not read
     # by the split pipeline (per-statement `models` + the resolved RunConfig
     # default govern model selection); retained as a benign optional so older
@@ -1531,10 +1559,16 @@ class RunConfigPatchRequest(BaseModel):
     filing_standard: Optional[Literal["mfrs", "mpers"]] = None
     notes_to_run: Optional[List[str]] = None
     notes_models: Optional[Dict[str, str]] = None
-    # Free-form to match RunConfigRequest.orchestration (monolith removed);
-    # the column accepts any string and History reads it back verbatim.
+    # Only `split` exists (monolith removed). Unset (None) stays None so a
+    # partial PATCH that doesn't touch orchestration won't clobber it; any
+    # supplied value is coerced to "split". (PR-2.)
     orchestration: Optional[str] = None
     model: Optional[str] = None
+
+    @field_validator("orchestration")
+    @classmethod
+    def _normalize_orchestration(cls, v):
+        return None if v is None else "split"
     # `infopack` is the scout-derived inventory the legacy `POST /api/run/
     # {session_id}` endpoint receives in its request body. For the
     # persistent-draft flow there is no separate "scout output store" on

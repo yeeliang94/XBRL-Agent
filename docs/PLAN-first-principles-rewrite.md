@@ -71,17 +71,19 @@ fact-store work:
 
 ## Peer-Review Follow-ups (logged 2026-05-30)
 
-A second team lead reviewed the Phase 1 state. Verdicts after checking against
-HEAD (their line numbers were from an older snapshot). **Tracked here, fixed in
-the phases noted — to be done together, not piecemeal.**
+A second team lead reviewed the Phase 1 state (their line numbers were from an
+older snapshot). **All 5 findings are VALID** — I initially mis-verified PR-4/PR-5
+as invalid because a recursive `grep ... .` matched a session-transcript file and
+a flaky `find` returned a false negative; re-checking with file-scoped greps
+confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
 
-| # | Finding | Verdict | Target | Notes |
+| # | Finding | Verdict | Target | Status |
 |---|---|---|---|---|
-| PR-1 | **CLI (`run.py`) bypasses the mandatory canonical pipeline** — builds `RunConfig(...)` with no `run_id`/`db_path` ([run.py:101](run.py)), so a CLI run skips fact projection, DB export, the reviewer pass, and fail-fast bootstrap; it just merges scratch workbooks. | ✅ VALID (pre-existing; reviewer said HIGH, I rate **MEDIUM** — `run.py` is a dev/test entrypoint, server is the production path). | **Phase 5** (orchestration unification) | The honest fix = create an audit run + bootstrap the tree + thread `run_id`/`db_path` + export/review/merge — i.e. share the server's phase pipeline. Belongs with Step 5.2. Until then the CLI is extraction-only and inconsistent with "canonical mandatory". |
-| PR-2 | **`orchestration` accepts free-form deleted values** — `RunConfigRequest`/`RunConfigPatchRequest` relaxed `orchestration` to `str`, so a hand-crafted `"monolith"` payload persists + mislabels History. | ✅ VALID (severity **LOW** — cosmetic audit label; split always runs). | **Phase 5** (API/route split) | Normalize to `"split"` at the API boundary (or 422 non-split). Requires updating the 2 mirror tests (`test_runs_patch_config`, `test_runs_start_endpoint`) that currently assert `"monolith"` round-trips; the `test_db_schema_v10` column round-trip stays (it pins schema, not the API). |
-| PR-3 | **`request_tokens`/`response_tokens` pydantic-ai deprecation warnings** (server.py token capture). | ✅ VALID (pre-existing tech debt, orthogonal). | **Phase 6** (cleanup) | Switch to `input_tokens`/`output_tokens` with a `getattr` compat fallback for older pydantic-ai. |
-| PR-4 | AGENTS.md out of sync re: canonical opt-out. | ❌ INVALID | — | No `AGENTS.md` exists in this repo (`find -iname AGENTS.md` → none). The agent reference is `CLAUDE.md`, already updated in Phase 1.1. |
-| PR-5 | Stale "sits idle when `XBRL_CANONICAL_MODE=0`" comments in server.py. | ❌ INVALID at HEAD | — | `grep XBRL_CANONICAL_MODE --include=*.py` (non-test) → zero matches; no such comments remain. Their cited line 1457 is token-counting code in current HEAD. Already handled in Phase 1.1. |
+| PR-1 | **CLI (`run.py`) bypasses the mandatory canonical pipeline** — builds `RunConfig(...)` with no `run_id`/`db_path` ([run.py:101](run.py)), so a CLI run skips fact projection, DB export, the reviewer pass, and fail-fast bootstrap; it just merges scratch workbooks. | ✅ VALID (pre-existing; reviewer said HIGH, I rate **MEDIUM** — `run.py` is a dev/test entrypoint, server is the production path). | **Phase 5.2** | 🟥 DEFERRED — fix = share the server phase pipeline (audit run + bootstrap + run_id/db_path + export/review/merge). Cross-ref'd in Step 5.2. |
+| PR-2 | **`orchestration` accepts free-form deleted values** — request models relaxed to `str`, so a hand-crafted `"monolith"` payload persisted + mislabelled History. | ✅ VALID (**LOW** — cosmetic audit label). | now | 🟩 DONE — `field_validator` on both request models coerces any value → `"split"` (gracefully handles pre-rewrite drafts; no 422 so old drafts still load). `test_runs_patch_config` + `test_runs_start_endpoint` updated to assert normalization. |
+| PR-3 | **`request_tokens`/`response_tokens` pydantic-ai deprecation warnings** (server.py token capture). | ✅ VALID (pre-existing tech debt). | now (server.py) / **Phase 6** (rest) | 🟨 PARTIAL — added `_in_tokens`/`_out_tokens` getattr-fallback helpers and replaced the server.py token-capture sites (suite warnings 22→8). `coordinator.py` + `notes/coordinator.py` + `notes/listofnotes_subcoordinator.py` still have 14 `request/response_tokens` refs (the residual warnings) — deferred to Phase 6 to avoid a server-import cycle and keep this batch verifiable. |
+| PR-4 | **AGENTS.md out of sync** — still said canonical can be flipped off + legacy fallback exists + `canonical_agent.py` disappears when off. | ✅ VALID (I was wrong to call it invalid — AGENTS.md *does* exist, 5 KB). | now | 🟩 DONE — rewrote the canonical non-negotiable to "mandatory, no opt-out, fail-fast, legacy/canonical_agent deleted". |
+| PR-5 | **Stale flag-gated comments** — `server.py` ("sits idle when `XBRL_CANONICAL_MODE=0`"), plus `db/schema.py` + `db/repository.py`. | ✅ VALID (I was wrong to call it invalid — file-scoped grep found them). | now | 🟩 DONE — refreshed comments in `server.py` (×3), `db/schema.py`, `db/repository.py` (×2). `grep XBRL_CANONICAL_MODE` on app code → 0. |
 
 ## Pre-Implementation Checklist
 - [x] 🟩 Questions from exploration resolved (isolation = branch; scope = full)
