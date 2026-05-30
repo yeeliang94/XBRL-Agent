@@ -34,7 +34,7 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Dict, List, Literal, Optional, Set, Any
+from typing import AsyncIterator, Dict, List, Literal, NamedTuple, Optional, Set, Any
 
 from dotenv import load_dotenv, set_key
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
@@ -2003,6 +2003,208 @@ def _fail_run(db_conn: "Optional[Any]", run_id: Optional[int], msg: str):
     return events, new_status
 
 
+class _ValidatedRun(NamedTuple):
+    """Structured result of the Validate phase (rewrite Phase 5.2).
+
+    Carries everything the rest of the pipeline needs once the request has
+    been parsed, variant/standard constraints checked, models built, the
+    infopack resolved, and the canonical-bootstrap guard cleared.
+    """
+    statements_to_run: "Set[Any]"
+    variants: dict
+    models: dict
+    notes_to_run: set
+    notes_models: dict
+    infopack: Any
+    model: Any
+    config: Any
+
+
+def _validate_and_build_run(
+    *,
+    run_config: "RunConfigRequest",
+    api_key: str,
+    proxy_url: str,
+    model_name: str,
+    session_dir: Path,
+    output_dir: str,
+    session_id: str,
+    run_id: Optional[int],
+    db_conn,
+) -> "tuple[Optional[_ValidatedRun], list[dict], Optional[str]]":
+    """Phase: Validate — parse + validate the request and build the run config.
+
+    The first phase of the run pipeline (rewrite Phase 5.2). Pure, yield-free,
+    and returns ONE structured result so the generator shell stays thin: either
+    a populated :class:`_ValidatedRun` (success) or, on any validation failure,
+    ``(None, fail_events, fail_status)`` carrying the SSE error events the
+    generator yields and the terminal status it records. Every failure path
+    routes through :func:`_fail_run` exactly as the inline code did — the only
+    change is the events are *returned* instead of yielded in place, so this
+    logic can live outside the generator without touching the lifecycle
+    contract (gotcha #10).
+    """
+    from coordinator import RunConfig
+    from notes_types import NotesTemplateType
+    from statement_types import StatementType, get_variant
+
+    statements_to_run: Set[StatementType] = set()
+    variants: Dict[StatementType, str] = {}
+    models: Dict[StatementType, Any] = {}
+
+    # Parse statement types
+    for s in run_config.statements:
+        try:
+            statements_to_run.add(StatementType(s))
+        except ValueError:
+            events, new_status = _fail_run(db_conn, run_id, f"Unknown statement type: {s}")
+            return None, events, new_status
+
+    # Parse notes templates up-front (before pre-creating run_agents rows),
+    # so DB rows and live events line up one-to-one. LIST_OF_NOTES is
+    # rejected until Phase C (Sheet-12 sub-coordinator + row-112 unmatched
+    # logic) lands — without it the generic agent would run with a
+    # placeholder prompt.
+    notes_to_run: Set[NotesTemplateType] = set()
+    for n in run_config.notes_to_run:
+        try:
+            parsed_note = NotesTemplateType(n)
+        except ValueError:
+            events, new_status = _fail_run(db_conn, run_id, f"Unknown notes template: {n}")
+            return None, events, new_status
+        if parsed_note not in _PUBLIC_NOTES_TEMPLATES:
+            events, new_status = _fail_run(db_conn, run_id, f"Notes template not available yet: {n}")
+            return None, events, new_status
+        notes_to_run.add(parsed_note)
+
+    # Build variant map — fall back to first registered variant if not specified
+    for stmt in statements_to_run:
+        if stmt.value in run_config.variants:
+            variants[stmt] = run_config.variants[stmt.value]
+        # else: coordinator will resolve from infopack / registry default.
+
+    # Reject variant/standard mismatches BEFORE launching the coordinator.
+    # Without this, the run would progress through row creation, model
+    # construction, and task launch before a FileNotFoundError bubbles up
+    # mid-extraction, leaving a confusing run_agents trail. Caught here,
+    # the user sees a single crisp error naming the offending variant and
+    # the standard in play (e.g. "SoRE is not available on MFRS — ...").
+    for stmt, variant_name in variants.items():
+        try:
+            v = get_variant(stmt, variant_name)
+        except KeyError as e:
+            events, new_status = _fail_run(
+                db_conn, run_id, f"Unknown variant for {stmt.value}: {e}",
+            )
+            return None, events, new_status
+        if run_config.filing_standard not in v.applies_to_standard:
+            allowed = (
+                ", ".join(sorted(v.applies_to_standard)).upper() or "(none)"
+            )
+            events, new_status = _fail_run(
+                db_conn, run_id,
+                f"{stmt.value}/{variant_name} is not available on "
+                f"{run_config.filing_standard.upper()} filings — "
+                f"only {allowed}.",
+            )
+            return None, events, new_status
+
+    # Build model overrides — resolve each through _create_proxy_model so
+    # per-agent overrides use the same proxy/direct wiring as the default.
+    # Wrap in try/except so a broken override key also produces a clean
+    # failed-row rather than bubbling out of the generator.
+    notes_models: Dict[NotesTemplateType, Any] = {}
+    try:
+        for stmt in statements_to_run:
+            if stmt.value in run_config.models:
+                override_name = run_config.models[stmt.value]
+                models[stmt] = _create_proxy_model(override_name, proxy_url, api_key)
+        # Same treatment for per-notes-template overrides. Silently ignore
+        # entries whose key isn't a known NotesTemplateType — they won't
+        # match any requested template and we don't want a typo in the
+        # frontend payload to fail the whole run.
+        for nt_key, nt_model_name in run_config.notes_models.items():
+            try:
+                nt_parsed = NotesTemplateType(nt_key)
+            except ValueError:
+                continue
+            notes_models[nt_parsed] = _create_proxy_model(
+                nt_model_name, proxy_url, api_key,
+            )
+    except Exception as e:
+        logger.exception(
+            "Override model construction failed for session %s", session_id,
+        )
+        events, new_status = _fail_run(db_conn, run_id, f"Model override failed: {e}")
+        return None, events, new_status
+
+    # Resolve infopack
+    infopack = None
+    if run_config.infopack:
+        from scout.infopack import Infopack
+        try:
+            # from_json expects a JSON string; request body gives us a dict
+            infopack = Infopack.from_json(json.dumps(run_config.infopack))
+        except Exception as e:
+            events, new_status = _fail_run(db_conn, run_id, f"Invalid infopack: {e}")
+            return None, events, new_status
+
+    # Create the model object for the coordinator. May raise if the
+    # proxy is unreachable or the API key is invalid — treat it as an
+    # early validation failure (yield error + mark row failed + return)
+    # so the user gets a clean SSE close instead of a 500.
+    try:
+        model = _create_proxy_model(model_name, proxy_url, api_key)
+    except Exception as e:
+        logger.exception(
+            "Model construction failed for session %s", session_id,
+        )
+        events, new_status = _fail_run(db_conn, run_id, f"Model setup failed: {e}")
+        return None, events, new_status
+
+    # Canonical mode is mandatory (rewrite Phase 1.1). The concept tree
+    # MUST have imported at startup for fact projection to resolve
+    # concepts. If the bootstrap failed, fail the run fast with a clear
+    # error instead of degrading to a correction-less workbook — the
+    # legacy direct-xlsx fallback that used to cover this case is gone.
+    if _CANONICAL_BOOTSTRAP_OK is False:
+        events, new_status = _fail_run(
+            db_conn, run_id,
+            "Canonical concept-tree bootstrap failed at startup — cannot "
+            "produce grounded facts. Check the server logs and restart "
+            "the server; no run can proceed until the import succeeds.",
+        )
+        return None, events, new_status
+
+    config = RunConfig(
+        pdf_path=str(session_dir / "uploaded.pdf"),
+        output_dir=output_dir,
+        model=model,
+        statements_to_run=statements_to_run,
+        variants=variants,
+        models=models,
+        filing_level=run_config.filing_level,
+        filing_standard=run_config.filing_standard,
+        # Canonical mode is mandatory: always thread the run_id + DB into
+        # the coordinator so extraction agents project their writes into
+        # run_concept_facts. Bootstrap success is guaranteed by the
+        # fail-fast guard above.
+        run_id=run_id,
+        db_path=str(AUDIT_DB_PATH),
+    )
+
+    return _ValidatedRun(
+        statements_to_run=statements_to_run,
+        variants=variants,
+        models=models,
+        notes_to_run=notes_to_run,
+        notes_models=notes_models,
+        infopack=infopack,
+        model=model,
+        config=config,
+    ), [], None
+
+
 async def run_multi_agent_stream(
     session_id: str,
     session_dir: Path,
@@ -2017,6 +2219,20 @@ async def run_multi_agent_stream(
 
     Runs the coordinator with per-agent event tagging, then merges workbooks,
     runs cross-checks, and persists everything to the audit DB.
+
+    Phase pipeline (rewrite Phase 5.2): the run proceeds through explicit
+    phases — **Validate** → **Extract** → **Cascade** → **Merge/Render** →
+    **Check** → **Review** → **Persist/Finalize**. Phase boundaries are marked
+    by ``_emit_stage(...)`` events (extracting | merging | cross_checking |
+    reviewing | re_checking | validating_notes | done). The first phase is a
+    standalone unit (:func:`_validate_and_build_run`) returning one structured
+    result; the remaining phases stay inline in this generator because each is
+    interleaved with the GeneratorExit-tolerant ``event_queue`` drain (gotcha
+    #19) — factoring a ``yield`` out of an async generator would break that
+    disconnect-finalization contract. The post-extraction *work* is already
+    delegated to named helpers (``_run_reviewer_pass``, ``merge_workbooks``,
+    ``run_cross_checks``, ``_export_canonical_workbooks``); this generator is
+    the thin orchestration shell that owns the lifecycle + the drain.
 
     Lifecycle contract (Phase 1.6 refactor):
       1. The `runs` row is created BEFORE the coordinator launches, so
@@ -2196,173 +2412,36 @@ async def run_multi_agent_stream(
         # runs row as failed. Previously these exits happened before the
         # row existed. ---
 
-        # Parse statement types
-        for s in run_config.statements:
-            try:
-                statements_to_run.add(StatementType(s))
-            except ValueError:
-                events, new_status = _fail_run(db_conn, run_id, f"Unknown statement type: {s}")
-                for ev in events:
-                    yield ev
-                terminal_status = new_status or terminal_status
-                return
-
-        # Parse notes templates up-front (before pre-creating run_agents rows),
-        # so DB rows and live events line up one-to-one. LIST_OF_NOTES is
-        # rejected until Phase C (Sheet-12 sub-coordinator + row-112 unmatched
-        # logic) lands — without it the generic agent would run with a
-        # placeholder prompt.
-        notes_to_run: Set[NotesTemplateType] = set()
-        for n in run_config.notes_to_run:
-            try:
-                parsed_note = NotesTemplateType(n)
-            except ValueError:
-                events, new_status = _fail_run(db_conn, run_id, f"Unknown notes template: {n}")
-                for ev in events:
-                    yield ev
-                terminal_status = new_status or terminal_status
-                return
-            if parsed_note not in _PUBLIC_NOTES_TEMPLATES:
-                events, new_status = _fail_run(db_conn, run_id, f"Notes template not available yet: {n}")
-                for ev in events:
-                    yield ev
-                terminal_status = new_status or terminal_status
-                return
-            notes_to_run.add(parsed_note)
-
-        # Build variant map — fall back to first registered variant if not specified
-        for stmt in statements_to_run:
-            if stmt.value in run_config.variants:
-                variants[stmt] = run_config.variants[stmt.value]
-            # else: coordinator will resolve from infopack / registry default.
-
-        # Reject variant/standard mismatches BEFORE launching the coordinator.
-        # Without this, the run would progress through row creation, model
-        # construction, and task launch before a FileNotFoundError bubbles up
-        # mid-extraction, leaving a confusing run_agents trail. Caught here,
-        # the user sees a single crisp error naming the offending variant and
-        # the standard in play (e.g. "SoRE is not available on MFRS — ...").
-        for stmt, variant_name in variants.items():
-            try:
-                v = get_variant(stmt, variant_name)
-            except KeyError as e:
-                events, new_status = _fail_run(
-                    db_conn, run_id, f"Unknown variant for {stmt.value}: {e}",
-                )
-                for ev in events:
-                    yield ev
-                terminal_status = new_status or terminal_status
-                return
-            if run_config.filing_standard not in v.applies_to_standard:
-                allowed = (
-                    ", ".join(sorted(v.applies_to_standard)).upper() or "(none)"
-                )
-                events, new_status = _fail_run(
-                    db_conn, run_id,
-                    f"{stmt.value}/{variant_name} is not available on "
-                    f"{run_config.filing_standard.upper()} filings — "
-                    f"only {allowed}.",
-                )
-                for ev in events:
-                    yield ev
-                terminal_status = new_status or terminal_status
-                return
-
-        # Build model overrides — resolve each through _create_proxy_model so
-        # per-agent overrides use the same proxy/direct wiring as the default.
-        # Wrap in try/except so a broken override key also produces a clean
-        # failed-row rather than bubbling out of the generator.
-        notes_models: Dict[NotesTemplateType, Any] = {}
-        try:
-            for stmt in statements_to_run:
-                if stmt.value in run_config.models:
-                    override_name = run_config.models[stmt.value]
-                    models[stmt] = _create_proxy_model(override_name, proxy_url, api_key)
-            # Same treatment for per-notes-template overrides. Silently ignore
-            # entries whose key isn't a known NotesTemplateType — they won't
-            # match any requested template and we don't want a typo in the
-            # frontend payload to fail the whole run.
-            for nt_key, nt_model_name in run_config.notes_models.items():
-                try:
-                    nt_parsed = NotesTemplateType(nt_key)
-                except ValueError:
-                    continue
-                notes_models[nt_parsed] = _create_proxy_model(
-                    nt_model_name, proxy_url, api_key,
-                )
-        except Exception as e:
-            logger.exception(
-                "Override model construction failed for session %s", session_id,
-            )
-            events, new_status = _fail_run(db_conn, run_id, f"Model override failed: {e}")
-            for ev in events:
-                yield ev
-            terminal_status = new_status or terminal_status
-            return
-
-        # Resolve infopack
-        infopack = None
-        if run_config.infopack:
-            from scout.infopack import Infopack
-            try:
-                # from_json expects a JSON string; request body gives us a dict
-                infopack = Infopack.from_json(json.dumps(run_config.infopack))
-            except Exception as e:
-                events, new_status = _fail_run(db_conn, run_id, f"Invalid infopack: {e}")
-                for ev in events:
-                    yield ev
-                terminal_status = new_status or terminal_status
-                return
-
-        # Create the model object for the coordinator. May raise if the
-        # proxy is unreachable or the API key is invalid — treat it as an
-        # early validation failure (yield error + mark row failed + return)
-        # so the user gets a clean SSE close instead of a 500.
-        try:
-            model = _create_proxy_model(model_name, proxy_url, api_key)
-        except Exception as e:
-            logger.exception(
-                "Model construction failed for session %s", session_id,
-            )
-            events, new_status = _fail_run(db_conn, run_id, f"Model setup failed: {e}")
-            for ev in events:
-                yield ev
-            terminal_status = new_status or terminal_status
-            return
-
-        # Canonical mode is mandatory (rewrite Phase 1.1). The concept tree
-        # MUST have imported at startup for fact projection to resolve
-        # concepts. If the bootstrap failed, fail the run fast with a clear
-        # error instead of degrading to a correction-less workbook — the
-        # legacy direct-xlsx fallback that used to cover this case is gone.
-        if _CANONICAL_BOOTSTRAP_OK is False:
-            events, new_status = _fail_run(
-                db_conn, run_id,
-                "Canonical concept-tree bootstrap failed at startup — cannot "
-                "produce grounded facts. Check the server logs and restart "
-                "the server; no run can proceed until the import succeeds.",
-            )
-            for ev in events:
-                yield ev
-            terminal_status = new_status or terminal_status
-            return
-
-        config = RunConfig(
-            pdf_path=str(session_dir / "uploaded.pdf"),
+        # === PHASE: Validate ===
+        # Parse + validate the request, build models/infopack, and construct
+        # the coordinator RunConfig. Returns ONE structured result; on any
+        # failure it carries the SSE error events to yield + the terminal
+        # status to record (rewrite Phase 5.2). The yield/return stays in the
+        # generator shell so the lifecycle contract (gotcha #10) is untouched.
+        validated, fail_events, fail_status = _validate_and_build_run(
+            run_config=run_config,
+            api_key=api_key,
+            proxy_url=proxy_url,
+            model_name=model_name,
+            session_dir=session_dir,
             output_dir=output_dir,
-            model=model,
-            statements_to_run=statements_to_run,
-            variants=variants,
-            models=models,
-            filing_level=run_config.filing_level,
-            filing_standard=run_config.filing_standard,
-            # Canonical mode is mandatory: always thread the run_id + DB into
-            # the coordinator so extraction agents project their writes into
-            # run_concept_facts. Bootstrap success is guaranteed by the
-            # fail-fast guard above.
+            session_id=session_id,
             run_id=run_id,
-            db_path=str(AUDIT_DB_PATH),
+            db_conn=db_conn,
         )
+        if validated is None:
+            for ev in fail_events:
+                yield ev
+            terminal_status = fail_status or terminal_status
+            return
+        statements_to_run = validated.statements_to_run
+        variants = validated.variants
+        models = validated.models
+        notes_to_run = validated.notes_to_run
+        notes_models = validated.notes_models
+        infopack = validated.infopack
+        model = validated.model
+        config = validated.config
 
         yield {"event": "status", "data": {
             "phase": "starting",
