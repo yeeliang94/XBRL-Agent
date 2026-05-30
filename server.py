@@ -4316,7 +4316,18 @@ def mount_spa(app, dist_directory: Path) -> None:
 # ``server.OUTPUT_DIR`` …) keeps working. Imported here — after every shared
 # symbol above is defined — and mounted BEFORE the SPA catch-all so /api/*
 # routes win over the fallback.
+#
+# Entry-point alias (rewrite Phase 5.1 fix): when this file is the entry point
+# (`python server.py`, per start.sh), it runs under the name "__main__", not
+# "server". The api/ routers do `import server` at import time — without this
+# alias that would execute THIS file a SECOND time as a fresh module "server"
+# and crash on a circular import (the routers aren't defined yet on the first
+# pass). Registering the running module under "server" makes that import
+# resolve to this already-initialized module. No-op under `uvicorn server:app`
+# or `import server` (the module is already named/cached "server").
 # ---------------------------------------------------------------------------
+sys.modules.setdefault("server", sys.modules[__name__])
+
 from api.config_routes import router as _config_router
 from api.uploads import router as _uploads_router
 from api.run_control import router as _run_control_router
