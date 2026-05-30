@@ -28,7 +28,7 @@ import pytest
 
 from concept_model.cascade import recompute_after_turn
 from concept_model.exporter import export_run_to_xlsx
-from concept_model.importer import import_template
+from concept_model.importer import import_company_targets, import_template
 from concept_model.parser import parse_template
 from db.schema import init_db
 
@@ -119,6 +119,7 @@ def test_import_phase2_template(tmp_path: Path, spec: dict) -> None:
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     template_id = import_template(db, jp)
+    import_company_targets(db, template_id)
     assert template_id == spec["template_id"]
 
     # Plausibility on row counts — three kinds, all present.
@@ -162,7 +163,8 @@ def test_canonical_e2e_phase2_template(tmp_path: Path, spec: dict) -> None:
     tree = parse_template(str(fixture))
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
-    import_template(db, jp)
+    _ct_tid = import_template(db, jp)
+    import_company_targets(db, _ct_tid)
 
     conn = sqlite3.connect(str(db))
     try:

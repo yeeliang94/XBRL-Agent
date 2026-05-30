@@ -1,3 +1,4 @@
+from concept_model.importer import import_company_targets
 """Phase 1 step 1.21 — end-to-end canonical-mode smoke test.
 
 Composes every Phase-1 layer:
@@ -47,7 +48,8 @@ def canonical_env(tmp_path: Path, monkeypatch) -> dict:
     tree = parse_template(str(FIXTURE))
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
-    import_template(db, jp)
+    _ct_tid = import_template(db, jp)
+    import_company_targets(db, _ct_tid)
 
     conn = sqlite3.connect(str(db))
     try:

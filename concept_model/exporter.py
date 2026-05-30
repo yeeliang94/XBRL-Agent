@@ -31,6 +31,16 @@ _DEFAULT_SOURCE_COL = {
     "group": "F",     # Group templates: F = Source
 }
 
+# Which entity scopes a filing level renders. A fact whose scope isn't in
+# this set has no place on the workbook (e.g. a Group-scope fact on a
+# Company filing — the Group columns only exist on Group templates) and is
+# dropped. A fact whose scope IS applicable but has no precomputed
+# concept_targets row is an importer bug, surfaced loudly (see below).
+_APPLICABLE_SCOPES = {
+    "company": ("Company",),
+    "group": ("Group", "Company"),
+}
+
 
 def export_run_to_xlsx(
     db_path: str | Path,
@@ -64,23 +74,20 @@ def export_run_to_xlsx(
 
     wb = openpyxl.load_workbook(xlsx_path, data_only=False)
 
-    is_group = (filing_level or "").lower() == "group"
-
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         # Pull every fact joined to its concept_node and template shape,
-        # LEFT JOINing ``concept_targets`` so a (period, entity_scope)
-        # dimension can route to its dedicated cell.  Routing then splits
-        # three ways (resolved in Python below):
-        #   * matrix templates (SOCIE)        → always via concept_targets,
-        #     for both Company and Group filings (the period/scope
-        #     dimension shifts the ROW for stacked blocks, or the COLUMN
-        #     for MPERS Company);
-        #   * linear Group filings            → via concept_targets (B/C/D/E
-        #     column pairs), raise if a dimension is unmapped;
-        #   * linear Company filings          → fall back to
-        #     ``concept_nodes.render_col`` and only read CY/Company facts.
+        # LEFT JOINing ``concept_targets`` so each (period, entity_scope)
+        # dimension routes to its dedicated cell. As of Phase 6.1 routing is
+        # a SINGLE keyed lookup for every shape: the importer precomputes a
+        # concept_targets row for every dimension a filing renders
+        # (import_company_targets B=CY/C=PY, import_group_targets B/C/D/E,
+        # matrix targets inline). The exporter no longer falls back to
+        # ``concept_nodes.render_col`` (the render_* columns remain in the
+        # SELECT but are unused by routing now). Facts whose scope doesn't
+        # apply to this filing are dropped; an applicable fact with no target
+        # row is an importer bug and raises.
         rows = conn.execute(
             """
             SELECT f.concept_uuid, f.period, f.entity_scope,
@@ -107,36 +114,28 @@ def export_run_to_xlsx(
     finally:
         conn.close()
 
-    # Resolve each fact to a physical (sheet, row, col) target, applying
-    # the three-way routing above. Facts that don't apply to this filing
-    # level (e.g. PY/Group on a Company filing) are dropped.
+    # Resolve each fact to a physical (sheet, row, col) target via a single
+    # concept_targets lookup. Matrix (SOCIE) always routes via targets for
+    # every dimension. Linear facts whose entity_scope doesn't apply to this
+    # filing level (e.g. a Group-scope fact on a Company filing) are dropped;
+    # an applicable fact with no target row is an importer bug → raise.
+    applicable = _APPLICABLE_SCOPES.get(
+        (filing_level or "").lower(), ("Company",)
+    )
     routed: list[dict[str, Any]] = []
     unmapped: list[tuple] = []
     for r in rows:
         is_matrix = r["shape"] == "matrix"
-        if is_matrix or is_group:
-            # Targets are mandatory; a NULL means import_group_targets /
-            # the matrix importer didn't map this dimension.
-            if r["target_col"] is None:
-                unmapped.append((r["concept_uuid"], r["period"], r["entity_scope"]))
-                continue
-            sheet, row, col = r["target_sheet"], int(r["target_row"]), r["target_col"]
-        else:
-            # Linear Company filing: render_col fallback. Two-column
-            # convention: CY → render_col (default B), PY → C. Mirrors
-            # cell_resolver.resolve_cell's column convention so writes
-            # and reads stay symmetric. Group-scope facts are dropped —
-            # they only apply to Group filings (which take the
-            # concept_targets branch above).
-            if r["entity_scope"] != "Company":
-                continue
-            if r["period"] == "CY":
-                col = r["render_col"]
-            elif r["period"] == "PY":
-                col = "C"
-            else:
-                continue
-            sheet, row = r["render_sheet"], int(r["render_row"])
+        if not is_matrix and r["entity_scope"] not in applicable:
+            # Out-of-scope fact for this filing level — no cell to land in.
+            continue
+        if r["target_col"] is None:
+            # In-scope (or matrix) fact with no precomputed target: the
+            # importer (import_company_targets / import_group_targets / the
+            # matrix importer) didn't map this dimension. Surface loudly.
+            unmapped.append((r["concept_uuid"], r["period"], r["entity_scope"]))
+            continue
+        sheet, row, col = r["target_sheet"], int(r["target_row"]), r["target_col"]
         routed.append({
             "sheet": sheet, "row": row, "col": col,
             "concept_uuid": r["concept_uuid"],
@@ -153,8 +152,9 @@ def export_run_to_xlsx(
         raise ValueError(
             "Export found facts with no concept_targets mapping "
             f"(run {run_id}): {unmapped[:5]}"
-            f"{'…' if len(unmapped) > 5 else ''}. Run import_group_targets "
-            "(or re-import matrix templates) for every template in the run."
+            f"{'…' if len(unmapped) > 5 else ''}. Run import_company_targets / "
+            "import_group_targets (or re-import matrix templates) for every "
+            "template in the run."
         )
 
     not_disclosed: list[dict[str, Any]] = []

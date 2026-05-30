@@ -7,10 +7,12 @@ startup (and is exposed as ``python -m concept_model.bootstrap`` for CLI/test).
 
 Walks the variant registry (``statement_types.VARIANTS``) across both filing
 standards and both filing levels, parsing each template to a concept tree and
-upserting it via :func:`concept_model.importer.import_template`. Group *linear*
-templates additionally get per-scope ``concept_targets`` via
-:func:`import_group_targets`; matrix (SOCIE) templates carry their targets
-inline so the importer writes them directly.
+upserting it via :func:`concept_model.importer.import_template`. Every linear
+template additionally gets per-scope ``concept_targets`` so the exporter routes
+each fact via a single keyed lookup (rewrite Phase 6.1): Company linear via
+:func:`import_company_targets` (B=CY, C=PY), Group linear via
+:func:`import_group_targets` (B/C/D/E). Matrix (SOCIE) templates carry their
+targets inline so the importer writes them directly.
 
 Idempotent — the importer's deterministic UUID5 keys make re-imports a no-op,
 so calling this on every startup is safe and cheap.
@@ -23,7 +25,11 @@ import tempfile
 from pathlib import Path
 
 from statement_types import VARIANTS, template_path
-from concept_model.importer import import_group_targets, import_template
+from concept_model.importer import (
+    import_company_targets,
+    import_group_targets,
+    import_template,
+)
 from concept_model.parser import parse_template
 
 logger = logging.getLogger(__name__)
@@ -57,7 +63,12 @@ def import_all_face_templates(db_path: str | Path) -> list[str]:
 
 
 def _import_one(db_path: str | Path, template_xlsx: Path, level: str) -> str:
-    """Parse one template xlsx, import it, and (for Group linear) fill targets."""
+    """Parse one template xlsx, import it, and fill per-scope targets.
+
+    Every linear template gets ``concept_targets`` rows so the exporter
+    routes each fact via a single keyed lookup (Phase 6.1); matrix (SOCIE)
+    templates carry their per-cell targets inline from ``import_template``.
+    """
     tree = parse_template(str(template_xlsx))
     payload = tree.to_json()
     with tempfile.NamedTemporaryFile(
@@ -71,10 +82,14 @@ def _import_one(db_path: str | Path, template_xlsx: Path, level: str) -> str:
         Path(json_path).unlink(missing_ok=True)
 
     # Matrix (SOCIE) templates carry per-cell targets inline; the importer
-    # already wrote them. Group *linear* templates need the B/C/D/E per-scope
-    # target rows so the exporter can route Company vs Group columns.
-    if level == "group" and payload.get("shape", "linear") != "matrix":
-        import_group_targets(db_path, template_id)
+    # already wrote them. Linear templates get per-scope target rows so the
+    # exporter routes via a single concept_targets lookup: Group needs the
+    # B/C/D/E Company-vs-Group columns; Company needs the B=CY/C=PY pair.
+    if payload.get("shape", "linear") != "matrix":
+        if level == "group":
+            import_group_targets(db_path, template_id)
+        else:
+            import_company_targets(db_path, template_id)
     return template_id
 
 
