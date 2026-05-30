@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from concept_model.versioning import compute_review_diff, has_snapshot
 
@@ -33,7 +33,10 @@ def _now() -> str:
 
 
 class FlagAnswer(BaseModel):
-    human_answer: str
+    # Bounded: this free text is folded verbatim into the next re-review system
+    # prompt, so an unbounded value is both a DB-bloat and a prompt-stuffing /
+    # cost vector. 8 KB is plenty for human guidance; overflow returns 422.
+    human_answer: str = Field(max_length=8000)
 
 
 def register_reviewer_routes(app, audit_db_getter) -> None:
