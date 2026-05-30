@@ -1247,11 +1247,14 @@ async def _run_reviewer_pass(
     try:
         if not has_snapshot(db_path, run_id):
             snapshot_facts(db_path, run_id)
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        # Don't interpolate the exception into the client-facing error: a DB
+        # error can leak absolute paths, and we log the full trace below
+        # (mirrors the /test-connection scrubbing).
         logger.exception("Reviewer snapshot failed for run %s", run_id)
-        outcome["error"] = f"snapshot failed: {type(e).__name__}: {e}"
-        await _emit("error", {"type": "reviewer_exception",
-                              "message": outcome["error"]})
+        outcome["error"] = "snapshot_failed"
+        msg = "Reviewer snapshot failed; see server logs for details."
+        await _emit("error", {"type": "reviewer_exception", "message": msg})
         await _emit("complete", {"success": False, "error": outcome["error"]})
         return outcome
 
@@ -1267,11 +1270,15 @@ async def _run_reviewer_pass(
             pdf_path=pdf_path,
             failed_checks=failed_payload, conflicts=conflicts, guidance=guidance,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        # Model construction routes through the LLM SDK, whose exceptions
+        # frequently embed the Authorization header / bearer token in str(e)
+        # — never surface it to the client (mirrors /test-connection). Full
+        # trace is logged server-side.
         logger.exception("Reviewer agent construction failed")
-        outcome["error"] = f"agent construction failed: {type(e).__name__}: {e}"
-        await _emit("error", {"type": "reviewer_exception",
-                              "message": outcome["error"]})
+        outcome["error"] = "agent_construction_failed"
+        msg = "Reviewer agent construction failed; see server logs for details."
+        await _emit("error", {"type": "reviewer_exception", "message": msg})
         await _emit("complete", {"success": False, "error": outcome["error"]})
         return outcome
 
@@ -1404,11 +1411,15 @@ async def _run_reviewer_pass(
             "success": False, "error": "reviewer_wallclock_exceeded",
             "writes_performed": deps.writes_performed,
         })
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        # The agent loop runs LLM calls whose exceptions can embed the bearer
+        # token in str(e); surface a stable code, log the trace server-side
+        # only (mirrors /test-connection).
         logger.exception("Reviewer run failed")
-        outcome["error"] = str(e)
-        await _emit("error", {"type": "reviewer_exception", "message": str(e)})
-        await _emit("complete", {"success": False, "error": str(e)})
+        outcome["error"] = "reviewer_exception"
+        msg = "Reviewer run failed; see server logs for details."
+        await _emit("error", {"type": "reviewer_exception", "message": msg})
+        await _emit("complete", {"success": False, "error": outcome["error"]})
 
     # Re-cascade so the reviewer's leaf fixes propagate to parent totals
     # before the caller re-exports + re-merges from facts.
@@ -5442,9 +5453,35 @@ def _active_flag_guidance(run_id: int) -> str:
 # failure), so the POST launches it as a background task and returns
 # immediately; the Review tab polls GET /re-review/status for the outcome.
 # Only the latest pass per run is tracked — a new POST overwrites the slot.
-# Entries are small (a status string + the outcome dict) and bounded by the
-# number of distinct runs re-reviewed this process lifetime.
+# Entries are small (a status string + the outcome dict). Growth is capped to
+# the most recent _REVIEW_TASKS_MAX runs (finished entries evicted oldest-first)
+# so a long-lived server doesn't accumulate one row per run forever.
 _REVIEW_TASKS: dict[int, dict] = {}
+_REVIEW_TASKS_MAX = 200
+# Serialises the re-entrancy check-and-set below: the get→set was a TOCTOU
+# hole (two near-simultaneous POSTs for the same run could both see "no pass
+# running" and both launch a thread, racing the same facts + snapshot).
+_REVIEW_TASKS_LOCK = threading.Lock()
+# Process-wide cap on concurrent reviewer passes ACROSS runs. The re-entrancy
+# guard only stops two passes for the SAME run; without this, one POST per run
+# could spawn unbounded threads + event loops + LLM connections, all contending
+# on the single SQLite file. A saturated server returns 429. Override via env.
+_REVIEW_MAX_CONCURRENCY = max(1, int(os.environ.get("XBRL_MAX_CONCURRENT_REVIEWS", "3")))
+_REVIEW_SEMAPHORE = threading.BoundedSemaphore(_REVIEW_MAX_CONCURRENCY)
+
+
+def _evict_finished_review_tasks() -> None:
+    """Drop oldest finished entries when the registry exceeds its cap.
+
+    Caller must hold ``_REVIEW_TASKS_LOCK``. Running passes are never evicted.
+    """
+    while len(_REVIEW_TASKS) > _REVIEW_TASKS_MAX:
+        for rid, st in _REVIEW_TASKS.items():
+            if st.get("status") != "running":
+                del _REVIEW_TASKS[rid]
+                break
+        else:
+            break  # everything left is running — nothing safe to evict
 
 
 @app.post("/api/runs/{run_id}/re-review")
@@ -5483,8 +5520,36 @@ async def re_review(run_id: int, body: Optional[dict] = None):
     # Model precedence: explicit per-request override (the Review-tab picker)
     # → the configured reviewer default → the run's model → TEST_MODEL.
     override = (body or {}).get("model") if isinstance(body, dict) else None
+    # Validate a client-supplied override the same way Settings does — a bad
+    # value would otherwise pick an arbitrary (possibly priciest) provider/model
+    # straight into _create_proxy_model.
+    if isinstance(override, str) and override.strip():
+        override = override.strip()
+        if len(override) > 128:
+            raise HTTPException(
+                status_code=422, detail="model override exceeds 128 characters.",
+            )
+        # Unknown id is a soft warning, not an error — mirrors the Settings
+        # default_models path: the registry may have been edited without a
+        # restart, or a new model added but not yet loaded. The length cap
+        # above already bounds abuse.
+        known_model_ids = {m["id"] for m in _load_available_models() if "id" in m}
+        if known_model_ids and override not in known_model_ids:
+            logger.warning(
+                "re-review model override %r not in config/models.json", override,
+            )
+    else:
+        override = None
+    # Bound free-text guidance — it's folded verbatim into the reviewer prompt,
+    # so an unbounded value is a cost / prompt-stuffing vector (matches the
+    # human_answer cap on the flag-answer endpoint).
+    guidance_in = (body or {}).get("guidance") if isinstance(body, dict) else None
+    if isinstance(guidance_in, str) and len(guidance_in) > 8000:
+        raise HTTPException(
+            status_code=422, detail="guidance exceeds 8000 characters.",
+        )
     model_name = (
-        (override if isinstance(override, str) and override else None)
+        override
         or _reviewer_model_name()
         or config.get("model")
         or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
@@ -5492,24 +5557,38 @@ async def re_review(run_id: int, body: Optional[dict] = None):
     if not api_key:
         raise HTTPException(status_code=400, detail="API key not set. Check Settings.")
 
-    # Re-entrancy guard: never run two reviewer passes over the same run at
-    # once (they'd race the same facts + snapshot). Report the in-flight pass
-    # instead of launching a second.
-    existing = _REVIEW_TASKS.get(run_id)
-    if existing and existing.get("status") == "running":
-        return {
-            "ok": True, "status": "running", "already_running": True,
-            "model": existing.get("model_name"),
-        }
-
-    # Everything heavy — building the model, gathering the review packet,
-    # running the pass, and re-exporting — runs on a dedicated thread with its
-    # OWN event loop (asyncio.run). This isolates a minutes-long pass from the
-    # request loop: it can't be cancelled by request teardown (a raw
-    # create_task is), can't block other requests, and keeps the model's async
-    # HTTP client bound to the loop that actually uses it.
+    # Re-entrancy guard + global slot claim, both under one lock so the
+    # check-and-set is atomic (the bare get→set was a TOCTOU hole: two
+    # near-simultaneous POSTs for the same run could both see "not running" and
+    # both launch). Never run two passes over the same run at once (they'd race
+    # the same facts + snapshot); report the in-flight pass instead. A global
+    # BoundedSemaphore caps concurrent passes ACROSS runs — when saturated we
+    # return 429 rather than spawning unbounded threads/loops/LLM connections.
+    # The slot is released in _thread_main's finally.
     state: dict = {"status": "running", "model_name": model_name, "outcome": None}
-    _REVIEW_TASKS[run_id] = state
+    with _REVIEW_TASKS_LOCK:
+        existing = _REVIEW_TASKS.get(run_id)
+        if existing and existing.get("status") == "running":
+            return {
+                "ok": True, "status": "running", "already_running": True,
+                "model": existing.get("model_name"),
+            }
+        if not _REVIEW_SEMAPHORE.acquire(blocking=False):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Too many reviewer passes running "
+                    f"(max {_REVIEW_MAX_CONCURRENCY}); try again shortly."
+                ),
+            )
+        # Everything heavy — building the model, gathering the review packet,
+        # running the pass, and re-exporting — runs on a dedicated thread with
+        # its OWN event loop (asyncio.run). This isolates a minutes-long pass
+        # from the request loop: it can't be cancelled by request teardown (a
+        # raw create_task is), can't block other requests, and keeps the
+        # model's async HTTP client bound to the loop that actually uses it.
+        _REVIEW_TASKS[run_id] = state
+        _evict_finished_review_tasks()
 
     def _gather():
         # Failing cross-checks come from the run's STORED cross_checks rows —
@@ -5600,14 +5679,18 @@ async def re_review(run_id: int, body: Optional[dict] = None):
             state["outcome"] = {
                 "ok": not outcome.get("error"), "model": model_name, **outcome,
             }
-        except Exception as e:  # noqa: BLE001 — record, never lose the thread
+        except Exception:  # noqa: BLE001 — record, never lose the thread
+            # Don't echo str(e) to the polled status — an SDK/auth failure can
+            # embed the bearer token (mirrors /test-connection). Full trace is
+            # logged server-side.
             logger.exception("background re-review failed for run %s", run_id)
             state["outcome"] = {
                 "ok": False, "model": model_name,
-                "error": f"{type(e).__name__}: {e}",
+                "error": "reviewer pass failed; see server logs for details.",
             }
         finally:
             state["status"] = "done"
+            _REVIEW_SEMAPHORE.release()
 
     threading.Thread(
         target=_thread_main, name=f"re-review-{run_id}", daemon=True,
@@ -6843,11 +6926,40 @@ if dist_dir.exists():
 # Main entry point
 # ---------------------------------------------------------------------------
 
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def resolve_bind_host(env: Optional[dict] = None) -> tuple[str, bool]:
+    """Resolve the uvicorn bind host and whether it exposes beyond this machine.
+
+    Loopback by default: the app has NO authentication / CORS / CSRF, yet
+    exposes destructive + paid-LLM endpoints (e.g. POST
+    /api/runs/{id}/revert-to-original wipes a run's facts; POST /re-review
+    spends API tokens). On 0.0.0.0 those are reachable by any host on the
+    network with no credentials, so the safe default is 127.0.0.1. Set
+    HOST=0.0.0.0 to deliberately expose on a trusted LAN.
+
+    Returns ``(host, is_exposed)`` where ``is_exposed`` is True for any
+    non-loopback bind, so the caller can warn. Pure (reads the passed env, or
+    ``os.environ``) so it is unit-testable without launching uvicorn.
+    """
+    src = os.environ if env is None else env
+    host = src.get("HOST", "127.0.0.1")
+    return host, host not in _LOOPBACK_HOSTS
+
+
 if __name__ == "__main__":
     import uvicorn
 
     load_dotenv(ENV_FILE)
-    host = os.environ.get("HOST", "0.0.0.0")
+    host, exposed = resolve_bind_host()
     port = int(os.environ.get("PORT", "8002"))
+    if exposed:
+        logger.warning(
+            "XBRL Agent is binding to %s — reachable beyond this machine with "
+            "NO authentication. The app exposes destructive + paid-LLM "
+            "endpoints; only expose it on a trusted network. Set HOST=127.0.0.1 "
+            "to restrict to this machine.", host,
+        )
     logger.info(f"Starting SOFP Agent Web UI on http://{host}:{port}")
     uvicorn.run(app, host=host, port=port)

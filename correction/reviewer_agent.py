@@ -14,7 +14,13 @@ Safety is structural, not behavioural:
 * **A deterministic no-plug guard** on the only write path
   (:func:`apply_reviewer_fix`) — ungrounded writes and residual plugs
   into catch-all / abstract rows are refused in CODE (invariant #17),
-  not merely discouraged in the prompt.
+  not merely discouraged in the prompt. The guard is a *best-effort
+  backstop*, not a hard security boundary: it keys on the agent-supplied
+  ``evidence`` string and a fixed catch-all label list, so a determined or
+  hallucinating model could still slip a plug past it (e.g. by fabricating a
+  PDF cite, or naming a residual row the list doesn't match). The real safety
+  net is the versioning above — every write is reversible — so the guard's
+  job is to catch the *accidental* plug, not to be unbypassable.
 
 The standalone helpers (``trace_cascade_source``, ``apply_reviewer_fix``,
 ``raise_reviewer_flag``) are pure functions so they can be unit-tested
@@ -372,6 +378,8 @@ def apply_reviewer_fix(
     db_path: str | Path,
     run_id: int,
     fact,
+    *,
+    template_prefix: Optional[str] = None,
 ) -> str:
     """Run the no-plug guard, then write one reviewer fix through apply_fact.
 
@@ -380,6 +388,17 @@ def apply_reviewer_fix(
     when the guard or the facts API refuses. Never raises — a rejection is
     reported so the agent can pick a different target, mirroring
     ``correction/canonical_agent.py::_apply_correction_fact``.
+
+    ``template_prefix`` scopes the write to the run's template family
+    (``"{standard}-{level}-"``). ``concept_uuid`` is a globally-unique PK, so
+    the lookup always finds the *right* concept — but ``concept_nodes`` holds
+    every imported standard×level (gotcha #21), and a write to an off-family
+    concept lands an unrenderable ``run_concept_facts`` row that the exporter
+    silently drops (cascade noise + a confusing diff). So we mirror the read
+    path (:func:`_resolve_concept`) and refuse a ``concept_uuid`` whose
+    ``template_id`` doesn't belong to this run's family. The prefix is
+    optional so the pure-function unit tests (single-template DBs) keep their
+    terse calls.
 
     Does NOT cascade — the pass recomputes once after the agent finishes
     (Step 9), so individual writes stay cheap.
@@ -393,13 +412,26 @@ def apply_reviewer_fix(
             return "rejected: a reviewer fix requires a concept_uuid."
         concept = conn.execute(
             "SELECT concept_uuid, kind, canonical_label, render_sheet, "
-            "render_row FROM concept_nodes WHERE concept_uuid = ?",
+            "render_row, template_id FROM concept_nodes WHERE concept_uuid = ?",
             (fact.concept_uuid,),
         ).fetchone()
         if concept is None:
             return f"rejected: unknown concept_uuid {fact.concept_uuid!r}."
 
-        # Deterministic guard FIRST — invariant #17 + grounding.
+        # Template-family scope FIRST — refuse an off-family concept_uuid so a
+        # hallucinated id can't write an unrenderable fact row (mirrors the
+        # read path's template_prefix scoping; gotcha #21).
+        if template_prefix and not str(
+            concept["template_id"] or ""
+        ).startswith(template_prefix):
+            return (
+                f"rejected: concept {fact.concept_uuid!r} belongs to template "
+                f"{concept['template_id']!r}, not this run's family "
+                f"({template_prefix!r}). Trace the failing cell in THIS run "
+                f"with trace_cascade_source_tool to get the right concept_uuid."
+            )
+
+        # Deterministic guard NEXT — invariant #17 + grounding.
         rejection = evaluate_apply_fix_guard(concept, evidence=fact.evidence)
         if rejection is not None:
             return rejection
@@ -824,6 +856,8 @@ def create_reviewer_agent(
                 children_status=children_status or None,
                 source=reason, evidence=evidence or None, actor="reviewer",
             ),
+            template_prefix=_family_prefix(
+                ctx.deps.filing_standard, ctx.deps.filing_level),
         )
         if out.startswith("ok"):
             ctx.deps.writes_performed += 1
@@ -856,6 +890,8 @@ def create_reviewer_agent(
                 value_status="not_disclosed",
                 source=reason, evidence=evidence or None, actor="reviewer",
             ),
+            template_prefix=_family_prefix(
+                ctx.deps.filing_standard, ctx.deps.filing_level),
         )
         if out.startswith("ok"):
             ctx.deps.writes_performed += 1
