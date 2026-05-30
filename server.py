@@ -127,6 +127,27 @@ def _out_tokens(u) -> int:
     return int(val or 0)
 
 
+def _reporting_periods_from_infopack(infopack) -> tuple[Optional[str], Optional[str]]:
+    """Pull (reporting_period_cy, reporting_period_py) from a scout Infopack.
+
+    Accepts an ``Infopack`` instance OR the serialised dict persisted in
+    ``runs.run_config_json['infopack']`` (download/recheck paths only have the
+    dict). Returns (None, None) when scout didn't run or didn't capture dates —
+    the exporter then falls back to the agent's scratch workbook.
+    """
+    if infopack is None:
+        return None, None
+    if isinstance(infopack, dict):
+        cy = infopack.get("reporting_period_cy")
+        py = infopack.get("reporting_period_py")
+    else:
+        cy = getattr(infopack, "reporting_period_cy", None)
+        py = getattr(infopack, "reporting_period_py", None)
+    cy = cy if isinstance(cy, str) and cy.strip() else None
+    py = py if isinstance(py, str) and py.strip() else None
+    return cy, py
+
+
 def _export_canonical_workbooks(
     *,
     run_id,
@@ -136,6 +157,8 @@ def _export_canonical_workbooks(
     filing_level: str,
     filing_standard: str,
     db_path,
+    reporting_period_cy: Optional[str] = None,
+    reporting_period_py: Optional[str] = None,
 ):
     """Phase C — replace agent-written workbooks with DB-exported ones.
 
@@ -167,10 +190,11 @@ def _export_canonical_workbooks(
             # NotPrepared / standard-variant mismatch — nothing to export.
             continue
         canon_path = Path(session_dir) / f"{stmt.value}_canonical.xlsx"
-        # The agent's scratch workbook (if present) holds the real row-1
-        # reporting-period dates, which don't project to facts — carry them
-        # into the fact-render so the download isn't stamped with the template
-        # placeholder "01/01/YYYY - 31/12/YYYY".
+        # Reporting-period dates are run-level metadata (same on every face
+        # statement), not per-agent data — the exporter stamps them from the
+        # scout period (``reporting_period_cy/py``), falling back to the agent's
+        # scratch workbook on no-scout runs. Either way the download isn't left
+        # with the "01/01/YYYY" placeholder.
         scratch_path = all_workbook_paths.get(stmt)
         try:
             shutil.copyfile(master, canon_path)
@@ -178,6 +202,8 @@ def _export_canonical_workbooks(
                 db_path, run_id, canon_path,
                 filing_level=filing_level,
                 template_id=_derive_template_id(Path(master)),
+                reporting_period_cy=reporting_period_cy,
+                reporting_period_py=reporting_period_py,
                 carry_forward_row1_from=scratch_path,
             )
         except Exception:
@@ -3180,6 +3206,7 @@ async def run_multi_agent_stream(
         # later canonical correction) rather than the agent's scratch xlsx.
         if _canonical_facts_enabled():
             try:
+                _ip_cy, _ip_py = _reporting_periods_from_infopack(infopack)
                 _export_canonical_workbooks(
                     run_id=run_id,
                     agent_results=coordinator_result.agent_results,
@@ -3188,6 +3215,8 @@ async def run_multi_agent_stream(
                     filing_level=run_config.filing_level,
                     filing_standard=run_config.filing_standard,
                     db_path=AUDIT_DB_PATH,
+                    reporting_period_cy=_ip_cy,
+                    reporting_period_py=_ip_py,
                 )
             except Exception:
                 logger.exception(
