@@ -13,7 +13,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_notes_pipeline_doc_mentions_html_contract() -> None:
-    doc = (REPO_ROOT / "docs" / "NOTES-PIPELINE.md").read_text(encoding="utf-8")
+    # The deep-dive was archived under docs/Archive/ in 80e20c7 (docs reorg);
+    # the load-bearing-phrase guard follows it there.
+    doc = (REPO_ROOT / "docs" / "Archive" / "NOTES-PIPELINE.md").read_text(encoding="utf-8")
     # HTML is the canonical emit format — prompts require it and the
     # writer enforces a rendered-char cap against it.
     assert "HTML" in doc
@@ -36,7 +38,7 @@ def test_claude_md_has_notes_html_gotcha() -> None:
 def test_adr_001_records_db_canonical_decision() -> None:
     """Peer-review #13: architectural decision recorded as an ADR so a
     future reader can find the *why* without chasing plan files."""
-    adr = REPO_ROOT / "docs" / "ADR-001-notes-db-canonical.md"
+    adr = REPO_ROOT / "docs" / "Archive" / "ADR-001-notes-db-canonical.md"
     assert adr.exists(), "ADR-001 missing — record the DB-canonical decision"
     content = adr.read_text(encoding="utf-8")
     # Load-bearing phrases: the decision itself and the two alternatives
