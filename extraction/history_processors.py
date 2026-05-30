@@ -40,7 +40,10 @@ _PAGE_MARKER_RE = re.compile(r"===\s*Page\s+(\d+)\s*===", re.IGNORECASE)
 # succeeded, the workbook — not the page images — is the source of truth, so
 # older images can be trimmed. Before the first successful write the agent is
 # still reading and cross-referencing multiple pages, so images are kept whole.
-_WRITE_TOOL_NAMES = frozenset({"fill_workbook", "write_notes"})
+# write_facts is the face-extraction write tool (rewrite Phase 3 renamed it
+# from fill_workbook, which is kept here for back-compat with message
+# histories recorded before the rename). write_notes is the notes write tool.
+_WRITE_TOOL_NAMES = frozenset({"write_facts", "fill_workbook", "write_notes"})
 
 # A write counts as a trimming boundary only when it actually COMMITTED data —
 # matched by a success string carrying a non-zero count. The count matters, not

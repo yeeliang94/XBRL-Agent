@@ -32,7 +32,7 @@ For **Direct** method (82 rows, 71 data-entry):
    a. Map each cash receipt/payment line directly from the SOCF face.
    b. Map investing and financing activities.
    c. Fill the Details section.
-5. Call fill_workbook(), verify_totals(), and save_result().
+5. Call write_facts(), verify_totals(), and save_result().
 
 === CRITICAL RULES ===
 

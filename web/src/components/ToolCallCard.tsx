@@ -187,7 +187,7 @@ const NEUTRAL_BADGE = { bg: pwc.grey50, fg: pwc.grey500 };
 
 /** Render expanded arguments — structured for known tools, JSON for unknown. */
 function renderArgs(toolName: string, args: Record<string, unknown>): React.ReactNode {
-  if (toolName === "fill_workbook") {
+  if (toolName === "write_facts" || toolName === "fill_workbook") {
     const fields = parseFillFields(args);
     if (fields) {
       return (

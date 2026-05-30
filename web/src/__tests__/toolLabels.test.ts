@@ -15,7 +15,10 @@ describe("humanToolName", () => {
   test("view_pdf_pages → 'Checking PDF pages'", () => {
     expect(humanToolName("view_pdf_pages")).toBe("Checking PDF pages");
   });
-  test("fill_workbook → 'Filling workbook'", () => {
+  test("write_facts → 'Filling workbook'", () => {
+    expect(humanToolName("write_facts")).toBe("Filling workbook");
+  });
+  test("fill_workbook (legacy alias) → 'Filling workbook'", () => {
     expect(humanToolName("fill_workbook")).toBe("Filling workbook");
   });
   test("verify_totals → 'Verifying totals'", () => {
@@ -78,7 +81,19 @@ describe("argsPreview", () => {
     expect(argsPreview("view_pages", { pages: [12, 13] })).toBe("pages 12 and 13");
   });
 
-  // fill_workbook — collapses the field list to "N fields → Sheet".
+  // write_facts — collapses the typed `facts` array to "N fields → Sheet".
+  test("write_facts with 24 facts on SOFP-Sub-CuNonCu → '24 fields → SOFP-Sub-CuNonCu'", () => {
+    const facts = Array.from({ length: 24 }, (_, i) => ({
+      sheet: "SOFP-Sub-CuNonCu",
+      field_label: `Field ${i}`,
+      col: 2,
+      value: i,
+      evidence: "p1",
+    }));
+    expect(argsPreview("write_facts", { facts })).toBe("24 fields → SOFP-Sub-CuNonCu");
+  });
+
+  // fill_workbook (legacy) — still parses the old fields_json JSON string.
   test("fill_workbook with 24 fields on SOFP-Sub-CuNonCu → '24 fields → SOFP-Sub-CuNonCu'", () => {
     const fields = Array.from({ length: 24 }, (_, i) => ({
       sheet: "SOFP-Sub-CuNonCu",
@@ -128,7 +143,13 @@ describe("argsPreview", () => {
 });
 
 describe("resultSummary", () => {
-  test("fill_workbook 'wrote 24 fields' → success / '24 values'", () => {
+  test("write_facts 'wrote 24 fields' → success / '24 values'", () => {
+    expect(resultSummary("write_facts", "wrote 24 fields")).toEqual({
+      text: "24 values",
+      tone: "success",
+    });
+  });
+  test("fill_workbook (legacy) 'wrote 24 fields' → success / '24 values'", () => {
     expect(resultSummary("fill_workbook", "wrote 24 fields")).toEqual({
       text: "24 values",
       tone: "success",

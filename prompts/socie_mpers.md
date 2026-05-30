@@ -79,7 +79,7 @@ naming the block header exactly. The writer uses it to pick the right row.
    - `Increase (decrease) through other changes, equity`
    - `Equity at end of period` — closing balance
 
-5. Call `fill_workbook()`, `verify_totals()` (status-only), then `save_result()`.
+5. Call `write_facts()`, `verify_totals()` (status-only), then `save_result()`.
 
 === CRITICAL RULES (MPERS) ===
 

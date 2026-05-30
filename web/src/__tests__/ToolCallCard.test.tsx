@@ -91,6 +91,29 @@ describe("ToolCallCard", () => {
     expect(screen.queryByText(/"fields"/)).not.toBeInTheDocument();
   });
 
+  test("write_facts expanded args render as a table from the typed facts array", () => {
+    // Current contract (rewrite Phase 3): args carry a typed `facts` array.
+    const entry: ToolTimelineEntry = {
+      ...activeEntry,
+      tool_name: "write_facts",
+      args: {
+        facts: [
+          { sheet: "SOFP-CuNonCu", field_label: "Total assets", col: 2, value: 1000000, evidence: "Page 5" },
+          { sheet: "SOFP-CuNonCu", field_label: "Total equity", col: 2, value: 500000, evidence: "Page 5" },
+        ],
+      },
+      result_summary: "Wrote 2 values",
+      duration_ms: 50,
+      endTime: Date.now() + 50,
+    };
+    render(<ToolCallCard entry={entry} />);
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByText("Total assets")).toBeInTheDocument();
+    expect(screen.getByText("1,000,000")).toBeInTheDocument();
+    expect(screen.getByText("Total equity")).toBeInTheDocument();
+    expect(screen.queryByText(/"facts"/)).not.toBeInTheDocument();
+  });
+
   // --- Step 9: verify_totals result renders with pass/fail styling ---
 
   test("verify_totals result renders with colored badges for Balanced/Matches PDF", () => {

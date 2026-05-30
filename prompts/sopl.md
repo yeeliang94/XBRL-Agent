@@ -35,7 +35,7 @@ benefits, depreciation). The main sheet is mostly self-contained with no cross-s
    - e. Sub-sheet fields with no matching note line stay empty.
 4. Fill the Analysis sub-sheet FIRST with revenue and expense breakdowns from notes.
 5. Fill remaining main-sheet data-entry cells (expenses by function, tax, EPS, etc.).
-6. Call fill_workbook() with all mappings.
+6. Call write_facts() with all mappings.
 7. Call verify_totals() to report verification status (balance checks are SOFP-only for now).
 8. Call save_result() when complete.
 

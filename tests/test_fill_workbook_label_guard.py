@@ -15,8 +15,6 @@ section-header keyword registry must recognise them.
 """
 from __future__ import annotations
 
-import json
-
 import openpyxl
 
 from tools.fill_workbook import fill_workbook, _build_label_index
@@ -50,11 +48,11 @@ class TestWriterRejectsBlankRowWrites:
         template = _make_company_socie_like(tmp_path)
         output = str(tmp_path / "filled.xlsx")
         # Mirrors the MPERS bug — agent submitted {row: 30, col: 2}.
-        payload = json.dumps([
+        facts = [
             {"sheet": "SOCIE", "row": 30, "col": 2, "value": 500_000},
-        ])
+        ]
 
-        result = fill_workbook(template, output, payload)
+        result = fill_workbook(template, output, facts)
 
         assert result.fields_written == 0, (
             "writer wrote to a row with no col-A label — this is the exact bug"
@@ -80,11 +78,11 @@ class TestWriterRejectsBlankRowWrites:
         """Carve-out: row 1 date cells have no label by design (_base.md)."""
         template = _make_company_socie_like(tmp_path)
         output = str(tmp_path / "filled.xlsx")
-        payload = json.dumps([
+        facts = [
             {"sheet": "SOCIE", "row": 1, "col": 2, "value": "01/01/2024 - 31/12/2024"},
-        ])
+        ]
 
-        result = fill_workbook(template, output, payload)
+        result = fill_workbook(template, output, facts)
 
         assert result.success, f"row 1 write should succeed. Errors: {result.errors}"
         assert result.fields_written == 1
@@ -93,11 +91,11 @@ class TestWriterRejectsBlankRowWrites:
         """Regression guard — normal label-based writes unchanged."""
         template = _make_company_socie_like(tmp_path)
         output = str(tmp_path / "filled.xlsx")
-        payload = json.dumps([
+        facts = [
             {"sheet": "SOCIE", "field_label": "Profit (loss)", "col": 2, "value": 322_066},
-        ])
+        ]
 
-        result = fill_workbook(template, output, payload)
+        result = fill_workbook(template, output, facts)
         assert result.success
         assert result.fields_written == 1
 
@@ -114,11 +112,11 @@ class TestWriterRejectsBlankRowWrites:
         """
         template = _make_company_socie_like(tmp_path)
         output = str(tmp_path / "filled.xlsx")
-        payload = json.dumps([
+        facts = [
             {"sheet": "SOCIE", "row": 10, "col": 2, "value": 1000},
-        ])
+        ]
 
-        result = fill_workbook(template, output, payload)
+        result = fill_workbook(template, output, facts)
         assert result.success
         assert result.fields_written == 1
 
@@ -181,14 +179,14 @@ class TestMpersGroupSocieBlockHeaders:
         wb.close()
 
         output = str(tmp_path / "filled.xlsx")
-        payload = json.dumps([
+        facts = [
             {"sheet": "SOCIE", "field_label": "Profit (loss)",
              "section": "Group - Current period", "col": 2, "value": 100},
             {"sheet": "SOCIE", "field_label": "Profit (loss)",
              "section": "Group - Prior period", "col": 2, "value": 200},
-        ])
+        ]
 
-        result = fill_workbook(path, output, payload)
+        result = fill_workbook(path, output, facts)
         assert result.success, result.errors
         assert result.fields_written == 2
 

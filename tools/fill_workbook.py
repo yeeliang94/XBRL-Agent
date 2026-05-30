@@ -1,11 +1,11 @@
-import json
 import logging
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 import openpyxl
+from pydantic import BaseModel, Field
 
 from tools.section_headers import (
     discover_section_headers,
@@ -14,6 +14,43 @@ from tools.section_headers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class FactWrite(BaseModel):
+    """One typed cell write proposed by the extraction agent.
+
+    Phase 3 of the first-principles rewrite replaced the stringly-typed
+    ``fields_json`` blob with this model so pydantic-ai validates each
+    proposal (and injects the schema into the tool signature) BEFORE the
+    tool body runs — malformed proposals never reach `fill_workbook`.
+
+    Mirrors the real cell contract rather than the report's store-first
+    ``(concept, period, scope)`` shape, because today's fill is still
+    cell-based (Phase 4 is what flips render-last). Evidence is REQUIRED:
+    the evidence column is the audit trail (gotcha #16) and making it a
+    routed typed field kills the old silent evidence-column override.
+    """
+
+    sheet: str
+    # 2 = CY (col B), 3 = PY (col C); group filings add D/E; the SOCIE
+    # 24-col matrix uses the equity-component column directly.
+    col: int = 2
+    # PDF page + short quote. Required — never let a value land without
+    # provenance (gotcha #16).
+    evidence: str = Field(min_length=1)
+    # Label-matching mode (preferred): match against column-A text.
+    field_label: str = ""
+    # Section hint to disambiguate duplicate labels (e.g. "current" vs
+    # "non-current").
+    section: str = ""
+    # Explicit-coordinate mode (SOCIE matrix and other complex layouts).
+    row: Optional[int] = None
+    # Numeric for data rows; str for the row-1 reporting-period date cells
+    # (e.g. "01/01/2022 - 31/12/2022"). The legacy dataclass annotation was
+    # `Optional[float]` but dataclasses don't validate, so date strings rode
+    # through. pydantic DOES validate — keep the union so date cells still
+    # work. int|float preserves integer-ness for the common numeric case.
+    value: Optional[Union[int, float, str]] = None
 
 
 @dataclass
@@ -197,15 +234,21 @@ def _detect_double_bookings(
 def fill_workbook(
     template_path: str,
     output_path: str,
-    fields_json: str,
+    facts: Sequence[Union["FactWrite", dict]],
     filing_level: str = "company",
 ) -> FillResult:
-    """Apply structured field mappings to an Excel template.
+    """Apply typed cell writes to an Excel template.
 
     Matches fields by label (column A text) with section-aware disambiguation.
     When a label appears multiple times (e.g. "Lease liabilities" under both
     non-current and current), the section hint ("current"/"non-current") picks
     the correct occurrence.
+
+    ``facts`` is a sequence of `FactWrite` models (the agent-facing contract
+    validated by pydantic-ai before this body runs) or plain dicts with the
+    same keys (the internal/test contract). Phase 3 of the rewrite removed the
+    old ``fields_json`` string + its JSON-decode error branch — proposals are
+    now typed end-to-end.
     """
     template = Path(template_path)
     if not template.exists():
@@ -216,15 +259,7 @@ def fill_workbook(
             errors=[f"Template not found: {template_path}"],
         )
 
-    try:
-        mappings = _parse_fields_json(fields_json)
-    except Exception as e:
-        return FillResult(
-            success=False,
-            fields_written=0,
-            output_path="",
-            errors=[f"Invalid JSON: {e}"],
-        )
+    mappings = _coerce_facts(facts)
 
     wb = openpyxl.load_workbook(template_path)
     errors: list[str] = []
@@ -546,28 +581,43 @@ def _find_row_by_label(
     return None
 
 
-def _parse_fields_json(fields_json: str) -> list[FieldMapping]:
-    data = json.loads(fields_json)
+def _coerce_facts(facts: Sequence[Union["FactWrite", dict]]) -> list[FieldMapping]:
+    """Normalise the typed `facts` argument into internal `FieldMapping`s.
 
-    if isinstance(data, dict) and "fields" in data:
-        items = data["fields"]
-    elif isinstance(data, list):
-        items = data
-    else:
-        raise ValueError('Expected a list of field mappings or {"fields": [...]}')
-
-    mappings = []
-    for item in items:
-        mappings.append(
-            FieldMapping(
-                sheet=item["sheet"],
-                field_label=item.get("field_label", ""),
-                col=int(item.get("col", 2)),
-                value=item.get("value"),
-                section=item.get("section") or "",
-                row=int(item["row"]) if "row" in item else None,
-                evidence=item.get("evidence", ""),
+    Accepts `FactWrite` models (the agent path, already validated by
+    pydantic-ai) or plain dicts (internal callers + tests). The internal
+    loop, the double-booking guard, and the canonical projection all work
+    in terms of `FieldMapping`, so we convert once here.
+    """
+    mappings: list[FieldMapping] = []
+    for f in facts:
+        if isinstance(f, FactWrite):
+            mappings.append(
+                FieldMapping(
+                    sheet=f.sheet,
+                    field_label=f.field_label,
+                    col=f.col,
+                    value=f.value,
+                    section=f.section,
+                    row=f.row,
+                    evidence=f.evidence,
+                )
             )
-        )
-
+        elif isinstance(f, dict):
+            mappings.append(
+                FieldMapping(
+                    sheet=f["sheet"],
+                    field_label=f.get("field_label", ""),
+                    col=int(f.get("col", 2)),
+                    value=f.get("value"),
+                    section=f.get("section") or "",
+                    row=int(f["row"]) if f.get("row") is not None else None,
+                    evidence=f.get("evidence", ""),
+                )
+            )
+        else:
+            raise TypeError(
+                f"fill_workbook: unsupported fact entry {type(f).__name__}; "
+                "expected FactWrite or dict"
+            )
     return mappings

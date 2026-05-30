@@ -12,6 +12,10 @@ export const TOOL_LABELS: Record<string, string> = {
   calculator: "Calculating",
   read_template: "Reading template",
   view_pdf_pages: "Checking PDF pages",
+  // write_facts is the current tool name (rewrite Phase 3). fill_workbook is
+  // kept as a back-compat alias so runs recorded before the rename still
+  // render a friendly label in History replay.
+  write_facts: "Filling workbook",
   fill_workbook: "Filling workbook",
   verify_totals: "Verifying totals",
   save_result: "Saving result",
@@ -31,9 +35,9 @@ export function humanToolName(name: string): string {
   return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// --- fill_workbook field parsing -------------------------------------------
+// --- write_facts field parsing ---------------------------------------------
 
-/** One field_entry from fill_workbook's fields_json arg. */
+/** One cell write from write_facts' `facts` arg (or legacy fill_workbook). */
 export interface FillField {
   sheet: string;
   field_label?: string;
@@ -45,13 +49,19 @@ export interface FillField {
 }
 
 /**
- * Parse fill_workbook's fields_json arg into typed field entries. Accepts
- * either a JSON string or an already-parsed object; tolerates either
- * {fields: [...]} or a bare array. Returns null on any parse failure so
- * callers can degrade cleanly.
+ * Parse a write_facts / fill_workbook tool call's arguments into typed field
+ * entries. The current contract (write_facts) passes a typed `facts` array
+ * directly. The legacy contract (fill_workbook, pre-rewrite runs in History)
+ * passed a `fields_json` JSON string or object, either `{fields: [...]}` or a
+ * bare array. Returns null on any parse failure so callers degrade cleanly.
  */
 export function parseFillFields(args: Record<string, unknown>): FillField[] | null {
   try {
+    // Current contract: write_facts emits a real array under `facts`.
+    if (Array.isArray(args.facts) && args.facts.length > 0) {
+      return args.facts as FillField[];
+    }
+    // Legacy contract: fill_workbook emitted a JSON string / object.
     const raw = typeof args.fields_json === "string"
       ? JSON.parse(args.fields_json)
       : args.fields_json;
@@ -116,7 +126,7 @@ export function argsPreview(toolName: string, args: Record<string, unknown>): st
     return "";
   }
 
-  if (toolName === "fill_workbook") {
+  if (toolName === "write_facts" || toolName === "fill_workbook") {
     const fields = parseFillFields(args);
     if (fields) {
       const sheet = fields[0]?.sheet;
@@ -187,7 +197,7 @@ export function resultSummary(toolName: string, summary: string): ResultSummary 
   try {
     if (!summary) return null;
 
-    if (toolName === "fill_workbook") {
+    if (toolName === "write_facts" || toolName === "fill_workbook") {
       const m = summary.match(RE_WROTE_N);
       if (m) return { text: `${m[1]} values`, tone: "success" };
       return null;

@@ -31,7 +31,7 @@ a matrix; there are no per-component reserve columns.
    `{"sheet": "SoRE", "row": 12, "col": 2, "value": 4_200_000, "evidence": "..."}`
 4. **Do NOT fill the `*Total…` formula rows** (17, 20, 21, 14) — they
    auto-calculate from the inputs you supply.
-5. Call `fill_workbook()`, `verify_totals()` (status-only), then `save_result()`.
+5. Call `write_facts()`, `verify_totals()` (status-only), then `save_result()`.
 
 === CRITICAL RULES ===
 

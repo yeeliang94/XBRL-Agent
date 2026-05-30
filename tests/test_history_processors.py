@@ -112,6 +112,24 @@ def test_strip_stale_images_strips_pre_write_batches_after_write():
     # batch (4,5) kept → 2 images remain.
     assert _count_images(out) == 2
 
+
+def test_write_facts_is_a_write_boundary():
+    """Rewrite Phase 3 renamed the face write tool fill_workbook → write_facts.
+    The stage-aware image trim keys off the tool NAME, so write_facts must be
+    recognised as a write boundary or the token-cost trim silently stops firing
+    on real (renamed) runs."""
+    messages = [
+        _image_batch_msg("view_pdf_pages", [1, 2]),       # pre-write → strip
+        ModelResponse(parts=[TextPart("looking")]),
+        _write_msg("write_facts"),                         # write boundary
+        _image_batch_msg("view_pdf_pages", [4, 5]),       # post-write → keep
+    ]
+
+    out = strip_stale_images(messages)
+
+    # Pre-write batch (1,2) stripped; post-write batch (4,5) kept → 2 remain.
+    assert _count_images(out) == 2
+
     first_return = out[0].parts[0]
     placeholders = [it for it in first_return.content if isinstance(it, str)]
     # Wording discourages re-fetching rather than inviting it.

@@ -1,7 +1,6 @@
 """Integration test: mocks vision output and asserts workbook creation,
 verification, and non-zero token reporting."""
 
-import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -40,21 +39,17 @@ def test_integration_mocks_vision_fills_workbook(tmp_path, mock_template, mock_p
     from tools.verifier import verify_totals
     from tools.template_reader import read_template
 
-    fields_json = json.dumps(
+    facts = [
         {
-            "fields": [
-                {
-                    "sheet": "SOFP-CuNonCu",
-                    "field_label": "Right-of-use assets",
-                    "col": 2,
-                    "value": 191518,
-                },
-            ]
-        }
-    )
+            "sheet": "SOFP-CuNonCu",
+            "field_label": "Right-of-use assets",
+            "col": 2,
+            "value": 191518,
+        },
+    ]
 
     output = str(tmp_path / "filled.xlsx")
-    fill_result = fill_workbook(mock_template, output, fields_json)
+    fill_result = fill_workbook(mock_template, output, facts)
     assert fill_result.success
     assert fill_result.fields_written == 1
     assert Path(output).exists()
@@ -109,16 +104,12 @@ def test_integration_full_flow(tmp_path, mock_template):
     from tools.fill_workbook import fill_workbook
     from tools.verifier import verify_totals
 
-    fields_json = json.dumps(
-        {
-            "fields": [
-                {"sheet": "SOFP-CuNonCu", "field_label": "Total assets", "col": 2, "value": 500},
-            ]
-        }
-    )
+    facts = [
+        {"sheet": "SOFP-CuNonCu", "field_label": "Total assets", "col": 2, "value": 500},
+    ]
 
     output = str(tmp_path / "filled.xlsx")
-    fill_result = fill_workbook(mock_template, output, fields_json)
+    fill_result = fill_workbook(mock_template, output, facts)
     assert fill_result.success
 
     pdf_values = {

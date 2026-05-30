@@ -71,10 +71,10 @@ def _deps(tmp_path, *, run_id=None, db_path=None, template_id=None):
 
 def _fill(tmp_path, row, col=2, value=123.0):
     out = tmp_path / "out.xlsx"
-    fields = json.dumps({"fields": [
+    facts = [
         {"sheet": "SOFP-CuNonCu", "row": row, "col": col, "value": value}
-    ]})
-    return fill_workbook(str(CO_SOFP), str(out), fields, filing_level="company")
+    ]
+    return fill_workbook(str(CO_SOFP), str(out), facts, filing_level="company")
 
 
 def test_projection_runs_when_canonical_deps_set(canonical_env, tmp_path):
