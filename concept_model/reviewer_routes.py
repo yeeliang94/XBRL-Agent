@@ -32,6 +32,9 @@ def _now() -> str:
     )
 
 
+_HUMAN_ANSWER_MAX = 8000
+
+
 class FlagAnswer(BaseModel):
     human_answer: str
 
@@ -114,6 +117,15 @@ def register_reviewer_routes(app, audit_db_getter) -> None:
         if not (body.human_answer and body.human_answer.strip()):
             raise HTTPException(
                 status_code=400, detail="human_answer must be non-empty.",
+            )
+        # Bounded: this free text is folded verbatim into the next re-review
+        # system prompt, so an unbounded value is a DB-bloat + prompt-stuffing /
+        # cost vector. Handler-level check (not a Pydantic Field) so the 422
+        # carries a readable message instead of a validation-error list.
+        if len(body.human_answer) > _HUMAN_ANSWER_MAX:
+            raise HTTPException(
+                status_code=422,
+                detail=f"human_answer exceeds {_HUMAN_ANSWER_MAX} characters.",
             )
         conn = _conn()
         try:

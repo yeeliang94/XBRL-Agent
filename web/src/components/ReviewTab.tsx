@@ -69,6 +69,21 @@ function fmt(v: number | null): string {
 }
 
 /**
+ * Surface the server's `detail` on a non-2xx response instead of a bare
+ * "HTTP 422". The reviewer endpoints return actionable messages (input-cap
+ * 422s, the 429 concurrency cap, the 409 "nothing to revert"), so the error
+ * banner should show them rather than a status code.
+ */
+async function errorDetail(r: Response): Promise<string> {
+  try {
+    const body = await r.json();
+    return body.detail || body.message || `HTTP ${r.status}`;
+  } catch {
+    return `HTTP ${r.status}`;
+  }
+}
+
+/**
  * Poll the background re-review pass until it finishes. A pass reads the PDF
  * and traces each failure, so it can take minutes; we poll every ~1.5s and
  * cap the wait so a stuck pass can't poll forever. The first poll fires
@@ -134,7 +149,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
     setError(null);
     try {
       const r = await fetch(`/api/runs/${runId}/review`, { signal });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) throw new Error(await errorDetail(r));
       setData(await r.json());
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
@@ -164,7 +179,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
           model: selectedModel || undefined,
         }),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) throw new Error(await errorDetail(r));
       // The POST only LAUNCHES the pass (it can run for minutes); poll the
       // status endpoint for the outcome. The outcome's `ok` reflects whether
       // the reviewer pass succeeded (the run is intact regardless thanks to
@@ -207,7 +222,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       const r = await fetch(`/api/runs/${runId}/revert-to-original`, {
         method: "POST",
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) throw new Error(await errorDetail(r));
       await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Revert failed");
@@ -226,7 +241,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ human_answer: text }),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) throw new Error(await errorDetail(r));
       await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Answer failed");
