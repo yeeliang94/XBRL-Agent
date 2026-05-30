@@ -42,6 +42,64 @@ _APPLICABLE_SCOPES = {
 }
 
 
+def _is_date_placeholder(value) -> bool:
+    """True for an unfilled reporting-period date-header cell."""
+    return isinstance(value, str) and "YYYY" in value
+
+
+def _stamp_period_headers(
+    wb,
+    reporting_period_cy: str | None,
+    reporting_period_py: str | None,
+    carry_forward_row1_from: str | Path | None,
+) -> None:
+    """Fill the placeholder reporting-period date headers in-place.
+
+    Scout metadata first (by column parity), else carry-forward from the
+    agent's scratch workbook. See the call site for the full rationale. Both
+    paths only overwrite cells still holding the "YYYY" placeholder.
+    """
+    import logging
+
+    if reporting_period_cy or reporting_period_py:
+        for d_ws in wb.worksheets:
+            for drow in d_ws.iter_rows(min_row=1, max_row=3):
+                for d_cell in drow:
+                    if not _is_date_placeholder(d_cell.value):
+                        continue
+                    is_cy = d_cell.column % 2 == 0  # B,D -> CY; C,E -> PY
+                    new = reporting_period_cy if is_cy else reporting_period_py
+                    if new:
+                        d_cell.value = new
+        return
+
+    # Fallback: carry the agent-typed dates over from the scratch workbook.
+    if not (carry_forward_row1_from and Path(carry_forward_row1_from).exists()):
+        return
+    src_wb = None
+    try:
+        src_wb = openpyxl.load_workbook(carry_forward_row1_from, data_only=False)
+        for sheet in wb.sheetnames:
+            if sheet not in src_wb.sheetnames:
+                continue
+            s_ws, d_ws = src_wb[sheet], wb[sheet]
+            for drow in d_ws.iter_rows(min_row=1, max_row=3):
+                for d_cell in drow:
+                    if not _is_date_placeholder(d_cell.value):
+                        continue
+                    s_val = s_ws.cell(row=d_cell.row, column=d_cell.column).value
+                    if isinstance(s_val, str) and s_val and "YYYY" not in s_val:
+                        d_cell.value = s_val
+    except Exception:  # noqa: BLE001 — a carry-forward hiccup must not sink the export
+        logging.getLogger(__name__).warning(
+            "reporting-period carry-forward from %s failed",
+            carry_forward_row1_from, exc_info=True,
+        )
+    finally:
+        if src_wb is not None:
+            src_wb.close()
+
+
 def export_run_to_xlsx(
     db_path: str | Path,
     run_id: int,
@@ -49,6 +107,8 @@ def export_run_to_xlsx(
     *,
     filing_level: str = "company",
     template_id: str | None = None,
+    reporting_period_cy: str | None = None,
+    reporting_period_py: str | None = None,
     carry_forward_row1_from: str | Path | None = None,
 ) -> int:
     """Fill ``xlsx_path`` in-place with the canonical-mode facts.
@@ -251,37 +311,29 @@ def export_run_to_xlsx(
         ):
             ws[f"{source_col}{row}"] = r["source"]
 
-    # Carry forward the agent's real reporting-period date headers from the
-    # scratch workbook. They're NON-concept cells, so they never project to
-    # facts — the fresh template copy keeps the literal "01/01/YYYY -
-    # 31/12/YYYY" placeholder. Their ROW varies by layout (Company: row 1;
-    # Group: row 2, under the Group/Company column-group labels; SOCIE matrix:
-    # B1), so rather than hardcode a row we key on the PLACEHOLDER itself:
-    # overwrite a cell ONLY when the canonical copy still shows the "YYYY" date
-    # placeholder AND the scratch has a real value at the same coordinate.
-    # Self-targeting (never touches a non-date cell) and layout-independent.
-    if carry_forward_row1_from and Path(carry_forward_row1_from).exists():
-        try:
-            src_wb = openpyxl.load_workbook(carry_forward_row1_from, data_only=False)
-            for sheet in wb.sheetnames:
-                if sheet not in src_wb.sheetnames:
-                    continue
-                s_ws, d_ws = src_wb[sheet], wb[sheet]
-                # Date headers sit in the top band; scanning a few rows keeps
-                # this cheap while covering every layout.
-                for drow in d_ws.iter_rows(min_row=1, max_row=3):
-                    for d_cell in drow:
-                        dval = d_cell.value
-                        if not (isinstance(dval, str) and "YYYY" in dval):
-                            continue
-                        s_val = s_ws.cell(
-                            row=d_cell.row, column=d_cell.column
-                        ).value
-                        if isinstance(s_val, str) and s_val and "YYYY" not in s_val:
-                            d_cell.value = s_val
-            src_wb.close()
-        except Exception:  # noqa: BLE001 — a carry-forward hiccup must not sink the export
-            pass
+    # Reporting-period date headers are NON-concept cells (they never project
+    # to ``run_concept_facts``), so the fresh template copy keeps the literal
+    # "01/01/YYYY - 31/12/YYYY" placeholder. Populate them deterministically.
+    #
+    # The period is RUN-LEVEL metadata — the same CY / PY string on every face
+    # statement, just repeated across Group's column pairs — so we never ask the
+    # five extraction agents to re-type it. Two sources, in priority order:
+    #
+    #   1. Scout-captured period (``reporting_period_cy`` / ``_py``). Stamped by
+    #      column PARITY, which holds across every layout: value columns are
+    #      CY, PY, CY, PY from B — Company B(CY)/C(PY); Group B(GrpCY)/C(GrpPY)/
+    #      D(CoCY)/E(CoPY); SOCIE B(CY) only. Even cols (B=2,D=4) → CY, odd
+    #      (C=3,E=5) → PY. Layout-independent and fixes Group, whose dates live
+    #      in row 2 (row 1 holds the Group/Company labels) — a row the writer
+    #      guard won't let an agent fill.
+    #   2. Fallback for no-scout runs: the agent's scratch workbook, where it
+    #      typed the dates into row 1 itself. Copied cell-for-cell.
+    #
+    # Both only ever overwrite a cell that still holds the "YYYY" placeholder,
+    # so they are self-targeting — never a data, label, or Source cell.
+    _stamp_period_headers(
+        wb, reporting_period_cy, reporting_period_py, carry_forward_row1_from
+    )
 
     wb.save(xlsx_path)
 
