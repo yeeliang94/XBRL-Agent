@@ -4651,11 +4651,40 @@ if dist_dir.exists():
 # Main entry point
 # ---------------------------------------------------------------------------
 
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def resolve_bind_host(env: Optional[dict] = None) -> tuple[str, bool]:
+    """Resolve the uvicorn bind host and whether it exposes beyond this machine.
+
+    Loopback by default: the app has NO authentication / CORS / CSRF, yet
+    exposes destructive + paid-LLM endpoints (e.g. POST
+    /api/runs/{id}/revert-to-original wipes a run's facts; POST /re-review
+    spends API tokens). On 0.0.0.0 those are reachable by any host on the
+    network with no credentials, so the safe default is 127.0.0.1. Set
+    HOST=0.0.0.0 to deliberately expose on a trusted LAN.
+
+    Returns ``(host, is_exposed)`` where ``is_exposed`` is True for any
+    non-loopback bind, so the caller can warn. Pure (reads the passed env, or
+    ``os.environ``) so it is unit-testable without launching uvicorn.
+    """
+    src = os.environ if env is None else env
+    host = src.get("HOST", "127.0.0.1")
+    return host, host not in _LOOPBACK_HOSTS
+
+
 if __name__ == "__main__":
     import uvicorn
 
     load_dotenv(ENV_FILE)
-    host = os.environ.get("HOST", "0.0.0.0")
+    host, exposed = resolve_bind_host()
     port = int(os.environ.get("PORT", "8002"))
+    if exposed:
+        logger.warning(
+            "XBRL Agent is binding to %s — reachable beyond this machine with "
+            "NO authentication. The app exposes destructive + paid-LLM "
+            "endpoints; only expose it on a trusted network. Set HOST=127.0.0.1 "
+            "to restrict to this machine.", host,
+        )
     logger.info(f"Starting SOFP Agent Web UI on http://{host}:{port}")
     uvicorn.run(app, host=host, port=port)
