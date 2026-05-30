@@ -1,4 +1,3 @@
-from concept_model.importer import import_company_targets
 """Phase 7 — notes unified into the canonical fact store.
 
 The shared facts API (POST /api/runs/{id}/facts) now branches scalar
@@ -41,7 +40,7 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
 
     from db.schema import init_db
     from concept_model.parser import parse_template
-    from concept_model.importer import import_template
+    from concept_model.importer import import_template, import_company_targets
     init_db(db)
     tree = parse_template(str(FACE))
     jp = tmp_path / "tree.json"

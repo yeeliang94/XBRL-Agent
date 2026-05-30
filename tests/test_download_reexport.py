@@ -1,4 +1,3 @@
-from concept_model.importer import import_company_targets
 """Phase 1.3 — download rebuilds the merged workbook from DB facts.
 
 The editable-review plan makes the DB the single source of truth: a
@@ -32,7 +31,7 @@ def seeded_run(tmp_path: Path):
     import server
     from db.schema import init_db
     from concept_model.parser import parse_template
-    from concept_model.importer import import_template
+    from concept_model.importer import import_template, import_company_targets
     from concept_model.facts_api import write_fact, FactWrite
 
     db_path = tmp_path / "xbrl.db"
