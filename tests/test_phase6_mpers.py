@@ -28,7 +28,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from concept_model.parser import parse_template
-from concept_model.importer import import_template, import_group_targets
+from concept_model.importer import (
+    import_company_targets,
+    import_group_targets,
+    import_template,
+)
 from concept_model.exporter import export_run_to_xlsx
 from db.schema import init_db
 
@@ -255,6 +259,8 @@ def test_phase6_e2e_mpers_company_and_group(tmp_path: Path) -> None:
         tree = parse_template(str(fixture))
         if level == "group":
             import_group_targets(db, tid)
+        else:
+            import_company_targets(db, tid)
         run_id = _new_run(db)
         conn = sqlite3.connect(str(db))
         leaf = conn.execute(

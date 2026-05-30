@@ -323,6 +323,65 @@ _GROUP_COL_LAYOUT = [
 ]
 
 
+def import_company_targets(db_path: str | Path, template_id: str) -> int:
+    """Populate ``concept_targets`` for every LEAF + COMPUTED concept in a
+    linear *Company* template (rewrite Phase 6.1).
+
+    Company templates use a fixed 2-column value layout (gotcha #12):
+    ``B = CY, C = PY`` (col A = label, col D = source). So each concept
+    gets two target rows — ``(Company, CY) → render_col`` (the parser's
+    value column, default B) and ``(Company, PY) → C`` — mirroring
+    ``cell_resolver.resolve_cell``'s CY=col2 / PY=col3 convention so the
+    write (extraction) and read (export) paths stay symmetric.
+
+    Precomputing these lets the exporter route every fact via ONE
+    ``concept_targets`` lookup instead of a render_col fallback branch
+    (report §5.1). Idempotent (UNIQUE(concept_uuid, entity_scope, period)).
+    Returns the number of target rows written.
+
+    Iterates ``concept_nodes`` only — which holds each concept's PRIMARY
+    render coord. A cross-sheet rolled-up concept's face *alias* coord
+    lives in ``concept_render_aliases`` and is deliberately NOT given a
+    target: that face cell holds a live cross-sheet formula and the
+    exporter must never write a literal there (v11 contract, gotcha #21).
+
+    Skips ABSTRACT concepts (never written) and SOCIE (matrix — its
+    per-cell targets are written inline by :func:`import_template`).
+    """
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        rows = conn.execute(
+            "SELECT concept_uuid, render_sheet, render_row, render_col "
+            "FROM concept_nodes "
+            "WHERE template_id = ? AND kind != 'ABSTRACT'",
+            (template_id,),
+        ).fetchall()
+        if not rows:
+            return 0
+
+        written = 0
+        for concept_uuid, sheet, row, render_col in rows:
+            # SOCIE matrix carries per-cell targets from import_template.
+            if "socie" in (sheet or "").lower():
+                continue
+            for period, col in (("CY", render_col or "B"), ("PY", "C")):
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO concept_targets(
+                        concept_uuid, entity_scope, period,
+                        target_sheet, target_row, target_col
+                    ) VALUES (?, 'Company', ?, ?, ?, ?)
+                    """,
+                    (concept_uuid, period, sheet, row, col),
+                )
+                written += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return written
+
+
 def import_group_targets(db_path: str | Path, template_id: str) -> int:
     """Populate ``concept_targets`` for every LEAF + COMPUTED concept in
     a Group template.

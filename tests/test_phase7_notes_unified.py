@@ -1,3 +1,4 @@
+from concept_model.importer import import_company_targets
 """Phase 7 — notes unified into the canonical fact store.
 
 The shared facts API (POST /api/runs/{id}/facts) now branches scalar
@@ -45,7 +46,8 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
     tree = parse_template(str(FACE))
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
-    import_template(db, jp)
+    _ct_tid = import_template(db, jp)
+    import_company_targets(db, _ct_tid)
 
     conn = sqlite3.connect(str(db))
     try:

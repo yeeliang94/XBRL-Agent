@@ -21,7 +21,7 @@ import openpyxl
 import pytest
 
 from concept_model.exporter import export_run_to_xlsx
-from concept_model.importer import import_template
+from concept_model.importer import import_company_targets, import_template
 from concept_model.parser import parse_template
 from db.schema import init_db
 
@@ -44,6 +44,7 @@ def seeded(tmp_path: Path) -> tuple[Path, int, str, Path]:
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     template_id = import_template(db, jp)
+    import_company_targets(db, template_id)
 
     conn = sqlite3.connect(str(db))
     try:

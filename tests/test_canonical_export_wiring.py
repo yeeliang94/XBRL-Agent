@@ -213,7 +213,11 @@ def test_group_export_wiring_fills_both_scope_columns(tmp_path):
     import server
     from db.schema import init_db
     from concept_model.parser import parse_template, _derive_template_id
-    from concept_model.importer import import_template, import_group_targets
+    from concept_model.importer import (
+    import_company_targets,
+    import_group_targets,
+    import_template,
+)
     from concept_model.facts_api import write_fact, FactWrite
 
     gr_sofp = REPO / "XBRL-template-MFRS" / "Group" / "01-SOFP-CuNonCu.xlsx"

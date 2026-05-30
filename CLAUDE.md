@@ -891,6 +891,25 @@ Group facts dropped (they only apply to Group filings, which use the
 `tests/test_canonical_export.py::test_py_facts_export_to_col_c_on_linear_company`
 and `::test_group_facts_dropped_on_company_filing`.
 
+**Single-lookup routing (2026-05-30, rewrite Phase 6.1):**
+The exporter no longer carries the three-way `render_col`/PY=C routing
+fallback described above — it now does ONE `concept_targets` lookup per
+fact for every shape. The importer precomputes a target row for every
+dimension a filing renders: `import_company_targets` (Company B=CY/C=PY)
+mirrors `import_group_targets` (B/C/D/E); matrix (SOCIE) targets stay
+inline; `bootstrap._import_one` calls the company variant for non-group
+linear templates. The CY=B/PY=C *result* is unchanged (the PY-columns
+and Group-drop behaviour above still hold) — only the mechanism moved
+from an inline fallback to a precomputed table. **Aliases are still NOT
+targets** (both importers iterate `concept_nodes` primary coords only),
+so cross-sheet formula cells stay live. An in-scope fact with no
+precomputed target now RAISES (importer-bug signal) instead of silently
+falling back. Tests that hand-roll a Company DB must call
+`import_company_targets(db, template_id)` after `import_template` (as the
+Group fixtures already call `import_group_targets`). Pinned by the same
+`test_canonical_export.py` / `test_canonical_cross_sheet_rollup.py` /
+`test_phase4_group.py` suites.
+
 ### 22. Agent workbook tools must serialise + atomic-save shared files
 
 pydantic-ai (1.77+, default `parallel_execution_mode`) runs batched
