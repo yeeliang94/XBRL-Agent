@@ -1,6 +1,6 @@
 # Implementation Plan: First-Principles Rewrite of the AI Processing Pipeline
 
-**Overall Progress:** `~92%` — Phases 0, 1, 2, 3, 4 COMPLETE; Phases 5.3, 6.1, 6.2, 6.3 COMPLETE (branch green: backend 2 failed [pre-existing doc invariants] / 1845 passed / 2 skipped; frontend 631 passed, tsc clean). Remaining: **5.1 server route split, 5.2 phase pipeline** (both large, no live-LLM needed). Phase 4 (store-first keystone) shipped 2026-05-30, commit `ed28e23` — render-last + non-concept date carry-forward; render-layer A/B clean on FINCO Company (5 date-cell diffs, 0 regressions; self-diff 0); Group A/B deferred as optional breadth (FINCO has no consolidated data — needs a genuinely group PDF). Phase 6.2 (3-bucket error taxonomy + `bucket` field on every coordinator SSE error; frontend drives `isRunning` off it) shipped 2026-05-30. Phase 6.1 (precomputed `concept_targets`, single exporter lookup) shipped 2026-05-30. Phase 5.3 (durable `run_review_tasks` table, schema v13) shipped 2026-05-30. Phase 3 (typed `write_facts`) shipped 2026-05-30. Once 5.1 + 5.2 land, the rewrite is ready for the merge gate to `main` (currently untouched at `pre-rewrite-baseline`).
+**Overall Progress:** `~88%` — Phases 0, 1, 2, 3 COMPLETE; Phase 4 RE-OPENED (Company done, Group date headers broken — see Step 4.3); Phases 5.3, 6.1, 6.2, 6.3 COMPLETE (branch green: backend 2 failed [pre-existing doc invariants] / 1845 passed / 2 skipped; frontend 631 passed, tsc clean). Remaining: **4.3 Group date-header fix (peer review, user-approved metadata-synthesis), 5.1 server route split, 5.2 phase pipeline** (none need live-LLM). Phase 4 (store-first keystone) commit `c61afeb` — render-last + render-from-facts; render-layer A/B clean on **FINCO Company** (5 date-cell diffs, 0 regressions; self-diff 0). **Peer review 2026-05-30 found Phase 4 was prematurely marked DONE: Group reporting-period date headers can't reach the download (writer refuses row-2 labelless writes; prompt only writes row 1), and the date carry-forward still depends on the scratch workbook. Step 4.3 has the user-approved fix (synthesize dates from Infopack metadata).** Phase 6.2 (3-bucket error taxonomy + `bucket` field on every coordinator SSE error; frontend drives `isRunning` off it) shipped 2026-05-30. Phase 6.1 (precomputed `concept_targets`, single exporter lookup) shipped 2026-05-30. Phase 5.3 (durable `run_review_tasks` table, schema v13) shipped 2026-05-30. Phase 3 (typed `write_facts`) shipped 2026-05-30. Once 5.1 + 5.2 land, the rewrite is ready for the merge gate to `main` (currently untouched at `pre-rewrite-baseline`).
 **PRD Reference:** [docs/REWRITE-first-principles.html](REWRITE-first-principles.html)
 **Last Updated:** 2026-05-30
 **Branch:** `rewrite/first-principles` (off `main`; baseline tag `pre-rewrite-baseline`)
@@ -267,7 +267,16 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
   - [x] 🟩 **Render/export path unchanged** — still produces the xlsx as today (Phase 4 flips to render-last), so behaviour stays A/B-comparable.
   - **Verified:** `test_fill_workbook_abstract_guard.py`, `test_prompt_residual_plug_rule.py` pass against the new contract; FactWrite rejects evidence-less proposals before the tool body (smoke-tested + pinned by the migrated agent tests); full backend 1801 passed, frontend 630 passed, tsc clean.
 
-### Phase 4: Store-first keystone — *the genuine architecture change* (report step 4) — 🟩 DONE (2026-05-30, commit `ed28e23`; Fatal-projection + render-last + non-concept date carry-forward; render-layer A/B clean on FINCO Company, Group deferred as optional breadth — FINCO has no consolidated data)
+### Phase 4: Store-first keystone — *the genuine architecture change* (report step 4) — 🟨 RE-OPENED (2026-05-30, commit `c61afeb`). Company DONE; **Group date headers BROKEN** — see Step 4.3 (peer review).
+
+> **Peer review (2026-05-30) found a real gap in `c61afeb`.** Phase 4 was
+> prematurely marked DONE. The keystone (render the download from facts) works
+> for **Company**, but **Group reporting-period date headers cannot reach the
+> download**, and the date carry-forward still depends on the agent scratch
+> workbook. Step 4.3 below captures the fix (user-approved: synthesize dates
+> from Infopack metadata). The Company A/B + commit are valid; the Group claim
+> was overstated because its unit test seeded dates with manual openpyxl edits,
+> bypassing the real writer path.
 
 > **Decision (2026-05-30, user-chosen):** implement 4.1 structurally now,
 > verified by unit tests only, and hand 4.2 (the live A/B) off to run with API
@@ -308,6 +317,71 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
   - [x] 🟩 FINCO Company (gpt-5.4-mini): before-vs-after = 5 cell diffs, all placeholder→real dates, **0 face-statement regressions**; self-diff = 0.
   - [x] 🟩 FINCO Group attempted but **not a valid A/B**: FINCO is a standalone single company (PDF has 0 occurrences of consolidated/group/non-controlling/subsidiary), so a Group run has no group data to extract — the imbalances/failed SOPL were a data×config mismatch, NOT a code defect. The Group code path (row-2 date carry-forward under the Group/Company column labels) is instead covered by the `placeholder-keyed/not-row1-bound` unit test. A clean live Group A/B needs a genuinely consolidated PDF (e.g. `data/Oriental.pdf`) + a stronger model — deferred as optional breadth.
   - **Verify:** ✅ no face-statement regressions on the Company A/B; render is deterministic. Independently revertable if a future consolidated-PDF A/B surfaces a Group-render issue.
+
+- [ ] 🟥 **Step 4.3: Fix Group date headers via metadata synthesis (peer review 2026-05-30, user-approved).** HAND-OFF — needs a healthy tool channel.
+  - **The bug (HIGH, confirmed in `c61afeb`):** Group templates put the
+    Group/Company column-group labels in **row 1** and the reporting-period
+    DATE headers in **row 2**. But (a) `prompts/_base.md` (~line 27) tells the
+    agent to write dates to **row 1** only, and (b) `tools/fill_workbook.py`
+    (~line 311) refuses labelless writes except `target_row == 1`. So on a
+    Group filing the agent literally cannot write the date headers — and the
+    `c61afeb` carry-forward then has nothing to copy. The download ships
+    `01/01/YYYY - 31/12/YYYY` placeholders on every Group face sheet. The
+    existing unit test (`test_carry_forward_is_placeholder_keyed_not_row1_bound`)
+    seeded dates with manual openpyxl edits, bypassing the writer — so it
+    passed while the real path was broken (the overstated-coverage LOW finding).
+  - **The fix (user chose "synthesize from metadata", NOT the writer/prompt hack):**
+    the scout already captures `reporting_period_cy` / `reporting_period_py` on
+    the `Infopack` (`scout/infopack.py:143-144`), persisted in
+    `runs.run_config_json` and reachable at export time via
+    `run.config["infopack"]`. Stamp the date headers from THAT authoritative
+    source inside the exporter — removing the scratch-workbook dependency
+    entirely (also resolves MEDIUM-1 "store-first still depends on scratch" and
+    MEDIUM-3 "bare-except + `src_wb` handle leak", since the whole scratch block
+    goes away).
+  - **Exact changes (a partial attempt was made this session, then reverted
+    clean per the corrupted-channel decision — redo from scratch):**
+    1. `concept_model/exporter.py::export_run_to_xlsx` — replace the
+       `carry_forward_row1_from` param with `reporting_period_cy: str | None` +
+       `reporting_period_py: str | None`. Replace the scratch-reading block
+       (~lines 254-287) with: iterate `wb.worksheets`, scan `iter_rows(min_row=1,
+       max_row=3)`, and for any cell whose value is a str containing `"YYYY"`,
+       overwrite with CY or PY by **column parity** — even columns (B=2, D=4) →
+       CY, odd columns (C=3, E=5) → PY. This holds across every layout: Company
+       B(CY)/C(PY); Group B(GrpCY)/C(GrpPY)/D(CoCY)/E(CoPY); SOCIE B(CY) only.
+       Self-targeting (only ever overwrites a `YYYY` placeholder) so it can't
+       touch a data/label/Source cell; no scratch file opened, so no handle to
+       leak and nothing to swallow.
+    2. `server.py::_export_canonical_workbooks` — add `reporting_period_cy` /
+       `reporting_period_py` kwargs; pass them into `export_run_to_xlsx` (drop
+       the `carry_forward_row1_from=scratch_path` arg + its comment + the
+       `scratch_path = all_workbook_paths.get(stmt)` line).
+    3. Thread the dates into all **4** `_export_canonical_workbooks` call sites
+       (`server.py` ~288, ~397, ~3180, ~3554). At each, pull them from the
+       run/infopack: the helpers (`_reexport_and_remerge_from_facts`,
+       `_recheck_from_facts`) have `config = run.config`; read
+       `config.get("infopack")` → `Infopack.from_json(...)` →
+       `.reporting_period_cy/.py` (mirror the existing `infopack` access at
+       `server.py:2614`). The two pipeline sites have the live `infopack` in
+       scope. A tiny `_reporting_periods_from_config(config) -> (cy, py)` helper
+       next to `_export_canonical_workbooks` keeps it DRY and null-safe.
+    4. **Tests:** delete/replace `test_carry_forward_is_placeholder_keyed_not_row1_bound`
+       and the `carry_forward_row1_from`-based tests in
+       `tests/test_canonical_export.py`. Add: (a) unit test that
+       `export_run_to_xlsx(..., reporting_period_cy=..., reporting_period_py=...)`
+       stamps a row-2 Group placeholder (use a real Group template copy) with
+       CY in B/D and PY in C/E; (b) a Company row-1 test; (c) a
+       SOCIE-B1-only test. These exercise the REAL exporter, not manual seeding.
+    5. **Re-verify:** the deterministic render-layer A/B harness still exists
+       (`scripts/ab_extract.py` / `scripts/ab_render.py`). A genuinely
+       consolidated PDF (`data/Oriental.pdf`, in the MAIN checkout only — copy
+       in; gitignored) + a stronger model than gpt-5.4-mini gives a real Group
+       A/B. Accept on zero non-date regressions; self-diff must be 0.
+  - **LOW (also fix):** `scripts/ab_extract.py` / `ab_render.py` hardcode
+    model/proxy/key and use `assert`/raw `argv` — light `argparse` + env reads.
+  - **Verify:** new exporter tests green through the real writer path; Group
+    download shows real dates (not `YYYY`); full backend back to the 2-pre-
+    existing-failures baseline.
 
 ### Phase 5: Server decomposition (report step 6)
 
