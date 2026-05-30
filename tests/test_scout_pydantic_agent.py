@@ -251,14 +251,17 @@ class TestPopulateInventoryFallback:
 
         async def fake_build(**kwargs):
             captured.update(kwargs)
-            return [NoteInventoryEntry(note_num=1, title="fallback", page_range=(20, 22))]
+            # Phase 6.3: with-source variant returns (entries, source).
+            return [NoteInventoryEntry(note_num=1, title="fallback", page_range=(20, 22))], "vision"
 
-        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=fake_build):
+        with patch("scout.notes_discoverer.build_notes_inventory_with_source_async", side_effect=fake_build):
             await _populate_inventory_via_vision(infopack, deps)
 
         assert captured.get("force_vision") is True
         assert captured.get("notes_start_page") == 20
         assert [e.note_num for e in infopack.notes_inventory] == [1]
+        # Phase 6.3: the post-scout vision fallback records source on the infopack.
+        assert infopack.inventory_source == "vision"
 
     @pytest.mark.asyncio
     async def test_noop_without_force_vision(self, synthetic_pdf: Path):
@@ -275,7 +278,7 @@ class TestPopulateInventoryFallback:
             called["vision"] = True
             return []
 
-        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=_would_fail):
+        with patch("scout.notes_discoverer.build_notes_inventory_with_source_async", side_effect=_would_fail):
             await _populate_inventory_via_vision(infopack, deps)
 
         assert called["vision"] is False
@@ -298,7 +301,7 @@ class TestPopulateInventoryFallback:
             called["vision"] = True
             return []
 
-        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=_would_fail):
+        with patch("scout.notes_discoverer.build_notes_inventory_with_source_async", side_effect=_would_fail):
             await _populate_inventory_via_vision(infopack, deps)
 
         assert called["vision"] is False
@@ -324,7 +327,7 @@ class TestPopulateInventoryFallback:
             called["vision"] = True
             return []
 
-        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=_would_fail):
+        with patch("scout.notes_discoverer.build_notes_inventory_with_source_async", side_effect=_would_fail):
             await _populate_inventory_via_vision(infopack, deps)
 
         assert called["vision"] is False
@@ -361,9 +364,10 @@ class TestDiscoverNotesInventoryTool:
 
         async def fake_build(**kwargs):
             captured.update(kwargs)
-            return []
+            # Phase 6.3: with-source variant returns (entries, source).
+            return [], "none"
 
-        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=fake_build):
+        with patch("scout.notes_discoverer.build_notes_inventory_with_source_async", side_effect=fake_build):
             asyncio.run(_discover_notes_inventory_impl(deps, notes_start_page=10))
 
         assert captured.get("force_vision") is True
@@ -379,9 +383,10 @@ class TestDiscoverNotesInventoryTool:
 
         async def fake_build(**kwargs):
             captured.update(kwargs)
-            return []
+            # Phase 6.3: with-source variant returns (entries, source).
+            return [], "none"
 
-        with patch("scout.notes_discoverer.build_notes_inventory_async", side_effect=fake_build):
+        with patch("scout.notes_discoverer.build_notes_inventory_with_source_async", side_effect=fake_build):
             asyncio.run(_discover_notes_inventory_impl(deps, notes_start_page=10))
 
         assert captured.get("force_vision") is False

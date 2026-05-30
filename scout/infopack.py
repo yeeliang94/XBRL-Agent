@@ -40,6 +40,8 @@ _VALID_SCALE_UNIT: set[str] = {"units", "thousands", "millions", "unknown"}
 # toggle wins, but a strong scout signal can preselect.
 ConsolidationLevel = Literal["company", "group", "both", "unknown"]
 _VALID_CONSOLIDATION: set[str] = {"company", "group", "both", "unknown"}
+# Source-honesty (rewrite Phase 6.3): how the notes inventory was built.
+_VALID_INVENTORY_SOURCE: set[str] = {"text", "vision", "none", "unknown"}
 
 
 @dataclass
@@ -148,6 +150,11 @@ class Infopack:
     # wins. "unknown" when the signals are ambiguous (e.g. both MFRS and
     # MPERS keywords appear).
     detected_standard: DetectedStandard = "unknown"
+    # Source-honesty (rewrite Phase 6.3): how the notes inventory was built —
+    # "text" (deterministic PyMuPDF regex), "vision" (LLM/OCR fallback for
+    # scanned PDFs — hidden determinism worth surfacing), "none" (nothing
+    # found), or "unknown" (no inventory pass ran). Advisory/telemetry only.
+    inventory_source: str = "unknown"
 
     # -- Serialisation ---------------------------------------------------------
 
@@ -157,6 +164,7 @@ class Infopack:
             "toc_page": self.toc_page,
             "page_offset": self.page_offset,
             "detected_standard": self.detected_standard,
+            "inventory_source": self.inventory_source,
             # Phase 2 — context fields. Always serialised so the loader
             # sees the same shape every time; consumers branch on the
             # values to decide whether to render.
@@ -357,6 +365,12 @@ class Infopack:
         currency_raw = data.get("currency", "RM")
         currency = currency_raw if isinstance(currency_raw, str) and currency_raw.strip() else "RM"
 
+        # Source-honesty (Phase 6.3): narrow to the known method labels; an
+        # unexpected upstream value lands as "unknown" rather than crashing.
+        inv_source = data.get("inventory_source", "unknown")
+        if inv_source not in _VALID_INVENTORY_SOURCE:
+            inv_source = "unknown"
+
         return cls(
             toc_page=data["toc_page"],
             page_offset=data["page_offset"],
@@ -369,6 +383,7 @@ class Infopack:
             currency=currency,
             scale_unit=scale_unit,
             consolidation_level=consolidation,
+            inventory_source=inv_source,
         )
 
     # -- Notes page hints ------------------------------------------------------

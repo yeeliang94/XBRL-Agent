@@ -96,6 +96,12 @@ class ScoutDeps:
     # explicitly, so the regex output flows through even when the LLM forgets
     # to mention it in its save_infopack JSON. Empty dict = no parse run yet.
     face_line_refs_by_statement: dict[StatementType, list] = field(default_factory=dict)
+    # Source-honesty (rewrite Phase 6.3): how the notes inventory was built —
+    # "text" (deterministic PyMuPDF regex), "vision" (LLM OCR fallback for
+    # scanned PDFs), "none" (nothing found), or "unknown" (no inventory pass
+    # ran). Set by the inventory-build call sites and surfaced on the Infopack
+    # so a run records whether hidden LLM/OCR determinism was involved.
+    inventory_source: str = "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +437,7 @@ async def _populate_inventory_via_vision(
         "Post-scout vision fallback: LLM produced empty inventory; running "
         "build_notes_inventory_async(notes_start_page=%d) directly.", start,
     )
-    inventory = await notes_discoverer.build_notes_inventory_async(
+    inventory, source = await notes_discoverer.build_notes_inventory_with_source_async(
         pdf_path=str(deps.pdf_path),
         notes_start_page=start,
         pdf_length=deps.pdf_length,
@@ -439,6 +445,10 @@ async def _populate_inventory_via_vision(
         force_vision=True,
     )
     infopack.notes_inventory = inventory
+    # Source-honesty (Phase 6.3): this post-scout fallback forces the vision
+    # path; record it on both deps and the infopack we're enriching.
+    deps.inventory_source = source
+    infopack.inventory_source = source
 
 
 async def _discover_notes_inventory_impl(
@@ -454,13 +464,16 @@ async def _discover_notes_inventory_impl(
     from scout import notes_discoverer
 
     _emit_progress_deps(deps, f"Building notes inventory from page {notes_start_page}...")
-    inventory = await notes_discoverer.build_notes_inventory_async(
+    inventory, source = await notes_discoverer.build_notes_inventory_with_source_async(
         pdf_path=str(deps.pdf_path),
         notes_start_page=notes_start_page,
         pdf_length=deps.pdf_length,
         vision_model=deps.vision_model,
         force_vision=deps.force_vision_inventory,
     )
+    # Source-honesty (Phase 6.3): record whether this inventory came from the
+    # deterministic regex pass or the vision/OCR fallback.
+    deps.inventory_source = source
     if not inventory and deps.vision_model is not None:
         _emit_progress_deps(
             deps,
@@ -771,6 +784,9 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
         currency=currency,
         scale_unit=scale_unit,
         consolidation_level=consolidation_level,
+        # Source-honesty (Phase 6.3): carry the inventory-build method recorded
+        # by discover_notes_inventory (text regex vs vision/OCR fallback).
+        inventory_source=deps.inventory_source,
     )
 
     # Validate page ranges

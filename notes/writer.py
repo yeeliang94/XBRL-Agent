@@ -159,9 +159,15 @@ def write_notes_workbook(
         row, chosen_label, score = resolution
         if score < 1.0:
             fuzzy_matches.append((payload.chosen_row_label, chosen_label, score))
-            level = logging.WARNING if score < BORDERLINE_FUZZY_SCORE else logging.DEBUG
-            logger.log(
-                level,
+            # Source-honesty (rewrite Phase 6.3): a non-exact row match is a
+            # silent LLM judgement — the agent's label did not match the
+            # template verbatim, so the writer *chose* a row. Surface every
+            # such fallback at WARNING (was DEBUG, invisible in production) so
+            # an operator can audit which rows were resolved fuzzily rather
+            # than exactly. These are all at/above the 0.85 threshold (below it
+            # is rejected, not fuzzy-matched), so the old DEBUG-vs-borderline
+            # split was dead code.
+            logger.warning(
                 "Fuzzy row match in %s: %r -> %r (score %.2f)",
                 sheet_name, payload.chosen_row_label, chosen_label, score,
             )
