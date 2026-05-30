@@ -49,6 +49,7 @@ def export_run_to_xlsx(
     *,
     filing_level: str = "company",
     template_id: str | None = None,
+    carry_forward_row1_from: str | Path | None = None,
 ) -> int:
     """Fill ``xlsx_path`` in-place with the canonical-mode facts.
 
@@ -56,6 +57,15 @@ def export_run_to_xlsx(
     caller copies the master template into the run's output dir before
     invoking us.  This keeps the formula network intact for any rows we
     don't override.
+
+    ``carry_forward_row1_from`` is the agent's scratch workbook. Row 1 holds
+    the reporting-period date headers (e.g. "01/01/2021 - 31/12/2021"), which
+    are NOT XBRL concepts so they never project to ``run_concept_facts`` — they
+    land in ``proj.skipped``. The fresh template copy we fill carries the
+    literal placeholder "01/01/YYYY - 31/12/YYYY" there, so a download rendered
+    purely from facts would ship placeholder dates on every face sheet. When a
+    scratch path is given we copy its real row-1 date cells over (value columns
+    only — never col A or the Source header), keeping the fact-render faithful.
 
     ``template_id`` scopes the fact query (and the unmapped-targets check)
     to a single template. The per-statement export pass passes it so one
@@ -240,6 +250,38 @@ def export_run_to_xlsx(
             and r["children_status"] != "aggregate_only"
         ):
             ws[f"{source_col}{row}"] = r["source"]
+
+    # Carry forward the agent's real reporting-period date headers from the
+    # scratch workbook. They're NON-concept cells, so they never project to
+    # facts — the fresh template copy keeps the literal "01/01/YYYY -
+    # 31/12/YYYY" placeholder. Their ROW varies by layout (Company: row 1;
+    # Group: row 2, under the Group/Company column-group labels; SOCIE matrix:
+    # B1), so rather than hardcode a row we key on the PLACEHOLDER itself:
+    # overwrite a cell ONLY when the canonical copy still shows the "YYYY" date
+    # placeholder AND the scratch has a real value at the same coordinate.
+    # Self-targeting (never touches a non-date cell) and layout-independent.
+    if carry_forward_row1_from and Path(carry_forward_row1_from).exists():
+        try:
+            src_wb = openpyxl.load_workbook(carry_forward_row1_from, data_only=False)
+            for sheet in wb.sheetnames:
+                if sheet not in src_wb.sheetnames:
+                    continue
+                s_ws, d_ws = src_wb[sheet], wb[sheet]
+                # Date headers sit in the top band; scanning a few rows keeps
+                # this cheap while covering every layout.
+                for drow in d_ws.iter_rows(min_row=1, max_row=3):
+                    for d_cell in drow:
+                        dval = d_cell.value
+                        if not (isinstance(dval, str) and "YYYY" in dval):
+                            continue
+                        s_val = s_ws.cell(
+                            row=d_cell.row, column=d_cell.column
+                        ).value
+                        if isinstance(s_val, str) and s_val and "YYYY" not in s_val:
+                            d_cell.value = s_val
+            src_wb.close()
+        except Exception:  # noqa: BLE001 — a carry-forward hiccup must not sink the export
+            pass
 
     wb.save(xlsx_path)
 

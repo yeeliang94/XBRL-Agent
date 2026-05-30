@@ -97,6 +97,79 @@ def _seed_fact(db: Path, run_id: int, concept_uuid: str, *,
         conn.close()
 
 
+def test_carry_forward_row1_dates_from_scratch(seeded) -> None:
+    """Phase 4.1: row-1 reporting-period dates are non-concept cells that don't
+    project to facts, so the fact-render keeps the template placeholder
+    '01/01/YYYY - 31/12/YYYY'. When the agent's scratch workbook is supplied,
+    its real row-1 dates must be carried over — value columns only, and only
+    when the scratch holds a real (non-placeholder) date."""
+    db, run_id, template_id, work = seeded
+    leaf = _uuid_for_row(db, "SOFP-CuNonCu", 10)
+    _seed_fact(db, run_id, leaf, value=123.0)
+
+    # Build a scratch workbook from the template, stamping real dates into B1/C1
+    # on the face sheet, and leave the sub-sheet's placeholder untouched.
+    scratch = work.parent / "SOFP_filled.xlsx"
+    shutil.copyfile(FIXTURE, scratch)
+    swb = openpyxl.load_workbook(str(scratch), data_only=False)
+    swb["SOFP-CuNonCu"]["B1"] = "01/01/2021 - 31/12/2021"
+    swb["SOFP-CuNonCu"]["C1"] = "01/01/2020 - 31/12/2020"
+    swb["SOFP-CuNonCu"]["A1"] = "SHOULD NOT BE CARRIED"  # col A is never carried
+    swb.save(str(scratch))
+
+    export_run_to_xlsx(db, run_id, str(work), carry_forward_row1_from=str(scratch))
+
+    wb = openpyxl.load_workbook(str(work), data_only=False)
+    face = wb["SOFP-CuNonCu"]
+    # Real dates carried into the value columns.
+    assert face["B1"].value == "01/01/2021 - 31/12/2021"
+    assert face["C1"].value == "01/01/2020 - 31/12/2020"
+    # Col A is not a date placeholder — never carried (stays template/label).
+    assert face["A1"].value != "SHOULD NOT BE CARRIED"
+    # The fact still landed (carry-forward doesn't disturb values).
+    assert face["B10"].value == 123.0
+    # The sub-sheet's placeholder stays placeholder (scratch had no real date).
+    assert wb["SOFP-Sub-CuNonCu"]["B1"].value == "01/01/YYYY - 31/12/YYYY"
+
+
+def test_carry_forward_is_placeholder_keyed_not_row1_bound(seeded) -> None:
+    """Group templates hold the Group/Company labels in row 1 and the date
+    placeholders in row 2 (not row 1). The carry-forward keys on the literal
+    'YYYY' placeholder, not a hardcoded row, so it must carry a real date that
+    lives below row 1. Simulate by stamping a placeholder into row 2 of the
+    template copy and a real date into the scratch's row 2."""
+    db, run_id, template_id, work = seeded
+    _seed_fact(db, run_id, _uuid_for_row(db, "SOFP-CuNonCu", 10), value=1.0)
+
+    # Canonical copy: put a date placeholder on row 2 (mimics Group layout).
+    cwb = openpyxl.load_workbook(str(work), data_only=False)
+    cwb["SOFP-CuNonCu"]["B2"] = "01/01/YYYY - 31/12/YYYY"
+    cwb.save(str(work))
+
+    # Scratch: real date in the matching row-2 cell.
+    scratch = work.parent / "SOFP_filled.xlsx"
+    shutil.copyfile(str(work), scratch)
+    swb = openpyxl.load_workbook(str(scratch), data_only=False)
+    swb["SOFP-CuNonCu"]["B2"] = "01/01/2021 - 31/12/2021"
+    swb.save(str(scratch))
+
+    export_run_to_xlsx(db, run_id, str(work), carry_forward_row1_from=str(scratch))
+
+    wb = openpyxl.load_workbook(str(work), data_only=False)
+    # Carried even though it's row 2, because it was a "YYYY" placeholder.
+    assert wb["SOFP-CuNonCu"]["B2"].value == "01/01/2021 - 31/12/2021"
+
+
+def test_carry_forward_row1_no_scratch_keeps_placeholder(seeded) -> None:
+    """Without a scratch path the export is unchanged — row 1 keeps the
+    template placeholder (graceful degradation, no crash)."""
+    db, run_id, template_id, work = seeded
+    _seed_fact(db, run_id, _uuid_for_row(db, "SOFP-CuNonCu", 10), value=1.0)
+    export_run_to_xlsx(db, run_id, str(work))  # no carry_forward_row1_from
+    wb = openpyxl.load_workbook(str(work), data_only=False)
+    assert wb["SOFP-CuNonCu"]["B1"].value == "01/01/YYYY - 31/12/YYYY"
+
+
 def test_export_reads_from_db_not_agent_writes(seeded) -> None:
     """Seed two leaf facts only; no other writes happen.  Export must
     still produce non-empty cells at those leaves."""
