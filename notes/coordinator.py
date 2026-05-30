@@ -14,16 +14,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from pydantic_ai import Agent
-from pydantic_ai.messages import (
-    FunctionToolCallEvent,
-    FunctionToolResultEvent,
-    PartDeltaEvent,
-    TextPartDelta,
-    ThinkingPartDelta,
+from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace  # noqa: F401
+from agent_runner import (
+    AgentLoopSpec,
+    run_agent_loop,
+    # Re-exported under the legacy name so
+    # `from notes.coordinator import _iter_with_turn_timeout`
+    # (tests/test_notes_turn_timeout) keeps working — the implementation
+    # now lives in agent_runner (rewrite Phase 2).
+    iter_with_turn_timeout as _iter_with_turn_timeout,  # noqa: F401
 )
-
-from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace
 from notes._rate_limit import (
     RATE_LIMIT_MAX_RETRIES,
     compute_backoff_delay,
@@ -128,25 +128,8 @@ class NotesRunConfig:
 # minutes-long stalls that triggered the fix.
 NOTES_TURN_TIMEOUT: float = 180.0
 
-
-async def _iter_with_turn_timeout(async_iterable, timeout: float):
-    """Yield nodes from ``async_iterable`` with a per-step timeout.
-
-    Each call to ``__anext__`` is wrapped in ``asyncio.wait_for`` — if
-    it takes longer than ``timeout`` seconds, ``asyncio.TimeoutError``
-    propagates out and the iterator's pending coroutine is cancelled
-    by ``wait_for`` itself (so we don't leak a background task).
-
-    Exists as a module-level helper so the behaviour can be pinned by
-    unit tests without standing up a real PydanticAI agent run.
-    """
-    iterator = async_iterable.__aiter__()
-    while True:
-        try:
-            node = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
-        except StopAsyncIteration:
-            return
-        yield node
+# `_iter_with_turn_timeout` is imported from agent_runner above (the per-step
+# timeout helper used to be defined here; rewrite Phase 2 moved it).
 
 
 @dataclass
@@ -720,15 +703,9 @@ async def _invoke_single_notes_agent_once(
 
     await emit("status", {"phase": "started", "message": f"Starting {template_type.value}..."})
 
-    iteration = 0
-    tool_start: dict[str, float] = {}
-    thinking_counter = 0
-    # v8 per-turn telemetry capture (peer-review [2]) — mirrors the face
-    # coordinator. Deltas vs the previous node's cumulative usage.
+    # v8 per-turn telemetry capture (peer-review [2]). Populated by
+    # run_agent_loop below; read after the loop for the outcome rollups.
     _turn_records: list[dict] = []
-    _prev_prompt = 0
-    _prev_completion = 0
-    _prev_total = 0
 
     async with agent.iter(prompt, deps=deps) as agent_run:
         try:
@@ -738,122 +715,17 @@ async def _invoke_single_notes_agent_once(
             # wrote rows — a stall after a successful write is
             # "close enough to done" and we keep the workbook; an early
             # stall (no write yet) is a real failure and re-raises.
-            async for node in _iter_with_turn_timeout(agent_run, NOTES_TURN_TIMEOUT):
-                iteration += 1
-                if iteration > MAX_AGENT_ITERATIONS:
-                    raise RuntimeError(
-                        f"Hit iteration limit ({MAX_AGENT_ITERATIONS}) — agent may be stuck."
-                    )
-                # v8 telemetry: per-node timing + tool capture.
-                _node_start = time.monotonic()
-                _node_tool_names: list[str] = []
-                _node_kind = (
-                    "call_tools" if Agent.is_call_tools_node(node)
-                    else "model_request" if Agent.is_model_request_node(node)
-                    else None
-                )
-                if Agent.is_call_tools_node(node):
-                    async with node.stream(agent_run.ctx) as tool_stream:
-                        async for event in tool_stream:
-                            if isinstance(event, FunctionToolCallEvent):
-                                _node_tool_names.append(event.part.tool_name)
-                                phase = NOTES_PHASE_MAP.get(event.part.tool_name)
-                                if phase:
-                                    await emit("status", {
-                                        "phase": phase,
-                                        "message": f"{template_type.value}: {phase.replace('_', ' ')}",
-                                    })
-                                raw_args = event.part.args
-                                if isinstance(raw_args, str):
-                                    try:
-                                        parsed = json.loads(raw_args)
-                                    except (json.JSONDecodeError, TypeError):
-                                        parsed = {}
-                                elif isinstance(raw_args, dict):
-                                    parsed = raw_args
-                                else:
-                                    parsed = {}
-                                await emit("tool_call", {
-                                    "tool_name": event.part.tool_name,
-                                    "tool_call_id": event.part.tool_call_id,
-                                    "args": parsed,
-                                })
-                                tool_start[event.part.tool_call_id] = time.monotonic()
-                            elif isinstance(event, FunctionToolResultEvent):
-                                content = event.result.content
-                                summary = str(content)[:800] if content else ""
-                                cid = event.result.tool_call_id
-                                start_t = tool_start.pop(cid, None)
-                                duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
-                                await emit("tool_result", {
-                                    "tool_name": event.result.tool_name,
-                                    "tool_call_id": cid,
-                                    "result_summary": summary,
-                                    "duration_ms": duration_ms,
-                                })
-                elif Agent.is_model_request_node(node):
-                    tid = f"{agent_id}_think_{thinking_counter}"
-                    active = False
-                    async with node.stream(agent_run.ctx) as model_stream:
-                        async for event in model_stream:
-                            if isinstance(event, PartDeltaEvent):
-                                delta = event.delta
-                                if isinstance(delta, TextPartDelta):
-                                    if active:
-                                        await emit("thinking_end", {
-                                            "thinking_id": tid, "summary": "", "full_length": 0,
-                                        })
-                                        active = False
-                                        thinking_counter += 1
-                                        tid = f"{agent_id}_think_{thinking_counter}"
-                                    await emit("text_delta", {"content": delta.content_delta})
-                                elif isinstance(delta, ThinkingPartDelta):
-                                    active = True
-                                    await emit("thinking_delta", {
-                                        "content": delta.content_delta or "",
-                                        "thinking_id": tid,
-                                    })
-                    if active:
-                        await emit("thinking_end", {
-                            "thinking_id": tid, "summary": "", "full_length": 0,
-                        })
-                        thinking_counter += 1
-
-                usage = agent_run.usage()
-                total = usage.total_tokens or 0
-                prompt_t = usage.request_tokens or 0
-                completion_t = usage.response_tokens or 0
-                await emit("token_update", {
-                    "prompt_tokens": prompt_t,
-                    "completion_tokens": completion_t,
-                    "thinking_tokens": 0,
-                    "cumulative": total,
-                    "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
-                })
-
-                # v8 telemetry: record this node as a per-turn metrics row
-                # (deltas vs the previous node). Guarded — advisory only.
-                try:
-                    d_prompt = max(prompt_t - _prev_prompt, 0)
-                    d_completion = max(completion_t - _prev_completion, 0)
-                    d_total = max(total - _prev_total, 0)
-                    _turn_records.append({
-                        "turn_index": iteration,
-                        "node_kind": _node_kind,
-                        "tool_names": ",".join(_node_tool_names) or None,
-                        "_n_tool_calls": len(_node_tool_names),
-                        "prompt_tokens": d_prompt,
-                        "completion_tokens": d_completion,
-                        "total_tokens": d_total,
-                        "cumulative_tokens": total,
-                        "cost_estimate": estimate_cost(d_prompt, d_completion, 0, model),
-                        "duration_ms": int((time.monotonic() - _node_start) * 1000),
-                    })
-                    _prev_prompt, _prev_completion, _prev_total = (
-                        prompt_t, completion_t, total
-                    )
-                except Exception:  # noqa: BLE001 — telemetry is advisory
-                    logger.debug("notes per-turn telemetry capture skipped for %s", template_type.value)
+            notes_spec = AgentLoopSpec(
+                agent_role=template_type.value,
+                model=model,
+                turn_timeout=NOTES_TURN_TIMEOUT,
+                phase_map=NOTES_PHASE_MAP,
+                phase_message=lambda role, phase: f"{role}: {phase.replace('_', ' ')}",
+                set_turn_counter=False,
+            )
+            await run_agent_loop(
+                agent_run, deps, notes_spec, emit, _turn_records,
+            )
         except asyncio.TimeoutError:
             # LLM stalled past NOTES_TURN_TIMEOUT. If the agent already
             # wrote a workbook, the rows are on disk — treat as done so
