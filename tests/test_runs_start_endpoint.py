@@ -217,14 +217,13 @@ def test_start_persists_orchestration_to_canonical_column(draft_with_config):
     in its UPDATE so the canonical store reflects the saved config.
 
     The monolith experiment that once gave this column a second value has
-    been removed, so `"monolith"` here is just an arbitrary non-default
-    string exercising the generic mirror — the invariant under test is
-    "the column round-trips whatever config.orchestration holds," not the
-    monolith feature itself.
+    been removed; the only valid orchestration is 'split'. A stale 'monolith'
+    patched here is coerced to 'split' at the API boundary (PR-2), and the
+    /start refresh must persist that normalized value to the column.
     """
     client, run_id, session_id, output_dir, db_path = draft_with_config
 
-    # Patch a non-default orchestration value onto the draft.
+    # Patch a deleted value; it is normalized to 'split' at the API boundary.
     resp = client.patch(
         f"/api/runs/{run_id}", json={"orchestration": "monolith"},
     )
@@ -255,9 +254,10 @@ def test_start_persists_orchestration_to_canonical_column(draft_with_config):
     finally:
         conn.close()
     assert row is not None
-    assert row["orchestration"] == "monolith", (
-        "runs.orchestration column was not refreshed from run_config "
-        "when starting a draft — History/Run-Detail will mislabel the run."
+    assert row["orchestration"] == "split", (
+        "runs.orchestration column was not refreshed from the (normalized) "
+        "run_config when starting a draft — History/Run-Detail will mislabel "
+        "the run."
     )
 
 

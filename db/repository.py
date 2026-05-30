@@ -74,9 +74,10 @@ class Run:
     scout_enabled: bool = False
     started_at: str = ""
     ended_at: Optional[str] = None
-    # v10: monolith experiment orchestration flag. Sourced from the
-    # `runs.orchestration` column — the canonical store. Defaults to
-    # 'split' for legacy rows without the column.
+    # v10 audit column, sourced from `runs.orchestration`. Originally the
+    # monolith-experiment flag; the experiment was removed in the rewrite
+    # (Phase 1) and the column is now always 'split' (retained for schema
+    # stability + History read-back).
     orchestration: str = "split"
 
 
@@ -194,8 +195,9 @@ class RunSummary:
     # Which taxonomy the templates came from. Stored on runs.run_config_json
     # under the same key; legacy rows (pre-MPERS wiring) default to MFRS.
     filing_standard: str = "mfrs"
-    # v10 monolith experiment: orchestration path used for this run.
-    # 'split' (default) or 'monolith'. Sourced from `runs.orchestration`.
+    # v10 audit column, sourced from `runs.orchestration`. Always 'split'
+    # now — the monolith experiment was removed in the rewrite (Phase 1);
+    # the column is retained for schema stability + History read-back.
     orchestration: str = "split"
 
 

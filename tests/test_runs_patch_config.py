@@ -192,29 +192,29 @@ def _read_column(output_dir: Path, run_id: int, column: str):
     return row[0] if row else None
 
 
-def test_patch_orchestration_mirrors_to_canonical_column(draft_session):
-    """Peer-review HIGH #1 (2026-05-28): list/detail source orchestration
-    from `runs.orchestration`, NOT from `run_config_json`. The PATCH
-    endpoint must mirror the orchestration choice to the column,
-    otherwise a draft-started monolith run is mislabeled in History.
+def test_patch_orchestration_normalizes_to_split(draft_session):
+    """PR-2 (rewrite Phase 1): the monolith experiment was removed, so 'split'
+    is the only valid orchestration. A PATCH carrying any other value (e.g. a
+    stale 'monolith' from a pre-rewrite client) is coerced to 'split' in BOTH
+    the canonical column and the merged config JSON, so History never reports
+    a path that can't run. The mirror-to-column mechanism itself (peer-review
+    HIGH #1, 2026-05-28) is still exercised here.
     """
     client, run_id, output_dir = draft_session
 
     # Pre-state: fresh upload starts at 'split' (default).
     assert _read_column(output_dir, run_id, "orchestration") == "split"
 
+    # PATCH a deleted value → coerced to 'split' in column AND config.
     resp = client.patch(
         f"/api/runs/{run_id}", json={"orchestration": "monolith"},
     )
     assert resp.status_code == 200, resp.text
-
-    # The canonical column reflects the patched choice.
-    assert _read_column(output_dir, run_id, "orchestration") == "monolith"
-    # And the JSON still carries it (round-trip via merged config).
+    assert _read_column(output_dir, run_id, "orchestration") == "split"
     persisted = _read_config(output_dir, run_id)
-    assert persisted["orchestration"] == "monolith"
+    assert persisted["orchestration"] == "split"
 
-    # Flipping back to 'split' must also propagate to the column.
+    # PATCH 'split' explicitly → stays 'split'.
     resp = client.patch(
         f"/api/runs/{run_id}", json={"orchestration": "split"},
     )

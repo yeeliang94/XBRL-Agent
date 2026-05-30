@@ -23,10 +23,10 @@ from pathlib import Path
 # code revert; the stray table is harmless (no FK points at it from any
 # legacy reader).
 # v4 (canonical-concept-model Phase 1, docs/PRD-canonical-concept-model):
-# adds seven additive tables that back the new concept tree, fact store,
-# audit log, and reconciliation queue. The legacy direct-Excel-write path
-# stays operational; canonical mode is gated by env-var
-# `XBRL_CANONICAL_MODE`.
+# adds seven additive tables that back the concept tree, fact store,
+# audit log, and reconciliation queue. As of the first-principles rewrite
+# (Phase 1.1) canonical mode is MANDATORY — the legacy direct-Excel-write
+# path and the `XBRL_CANONICAL_MODE` opt-out were removed.
 # v5 (canonical-concept-model Phase 5, SOCIE matrix variant): adds one
 # nullable column `concept_nodes.matrix_col` carrying the equity-component
 # column label on MATRIX_CELL concepts. NULL on every linear concept, so
