@@ -272,6 +272,7 @@ async def test_iteration_limit_salvages_clean_post_write_run():
     agent = _make_node_yielding_agent(coordinator.MAX_AGENT_ITERATIONS + 2)
     deps = MagicMock()
     deps.filled_path = "/tmp/SOPL_filled.xlsx"
+    deps.projection_failed = False
     deps.last_verify_result = VerificationResult(
         is_balanced=None, matches_pdf=None, mismatches=[], mandatory_unfilled=[],
     )
@@ -293,6 +294,37 @@ async def test_iteration_limit_salvages_clean_post_write_run():
 
 
 @pytest.mark.asyncio
+async def test_iteration_limit_salvage_blocked_by_projection_failure():
+    """Peer-review (Phase 4.1): the iteration-cap salvage must honour the
+    fatal-projection gate. A clean, written workbook whose facts never reached
+    the DB (projection_failed) is NOT salvageable — it fails, not succeeds."""
+    import coordinator
+    from tools.verifier import VerificationResult
+
+    agent = _make_node_yielding_agent(coordinator.MAX_AGENT_ITERATIONS + 2)
+    deps = MagicMock()
+    deps.filled_path = "/tmp/SOPL_filled.xlsx"
+    deps.last_verify_result = VerificationResult(
+        is_balanced=None, matches_pdf=None, mismatches=[], mandatory_unfilled=[],
+    )
+    deps.projection_failed = True
+    deps.projection_error = "sqlite3.OperationalError: database is locked"
+
+    with patch("coordinator.create_extraction_agent", return_value=(agent, deps)):
+        result = await coordinator._run_single_agent(
+            statement_type=StatementType.SOPL,
+            variant="Function",
+            pdf_path="/tmp/x.pdf",
+            template_path="/tmp/t.xlsx",
+            model="test-model",
+            output_dir="/tmp",
+        )
+
+    assert result.status == "failed"
+    assert "projection failed" in (result.error or "").lower()
+
+
+@pytest.mark.asyncio
 async def test_iteration_limit_without_clean_verify_still_fails_with_tokens():
     """No clean verify → still a hard failure, but tokens are now backfilled."""
     import coordinator
@@ -300,6 +332,7 @@ async def test_iteration_limit_without_clean_verify_still_fails_with_tokens():
     agent = _make_node_yielding_agent(coordinator.MAX_AGENT_ITERATIONS + 2)
     deps = MagicMock()
     deps.filled_path = "/tmp/SOPL_filled.xlsx"
+    deps.projection_failed = False
     deps.last_verify_result = None  # never verified → not salvageable
 
     with patch("coordinator.create_extraction_agent", return_value=(agent, deps)):

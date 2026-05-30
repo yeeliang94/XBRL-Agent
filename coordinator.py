@@ -725,6 +725,27 @@ async def _run_single_agent(
         # the result is salvageable; otherwise it's a hard failure.
         _tokens, _cost = _safe_usage_backfill(agent_run, model, statement_type.value)
         _save_trace_best_effort(agent_run)
+        # Store-first contract (Phase 4.1): a salvage-as-succeeded must honour
+        # the SAME fatal-projection gate as the normal-completion path. A
+        # workbook on disk whose facts never reached the DB is not salvageable
+        # — the download renders from the DB.
+        if deps.projection_failed:
+            err_msg = (
+                f"{statement_type.value}: fact-store projection failed — "
+                f"{deps.projection_error or 'see logs'}. Cannot salvage a "
+                "stalled run whose facts never reached the database."
+            )
+            logger.error(err_msg)
+            await _emit("error", {"message": err_msg, "type": "projection_failed"})
+            await _emit("complete", {
+                "success": False, "error": err_msg,
+                "workbook_path": deps.filled_path,
+            })
+            return _finalize(AgentResult(
+                statement_type=statement_type, variant=variant, status="failed",
+                workbook_path=deps.filled_path, error=err_msg,
+                total_tokens=_tokens, total_cost=_cost,
+            ))
         if deps.filled_path:
             logger.warning(
                 "%s/%s: LLM stalled past %ss after write — treating as done "
@@ -769,6 +790,26 @@ async def _run_single_agent(
         # still surface the structured "Hit iteration limit" message.
         _tokens, _cost = _safe_usage_backfill(agent_run, model, statement_type.value)
         _save_trace_best_effort(agent_run)
+        # Store-first contract (Phase 4.1): same fatal-projection gate as the
+        # normal-completion + timeout-salvage paths — never salvage a run whose
+        # facts never reached the DB.
+        if deps.projection_failed:
+            err_msg = (
+                f"{statement_type.value}: fact-store projection failed — "
+                f"{deps.projection_error or 'see logs'}. Cannot salvage an "
+                "iteration-capped run whose facts never reached the database."
+            )
+            logger.error(err_msg)
+            await _emit("error", {"message": err_msg, "type": "projection_failed"})
+            await _emit("complete", {
+                "success": False, "error": err_msg,
+                "workbook_path": deps.filled_path,
+            })
+            return _finalize(AgentResult(
+                statement_type=statement_type, variant=variant, status="failed",
+                workbook_path=deps.filled_path, error=err_msg,
+                total_tokens=_tokens, total_cost=_cost,
+            ))
         if deps.filled_path and _verify_is_clean(deps.last_verify_result):
             logger.warning(
                 "%s/%s: hit iteration cap after a clean write — salvaging "

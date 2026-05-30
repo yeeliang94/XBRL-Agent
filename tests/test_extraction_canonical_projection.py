@@ -159,15 +159,20 @@ def test_projection_call_failure_is_fatal(canonical_env, tmp_path, monkeypatch):
     assert warning is not None and "FAILED" in warning
 
 
-def test_successful_projection_clears_prior_fatal_flag(canonical_env, tmp_path):
-    """A later successful write_facts clears a transient earlier failure — the
-    flag reflects the OUTCOME OF THE LATEST projection attempt."""
+def test_prior_projection_failure_is_sticky(canonical_env, tmp_path):
+    """Peer-review: the fatal flag is STICKY for the run. A later write_facts
+    only projects ITS OWN cells, so it cannot prove the earlier failed batch's
+    facts ever landed — a subsequent (even successful) projection must NOT clear
+    the flag, or a partial correction would silently mask missing facts."""
     db_path, run_id, template_id, leaf = canonical_env
     deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
-    deps.projection_failed = True  # simulate an earlier failed attempt
-    deps.projection_error = "stale"
+    deps.projection_failed = True  # an earlier batch's projection call failed
+    deps.projection_error = "sqlite3.OperationalError: database is locked"
 
+    # A later, fully-successful projection of a different batch.
     result = _fill(tmp_path, leaf, value=4321.0)
-    _project_facts_if_canonical(deps, result)
-    assert deps.projection_failed is False
-    assert deps.projection_error is None
+    warning = _project_facts_if_canonical(deps, result)
+    assert warning is None  # this batch projected cleanly
+    # ...but the run is still doomed: the earlier batch never landed.
+    assert deps.projection_failed is True
+    assert deps.projection_error == "sqlite3.OperationalError: database is locked"

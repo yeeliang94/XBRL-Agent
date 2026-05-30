@@ -2,10 +2,10 @@ import logging
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import Annotated, Optional, Sequence, Union
 
 import openpyxl
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, StringConstraints
 
 from tools.section_headers import (
     discover_section_headers,
@@ -36,8 +36,10 @@ class FactWrite(BaseModel):
     # 24-col matrix uses the equity-component column directly.
     col: int = 2
     # PDF page + short quote. Required — never let a value land without
-    # provenance (gotcha #16).
-    evidence: str = Field(min_length=1)
+    # provenance (gotcha #16). `strip_whitespace=True` + `min_length=1` means a
+    # whitespace-only string ("   ") is stripped to "" and then rejected, so
+    # blank-after-trim evidence can't sneak past as "present".
+    evidence: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     # Label-matching mode (preferred): match against column-A text.
     field_label: str = ""
     # Section hint to disambiguate duplicate labels (e.g. "current" vs
