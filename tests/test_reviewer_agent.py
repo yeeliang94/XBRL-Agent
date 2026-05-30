@@ -211,12 +211,12 @@ def test_ungrounded_fix_in_run_is_rejected_not_applied(seeded):
 
 
 @pytest.mark.parametrize("is_group, n_items, expected", [
-    (False, 0, 10),    # base, clamped at min
-    (False, 1, 12),    # 10 + 2
-    (False, 5, 20),    # 10 + 10
-    (True, 5, 24),     # 10 + 4 + 10
-    (False, 20, 30),   # clamped at max
-    (True, 20, 30),    # clamped at max
+    (False, 0, 12),    # base, clamped at min (Phase 3: 10→12)
+    (False, 1, 14),    # 12 + 2
+    (False, 5, 22),    # 12 + 10
+    (True, 5, 26),     # 12 + 4 + 10
+    (False, 20, 36),   # clamped at max (Phase 3: 30→36)
+    (True, 20, 36),    # clamped at max
 ])
 def test_turn_cap_formula(is_group, n_items, expected):
     from correction.reviewer_agent import compute_reviewer_turn_cap

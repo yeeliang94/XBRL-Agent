@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Dict
 
 from statement_types import StatementType
-from cross_checks.framework import CrossCheckResult
+from cross_checks.framework import CrossCheckResult, Comparand
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, filing_level_prefix,
 )
@@ -24,6 +24,7 @@ class SOCFToSOFPCashCheck:
     def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company") -> CrossCheckResult:
         socf_wb = open_workbook(workbook_paths[StatementType.SOCF])
         socf_ws = find_sheet(socf_wb, "SOCF-Indirect", "SOCF-Direct")
+        socf_sheet = socf_ws.title if socf_ws is not None else "SOCF"
         socf_cash = None
         co_socf_cash = None
         if socf_ws is not None:
@@ -34,6 +35,7 @@ class SOCFToSOFPCashCheck:
 
         sofp_wb = open_workbook(workbook_paths[StatementType.SOFP])
         sofp_ws = find_sheet(sofp_wb, "SOFP-CuNonCu", "SOFP-OrdOfLiq")
+        sofp_sheet = sofp_ws.title if sofp_ws is not None else "SOFP"
         sofp_cash = None
         co_sofp_cash = None
         if sofp_ws is not None:
@@ -85,9 +87,28 @@ class SOCFToSOFPCashCheck:
                     f"Company: SOCF ({co_socf_cash}) vs SOFP ({co_sofp_cash}), diff={co_diff:.2f}"
                 )
 
+        comparands = [
+            Comparand(label="Cash and cash equivalents at end of period",
+                      sheet=socf_sheet, value=socf_cash, role="lhs",
+                      statement=StatementType.SOCF.value),
+            Comparand(label="Cash and cash equivalents", sheet=sofp_sheet,
+                      value=sofp_cash, role="rhs",
+                      statement=StatementType.SOFP.value),
+        ]
+        if filing_level == "group":
+            comparands += [
+                Comparand(label="Cash and cash equivalents at end of period "
+                          "[company]", sheet=socf_sheet, value=co_socf_cash,
+                          role="lhs", statement=StatementType.SOCF.value),
+                Comparand(label="Cash and cash equivalents [company]",
+                          sheet=sofp_sheet, value=co_sofp_cash, role="rhs",
+                          statement=StatementType.SOFP.value),
+            ]
+
         return CrossCheckResult(
             name=self.name,
             status="passed" if group_passed and co_passed else "failed",
             expected=socf_cash, actual=sofp_cash, diff=diff, tolerance=tolerance,
             message="; ".join(parts),
+            comparands=comparands,
         )

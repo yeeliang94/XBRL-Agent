@@ -125,6 +125,38 @@ async def test_reviewer_pass_snapshots_then_applies_grounded_fix(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reviewer_pass_saves_conversation_trace(tmp_path):
+    """Phase 4 (holistic audit) — the reviewer's transcript is persisted to
+    {output_dir}/CORRECTION_conversation_trace.json so its judgement is
+    auditable via the existing /agents/CORRECTION/trace route (gotcha #6)."""
+    import json
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE runs SET output_dir=? WHERE id=?", (str(out_dir), run_id))
+    conn.commit()
+    conn.close()
+
+    failed = [CrossCheckResult(
+        name="sofp_assets_balance", status="failed", expected=170.0,
+        actual=150.0, diff=20.0, message="off by 20", target_sheet="SOFP",
+        target_row=10)]
+    await _run_reviewer_pass(
+        failed_checks=failed, conflicts=[], model=FunctionModel(_fix_cash_scripted),
+        filing_level="company", event_queue=asyncio.Queue(), db_path=db,
+        run_id=run_id)
+
+    trace = out_dir / "CORRECTION_conversation_trace.json"
+    assert trace.exists(), "reviewer trace should be saved under output_dir"
+    payload = json.loads(trace.read_text(encoding="utf-8"))
+    # The trace carries the conversation (same shape as extraction traces).
+    assert "messages" in payload and isinstance(payload["messages"], list)
+
+
+@pytest.mark.asyncio
 async def test_reviewer_pass_noop_when_nothing_to_review(tmp_path):
     from server import _run_reviewer_pass
 

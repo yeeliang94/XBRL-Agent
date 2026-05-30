@@ -133,17 +133,24 @@ async def re_review(run_id: int, body: Optional[dict] = None):
         try:
             rows = conn2.execute(
                 "SELECT check_name, expected, actual, diff, message, "
-                "target_sheet, target_row FROM cross_checks "
+                "target_sheet, target_row, comparands_json FROM cross_checks "
                 "WHERE run_id = ? AND status = 'failed' ORDER BY id",
                 (run_id,),
             ).fetchall()
         finally:
             conn2.close()
+        # Decode the persisted comparands (Phase 2) so a manual re-review gets
+        # the same entry points the inline auto-review had from live objects.
+        from cross_checks.framework import comparands_from_json
         failed = [
             SimpleNamespace(
                 name=r["check_name"], expected=r["expected"], actual=r["actual"],
                 diff=r["diff"], message=r["message"],
                 target_sheet=r["target_sheet"], target_row=r["target_row"],
+                comparands=comparands_from_json(
+                    r["comparands_json"]
+                    if "comparands_json" in r.keys() else None
+                ),
             )
             for r in rows
         ]

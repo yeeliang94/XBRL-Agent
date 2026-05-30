@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Dict
 
 from statement_types import StatementType
-from cross_checks.framework import CrossCheckResult
+from cross_checks.framework import CrossCheckResult, Comparand
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, socie_column,
     find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run, filing_level_prefix,
@@ -28,6 +28,7 @@ class SOPLToSOCIEProfitCheck:
     def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
         sopl_wb = open_workbook(workbook_paths[StatementType.SOPL])
         sopl_ws = find_sheet(sopl_wb, "SOPL-Function", "SOPL-Nature")
+        sopl_sheet = sopl_ws.title if sopl_ws is not None else "SOPL"
         sopl_profit = None
         co_sopl_profit = None
         if sopl_ws is not None:
@@ -38,6 +39,7 @@ class SOPLToSOCIEProfitCheck:
 
         socie_wb = open_workbook(workbook_paths[StatementType.SOCIE])
         socie_ws = find_sheet(socie_wb, "SOCIE")
+        socie_sheet = socie_ws.title if socie_ws is not None else "SOCIE"
         socie_profit = None
         co_socie_profit = None
         if socie_ws is not None:
@@ -100,6 +102,23 @@ class SOPLToSOCIEProfitCheck:
 
         passed = group_passed and co_passed
 
+        comparands = [
+            Comparand(label="Profit (loss)", sheet=sopl_sheet, value=sopl_profit,
+                      role="lhs", statement=StatementType.SOPL.value),
+            Comparand(label="Profit (loss)", sheet=socie_sheet,
+                      value=socie_profit, role="rhs",
+                      statement=StatementType.SOCIE.value),
+        ]
+        if filing_level == "group":
+            comparands += [
+                Comparand(label="Profit (loss) [company]", sheet=sopl_sheet,
+                          value=co_sopl_profit, role="lhs",
+                          statement=StatementType.SOPL.value),
+                Comparand(label="Profit (loss) [company]", sheet=socie_sheet,
+                          value=co_socie_profit, role="rhs",
+                          statement=StatementType.SOCIE.value),
+            ]
+
         return CrossCheckResult(
             name=self.name,
             status="passed" if passed else "failed",
@@ -108,4 +127,5 @@ class SOPLToSOCIEProfitCheck:
             diff=diff,
             tolerance=tolerance,
             message="; ".join(parts),
+            comparands=comparands,
         )

@@ -18,6 +18,12 @@ export const NON_AGENT_TAB_IDS: ReadonlySet<string> = new Set([
   "scout",
   "validator",
   "NOTES_VALIDATOR",
+  // CORRECTION = the reviewer pass. A real pseudo-agent that runs after
+  // cross-checks; not a user-picked statement role. Without this it fell
+  // through the statementsInRun gate in AgentTabs and the reviewer ran
+  // invisibly in the live view (the bug this set already fixed for
+  // NOTES_VALIDATOR).
+  "CORRECTION",
 ]);
 
 export function isNonAgentTab(id: string): boolean {

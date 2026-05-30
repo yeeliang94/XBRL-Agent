@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Dict
 
 from statement_types import StatementType
-from cross_checks.framework import CrossCheckResult
+from cross_checks.framework import CrossCheckResult, Comparand
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label,
     find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
@@ -28,6 +28,7 @@ class SOCIEToSOFPEquityCheck:
     def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
         socie_wb = open_workbook(workbook_paths[StatementType.SOCIE])
         socie_ws = find_sheet(socie_wb, "SOCIE")
+        socie_sheet = socie_ws.title if socie_ws is not None else "SOCIE"
         socie_equity = None
         co_socie_equity = None
         if socie_ws is not None:
@@ -58,6 +59,7 @@ class SOCIEToSOFPEquityCheck:
 
         sofp_wb = open_workbook(workbook_paths[StatementType.SOFP])
         sofp_ws = find_sheet(sofp_wb, "SOFP-CuNonCu", "SOFP-OrdOfLiq")
+        sofp_sheet = sofp_ws.title if sofp_ws is not None else "SOFP"
         sofp_equity = None
         co_sofp_equity = None
         if sofp_ws is not None:
@@ -94,9 +96,27 @@ class SOCIEToSOFPEquityCheck:
                     f"Company: SOCIE ({co_socie_equity}) vs SOFP ({co_sofp_equity}), diff={co_diff:.2f}"
                 )
 
+        comparands = [
+            Comparand(label="Equity at end of period", sheet=socie_sheet,
+                      value=socie_equity, role="lhs",
+                      statement=StatementType.SOCIE.value),
+            Comparand(label="Total equity", sheet=sofp_sheet, value=sofp_equity,
+                      role="rhs", statement=StatementType.SOFP.value),
+        ]
+        if filing_level == "group":
+            comparands += [
+                Comparand(label="Equity at end of period [company]",
+                          sheet=socie_sheet, value=co_socie_equity, role="lhs",
+                          statement=StatementType.SOCIE.value),
+                Comparand(label="Total equity [company]", sheet=sofp_sheet,
+                          value=co_sofp_equity, role="rhs",
+                          statement=StatementType.SOFP.value),
+            ]
+
         return CrossCheckResult(
             name=self.name,
             status="passed" if group_passed and co_passed else "failed",
             expected=socie_equity, actual=sofp_equity, diff=diff, tolerance=tolerance,
             message="; ".join(parts),
+            comparands=comparands,
         )

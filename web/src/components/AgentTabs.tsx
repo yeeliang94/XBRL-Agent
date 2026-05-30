@@ -108,6 +108,7 @@ function AgentTabsImpl({
     let scoutId: string | null = null;
     let validatorId: string | null = null;
     let notesValidatorId: string | null = null;
+    let correctionId: string | null = null;
     for (const id of tabOrder) {
       const agent = agents[id];
       if (!agent) continue;
@@ -116,9 +117,14 @@ function AgentTabsImpl({
         // NOTES_VALIDATOR joins them (peer-review F1) so its skip-emit
         // actually has a visible tab; bucketed with notes below since it
         // is thematically adjacent to the notes agents that feed it.
+        // CORRECTION (the reviewer pass) is the same shape — it must be
+        // bucketed explicitly here, else it'd hit this branch, match no
+        // `id === …` case, and fall through `continue` into nowhere (the
+        // very disappearance we're fixing).
         if (id === "scout") scoutId = id;
         else if (id === "validator") validatorId = id;
         else if (id === "NOTES_VALIDATOR") notesValidatorId = id;
+        else if (id === "CORRECTION") correctionId = id;
         continue;
       }
       if (id.startsWith(NOTES_TAB_PREFIX)) {
@@ -138,6 +144,9 @@ function AgentTabsImpl({
       ...notesIds,
       ...(notesValidatorId ? [notesValidatorId] : []),
       ...(scoutId ? [scoutId] : []),
+      // Reviewer sits just before Cross-checks (validator) — it runs right
+      // after the cross-check pass, so this mirrors the run timeline.
+      ...(correctionId ? [correctionId] : []),
       ...(validatorId ? [validatorId] : []),
     ];
   })();
@@ -154,10 +163,12 @@ function AgentTabsImpl({
   let scoutActive: string | null = null;
   let validatorActive: string | null = null;
   let notesValidatorActive: string | null = null;
+  let correctionActive: string | null = null;
   for (const id of gatedOrder) {
     if (id === "scout") scoutActive = id;
     else if (id === "validator") validatorActive = id;
     else if (id === "NOTES_VALIDATOR") notesValidatorActive = id;
+    else if (id === "CORRECTION") correctionActive = id;
     else if (id.startsWith(NOTES_TAB_PREFIX)) notesActive.push(id);
     else statementActive.push(id);
   }
@@ -222,6 +233,7 @@ function AgentTabsImpl({
         ))}
         {notesValidatorActive && renderTab(notesValidatorActive)}
         {scoutActive && renderTab(scoutActive)}
+        {correctionActive && renderTab(correctionActive)}
         {validatorActive && renderTab(validatorActive)}
       </div>
     </div>

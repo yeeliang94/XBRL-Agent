@@ -449,6 +449,7 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
             build_default_cross_checks(), all_workbook_paths, check_config,
             tolerance=tolerance,
         )
+        from cross_checks.framework import comparands_to_json
         return [
             {
                 "name": r.name,
@@ -460,6 +461,8 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
                 "message": r.message,
                 "target_sheet": r.target_sheet,
                 "target_row": r.target_row,
+                "comparands_json": comparands_to_json(
+                    getattr(r, "comparands", None)),
             }
             for r in results
         ]
@@ -499,6 +502,7 @@ def _refresh_persisted_cross_checks(run_id: int) -> bool:
                     expected=r["expected"], actual=r["actual"], diff=r["diff"],
                     tolerance=r["tolerance"], message=r["message"],
                     target_sheet=r["target_sheet"], target_row=r["target_row"],
+                    comparands_json=r.get("comparands_json"),
                 )
             conn.commit()
             return True
@@ -900,7 +904,9 @@ async def _run_reviewer_pass(
         "exhausted": False, "turns_used": 0, "max_turns": 0,
     }
     # Normalise the failing cross-checks (CrossCheckResult objects) into the
-    # plain-dict shape the review packet renderer expects.
+    # plain-dict shape the review packet renderer expects. `comparands` carry
+    # the values each check compared (Phase 2) so the reviewer gets concrete
+    # entry points; the inline pass has the live objects, so no DB round-trip.
     failed_payload = [
         {
             "name": getattr(c, "name", None),
@@ -910,6 +916,10 @@ async def _run_reviewer_pass(
             "message": getattr(c, "message", None),
             "target_sheet": getattr(c, "target_sheet", None),
             "target_row": getattr(c, "target_row", None),
+            "comparands": [
+                dataclasses.asdict(cm)
+                for cm in (getattr(c, "comparands", None) or [])
+            ],
         }
         for c in (failed_checks or [])
     ]
@@ -991,6 +1001,27 @@ async def _run_reviewer_pass(
         filing_level=filing_level, n_items=n_items,
     )
     outcome["max_turns"] = max_turns
+
+    # Phase 4 (reviewer holistic audit): resolve the run's output dir so we can
+    # persist the reviewer's conversation trace there (like extraction agents).
+    # Falls back to the PDF's parent (pdf_path is {output_dir}/uploaded.pdf).
+    _review_out_dir: Optional[str] = None
+    try:
+        _cc2 = _sqlite3_count.connect(str(db_path))
+        try:
+            _row = _cc2.execute(
+                "SELECT output_dir FROM runs WHERE id = ?", (run_id,),
+            ).fetchone()
+            _review_out_dir = _row[0] if _row and _row[0] else None
+        finally:
+            _cc2.close()
+    except Exception:  # noqa: BLE001 — trace dir is best-effort
+        _review_out_dir = None
+    if not _review_out_dir and pdf_path:
+        _review_out_dir = str(Path(pdf_path).parent)
+
+    agent_run = None  # bound by the `async with` below; pre-init so the
+    # trace-save `finally` can reference it even if construction/enter fails.
 
     try:
         agent, deps = create_reviewer_agent(
@@ -1141,6 +1172,35 @@ async def _run_reviewer_pass(
         outcome["error"] = str(e)
         await _emit("error", {"type": "reviewer_exception", "message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
+    finally:
+        # Phase 4: persist the reviewer's transcript so its turn-by-turn
+        # judgement is auditable in the Review tab (gotcha #6 — a FAILED /
+        # exhausted pass is exactly when the trace matters most). Prefer the
+        # finished result; fall back to the partial message history on a
+        # failure path (mirrors the extraction failure-trace helper). Always
+        # best-effort — a trace-save error must never mask the pass outcome.
+        if _review_out_dir:
+            try:
+                from agent_tracing import (
+                    save_agent_trace, save_messages_trace,
+                )
+                # Prefix = agent_id ("CORRECTION") so the file matches the
+                # reviewer's run_agents.statement_type and is served by the
+                # EXISTING /api/runs/{id}/agents/{stmt}/trace route — no new
+                # endpoint needed (that route whitelists by run_agents row).
+                _res = getattr(agent_run, "result", None)
+                if _res is not None:
+                    save_agent_trace(_res, _review_out_dir, agent_id)
+                elif agent_run is not None:
+                    save_messages_trace(
+                        agent_run.ctx.state.message_history,
+                        _review_out_dir, agent_id,
+                    )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to save reviewer trace for run %s", run_id,
+                    exc_info=True,
+                )
 
     # Re-cascade so the reviewer's leaf fixes propagate to parent totals
     # before the caller re-exports + re-merges from facts.
@@ -3815,6 +3875,7 @@ async def run_multi_agent_stream(
                         )
 
                 # Persist cross-check results
+                from cross_checks.framework import comparands_to_json
                 for check_result in cross_check_results:
                     repo.save_cross_check(
                         db_conn, run_id,
@@ -3827,6 +3888,8 @@ async def run_multi_agent_stream(
                         message=check_result.message,
                         target_sheet=check_result.target_sheet,
                         target_row=check_result.target_row,
+                        comparands_json=comparands_to_json(
+                            getattr(check_result, "comparands", None)),
                     )
                 db_conn.commit()
             except Exception as e:
