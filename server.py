@@ -1209,6 +1209,13 @@ async def _run_notes_validator_pass(
     except Exception as e:  # noqa: BLE001
         logger.exception("Notes validator construction failed")
         outcome["error"] = f"agent construction failed: {e}"
+        # Surface the failure on the wire (peer-review HIGH): without this the
+        # construction path returned silently, leaving the Notes Validator tab
+        # stranded on "Waiting…" with no bucketed error. `_emit` stamps the
+        # recoverable bucket; the paired `complete` flips the tab terminal.
+        await _emit("error", {"type": "notes_validator_exception",
+                              "message": outcome["error"]})
+        await _emit("complete", {"success": False, "error": outcome["error"]})
         return outcome
 
     outcome["context"] = context
@@ -4057,6 +4064,15 @@ async def run_multi_agent_stream(
             if getattr(r, "flag", None)
         )
         any_agent_flagged = bool(flagged_statements)
+        # Peer-review HIGH: a notes-validator failure marks its pseudo-agent
+        # row "failed" (see finish_run_agent above), so a clean "completed"
+        # run badge over a failed sub-agent is internally inconsistent. The
+        # validator is a soft-fail pass (gotcha #22) — output is intact, dedup
+        # just didn't run — but it's still a needs-review signal, so tip an
+        # otherwise-green run to completed_with_errors like every other one.
+        validator_failed = bool(
+            validator_outcome and validator_outcome.get("error")
+        )
         if all_agents_ok and merge_result.success and correction_exhausted:
             overall_status = "correction_exhausted"
         elif canonical_reexport_failed:
@@ -4066,7 +4082,7 @@ async def run_multi_agent_stream(
             overall_status = "completed_with_errors"
         elif (all_agents_ok and merge_result.success and not any_check_failed
               and not cross_check_crashed and open_conflicts == 0
-              and not any_agent_flagged):
+              and not any_agent_flagged and not validator_failed):
             # Peer-review fix (2026-04-27): a cross-check pass that
             # crashed produced an empty results list, so
             # ``any_check_failed`` is misleadingly False. Without the
@@ -4082,6 +4098,10 @@ async def run_multi_agent_stream(
         elif all_agents_ok and merge_result.success and any_agent_flagged:
             # Everything ran, but at least one statement finalised with an
             # acknowledged gap (peer-review F1) → needs human review.
+            overall_status = "completed_with_errors"
+        elif all_agents_ok and merge_result.success and validator_failed:
+            # Extraction/merge/cross-checks are clean, but the notes-validator
+            # pass failed (peer-review HIGH) → needs review, not a clean badge.
             overall_status = "completed_with_errors"
         elif all_agents_ok and (any_check_failed or cross_check_crashed):
             overall_status = "completed_with_errors"
