@@ -1,6 +1,6 @@
 # Implementation Plan: First-Principles Rewrite of the AI Processing Pipeline
 
-**Overall Progress:** `~35%` — Phase 0 + Phase 1 COMPLETE (monolith, canonical_agent, and legacy correction all deleted; canonical mode mandatory + fail-fast; ~−9,400 LOC, 6 commits, all green). Phase 2 (one agent runner) is next.
+**Overall Progress:** `~50%` — Phases 0, 1, 2 COMPLETE. Phase 2 extracted the shared `agent_runner.run_agent_loop` and routed both face + notes coordinators through it. Phase 3 (typed `write_facts` contract) in progress.
 **PRD Reference:** [docs/REWRITE-first-principles.html](REWRITE-first-principles.html)
 **Last Updated:** 2026-05-30
 **Branch:** `rewrite/first-principles` (off `main`; baseline tag `pre-rewrite-baseline`)
@@ -140,18 +140,24 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
   - [ ] 🟥 ~~Remove the monolith/orchestration *frontend* surface too~~ — the orchestration selector + monolith-model UI in `web/src/components/PreRunPanel.tsx` (~line 1058, plus the `orchestration`/`monolithModel` state and the request-payload branch), references in `StatementRunConfig.tsx`, `RunDetailView.tsx`, and `HistoryList.tsx`, the `orchestration` field in `web/src/lib/types.ts`, and the vitest specs (`PreRunPanelOrchestration.test.tsx`, `PreRunPanelMonolithModel.test.tsx`, `RunDetailViewOrchestration.test.tsx`). Drop the API request/response assumption that a `monolith` orchestration can be submitted, so the UI can't offer a path the backend no longer supports
   - **Verify:** `grep -rn "canonical_agent\|monolith" --include="*.py" .` returns only the relocated helper's new home (and historical docs); `grep -rn "monolith\|orchestration" web/src` returns nothing live; full backend suite green; `cd web && npx vitest run` green with the orchestration specs removed (not skipped); the PreRun panel no longer offers a monolith path and History no longer renders an orchestration badge; the reviewer pass still runs end-to-end on a run with failing cross-checks.
 
-### Phase 2: One agent loop — *the DRY keystone before store-first* (report steps 2–3)
+### Phase 2: One agent loop — *the DRY keystone before store-first* (report steps 2–3) — 🟩 COMPLETE
 
-- [ ] 🟥 **Step 2.1: Extract `run_agent(spec, sink)`** — one place the agent loop lives.
-  - [ ] 🟥 Define `AgentSpec` (factory, prompt, deps, turn_timeout, max_iters, telemetry recorder) and `EventSink` (the typed event emitter)
-  - [ ] 🟥 Move the shared mechanics into one runner: `agent.iter()` streaming, per-turn timeout, iteration cap below pydantic-ai's 50 (gotcha #18), telemetry deltas, the four terminal-exception paths, trace save (incl. the failed-agent trace, gotcha #6)
-  - [ ] 🟥 Route the **face coordinator** (`coordinator.py`) through it; it becomes a fan-out planner
-  - **Verify:** `tests/test_e2e.py` and `tests/test_agent_tracing.py` pass unchanged; telemetry rows (`run_agent_turns`, schema v8) still populate; a failed/timed-out agent still writes a partial trace.
+> **Design note:** rather than one monolithic `run_agent(spec, sink)` that
+> swallows each coordinator's divergent outer logic (verify/save gate vs
+> no-write/retry), the shared piece is `agent_runner.run_agent_loop(agent_run,
+> deps, spec, emit, turn_records)` — the node-streaming loop only. Each caller
+> still owns agent construction, the prompt, the gate/retry, trace save, and
+> the outcome. Per-caller differences ride on `AgentLoopSpec` (phase map +
+> message, turn timeout, `set_turn_counter`). This is the "one loop" win
+> without a god-function.
 
-- [ ] 🟥 **Step 2.2: Route the notes coordinator through the same runner** — retire the parallel loop (report step 3).
-  - [ ] 🟥 Replace `notes/coordinator.py` (1,405 LOC) mechanics with `run_agent`; keep the notes-specific fan-out planning (Sheet-12 sub-agent count via `pricing.resolve_notes_parallel`, retry budget)
-  - [ ] 🟥 Preserve the notes-only invariants as backend behaviour: sanitiser, 30k rendered-char cap (gotcha #16), cross-sheet dedup, side-log failure channel for now
-  - **Verify:** `tests/test_notes_retry_budget.py`, `tests/test_notes_validator_agent.py` (incl. the IO-race-safety suite, gotcha #22), and notes E2E pass; a notes run still writes `notes_cells` and the download overlay matches.
+- [x] 🟩 **Step 2.1: Extract the shared loop; route the face coordinator** — `agent_runner.py` (commit 2a26bf9). Owns `iter_with_turn_timeout`, `IterationLimitReached`, tool/model event streaming, `token_update`, v8 per-turn telemetry. `coordinator.py` lost ~213 lines.
+  - **Verified:** `test_e2e.py`, `test_agent_tracing.py`, `test_max_agent_iterations_below_pydantic_cap.py`, `test_coordinator.py` green; backend 1801 passed.
+
+- [x] 🟩 **Step 2.2: Route the notes coordinator through the same runner** — commit 0a6b0c4. `notes/coordinator.py::_invoke_single_notes_agent_once` lost ~128 lines; outer timeout/no-write + iteration-cap-to-retry semantics preserved (`IterationLimitReached` is-a `RuntimeError`). `_iter_with_turn_timeout` re-exported for `test_notes_turn_timeout`.
+  - **Verified:** `test_notes_turn_timeout`, `test_notes_coordinator`, `test_notes_retry_budget`, e2e green; backend 1801 passed.
+
+- [ ] 🟥 **Step 2.3 (deferred, optional): the Sheet-12 fan-out loop** — `notes/listofnotes_subcoordinator.py` has a THIRD `agent.iter()` loop with load-bearing divergences (namespaced `tool_call_id`s for the frontend dedup; **intentionally no** per-turn telemetry/`token_update` per gotcha #6; dynamic iteration cap; no turn timeout). Forcing it through `run_agent_loop` would change behaviour or bloat the spec with flags — left as a documented exception, not a clean fit.
 
 ### Phase 3: Typed tool contract — *build the new agent write path before store-first removes the old one* (report step 5)
 
