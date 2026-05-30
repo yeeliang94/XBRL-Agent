@@ -398,9 +398,8 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
   - **Verified:** `test_server_run_lifecycle.py`, `test_pipeline_stage_events.py`, `test_stop_all_preserves_partial.py`, `test_silent_exception_surfacing.py`, `test_cross_check_progress_events.py`, `test_e2e.py`, `test_mpers_wiring.py`, `test_filing_level.py`, `test_runs_start_endpoint.py`, `test_legacy_run_endpoint.py` all green; full backend at baseline (2 pre-existing doc failures). Every exit path still leaves a terminal status.
   - [ ] 🟥 **Deferred (needs a dedicated session):** the full `PHASES = [...]` structured-result rewrite of the Extract/drain core (requires restructuring the GeneratorExit-tolerant drain — high risk, only-tests-as-net) and **PR-1** (fold `run.py` CLI into the shared pipeline so a CLI run also projects facts → exports → reviews).
 
-- [ ] 🟥 **Step 5.3: Move re-review task state to a DB table** — durable background tasks.
-  - [ ] 🟥 Replace the in-process `_REVIEW_TASKS` dict (`server.py:5447`) with a schema-stepped table; survive restart
-  - **Verify:** a launched re-review is recoverable after a simulated restart; the async launch + poll contract (gotcha #21) still works.
+- [x] 🟩 **Step 5.3: Move re-review task state to a DB table — DONE** (header marker was stale; the work shipped — see CLAUDE.md gotcha #11 v12→v13 + gotcha #21). The in-process `_REVIEW_TASKS` dict is gone; re-review state lives in the durable `run_review_tasks` table (schema v13, one row per run). `server._save_review_task` / `repo.fetch_review_task` write/read it; `server._lifespan` calls `repo.reconcile_stale_review_tasks` at startup to retire rows left `running` by a dead process. Pinned by `tests/test_db_schema_v13.py` + `tests/test_reviewer_routes.py` (`test_re_review_outcome_survives_simulated_restart`, `test_stale_running_task_reconciled_at_startup`).
+  - **Verified:** a launched re-review is recoverable after a simulated restart; the async launch + poll contract (gotcha #21) still works.
 
 ### Phase 6: Determinism, error taxonomy & honest contracts (report steps 7–8)
 
