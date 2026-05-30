@@ -54,7 +54,19 @@ def run_agent(
     notes: Optional[Set[NotesTemplateType]] = None,
     filing_standard: str = "mfrs",
 ) -> AgentResult:
-    """Run extraction via the coordinator for one or more statement types.
+    """Run a CLI extraction through the SAME canonical pipeline as the web server.
+
+    Rewrite Phase 5.2 / PR-1: previously the CLI built a bare ``RunConfig`` with
+    no ``run_id``/``db_path`` and merged scratch workbooks directly — so a CLI
+    run skipped fact projection, the audit DB row, the canonical fact-export,
+    and the reviewer pass. It now drives ``server.run_multi_agent_stream`` (the
+    single phase pipeline), so a CLI run projects facts → exports from facts →
+    runs cross-checks → (optionally) reviews → merges, exactly like the UI.
+
+    The web server runs the canonical concept-tree bootstrap in its FastAPI
+    lifespan; the CLI has no lifespan, so we run it here before driving the
+    pipeline (without it, fact projection can't resolve concepts and the run
+    fails fast).
 
     Args:
         pdf_path: path to the PDF to extract from.
@@ -67,77 +79,91 @@ def run_agent(
         notes: optional set of NotesTemplateType to fill in parallel with the
             face-statement extraction.
     """
-    from coordinator import RunConfig, run_extraction
-    from notes.coordinator import NotesRunConfig, run_notes_extraction
-    from server import _create_proxy_model
-    from workbook_merger import merge as merge_workbooks
+    import shutil
+    import uuid
 
-    # Each run gets its own numbered subdirectory
+    import server
+    from server import run_multi_agent_stream, RunConfigRequest
+
+    # Each run gets its own numbered subdirectory; that dir IS the session dir
+    # the pipeline reads/writes (it expects uploaded.pdf inside it).
     output_dir = _next_run_dir(output_dir)
+    session_dir = Path(output_dir)
+    session_id = str(uuid.uuid4())
 
     if statements is None:
         statements = set(StatementType)
     notes = set(notes or set())
 
-    # Resolve model through the same proxy/direct routing as the web server
+    # The pipeline's coordinator resolves the source PDF as
+    # ``session_dir/uploaded.pdf``; copy the caller's PDF into place.
+    shutil.copyfile(pdf_path, session_dir / "uploaded.pdf")
+
     load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
     api_key = (os.environ.get("GOOGLE_API_KEY", "")
                or os.environ.get("GEMINI_API_KEY", ""))
-    resolved_model = _create_proxy_model(model, proxy_url, api_key)
 
-    config = RunConfig(
-        pdf_path=pdf_path,
-        output_dir=output_dir,
-        model=resolved_model,
-        statements_to_run=statements,
+    # Canonical bootstrap — the server does this in its lifespan; the CLI must
+    # run it explicitly or the pipeline's fail-fast guard
+    # (``_CANONICAL_BOOTSTRAP_OK is False``) trips, or projection silently skips
+    # every concept. Marks the module flag the pipeline reads.
+    from db.schema import init_db
+    init_db(server.AUDIT_DB_PATH)
+    try:
+        from concept_model.bootstrap import import_all_face_templates
+        import_all_face_templates(server.AUDIT_DB_PATH)
+        server._CANONICAL_BOOTSTRAP_OK = True
+    except Exception as exc:  # noqa: BLE001 — surfaced as a failed run below
+        server._CANONICAL_BOOTSTRAP_OK = False
+        print(f"WARNING: canonical bootstrap failed: {exc}")
+
+    run_config = RunConfigRequest(
+        statements=[s.value for s in statements],
+        notes_to_run=sorted(n.value for n in notes),
         filing_level=filing_level,
         filing_standard=filing_standard,
     )
-    notes_config = NotesRunConfig(
-        pdf_path=pdf_path,
-        output_dir=output_dir,
-        model=resolved_model,
-        notes_to_run=notes,
-        filing_level=filing_level,
-        filing_standard=filing_standard,
-    )
 
-    async def _run_all():
-        # Face statements and notes run concurrently — no dependency between them.
-        face_task = asyncio.create_task(run_extraction(config))
-        notes_task = asyncio.create_task(run_notes_extraction(notes_config))
-        return await face_task, await notes_task
+    merged_path = str(session_dir / "filled.xlsx")
+    final: dict = {"success": False, "merged": None, "errors": []}
 
-    coordinator_result, notes_result = asyncio.run(_run_all())
+    async def _drive() -> None:
+        async for evt in run_multi_agent_stream(
+            session_id=session_id,
+            session_dir=session_dir,
+            run_config=run_config,
+            api_key=api_key,
+            proxy_url=proxy_url,
+            model_name=model,
+        ):
+            ev = evt.get("event")
+            data = evt.get("data") or {}
+            if ev == "pipeline_stage":
+                print(f"  [stage] {data.get('stage')}")
+            elif ev == "complete":
+                role = data.get("agent_role") or data.get("agent_id")
+                ok = "ok" if data.get("success") else f"FAILED ({data.get('error')})"
+                print(f"  [{role}] {ok}")
+            elif ev == "error":
+                final["errors"].append(str(data.get("message", "")))
+            elif ev == "run_complete":
+                final["success"] = bool(data.get("success"))
+                final["merged"] = data.get("merged_workbook")
+                for s in data.get("statements_failed", []) or []:
+                    final["errors"].append(f"{s}: extraction failed")
+                for s in data.get("notes_failed", []) or []:
+                    final["errors"].append(f"NOTES {s}: failed")
 
-    # Merge workbooks into a single file
-    merged_path = str(Path(output_dir) / "filled.xlsx")
-    if coordinator_result.workbook_paths or notes_result.workbook_paths:
-        merge_workbooks(
-            coordinator_result.workbook_paths,
-            merged_path,
-            notes_workbook_paths=notes_result.workbook_paths,
-        )
-
-    success = coordinator_result.all_succeeded and notes_result.all_succeeded
-    errors = [
-        f"{r.statement_type.value}: {r.error}"
-        for r in coordinator_result.agent_results
-        if r.status == "failed"
-    ] + [
-        f"NOTES {r.template_type.value}: {r.error}"
-        for r in notes_result.agent_results
-        if r.status == "failed"
-    ]
+    asyncio.run(_drive())
 
     return AgentResult(
-        success=success,
+        success=final["success"],
         fields_filled=0,
         token_report=TokenReport(),
-        output_json_path=str(Path(output_dir) / "result.json"),
-        output_excel_path=merged_path,
-        errors=errors,
+        output_json_path=str(session_dir / "result.json"),
+        output_excel_path=final["merged"] or merged_path,
+        errors=final["errors"],
     )
 
 
