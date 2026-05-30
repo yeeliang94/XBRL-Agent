@@ -19,7 +19,7 @@ You must fill **all 4 blocks** independently:
 3. **Block 3 (rows 51–73):** Company current-year SOCIE movements
 4. **Block 4 (rows 75–97):** Company prior-year SOCIE movements
 
-Use explicit `row` and `col` coordinates when calling fill_workbook for SOCIE, targeting the correct row range for each block.
+Use explicit `row` and `col` coordinates when calling write_facts for SOCIE, targeting the correct row range for each block.
 
 ### Where to find the numbers
 

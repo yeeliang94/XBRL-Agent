@@ -3,7 +3,7 @@
 Replaces the SOFP-specific create_sofp_agent with a parametric factory that works
 for all 5 statement types. Each agent gets a statement-specific system prompt built
 from the prompts/ directory, the same set of tools (calculator, view_pdf_pages,
-fill_workbook, verify_totals, save_result, read_template), and optional page
+write_facts, verify_totals, save_result, read_template), and optional page
 hints from scout.
 """
 
@@ -23,7 +23,7 @@ from token_tracker import TokenReport
 from tools.calculator import calculator_result_json as _calculator_impl
 from tools.template_reader import read_template as _read_template_impl, TemplateField
 from tools.pdf_viewer import render_pages_to_png_bytes, count_pdf_pages
-from tools.fill_workbook import fill_workbook as _fill_workbook_impl
+from tools.fill_workbook import fill_workbook as _fill_workbook_impl, FactWrite
 from tools.verifier import verify_statement as _verify_statement_impl
 from extraction.history_processors import strip_stale_images, strip_duplicate_template
 from prompts import render_prompt
@@ -607,24 +607,28 @@ def create_extraction_agent(
         return results
 
     @agent.tool
-    def fill_workbook(ctx: RunContext[ExtractionDeps], fields_json: str) -> str:
-        """Write field values to the Excel template.
+    def write_facts(ctx: RunContext[ExtractionDeps], facts: List[FactWrite]) -> str:
+        """Write extracted values to the statement's cells.
 
-        Args:
-            fields_json: JSON with field mappings. Two modes supported:
+        Each entry in ``facts`` is one cell write. ``evidence`` is REQUIRED on
+        every entry (the PDF page + a short quote) — it is the audit trail.
 
-                Label matching (most statements):
-                {"fields": [{"sheet": "...", "field_label": "...", "section": "...",
-                  "col": 2, "value": 123, "evidence": "Page X, description"}, ...]}
-                - col: 2 for current year (CY), 3 for prior year (PY)
+        Two addressing modes:
 
-                Explicit cell coordinates (SOCIE matrix and other complex layouts):
-                {"fields": [{"sheet": "...", "row": 6, "col": 3, "value": 123,
-                  "evidence": "..."}, ...]}
-                - row: the 1-indexed row number from read_template()
-                - col: any column number (B=2, C=3, D=4, ... X=24)
+            Label matching (most statements) — set ``field_label`` (and
+            ``section`` to disambiguate duplicate labels):
+                {"sheet": "...", "field_label": "...", "section": "...",
+                 "col": 2, "value": 123, "evidence": "Page X, '<quote>'"}
+              - col: 2 for current year (CY), 3 for prior year (PY)
 
-                Only write to data-entry cells. Never write to formula cells.
+            Explicit cell coordinates (SOCIE matrix and other complex layouts)
+            — set ``row`` instead of ``field_label``:
+                {"sheet": "...", "row": 6, "col": 3, "value": 123,
+                 "evidence": "..."}
+              - row: the 1-indexed row number from read_template()
+              - col: any column number (B=2, C=3, D=4, ... X=24)
+
+        Only write to data-entry cells. Never write to formula cells.
         """
         output_path = str(Path(ctx.deps.output_dir) / ctx.deps.filled_filename)
         source_path = (
@@ -635,7 +639,7 @@ def create_extraction_agent(
         result = _fill_workbook_impl(
             template_path=source_path,
             output_path=output_path,
-            fields_json=fields_json,
+            facts=facts,
             filing_level=ctx.deps.filing_level,
         )
         if result.success:

@@ -555,7 +555,7 @@ def _open_conflict_count(db_path, run_id) -> int:
 PHASE_MAP = {
     "read_template": "reading_template",
     "view_pdf_pages": "viewing_pdf",
-    "fill_workbook": "filling_workbook",
+    "write_facts": "filling_workbook",
     "verify_totals": "verifying",
     "save_result": "complete",
 }

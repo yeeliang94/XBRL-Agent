@@ -1,6 +1,6 @@
 # Implementation Plan: First-Principles Rewrite of the AI Processing Pipeline
 
-**Overall Progress:** `~50%` — Phases 0, 1, 2 COMPLETE (branch green). Phase 3 (typed `write_facts` contract) was STARTED (FactWrite model + typed impl designed) then REVERTED to keep the branch green — see the Phase 3 status note below.
+**Overall Progress:** `~62%` — Phases 0, 1, 2, 3 COMPLETE (branch green). Phase 3 (typed `write_facts` contract) shipped 2026-05-30: full rename + frontend, backend 1801 pass / frontend 630 pass / tsc clean. Phase 4 (store-first keystone) is next; 4.2 needs a real-LLM A/B run (no API key in this environment).
 **PRD Reference:** [docs/REWRITE-first-principles.html](REWRITE-first-principles.html)
 **Last Updated:** 2026-05-30
 **Branch:** `rewrite/first-principles` (off `main`; baseline tag `pre-rewrite-baseline`)
@@ -159,7 +159,57 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
 
 - [ ] 🟥 **Step 2.3 (deferred, optional): the Sheet-12 fan-out loop** — `notes/listofnotes_subcoordinator.py` has a THIRD `agent.iter()` loop with load-bearing divergences (namespaced `tool_call_id`s for the frontend dedup; **intentionally no** per-turn telemetry/`token_update` per gotcha #6; dynamic iteration cap; no turn timeout). Forcing it through `run_agent_loop` would change behaviour or bloat the spec with flags — left as a documented exception, not a clean fit.
 
-### Phase 3: Typed tool contract — *build the new agent write path before store-first removes the old one* (report step 5) — 🟨 STARTED, REVERTED (clean pickup below)
+### Phase 3: Typed tool contract — *build the new agent write path before store-first removes the old one* (report step 5) — 🟩 DONE
+
+> **Completed (2026-05-30).** Full literal rewrite landed and verified: backend
+> **1801 passed** (only the 2 pre-existing `test_docs_invariants` doc failures),
+> frontend **630 passed**, `tsc --noEmit` clean. User chose "full rename +
+> frontend" over the keep-the-name option.
+>
+> **What shipped:**
+> - `tools/fill_workbook.py`: `FactWrite` pydantic model (evidence REQUIRED via
+>   `Field(min_length=1)`) + `_coerce_facts`; `fill_workbook(..., facts:
+>   Sequence[FactWrite|dict], ...)`; deleted `_parse_fields_json` + the
+>   Invalid-JSON branch + `import json`.
+> - `extraction/agent.py`: tool renamed `fill_workbook` → `write_facts(ctx,
+>   facts: List[FactWrite])`; impl called with `facts=`. The impl FUNCTION keeps
+>   its name `fill_workbook` (only the agent TOOL was renamed) — module-level
+>   doc-comments referencing the writer stay accurate.
+> - PHASE_MAP key `fill_workbook` → `write_facts` in **both** `coordinator.py`
+>   and `server.py`.
+> - Prompts: tool renamed across all 10 face prompts; `_base.md` date-cell
+>   examples gained the now-required `evidence`. `save_result`'s `fields_json`
+>   stays a string (result-summary artifact, NOT a write path) — unchanged.
+> - ~11 backend test files migrated `fields_json='{"fields":[…]}'` → `facts=[…]`
+>   (delegated to a verification-gated subagent); no invalid-JSON test existed to
+>   delete; `test_extraction_agent` tool-lookup retargeted to `write_facts`.
+> - Frontend (the user-chosen extra scope the original step-list omitted):
+>   `toolLabels.ts` (label + `parseFillFields` reads the new `facts` array, keeps
+>   `fields_json` for old runs), `ToolCallCard.tsx` `renderArgs`, `argsPreview`,
+>   `resultSummary` — all accept `write_facts` AND keep `fill_workbook` as a
+>   back-compat alias so pre-rename History replays still render. Specs extended.
+>
+> **Deviations / things found (not in the original step-list):**
+> 1. **Frontend telemetry surface** — the rename rippled into `toolLabels.ts` /
+>    `ToolCallCard.tsx` + 5 vitest specs (timeline keys off tool name + parses
+>    its arg). Confirmed scope with the user; handled with back-compat aliases.
+> 2. **`extraction/history_processors.py::_WRITE_TOOL_NAMES`** keys the
+>    token-cost image-trim off the write tool NAME. Added `write_facts` (kept
+>    `fill_workbook`) or the trim would silently stop firing on real runs.
+>    Pinned by new `test_write_facts_is_a_write_boundary`.
+> 3. **`FactWrite.value` had to be `Optional[Union[int,float,str]]`, not
+>    `Optional[float]`** — row-1 reporting-period date cells write STRING values
+>    ("01/01/2022 - 31/12/2022"). The old dataclass annotation didn't validate;
+>    pydantic does, so a float-only type would have rejected every date cell.
+> 4. **Evidence is now strictly REQUIRED** on the agent path (pydantic
+>    `min_length=1`) — the intended "kills the silent evidence-column override"
+>    win, but it tightens behaviour: an agent that omits evidence gets a
+>    validation error and must retry. Dict callers (tests/internal) bypass the
+>    model so they're unaffected.
+
+#### Original status note (superseded — kept for audit trail)
+
+> **Status (this session):** scoped + designed, then backed out to keep the
 
 > **Status (this session):** scoped + designed, then backed out to keep the
 > branch green. The full literal rewrite (chosen by the user over the
@@ -210,12 +260,12 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
 > before typed tools (step 5), but store-first can't "write the store directly"
 > until a typed tool exists. Phase 3 builds it; Phase 4 removes the old path.
 
-- [ ] 🟥 **Step 3.1: Replace stringly-typed JSON tools with typed `write_facts`** — let pydantic-ai validate + inject the schema, and give store-first a write path to build on.
-  - [ ] 🟥 Define `FactWrite` (concept, period, scope, value|html mutually exclusive, **required** typed `Evidence{page,quote}`) and `write_facts(ctx, facts: list[FactWrite]) -> WriteReport` as the new agent-facing write path into the fact store
-  - [ ] 🟥 Replace `fill_workbook(ctx, fields_json: str)` (`extraction/agent.py:610`); remove `json.loads()` defensive parsing from `tools/fill_workbook.py` (573 LOC) and the dual-mode docstring switch
-  - [ ] 🟥 Make evidence a routed, typed field (kills the silent evidence-column override, report §3.2)
-  - [ ] 🟥 **Keep the existing render/export path unchanged for now** (still produce the xlsx the way the run does today) so behaviour stays A/B-comparable; Phase 4 is what flips to render-last
-  - **Verify:** the no-plug guard and abstract-row guard tests (gotcha #17: `test_fill_workbook_abstract_guard.py`, `test_prompt_residual_plug_rule.py`) pass against the new contract; malformed proposals are rejected by the framework before the tool body (unit test); a full run still produces a correct `filled.xlsx`.
+- [x] 🟩 **Step 3.1: Replace stringly-typed JSON tools with typed `write_facts`** — DONE. pydantic-ai validates + injects the schema; store-first now has a typed write path to build on.
+  - [x] 🟩 Defined `FactWrite` (cell-shaped — `sheet/col/field_label/section/row/value`, **required** `evidence` via `Field(min_length=1)`; `value` is `Optional[Union[int,float,str]]` for date cells) and renamed the tool to `write_facts(ctx, facts: list[FactWrite])`. (Used the resolved cell-shape design, NOT the report's `concept/period/scope` shape — that's Phase 4's store-first shape and doesn't fit today's cell-based fill.)
+  - [x] 🟩 Replaced `fill_workbook(ctx, fields_json: str)`; removed `_parse_fields_json` / `json.loads()` defensive parsing + the Invalid-JSON branch + `import json` from `tools/fill_workbook.py`.
+  - [x] 🟩 Evidence is a required typed field (kills the silent evidence-column override).
+  - [x] 🟩 **Render/export path unchanged** — still produces the xlsx as today (Phase 4 flips to render-last), so behaviour stays A/B-comparable.
+  - **Verified:** `test_fill_workbook_abstract_guard.py`, `test_prompt_residual_plug_rule.py` pass against the new contract; FactWrite rejects evidence-less proposals before the tool body (smoke-tested + pinned by the migrated agent tests); full backend 1801 passed, frontend 630 passed, tsc clean.
 
 ### Phase 4: Store-first keystone — *the genuine architecture change* (report step 4) — **gated on Phases 2–3 being stable**
 

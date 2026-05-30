@@ -17,7 +17,6 @@ for the matrix layouts that don't.
 """
 from __future__ import annotations
 
-import json
 import shutil
 from pathlib import Path
 
@@ -103,21 +102,19 @@ def test_socie_evidence_lands_in_source_column(
     assert src.exists(), f"missing template: {rel_path}"
     dst = _copy_template(src, tmp_path / src.name)
 
-    payload = {
-        "fields": [
-            {
-                "sheet": sheet,
-                "field_label": label,
-                "col": 2,
-                "value": 12345,
-                "evidence": "Page 14 statement of changes in equity",
-            }
-        ]
-    }
+    facts = [
+        {
+            "sheet": sheet,
+            "field_label": label,
+            "col": 2,
+            "value": 12345,
+            "evidence": "Page 14 statement of changes in equity",
+        }
+    ]
     result = fill_workbook(
         template_path=str(dst),
         output_path=str(dst),
-        fields_json=json.dumps(payload),
+        facts=facts,
         filing_level=filing_level,
     )
     assert result.success, f"fill_workbook failed: {result.errors}"

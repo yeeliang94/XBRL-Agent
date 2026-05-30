@@ -49,8 +49,8 @@ def test_fill_by_label(tmp_path):
     template = _make_template(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = '{"fields": [{"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 2, "value": 191518}]}'
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [{"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 2, "value": 191518}]
+    result = fill_workbook(str(template), output, facts)
 
     assert result.success
     assert result.fields_written == 1
@@ -64,8 +64,8 @@ def test_fill_by_label_fuzzy(tmp_path):
     template = _make_template(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = '{"fields": [{"sheet": "Sheet", "field_label": "Right of use assets", "col": 2, "value": 100}]}'
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [{"sheet": "Sheet", "field_label": "Right of use assets", "col": 2, "value": 100}]
+    result = fill_workbook(str(template), output, facts)
 
     assert result.success
     assert result.fields_written == 1
@@ -79,8 +79,8 @@ def test_fill_by_row_fallback(tmp_path):
     template = _make_template(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = '{"fields": [{"sheet": "Sheet", "row": 1, "col": 2, "value": 191518}]}'
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [{"sheet": "Sheet", "row": 1, "col": 2, "value": 191518}]
+    result = fill_workbook(str(template), output, facts)
 
     assert result.success
     assert result.fields_written == 1
@@ -95,8 +95,8 @@ def test_fill_duplicate_label_with_section(tmp_path):
     template = _make_template_with_duplicates(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = '{"fields": [{"sheet": "SOFP", "field_label": "Lease liabilities", "section": "current liabilities", "col": 2, "value": 36148}]}'
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [{"sheet": "SOFP", "field_label": "Lease liabilities", "section": "current liabilities", "col": 2, "value": 36148}]
+    result = fill_workbook(str(template), output, facts)
 
     assert result.success
     assert result.fields_written == 1
@@ -113,8 +113,8 @@ def test_fill_duplicate_label_noncurrent_section(tmp_path):
     template = _make_template_with_duplicates(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = '{"fields": [{"sheet": "SOFP", "field_label": "Lease liabilities", "section": "non-current liabilities", "col": 2, "value": 160404}]}'
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [{"sheet": "SOFP", "field_label": "Lease liabilities", "section": "non-current liabilities", "col": 2, "value": 160404}]
+    result = fill_workbook(str(template), output, facts)
 
     assert result.success
     wb = openpyxl.load_workbook(output)
@@ -128,13 +128,11 @@ def test_fill_duplicate_label_both_sections(tmp_path):
     template = _make_template_with_duplicates(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = """{
-        "fields": [
-            {"sheet": "SOFP", "field_label": "Lease liabilities", "section": "non-current liabilities", "col": 2, "value": 160404},
-            {"sheet": "SOFP", "field_label": "Lease liabilities", "section": "current liabilities", "col": 2, "value": 36148}
-        ]
-    }"""
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [
+        {"sheet": "SOFP", "field_label": "Lease liabilities", "section": "non-current liabilities", "col": 2, "value": 160404},
+        {"sheet": "SOFP", "field_label": "Lease liabilities", "section": "current liabilities", "col": 2, "value": 36148},
+    ]
+    result = fill_workbook(str(template), output, facts)
 
     assert result.success
     assert result.fields_written == 2
@@ -149,8 +147,8 @@ def test_fill_workbook_preserves_formulas(tmp_path):
     template = _make_template(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = '{"fields": [{"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 2, "value": 50}]}'
-    fill_workbook(str(template), output, fields_json)
+    facts = [{"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 2, "value": 50}]
+    fill_workbook(str(template), output, facts)
 
     wb = openpyxl.load_workbook(output, data_only=False)
     assert str(wb.active["B2"].value).startswith("=")
@@ -161,34 +159,25 @@ def test_fill_workbook_refuses_formula_cells(tmp_path):
     template = _make_template(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = '{"fields": [{"sheet": "Sheet", "field_label": "Total assets", "col": 2, "value": 999}]}'
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [{"sheet": "Sheet", "field_label": "Total assets", "col": 2, "value": 999}]
+    result = fill_workbook(str(template), output, facts)
 
     assert not result.success
     assert "formula" in " ".join(result.errors).lower()
 
 
 def test_fill_workbook_missing_template():
-    result = fill_workbook("/nonexistent.xlsx", "/tmp/out.xlsx", '{"fields": []}')
+    result = fill_workbook("/nonexistent.xlsx", "/tmp/out.xlsx", [])
     assert not result.success
     assert "not found" in result.errors[0].lower()
-
-
-def test_fill_workbook_invalid_json(tmp_path):
-    template = _make_template(tmp_path)
-    output = str(tmp_path / "filled.xlsx")
-
-    result = fill_workbook(str(template), output, "not json")
-    assert not result.success
-    assert "Invalid JSON" in result.errors[0]
 
 
 def test_fill_workbook_wrong_sheet(tmp_path):
     template = _make_template(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = '{"fields": [{"sheet": "NonExistent", "field_label": "Right-of-use assets", "col": 2, "value": 10}]}'
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [{"sheet": "NonExistent", "field_label": "Right-of-use assets", "col": 2, "value": 10}]
+    result = fill_workbook(str(template), output, facts)
 
     assert "NonExistent" in " ".join(result.errors)
 
@@ -197,13 +186,11 @@ def test_fill_workbook_multiple_fields(tmp_path):
     template = _make_template(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = """{
-        "fields": [
-            {"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 2, "value": 100},
-            {"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 3, "value": 200}
-        ]
-    }"""
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [
+        {"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 2, "value": 100},
+        {"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 3, "value": 200},
+    ]
+    result = fill_workbook(str(template), output, facts)
 
     assert result.success
     assert result.fields_written == 2
@@ -219,8 +206,8 @@ def test_fill_label_not_found(tmp_path):
     template = _make_template(tmp_path)
     output = str(tmp_path / "filled.xlsx")
 
-    fields_json = '{"fields": [{"sheet": "Sheet", "field_label": "Nonexistent field XYZ", "col": 2, "value": 1}]}'
-    result = fill_workbook(str(template), output, fields_json)
+    facts = [{"sheet": "Sheet", "field_label": "Nonexistent field XYZ", "col": 2, "value": 1}]
+    result = fill_workbook(str(template), output, facts)
 
     assert not result.success
     assert "No matching label" in " ".join(result.errors)

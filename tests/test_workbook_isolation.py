@@ -1,6 +1,5 @@
 """Tests for per-statement workbook isolation (Step 4.4)."""
 
-import json
 import asyncio
 import pytest
 from pathlib import Path
@@ -85,7 +84,7 @@ class TestWorkbookIsolation:
             result = fill_impl(
                 template_path=template_path,
                 output_path=out_path,
-                fields_json='{"fields": []}',
+                facts=[],
             )
             assert result.success
 

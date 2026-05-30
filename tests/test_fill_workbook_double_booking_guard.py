@@ -17,7 +17,6 @@ Plan §4.1 explicitly requires:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -28,9 +27,9 @@ from tools.fill_workbook import fill_workbook
 _FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "run_review"
 
 
-def _fields(payloads: list[dict]) -> str:
-    """Compact wrapper for the JSON fields format the writer expects."""
-    return json.dumps(payloads)
+def _fields(payloads: list[dict]) -> list[dict]:
+    """Pass-through for the typed facts list the writer expects."""
+    return payloads
 
 
 def test_double_booking_warning_fires_on_amway_shape(tmp_path: Path) -> None:
@@ -62,7 +61,7 @@ def test_double_booking_warning_fires_on_amway_shape(tmp_path: Path) -> None:
     result = fill_workbook(
         template_path=str(template),
         output_path=str(output),
-        fields_json=_fields(fields),
+        facts=_fields(fields),
         filing_level="company",
     )
     assert result.success
@@ -103,7 +102,7 @@ def test_disjoint_evidence_does_not_trigger(tmp_path: Path) -> None:
     result = fill_workbook(
         template_path=str(template),
         output_path=str(output),
-        fields_json=_fields(fields),
+        facts=_fields(fields),
         filing_level="company",
     )
     assert result.success
@@ -142,7 +141,7 @@ def test_group_consolidation_passthrough_does_not_trigger(tmp_path: Path) -> Non
     result = fill_workbook(
         template_path=str(template),
         output_path=str(output),
-        fields_json=_fields(fields),
+        facts=_fields(fields),
         filing_level="group",
     )
     assert result.success
@@ -173,7 +172,7 @@ def test_existing_abstract_row_guard_unaffected(tmp_path: Path) -> None:
     result = fill_workbook(
         template_path=str(template),
         output_path=str(output),
-        fields_json=_fields(fields),
+        facts=_fields(fields),
         filing_level="company",
     )
     # Abstract-row guard refuses the write — fields_written=0, errors set.

@@ -29,7 +29,7 @@ section. Simpler layout.
 5. For BeforeTax variant: also fill the tax-on-OCI rows at the bottom.
 6. If the entity has NO OCI items (common for simple companies), only the Profit/(loss)
    row needs to be filled. All OCI rows stay blank (formula subtotals will be zero).
-7. Call fill_workbook(), verify_totals(), and save_result().
+7. Call write_facts(), verify_totals(), and save_result().
 
 === CRITICAL RULES ===
 

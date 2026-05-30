@@ -46,7 +46,7 @@ CELL INTERSECTIONS (row × column), not entire rows.
    - Share-based payments → column 8 (H)
    Example: {"sheet": "SOCIE", "row": 10, "col": 3, "value": 500000, "evidence": "..."}
 5. Fill BOTH current period (rows 6-25) and prior period (rows 30-49).
-6. Call fill_workbook(), verify_totals() (reports status only), and save_result().
+6. Call write_facts(), verify_totals() (reports status only), and save_result().
 
 === CRITICAL RULES ===
 

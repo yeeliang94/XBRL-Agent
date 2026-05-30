@@ -24,7 +24,6 @@ pins three properties:
 """
 from __future__ import annotations
 
-import json
 import shutil
 from pathlib import Path
 
@@ -82,7 +81,7 @@ def test_fill_workbook_refuses_total_cell_after_skip_recalc_merge(
     merged = tmp_path / "merged.xlsx"
     merge_workbooks({StatementType.SOFP: str(src)}, str(merged), skip_recalc=True)
 
-    fields = json.dumps([
+    facts = [
         {
             "sheet": "SOFP-CuNonCu",
             "row": 7,  # *Total assets — must be refused
@@ -90,11 +89,11 @@ def test_fill_workbook_refuses_total_cell_after_skip_recalc_merge(
             "value": 99999,
             "evidence": "synthetic test",
         },
-    ])
+    ]
     result = fill_workbook(
         template_path=str(merged),
         output_path=str(merged),
-        fields_json=fields,
+        facts=facts,
     )
     # The write must not have landed
     assert result.fields_written == 0
@@ -121,7 +120,7 @@ def test_post_correction_recalc_reflects_leaf_writes(tmp_path: Path) -> None:
     merge_workbooks({StatementType.SOFP: str(src)}, str(merged), skip_recalc=True)
 
     # Simulated correction agent write to a LEAF cell
-    fields = json.dumps([
+    facts = [
         {
             "sheet": "SOFP-CuNonCu",
             "row": 5,  # leaf
@@ -129,11 +128,11 @@ def test_post_correction_recalc_reflects_leaf_writes(tmp_path: Path) -> None:
             "value": 500,
             "evidence": "synthetic correction",
         },
-    ])
+    ]
     fill_result = fill_workbook(
         template_path=str(merged),
         output_path=str(merged),
-        fields_json=fields,
+        facts=facts,
     )
     assert fill_result.fields_written == 1
 

@@ -123,13 +123,11 @@ def test_fill_workbook_resolved_writes_feed_projection(db, tmp_path):
     label, row = leaf_label[0], int(leaf_label[1])
 
     out = tmp_path / "out.xlsx"
-    fields = json.dumps({
-        "fields": [
-            {"sheet": "SOFP-CuNonCu", "row": row, "col": 2, "value": 555.0,
-             "evidence": "p3"},
-        ]
-    })
-    result = fill_workbook(str(CO_SOFP), str(out), fields, filing_level="company")
+    facts = [
+        {"sheet": "SOFP-CuNonCu", "row": row, "col": 2, "value": 555.0,
+         "evidence": "p3"},
+    ]
+    result = fill_workbook(str(CO_SOFP), str(out), facts, filing_level="company")
     assert result.success
     assert result.resolved_writes, "expected resolved_writes for canonical projection"
 

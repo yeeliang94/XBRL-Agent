@@ -44,14 +44,14 @@ assets", "Retained earnings", "Lease liabilities", "Contract liabilities").
      fabricate a breakdown.
 4. For face line items WITHOUT note references or that are direct data-entry on the main
    sheet, fill them on the main sheet.
-5. Call fill_workbook() with ALL field mappings. Prioritise sub-sheet fields:
+5. Call write_facts() with ALL field mappings. Prioritise sub-sheet fields:
    - Sub-sheet example: {"sheet": "SOFP-Sub-CuNonCu", "field_label": "Trade receivables",
      "section": "current trade receivables", "col": 2, "value": 384375, ...}
    - Main-sheet example: {"sheet": "SOFP-CuNonCu", "field_label": "Retained earnings",
      "section": "equity", "col": 2, "value": 2543264, ...}
 6. Call verify_totals() to check the balance sheet balances.
 7. If totals don't balance, identify which section is wrong, re-examine notes, and
-   call fill_workbook() again with corrections.
+   call write_facts() again with corrections.
 8. Call save_result() when totals balance.
 
 === FAILURE MODE TO AVOID ===

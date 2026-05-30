@@ -17,7 +17,6 @@ Two coupled defences live in `tools/fill_workbook.py`:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import openpyxl
@@ -90,7 +89,7 @@ class TestRefusesWritesToAbstractRows:
         output = str(tmp_path / "filled.xlsx")
         # Mirrors the screenshot bug — agent wrote 6092 to the "Interest income"
         # header row instead of the leaves below.
-        payload = json.dumps([
+        facts = [
             {
                 "sheet": "SOPL-Analysis-Function",
                 "field_label": "Interest income",
@@ -98,9 +97,9 @@ class TestRefusesWritesToAbstractRows:
                 "value": 6092,
                 "evidence": "Page 36 Note 6",
             },
-        ])
+        ]
 
-        result = fill_workbook(template, output, payload)
+        result = fill_workbook(template, output, facts)
 
         assert result.fields_written == 0, (
             "writer must refuse to land a value on a dark-navy section-"
@@ -116,16 +115,16 @@ class TestRefusesWritesToAbstractRows:
         """Regression guard — leaves under a header are still writable."""
         template = _make_sopl_like(tmp_path)
         output = str(tmp_path / "filled.xlsx")
-        payload = json.dumps([
+        facts = [
             {
                 "sheet": "SOPL-Analysis-Function",
                 "field_label": "Interest income on loans, advances and financing",
                 "col": 2,
                 "value": 6092,
             },
-        ])
+        ]
 
-        result = fill_workbook(template, output, payload)
+        result = fill_workbook(template, output, facts)
         assert result.success, f"leaf write should succeed. Errors: {result.errors}"
         assert result.fields_written == 1
 
@@ -140,7 +139,7 @@ class TestRefusesWritesToAbstractRows:
         as the existing formula-cell refusal."""
         template = _make_sopl_like(tmp_path)
         output = str(tmp_path / "filled.xlsx")
-        payload = json.dumps([
+        facts = [
             {  # bad — abstract header
                 "sheet": "SOPL-Analysis-Function",
                 "field_label": "Interest income",
@@ -153,9 +152,9 @@ class TestRefusesWritesToAbstractRows:
                 "col": 2,
                 "value": 5307,
             },
-        ])
+        ]
 
-        result = fill_workbook(template, output, payload)
+        result = fill_workbook(template, output, facts)
 
         assert result.fields_written == 1
         assert result.errors, "the abstract-row write should still produce an error"
@@ -190,13 +189,13 @@ class TestAbstractGuardOnRealMpersTemplate:
         # here; we exercise 'Other expenses' because that's the same kind
         # of catch-all-flavoured row the screenshot bug hit.
         output = str(tmp_path / "filled.xlsx")
-        payload = json.dumps([{
+        facts = [{
             "sheet": "SOPL-Analysis-Function",
             "field_label": "Other expenses",
             "col": 2,
             "value": 999_999,
-        }])
-        result = fill_workbook(self._MPERS_TEMPLATE, output, payload)
+        }]
+        result = fill_workbook(self._MPERS_TEMPLATE, output, facts)
 
         assert result.fields_written == 0, (
             "writer should refuse to write to the 'Other expenses' "
@@ -216,16 +215,16 @@ class TestDuplicateLabelPrefersLeaf:
         (row 8), the writer must pick the leaf."""
         template = _make_dup_label_sheet(tmp_path)
         output = str(tmp_path / "filled.xlsx")
-        payload = json.dumps([
+        facts = [
             {
                 "sheet": "SOPL-Analysis-Function",
                 "field_label": "Other fee and commission income",
                 "col": 2,
                 "value": 18282,
             },
-        ])
+        ]
 
-        result = fill_workbook(template, output, payload)
+        result = fill_workbook(template, output, facts)
 
         assert result.success, f"leaf preference should let the write land. Errors: {result.errors}"
         assert result.fields_written == 1

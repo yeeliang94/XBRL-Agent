@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 PHASE_MAP = {
     "read_template": "reading_template",
     "view_pdf_pages": "viewing_pdf",
-    "fill_workbook": "filling_workbook",
+    "write_facts": "filling_workbook",
     "verify_totals": "verifying",
     "save_result": "complete",
 }
@@ -606,7 +606,7 @@ async def _run_single_agent(
 
         # Peer-review (2026-05-21): coordinator used to return
         # status="succeeded" even when the agent finished without ever
-        # calling fill_workbook (deps.filled_path empty). The save gate
+        # calling write_facts (deps.filled_path empty). The save gate
         # in extraction/agent.py blocks save_result without a passing
         # verify, but it can't force the agent to *enter* the gate.
         # A conversational-only end-of-turn would still mark the run
@@ -614,7 +614,7 @@ async def _run_single_agent(
         if not deps.filled_path:
             err_msg = (
                 f"{statement_type.value}: agent finished without writing a "
-                "workbook (no fill_workbook tool call landed)."
+                "workbook (no write_facts tool call landed)."
             )
             logger.warning(err_msg)
             await _emit("error", {"message": err_msg})

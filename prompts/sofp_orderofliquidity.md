@@ -36,14 +36,14 @@ template has matching fields.
    - e. Sub-sheet fields with no matching note line stay empty.
 4. Fill the main sheet (SOFP-OrdOfLiq) with face-level values — these are standalone
    data-entry cells that will NOT be overwritten.
-5. Call fill_workbook() with ALL field mappings:
+5. Call write_facts() with ALL field mappings:
    - Main-sheet example: {"sheet": "SOFP-OrdOfLiq", "field_label": "Cash and cash equivalents",
      "section": "assets", "col": 2, "value": 2551004, ...}
    - Sub-sheet example: {"sheet": "SOFP-Sub-OrdOfLiq", "field_label": "Trade receivables",
      "section": "trade and other receivables", "col": 2, "value": 384375, ...}
 6. Call verify_totals() to check the balance sheet balances.
 7. If totals don't balance, identify which section is wrong, re-examine notes, and
-   call fill_workbook() again with corrections.
+   call write_facts() again with corrections.
 8. Call save_result() when totals balance.
 
 === CRITICAL RULES ===

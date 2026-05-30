@@ -306,31 +306,30 @@ def test_fill_workbook_resets_last_verify_result(tmp_path):
     fill_tool = None
     for ts in getattr(agent, "toolsets", []) or []:
         tools = getattr(ts, "tools", {}) or {}
-        if "fill_workbook" in tools:
-            fill_tool = tools["fill_workbook"]
+        if "write_facts" in tools:
+            fill_tool = tools["write_facts"]
             break
-    assert fill_tool is not None, "fill_workbook tool not registered"
+    assert fill_tool is not None, "write_facts tool not registered"
 
     # Build a minimal RunContext. The tool only uses ctx.deps, so we
     # can stub the rest.
-    import json as _json
     class _Ctx:
         pass
     ctx = _Ctx()
     ctx.deps = deps
-    fields_json = _json.dumps({"fields": [
+    facts = [
         {"sheet": "SOFP-CuNonCu", "field_label": "Total assets",
          "col": 2, "value": 100, "evidence": "t"},
-    ]})
+    ]
     # Invoke the tool body. `tool.function` is the underlying callable.
     fn = getattr(fill_tool, "function", None) or getattr(fill_tool, "func", None)
     if fn is None:
         # Fallback: try tool.__call__ or tool.run
         fn = fill_tool
-    fn(ctx, fields_json)
+    fn(ctx, facts)
 
     assert deps.last_verify_result is None, (
-        "fill_workbook must clear last_verify_result on success so save_result "
+        "write_facts must clear last_verify_result on success so save_result "
         "can't be called on stale verification data"
     )
 
@@ -340,7 +339,6 @@ def test_fill_workbook_clears_stale_completed_flag(tmp_path):
     completed_with_flag / unresolved_summary so the next clean save doesn't
     stamp a stale `_unresolved_flag`."""
     import openpyxl
-    import json as _json
     from extraction.agent import create_extraction_agent
     from pydantic_ai.models.test import TestModel as _TM
 
@@ -369,8 +367,8 @@ def test_fill_workbook_clears_stale_completed_flag(tmp_path):
     fill_tool = None
     for ts in getattr(agent, "toolsets", []) or []:
         tools = getattr(ts, "tools", {}) or {}
-        if "fill_workbook" in tools:
-            fill_tool = tools["fill_workbook"]
+        if "write_facts" in tools:
+            fill_tool = tools["write_facts"]
             break
     assert fill_tool is not None
 
@@ -378,12 +376,12 @@ def test_fill_workbook_clears_stale_completed_flag(tmp_path):
         pass
     ctx = _Ctx()
     ctx.deps = deps
-    fields_json = _json.dumps({"fields": [
+    facts = [
         {"sheet": "SOFP-CuNonCu", "field_label": "Total assets",
          "col": 2, "value": 100, "evidence": "t"},
-    ]})
+    ]
     fn = getattr(fill_tool, "function", None) or getattr(fill_tool, "func", None) or fill_tool
-    fn(ctx, fields_json)
+    fn(ctx, facts)
 
     assert deps.completed_with_flag is False
     assert deps.unresolved_summary is None
