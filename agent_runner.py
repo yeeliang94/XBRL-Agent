@@ -112,6 +112,16 @@ class AgentLoopSpec:
     # so the save-gate in extraction/agent.py can see the real iteration budget
     # (face only; the notes deps has no such field).
     set_turn_counter: bool = False
+    # When True, the inner tool/model event streams are ALSO wrapped in the
+    # per-step timeout (a provider that stalls mid-stream is caught, not just
+    # one that stalls between nodes). The face loop has always done this; the
+    # notes loop historically used a BARE ``async for`` over the inner stream
+    # and only timed out the outer node iteration. We default True (face's
+    # behaviour) but let the notes coordinator opt OUT (False) so a legitimate
+    # long-running ``write_notes`` tool call is not cancelled at the per-turn
+    # timeout — preserving notes' exact prior behaviour (peer-review MEDIUM,
+    # rewrite Phase 2).
+    bound_inner_streams: bool = True
 
 
 async def run_agent_loop(
@@ -146,6 +156,14 @@ async def run_agent_loop(
     # (pydantic-ai's usage() is cumulative).
     prev_prompt = prev_completion = prev_total = 0
 
+    def _inner(stream):
+        # Wrap the inner tool/model event stream in the per-step timeout only
+        # when the caller opted in (face). Notes opts out so a legitimate long
+        # tool call isn't cancelled mid-execution (see AgentLoopSpec).
+        if spec.bound_inner_streams:
+            return iter_with_turn_timeout(stream, spec.turn_timeout)
+        return stream
+
     async for node in iter_with_turn_timeout(agent_run, spec.turn_timeout):
         iteration += 1
         if spec.set_turn_counter:
@@ -167,9 +185,7 @@ async def run_agent_loop(
 
         if Agent.is_call_tools_node(node):
             async with node.stream(agent_run.ctx) as tool_stream:
-                async for event in iter_with_turn_timeout(
-                    tool_stream, spec.turn_timeout
-                ):
+                async for event in _inner(tool_stream):
                     if isinstance(event, FunctionToolCallEvent):
                         tool_name = event.part.tool_name
                         node_tool_names.append(tool_name)
@@ -214,9 +230,7 @@ async def run_agent_loop(
             thinking_id = f"{spec.agent_role}_think_{thinking_counter}"
             thinking_active = False
             async with node.stream(agent_run.ctx) as model_stream:
-                async for event in iter_with_turn_timeout(
-                    model_stream, spec.turn_timeout
-                ):
+                async for event in _inner(model_stream):
                     if isinstance(event, PartDeltaEvent):
                         delta = event.delta
                         if isinstance(delta, TextPartDelta):

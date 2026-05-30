@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import shutil
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -722,6 +721,11 @@ async def _invoke_single_notes_agent_once(
                 phase_map=NOTES_PHASE_MAP,
                 phase_message=lambda role, phase: f"{role}: {phase.replace('_', ' ')}",
                 set_turn_counter=False,
+                # Preserve notes' historical behaviour: the old loop only timed
+                # out outer node iteration, NOT the inner tool/model streams, so
+                # a legitimate long-running write_notes isn't cancelled at the
+                # per-turn timeout (peer-review MEDIUM, rewrite Phase 2).
+                bound_inner_streams=False,
             )
             await run_agent_loop(
                 agent_run, deps, notes_spec, emit, _turn_records,

@@ -383,11 +383,11 @@ def update_run_config(
     # Mirror `orchestration` from the merged config into the canonical
     # `runs.orchestration` column (peer-review HIGH #1, 2026-05-28).
     # History list/detail source orchestration from the column, NOT the
-    # JSON — see fetch_run/list_runs at the bottom of this file. Without
-    # this mirror a user who picks 'monolith' in the pre-run panel sees
-    # their started run mislabeled as 'split' in History, and the
-    # coordinator dispatcher's read of the column would route the run
-    # back to the split path even though the config says monolith.
+    # JSON — see fetch_run/list_runs at the bottom of this file. The monolith
+    # experiment that gave this column a second value was removed in the
+    # rewrite (Phase 1); the API now normalizes any value to 'split', so the
+    # column is always 'split' and is retained only for schema/History
+    # read-back stability.
     new_orchestration = merged.get("orchestration") or "split"
     cur = conn.execute(
         "UPDATE runs SET run_config_json = ?, orchestration = ? "
