@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Dict
 
 from statement_types import StatementType
-from cross_checks.framework import CrossCheckResult
+from cross_checks.framework import CrossCheckResult, Comparand
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, find_label_row,
     filing_level_prefix,
@@ -43,6 +43,10 @@ class SOFPBalanceCheck:
         # equity+liabilities total (the side the reviewer compares to assets).
         target_sheet = ws.title
         target_row = find_label_row(ws, "total equity and liabilities")
+        # Both sides as comparands so the reviewer can trace down from EITHER
+        # total — not just the one `target_row` names. On run 153 the bug was
+        # on the assets side while the target pointed at equity+liab.
+        assets_row = find_label_row(ws, "total assets")
 
         # Group filing: also read Company columns (D=4)
         co_assets_cy = None
@@ -87,6 +91,24 @@ class SOFPBalanceCheck:
 
         passed = group_passed and co_passed
 
+        sofp = StatementType.SOFP.value
+        comparands = [
+            Comparand(label="Total assets", sheet=target_sheet, value=assets_cy,
+                      role="lhs", statement=sofp, row=assets_row),
+            Comparand(label="Total equity and liabilities", sheet=target_sheet,
+                      value=eq_liab_cy, role="rhs", statement=sofp,
+                      row=target_row),
+        ]
+        if filing_level == "group":
+            comparands += [
+                Comparand(label="Total assets [company]", sheet=target_sheet,
+                          value=co_assets_cy, role="lhs", statement=sofp,
+                          row=assets_row),
+                Comparand(label="Total equity and liabilities [company]",
+                          sheet=target_sheet, value=co_eq_liab_cy, role="rhs",
+                          statement=sofp, row=target_row),
+            ]
+
         return CrossCheckResult(
             name=self.name,
             status="passed" if passed else "failed",
@@ -97,4 +119,5 @@ class SOFPBalanceCheck:
             message="; ".join(parts),
             target_sheet=target_sheet,
             target_row=target_row,
+            comparands=comparands,
         )

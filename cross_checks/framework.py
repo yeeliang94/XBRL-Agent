@@ -7,9 +7,12 @@ handles missing-statement detection (→ pending) and variant gating
 """
 from __future__ import annotations
 
+import json
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Protocol, Set, runtime_checkable
+from dataclasses import asdict, dataclass, field, fields
+from typing import (
+    Any, Callable, Dict, Optional, Protocol, Sequence, Set, runtime_checkable,
+)
 
 from statement_types import StatementType
 
@@ -24,6 +27,33 @@ DEFAULT_TOLERANCE_RM = 1.0
 # Hoisted to module scope so the contract is visible without reading
 # `run_all` (peer-review S10).
 DEFAULT_APPLIES_TO_STANDARD: frozenset[str] = frozenset({"mfrs", "mpers"})
+
+
+@dataclass
+class Comparand:
+    """One value a cross-check looked at, with where it came from.
+
+    The reviewer needs concrete entry points to root-cause a failure
+    (docs/PLAN-reviewer-holistic-audit.md, Phase 2). A singular
+    ``target_sheet/row`` can't describe a *two-sided* check (e.g. SOPL profit
+    vs SOCIE profit) or the leaf composition of an imbalance — and on run 153
+    the one target SOFP-balance set pointed at the clean side. So each check
+    now also emits the values it compared:
+
+    - ``role="lhs"`` / ``"rhs"`` — the two sides of a cross-statement equality.
+    - ``role="leaf"`` — a component feeding a balance/total (so the reviewer
+      sees where an over-count hides).
+
+    ``(sheet, label)`` lets the reviewer resolve each comparand to a concept
+    via its family-scoped resolver; ``row`` is included when the check knows
+    it. Advisory data — never affects pass/fail.
+    """
+    label: str
+    sheet: str
+    value: Optional[float] = None
+    role: str = "leaf"          # "lhs" | "rhs" | "leaf"
+    statement: str = ""         # the StatementType value the sheet belongs to
+    row: Optional[int] = None
 
 
 @dataclass
@@ -54,6 +84,38 @@ class CrossCheckResult:
     # frontend by matching render_sheet/render_row.
     target_sheet: Optional[str] = None
     target_row: Optional[int] = None
+    # Phase 2 (reviewer holistic audit) — the values this check compared, so
+    # the reviewer gets concrete entry points instead of a bare diff. See
+    # :class:`Comparand`. Additive + backward-compatible (empty by default).
+    comparands: list[Comparand] = field(default_factory=list)
+
+
+def comparands_to_json(comparands: Optional[Sequence["Comparand"]]) -> Optional[str]:
+    """Serialise a check's comparands for the ``cross_checks.comparands_json``
+    column. Returns None for an empty list so the column stays NULL."""
+    if not comparands:
+        return None
+    return json.dumps([asdict(c) for c in comparands])
+
+
+def comparands_from_json(raw: Optional[str]) -> list["Comparand"]:
+    """Decode ``comparands_json`` back to Comparands. Tolerant: a malformed
+    blob or schema drift degrades to an empty list (the reviewer falls back
+    to the bare diff) rather than raising."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    known = {f.name for f in fields(Comparand)}
+    out: list[Comparand] = []
+    for d in data:
+        if isinstance(d, dict):
+            out.append(Comparand(**{k: v for k, v in d.items() if k in known}))
+    return out
 
 
 @runtime_checkable

@@ -20,6 +20,9 @@ from correction.reviewer_agent import (
     apply_reviewer_fix,
     evaluate_apply_fix_guard,
     raise_reviewer_flag,
+    list_run_facts,
+    _repeated_values,
+    _format_fact_listing,
 )
 
 
@@ -392,3 +395,87 @@ def test_raise_flag_rejects_empty_reasoning(tmp_path):
     db, run_id = _seed(tmp_path)
     out = raise_reviewer_flag(db, run_id, category="stuck", reasoning="  ")
     assert out.startswith("rejected")
+
+
+# ---------------------------------------------------------------------------
+# Step 5b — list_run_facts: holistic sight (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def test_list_facts_enumerates_every_filled_fact(tmp_path):
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 30.0)
+    _wf(db, run_id, LEAF2, 20.0)
+    _wf(db, run_id, OTHER, 5.0)
+    facts = list_run_facts(db, run_id, template_prefix="mfrs-company-")
+    by_uuid = {f["concept_uuid"]: f for f in facts}
+    assert {LEAF1, LEAF2, OTHER} <= set(by_uuid)
+    assert by_uuid[LEAF1]["value"] == 30.0
+    assert by_uuid[LEAF1]["render_sheet"] == "SOFP-Sub-CuNonCu"
+
+
+def test_list_facts_flags_a_value_written_to_multiple_rows(tmp_path):
+    """The over-count signature: one value disclosed once, written to 2 rows
+    (run 153's FVTPL written 3×). _repeated_values must surface it."""
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 991755.0)
+    _wf(db, run_id, OTHER, 991755.0)  # same figure on a different leaf
+    facts = list_run_facts(db, run_id, template_prefix="mfrs-company-")
+    repeats = _repeated_values(facts)
+    assert 991755.0 in repeats
+    assert len(repeats[991755.0]) == 2
+    # and it shows up in the rendered listing the tool returns
+    assert "Repeated values" in _format_fact_listing(facts)
+
+
+def test_list_facts_does_not_flag_zero(tmp_path):
+    """Zero legitimately repeats; treating it as a double-count is noise."""
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 0.0)
+    _wf(db, run_id, LEAF2, 0.0)
+    facts = list_run_facts(db, run_id, template_prefix="mfrs-company-")
+    assert _repeated_values(facts) == {}
+
+
+def test_list_facts_sheet_filter_narrows(tmp_path):
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 30.0)
+    only = list_run_facts(
+        db, run_id, sheet="NoSuchSheet", template_prefix="mfrs-company-")
+    assert only == []
+
+
+def test_list_facts_is_family_scoped(tmp_path):
+    """A non-matching family prefix returns nothing (mirrors _resolve_concept)."""
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 30.0)
+    assert list_run_facts(db, run_id, template_prefix="mpers-group-") == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — the review packet renders a check's comparands (both sides)
+# ---------------------------------------------------------------------------
+
+
+def test_packet_renders_comparands_both_sides():
+    from correction.reviewer_agent import _format_review_packet
+    packet = _format_review_packet(
+        failed_checks=[{
+            "name": "sopl_to_socie_profit",
+            "expected": -20633.0, "actual": -20678.0, "diff": 45.0,
+            "message": "mismatch",
+            "comparands": [
+                {"label": "Profit (loss)", "sheet": "SOPL-Function",
+                 "value": -20633.0, "role": "lhs", "statement": "SOPL",
+                 "row": None},
+                {"label": "Profit (loss)", "sheet": "SOCIE",
+                 "value": -20678.0, "role": "rhs", "statement": "SOCIE",
+                 "row": None},
+            ],
+        }],
+        conflicts=[], guidance=None,
+    )
+    # Both sides appear as entry points the reviewer can act on.
+    assert "[lhs]" in packet and "[rhs]" in packet
+    assert "-20633.0" in packet and "-20678.0" in packet
+    assert "SOPL" in packet and "SOCIE" in packet

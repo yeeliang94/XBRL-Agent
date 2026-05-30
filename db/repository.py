@@ -167,6 +167,10 @@ class CrossCheck:
     # Review Workspace Step 8 — click-to-cell target (nullable).
     target_sheet: Optional[str] = None
     target_row: Optional[int] = None
+    # v14 (reviewer holistic audit) — JSON list of the values the check
+    # compared, decoded for the reviewer packet. Nullable; see
+    # cross_checks.framework.Comparand.
+    comparands_json: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -596,13 +600,14 @@ def save_cross_check(
     message: str | None = None,
     target_sheet: str | None = None,
     target_row: int | None = None,
+    comparands_json: str | None = None,
 ) -> int:
     cur = conn.execute(
         "INSERT INTO cross_checks(run_id, check_name, status, expected, actual, diff, "
-        "tolerance, message, target_sheet, target_row) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "tolerance, message, target_sheet, target_row, comparands_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (run_id, check_name, status, expected, actual, diff, tolerance, message,
-         target_sheet, target_row),
+         target_sheet, target_row, comparands_json),
     )
     return int(cur.lastrowid)
 
@@ -1028,6 +1033,9 @@ def fetch_cross_checks(conn: sqlite3.Connection, run_id: int) -> list[CrossCheck
             diff=r["diff"], tolerance=r["tolerance"], message=r["message"],
             target_sheet=(r["target_sheet"] if "target_sheet" in r.keys() else None),
             target_row=(r["target_row"] if "target_row" in r.keys() else None),
+            comparands_json=(
+                r["comparands_json"] if "comparands_json" in r.keys() else None
+            ),
         )
         for r in rows
     ]

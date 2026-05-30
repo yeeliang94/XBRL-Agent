@@ -23,6 +23,7 @@ registers thin ``@agent.tool`` wrappers around them.
 """
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -301,6 +302,104 @@ def _format_trace(trace: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Step 5b — list_run_facts: HOLISTIC sight across every filled statement.
+#
+# `read_facts`/`trace_cascade_source` are point lookups — they need a
+# concept_uuid or (sheet, row) you already suspect. The holistic auditor
+# (docs/PLAN-reviewer-holistic-audit.md, Phase 1) instead needs to *browse*
+# the whole filled run to spot a value duplicated across rows/sheets (the
+# over-count failure mode) or sitting on the wrong statement. This is the
+# read surface that makes "look at all the statements" possible.
+# ---------------------------------------------------------------------------
+
+
+def list_run_facts(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    sheet: Optional[str] = None,
+    template_prefix: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Enumerate every fact written for a run, joined to its concept.
+
+    Family-scoped via ``template_prefix`` (same reason as
+    :func:`_resolve_concept` — ``concept_nodes`` holds all four
+    standard×level families and the join would otherwise pull facts whose
+    concept happens to share a uuid across families; in practice facts are
+    keyed to one family's uuids, but the scope keeps the listing honest).
+    Pass ``sheet`` to narrow to one render sheet. Read-only.
+    """
+    conn = _open_conn(db_path)
+    try:
+        sql = (
+            "SELECT n.render_sheet, n.render_row, n.canonical_label, n.kind, "
+            "f.concept_uuid, f.period, f.entity_scope, f.value, "
+            "f.value_status, f.source, f.evidence "
+            "FROM run_concept_facts f "
+            "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
+            "WHERE f.run_id = ?"
+        )
+        params: list[Any] = [run_id]
+        if template_prefix:
+            sql += " AND n.template_id LIKE ?"
+            params.append(f"{template_prefix}%")
+        if sheet:
+            sql += " AND n.render_sheet = ?"
+            params.append(sheet)
+        sql += (
+            " ORDER BY n.render_sheet, n.render_row, f.period, f.entity_scope"
+        )
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def _repeated_values(facts: Sequence[dict[str, Any]]) -> dict[float, list[str]]:
+    """Group non-zero numeric values that appear on >1 distinct (sheet,row).
+
+    A value disclosed once in the PDF but written to several rows/sheets is
+    the signature of a double/triple-count (run 153's FVTPL written 3×). We
+    surface these so the reviewer interrogates them — it's advisory, not a
+    verdict (a real figure can legitimately repeat, e.g. a 0 or a subtotal).
+    """
+    seen: dict[float, set[str]] = {}
+    for f in facts:
+        val = f.get("value")
+        if val is None or float(val) == 0.0:
+            continue
+        coord = f"{f['render_sheet']}!row{f['render_row']} ({f['canonical_label']})"
+        seen.setdefault(float(val), set()).add(coord)
+    return {v: sorted(c) for v, c in seen.items() if len(c) > 1}
+
+
+def _format_fact_listing(facts: Sequence[dict[str, Any]]) -> str:
+    """Render :func:`list_run_facts` output as a compact scannable table."""
+    if not facts:
+        return "(no facts written for this run yet)"
+    lines: list[str] = []
+    current_sheet = None
+    for f in facts:
+        if f["render_sheet"] != current_sheet:
+            current_sheet = f["render_sheet"]
+            lines.append(f"\n=== {current_sheet} ===")
+        lines.append(
+            f"  row {f['render_row']:>3} {f['canonical_label']!r} "
+            f"[{f['kind']}] {f['period']}/{f['entity_scope']}: "
+            f"{f['value']} ({f['value_status']}) uuid={f['concept_uuid']}"
+        )
+    repeats = _repeated_values(facts)
+    if repeats:
+        lines.append(
+            "\n⚠ Repeated values (a value disclosed once but written to "
+            "several rows is a possible double-count — investigate each):"
+        )
+        for val, coords in sorted(repeats.items()):
+            lines.append(f"  {val} appears at: {'; '.join(coords)}")
+    return "\n".join(lines).lstrip("\n")
+
+
+# ---------------------------------------------------------------------------
 # Step 6 — apply_fix: the only write path, with a deterministic no-plug guard.
 # ---------------------------------------------------------------------------
 
@@ -568,9 +667,23 @@ def render_reviewer_prompt(
     reviewer reads/writes the right ``entity_scope`` on Group filings.
     """
     body = _PROMPT_PATH.read_text(encoding="utf-8").strip()
+    # Holistic sight (Phase 1): start the reviewer with the whole filled
+    # picture so it can spot duplicates/misclassifications across statements,
+    # not just the cell a check named. Best-effort — a summary failure must
+    # never block the review (the agent can still call list_facts directly).
+    fact_summary = ""
+    try:
+        facts = list_run_facts(
+            db_path, run_id,
+            template_prefix=_family_prefix(filing_standard, filing_level),
+        )
+        fact_summary = _format_fact_summary(facts)
+    except Exception:  # noqa: BLE001 — summary is advisory, never fatal
+        fact_summary = ""
     packet = _format_review_packet(
         failed_checks or [], conflicts or [], guidance,
         filing_level=filing_level, filing_standard=filing_standard,
+        fact_summary=fact_summary,
     )
     return f"{body}\n\n{packet}"
 
@@ -593,6 +706,32 @@ def _scope_from_check_name(name: Optional[str]) -> Optional[str]:
     return None
 
 
+def _format_fact_summary(facts: Sequence[dict[str, Any]]) -> str:
+    """Compact per-sheet roll-up + repeated-value warning for the packet.
+
+    Lighter than :func:`_format_fact_listing` (which the ``list_facts`` tool
+    returns in full) — this just orients the reviewer up front: how much was
+    filled where, and which values look double-counted.
+    """
+    if not facts:
+        return "(no facts filled yet)"
+    by_sheet: dict[str, int] = {}
+    for f in facts:
+        by_sheet[f["render_sheet"]] = by_sheet.get(f["render_sheet"], 0) + 1
+    lines = ["Filled facts by sheet (call list_facts for the detail):"]
+    for sheet in sorted(by_sheet):
+        lines.append(f"  - {sheet}: {by_sheet[sheet]} facts")
+    repeats = _repeated_values(facts)
+    if repeats:
+        lines.append(
+            "Repeated values across rows (a value disclosed once but written "
+            "to several rows is a possible double-count — verify each):"
+        )
+        for val, coords in sorted(repeats.items()):
+            lines.append(f"  - {val}: {'; '.join(coords)}")
+    return "\n".join(lines)
+
+
 def _format_review_packet(
     failed_checks: Sequence[dict[str, Any]],
     conflicts: Sequence[dict[str, Any]],
@@ -600,6 +739,7 @@ def _format_review_packet(
     *,
     filing_level: str = "company",
     filing_standard: str = "mfrs",
+    fact_summary: str = "",
 ) -> str:
     is_group = (filing_level or "").lower() == "group"
     lines = ["=== REVIEW PACKET ===", ""]
@@ -607,6 +747,10 @@ def _format_review_packet(
         f"Filing: {(filing_standard or 'mfrs').upper()} "
         f"{(filing_level or 'company').capitalize()}."
     )
+    if fact_summary:
+        lines.append("")
+        lines.append("=== WHAT WAS FILLED (whole run) ===")
+        lines.append(fact_summary)
     if is_group:
         lines.append(
             "This is a GROUP filing — facts carry BOTH Group and Company "
@@ -631,6 +775,20 @@ def _format_review_packet(
                 )
                 + (f"  [use entity_scope='{scope}']" if scope else "")
             )
+            # Phase 2: list the values the check compared, so the reviewer has
+            # BOTH sides of a mismatch (not just the one cell `target` names).
+            # Each comparand may arrive as a dataclass (inline pass) or a dict
+            # (decoded from comparands_json on a manual re-review).
+            for cm in (c.get("comparands") or []):
+                g = cm if isinstance(cm, dict) else dataclasses.asdict(cm)
+                where = f"{g.get('sheet')}"
+                if g.get("row"):
+                    where += f" row {g.get('row')}"
+                lines.append(
+                    f"    · [{g.get('role')}] {g.get('label')} "
+                    f"({g.get('statement') or where}) = {g.get('value')} "
+                    f"@ {where}"
+                )
     else:
         lines.append("  (none failing)")
     lines.append("")
@@ -655,14 +813,17 @@ def _format_review_packet(
 def compute_reviewer_turn_cap(*, filing_level: str, n_items: int) -> int:
     """Dynamic turn cap, staying safely below pydantic-ai's silent 50 (gotcha #18).
 
-    Formula: 10 base + 4 if Group + 2 per item to investigate, clamped
-    [10, 30]. The 30 ceiling leaves the same comfortable buffer below 50
-    that the correction agent's 25-cap does, while giving the reviewer more
-    room than correction because it investigates (reads) before it writes.
+    Formula: 12 base + 4 if Group + 2 per item to investigate, clamped
+    [12, 36]. Raised from the old [10, 30] for the holistic-audit reviewer
+    (Phase 3): it now reads the whole filing (`list_facts`) and traces BOTH
+    sides of cross-statement mismatches before writing, so it needs more
+    read headroom. The 36 ceiling stays below `MAX_AGENT_ITERATIONS` (40),
+    which stays below pydantic-ai's silent 50 — pinned by
+    test_turn_cap_below_pydantic_50.
     """
     is_group = (filing_level or "").lower() == "group"
-    raw = 10 + (4 if is_group else 0) + 2 * int(n_items)
-    return max(10, min(30, raw))
+    raw = 12 + (4 if is_group else 0) + 2 * int(n_items)
+    return max(12, min(36, raw))
 
 
 def create_reviewer_agent(
@@ -755,6 +916,25 @@ def create_reviewer_agent(
                 f"source={f['source']!r} evidence={f['evidence']!r}"
             )
         return "\n".join(lines)
+
+    @agent.tool
+    def list_facts(ctx: RunContext[ReviewerDeps], sheet: str = "") -> str:
+        """List EVERY fact filled across all statements (read-only, holistic).
+
+        Pass an empty ``sheet`` to see the whole run, or a sheet name (e.g.
+        'SOFP-Sub-OrdOfLiq') to narrow. Use this to audit the full picture
+        before fixing anything: a value disclosed once in the PDF but written
+        to several rows/sheets is a double-count, and a figure sitting on the
+        wrong statement is a misclassification. A '⚠ Repeated values' footer
+        highlights the likely double-counts for you to interrogate.
+        """
+        facts = list_run_facts(
+            ctx.deps.db_path, ctx.deps.run_id,
+            sheet=sheet or None,
+            template_prefix=_family_prefix(
+                ctx.deps.filing_standard, ctx.deps.filing_level),
+        )
+        return _format_fact_listing(facts)
 
     @agent.tool
     def trace_cascade_source_tool(

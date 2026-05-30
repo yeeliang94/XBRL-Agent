@@ -699,3 +699,49 @@ class TestMessagePrefixHonoursFilingLevel:
             tolerance=1.0, filing_level="company",
         )
         assert "Group" not in result.message, result.message
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 (reviewer holistic audit) — every numeric check emits comparands
+# so the reviewer gets concrete entry points, not a bare diff.
+# ---------------------------------------------------------------------------
+
+class TestComparands:
+    def test_sofp_balance_emits_both_sides(self, tmp_dir):
+        """The fix for run 153: BOTH the assets total and the equity+liab total
+        are comparands, so the reviewer can trace down from EITHER (not just
+        the equity side `target_row` names)."""
+        path = os.path.join(tmp_dir, "sofp.xlsx")
+        _make_workbook({
+            "SOFP-CuNonCu": [
+                ["*Total assets", 1000.0, 800.0],
+                ["*Total equity and liabilities", 900.0, 800.0],
+            ],
+        }, path)
+        result = SOFPBalanceCheck().run({StatementType.SOFP: path}, tolerance=1.0)
+        roles = {c.role: c for c in result.comparands}
+        assert "lhs" in roles and "rhs" in roles
+        assert roles["lhs"].value == 1000.0          # assets side
+        assert roles["rhs"].value == 900.0           # equity+liab side
+        assert roles["lhs"].label == "Total assets"
+
+    def test_sopl_to_socie_profit_emits_both_statements(self, tmp_dir):
+        """The check that had NO target on run 153 now hands the reviewer both
+        the SOPL value and the SOCIE value with their statements."""
+        sopl_path = os.path.join(tmp_dir, "sopl.xlsx")
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        _make_workbook({"SOPL-Function": [["*Profit (loss)", 250000.0, 200000.0]]},
+                       sopl_path)
+        _make_workbook({"SOCIE": [
+            [None, "Issued capital", "Retained earnings"],
+            ["*Profit (loss) for the period", None, 300000.0],
+        ]}, socie_path)
+        result = SOPLToSOCIEProfitCheck().run(
+            {StatementType.SOPL: sopl_path, StatementType.SOCIE: socie_path},
+            tolerance=1.0,
+        )
+        assert result.status == "failed"
+        by_stmt = {c.statement: c for c in result.comparands}
+        assert by_stmt["SOPL"].value == 250000.0
+        assert by_stmt["SOCIE"].value == 300000.0
+        assert {c.role for c in result.comparands} == {"lhs", "rhs"}

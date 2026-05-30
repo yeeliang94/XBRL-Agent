@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Dict
 
 from statement_types import StatementType
-from cross_checks.framework import CrossCheckResult
+from cross_checks.framework import CrossCheckResult, Comparand
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, is_sore_run,
 )
@@ -36,6 +36,7 @@ class SoREToSOFPRetainedEarningsCheck:
         # whichever variant ran to that key.
         sore_wb = open_workbook(workbook_paths[StatementType.SOCIE])
         sore_ws = find_sheet(sore_wb, "SoRE")
+        sore_sheet = sore_ws.title if sore_ws is not None else "SoRE"
         sore_re = None
         co_sore_re = None
         if sore_ws is not None:
@@ -50,6 +51,7 @@ class SoREToSOFPRetainedEarningsCheck:
 
         sofp_wb = open_workbook(workbook_paths[StatementType.SOFP])
         sofp_ws = find_sheet(sofp_wb, "SOFP-CuNonCu", "SOFP-OrdOfLiq")
+        sofp_sheet = sofp_ws.title if sofp_ws is not None else "SOFP"
         sofp_re = None
         co_sofp_re = None
         if sofp_ws is not None:
@@ -97,6 +99,24 @@ class SoREToSOFPRetainedEarningsCheck:
                     f"Company: SoRE ({co_sore_re}) vs SOFP ({co_sofp_re}), diff={co_diff:.2f}"
                 )
 
+        comparands = [
+            Comparand(label="Retained earnings at end of period",
+                      sheet=sore_sheet, value=sore_re, role="lhs",
+                      statement=StatementType.SOCIE.value),
+            Comparand(label="Retained earnings", sheet=sofp_sheet,
+                      value=sofp_re, role="rhs",
+                      statement=StatementType.SOFP.value),
+        ]
+        if filing_level == "group":
+            comparands += [
+                Comparand(label="Retained earnings at end of period [company]",
+                          sheet=sore_sheet, value=co_sore_re, role="lhs",
+                          statement=StatementType.SOCIE.value),
+                Comparand(label="Retained earnings [company]", sheet=sofp_sheet,
+                          value=co_sofp_re, role="rhs",
+                          statement=StatementType.SOFP.value),
+            ]
+
         return CrossCheckResult(
             name=self.name,
             status="passed" if group_passed and co_passed else "failed",
@@ -105,4 +125,5 @@ class SoREToSOFPRetainedEarningsCheck:
             diff=diff,
             tolerance=tolerance,
             message="; ".join(parts),
+            comparands=comparands,
         )

@@ -359,6 +359,28 @@ describe("AgentTabs", () => {
     expect(screen.getByText("Scout")).toBeTruthy();
   });
 
+  test("reviewer (CORRECTION) tab renders live even though it's not a picked statement", () => {
+    // Regression: the reviewer pass ran invisibly because CORRECTION fell
+    // through the statementsInRun gate (its role isn't a face statement).
+    // It's now a NON_AGENT_TAB_ID, so it always shows — like scout/validator.
+    const agents: Record<string, AgentTabState> = {
+      CORRECTION: {
+        agentId: "CORRECTION", label: "Correction", status: "running",
+        role: "CORRECTION",
+      },
+    };
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={["CORRECTION"]}
+        activeTab="CORRECTION"
+        onTabClick={() => {}}
+        statementsInRun={["SOFP", "SOPL"]}
+      />,
+    );
+    expect(screen.getByText("Correction")).toBeTruthy();
+  });
+
   // ---------------------------------------------------------------------
   // Phase D.3: notes tabs — mirror of the statement-gating contract but
   // keyed by agent_id prefix "notes:" and gated by `notesInRun`.

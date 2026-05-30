@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Dict
 
 from statement_types import StatementType
-from cross_checks.framework import CrossCheckResult
+from cross_checks.framework import CrossCheckResult, Comparand
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label,
     find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
@@ -27,6 +27,7 @@ class SOCIToSOCIETCICheck:
     def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
         soci_wb = open_workbook(workbook_paths[StatementType.SOCI])
         soci_ws = find_sheet(soci_wb, "SOCI-BeforeOfTax", "SOCI-BeforeTax", "SOCI-NetOfTax")
+        soci_sheet = soci_ws.title if soci_ws is not None else "SOCI"
         soci_tci = None
         co_soci_tci = None
         if soci_ws is not None:
@@ -37,6 +38,7 @@ class SOCIToSOCIETCICheck:
 
         socie_wb = open_workbook(workbook_paths[StatementType.SOCIE])
         socie_ws = find_sheet(socie_wb, "SOCIE")
+        socie_sheet = socie_ws.title if socie_ws is not None else "SOCIE"
         socie_tci = None
         co_socie_tci = None
         if socie_ws is not None:
@@ -91,9 +93,28 @@ class SOCIToSOCIETCICheck:
                     f"Company: SOCI ({co_soci_tci}) vs SOCIE ({co_socie_tci}), diff={co_diff:.2f}"
                 )
 
+        comparands = [
+            Comparand(label="Total comprehensive income", sheet=soci_sheet,
+                      value=soci_tci, role="lhs",
+                      statement=StatementType.SOCI.value),
+            Comparand(label="Total comprehensive income", sheet=socie_sheet,
+                      value=socie_tci, role="rhs",
+                      statement=StatementType.SOCIE.value),
+        ]
+        if filing_level == "group":
+            comparands += [
+                Comparand(label="Total comprehensive income [company]",
+                          sheet=soci_sheet, value=co_soci_tci, role="lhs",
+                          statement=StatementType.SOCI.value),
+                Comparand(label="Total comprehensive income [company]",
+                          sheet=socie_sheet, value=co_socie_tci, role="rhs",
+                          statement=StatementType.SOCIE.value),
+            ]
+
         return CrossCheckResult(
             name=self.name,
             status="passed" if group_passed and co_passed else "failed",
             expected=soci_tci, actual=socie_tci, diff=diff, tolerance=tolerance,
             message="; ".join(parts),
+            comparands=comparands,
         )

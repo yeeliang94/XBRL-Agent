@@ -89,7 +89,7 @@ from pathlib import Path
 # IF NOT EXISTS walk-forward with no ALTER columns. Startup reconciles any
 # row left `running` by a dead process into a terminal error state
 # (see server._lifespan).
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -229,7 +229,13 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- statuses (pending/not_applicable) and checks without a natural
         -- anchor leave these NULL.
         target_sheet    TEXT,
-        target_row      INTEGER
+        target_row      INTEGER,
+        -- v14 (reviewer holistic audit, Phase 2): JSON list of the values
+        -- this check compared (both sides of a cross-statement equality, or
+        -- the leaves of a balance) so the reviewer gets concrete entry points
+        -- instead of a bare diff. Nullable — older rows + non-numeric checks
+        -- read NULL. See cross_checks.framework.Comparand.
+        comparands_json TEXT
     )
     """,
 
@@ -585,6 +591,14 @@ _V9_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # safe default ('split') keeps every existing run readable.
 _V10_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("runs", "orchestration", "TEXT DEFAULT 'split'"),
+)
+
+
+# v14 columns: the reviewer-facing comparands on a cross-check (reviewer
+# holistic audit, Phase 2). Nullable so existing cross_checks rows + non-
+# numeric checks read NULL. SQLite ALTER TABLE accepts a nullable column.
+_V14_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("cross_checks", "comparands_json", "TEXT"),
 )
 
 
@@ -1038,6 +1052,46 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (13,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v13→v14 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v13 → v14: add cross_checks.comparands_json (reviewer holistic
+        # audit, Phase 2). Fresh DBs already carry the column via CREATE TABLE
+        # above; this ALTER walks an existing v13 DB forward. Same BEGIN
+        # IMMEDIATE + duplicate-column tolerance as the earlier column steps.
+        if current_version is not None and current_version < 14:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 14:
+                    for table, col_name, col_ddl in _V14_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (14,),
                     )
                 conn.commit()
             except Exception:
