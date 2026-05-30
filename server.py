@@ -1444,6 +1444,25 @@ async def _lifespan(app: FastAPI):
     """
     from db.schema import init_db
     init_db(AUDIT_DB_PATH)
+    # Retire any manual re-review pass left `running` by a previous process
+    # (Phase 5.3). The pass runs on a daemon thread that dies with the
+    # process, so a surviving `running` row can never complete: a poll would
+    # hang and a relaunch would be blocked by the re-entrancy guard. Flip
+    # those rows to a terminal error so the UI resolves and the user can
+    # relaunch. Best-effort — a reconcile failure must not block startup.
+    try:
+        from db import repository as repo
+        conn = _open_audit_conn()
+        try:
+            n = repo.reconcile_stale_review_tasks(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        if n:
+            logger.info("reconciled %d stale re-review task(s) at startup", n)
+    except Exception:
+        logger.warning("re-review task reconciliation failed at startup",
+                       exc_info=True)
     # Canonical mode: import every face template's concept tree so the
     # Concepts UI has a tree to render and the facts API can resolve
     # concept_uuids. Idempotent (deterministic UUID5), so it's safe on
@@ -4674,14 +4693,38 @@ def _active_flag_guidance(run_id: int) -> str:
     return "\n".join(lines)
 
 
-# In-process registry of running / finished manual re-review passes, keyed by
-# run_id. A re-review can take minutes (it reads the PDF and traces each
-# failure), so the POST launches it as a background task and returns
-# immediately; the Review tab polls GET /re-review/status for the outcome.
-# Only the latest pass per run is tracked — a new POST overwrites the slot.
-# Entries are small (a status string + the outcome dict) and bounded by the
-# number of distinct runs re-reviewed this process lifetime.
-_REVIEW_TASKS: dict[int, dict] = {}
+# Durable registry of running / finished manual re-review passes, keyed by
+# run_id, in the `run_review_tasks` table (schema v13, Phase 5.3). A
+# re-review can take minutes (it reads the PDF and traces each failure), so
+# the POST launches it as a background task and returns immediately; the
+# Review tab polls GET /re-review/status for the outcome. Only the latest
+# pass per run is tracked — a new POST overwrites the row (run_id is the PK).
+# Persisting to the DB (vs the old in-process dict) means a finished outcome
+# survives a server restart and a poll can still fetch it; startup retires
+# any pass left `running` by a dead process (see `_lifespan` →
+# `reconcile_stale_review_tasks`).
+def _save_review_task(
+    run_id: int, status: str, *, model_name=None, outcome=None
+) -> None:
+    """Persist the latest re-review task state for a run (best-effort).
+
+    Wrapped so a telemetry-style DB hiccup on the background thread can
+    never crash the daemon thread mid-pass — the worst case is a stale
+    `running` row that startup reconciliation later retires.
+    """
+    from db import repository as repo
+    try:
+        conn = _open_audit_conn()
+        try:
+            repo.upsert_review_task(
+                conn, run_id, status, model_name=model_name, outcome=outcome
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — never fault the re-review thread on a DB write
+        logger.warning("failed to persist re-review task state for run %s",
+                       run_id, exc_info=True)
 
 
 @app.post("/api/runs/{run_id}/re-review")
@@ -4732,7 +4775,12 @@ async def re_review(run_id: int, body: Optional[dict] = None):
     # Re-entrancy guard: never run two reviewer passes over the same run at
     # once (they'd race the same facts + snapshot). Report the in-flight pass
     # instead of launching a second.
-    existing = _REVIEW_TASKS.get(run_id)
+    from db import repository as repo
+    existing_conn = _open_audit_conn()
+    try:
+        existing = repo.fetch_review_task(existing_conn, run_id)
+    finally:
+        existing_conn.close()
     if existing and existing.get("status") == "running":
         return {
             "ok": True, "status": "running", "already_running": True,
@@ -4745,8 +4793,7 @@ async def re_review(run_id: int, body: Optional[dict] = None):
     # request loop: it can't be cancelled by request teardown (a raw
     # create_task is), can't block other requests, and keeps the model's async
     # HTTP client bound to the loop that actually uses it.
-    state: dict = {"status": "running", "model_name": model_name, "outcome": None}
-    _REVIEW_TASKS[run_id] = state
+    _save_review_task(run_id, "running", model_name=model_name)
 
     def _gather():
         # Failing cross-checks come from the run's STORED cross_checks rows —
@@ -4834,17 +4881,19 @@ async def re_review(run_id: int, body: Optional[dict] = None):
             # ``outcome["error"]``. ``ok`` reflects the pass outcome (not merely
             # "the request ran") so the UI never shows a phantom success
             # (peer-review HIGH). ``model`` echoes which model ran.
-            state["outcome"] = {
+            result = {
                 "ok": not outcome.get("error"), "model": model_name, **outcome,
             }
         except Exception as e:  # noqa: BLE001 — record, never lose the thread
             logger.exception("background re-review failed for run %s", run_id)
-            state["outcome"] = {
+            result = {
                 "ok": False, "model": model_name,
                 "error": f"{type(e).__name__}: {e}",
             }
-        finally:
-            state["status"] = "done"
+        # Persist the terminal outcome so a poll (even after a restart) reads
+        # it. _save_review_task is itself best-effort, so this never re-raises.
+        _save_review_task(run_id, "done", model_name=model_name,
+                          outcome=result)
 
     threading.Thread(
         target=_thread_main, name=f"re-review-{run_id}", daemon=True,
@@ -4862,7 +4911,12 @@ async def re_review_status(run_id: int):
     synchronous endpoint used to return (``ok``, ``model``, ``invoked``,
     ``writes_performed``, ``flags_raised``, ``error``).
     """
-    state = _REVIEW_TASKS.get(run_id)
+    from db import repository as repo
+    conn = _open_audit_conn()
+    try:
+        state = repo.fetch_review_task(conn, run_id)
+    finally:
+        conn.close()
     if state is None:
         return {"status": "idle"}
     if state.get("status") == "running":

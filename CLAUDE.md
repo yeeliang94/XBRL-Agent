@@ -322,7 +322,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **12**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **13**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -360,6 +360,15 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   Both are new tables → the step is a pure `CREATE TABLE IF NOT EXISTS`
   walk-forward with no `_V12_MIGRATION_COLUMNS`. Pinned by
   `tests/test_db_schema_v12.py`.
+- **v12 → v13:** adds the `run_review_tasks` table (rewrite Phase 5.3) — the
+  durable replacement for the in-process `_REVIEW_TASKS` dict in `server.py`
+  (gotcha #21). One row per run (`run_id` PK; a relaunch overwrites the
+  slot), so a finished manual re-review outcome survives a restart and a
+  poll can still fetch it. New table → a pure `CREATE TABLE IF NOT EXISTS`
+  walk-forward with no `_V13_MIGRATION_COLUMNS`. Startup
+  (`server._lifespan`) calls `repo.reconcile_stale_review_tasks` to retire
+  any row left `running` by a dead process into a terminal error. Pinned by
+  `tests/test_db_schema_v13.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -791,9 +800,9 @@ code path is fully wired:
   `GET /api/runs/{id}/re-review/status`, `POST /api/runs/{id}/revert-to-original`.
   - **Manual re-review is async (background thread + poll).** A pass can run
     for minutes, so `POST /re-review` only *launches* it — on a dedicated
-    thread with its own event loop (`asyncio.run`), tracked in the in-process
-    `_REVIEW_TASKS` registry keyed by run_id — and returns
-    `{ok, status:"running", model}` immediately. The Review tab polls
+    thread with its own event loop (`asyncio.run`), tracked in the **durable
+    `run_review_tasks` table** (schema v13, gotcha #11) keyed by run_id — and
+    returns `{ok, status:"running", model}` immediately. The Review tab polls
     `GET /re-review/status` (`idle` | `running` | `done` + the finished
     outcome) for the result. A dedicated thread (not a raw `asyncio.create_task`)
     is deliberate: a detached create_task is cancelled when the request scope
@@ -801,6 +810,20 @@ code path is fully wired:
     isolated from request teardown and keeps the model's async HTTP client
     bound to the loop that uses it. A re-entrancy guard reports an in-flight
     pass instead of double-launching one over the same run's facts.
+    - **Durable across restarts (rewrite Phase 5.3).** The pass state lives
+      in `run_review_tasks` (one row per run; relaunch overwrites it), not an
+      in-process dict, so a *finished* outcome survives a server restart and a
+      poll can still fetch it. `server._save_review_task` /
+      `repo.fetch_review_task` are the write/read helpers; the status endpoint
+      and re-entrancy guard both read the table. Because the daemon thread
+      dies with the process, `server._lifespan` calls
+      `repo.reconcile_stale_review_tasks` at startup to flip any row left
+      `running` by a crash into a terminal `done` error ("Server restarted
+      while the re-review was running.") so the poll resolves and a relaunch
+      isn't blocked. Pinned by `tests/test_db_schema_v13.py` (logic) +
+      `tests/test_reviewer_routes.py`
+      (`test_re_review_outcome_survives_simulated_restart`,
+      `test_stale_running_task_reconciled_at_startup`).
 
 **Canonical mode cannot be disabled** (rewrite Phase 1.1). There is no
 opt-out flag and no legacy pipeline to fall back to. If the concept-tree

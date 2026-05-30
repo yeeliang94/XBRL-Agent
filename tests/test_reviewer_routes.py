@@ -375,6 +375,87 @@ def test_re_review_status_is_idle_before_any_pass(client):
     assert r.json() == {"status": "idle"}
 
 
+def test_re_review_outcome_survives_simulated_restart(client, monkeypatch):
+    """Phase 5.3: a FINISHED re-review outcome is durable. The status now
+    lives in the run_review_tasks table, not an in-process dict, so the
+    outcome is on disk and survives a process restart. We prove durability
+    directly: after the pass completes, a brand-new DB connection (what a
+    restarted process would open) still reads the persisted 'done' outcome.
+    The pre-rewrite in-process dict would have lost it on restart."""
+    tc, db, run_id, srv = client
+    _wf(db, run_id, LEAF1, 100.0)
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO run_concept_conflicts(run_id, concept_uuid, period, "
+        "entity_scope, kind, detail, status, created_at) VALUES "
+        "(?, ?, 'CY', 'Company', 'partial_state', 'x', 'open', '2026Z')",
+        (run_id, PARENT))
+    conn.commit()
+    conn.close()
+    _patch_for_rereview(srv, monkeypatch)
+    r = tc.post(f"/api/runs/{run_id}/re-review", json={})
+    assert r.status_code == 200, r.text
+    done = _await_rereview(tc, run_id)
+    assert done["invoked"] is True and done["writes_performed"] == 1
+
+    # A restarted process shares nothing in memory — only the DB on disk. A
+    # fresh connection (mirrors that) must still see the finished outcome.
+    from db import repository as repo
+    fresh = sqlite3.connect(str(db))
+    try:
+        persisted = repo.fetch_review_task(fresh, run_id)
+    finally:
+        fresh.close()
+    assert persisted is not None, "outcome was not persisted to the DB"
+    assert persisted["status"] == "done"
+    assert persisted["outcome"]["invoked"] is True
+    assert persisted["outcome"]["writes_performed"] == 1
+
+
+def test_stale_running_task_reconciled_at_startup(client, monkeypatch):
+    """Phase 5.3: a pass left 'running' by a crashed process is retired to a
+    terminal error at startup (the daemon thread died with the process). The
+    `_lifespan` handler runs reconcile_stale_review_tasks so a poll resolves
+    and a relaunch isn't blocked by the re-entrancy guard. We drive the real
+    `_lifespan` directly (stubbing only the heavy face-template bootstrap,
+    which does disk I/O and is unrelated to this wiring) — that proves the
+    reconcile is actually wired into startup. The reconcile logic itself is
+    pinned in test_db_schema_v13.py; the status-endpoint read is pinned by
+    the other route tests."""
+    tc, db, run_id, srv = client
+    # Simulate a crash mid-pass: a 'running' row with no live thread.
+    from db import repository as repo
+    conn = sqlite3.connect(str(db))
+    conn.execute("PRAGMA foreign_keys = ON")
+    repo.upsert_review_task(conn, run_id, "running", model_name="m1")
+    conn.commit()
+    conn.close()
+
+    # Keep startup fast + hermetic: the canonical bootstrap reads template
+    # xlsx files off disk and isn't what this test asserts.
+    import concept_model.bootstrap as boot
+    monkeypatch.setattr(boot, "import_all_face_templates", lambda *a, **k: [])
+
+    # Drive the real lifespan startup (the wiring under test). `_lifespan` is
+    # an @asynccontextmanager, so entering it runs everything up to `yield`
+    # (the startup half, including the reconcile) and exiting runs teardown.
+    import asyncio
+
+    async def _run_startup():
+        async with srv._lifespan(srv.app):
+            pass
+
+    asyncio.run(_run_startup())
+
+    # The orphaned 'running' row is now a terminal error a poll can resolve.
+    s = tc.get(f"/api/runs/{run_id}/re-review/status")
+    assert s.status_code == 200, s.text
+    body = s.json()
+    assert body["status"] == "done"
+    assert body["ok"] is False
+    assert "restart" in body["error"].lower()
+
+
 def test_active_flag_guidance_includes_open_and_answered(client):
     """Re-review guidance must carry still-OPEN prior flags, not just
     answered ones, so the reviewer keeps its stuck/dispute context

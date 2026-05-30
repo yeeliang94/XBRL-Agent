@@ -78,7 +78,18 @@ from pathlib import Path
 # is stuck on (`stuck`) or where it disputes a prior agent
 # (`disputes_prior`). Both are brand-new tables, so the v11→v12 step is a
 # pure CREATE TABLE IF NOT EXISTS walk-forward with no ALTER columns.
-CURRENT_SCHEMA_VERSION = 12
+# v13 (rewrite Phase 5.3, durable re-review tasks): adds the
+# `run_review_tasks` table that replaces the in-process `_REVIEW_TASKS`
+# dict in server.py. A manual re-review runs on a background thread and
+# can take minutes; the old dict lost both in-flight and finished passes
+# on a process restart. The table persists the latest pass per run
+# (run_id is the PK — a new launch overwrites the slot, mirroring the
+# dict), so a finished outcome survives a restart and a poll can still
+# fetch it. Brand-new table -> the v12->v13 step is a pure CREATE TABLE
+# IF NOT EXISTS walk-forward with no ALTER columns. Startup reconciles any
+# row left `running` by a dead process into a terminal error state
+# (see server._lifespan).
+CURRENT_SCHEMA_VERSION = 13
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -448,6 +459,33 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         status        TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'answered' | 'resolved' | 'dismissed'
         human_answer  TEXT,
         created_at    TEXT NOT NULL DEFAULT '',
+        updated_at    TEXT NOT NULL DEFAULT ''
+    )
+    """,
+
+    # -----------------------------------------------------------------
+    # v13: durable manual re-review task state (rewrite Phase 5.3).
+    # -----------------------------------------------------------------
+
+    # Replaces the in-process `_REVIEW_TASKS` dict in server.py. A manual
+    # re-review launches a background thread (minutes-long) and returns
+    # immediately; the Review tab polls for the outcome. The old dict lost
+    # every pass — in-flight AND finished — on a process restart. This
+    # table keeps the latest pass per run: `run_id` is the PRIMARY KEY so a
+    # new launch overwrites the slot (the dict's `[run_id] = state`
+    # semantics), the implicit PK index serves the per-run poll, and a
+    # finished outcome survives a restart. Absence of a row == 'idle'.
+    # `outcome_json` is NULL while running and carries the full outcome
+    # dict (ok / error / invoked / writes_performed / flags_raised / model)
+    # once done. No CHECK on `status`: only {running, done} today, but a
+    # future value shouldn't force a table rebuild (same rationale as runs).
+    """
+    CREATE TABLE IF NOT EXISTS run_review_tasks (
+        run_id        INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+        status        TEXT NOT NULL,           -- 'running' | 'done'
+        model_name    TEXT,
+        outcome_json  TEXT,                    -- NULL while running; outcome dict JSON when done
+        started_at    TEXT NOT NULL DEFAULT '',
         updated_at    TEXT NOT NULL DEFAULT ''
     )
     """,
@@ -973,6 +1011,33 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (12,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v12→v13 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v12 → v13: add the run_review_tasks table (durable manual
+        # re-review state, Phase 5.3). Created above via the idempotent
+        # CREATE TABLE IF NOT EXISTS, so older DBs that walk through this
+        # block just confirm the table exists and bump the marker — no
+        # ALTER columns needed. Same BEGIN IMMEDIATE discipline as the
+        # earlier additive-table steps (v2→v3, v10→v11, v11→v12).
+        if current_version is not None and current_version < 13:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 13:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (13,),
                     )
                 conn.commit()
             except Exception:
