@@ -167,12 +167,18 @@ def _export_canonical_workbooks(
             # NotPrepared / standard-variant mismatch — nothing to export.
             continue
         canon_path = Path(session_dir) / f"{stmt.value}_canonical.xlsx"
+        # The agent's scratch workbook (if present) holds the real row-1
+        # reporting-period dates, which don't project to facts — carry them
+        # into the fact-render so the download isn't stamped with the template
+        # placeholder "01/01/YYYY - 31/12/YYYY".
+        scratch_path = all_workbook_paths.get(stmt)
         try:
             shutil.copyfile(master, canon_path)
             applied = export_run_to_xlsx(
                 db_path, run_id, canon_path,
                 filing_level=filing_level,
                 template_id=_derive_template_id(Path(master)),
+                carry_forward_row1_from=scratch_path,
             )
         except Exception:
             logger.exception(
