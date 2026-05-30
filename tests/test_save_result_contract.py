@@ -203,6 +203,7 @@ async def test_coordinator_fails_when_workbook_written_but_save_not_called():
 
     agent = _make_completing_agent_iter()
     deps = MagicMock()
+    deps.projection_failed = False
     deps.filled_path = "/tmp/SOFP_filled.xlsx"
     deps.result_saved = False  # <-- the load-bearing assertion
     deps.last_save_error = "save_result refused: mandatory rows unfilled"
@@ -239,6 +240,7 @@ async def test_coordinator_succeeds_when_workbook_written_and_save_called():
 
     agent = _make_completing_agent_iter()
     deps = MagicMock()
+    deps.projection_failed = False
     deps.filled_path = "/tmp/SOFP_filled.xlsx"
     deps.result_saved = True
     deps.last_save_error = None

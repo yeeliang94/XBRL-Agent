@@ -116,6 +116,7 @@ class TestCoordinator:
         with patch("coordinator.create_extraction_agent") as mock_factory:
             mock_agent = _make_mock_agent_iter()
             mock_deps = MagicMock()
+            mock_deps.projection_failed = False
             mock_deps.filled_path = "/tmp/output/SOFP_filled.xlsx"
             mock_deps.filled_filename = "SOFP_filled.xlsx"
             mock_factory.return_value = (mock_agent, mock_deps)
@@ -136,6 +137,7 @@ class TestCoordinator:
         with patch("coordinator.create_extraction_agent") as mock_factory:
             mock_agent = _make_mock_agent_iter()
             mock_deps = MagicMock()
+            mock_deps.projection_failed = False
             mock_deps.filled_path = "/tmp/output/SOFP_filled.xlsx"
             mock_deps.filled_filename = "SOFP_filled.xlsx"
             mock_factory.return_value = (mock_agent, mock_deps)
@@ -155,6 +157,7 @@ class TestCoordinator:
         with patch("coordinator.create_extraction_agent") as mock_factory:
             mock_agent = _make_mock_agent_iter()
             mock_deps = MagicMock()
+            mock_deps.projection_failed = False
             mock_deps.filled_path = "/tmp/output/SOFP_filled.xlsx"
             mock_deps.filled_filename = "SOFP_filled.xlsx"
             mock_deps.statement_type = StatementType.SOFP
@@ -176,6 +179,7 @@ class TestCoordinator:
             nonlocal call_count
             call_count += 1
             mock_deps = MagicMock()
+            mock_deps.projection_failed = False
             mock_deps.filled_path = f"/tmp/{call_count}_filled.xlsx"
             mock_deps.filled_filename = f"{call_count}_filled.xlsx"
             mock_deps.statement_type = kwargs["statement_type"]
@@ -217,6 +221,7 @@ class TestCoordinator:
         with patch("coordinator.create_extraction_agent") as mock_factory:
             mock_agent = _make_mock_agent_iter()
             mock_deps = MagicMock()
+            mock_deps.projection_failed = False
             mock_deps.filled_path = "/tmp/output/filled.xlsx"
             mock_deps.filled_filename = "filled.xlsx"
             mock_deps.statement_type = StatementType.SOFP

@@ -121,6 +121,18 @@ class ExtractionDeps:
         # agent's own words (kept separate from the verifier-derived summary).
         self.seen_unresolved_refusal: bool = False
         self.unresolved_reason: Optional[str] = None
+        # Rewrite Phase 4.1 (store-first): the fact store is the PRIMARY,
+        # transactional write — a projection-CALL failure (project_writes
+        # raising: DB error, etc.) is now FATAL, not a swallowed best-effort
+        # log, because a run that "succeeds" with facts silently missing is
+        # a half-populated lie (the download/Concepts UI render from the DB).
+        # `_project_facts_if_canonical` sets this when the projection call
+        # raises; the coordinator's success contract refuses to mark the
+        # statement succeeded while it is True. NOTE: this is the infra-
+        # failure path only — `proj.has_gaps` (some cells didn't map to a
+        # concept, e.g. row-1 date cells) stays advisory, never fatal.
+        self.projection_failed: bool = False
+        self.projection_error: Optional[str] = None
 
 
 def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
@@ -163,19 +175,31 @@ def _is_force_save_allowed(deps: "ExtractionDeps") -> bool:
 
 
 def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]:
-    """Project a fill_workbook result's resolved writes into run_concept_facts
-    when canonical mode is active. Returns an advisory warning string when any
-    cells were skipped/rejected (so the agent + run see the gap), or None.
+    """Project a write_facts result's resolved writes into run_concept_facts.
 
-    Canonical mode is active iff run_id + db_path + template_id are all set on
-    deps (the coordinator only threads them through in canonical mode). Never
-    raises — a projection failure must not break extraction, since the scratch
-    xlsx write already succeeded.
+    The fact store is the primary, transactional truth (rewrite Phase 4.1).
+    Returns an advisory warning string when some cells didn't map to a concept
+    (``proj.has_gaps`` — normal for row-1 date cells), or None on a clean pass.
+
+    Canonical mode is always active downstream of the mandatory-bootstrap
+    (run_id + db_path + template_id are threaded through on every run).
+
+    **Projection-CALL failure is FATAL.** If ``project_writes`` itself raises
+    (a DB error, a corrupt template_id, etc.) we set ``deps.projection_failed``
+    so the coordinator refuses to mark the statement succeeded — a run must not
+    report success with facts silently missing, because the download and the
+    Concepts UI render from the DB, not from the agent's scratch xlsx. This is
+    the infra-failure path ONLY; ``has_gaps`` stays advisory.
     """
     if not (deps.run_id is not None and deps.db_path and deps.template_id):
         return None
     if not result.resolved_writes:
         return None
+    # Each call reflects the outcome of THIS write_facts attempt: a later
+    # successful re-write clears a transient earlier failure (reset before the
+    # attempt so the most recent projection result wins).
+    deps.projection_failed = False
+    deps.projection_error = None
     try:
         from concept_model.cell_resolver import project_writes
         proj = project_writes(
@@ -185,12 +209,18 @@ def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]
             result.resolved_writes,
             filing_level=deps.filing_level,
         )
-    except Exception:
+    except Exception as e:
         logger.exception(
-            "canonical fact projection failed for %s",
+            "canonical fact projection failed for %s — marking FATAL",
             deps.statement_type.value,
         )
-        return "Canonical projection error: facts may be incomplete (see logs)."
+        deps.projection_failed = True
+        deps.projection_error = f"{type(e).__name__}: {e}"
+        return (
+            "Canonical projection FAILED: the fact store write did not land "
+            "(see logs). This run cannot finalise — the download renders from "
+            "the database, so a missing projection means missing data."
+        )
 
     if proj.has_gaps:
         logger.warning(
