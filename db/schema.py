@@ -50,12 +50,13 @@ from pathlib import Path
 # the human row-2 SOCIE component header displayed in the review grid. The
 # routing key remains `matrix_col` (Excel column letter), so existing facts
 # and exporters keep their geometry unchanged.
-# v10 (monolith experiment, docs/PLAN-monolith-face-experiment.md): adds
-# nullable `runs.orchestration` (TEXT DEFAULT 'split'). The
-# orchestration flag selects between the split-pipeline coordinator
-# (default) and the experimental single-agent monolith path. Nullable
-# with a safe default keeps legacy rows readable; SQLite ALTER TABLE
-# can't add NOT NULL without a default anyway (gotcha #11).
+# v10: adds nullable `runs.orchestration` (TEXT DEFAULT 'split'). Originally
+# the flag selected between the split-pipeline coordinator and an experimental
+# single-agent monolith path; the monolith experiment was removed in the
+# rewrite (Phase 1) and the column is now always 'split' (historical-only,
+# retained for schema/History stability). Nullable with a safe default keeps
+# legacy rows readable; SQLite ALTER TABLE can't add NOT NULL without a
+# default anyway (gotcha #11).
 # v11 (concept_render_aliases): a single concept_uuid can have more than
 # one physical render coord on a workbook. The motivating case is face-
 # sheet rows whose value cross-rolls-up from a sub-sheet total (e.g.
@@ -118,9 +119,9 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         scout_enabled         INTEGER NOT NULL DEFAULT 0,
         started_at            TEXT NOT NULL DEFAULT '',
         ended_at              TEXT,
-        -- v10: monolith experiment flag. NULL on rows created before v10
-        -- (and SQLite default 'split' for new rows under v10) so legacy
-        -- readers ignore an unknown value and keep working.
+        -- v10 audit column (was the monolith-experiment flag; experiment
+        -- removed in the rewrite, always 'split' now). NULL on pre-v10 rows;
+        -- SQLite default 'split' for new rows.
         orchestration         TEXT DEFAULT 'split'
     )
     """,
@@ -541,9 +542,9 @@ _V9_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-# v10 column: monolith experiment orchestration flag. Nullable with a
-# safe default ('split') keeps every existing run readable and routes
-# legacy callers through the default split-pipeline coordinator.
+# v10 column: `runs.orchestration` (was the monolith-experiment flag;
+# experiment removed in the rewrite, always 'split' now). Nullable with a
+# safe default ('split') keeps every existing run readable.
 _V10_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("runs", "orchestration", "TEXT DEFAULT 'split'"),
 )
@@ -886,11 +887,11 @@ def init_db(path: str | Path) -> None:
             existing = cur.fetchone()
             current_version = int(existing[0]) if existing is not None else None
 
-        # v9 → v10: add the nullable `runs.orchestration` flag for the
-        # monolith experiment. Default 'split' keeps every legacy reader
-        # routed through the existing coordinator. Fresh DBs already carry
-        # it via CREATE TABLE above. Same BEGIN IMMEDIATE +
-        # duplicate-column tolerance as the earlier steps.
+        # v9 → v10: add the nullable `runs.orchestration` audit column (was the
+        # monolith-experiment flag; experiment removed in the rewrite, always
+        # 'split' now). Default 'split' keeps every legacy reader working.
+        # Fresh DBs already carry it via CREATE TABLE above. Same BEGIN
+        # IMMEDIATE + duplicate-column tolerance as the earlier steps.
         if current_version is not None and current_version < 10:
             try:
                 conn.execute("BEGIN IMMEDIATE")
