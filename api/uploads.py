@@ -7,7 +7,6 @@ import asyncio
 import json
 import logging
 import os
-import traceback
 import uuid
 from typing import Optional
 
@@ -221,8 +220,12 @@ async def scout_pdf(session_id: str, request: Request):
             yield f"event: scout_cancelled\ndata: {json.dumps({'message': 'Scout cancelled by user'})}\n\n"
 
         except Exception as e:
+            # The full traceback is logged server-side only. It is NOT sent to
+            # the browser: a provider/LLM stack trace can embed request
+            # internals or credentials (mirrors the generic-response policy in
+            # /api/test-connection). The client gets the exception summary.
             logger.exception("Scout failed", extra={"session_id": session_id})
-            yield f"event: error\ndata: {json.dumps({'message': str(e), 'traceback': traceback.format_exc()})}\n\n"
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
 
         finally:
             # Cancel the scout task if still running (e.g. client disconnected)

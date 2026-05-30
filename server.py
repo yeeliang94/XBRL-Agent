@@ -2921,7 +2921,18 @@ async def run_multi_agent_stream(
                 try:
                     stmt_data = json.loads(stmt_result_path.read_text(encoding="utf-8"))
                     stmt_key = agent_result.statement_type.value
-                    for field in stmt_data.get("fields", []):
+                    raw_fields = (
+                        stmt_data.get("fields", [])
+                        if isinstance(stmt_data, dict) else []
+                    )
+                    for field in raw_fields:
+                        # Same defence as the audit-persist loop below: a
+                        # non-dict entry in `fields` (observed on SOCI/SOCIE)
+                        # would raise "'list' object has no attribute 'get'"
+                        # and the except drops the WHOLE statement from the
+                        # preview result.json. Skip the bad entry instead.
+                        if not isinstance(field, dict):
+                            continue
                         merged_fields.append({
                             "statement": stmt_key,
                             "field_label": field.get("field_label", ""),
