@@ -61,7 +61,8 @@ async def update_settings(body: dict):
     """Update .env file with new settings."""
     ENV_FILE = server.ENV_FILE
     if not ENV_FILE.exists():
-        ENV_FILE.write_text("")
+        # encoding pinned per the Windows UTF-8 invariant (gotcha #1).
+        ENV_FILE.write_text("", encoding="utf-8")
 
     # Legacy fields
     if "model" in body:
