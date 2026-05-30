@@ -285,8 +285,21 @@ confirmed both. 4 fixed now (PR-2/3/4/5); PR-1 deferred to Phase 5.
     and the evidence column) stays **advisory**, or every real run would fail.
     The flag resets per `write_facts` call so a retry-success clears a transient
     failure. Pinned by `tests/test_extraction_canonical_projection.py`
-    (`test_projection_call_failure_is_fatal`, `test_unmapped_cell_is_not_fatal`,
-    `test_successful_projection_clears_prior_fatal_flag`). Backend 1804 passed.
+    (`test_projection_call_failure_is_fatal`, `test_unmapped_cell_is_not_fatal`).
+  - [x] 🟩 **Peer-review hardening (2026-05-30).** Four findings, all valid:
+    (1) the timeout + iteration-cap **salvage paths** in `coordinator.py` marked
+    a statement succeeded on `deps.filled_path` alone, bypassing the new gate —
+    both now honour `projection_failed` first (pinned by
+    `test_iteration_limit_salvage_blocked_by_projection_failure`). (2) the
+    per-call **reset was unsafe** (a later partial/unmapped write could clear a
+    prior failure while the failed batch's facts stayed absent) — the flag is
+    now **STICKY** for the run, fail-closed (pinned by
+    `test_prior_projection_failure_is_sticky`). (3) `FactWrite.evidence` used
+    `min_length=1`, so whitespace-only passed — now
+    `StringConstraints(strip_whitespace=True, min_length=1)` (pinned by
+    `test_factwrite_requires_nonblank_evidence`). (4) two stale agent-facing
+    "fill_workbook" strings (verify-first guidance + save-gate guidance) →
+    "write_facts". Backend 1806 passed.
   - [ ] 🟥 **Stop writing an agent scratch `filled.xlsx` (render-last) — BLOCKED on the live A/B (4.2).** Concrete finding during implementation: `concept_model/exporter.py::export_run_to_xlsx` fills a fresh **template copy** (placeholder `01/01/YYYY` dates in B1) from `run_concept_facts` only, and **row-1 reporting-period date cells are non-concept writes that do NOT project to facts** (they land in `proj.skipped`). Nothing else stamps the period dates. So a literal "drop the scratch xlsx, render only from facts" would regress the download's reporting-period dates (and any other non-concept cell) — a divergence that ONLY a real-run/A/B can validate, which is exactly what the keystone's A/B gate exists for. Doing it blind under "unit-tests only" would be silently shipping a known regression. Deferred to land **together with** 4.2 (and likely a small exporter change to carry forward non-concept cells, or to project period dates as facts).
   - [ ] 🟥 **Delete the merge step + the exporter's zero-facts fallback — partially BLOCKED.** The merge is also how face statements + the separate notes pipeline (`notes_cells`) are combined into one `filled.xlsx`; it can't be literally deleted, only have its inputs switched to facts-renders. Removing the zero-facts/`except: continue`/outer fallbacks in `_export_canonical_workbooks` is coupled to the same non-concept-cell (date) wrinkle above, so it rides with 4.2 too.
   - **Verify:** ✅ unit test that a forced projection failure marks the statement `failed` (no half-populated success) — DONE. ⏳ "download reflects DB facts exactly" + "merge-step tests removed" — deferred to 4.2 (needs the live A/B to confirm no date-cell/non-concept regression).

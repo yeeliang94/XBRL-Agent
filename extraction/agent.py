@@ -195,11 +195,16 @@ def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]
         return None
     if not result.resolved_writes:
         return None
-    # Each call reflects the outcome of THIS write_facts attempt: a later
-    # successful re-write clears a transient earlier failure (reset before the
-    # attempt so the most recent projection result wins).
-    deps.projection_failed = False
-    deps.projection_error = None
+    # The fatal flag is STICKY for the run (peer-review): once a projection
+    # CALL has failed, facts from that batch are absent from the DB, and a
+    # later write_facts only projects ITS OWN resolved_writes — a subsequent
+    # partial correction (or a write of only unmapped cells) would otherwise
+    # clear the flag while the earlier batch's facts are still missing. We
+    # cannot cheaply prove a retry re-covered every lost fact, so we fail
+    # closed: do NOT reset projection_failed here. Projection failures should
+    # essentially never happen (local sqlite, same process), so the rare
+    # false-negative on a fully-recovered transient error is an acceptable
+    # price for never silently shipping a half-populated success.
     try:
         from concept_model.cell_resolver import project_writes
         proj = project_writes(
@@ -362,7 +367,7 @@ def _check_save_gate(
             f"{json.dumps(result.mandatory_unfilled)}"
         )
     parts.extend(issues)
-    parts.append("Correct the issues with fill_workbook, re-run "
+    parts.append("Correct the issues with write_facts, re-run "
                  "verify_totals, then retry save_result.")
     # Tell the agent about the honest-completion escape hatch (gotcha #17):
     # if the gap is genuinely in the source, or the only row that would close
@@ -724,7 +729,7 @@ def create_extraction_agent(
             if stmt_path.exists():
                 filled_path = str(stmt_path)
             else:
-                return "No filled workbook found yet. Run fill_workbook first."
+                return "No filled workbook found yet. Run write_facts first."
         result = _verify_statement_impl(
             filled_path,
             ctx.deps.statement_type,

@@ -3,7 +3,30 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-from tools.fill_workbook import fill_workbook, FillResult, _normalize_label, _find_row_by_label, _build_label_index
+from tools.fill_workbook import (
+    fill_workbook,
+    FactWrite,
+    FillResult,
+    _normalize_label,
+    _find_row_by_label,
+    _build_label_index,
+)
+
+
+def test_factwrite_requires_nonblank_evidence():
+    """Peer-review: evidence is the audit trail (gotcha #16). min_length=1 alone
+    let a whitespace-only string through; StringConstraints(strip_whitespace)
+    strips first so '   ' is rejected, while real evidence is kept (trimmed)."""
+    import pydantic
+
+    # Whitespace-only and empty evidence are both rejected.
+    for blank in ("", "   ", "\t\n"):
+        with pytest.raises(pydantic.ValidationError):
+            FactWrite(sheet="S", col=2, value=1, evidence=blank)
+
+    # Real evidence is accepted and surrounding whitespace is trimmed.
+    fw = FactWrite(sheet="S", col=2, value=1, evidence="  Page 5  ")
+    assert fw.evidence == "Page 5"
 
 
 def _make_template(tmp_path):
