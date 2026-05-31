@@ -113,8 +113,16 @@ def comparands_from_json(raw: Optional[str]) -> list["Comparand"]:
     known = {f.name for f in fields(Comparand)}
     out: list[Comparand] = []
     for d in data:
-        if isinstance(d, dict):
+        if not isinstance(d, dict):
+            continue
+        # Skip an entry that can't construct (e.g. missing the required
+        # `label`/`sheet` after schema drift) rather than letting one bad
+        # row raise and sink the whole decode — the docstring promises a
+        # graceful degrade to the bare diff.
+        try:
             out.append(Comparand(**{k: v for k, v in d.items() if k in known}))
+        except (TypeError, ValueError):
+            continue
     return out
 
 
