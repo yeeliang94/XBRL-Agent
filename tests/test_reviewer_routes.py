@@ -225,6 +225,62 @@ def test_re_review_starts_pass_and_preserves_original_snapshot(client, monkeypat
     assert snap == 100.0
 
 
+def test_manual_re_review_creates_correction_agent_row_and_trace_is_reachable(
+    client, monkeypatch
+):
+    """Peer-review MEDIUM: manual re-review saves CORRECTION_conversation_trace
+    .json, but the trace route whitelists by run_agents.statement_type. On a
+    run that never auto-reviewed there was no CORRECTION row, so the trace
+    404'd. The manual path must now create the row itself."""
+    tc, db, run_id, srv = client
+    # output_dir must be set so the reviewer pass persists its trace there.
+    out_dir = db.parent / "run_out"
+    out_dir.mkdir()
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE runs SET output_dir=? WHERE id=?", (str(out_dir), run_id))
+    # No CORRECTION row exists yet (the precondition the bug needed).
+    assert conn.execute(
+        "SELECT COUNT(*) FROM run_agents WHERE run_id=? AND statement_type='CORRECTION'",
+        (run_id,)).fetchone()[0] == 0
+    conn.execute(
+        "INSERT INTO run_concept_conflicts(run_id, concept_uuid, period, "
+        "entity_scope, kind, detail, status, created_at) VALUES "
+        "(?, ?, 'CY', 'Company', 'partial_state', 'x', 'open', '2026Z')",
+        (run_id, PARENT))
+    conn.commit()
+    conn.close()
+    # Write the fact on its own connection AFTER releasing the write-lock above
+    # (an uncommitted UPDATE would otherwise dead-lock this write).
+    _wf(db, run_id, LEAF1, 100.0)
+
+    # A no-op model: the agent returns immediately with zero writes, so this
+    # test isolates the row-creation + trace-reachability path (no fact-write
+    # contention with the status poller).
+    def _noop(messages, info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart("nothing to fix")])
+    monkeypatch.setattr(srv, "_create_proxy_model",
+                        lambda *a, **k: FunctionModel(_noop))
+
+    r = tc.post(f"/api/runs/{run_id}/re-review", json={})
+    assert r.status_code == 200, r.text
+    done = _await_rereview(tc, run_id)
+    assert done["invoked"] is True
+
+    # A CORRECTION run_agents row now exists, in a terminal status.
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT status FROM run_agents WHERE run_id=? AND statement_type='CORRECTION'",
+        (run_id,)).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] in ("completed", "failed")
+
+    # And the saved transcript is now reachable via the existing trace route.
+    tr = tc.get(f"/api/runs/{run_id}/agents/CORRECTION/trace")
+    assert tr.status_code == 200, tr.text
+    assert "messages" in tr.json()
+
+
 def test_refresh_persisted_cross_checks_replaces_rows(client, monkeypatch):
     """Peer-review P1: manual re-review / revert must refresh the persisted
     cross_checks so the Review tab + a later re-review don't read stale rows.

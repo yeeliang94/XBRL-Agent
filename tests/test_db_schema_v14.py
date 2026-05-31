@@ -132,3 +132,12 @@ def test_comparands_json_helpers_are_tolerant():
     assert comparands_from_json('{"not": "a list"}') == []
     # Unknown keys are dropped, not fatal (forward-compat).
     assert comparands_from_json('[{"label":"x","sheet":"S","bogus":1}]')[0].label == "x"
+    # Peer-review LOW: an entry missing a REQUIRED field (label/sheet) after
+    # schema drift must be skipped, not raise — the docstring promises a
+    # graceful degrade to the bare diff. The good entry survives.
+    decoded = comparands_from_json(
+        '[{"value":5.0,"role":"lhs"}, {"label":"ok","sheet":"S"}]'
+    )
+    assert [c.label for c in decoded] == ["ok"]
+    # An all-bad blob degrades to [] rather than raising.
+    assert comparands_from_json('[{"value":1.0},{"role":"rhs"}]') == []

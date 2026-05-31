@@ -356,15 +356,25 @@ def list_run_facts(
 
 
 def _repeated_values(facts: Sequence[dict[str, Any]]) -> dict[float, list[str]]:
-    """Group non-zero numeric values that appear on >1 distinct (sheet,row).
+    """Group non-zero numeric LEAF values that appear on >1 distinct (sheet,row).
 
     A value disclosed once in the PDF but written to several rows/sheets is
     the signature of a double/triple-count (run 153's FVTPL written 3×). We
     surface these so the reviewer interrogates them — it's advisory, not a
-    verdict (a real figure can legitimately repeat, e.g. a 0 or a subtotal).
+    verdict.
+
+    Restricted to ``kind == "LEAF"`` deliberately: the genuine double-count
+    is a leaf written twice, whereas the legitimate cross-statement equalities
+    the cross-checks assert (Total equity = SOCIE equity-at-end, SOPL profit =
+    SOCIE profit, SOCF cash = SOFP cash, …) are equal COMPUTED totals on two
+    sheets. Including totals would flag every balanced pair as a "double-count"
+    and bury the real signal — exactly the noise that wastes the reviewer's
+    turn budget and tempts an ungrounded blank.
     """
     seen: dict[float, set[str]] = {}
     for f in facts:
+        if (f.get("kind") or "").upper() != "LEAF":
+            continue
         val = f.get("value")
         if val is None or float(val) == 0.0:
             continue

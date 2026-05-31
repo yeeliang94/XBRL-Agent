@@ -303,3 +303,40 @@ async def test_reviewer_pass_result_is_revertible(tmp_path):
     finally:
         conn.close()
     assert val == 100.0
+
+
+@pytest.mark.asyncio
+async def test_reviewer_pass_handles_failed_check_with_comparands(tmp_path):
+    """Regression (peer-review HIGH): `_run_reviewer_pass` serialises each
+    failed check's `comparands` via `dataclasses.asdict`. server.py had no
+    module-level `import dataclasses`, so a real failed check — which now ALWAYS
+    carries comparands from the 6 numeric checks — raised NameError before the
+    pass emitted a single event. The existing tests passed only because they
+    built checks with an EMPTY comparands list (the comprehension short-
+    circuits). This pins a NON-empty list so the import can't silently regress.
+    """
+    from server import _run_reviewer_pass
+    from cross_checks.framework import Comparand
+
+    db, run_id = _seed(tmp_path)
+    failed = [CrossCheckResult(
+        name="sofp_assets_balance", status="failed", expected=170.0,
+        actual=150.0, diff=20.0, message="assets total off by 20",
+        target_sheet="SOFP", target_row=10,
+        comparands=[
+            Comparand(label="Total assets", sheet="SOFP", value=150.0,
+                      role="lhs", statement="SOFP", row=10),
+            Comparand(label="Total equity and liabilities", sheet="SOFP",
+                      value=170.0, role="rhs", statement="SOFP", row=20),
+        ])]
+
+    # Pre-fix this raised NameError inside failed_payload construction.
+    outcome = await _run_reviewer_pass(
+        failed_checks=failed, conflicts=[],
+        model=FunctionModel(_fix_cash_scripted),
+        filing_level="company", event_queue=asyncio.Queue(), db_path=db,
+        run_id=run_id)
+
+    assert outcome["invoked"] is True
+    assert outcome["writes_performed"] == 1
+    assert not outcome.get("error")

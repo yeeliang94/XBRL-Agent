@@ -437,6 +437,28 @@ def test_list_facts_does_not_flag_zero(tmp_path):
     assert _repeated_values(facts) == {}
 
 
+def test_list_facts_does_not_flag_leaf_equal_to_a_computed_total(tmp_path):
+    """A leaf whose value equals a COMPUTED total is NOT a double-count — that
+    is the shape of every legitimate cross-statement equality the cross-checks
+    assert (Total equity = SOCIE equity-at-end, etc.). Restricting
+    _repeated_values to LEAF facts keeps those out of the warning so the real
+    leaf-vs-leaf over-count isn't buried (review follow-up)."""
+    from concept_model.cascade import recompute_after_turn
+    db, run_id = _seed(tmp_path)
+    # One leaf carries 100; the cascade makes the COMPUTED *Total PPE = 100 too
+    # (LEAF2 unwritten). Computed-equals-leaf must NOT be flagged.
+    _wf(db, run_id, LEAF1, 100.0)
+    recompute_after_turn(db, run_id)
+    facts = list_run_facts(db, run_id, template_prefix="mfrs-company-")
+    assert any(f["kind"] == "COMPUTED" and f["value"] == 100.0 for f in facts)
+    assert _repeated_values(facts) == {}
+    # But two LEAVES sharing a value are still flagged (the real over-count).
+    _wf(db, run_id, LEAF2, 100.0)
+    recompute_after_turn(db, run_id)
+    facts = list_run_facts(db, run_id, template_prefix="mfrs-company-")
+    assert 100.0 in _repeated_values(facts)
+
+
 def test_list_facts_sheet_filter_narrows(tmp_path):
     db, run_id = _seed(tmp_path)
     _wf(db, run_id, LEAF1, 30.0)

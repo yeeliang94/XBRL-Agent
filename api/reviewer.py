@@ -183,26 +183,103 @@ async def re_review(run_id: int, body: Optional[dict] = None):
                 break
         return failed, conflicts, combined or None, pdf_path
 
+    def _ensure_correction_agent_row() -> Optional[int]:
+        """Reuse-or-create the run's CORRECTION ``run_agents`` row.
+
+        ``_run_reviewer_pass`` saves its transcript as
+        ``CORRECTION_conversation_trace.json``, but the trace route whitelists
+        by ``run_agents.statement_type`` — so a manual re-review on a run that
+        never auto-reviewed had no row and its trace 404'd (peer-review
+        MEDIUM). The auto-review path creates this row inline; mirror it here.
+        Reuse an existing row (re-opened to ``running``) so repeated
+        re-reviews don't churn duplicate audit rows. Best-effort — a
+        telemetry-row failure must never block the pass itself.
+        """
+        from db import repository as repo
+        try:
+            conn = server._open_audit_conn()
+            try:
+                existing = conn.execute(
+                    "SELECT id FROM run_agents WHERE run_id = ? AND "
+                    "statement_type = ? ORDER BY id DESC LIMIT 1",
+                    (run_id, server.CORRECTION_AGENT_ID),
+                ).fetchone()
+                if existing is not None:
+                    rid = int(existing[0])
+                    conn.execute(
+                        "UPDATE run_agents SET status = 'running', model = ? "
+                        "WHERE id = ?",
+                        (model_name, rid),
+                    )
+                    conn.commit()
+                    return rid
+                rid = repo.create_run_agent(
+                    conn, run_id,
+                    statement_type=server.CORRECTION_AGENT_ID,
+                    variant=None, model=model_name,
+                )
+                conn.commit()
+                return rid
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 — trace reachability is best-effort
+            logger.warning(
+                "could not ensure CORRECTION run_agent row for run %s",
+                run_id, exc_info=True,
+            )
+            return None
+
+    def _finalize_correction_agent_row(agent_id: Optional[int], outcome: dict) -> None:
+        """Close the CORRECTION row, mirroring the auto path's status logic."""
+        if agent_id is None:
+            return
+        from db import repository as repo
+        try:
+            conn = server._open_audit_conn()
+            try:
+                status = "failed" if outcome.get("error") else "completed"
+                repo.finish_run_agent(
+                    conn, agent_id, status=status, workbook_path=None,
+                    total_tokens=int(outcome.get("total_tokens", 0) or 0),
+                    total_cost=float(outcome.get("total_cost", 0.0) or 0.0),
+                    turn_count=int(outcome.get("turns_used", 0) or 0),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "could not finalize CORRECTION run_agent row for run %s",
+                run_id, exc_info=True,
+            )
+
     async def _runner_async() -> dict:
         # Build the model inside this loop so its async HTTP client binds here.
         model = server._create_proxy_model(model_name, proxy_url, api_key)
         failed, conflicts, combined, pdf_path = _gather()
-        outcome = await server._run_reviewer_pass(
-            failed_checks=failed, conflicts=conflicts, model=model,
-            filing_level=filing_level, filing_standard=filing_standard,
-            event_queue=None,
-            db_path=server.AUDIT_DB_PATH, run_id=run_id, pdf_path=pdf_path,
-            guidance=combined,
-        )
-        if outcome.get("writes_performed", 0) > 0:
-            server._reexport_remerge_durable(run_id)
-            # The reviewer changed facts — refresh the persisted cross-checks
-            # so the Review tab and any later re-review see current pass/fail
-            # state, not the pre-fix failures (peer-review P1), then safely
-            # downgrade the run badge if failures remain.
-            server._refresh_persisted_cross_checks(run_id)
-            server._safe_downgrade_run_status(run_id)
-        return outcome
+        correction_agent_id = _ensure_correction_agent_row()
+        outcome: dict = {}
+        try:
+            outcome = await server._run_reviewer_pass(
+                failed_checks=failed, conflicts=conflicts, model=model,
+                filing_level=filing_level, filing_standard=filing_standard,
+                event_queue=None,
+                db_path=server.AUDIT_DB_PATH, run_id=run_id, pdf_path=pdf_path,
+                guidance=combined,
+            )
+            if outcome.get("writes_performed", 0) > 0:
+                server._reexport_remerge_durable(run_id)
+                # The reviewer changed facts — refresh the persisted cross-checks
+                # so the Review tab and any later re-review see current pass/fail
+                # state, not the pre-fix failures (peer-review P1), then safely
+                # downgrade the run badge if failures remain.
+                server._refresh_persisted_cross_checks(run_id)
+                server._safe_downgrade_run_status(run_id)
+            return outcome
+        finally:
+            # Always close the row — even if the pass raised — so the trace is
+            # reachable and the row never lingers in `running`.
+            _finalize_correction_agent_row(correction_agent_id, outcome)
 
     def _thread_main() -> None:
         try:
