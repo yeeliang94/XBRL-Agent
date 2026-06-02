@@ -117,7 +117,11 @@ def test_render_prompt_omits_block_when_template_path_missing() -> None:
         filing_level="company",
         filing_standard="mfrs",
     )
-    assert "SIGN CONVENTIONS" not in rendered  # no template_path → no block
+    # No template_path → no dynamically-generated block. Check the block's
+    # distinctive header phrase, not a bare "SIGN CONVENTIONS" substring:
+    # socf.md's static prose now cross-references the block by name (Step
+    # 6.0 single-source pointer), so the loose substring would false-trip.
+    assert "(from live template formulas)" not in rendered
     # But the static SOCF prompt content must still be present.
     assert "SOCF" in rendered or "Cash Flows" in rendered
 

@@ -109,6 +109,12 @@ def render_prompt(
     # sign coefficient, so the agent can match the cell's directional
     # name to the formula's intent (e.g. (Gain) loss on disposal of
     # PPE — added with +1 → enter loss as POSITIVE magnitude).
+    #
+    # The gate includes SOCIE only to reach the SoRE variant: the helper
+    # filters on a "socf"/"sore" sheet name, so the matrix SOCIE sheet
+    # (named "SOCIE") no-ops and falls back to socie.md's prose (ADR-002).
+    # The block's title + wording are statement-neutral (Step 6.0) so the
+    # SoRE statement no longer receives a SOCF-branded block.
     if template_path and statement_type in (StatementType.SOCF, StatementType.SOCIE):
         try:
             from prompts._sign_conventions import socf_sign_convention_block
