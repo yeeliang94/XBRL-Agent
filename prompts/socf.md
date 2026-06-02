@@ -36,6 +36,12 @@ For **Direct** method (82 rows, 71 data-entry):
 
 === CRITICAL RULES ===
 
+- **A per-row sign block may be appended below** ("PER-ROW SIGN CONVENTIONS
+  — AUTHORITATIVE"), built from this template's live `*Total …` formulas.
+  When it lists a row, its ADD/SUBTRACT instruction is the single source of
+  truth and OVERRIDES the generic rules in this section for that row. The
+  generic rules below are the fallback for rows the block does not list.
+
 - **Sign conventions are critical for SOCF:**
   - Indirect method: non-cash add-backs are POSITIVE (depreciation, impairment losses).
     Working capital: decrease in receivables = positive, increase in payables = positive.

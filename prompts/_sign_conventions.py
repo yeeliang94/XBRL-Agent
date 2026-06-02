@@ -55,10 +55,14 @@ def _label_at(ws, row: int) -> str:
 
 def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
     """Build a prompt-injectable block listing each row that flows into
-    a SOCF `*Total …` formula, alongside its add/subtract sign.
+    a `*Total …` formula, alongside its add/subtract sign. Serves SOCF
+    and the SoRE (SOCIE-family) statement — the title and wording are
+    statement-neutral so SoRE no longer receives SOCF-branded prose.
 
     Returns None if the template can't be read or carries no `*Total`
-    formulas — the agent falls back to the static generic rules.
+    formulas — the agent falls back to the static generic rules. The
+    matrix SOCIE sheet (named "SOCIE") is filtered out below, so only
+    SoRE among the SOCIE family produces a block.
 
     The block is intentionally terse so the prompt cache stays warm.
     Each row appears AT MOST ONCE in the output even when it feeds
@@ -113,7 +117,13 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
         return None
 
     lines = [
-        "=== SOCF SIGN CONVENTIONS (from live template formulas) ===",
+        "=== PER-ROW SIGN CONVENTIONS — AUTHORITATIVE (from live template formulas) ===",
+        "",
+        "These signs are read directly from THIS template's live `*Total …`",
+        "formulas, so for the rows listed below they OVERRIDE any general",
+        "sign rule stated earlier in this prompt. (Rows not listed here fall",
+        "back to the general sign rules above — this block is the single",
+        "source of truth wherever the two disagree.)",
         "",
         "Each row below appears in a `*Total …` formula with the indicated",
         "coefficient. Enter values to MATCH the formula's intent:",
@@ -135,9 +145,9 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
         "total takes a POSITIVE loss magnitude; a gain takes NEGATIVE)."
     )
     lines.append(
-        "If the formula SUBTRACTS a row, enter the magnitude that flips "
-        "the directional name (a 'Cash payments' row subtracted by the "
-        "total takes a POSITIVE outflow magnitude — the formula handles "
-        "the sign flip)."
+        "If the formula SUBTRACTS a row, enter a POSITIVE magnitude that "
+        "matches the row's plain name and let the formula apply the sign "
+        "flip — e.g. a 'Dividends paid' or 'Cash payments' row subtracted "
+        "by the total takes a POSITIVE magnitude (do NOT pre-negate it)."
     )
     return "\n".join(lines)

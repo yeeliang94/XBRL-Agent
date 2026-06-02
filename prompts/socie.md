@@ -20,9 +20,15 @@ components. This is the most complex template structure.
 - W: Non-controlling interests
 - X: Total (FORMULA: U+V+W)
 
-**Row layout (duplicated for two periods):**
+**Row layout (duplicated for two periods) — MFRS Company linear template:**
 - Rows 6-25: Current period movements
 - Rows 30-49: Prior period movements
+
+These ranges are the **MFRS Company** starting anchor ONLY. ALWAYS confirm the
+actual movement-row numbers from read_template() before writing — they DIFFER
+on Group filings (a 4-block layout at rows 3-25 / 27-49 / 51-73 / 75-97,
+described in the Group overlay below) and can shift if the template is
+regenerated. Anchor on read_template()'s row labels, not these literals.
 
 Each period: opening balance → accounting policy changes → restated opening → profit/loss
 → OCI → TCI → contributions/distributions (dividends, share issuance, etc.) → total change
@@ -33,19 +39,34 @@ CELL INTERSECTIONS (row × column), not entire rows.
 
 === STRATEGY ===
 
-1. Call read_template() to understand the column and row layout.
+1. Call read_template() FIRST and read off the ACTUAL row number for each
+   movement you will write — profit/(loss), OCI/revaluation, dividends paid,
+   share issuance, share-based payments, and equity-at-end. The row numbers in
+   the examples below are illustrative; read_template()'s labels are
+   authoritative (the literals drift on Group / regenerated templates).
 2. View the Statement of Changes in Equity page in the PDF.
-3. Identify which equity components the entity has (columns to fill).
+3. Identify which equity components the entity has (columns to fill). Columns
+   are stable: B = Issued capital, C = Retained earnings, D = Treasury shares,
+   reserves E-L, NCI = W, Total = X (a FORMULA — never write it).
 4. For each movement row, fill the value in the CORRECT column using EXPLICIT
-   ROW + COL coordinates (not label matching — this is a matrix template):
-   - Profit/(loss) always → column 3 (C = Retained earnings)
-   - OCI items → relevant reserve column (e.g., revaluation → column 9 = I)
-   - Dividends paid → column 3 (C = Retained earnings), positive magnitude
-     because the Total increase/decrease formula subtracts this row
-   - Share issuance → column 2 (B = Issued capital)
-   - Share-based payments → column 8 (H)
-   Example: {"sheet": "SOCIE", "row": 10, "col": 3, "value": 500000, "evidence": "..."}
-5. Fill BOTH current period (rows 6-25) and prior period (rows 30-49).
+   ROW + COL coordinates (not label matching — this is a matrix template).
+   Confirm the ROW from read_template(); the COLUMN is fixed by the movement
+   type. One worked write_facts example per movement type (replace <row> with
+   the read_template() row for that movement):
+   - Profit/(loss) → column 3 (C = Retained earnings):
+     {"sheet": "SOCIE", "row": <profit row>, "col": 3, "value": 1250000, "evidence": "..."}
+   - OCI item, e.g. revaluation surplus → its reserve column (revaluation = column 9 = I):
+     {"sheet": "SOCIE", "row": <OCI row>, "col": 9, "value": 80000, "evidence": "..."}
+   - Dividends paid → column 3 (C = Retained earnings), POSITIVE magnitude
+     (the Total increase/decrease formula subtracts this row):
+     {"sheet": "SOCIE", "row": <dividends row>, "col": 3, "value": 500000, "evidence": "..."}
+   - Share issuance → column 2 (B = Issued capital):
+     {"sheet": "SOCIE", "row": <share-issue row>, "col": 2, "value": 2000000, "evidence": "..."}
+   - Share-based payments → column 8 (H):
+     {"sheet": "SOCIE", "row": <SBP row>, "col": 8, "value": 35000, "evidence": "..."}
+5. Fill BOTH current period (Company linear: rows 6-25) and prior period
+   (rows 30-49) — but read the actual ranges from read_template() (Group uses
+   the 4-block layout in the overlay below).
 6. Call write_facts(), verify_totals() (reports status only), and save_result().
 
 === CRITICAL RULES ===
