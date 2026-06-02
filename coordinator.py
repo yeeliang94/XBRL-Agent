@@ -182,6 +182,12 @@ class AgentResult:
     completion_tokens: int = 0
     turn_count: int = 0
     tool_call_count: int = 0
+    # v15 cache telemetry (§6 rec 1): cumulative cache-read / cache-write
+    # tokens for this agent, summed from the per-turn deltas. cache_read > 0
+    # is the proof that prompt caching is hitting; cache_write is tracked so
+    # cost accounting sees the (Anthropic-priced) write side too.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 @dataclass
@@ -510,6 +516,14 @@ async def _run_single_agent(
             )
             result.completion_tokens = sum(
                 int(t.get("completion_tokens") or 0) for t in _turn_records
+            )
+            # v15 cache rollups — summed from the same per-turn deltas so the
+            # run_agents row stays internally consistent with run_agent_turns.
+            result.cache_read_tokens = sum(
+                int(t.get("cache_read_tokens") or 0) for t in _turn_records
+            )
+            result.cache_write_tokens = sum(
+                int(t.get("cache_write_tokens") or 0) for t in _turn_records
             )
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("turn telemetry finalize skipped for %s", agent_role)

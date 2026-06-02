@@ -89,7 +89,7 @@ from pathlib import Path
 # IF NOT EXISTS walk-forward with no ALTER columns. Startup reconciles any
 # row left `running` by a dead process into a terminal error state
 # (see server._lifespan).
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -158,7 +158,12 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         prompt_tokens     INTEGER DEFAULT 0,
         completion_tokens INTEGER DEFAULT 0,
         turn_count        INTEGER DEFAULT 0,
-        tool_call_count   INTEGER DEFAULT 0
+        tool_call_count   INTEGER DEFAULT 0,
+        -- v15 cache telemetry: cache_read = prompt-cache hits (proof caching
+        -- works); cache_write = tokens written to cache (Anthropic prices
+        -- these at a premium, so cost accounting must see them). Default 0.
+        cache_read_tokens  INTEGER DEFAULT 0,
+        cache_write_tokens INTEGER DEFAULT 0
     )
     """,
 
@@ -180,6 +185,8 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         cumulative_tokens INTEGER DEFAULT 0,       -- running total after this turn
         cost_estimate     REAL DEFAULT 0,          -- delta cost for this turn
         duration_ms       INTEGER DEFAULT 0,
+        cache_read_tokens  INTEGER DEFAULT 0,      -- v15: cache-hit delta this turn
+        cache_write_tokens INTEGER DEFAULT 0,      -- v15: cache-write delta this turn
         ts                TEXT NOT NULL
     )
     """,
@@ -599,6 +606,17 @@ _V10_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # numeric checks read NULL. SQLite ALTER TABLE accepts a nullable column.
 _V14_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("cross_checks", "comparands_json", "TEXT"),
+)
+
+
+# v15 columns: cache telemetry (§6 caching work — measure before optimizing).
+# Rollups on run_agents + per-turn deltas on run_agent_turns. All nullable with
+# default 0 so every pre-v15 row reads 0; SQLite ALTER TABLE accepts them.
+_V15_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("run_agents", "cache_read_tokens", "INTEGER DEFAULT 0"),
+    ("run_agents", "cache_write_tokens", "INTEGER DEFAULT 0"),
+    ("run_agent_turns", "cache_read_tokens", "INTEGER DEFAULT 0"),
+    ("run_agent_turns", "cache_write_tokens", "INTEGER DEFAULT 0"),
 )
 
 
@@ -1092,6 +1110,47 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (14,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v14→v15 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v14 → v15: add cache-telemetry columns (cache_read_tokens /
+        # cache_write_tokens) to run_agents + run_agent_turns. Fresh DBs already
+        # carry them via CREATE TABLE above; this ALTER walks an existing v14 DB
+        # forward. Same BEGIN IMMEDIATE + duplicate-column tolerance as the
+        # earlier column steps (v9→v10, v13→v14).
+        if current_version is not None and current_version < 15:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 15:
+                    for table, col_name, col_ddl in _V15_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (15,),
                     )
                 conn.commit()
             except Exception:

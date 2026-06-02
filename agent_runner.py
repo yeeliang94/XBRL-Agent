@@ -71,6 +71,25 @@ def _out_tokens(u) -> int:
     return int(val or 0)
 
 
+def _cache_read_tokens(u) -> int:
+    """Prompt-cache *read* tokens (a cache HIT) from a pydantic-ai Usage.
+
+    pydantic-ai 1.77 normalises every provider's cached-prompt field to
+    ``cache_read_tokens``. A non-zero value is the only proof that prompt
+    caching is actually working — this is the §6 "measure first" signal.
+    getattr-with-default keeps it safe on older interpreters that lack the
+    field (returns 0 rather than raising)."""
+    return int(getattr(u, "cache_read_tokens", 0) or 0)
+
+
+def _cache_write_tokens(u) -> int:
+    """Prompt-cache *write* tokens from a pydantic-ai Usage (see _cache_read_tokens).
+
+    Captured separately because Anthropic bills cache writes at a premium —
+    counting only reads would report phantom savings on a write-heavy run."""
+    return int(getattr(u, "cache_write_tokens", 0) or 0)
+
+
 async def iter_with_turn_timeout(async_iterable, timeout: float):
     """Yield items from ``async_iterable`` with a per-step timeout.
 
@@ -153,8 +172,10 @@ async def run_agent_loop(
     thinking_counter = 0
     iteration = 0
     # Running cumulative usage so each node's per-turn figure is a delta
-    # (pydantic-ai's usage() is cumulative).
+    # (pydantic-ai's usage() is cumulative). Cache read/write track the same
+    # way so the per-turn rows show when a turn hit (or wrote) the cache.
     prev_prompt = prev_completion = prev_total = 0
+    prev_cache_read = prev_cache_write = 0
 
     def _inner(stream):
         # Wrap the inner tool/model event stream in the per-step timeout only
@@ -263,6 +284,8 @@ async def run_agent_loop(
         total = int(usage.total_tokens or 0)
         prompt_t = _in_tokens(usage)
         completion_t = _out_tokens(usage)
+        cache_read_t = _cache_read_tokens(usage)
+        cache_write_t = _cache_write_tokens(usage)
         await emit("token_update", {
             "prompt_tokens": prompt_t,
             "completion_tokens": completion_t,
@@ -289,8 +312,13 @@ async def run_agent_loop(
                 "cumulative_tokens": total,
                 "cost_estimate": estimate_cost(d_prompt, d_completion, 0, spec.model),
                 "duration_ms": int((time.monotonic() - node_start) * 1000),
+                # v15 cache telemetry: this turn's contribution to cache
+                # read/write (delta of the cumulative usage).
+                "cache_read_tokens": max(cache_read_t - prev_cache_read, 0),
+                "cache_write_tokens": max(cache_write_t - prev_cache_write, 0),
             })
             prev_prompt, prev_completion, prev_total = prompt_t, completion_t, total
+            prev_cache_read, prev_cache_write = cache_read_t, cache_write_t
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("per-turn telemetry capture skipped for %s", spec.agent_role)
 
