@@ -15,6 +15,30 @@ from openpyxl.formula.tokenizer import Tokenizer
 # direction marker AND the no-plug guidance — the original Bug B fix
 # only updated the CY branch, leaving the other three with the legacy
 # bare line and no anti-plug guard.
+# Phase 10 (2026-06-02): the SOFP balance identity used a fixed absolute
+# tolerance of 0.01. On a statement reported in plain RM (units), many line
+# items each rounded to the nearest unit and then summed legitimately differ
+# from a separately-rounded total by ~±1 — and a fixed 0.01 manufactured an
+# unresolvable imbalance from that ±1 rounding (the agent then loops or is
+# pushed toward a plug). Scale the tolerance to the statement's magnitude
+# with an absolute floor of one unit, so legitimate rounding passes while a
+# genuine missing line item (orders of magnitude larger) still fails.
+_BALANCE_REL_TOLERANCE = 1e-6
+_BALANCE_FLOOR = 1.0
+
+
+def _balance_tolerance(*magnitudes: float) -> float:
+    """Magnitude-scaled tolerance for a SOFP balance identity.
+
+    ``max(1.0, 1e-6 * largest-magnitude)`` — ~1 unit for ordinary
+    statements, growing very slowly so a large entity's accumulated
+    rounding is absorbed without ever tolerating a real, line-item-sized
+    discrepancy.
+    """
+    scale = max((abs(m) for m in magnitudes), default=0.0)
+    return max(_BALANCE_FLOOR, _BALANCE_REL_TOLERANCE * scale)
+
+
 def _sofp_imbalance_feedback(period_label: str, diff: float) -> list[str]:
     """Return the IMBALANCE + diagnostic + no-plug lines for a SOFP period.
 
@@ -528,7 +552,10 @@ def verify_totals(
         and "total_equity_liabilities_cy" in computed_totals
     ):
         diff = computed_totals["total_assets_cy"] - computed_totals["total_equity_liabilities_cy"]
-        if abs(diff) > 0.01:
+        if abs(diff) > _balance_tolerance(
+            computed_totals["total_assets_cy"],
+            computed_totals["total_equity_liabilities_cy"],
+        ):
             is_balanced = False
             mismatches.append(
                 f"CY: assets={computed_totals['total_assets_cy']} "
@@ -542,7 +569,10 @@ def verify_totals(
         and "total_equity_liabilities_py" in computed_totals
     ):
         diff = computed_totals["total_assets_py"] - computed_totals["total_equity_liabilities_py"]
-        if abs(diff) > 0.01:
+        if abs(diff) > _balance_tolerance(
+            computed_totals["total_assets_py"],
+            computed_totals["total_equity_liabilities_py"],
+        ):
             is_balanced = False
             mismatches.append(
                 f"PY: assets={computed_totals['total_assets_py']} "
@@ -557,7 +587,10 @@ def verify_totals(
             and "company_total_equity_liabilities_cy" in computed_totals
         ):
             diff = computed_totals["company_total_assets_cy"] - computed_totals["company_total_equity_liabilities_cy"]
-            if abs(diff) > 0.01:
+            if abs(diff) > _balance_tolerance(
+                computed_totals["company_total_assets_cy"],
+                computed_totals["company_total_equity_liabilities_cy"],
+            ):
                 is_balanced = False
                 mismatches.append(
                     f"Company CY: assets={computed_totals['company_total_assets_cy']} "
@@ -569,7 +602,10 @@ def verify_totals(
             and "company_total_equity_liabilities_py" in computed_totals
         ):
             diff = computed_totals["company_total_assets_py"] - computed_totals["company_total_equity_liabilities_py"]
-            if abs(diff) > 0.01:
+            if abs(diff) > _balance_tolerance(
+                computed_totals["company_total_assets_py"],
+                computed_totals["company_total_equity_liabilities_py"],
+            ):
                 is_balanced = False
                 mismatches.append(
                     f"Company PY: assets={computed_totals['company_total_assets_py']} "
@@ -631,7 +667,7 @@ def verify_totals(
                 computed_totals[f"equity_owners_cy{sfx}"] = owners
                 computed_totals[f"equity_nci_cy{sfx}"] = nci
                 expected = owners + nci
-                if abs(te - expected) > 0.01:
+                if abs(te - expected) > _balance_tolerance(te, owners, nci):
                     is_balanced = False
                     mismatches.append(
                         f"{pfx}Total equity ({te}) != "

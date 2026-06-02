@@ -130,6 +130,55 @@ def test_verify_unbalanced_feedback_direction(tmp_path):
     assert "lower" in feedback or "too low" in feedback
 
 
+# ---------------------------------------------------------------------------
+# Phase 10 (2026-06-02) — magnitude-scaled SOFP balance tolerance. A ±1 unit
+# rounding (legitimate when many rounded line items are summed) must not
+# manufacture an unresolvable imbalance, while a real discrepancy still fails.
+# ---------------------------------------------------------------------------
+
+
+def _sofp_cy(tmp_path, assets: float, eq_liab: float):
+    path = tmp_path / "sofp_tol.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOFP-CuNonCu"
+    ws["A1"] = "Total assets"
+    ws["B1"] = assets
+    ws["A2"] = "Total equity and liabilities"
+    ws["B2"] = eq_liab
+    wb.save(str(path))
+    return path
+
+
+def test_balance_tolerance_absorbs_unit_rounding(tmp_path):
+    """An RM'000 statement off by exactly 1 unit (rounding) is now balanced —
+    under the old 0.01 absolute check this manufactured an imbalance."""
+    path = _sofp_cy(tmp_path, assets=1595, eq_liab=1594)
+    result = verify_totals(str(path))
+    assert result.is_balanced, f"±1 rounding should pass: {result.feedback!r}"
+
+
+def test_balance_tolerance_still_flags_real_imbalance(tmp_path):
+    """A real >tolerance discrepancy still fails on a small statement."""
+    path = _sofp_cy(tmp_path, assets=1595, eq_liab=1590)  # off by 5
+    result = verify_totals(str(path))
+    assert not result.is_balanced
+
+
+def test_balance_tolerance_scales_with_magnitude(tmp_path):
+    """On a large statement the tolerance grows: a tiny relative discrepancy
+    passes, but a real one still fails."""
+    # magnitude 50,000,000 → tol = max(1.0, 1e-6 * 5e7) = 50.
+    ok_dir = tmp_path / "ok"
+    ok_dir.mkdir()
+    ok = _sofp_cy(ok_dir, assets=50_000_000, eq_liab=50_000_030)  # off 30 < 50
+    assert verify_totals(str(ok)).is_balanced
+    bad_dir = tmp_path / "bad"
+    bad_dir.mkdir()
+    bad = _sofp_cy(bad_dir, assets=50_000_000, eq_liab=50_000_080)  # off 80 > 50
+    assert not verify_totals(str(bad)).is_balanced
+
+
 def test_evaluate_formula_weighted_sum(tmp_path):
     """Formula parser handles =1*B2+1*B3 style sums."""
     wb = openpyxl.Workbook()
