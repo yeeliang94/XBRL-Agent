@@ -1,6 +1,6 @@
 # Implementation Plan: Prompt Caching (§6) + Agent Effectiveness (§9)
 
-**Overall Progress:** `45%` — Phases 0,1,2,4,5 ✅ (Phase 3 gated on live telemetry; Step 5.3 moved to Phase 6)
+**Overall Progress:** `90%` — Phases 0,1,2,4,5,6,7,8,9,10 ✅ (only Phase 3 remains, gated on live telemetry)
 **PRD Reference:** [docs/REVIEW-prompts-and-caching.html](REVIEW-prompts-and-caching.html) — §6 (caching recommendations) and §9 (effectiveness problems)
 **Last Updated:** 2026-06-02
 **Branch:** `prompt-caching-and-effectiveness`
@@ -135,17 +135,19 @@ temperature pin today, so converting them would change behaviour for ~0 benefit.
 
 ---
 
-### Phase 9: Effectiveness — provider-aware temperature (§9 #7)
-- [ ] 🟥 **Step 9.1: Lower temperature off Gemini** — make temperature provider-aware (Gemini stays 1.0 per CLAUDE.md:140; OpenAI/Anthropic drop to ~0–0.2), validating per model since some GPT-5 reasoning models reject non-default temperature.
-  - [ ] 🟥 Confirm no test pins `temperature=1.0` for non-Gemini; update if so
-  - **Verify:** a Claude/OpenAI run still completes (no API rejection); spot-check that numeric extraction variance is not worse than baseline on a repeat run.
+### Phase 9: Effectiveness — provider-aware temperature (§9 #7) ✅
+- [x] 🟩 **Step 9.1: Lower temperature off Gemini** — DONE. `model_settings.py` now resolves a provider-aware default via `_default_temperature(model)`: Gemini → 1.0 (CLAUDE.md constraint); Anthropic → 0.2; OpenAI → 0.2 EXCEPT reasoning models (o1/o3/o4 + gpt-5.x markers, incl. the default `openai.gpt-5.4`) which reject a non-default temperature and stay 1.0; unknown / bare-string → 1.0 (safe). `build_model_settings` signature changed to `temperature: float | None = None` (None → resolve; explicit float still overrides). `LOWERED_TEMPERATURE = 0.2` constant added.
+  - [x] 🟩 Updated the two `test_model_settings.py` pins that now lower (direct + proxy-routed Anthropic) and added 3 Phase-9 pins (OpenAI reasoning stays 1.0 across 4 ids; non-reasoning → 0.2 with cache params intact; Gemini direct+proxy stays 1.0). Confirmed no other test pins temperature.
+  - **Mocked:** ✅ 12 passed (`test_model_settings.py`); full backend suite 1903 passed.
+  - **Verify (USER, live):** a Claude/non-reasoning-OpenAI run still completes (no API rejection); the default `gpt-5.4` path is unchanged (stays 1.0). Spot-check numeric-extraction variance on a repeat run.
 
 ---
 
-### Phase 10: Effectiveness — rounding tolerance (§9 #8)
-- [ ] 🟥 **Step 10.1: Scale the SOFP balance tolerance** — change the absolute `abs(diff) > 0.01` check (`tools/verifier.py:482`) to scale with the statement's unit/magnitude so a legitimate ±RM1 rounding on an RM'000 statement doesn't manufacture an unresolvable imbalance.
-  - [ ] 🟥 Update `tests/test_cross_checks.py` / verifier balance tests for the new tolerance
-  - **Verify:** an RM'000 statement with a genuine ±1 source rounding no longer trips the imbalance → acknowledge loop; a real >tolerance imbalance still fails.
+### Phase 10: Effectiveness — rounding tolerance (§9 #8) ✅
+- [x] 🟩 **Step 10.1: Scale the SOFP balance tolerance** — DONE. New `_balance_tolerance(*magnitudes)` in `tools/verifier.py` → `max(1.0, 1e-6 * largest-magnitude)`, applied to all four `verify_totals` SOFP balance branches (CY/PY/Company-CY/Company-PY) + the Group equity-attribution sub-check, replacing the fixed `abs(diff) > 0.01`. ~1 unit for ordinary statements (matching the cross-check framework's existing `DEFAULT_TOLERANCE_RM = 1.0` floor), growing slowly so a large entity's accumulated rounding is absorbed but a genuine missing line item still fails. (The `cross_checks` SOFPBalanceCheck already had the 1.0 floor — the 0.01 problem was isolated to the face-agent `verify_totals` path, the one that drives the acknowledge loop.)
+  - [x] 🟩 Added 3 verifier balance-tolerance pins in `tests/test_verifier.py` (±1 rounding now passes; a real >tol discrepancy still fails; magnitude scaling on a 50M statement). `test_cross_checks.py` unaffected (separate module, already 1.0).
+  - **Mocked:** ✅ 54 passed (verifier + feedback + cross-checks); full backend suite 1903 passed.
+  - **Verify (USER, live):** an RM'000 statement with a genuine ±1 source rounding no longer trips the imbalance → acknowledge loop; a real >tolerance imbalance still fails.
 
 ---
 
@@ -169,6 +171,7 @@ A second team-lead review of Phases 1–2 raised 3 findings — **all 3 verified
 - **F3 (MEDIUM) — labelled now, full fix tracked.** `estimate_cost` prices prompt tokens flat, ignoring cache read discounts / Anthropic write premium, so `total_cost` overstates once caching hits. Correct pricing is provider-dependent (input_tokens INCLUDES cached reads on OpenAI, EXCLUDES on Anthropic) and needs per-model cache rates → out of scope for an inline fix. Added an explicit "PRE-CACHE ESTIMATE" docstring; token-level truth is already on the Telemetry tab (v15). Full cache-aware pricing spawned as a follow-up task.
 
 ## Notes / deviations log
+- **2026-06-02 — Phases 9 & 10:** provider-aware temperature + magnitude-scaled SOFP tolerance. Phase 9: the default app model (`openai.gpt-5.4`) is an OpenAI reasoning model, so it STAYS at 1.0 — the common path is unchanged; the win lands for Anthropic (0.2) and non-reasoning OpenAI (0.2). Conservative by design because the handoff flagged that GPT-5 reasoning models reject non-default temperature and the enterprise-proxy path is untestable here. Phase 10: discovered the `cross_checks` SOFP balance check already used a 1.0 floor (`DEFAULT_TOLERANCE_RM`); the 0.01 over-tightness was only in the face-agent `verify_totals` path (the acknowledge-loop driver), so the fix is scoped there and stays consistent with the cross-check in the common case. Full suite 1903 passed.
 - **2026-06-02 — Phase 7:** directional verifier feedback. Added a 2x-component sign-error heuristic (`_imbalance_diagnostic`) and wired it into all four non-SOFP verifiers; routed via feedback (not `mismatches`) to avoid disturbing the substring-on-mismatch tests. Prompt side: `_base.md` now states `verify_totals()` is near-vacuous for non-SOFP (value accuracy is the agent's job), and the impossible cross-statement checks in `soci.md`/`socf.md` were reframed as "runs later, you can't do it here." 3 new pins in `test_verifier_feedback_wording.py` (2 positive sign-error cases + 1 negative no-false-positive case). Did NOT touch SOFP's `_sofp_imbalance_feedback`. Full suite pending.
 - **2026-06-02 — Phase 6:** single-sourced sign conventions + de-hardcoded SOCIE rows. Key discovery: the matrix-SOCIE sheet ("SOCIE") never actually received the SOCF sign block (the helper filters on a "socf"/"sore" sheet name → returns None), so "stop feeding SOCIE a SOCF-worded block" really meant the **SoRE** variant (sheet "SoRE", reached via the SOCIE gate) was getting a block literally titled "SOCF SIGN CONVENTIONS" with cash-flow prose. Fixed by making the block title + examples statement-neutral and marking it authoritative over the static prose. For 6.1, the literals 6-25/30-49 are **kept** (pinned by `test_still_has_mfrs_row_ranges`, whose rationale is "agent loses anchoring without them") but reframed as the Company anchor with a mandatory "confirm via read_template(), Group differs" instruction — satisfies the de-hardcode intent (no blind trust) without breaking the pin. One pin loosened→tightened in the same commit (omit-block test). Full suite 1892 passed.
 - **2026-06-02 — Phase 0:** the review's "pydantic-ai is 0.8.1" was a red herring (system python). The real runtime (`venv`) is **1.77.0** with first-class caching APIs, so Phase 2 needs no `extra_body` hacks: `AnthropicModelSettings.anthropic_cache_instructions` (direct) and `OpenAIChatModelSettings.openai_prompt_cache_key` / `openai_prompt_cache_retention` (OpenAI). `CURRENT_SCHEMA_VERSION` had already drifted to **14** (CLAUDE.md says 13) — v15 builds on 14.
