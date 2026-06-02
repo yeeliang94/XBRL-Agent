@@ -17,17 +17,27 @@ def _flatten(s: str) -> str:
 
 
 def test_notes_base_prompt_contains_non_duplication_rule():
-    """Step 6.1: base prompt must state the 'one note, one cell' invariant."""
+    """Base prompt must state the no-cross-sheet-duplication invariant.
+
+    PLAN Phase 5 (§9 #1): the headline was reworded from the contradictory
+    "exactly one CELL across the workbook" (which collided with the legitimate
+    one-note-feeds-multiple-rows case) to "exactly one SHEET" — content isn't
+    duplicated across sheets, but may populate several rows within its sheet.
+    Matched loosely so wording can keep evolving.
+    """
     text = (_PROMPT_DIR / "_notes_base.md").read_text(encoding="utf-8")
     flat = _flatten(text)
-    # The headline invariant — matched loosely so wording can evolve
-    # without forcing a test edit every time.
-    assert "exactly one cell" in flat or "one cell" in flat
+    # The headline invariant: a note's content lives on exactly one SHEET.
+    assert "exactly one sheet" in flat or "no cross-sheet duplication" in flat
     assert "appears" in flat or "appear" in flat
     # Sub-note grouping guidance should also be present.
     assert "5.1" in text  # example sub-note number
-    # Explicit "same sub-note cannot appear in two cells" phrasing.
-    assert "two cells" in flat or "both sheets" in flat
+    # Cross-sheet duplication is the forbidden case (not multi-row on one sheet).
+    assert (
+        "two different sheets" in flat
+        or "both sheets" in flat
+        or "cross-sheet" in flat
+    )
 
 
 def test_accounting_policies_prompt_has_heading_rule():

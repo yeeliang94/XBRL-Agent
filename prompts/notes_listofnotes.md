@@ -70,14 +70,17 @@ Format — a JSON list of entries, one per batch note:
   combined risk-management note that writes to "Disclosure of financial
   instruments", "Disclosure of credit risk", and "Disclosure of
   liquidity risk").
-- For a note you deliberately did NOT write:
+- For a note you deliberately did NOT write to a Sheet-12 row:
   `{"note_num": <int>, "action": "skipped", "reason": "<one sentence>"}`
-  Valid reasons include: the note is the Summary of Accounting Policies
-  (belongs on Sheet {{CROSS_SHEET:accounting_policies}}); the note is
+  **A skip is only valid when the note belongs on ANOTHER sheet.** The
+  complete list of valid skip reasons: the note is the Summary of
+  Accounting Policies (belongs on Sheet {{CROSS_SHEET:accounting_policies}});
   Corporate Information (belongs on Sheet {{CROSS_SHEET:corporate_information}});
-  the note is Related Party Transactions (belongs on Sheet
-  {{CROSS_SHEET:related_party}}); no row on this List of Notes sheet
-  fits and it isn't important enough for the catch-all row.
+  or Related Party Transactions (belongs on Sheet
+  {{CROSS_SHEET:related_party}}). A real disclosure note that simply fits no
+  specific Sheet-12 row is **never** skipped — it goes to the catch-all row
+  (step 3). The catch-all is the sink, not a bin: "no row fits" means
+  catch-all, not skip.
 
 Every note number in your batch must appear in the receipt exactly
 once. The tool returns errors if anything is missing, duplicated,
@@ -90,13 +93,15 @@ Worked example for a 3-note batch (notes 4, 5, 6):
       {"note_num": 4, "action": "written",
        "row_labels": ["Disclosure of financial instruments at fair value through profit or loss"]},
       {"note_num": 5, "action": "written",
-       "row_labels": ["Disclosure of trade and other payables"]},
+       "row_labels": ["{{CATCH_ALL_LABEL}}"]},
       {"note_num": 6, "action": "skipped",
-       "reason": "Share capital disclosure handled by Notes-13"}
+       "reason": "Summary of Accounting Policies — belongs on the Accounting Policies sheet"}
     ]
 
-Do NOT force a "written" entry when no Sheet-12 row genuinely fits —
-a truthful "skipped" is always better than a guess.
+Note 5 above is a real disclosure that fits no specific row, so it lands on
+the catch-all (NOT skipped). Note 6 is skipped only because it belongs on
+another sheet. Do NOT force a "written" entry onto a wrong specific row —
+but "no specific row fits" means the catch-all, never a silent drop.
 
 === SCOPE BOUNDARY: SKIP THE ACCOUNTING-POLICIES NOTE ===
 

@@ -1,6 +1,6 @@
 # Implementation Plan: Prompt Caching (§6) + Agent Effectiveness (§9)
 
-**Overall Progress:** `36%` — Phase 0 ✅, Phase 1 ✅, Phase 2 ✅, Phase 4 ✅ (Phase 3 gated on live telemetry)
+**Overall Progress:** `45%` — Phases 0,1,2,4,5 ✅ (Phase 3 gated on live telemetry; Step 5.3 moved to Phase 6)
 **PRD Reference:** [docs/REVIEW-prompts-and-caching.html](REVIEW-prompts-and-caching.html) — §6 (caching recommendations) and §9 (effectiveness problems)
 **Last Updated:** 2026-06-02
 **Branch:** `prompt-caching-and-effectiveness`
@@ -96,16 +96,18 @@ temperature pin today, so converting them would change behaviour for ~0 benefit.
 
 ---
 
-### Phase 5: Effectiveness — notes prompt contradictions (§9 #1)
-- [ ] 🟥 **Step 5.1: Reconcile "ONE NOTE, ONE CELL" vs multi-row** — reword the base invariant (`prompts/_notes_base.md:11`) to "content isn't duplicated *across sheets*" and explicitly bless intra-sheet multi-row splits.
-- [ ] 🟥 **Step 5.2: Reconcile "skip" vs "catch-all"** — make the Sheet-12 catch-all instruction (`prompts/notes_listofnotes.md:44`) explicitly override the base "skip" disposition; define the "important enough for the catch-all" judgement or remove it (the §9 #1 internal-contradiction row).
-- [ ] 🟥 **Step 5.3: Sign-convention single source** — state each dividend/OCI sign rule once; mark the injected `_sign_conventions.py` block authoritative; stop feeding SOCIE a SOCF-worded block.
-  - [ ] 🟥 Update `tests/test_notes_prompt_phase1.py` assertions touched by the rewording
-  - **Verify:** notes run on the sample PDF — no cross-sheet duplicate of a note; previously-dropped catch-all notes now land; `pytest tests/test_notes_prompt_phase1.py` green.
+### Phase 5: Effectiveness — notes prompt contradictions (§9 #1) ✅
+- [x] 🟩 **Step 5.1: Reconcile "ONE NOTE, ONE CELL" vs multi-row** — DONE. `prompts/_notes_base.md` headline reworded from "exactly one CELL across the workbook" → **"exactly one SHEET"** (no cross-sheet duplication), explicitly blessing intra-sheet multi-row splits + sub-note grouping. Section renamed `INVARIANT: NO CROSS-SHEET DUPLICATION`.
+- [x] 🟩 **Step 5.2: Reconcile "skip" vs "catch-all"** — DONE. Base "skip" disposition now carves out sheet-defined catch-all sinks. `prompts/notes_listofnotes.md` skip taxonomy tightened: a skip is valid **only** when the note belongs on another sheet (acc-policies / corporate-info / related-party); "no specific row fits" → catch-all, never a silent drop. Removed the contradictory "isn't important enough for the catch-all" escape and the misleading "handled by Notes-13" worked-example skip (now a catch-all `written` example).
+- [x] 🟩 **Pinning test updated:** `test_notes_phase6_prompts.py::test_notes_base_prompt_contains_non_duplication_rule` rewritten to assert the corrected SHEET-level invariant (it had pinned the old contradictory "one cell" wording).
+  - **Mocked:** ✅ notes prompt + e2e suites green (phase6, notes12_e2e, prompt_phase1, label_catalog, html_contract, no_mfrs_leak, filing_standard, mpers_notes — 86+ passed).
+  - **Verify (USER, live):** a notes run on the sample PDF shows no cross-sheet duplicate; a real-but-unmatched note lands on the catch-all instead of being dropped.
+- **Step 5.3 (sign-convention single source) MOVED to Phase 6** — it's face-statement sign conventions (`_sign_conventions.py` + SOCIE/SOCF prompts, ADR-002), the same subsystem as the SOCIE work; grouping it there keeps each commit coherent (notes vs face).
 
 ---
 
-### Phase 6: Effectiveness — de-hardcode SOCIE rows (§9 #2)
+### Phase 6: Effectiveness — de-hardcode SOCIE rows (§9 #2) + sign-convention single source (§9 #1, moved from Phase 5)
+- [ ] 🟥 **Step 6.0: Sign-convention single source** — state each dividend/OCI sign rule once; mark the dynamically-injected `_sign_conventions.py` block authoritative over the static prose; stop feeding SOCIE a SOCF-worded block. Respect ADR-002 + the dividend-sign pins.
 - [ ] 🟥 **Step 6.1: Read movement rows from the template** — change `prompts/socie.md` to have the agent confirm movement-row numbers (profit, dividends, equity-at-end, share issue, OCI) from `read_template()` instead of trusting literal rows 6–25/30–49, which conflict with the group overlay (rows 3–25…).
   - [ ] 🟥 Add one worked `write_facts` example per movement type (not one bare example for a 24-column matrix)
   - [ ] 🟥 Re-check `tests/test_filing_level.py` (Company vs Group SOCIE routing) still passes
@@ -159,5 +161,6 @@ If something goes badly wrong:
 ## Notes / deviations log
 - **2026-06-02 — Phase 0:** the review's "pydantic-ai is 0.8.1" was a red herring (system python). The real runtime (`venv`) is **1.77.0** with first-class caching APIs, so Phase 2 needs no `extra_body` hacks: `AnthropicModelSettings.anthropic_cache_instructions` (direct) and `OpenAIChatModelSettings.openai_prompt_cache_key` / `openai_prompt_cache_retention` (OpenAI). `CURRENT_SCHEMA_VERSION` had already drifted to **14** (CLAUDE.md says 13) — v15 builds on 14.
 - **2026-06-02 — Phase 1:** landed cache telemetry end-to-end (capture → schema v15 → repo → API payload → frontend). All tests I can run pass: backend 1881 passed / 2 skipped, frontend 632 passed, tsc clean. Live end-to-end verification (does a real run report non-zero cache reads) is handed to the user — it's the gate for Phase 3.
+- **2026-06-02 — Phase 5:** fixed the notes prompt's flat contradictions (§9 #1). Base invariant reworded "one cell" → "one sheet" (the multi-row case is now explicitly legitimate); Sheet-12 skip taxonomy tightened so unmatched-but-real notes hit the catch-all instead of being dropped, and the misleading "handled by Notes-13" skip example was removed. Updated the one pinning test that encoded the old contradictory wording. Deferred Step 5.3 (sign conventions) to Phase 6 — same subsystem as SOCIE. Notes prompt + e2e suites green.
 - **2026-06-02 — Phase 4:** pre-inject cascade traces into the reviewer packet (`_trace_for_check` + `render_reviewer_prompt` wiring), plus reviewer.md batching guidance. Highest-ROI reviewer change: the children-feeding-a-total data is computed server-side and was being rediscovered by the agent at 2-3 tool round-trips per check, against a tight [12,36] budget. Reviewer suite 58 + routes/lifecycle/e2e 43 green. Live before/after turn-count comparison handed to the user. (Did Phase 4 before Phase 3 because Phase 3 is gated on the live telemetry; Phase 4 is independent and mock-testable.)
 - **2026-06-02 — Phase 2:** added `model_settings.py::build_model_settings` (provider-aware, dispatch by model type) and wired it into all 6 multi-turn agents. Direct-Anthropic caches instructions+tools; OpenAI (direct + proxy) sets cache_key+24h retention. 1.77's first-class settings meant **no `extra_body`/`CachePoint` hacks** — simpler than the report assumed. Removed the now-dead `ModelSettings` imports in the 6 files. Deferred: proxy-routed-Anthropic caching (Step 2.2 known gap) and the temperature seam (Phase 9 — helper already accepts a `temperature` override). New `tests/test_model_settings.py` (6) green.
