@@ -40,6 +40,33 @@ from pydantic_ai.settings import ModelSettings
 PINNED_TEMPERATURE = 1.0
 
 
+def _resolved_provider(model: Any) -> str:
+    """Best-effort provider of the *underlying* model, even when the Python
+    type is ``OpenAIChatModel`` because of proxy routing.
+
+    The enterprise proxy wraps EVERY model — including ``vertex_ai.*`` (Gemini)
+    and ``bedrock.anthropic.*`` (Claude) — as an ``OpenAIChatModel`` pointed at
+    the OpenAI-compatible endpoint (server._create_proxy_model). Dispatching on
+    the Python type alone would then attach OpenAI-only cache params
+    (`prompt_cache_key`) to a Gemini/Claude request, which the proxy may reject
+    if it doesn't drop unknown params. So we read the registry model id off
+    ``model.model_name`` and classify by it. Returns 'openai' | 'anthropic' |
+    'google' | 'unknown'.
+    """
+    name = (getattr(model, "model_name", "") or "").lower()
+    if not name:
+        return "unknown"
+    # Order matters: anthropic/google markers (incl. their proxy prefixes
+    # vertex_ai.* / bedrock.anthropic.*) are checked before the OpenAI markers.
+    if any(k in name for k in ("vertex_ai", "gemini", "google")):
+        return "google"
+    if any(k in name for k in ("anthropic", "claude", "bedrock")):
+        return "anthropic"
+    if name.startswith(("gpt-", "o1-", "o3-", "o4-")) or "openai" in name:
+        return "openai"
+    return "unknown"
+
+
 def build_model_settings(
     model: Any,
     *,
@@ -68,21 +95,27 @@ def build_model_settings(
             anthropic_cache_tool_definitions=True,
         )
 
-    # OpenAIChatModel covers direct OpenAI AND every proxy-routed model. The
-    # deprecated aliases are matched too so a caller on an older construction
-    # path still benefits.
+    # OpenAIChatModel is the Python type for direct OpenAI AND every
+    # proxy-routed model. Only attach OpenAI-only cache params when the
+    # UNDERLYING model is actually OpenAI — otherwise a proxy-routed Gemini/
+    # Claude would receive `prompt_cache_key` it can't honour and the proxy may
+    # reject (peer-review F1). Proxy-routed Anthropic/Gemini fall through to
+    # plain settings (their caching can't be driven from here anyway — the
+    # Step 2.2 known gap), which is behaviour-neutral vs. before this change.
     if type_name in ("OpenAIChatModel", "OpenAIModel", "OpenAIResponsesModel"):
-        from pydantic_ai.models.openai import OpenAIChatModelSettings
+        if _resolved_provider(model) == "openai":
+            from pydantic_ai.models.openai import OpenAIChatModelSettings
 
-        settings: dict[str, Any] = {
-            "temperature": temperature,
-            # Extend retention past the default few minutes so reuse survives
-            # across the agents in a run (and short gaps between runs).
-            "openai_prompt_cache_retention": "24h",
-        }
-        if cache_key:
-            settings["openai_prompt_cache_key"] = cache_key
-        return OpenAIChatModelSettings(**settings)
+            settings: dict[str, Any] = {
+                "temperature": temperature,
+                # Extend retention past the default few minutes so reuse
+                # survives across the agents in a run (and short gaps between).
+                "openai_prompt_cache_retention": "24h",
+            }
+            if cache_key:
+                settings["openai_prompt_cache_key"] = cache_key
+            return OpenAIChatModelSettings(**settings)
+        return ModelSettings(temperature=temperature)
 
     # GoogleModel / bare string / unknown — implicit caching only.
     return ModelSettings(temperature=temperature)
