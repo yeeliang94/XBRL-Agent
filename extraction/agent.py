@@ -571,7 +571,8 @@ def create_extraction_agent(
         system_prompt=system_prompt,
         # Phase 2: provider-correct prompt caching of the static system prompt
         # + tool defs. cache_key keeps this statement's requests on one OpenAI
-        # cache shard. Temperature stays pinned inside build_model_settings.
+        # cache shard. Temperature is provider-aware inside build_model_settings
+        # (Phase 9): Gemini + OpenAI-reasoning stay 1.0, others lowered.
         model_settings=build_model_settings(
             model, cache_key=f"xbrl-face-{statement_type.value}"
         ),

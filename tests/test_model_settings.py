@@ -9,7 +9,7 @@ assert the returned settings carry the right flags. Temperature stays pinned at
 """
 from __future__ import annotations
 
-from model_settings import build_model_settings, PINNED_TEMPERATURE
+from model_settings import build_model_settings, PINNED_TEMPERATURE, LOWERED_TEMPERATURE
 
 
 class AnthropicModel:  # noqa: D401 — stand-in matching the real class name
@@ -29,7 +29,8 @@ class GoogleModel:
 
 def test_anthropic_caches_instructions_and_tools():
     s = build_model_settings(AnthropicModel(), cache_key="ignored-on-anthropic")
-    assert s["temperature"] == PINNED_TEMPERATURE
+    # Phase 9: Anthropic accepts a non-default temperature → lowered.
+    assert s["temperature"] == LOWERED_TEMPERATURE
     assert s["anthropic_cache_instructions"] is True
     assert s["anthropic_cache_tool_definitions"] is True
     # cache_key is an OpenAI-only concept — it must NOT leak onto Anthropic.
@@ -37,6 +38,8 @@ def test_anthropic_caches_instructions_and_tools():
 
 
 def test_openai_sets_cache_key_and_retention():
+    # Default fixture model is gpt-5.4 — an OpenAI reasoning model, which
+    # rejects a non-default temperature, so it stays pinned at 1.0 (Phase 9).
     s = build_model_settings(OpenAIChatModel(), cache_key="xbrl-face-SOFP")
     assert s["temperature"] == PINNED_TEMPERATURE
     assert s["openai_prompt_cache_key"] == "xbrl-face-SOFP"
@@ -69,7 +72,8 @@ def test_proxy_routed_anthropic_does_not_get_openai_cache_params():
     )
     assert "openai_prompt_cache_key" not in s
     assert "openai_prompt_cache_retention" not in s
-    assert s["temperature"] == PINNED_TEMPERATURE
+    # Phase 9: classified as anthropic by model id → lowered temperature.
+    assert s["temperature"] == LOWERED_TEMPERATURE
 
 
 def test_proxy_routed_gemini_does_not_get_openai_cache_params():
@@ -101,6 +105,37 @@ def test_bare_string_model_falls_back_to_plain_settings():
 
 
 def test_temperature_override_is_honored():
-    # Phase 9 will lower temperature off Gemini — confirm the seam works now.
+    # An explicit temperature always wins over the provider-aware default.
     s = build_model_settings(OpenAIChatModel(), cache_key="k", temperature=0.0)
     assert s["temperature"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 — provider-aware temperature defaults.
+# ---------------------------------------------------------------------------
+
+
+def test_openai_reasoning_models_keep_pinned_temperature():
+    """o-series and gpt-5.x reject a non-default temperature → stay at 1.0,
+    direct and proxy-prefixed."""
+    for name in ("gpt-5.4", "openai.gpt-5.4", "o3-mini", "openai.o1-preview"):
+        s = build_model_settings(OpenAIChatModel(name), cache_key="k")
+        assert s["temperature"] == PINNED_TEMPERATURE, name
+
+
+def test_openai_non_reasoning_models_get_lowered_temperature():
+    """Standard OpenAI chat models accept a lower temperature for less
+    numeric-extraction jitter."""
+    for name in ("gpt-4o", "openai.gpt-4o-mini", "gpt-4-turbo"):
+        s = build_model_settings(OpenAIChatModel(name), cache_key="k")
+        assert s["temperature"] == LOWERED_TEMPERATURE, name
+        # Lowering must not disturb the OpenAI cache params.
+        assert s["openai_prompt_cache_key"] == "k", name
+
+
+def test_gemini_stays_pinned_at_one():
+    """Gemini-3-through-proxy requires 1.0 (CLAUDE.md Temperature Constraint)
+    — both direct and proxy-routed."""
+    assert build_model_settings(GoogleModel())["temperature"] == PINNED_TEMPERATURE
+    proxied = build_model_settings(OpenAIChatModel("vertex_ai.gemini-3.5-flash"))
+    assert proxied["temperature"] == PINNED_TEMPERATURE
