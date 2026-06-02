@@ -18,9 +18,15 @@ TYPE that ``server._create_proxy_model`` handed us:
 - ``GoogleModel`` / anything else (incl. bare-string models): implicit caching
   only — return a plain ``ModelSettings`` unchanged from today.
 
-Temperature stays pinned at 1.0 here — Gemini-3-through-proxy requires it (the
-"Temperature Constraint" rule in CLAUDE.md). PLAN Phase 9 will make it
-provider-aware; this module is the single place that change will land.
+Temperature is provider-aware (PLAN Phase 9). Gemini stays pinned at 1.0 —
+Gemini-3-through-proxy requires it (the "Temperature Constraint" rule in
+CLAUDE.md). Anthropic and *non-reasoning* OpenAI chat models drop to a
+lower, lower-variance temperature. OpenAI reasoning models (o-series and
+gpt-5.x — including the default ``gpt-5.4``) reject a non-default
+temperature, so they keep 1.0; unknown / bare-string models keep 1.0 too
+(safe default). A caller may still pass an explicit ``temperature=`` to
+override the resolved default. This module is the single place the policy
+lives.
 
 KNOWN GAP (PLAN Step 2.2): Claude routed through the proxy arrives as an
 ``OpenAIChatModel``, so it takes the OpenAI branch and the ``anthropic_cache_*``
@@ -36,8 +42,40 @@ from typing import Any
 from pydantic_ai.settings import ModelSettings
 
 # Pinned temperature (Gemini-3-through-proxy requires 1.0; see module docstring
-# and CLAUDE.md "Temperature Constraint"). PLAN Phase 9 makes this per-provider.
+# and CLAUDE.md "Temperature Constraint"). Also the safe default for OpenAI
+# reasoning models (which reject non-default temperature) and unknown models.
 PINNED_TEMPERATURE = 1.0
+
+# Lower, lower-variance temperature for providers/models that accept it
+# (Anthropic + non-reasoning OpenAI chat). Numeric extraction benefits from
+# less sampling jitter; we stay above 0.0 to avoid degenerate loops.
+LOWERED_TEMPERATURE = 0.2
+
+# OpenAI model-id markers for the reasoning family (o1/o3/o4 + gpt-5.x).
+# These reject a non-default temperature, so they keep PINNED_TEMPERATURE.
+# Checked as substrings against the (proxy-prefixed) lowercased model id, so
+# "openai.gpt-5.4" and a bare "o3-mini" both match.
+_OPENAI_REASONING_MARKERS = ("o1-", "o3-", "o4-", "gpt-5")
+
+
+def _default_temperature(model: Any) -> float:
+    """Resolve the provider-aware default temperature for ``model``.
+
+    Gemini → 1.0 (required). Anthropic → lowered. OpenAI → lowered UNLESS it
+    is a reasoning model (o-series / gpt-5.x), which keeps 1.0 because those
+    reject a non-default temperature. Unknown / bare-string → 1.0 (safe).
+    """
+    provider = _resolved_provider(model)
+    if provider == "google":
+        return PINNED_TEMPERATURE
+    if provider == "anthropic":
+        return LOWERED_TEMPERATURE
+    if provider == "openai":
+        name = (getattr(model, "model_name", "") or "").lower()
+        if any(m in name for m in _OPENAI_REASONING_MARKERS):
+            return PINNED_TEMPERATURE
+        return LOWERED_TEMPERATURE
+    return PINNED_TEMPERATURE
 
 
 def _resolved_provider(model: Any) -> str:
@@ -71,17 +109,21 @@ def build_model_settings(
     model: Any,
     *,
     cache_key: str | None = None,
-    temperature: float = PINNED_TEMPERATURE,
+    temperature: float | None = None,
 ) -> ModelSettings:
     """Return cache-enabled, provider-correct ``ModelSettings`` for ``model``.
 
     ``model`` is the object ``_create_proxy_model`` returned (or a bare string
     when a caller hands a model name straight to pydantic-ai). ``cache_key`` is a
     stable per-agent-type label used only on the OpenAI path for cache-shard
-    locality (ignored elsewhere). Any model whose type we don't recognise falls
-    back to a plain ``ModelSettings(temperature=...)`` — behaviour is never worse
-    than before this change.
+    locality (ignored elsewhere). ``temperature`` defaults to the provider-aware
+    value from ``_default_temperature`` (Phase 9); pass an explicit float to
+    override. Any model whose type we don't recognise falls back to a plain
+    ``ModelSettings(temperature=...)`` — behaviour is never worse than before
+    this change.
     """
+    if temperature is None:
+        temperature = _default_temperature(model)
     type_name = type(model).__name__
 
     if type_name == "AnthropicModel":
