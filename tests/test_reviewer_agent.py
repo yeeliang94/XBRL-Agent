@@ -109,6 +109,47 @@ def test_prompt_carries_reviewer_doctrine(seeded):
     assert "sofp_assets_eq_eqliab" in lower
 
 
+def test_packet_renders_precomputed_trace_under_check():
+    """Phase 4: a per-check pre-computed trace is rendered, indented, under the
+    check it belongs to — a pure-function pin that doesn't need a DB."""
+    from correction.reviewer_agent import _format_review_packet
+
+    packet = _format_review_packet(
+        [{
+            "name": "sofp_assets_eq_eqliab", "expected": 150, "actual": 100,
+            "diff": 50, "message": "assets != equity+liabilities",
+            "target_sheet": "SOFP", "target_row": 10,
+        }],
+        [], None,
+        check_traces=["Total assets (COMPUTED, SOFP row 10)\n  children..."],
+    )
+    assert "cascade trace (pre-computed" in packet
+    # The trace text is indented beneath the check.
+    assert "      Total assets (COMPUTED, SOFP row 10)" in packet
+
+
+def test_prompt_inlines_cascade_trace_for_failing_target(seeded):
+    """Phase 4: render_reviewer_prompt resolves the failing check's target down
+    to its children and inlines the trace, so the reviewer doesn't spend turns
+    rediscovering it via trace_cascade_source_tool."""
+    from correction.reviewer_agent import render_reviewer_prompt
+
+    db, run_id = seeded
+    prompt = render_reviewer_prompt(
+        db_path=db, run_id=run_id,
+        failed_checks=[{
+            "name": "sofp_assets_eq_eqliab", "expected": 150, "actual": 100,
+            "diff": 50, "message": "assets != equity+liabilities",
+            "target_sheet": "SOFP", "target_row": 10,
+        }],
+        conflicts=[],
+    )
+    assert "cascade trace (pre-computed" in prompt
+    # The seeded fixture's Total assets (row 10) has one child, Cash (row 5).
+    assert "Total assets" in prompt
+    assert "Cash" in prompt
+
+
 def test_guidance_is_rendered_into_prompt(seeded):
     from correction.reviewer_agent import render_reviewer_prompt
 
