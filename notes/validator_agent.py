@@ -31,7 +31,7 @@ import openpyxl
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
-from pydantic_ai.settings import ModelSettings
+from model_settings import build_model_settings
 
 from notes.writer import payload_sidecar_path
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
@@ -357,7 +357,10 @@ def create_notes_validator_agent(
         model,
         deps_type=NotesValidatorAgentDeps,
         system_prompt=system_prompt,
-        model_settings=ModelSettings(temperature=1.0),
+        # Phase 2: provider-correct prompt caching of the static system prompt.
+        model_settings=build_model_settings(
+            model, cache_key="xbrl-notes-validator"
+        ),
     )
 
     @agent.tool

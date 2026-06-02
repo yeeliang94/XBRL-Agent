@@ -23,7 +23,7 @@ import time
 
 import fitz
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.settings import ModelSettings
+from model_settings import build_model_settings
 from pydantic_ai.messages import (
     BinaryContent,
     FunctionToolCallEvent,
@@ -860,7 +860,9 @@ def create_scout_agent(
         model,
         deps_type=ScoutDeps,
         system_prompt=system_prompt,
-        model_settings=ModelSettings(temperature=1.0),
+        # Phase 2: provider-correct prompt caching (scout's system prompt is
+        # near-fully static, so it caches well across its own turns).
+        model_settings=build_model_settings(model, cache_key="xbrl-scout"),
         # Token-cost reduction: strip stale page-image blobs (from view_pages)
         # out of the outbound request each turn. Pure function over the message
         # list; see extraction/history_processors.py.

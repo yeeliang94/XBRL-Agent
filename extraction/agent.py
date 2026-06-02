@@ -16,7 +16,7 @@ from typing import Optional, Union, List, Tuple, Set, Dict
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.messages import BinaryContent
-from pydantic_ai.settings import ModelSettings
+from model_settings import build_model_settings
 
 from statement_types import StatementType
 from token_tracker import TokenReport
@@ -569,7 +569,12 @@ def create_extraction_agent(
         model,
         deps_type=ExtractionDeps,
         system_prompt=system_prompt,
-        model_settings=ModelSettings(temperature=1.0),
+        # Phase 2: provider-correct prompt caching of the static system prompt
+        # + tool defs. cache_key keeps this statement's requests on one OpenAI
+        # cache shard. Temperature stays pinned inside build_model_settings.
+        model_settings=build_model_settings(
+            model, cache_key=f"xbrl-face-{statement_type.value}"
+        ),
         # Token-cost reduction: strip re-billed payloads from the outbound
         # request each turn — stale page images and the repeated template
         # summary. Pure functions over the message list; see

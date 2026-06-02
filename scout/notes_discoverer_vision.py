@@ -25,7 +25,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models import Model
-from pydantic_ai.settings import ModelSettings
+from model_settings import build_model_settings
 
 from scout.notes_discoverer import NoteInventoryEntry, SubNoteInventoryEntry
 from tools.pdf_viewer import render_pages_to_png_bytes
@@ -300,7 +300,9 @@ def _build_vision_agent(model: Model) -> Agent[None, _VisionBatch]:
         model,
         output_type=_VisionBatch,
         system_prompt=_VISION_SYSTEM_PROMPT,
-        model_settings=ModelSettings(temperature=1.0),
+        # Phase 2: the static vision system prompt caches across the up-to-5
+        # parallel scan batches that share it.
+        model_settings=build_model_settings(model, cache_key="xbrl-scout-vision"),
     )
 
 
