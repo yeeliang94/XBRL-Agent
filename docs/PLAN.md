@@ -1,6 +1,6 @@
 # Implementation Plan: Prompt Caching (§6) + Agent Effectiveness (§9)
 
-**Overall Progress:** `27%` — Phase 0 ✅, Phase 1 ✅, Phase 2 ✅ (code + mocked tests; live verify pending user)
+**Overall Progress:** `36%` — Phase 0 ✅, Phase 1 ✅, Phase 2 ✅, Phase 4 ✅ (Phase 3 gated on live telemetry)
 **PRD Reference:** [docs/REVIEW-prompts-and-caching.html](REVIEW-prompts-and-caching.html) — §6 (caching recommendations) and §9 (effectiveness problems)
 **Last Updated:** 2026-06-02
 **Branch:** `prompt-caching-and-effectiveness`
@@ -87,11 +87,12 @@ temperature pin today, so converting them would change behaviour for ~0 benefit.
 
 ---
 
-### Phase 4: Effectiveness — reviewer cascade-trace pre-injection (highest ROI, lowest risk)
-- [ ] 🟥 **Step 4.1: Pre-inject the trace into the review packet** — `_format_review_packet` (`correction/reviewer_agent.py:745`) already runs one fact query; also call `trace_cascade_source` (`reviewer_agent.py:224`) per failing check's target and render the children + signed coefficients + children-sum-vs-parent delta, so the reviewer doesn't burn 2–3 tool rounds rediscovering it.
-  - [ ] 🟥 Instruct tool-call batching in `prompts/reviewer.md` (trace lhs+rhs in one turn)
-  - [ ] 🟥 Update `tests/test_reviewer_tools.py` / reviewer prompt tests if packet shape is asserted
-  - **Verify:** on a known-failing run, the reviewer reaches its first `apply_fix` in fewer turns than baseline (compare `run_agent_turns`); fixes-per-budget improves.
+### Phase 4: Effectiveness — reviewer cascade-trace pre-injection (highest ROI, lowest risk) ✅
+- [x] 🟩 **Step 4.1: Pre-inject the trace into the review packet** — DONE. New `_trace_for_check` pre-computes `trace_cascade_source` for each failing check's `target_sheet`/`target_row` (and comparand coords, scope-aware, CY, deduped/capped); `render_reviewer_prompt` threads the rendered traces into `_format_review_packet`, which inlines them indented under each check.
+  - [x] 🟩 `prompts/reviewer.md`: instructs tool-call batching ("budget counts round-trips") + tells the reviewer the named target's trace is already inlined (don't re-call the tool for it).
+  - [x] 🟩 Tests: `test_packet_renders_precomputed_trace_under_check` (pure) + `test_prompt_inlines_cascade_trace_for_failing_target` (integration on the seeded fixture). Existing reviewer tests unaffected (substring assertions).
+  - **Verify (USER, live):** on a known-failing run, the reviewer reaches its first `apply_fix` in fewer turns than baseline (compare `run_agent_turns`); fixes-per-budget improves.
+  - **Mocked:** ✅ reviewer suite 58 passed; routes + lifecycle + e2e 43 passed.
 
 ---
 
@@ -158,4 +159,5 @@ If something goes badly wrong:
 ## Notes / deviations log
 - **2026-06-02 — Phase 0:** the review's "pydantic-ai is 0.8.1" was a red herring (system python). The real runtime (`venv`) is **1.77.0** with first-class caching APIs, so Phase 2 needs no `extra_body` hacks: `AnthropicModelSettings.anthropic_cache_instructions` (direct) and `OpenAIChatModelSettings.openai_prompt_cache_key` / `openai_prompt_cache_retention` (OpenAI). `CURRENT_SCHEMA_VERSION` had already drifted to **14** (CLAUDE.md says 13) — v15 builds on 14.
 - **2026-06-02 — Phase 1:** landed cache telemetry end-to-end (capture → schema v15 → repo → API payload → frontend). All tests I can run pass: backend 1881 passed / 2 skipped, frontend 632 passed, tsc clean. Live end-to-end verification (does a real run report non-zero cache reads) is handed to the user — it's the gate for Phase 3.
+- **2026-06-02 — Phase 4:** pre-inject cascade traces into the reviewer packet (`_trace_for_check` + `render_reviewer_prompt` wiring), plus reviewer.md batching guidance. Highest-ROI reviewer change: the children-feeding-a-total data is computed server-side and was being rediscovered by the agent at 2-3 tool round-trips per check, against a tight [12,36] budget. Reviewer suite 58 + routes/lifecycle/e2e 43 green. Live before/after turn-count comparison handed to the user. (Did Phase 4 before Phase 3 because Phase 3 is gated on the live telemetry; Phase 4 is independent and mock-testable.)
 - **2026-06-02 — Phase 2:** added `model_settings.py::build_model_settings` (provider-aware, dispatch by model type) and wired it into all 6 multi-turn agents. Direct-Anthropic caches instructions+tools; OpenAI (direct + proxy) sets cache_key+24h retention. 1.77's first-class settings meant **no `extra_body`/`CachePoint` hacks** — simpler than the report assumed. Removed the now-dead `ModelSettings` imports in the 6 files. Deferred: proxy-routed-Anthropic caching (Step 2.2 known gap) and the temperature seam (Phase 9 — helper already accepts a `temperature` override). New `tests/test_model_settings.py` (6) green.

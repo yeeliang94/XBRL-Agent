@@ -690,12 +690,73 @@ def render_reviewer_prompt(
         fact_summary = _format_fact_summary(facts)
     except Exception:  # noqa: BLE001 — summary is advisory, never fatal
         fact_summary = ""
+    # Phase 4: pre-compute the cascade trace for each failing check's target
+    # cell and inline it in the packet. The reviewer's biggest budget sink is
+    # rediscovering — via 2-3 trace_cascade_source_tool round-trips — what the
+    # server already knows (the children feeding a failing total + their signed
+    # sum). Computing it once here lets the reviewer go straight to the PDF /
+    # the fix. Best-effort and per-check guarded: a trace failure yields "".
+    prefix = _family_prefix(filing_standard, filing_level)
+    check_traces: list[str] = []
+    for c in (failed_checks or []):
+        try:
+            check_traces.append(_trace_for_check(db_path, run_id, c, template_prefix=prefix))
+        except Exception:  # noqa: BLE001 — pre-computed trace is advisory
+            check_traces.append("")
     packet = _format_review_packet(
         failed_checks or [], conflicts or [], guidance,
         filing_level=filing_level, filing_standard=filing_standard,
-        fact_summary=fact_summary,
+        fact_summary=fact_summary, check_traces=check_traces,
     )
     return f"{body}\n\n{packet}"
+
+
+def _trace_for_check(
+    db_path: str | Path,
+    run_id: int,
+    check: dict[str, Any],
+    *,
+    template_prefix: Optional[str],
+) -> str:
+    """Pre-compute the cascade trace(s) for a failing check's target cell(s).
+
+    Resolves the check's ``target_sheet``/``target_row`` (and, failing that, its
+    comparand coords) down to the children feeding the total, honouring the
+    Group/Company scope tag in the check name. Returns rendered trace text, or
+    "" when nothing decomposes (a bare leaf adds nothing the comparand line
+    didn't already say). CY only — the common failing dimension; the reviewer
+    can still trace PY explicitly via the tool.
+    """
+    scope = _scope_from_check_name(check.get("name") or check.get("check_name")) or "Company"
+    coords: list[tuple[str, int]] = []
+    ts, tr = check.get("target_sheet"), check.get("target_row")
+    if ts and tr:
+        coords.append((ts, int(tr)))
+    for cm in (check.get("comparands") or []):
+        g = cm if isinstance(cm, dict) else dataclasses.asdict(cm)
+        if g.get("sheet") and g.get("row"):
+            coords.append((g["sheet"], int(g["row"])))
+
+    seen: set[tuple[str, int]] = set()
+    blocks: list[str] = []
+    for sheet, row in coords:
+        key = (sheet, row)
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(seen) > 4:  # keep the packet focused
+            break
+        try:
+            trace = trace_cascade_source(
+                db_path, run_id, sheet=sheet, row=row,
+                entity_scope=scope, template_prefix=template_prefix,
+            )
+        except Exception:  # noqa: BLE001 — advisory
+            continue
+        # Only inline a trace that actually decomposes a total.
+        if trace.get("found") and trace.get("children"):
+            blocks.append(_format_trace(trace))
+    return "\n".join(blocks)
 
 
 def _scope_from_check_name(name: Optional[str]) -> Optional[str]:
@@ -750,6 +811,7 @@ def _format_review_packet(
     filing_level: str = "company",
     filing_standard: str = "mfrs",
     fact_summary: str = "",
+    check_traces: Sequence[str] = (),
 ) -> str:
     is_group = (filing_level or "").lower() == "group"
     lines = ["=== REVIEW PACKET ===", ""]
@@ -772,7 +834,7 @@ def _format_review_packet(
     lines.append("")
     lines.append("Failing cross-checks to investigate:")
     if failed_checks:
-        for c in failed_checks:
+        for i, c in enumerate(failed_checks):
             name = c.get("name") or c.get("check_name")
             scope = _scope_from_check_name(name)
             lines.append(
@@ -799,6 +861,17 @@ def _format_review_packet(
                     f"({g.get('statement') or where}) = {g.get('value')} "
                     f"@ {where}"
                 )
+            # Phase 4: inline the pre-computed cascade trace for this check's
+            # target, so the reviewer doesn't spend turns rediscovering it.
+            trace_text = check_traces[i] if i < len(check_traces) else ""
+            if trace_text:
+                lines.append(
+                    "    cascade trace (pre-computed — the children feeding "
+                    "this total; no need to call trace_cascade_source_tool for "
+                    "the cell named above):"
+                )
+                for tl in trace_text.splitlines():
+                    lines.append(f"      {tl}")
     else:
         lines.append("  (none failing)")
     lines.append("")
