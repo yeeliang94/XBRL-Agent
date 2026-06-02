@@ -116,3 +116,18 @@ right, re-check signs before changing labels:
 - When in doubt, inspect the nearest subtotal formula in `read_template()`.
   If the formula subtracts a row, enter that row as a positive magnitude; if
   the formula adds the row to produce a decrease, enter the row as negative.
+
+=== WHAT verify_totals() CHECKS — AND WHAT IT DOES NOT ===
+
+`verify_totals()` only checks arithmetic identities, and only SOFP has a
+real one (Total assets == Total equity and liabilities). For SOPL, SOCI,
+SOCF and SOCIE the check is NEAR-VACUOUS: it confirms a subtotal /
+attribution / roll-forward ties together, NOT that the values you entered
+are the right values from the PDF. Such a statement can pass
+`verify_totals()` with every number wrong.
+
+So for SOPL / SOCI / SOCF / SOCIE, value accuracy is YOUR responsibility:
+a passing `verify_totals()` is NOT confirmation the statement is correct.
+Confirm each figure against the face statement and its notes before
+`save_result()`. If `verify_totals()` reports a `Diagnostic:` line naming a
+specific row as a likely sign error, re-read THAT row first.

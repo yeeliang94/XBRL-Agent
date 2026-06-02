@@ -35,7 +35,10 @@ section. Simpler layout.
 
 - Profit/(loss) is a DATA-ENTRY cell, not a formula. It must match SOPL exactly.
 - OCI losses are entered as NEGATIVE values (unlike SOPL expenses which are positive).
-- Total comprehensive income must equal the TCI row in SOCIE — cross-check this.
+- Total comprehensive income (the TCI row) auto-computes from the values you
+  enter. You CANNOT cross-check it against SOCIE here — you only see the SOCI.
+  A later cross-check does that; your job is to enter the profit row and each
+  OCI item correctly from the PDF so the computed TCI is right.
 - For BeforeTax: enter gross OCI amounts AND the tax effect separately. Do not net them.
 - For NetOfTax: enter amounts already net of tax. No separate tax rows.
 - Many entities have zero OCI — this is normal. Do not fabricate OCI items.

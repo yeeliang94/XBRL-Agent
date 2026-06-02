@@ -22,7 +22,8 @@ from __future__ import annotations
 import openpyxl
 import pytest
 
-from tools.verifier import verify_totals
+from statement_types import StatementType
+from tools.verifier import verify_statement, verify_totals
 
 
 def _no_plug_clause_present(feedback: str) -> bool:
@@ -178,3 +179,104 @@ def test_imbalance_feedback_is_non_directive_on_every_branch(scenario, tmp_path)
         f"every imbalance branch must invite the agent to finish honestly. "
         f"Got: {feedback!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.1 (2026-06-02) — directional sign-error diagnostics for the
+# non-SOFP verifiers (SOPL / SOCI / SOCF / SOCIE). When an arithmetic
+# identity fails and the gap is ~2x a single component magnitude, that
+# component was almost certainly entered with the wrong sign; the feedback
+# must name that row WITHOUT weakening the no-plug guard.
+# ---------------------------------------------------------------------------
+
+
+def test_soci_oci_sign_error_is_diagnosed_directionally(tmp_path):
+    """An OCI value keyed with the wrong sign makes Total CI miss P&L+OCI by
+    exactly 2x the OCI magnitude. The feedback must flag a sign error and
+    name the OCI row — and still forbid plugging."""
+    path = tmp_path / "soci_oci_sign.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOCI-NetOfTax"
+    # P&L 1000, OCI should be -200 (a loss) but was keyed +200; correct TCI 800.
+    ws["A1"] = "Profit (loss)"
+    ws["B1"] = 1000
+    ws["A2"] = "Total other comprehensive income"
+    ws["B2"] = 200
+    ws["A3"] = "Total comprehensive income"
+    ws["B3"] = 800
+    wb.save(str(path))
+
+    result = verify_statement(
+        str(path), StatementType.SOCI, variant="NetOfTax", filing_level="company",
+    )
+    assert result.is_balanced is False, "test setup error — should be imbalanced"
+    feedback = (result.feedback or "").lower()
+    assert "diagnostic" in feedback, f"no directional diagnostic. Got: {result.feedback!r}"
+    assert "sign error" in feedback, f"diagnostic must name a sign error. Got: {result.feedback!r}"
+    assert "other comprehensive income" in feedback, (
+        f"diagnostic must name the suspect OCI row. Got: {result.feedback!r}"
+    )
+    # The no-plug guard must survive the new directional wording (gotcha #17).
+    assert _no_plug_clause_present(feedback), (
+        f"directional feedback must keep the no-plug clause. Got: {result.feedback!r}"
+    )
+
+
+def test_socf_financing_sign_error_is_diagnosed_directionally(tmp_path):
+    """A financing outflow keyed positive shifts Net-increase-before-FX by 2x
+    its magnitude; the feedback must name the financing row as the suspect."""
+    path = tmp_path / "socf_fin_sign.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOCF-Indirect"
+    ws["A1"] = "Net cash flows from operating activities"
+    ws["B1"] = 500
+    ws["A2"] = "Net cash flows from investing activities"
+    ws["B2"] = -200
+    ws["A3"] = "Net cash flows from financing activities"
+    ws["B3"] = 300  # should be -300; net before FX is therefore 0
+    ws["A4"] = "Net increase (decrease) in cash before foreign exchange"
+    ws["B4"] = 0
+    wb.save(str(path))
+
+    result = verify_statement(
+        str(path), StatementType.SOCF, variant="Indirect", filing_level="company",
+    )
+    assert result.is_balanced is False, "test setup error — should be imbalanced"
+    feedback = (result.feedback or "").lower()
+    assert "diagnostic" in feedback, f"no directional diagnostic. Got: {result.feedback!r}"
+    assert "sign error" in feedback
+    assert "financing" in feedback, (
+        f"diagnostic must name the suspect financing row. Got: {result.feedback!r}"
+    )
+    assert _no_plug_clause_present(feedback)
+
+
+def test_non_sofp_diagnostic_silent_when_gap_matches_no_component(tmp_path):
+    """The 2x heuristic must not fire spuriously: an imbalance whose gap does
+    NOT match 2x any single component carries the raw mismatch + no-plug
+    footer but no 'sign error' diagnostic (avoids misleading the agent)."""
+    path = tmp_path / "soci_no_match.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOCI-NetOfTax"
+    # gap = 800 - (1000 + 50) = -250, which is not 2x of 1000 or 50.
+    ws["A1"] = "Profit (loss)"
+    ws["B1"] = 1000
+    ws["A2"] = "Total other comprehensive income"
+    ws["B2"] = 50
+    ws["A3"] = "Total comprehensive income"
+    ws["B3"] = 800
+    wb.save(str(path))
+
+    result = verify_statement(
+        str(path), StatementType.SOCI, variant="NetOfTax", filing_level="company",
+    )
+    assert result.is_balanced is False
+    feedback = (result.feedback or "").lower()
+    assert "sign error" not in feedback, (
+        f"2x heuristic fired on a non-matching gap. Got: {result.feedback!r}"
+    )
+    # But the no-plug guard is still present on every imbalance.
+    assert _no_plug_clause_present(feedback)

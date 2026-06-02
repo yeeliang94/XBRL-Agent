@@ -59,18 +59,67 @@ _NO_PLUG_FOOTER = (
 )
 
 
+# Phase 7.1 (2026-06-02): non-SOFP verifiers only check arithmetic
+# identities (P&L attribution, OCI roll-up, cash roll-forward) — they say
+# nothing about whether the underlying *values* are right. When such an
+# identity fails, the most common cause is a SIGN error on one component
+# (an OCI loss keyed positive, a financing outflow keyed positive,
+# ADR-002's dividends). A sign-flipped component shifts the identity's gap
+# by exactly 2x its magnitude, so a gap that matches 2x a single component
+# is a strong sign-error tell. This helper turns the `computed_totals`
+# already in hand into a directional hint — mirroring SOFP's
+# `_sofp_imbalance_feedback` — WITHOUT weakening the no-plug guard.
+def _imbalance_diagnostic(
+    diff: float, components: dict[str, float]
+) -> Optional[str]:
+    """Return a one-line sign-error hint when |diff| ~= 2x a single
+    component magnitude, else None.
+
+    `diff = actual - expected` for the failed identity; `components` maps a
+    human-readable row name to the magnitude that feeds `expected`. The
+    hint is diagnostic only — it points at the suspect row and tells the
+    agent to re-verify its sign against the PDF + live formula. The
+    no-plug footer (appended separately) still forbids plugging.
+    """
+    if abs(diff) <= 0.01:
+        return None
+    for name, val in components.items():
+        if not val:
+            continue
+        tol = max(0.01, 0.005 * abs(val))
+        if abs(abs(diff) - 2.0 * abs(val)) <= tol:
+            return (
+                f"Diagnostic: the gap ({diff:g}) is ~2x '{name}' ({val:g}) "
+                f"— the signature of a SIGN error on that row (a value "
+                f"entered with the wrong sign). Re-read that row's value and "
+                f"sign from the PDF and against the live *Total formula "
+                f"before changing anything. Do NOT plug another row to "
+                f"absorb the gap."
+            )
+    return None
+
+
 def _compose_feedback(
     mismatches: list[str],
     is_balanced: Optional[bool],
     passed_message: str,
+    diagnostics: Optional[list[str]] = None,
 ) -> str:
     """Build the per-statement feedback string with the no-plug footer
     appended whenever the statement is unbalanced. Used by SOCIE / SOCF /
     SOPL / SOCI verifiers (SOFP injects no-plug guidance per branch via
-    `_sofp_imbalance_feedback`)."""
+    `_sofp_imbalance_feedback`).
+
+    `diagnostics` (Phase 7.1) are directional sign-error hints derived
+    from `computed_totals` at each imbalance site; they go in the feedback
+    string (between the raw mismatches and the no-plug footer) but are
+    deliberately kept OUT of the `mismatches` list so callers that assert
+    on the raw arithmetic mismatches are unaffected."""
     if not mismatches:
         return passed_message
     lines = list(mismatches)
+    if diagnostics:
+        lines.extend(diagnostics)
     if is_balanced is False:
         lines.append(_NO_PLUG_FOOTER)
     return "\n".join(lines)
@@ -816,6 +865,7 @@ def _verify_socie(
 
     computed_totals: dict[str, float] = {}
     mismatches: list[str] = []
+    diagnostics: list[str] = []
     is_balanced = True
     formula_warnings: list[str] = []
 
@@ -908,6 +958,12 @@ def _verify_socie(
                 f"{label}: closing equity ({closing}) != "
                 f"restated ({restated}) + total increase ({increase}) = {expected}"
             )
+            hint = _imbalance_diagnostic(diff, {
+                f"{label} restated opening equity": restated,
+                f"{label} total increase (decrease) in equity": increase,
+            })
+            if hint:
+                diagnostics.append(hint)
 
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
@@ -930,6 +986,7 @@ def _verify_socie(
         mismatches=mismatches,
         feedback=_compose_feedback(
             mismatches, is_balanced, "SOCIE balance check passed.",
+            diagnostics=diagnostics,
         ),
         mandatory_unfilled=mandatory_unfilled,
     )
@@ -959,6 +1016,7 @@ def _verify_socf(
 
     computed_totals: dict[str, float] = {}
     mismatches: list[str] = []
+    diagnostics: list[str] = []
     is_balanced = True
     formula_warnings: list[str] = []
 
@@ -1030,6 +1088,13 @@ def _verify_socf(
                     f"Investing ({col_totals['net_investing']}) + "
                     f"Financing ({col_totals['net_financing']}) = {expected}"
                 )
+                hint = _imbalance_diagnostic(actual - expected, {
+                    f"{pfx}Net cash from operating activities": col_totals["net_operating"],
+                    f"{pfx}Net cash from investing activities": col_totals["net_investing"],
+                    f"{pfx}Net cash from financing activities": col_totals["net_financing"],
+                })
+                if hint:
+                    diagnostics.append(hint)
 
         # Check: cash at end == cash at beginning + net increase after FX
         for key in ["cash_beginning", "cash_end", "net_increase_after_fx"]:
@@ -1047,6 +1112,12 @@ def _verify_socf(
                     f"Cash at beginning ({col_totals['cash_beginning']}) + "
                     f"Net increase after FX ({col_totals['net_increase_after_fx']}) = {expected}"
                 )
+                hint = _imbalance_diagnostic(actual - expected, {
+                    f"{pfx}Cash and cash equivalents at beginning": col_totals["cash_beginning"],
+                    f"{pfx}Net increase after FX": col_totals["net_increase_after_fx"],
+                })
+                if hint:
+                    diagnostics.append(hint)
 
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
@@ -1065,6 +1136,7 @@ def _verify_socf(
         mismatches=mismatches,
         feedback=_compose_feedback(
             mismatches, is_balanced, "SOCF balance check passed.",
+            diagnostics=diagnostics,
         ),
         mandatory_unfilled=mandatory_unfilled,
     )
@@ -1093,6 +1165,7 @@ def _verify_sopl(
 
     computed_totals: dict[str, float] = {}
     mismatches: list[str] = []
+    diagnostics: list[str] = []
     is_balanced = True
     formula_warnings: list[str] = []
 
@@ -1190,6 +1263,12 @@ def _verify_sopl(
                     f"{pfx}Profit/loss ({pl_val}) != "
                     f"owners ({owners}) + non-controlling interests ({nci}) = {expected}"
                 )
+                hint = _imbalance_diagnostic(pl_val - expected, {
+                    f"{pfx}Profit (loss), attributable to owners of parent": owners,
+                    f"{pfx}Profit (loss), attributable to non-controlling interests": nci,
+                })
+                if hint:
+                    diagnostics.append(hint)
 
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")
@@ -1208,6 +1287,7 @@ def _verify_sopl(
         mismatches=mismatches,
         feedback=_compose_feedback(
             mismatches, is_balanced, "SOPL attribution check passed.",
+            diagnostics=diagnostics,
         ),
         mandatory_unfilled=mandatory_unfilled,
     )
@@ -1236,6 +1316,7 @@ def _verify_soci(
 
     computed_totals: dict[str, float] = {}
     mismatches: list[str] = []
+    diagnostics: list[str] = []
     is_balanced = True
     formula_warnings: list[str] = []
 
@@ -1296,6 +1377,12 @@ def _verify_soci(
                         f"{pfx}Total CI ({ci_val}) != P&L ({pl_val}) "
                         f"+ OCI ({oci_val}) = {expected}"
                     )
+                    hint = _imbalance_diagnostic(ci_val - expected, {
+                        f"{pfx}Total other comprehensive income": oci_val,
+                        f"{pfx}Profit (loss)": pl_val,
+                    })
+                    if hint:
+                        diagnostics.append(hint)
 
         if len(total_ci_rows) >= 2:
             ci_main = _get_cell_value(wb, ws, total_ci_rows[0], cy_col, warnings=formula_warnings) or 0.0
@@ -1324,6 +1411,7 @@ def _verify_soci(
         mismatches=mismatches,
         feedback=_compose_feedback(
             mismatches, is_balanced, "SOCI balance check passed.",
+            diagnostics=diagnostics,
         ),
         mandatory_unfilled=mandatory_unfilled,
     )
