@@ -116,3 +116,67 @@ def test_malformed_subnote_entries_dropped_silently():
     # Only the OK entry survives — bad subnotes don't take down the
     # parent note or block the whole save.
     assert refs == ["2.1"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 8.2 — save_infopack reports SURVIVING counts so the agent can
+# self-correct in-run (e.g. notice a note count that looks too low).
+# ---------------------------------------------------------------------------
+
+
+def test_save_infopack_reports_survival_counts():
+    deps = _make_deps()
+    payload = {
+        "toc_page": 2,
+        "page_offset": 0,
+        "statements": {
+            "SOFP": {
+                "variant_suggestion": "CuNonCu",
+                "face_page": 5,
+                "note_pages": [],
+                "confidence": "HIGH",
+                "face_line_refs": [
+                    {"label": "Property, plant and equipment", "note_num": 4,
+                     "section": "non-current assets"},
+                    {"label": "Trade receivables", "note_num": None,
+                     "section": "current assets"},
+                ],
+            },
+        },
+        "notes_inventory": [
+            {"note_num": 2, "title": "Policies", "page_range": [15, 22]},
+            {"note_num": 4, "title": "PPE", "page_range": [45, 47]},
+        ],
+    }
+    result = _save_infopack_impl(deps, json.dumps(payload))
+    low = result.lower()
+    assert "1 statement(s)" in low
+    assert "2 note(s)" in low
+    assert "2 face-ref(s)" in low
+    # A null note_num ref still survives (confidence-gated, Phase 8.1).
+    refs = deps.infopack.statements[StatementType.SOFP].face_line_refs
+    assert [r.note_num for r in refs] == [4, None]
+
+
+def test_save_infopack_flags_skipped_inventory_entries():
+    deps = _make_deps()
+    payload = {
+        "toc_page": 2,
+        "page_offset": 0,
+        "statements": {
+            "SOFP": {
+                "variant_suggestion": "CuNonCu",
+                "face_page": 5,
+                "note_pages": [],
+                "confidence": "HIGH",
+            },
+        },
+        "notes_inventory": [
+            {"note_num": 2, "title": "ok", "page_range": [15, 22]},
+            {"note_num": 4, "title": "bad page", "page_range": "garbage"},  # skipped
+        ],
+    }
+    result = _save_infopack_impl(deps, json.dumps(payload))
+    low = result.lower()
+    assert "1 note(s)" in low  # only the valid entry survived
+    assert "skipped" in low and "re-check" in low
