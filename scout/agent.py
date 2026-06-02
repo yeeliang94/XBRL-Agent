@@ -154,6 +154,13 @@ the presentation variant, and discover related note pages.
       see on the rendered face-page image (label, note_num cited, section
       header it sits under). Downstream face agents use this map to skip
       re-reading the face page.
+      Emit a ref ONLY when you can read the line confidently. The
+      note-reference column on a scanned image is often blurry — if you
+      cannot clearly read the cited note number for a line, set
+      `note_num` to null rather than guessing (a wrong note number sends
+      the face agent to the wrong page). Same rule as statements: do NOT
+      guess. A confident label with a null note_num is more useful than a
+      confident label with a fabricated one.
 4. Identify the PDF page where the Notes-to-the-Financial-Statements section
    begins (from the TOC or by inspecting pages right after the last face
    statement) and call `discover_notes_inventory` with it. **This step is
@@ -795,7 +802,21 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
         return f"Error: invalid page references — {'; '.join(errors)}"
 
     deps.infopack = infopack
-    return f"Infopack saved successfully with {len(statements)} statement(s)."
+    # Phase 8.2: report SURVIVING counts (not a bare "saved") so the agent
+    # can see how much actually made it past validation and self-correct
+    # in-run — e.g. if it expected 14 notes but only 12 survived, or if
+    # entries were skipped as malformed.
+    ref_total = sum(len(s.face_line_refs) for s in statements.values())
+    msg = (
+        f"Infopack saved successfully: {len(statements)} statement(s), "
+        f"{len(inventory)} note(s), {ref_total} face-ref(s)."
+    )
+    if skipped:
+        msg += (
+            f" {skipped} inventory entr(y/ies) skipped as malformed — "
+            f"re-check those notes if the count looks low."
+        )
+    return msg
 
 
 # ---------------------------------------------------------------------------
@@ -1061,7 +1082,10 @@ def create_scout_agent(
         read_face_structure returns []), include face_line_refs YOURSELF
         from the rendered face-page image: every visible line item, its
         cited note number (or null), and the section header it sits
-        under. Set face_read_in_detail = true iff you actually read the
+        under. Emit a ref only at high confidence; if the note-reference
+        column is illegible on the scan, set note_num to null rather than
+        guessing (do NOT guess — a wrong note number misroutes the face
+        agent). Set face_read_in_detail = true iff you actually read the
         face page line-by-line.
 
         Args:

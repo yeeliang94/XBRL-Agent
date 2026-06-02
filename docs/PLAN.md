@@ -126,11 +126,12 @@ temperature pin today, so converting them would change behaviour for ~0 benefit.
 
 ---
 
-### Phase 8: Effectiveness — scout hint confidence-gating (§9 #5)
-- [ ] 🟥 **Step 8.1: Gate scanned-PDF `face_line_refs`** — in `scout/agent.py`, instruct the scout to emit refs only at high confidence and null the `note_num` when the reference column is illegible (mirror the existing "do NOT guess" face-page rule).
-- [ ] 🟥 **Step 8.2: `save_infopack` survival counts** — return surviving counts ("3 statements, 14 notes, 22 refs; 2 skipped — re-check") instead of a bare "saved successfully", so the agent can self-correct in-run.
-  - [ ] 🟥 Update `tests/test_scout_*` assertions if the success string / ref schema is pinned
-  - **Verify:** a scanned/low-text PDF run — scout no longer emits confident wrong note numbers; the tool result reports counts; relevant scout tests green.
+### Phase 8: Effectiveness — scout hint confidence-gating (§9 #5) ✅
+- [x] 🟩 **Step 8.1: Gate scanned-PDF `face_line_refs`** — DONE. `scout/agent.py` system-prompt step 3.f + the `save_infopack` docstring now tell the scout to emit a face-line ref ONLY at high confidence and to set `note_num` to **null** when the note-reference column is illegible on the scan, rather than guessing (mirrors the existing "do NOT guess" statement rule). Prompt-only — the code already accepts `note_num=None`.
+- [x] 🟩 **Step 8.2: `save_infopack` survival counts** — DONE. The return string now reports surviving counts: "Infopack saved successfully: N statement(s), M note(s), R face-ref(s)." + ", K inventory entr(y/ies) skipped as malformed — re-check…" when any inventory entry was dropped. Kept the "saved successfully" substring so the three existing success-string assertions stay green.
+  - [x] 🟩 Two new pins in `tests/test_save_infopack_accepts_subnotes.py`: survival-count reporting (incl. a null-note_num ref surviving) + the skipped→"re-check" path.
+  - **Mocked:** ✅ 62 passed (scout suites).
+  - **Verify (USER, live):** a scanned/low-text PDF run — scout no longer emits confident wrong note numbers; the tool result reports counts.
 
 ---
 
