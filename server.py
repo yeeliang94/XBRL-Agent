@@ -3733,6 +3733,9 @@ async def run_multi_agent_stream(
                         completion_tokens=getattr(agent_result, "completion_tokens", 0),
                         turn_count=getattr(agent_result, "turn_count", 0),
                         tool_call_count=getattr(agent_result, "tool_call_count", 0),
+                        # v15 cache telemetry rollups (§6 rec 1: measure first).
+                        cache_read_tokens=getattr(agent_result, "cache_read_tokens", 0),
+                        cache_write_tokens=getattr(agent_result, "cache_write_tokens", 0),
                     )
                     # v8: persist the per-turn metrics rows. Telemetry is
                     # advisory — a write failure here must never fault the
@@ -3814,6 +3817,9 @@ async def run_multi_agent_stream(
                         completion_tokens=getattr(notes_agent_result, "completion_tokens", 0),
                         turn_count=getattr(notes_agent_result, "turn_count", 0),
                         tool_call_count=getattr(notes_agent_result, "tool_call_count", 0),
+                        # v15 cache telemetry rollups (§6 rec 1: measure first).
+                        cache_read_tokens=getattr(notes_agent_result, "cache_read_tokens", 0),
+                        cache_write_tokens=getattr(notes_agent_result, "cache_write_tokens", 0),
                     )
                     # v8: persist per-turn metrics rows for notes agents too.
                     # Advisory — never fault the run on a telemetry write.

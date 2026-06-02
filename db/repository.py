@@ -100,6 +100,9 @@ class RunAgent:
     completion_tokens: int = 0
     turn_count: int = 0
     tool_call_count: int = 0
+    # v15 cache telemetry rollups. Defaulted so pre-v15 rows read 0.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     # Phase 7: per-agent SSE-equivalent events hydrated by get_run_detail().
     # Defaulted via field(default_factory=list) so legacy callers that build
     # RunAgent directly (e.g. fetch_run_agents) don't break — a bare `= []`
@@ -477,6 +480,8 @@ def finish_run_agent(
     completion_tokens: int = 0,
     turn_count: int = 0,
     tool_call_count: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> None:
     """Mark an agent row as finished with final status + metrics.
 
@@ -498,19 +503,23 @@ def finish_run_agent(
             "UPDATE run_agents SET status = ?, ended_at = ?, workbook_path = ?, "
             "total_tokens = ?, total_cost = ?, prompt_tokens = ?, "
             "completion_tokens = ?, turn_count = ?, tool_call_count = ?, "
+            "cache_read_tokens = ?, cache_write_tokens = ?, "
             "variant = ? WHERE id = ?",
             (status, _now(), workbook_path, total_tokens, total_cost,
              prompt_tokens, completion_tokens, turn_count, tool_call_count,
+             cache_read_tokens, cache_write_tokens,
              variant, run_agent_id),
         )
     else:
         conn.execute(
             "UPDATE run_agents SET status = ?, ended_at = ?, workbook_path = ?, "
             "total_tokens = ?, total_cost = ?, prompt_tokens = ?, "
-            "completion_tokens = ?, turn_count = ?, tool_call_count = ? "
+            "completion_tokens = ?, turn_count = ?, tool_call_count = ?, "
+            "cache_read_tokens = ?, cache_write_tokens = ? "
             "WHERE id = ?",
             (status, _now(), workbook_path, total_tokens, total_cost,
              prompt_tokens, completion_tokens, turn_count, tool_call_count,
+             cache_read_tokens, cache_write_tokens,
              run_agent_id),
         )
 
@@ -532,8 +541,9 @@ def insert_agent_turns(
     conn.executemany(
         "INSERT INTO run_agent_turns(run_agent_id, turn_index, node_kind, "
         "tool_names, prompt_tokens, completion_tokens, total_tokens, "
-        "cumulative_tokens, cost_estimate, duration_ms, ts) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "cumulative_tokens, cost_estimate, duration_ms, "
+        "cache_read_tokens, cache_write_tokens, ts) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 run_agent_id,
@@ -546,6 +556,8 @@ def insert_agent_turns(
                 int(t.get("cumulative_tokens") or 0),
                 float(t.get("cost_estimate") or 0.0),
                 int(t.get("duration_ms") or 0),
+                int(t.get("cache_read_tokens") or 0),
+                int(t.get("cache_write_tokens") or 0),
                 ts,
             )
             for t in turns
@@ -947,6 +959,9 @@ def fetch_run_agents(conn: sqlite3.Connection, run_id: int) -> list[RunAgent]:
             completion_tokens=_row_get(r, "completion_tokens", 0),
             turn_count=_row_get(r, "turn_count", 0),
             tool_call_count=_row_get(r, "tool_call_count", 0),
+            # v15 cache rollups — _row_get guard so a pre-v15 row hydrates as 0.
+            cache_read_tokens=_row_get(r, "cache_read_tokens", 0),
+            cache_write_tokens=_row_get(r, "cache_write_tokens", 0),
         )
         for r in rows
     ]
@@ -970,7 +985,8 @@ def fetch_agent_turns(conn: sqlite3.Connection, run_agent_id: int) -> list[dict]
     rows = conn.execute(
         "SELECT turn_index, node_kind, tool_names, prompt_tokens, "
         "completion_tokens, total_tokens, cumulative_tokens, cost_estimate, "
-        "duration_ms, ts FROM run_agent_turns WHERE run_agent_id = ? "
+        "duration_ms, cache_read_tokens, cache_write_tokens, ts "
+        "FROM run_agent_turns WHERE run_agent_id = ? "
         "ORDER BY turn_index",
         (run_agent_id,),
     ).fetchall()
@@ -985,6 +1001,8 @@ def fetch_agent_turns(conn: sqlite3.Connection, run_agent_id: int) -> list[dict]
             "cumulative_tokens": r["cumulative_tokens"] or 0,
             "cost_estimate": r["cost_estimate"] or 0.0,
             "duration_ms": r["duration_ms"] or 0,
+            "cache_read_tokens": _row_get(r, "cache_read_tokens", 0),
+            "cache_write_tokens": _row_get(r, "cache_write_tokens", 0),
         }
         for r in rows
     ]

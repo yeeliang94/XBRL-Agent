@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prompt &amp; Caching Review — XBRL Agent</title>
+<style>
+  :root {
+    --ink: #1a1a1a; --muted: #5c5c5c; --line: #e3e3e3; --soft: #f6f6f4;
+    --accent: #c8102e; --accent-soft: #fdecec; --ok: #1b7f4b; --warn: #b8860b;
+    --code-bg: #f4f4f2; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: var(--ink); margin: 0; background: #fff;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 48px 28px 96px; }
+  header.doc { border-bottom: 3px solid var(--accent); padding-bottom: 20px; margin-bottom: 8px; }
+  header.doc h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .meta strong { color: var(--ink); font-weight: 600; }
+  h2 { font-size: 21px; margin: 44px 0 6px; padding-top: 10px; border-top: 1px solid var(--line); letter-spacing: -0.01em; }
+  h3 { font-size: 16px; margin: 26px 0 6px; }
+  h4 { font-size: 14px; margin: 18px 0 4px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  p { margin: 8px 0; }
+  code { font-family: var(--mono); font-size: 0.86em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.45; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--soft); font-weight: 600; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; vertical-align: middle; }
+  .t-static { background: #e8f0fe; color: #1a52c4; }
+  .t-dyn { background: #fff3e0; color: #a85b00; }
+  .t-p0 { background: var(--accent-soft); color: var(--accent); }
+  .t-p1 { background: #fff3e0; color: #a85b00; }
+  .t-p2 { background: #eef3ee; color: var(--ok); }
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .callout.ok { border-color: var(--ok); background: #eef6f0; }
+  .callout.warn { border-color: var(--warn); background: #fbf4e0; }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+  .lede { font-size: 17px; color: var(--ink); }
+  ol.steps { padding-left: 0; counter-reset: step; list-style: none; }
+  ol.steps > li { position: relative; padding: 12px 0 12px 46px; border-bottom: 1px solid var(--line); }
+  ol.steps > li::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: 12px; width: 30px; height: 30px; background: var(--accent); color: #fff; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 14px; }
+  ol.steps > li .h { font-weight: 600; }
+  .toc { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px 14px 34px; margin: 20px 0 8px; font-size: 14px; }
+  .toc li { margin: 3px 0; }
+  .small { font-size: 13px; color: var(--muted); }
+  .kw { color: var(--accent); font-weight: 600; }
+  hr.soft { border: none; border-top: 1px solid var(--line); margin: 28px 0; }
+  .file { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .verdict-zero { color: var(--accent); font-weight: 600; }
+  .verdict-ok { color: var(--ok); font-weight: 600; }
+  .verdict-part { color: var(--warn); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>Prompt &amp; Caching Review — XBRL Agent</h1>
+  <div class="meta">
+    <strong>Scope:</strong> every agent prompt (system + dynamic) and the LLM prompt-caching path &nbsp;·&nbsp;
+    <strong>Status:</strong> for peer review &nbsp;·&nbsp;
+    <strong>Date:</strong> 2026-06-02 &nbsp;·&nbsp;
+    <strong>Method:</strong> code-grounded; claims cite <span class="file">file:line</span> where a line is load-bearing (some cite file-only) and were spot-verified against the working tree &nbsp;·&nbsp;
+    <strong>Rev:</strong> 2 (incorporates peer review)
+  </div>
+</header>
+
+<p class="lede">This report maps how every agent's prompt is assembled, documents the current state of LLM prompt caching (spoiler: there is none, explicitly), and gives a first-principles set of recommendations ordered by reasoning rather than by checklist. <strong>Section&nbsp;9</strong> is a separate axis: prompt-quality problems that hurt the agents' <em>accuracy and task completion</em>, independent of cost.</p>
+
+<div class="callout warn">
+<p><strong>Rev 2 — peer-review response.</strong> A peer review caught real issues, all incorporated: (1) the Anthropic recommendation now splits <em>direct</em> <code>AnthropicModel</code> from <em>proxy/LiteLLM</em> Claude (the default Mac path routes Claude as <code>OpenAIChatModel</code>, so the fix differs); (2) telemetry field names corrected to pydantic-ai's normalized <code>cache_read_tokens</code> / <code>cache_write_tokens</code>, with cache-write cost added; (3) the Sheet-12 burst-cache claim is caveated — concurrent launch defeats a cold cache without warm-up, and it only touches the smaller cross-agent lever; (4) §2's "every agent" generalization is narrowed (vision/reviewer/validator exceptions); (5) OpenAI <code>prompt_cache_key</code> / <code>prompt_cache_retention</code> added as levers; (6) a Sheet-12-internal contradiction folded into effectiveness #1; (7) the temperature constraint is correctly attributed (not gotcha #5).</p>
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#summary">Executive summary</a></li>
+    <li><a href="#pattern">The common prompt pattern</a></li>
+    <li><a href="#agents">Per-agent prompt breakdown</a></li>
+    <li><a href="#caching">Caching review — current state</a></li>
+    <li><a href="#costmodel">The cost model from first principles</a></li>
+    <li><a href="#recs">Recommendations</a></li>
+    <li><a href="#hygiene">Documentation &amp; code hygiene</a></li>
+    <li><a href="#flags">Discrepancies flagged for the team</a></li>
+    <li><a href="#effectiveness">Effectiveness problems (accuracy, not cost)</a></li>
+  </ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="summary">1 — Executive summary</h2>
+
+<table>
+  <tr><th style="width:34%">Question</th><th>Finding</th></tr>
+  <tr><td>Is LLM prompt caching configured anywhere?</td><td><span class="verdict-zero">No — nothing explicit.</span> Zero <code>cache_control</code> / <code>CachePoint</code> / <code>extra_headers</code> / beta headers in production code. Only provider <em>automatic</em> caching applies passively.</td></tr>
+  <tr><td>Is cache effectiveness measured?</td><td><span class="verdict-zero">No.</span> <code>usage()</code> is read for totals (<code>_in_tokens</code> reads only <code>input_tokens</code>/<code>request_tokens</code>, <span class="file">server.py:110</span>) but pydantic-ai's normalized <code>cache_read_tokens</code> / <code>cache_write_tokens</code> are discarded everywhere. Cost is managed blind — and a naive fix that ignores cache <em>writes</em> would misprice Anthropic.</td></tr>
+  <tr><td>What happens on the default path (<code>openai.gpt-5.4</code>)?</td><td><span class="verdict-ok">Auto-caching likely helps.</span> OpenAI caches &gt;1024-token prefixes server-side with no markers; the fixed system prompt is first and stable across an agent's turns. Working but <strong>unverified</strong>.</td></tr>
+  <tr><td>What happens on <code>claude-*</code> models?</td><td><span class="verdict-zero">Zero caching.</span> Anthropic requires explicit markers; none set. Full re-billing every turn. Largest avoidable gap — but the fix differs by path: <em>direct</em> mode is native <code>AnthropicModel</code>; the <em>default Mac proxy</em> routes Claude as <code>OpenAIChatModel</code> through LiteLLM (<span class="file">server.py:768</span>), needing OpenAI-format <code>cache_control</code> + LiteLLM passthrough.</td></tr>
+  <tr><td>What happens on Gemini (direct, Mac)?</td><td><span class="verdict-part">Implicit only.</span> Google-side implicit caching; no explicit markers, unverified.</td></tr>
+  <tr><td>Is the architecture cache-friendly?</td><td><span class="verdict-ok">Yes, structurally.</span> Tiny constant user message; heavy content front-loaded into a fixed system prompt. Caching works the moment it's turned on and measured.</td></tr>
+</table>
+
+<div class="callout">
+<p><strong>One-line conclusion.</strong> The biggest cost term is <code>T·S</code> — the fixed system prompt <code>S</code> re-encoded across <code>T</code> turns (up to 40). Caching attacks exactly this term, is cheap and risk-free to enable, and is the right first action — but it is the <em>smallest</em> of three levers. Reducing turn count and prompt size matter more in principle.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="pattern">2 — The common prompt pattern</h2>
+
+<p>The <strong>iterative agents</strong> (the 5 face agents, the notes agents, the main scout loop) follow the same shape, which is what makes the caching story uniform:</p>
+
+<pre>Agent(model,
+      deps_type=...,
+      system_prompt=&lt;one big pre-built string&gt;,   # all static + dynamic content lives HERE
+      model_settings=ModelSettings(temperature=1.0),
+      history_processors=[strip_stale_images, ...])</pre>
+
+<ul>
+  <li><strong>The system prompt is the whole prompt.</strong> Static rules <em>and</em> run-dynamic data are concatenated into one <code>system_prompt</code> string at construction time. The first <strong>user message</strong> is usually a tiny near-constant trigger (e.g. <em>"Extract the X… follow the strategy in your system prompt"</em>).</li>
+  <li><strong><code>ModelSettings</code> carries only <code>temperature=1.0</code></strong> — pinned by the "Temperature Constraint" rule in CLAUDE.md (<span class="file">CLAUDE.md:140</span>; <em>not</em> gotcha #5, which is SSL). It exposes <code>extra_headers</code> and <code>extra_body</code> — the natural caching hook — never used.</li>
+  <li><strong>For the iterative agents, PDF images are not in the prompt up front.</strong> They enter as <code>view_pdf_pages</code> tool results, then get stripped from later turns by <code>strip_stale_images</code>.</li>
+</ul>
+
+<div class="callout warn">
+<p><strong>Exceptions to the pattern (don't over-generalize):</strong> the <strong>vision inventory fallback</strong> (<span class="file">scout/notes_discoverer_vision.py:339</span>) is a one-shot agent that puts <code>BinaryContent</code> page images <em>directly in the initial user prompt</em> and uses a structured <code>output_type</code>, not a save-tool; the <strong>reviewer</strong> (<span class="file">correction/reviewer_agent.py:873</span>) and the <strong>notes validator</strong> have <em>no</em> <code>history_processors</code> at all. So the "uniform shape" statement scopes to the iterative face/notes/scout-main agents only.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="agents">3 — Per-agent prompt breakdown</h2>
+
+<h3>3.1 Face extraction agents — SOFP, SOPL, SOCI, SOCF, SOCIE</h3>
+<p class="small">Built at <span class="file">extraction/agent.py:568</span>; assembled by <code>render_prompt</code> at <span class="file">prompts/__init__.py:84</span>. Precedence: <code>{stmt}_{variant}.md</code> &gt; <code>{stmt}_{standard}.md</code> &gt; <code>{stmt}.md</code> (<span class="file">prompts/__init__.py:60</span>).</p>
+<table>
+  <tr><th style="width:5%">#</th><th>Content</th><th style="width:20%">Static / Dynamic</th><th style="width:18%">Reuse scope</th></tr>
+  <tr><td>1</td><td><code>_base.md</code> — persona, general rules, no-residual-plug (gotcha #17), extraction procedure, sign troubleshooting</td><td><span class="tag t-static">STATIC</span></td><td>identical across all 5 face agents</td></tr>
+  <tr><td>2</td><td><code>{stmt}*.md</code> statement body (<code>{{VARIANT}}</code> substituted)</td><td><span class="tag t-static">STATIC</span> per (stmt,variant,standard)</td><td>per-statement</td></tr>
+  <tr><td>3</td><td><code>=== SCOUT-OBSERVED CONTEXT ===</code> (entity, periods, currency, scale_unit)</td><td><span class="tag t-dyn">DYNAMIC</span> per-run</td><td>shared across 5 face agents</td></tr>
+  <tr><td>4</td><td>PAGE NAVIGATION + <code>face_line_refs</code></td><td><span class="tag t-dyn">DYNAMIC</span> per-agent</td><td>per-agent</td></tr>
+  <tr><td>5</td><td><code>_group_overlay.md</code> / <code>_group_socie_overlay.md</code> (group only)</td><td><span class="tag t-static">STATIC</span> per level</td><td>per-level</td></tr>
+  <tr><td>6</td><td>SOCF/SOCIE sign-convention block (reads live template formulas)</td><td><span class="tag t-dyn">DYNAMIC</span>, SOCF/SOCIE only</td><td>per-statement</td></tr>
+</table>
+<p><strong>Tools</strong> (6, identical across all five; docstrings enter the prompt): <code>calculator</code>, <code>read_template</code>, <code>view_pdf_pages</code>, <code>write_facts</code>, <code>verify_totals</code>, <code>save_result</code>.</p>
+<div class="callout warn">
+<p><strong>Dead path:</strong> <code>cache_template</code> is never passed in the live pipeline (<span class="file">coordinator.py:547</span>; <code>run.py</code> calls it "unused"). The ~12k-token template summary is therefore <em>not</em> in the system prompt — it arrives as a <code>read_template</code> tool result and is de-duplicated on repeat by <code>strip_duplicate_template</code>. The "embed for caching" comments at <span class="file">extraction/agent.py:541</span> and <span class="file">prompts/__init__.py:98</span> describe a path that is never taken. See recommendation&nbsp;4.</p>
+</div>
+
+<h3>3.2 Notes agents — single-sheet (Sheets 10/11/13/14)</h3>
+<p class="small">Built at <span class="file">notes/agent.py:1163</span> via <code>create_notes_agent</code>; assembled by <code>render_notes_prompt</code> (<span class="file">notes/agent.py:477</span>).</p>
+<p>Order: <code>_notes_base.md</code> (static; includes the HTML tag whitelist that must mirror <code>html_sanitize.ALLOWED_TAGS</code>, gotcha #16) → sheet map → <code>=== TARGET ===</code> (sheet/level/standard) → column rules → per-template body → scout context → <code>=== INVENTORY ===</code> → MPERS overlay → <strong>template label catalog</strong> (col-A labels ≤180 rows, gotcha #15) → page hints → page offset. Only the leading <code>_notes_base.md</code> is byte-identical across sibling notes agents.</p>
+<p><strong>Tools:</strong> <code>calculator</code>, <code>read_template</code>, <code>view_pdf_pages</code>, <code>write_notes</code>, <code>save_result</code> (+ <code>submit_batch_coverage</code> on sub-agents only).</p>
+
+<h3>3.3 Sheet-12 fan-out sub-agents <span class="small">(the caching-relevant one)</span></h3>
+<p>Same factory, but each sub-agent gets <code>inventory=batch</code> (its own slice). All N sub-agents share the same template body, label catalog, hints and offset — <strong>the only system-prompt difference is the <code>=== INVENTORY ===</code> block at part&nbsp;7</strong> (<span class="file">notes/agent.py:561</span>), rendered <em>mid-prompt</em>. Per-sub-agent unique data (<code>sub_agent_id</code>, assigned notes, page span) is correctly placed last in the user message (<span class="file">notes/listofnotes_subcoordinator.py:624</span>).</p>
+<div class="callout warn"><p><strong>Cache-hostile:</strong> the mid-prompt inventory pushes the large static label-catalog/hints/offset tail behind a diverging block, so it cannot be a shared cache suffix across the burst. See recommendation&nbsp;5.</p></div>
+
+<h3>3.4 Scout agent</h3>
+<p class="small">Built at <span class="file">scout/agent.py:859</span>.</p>
+<p>System prompt is the constant <code>_SYSTEM_PROMPT</code> (<span class="file">scout/agent.py:111</span>) with a single <code>{statements_section}</code> interpolation — <strong>the most cache-friendly system prompt in the codebase.</strong> Output is <code>str</code>; result delivered via the <code>save_infopack</code> tool, not a structured <code>output_type</code>. Two sub-systems:</p>
+<ul>
+  <li><strong>Text path</strong> (<code>scout/notes_discoverer.py</code>, <code>scout/face_structure.py</code>): pure regex — <strong>no LLM, no prompt</strong>.</li>
+  <li><strong>Vision path</strong> (<span class="file">scout/notes_discoverer_vision.py:299</span>): a separate one-shot agent with its own static <code>_VISION_SYSTEM_PROMPT</code>, <code>output_type=_VisionBatch</code>, page images as the user message; scanned-PDF fallback only, 8-page batches × up to 5 parallel.</li>
+</ul>
+
+<h3>3.5 Reviewer agent</h3>
+<p class="small">Built at <span class="file">correction/reviewer_agent.py:873</span>; system prompt = <code>render_reviewer_prompt</code> = <code>body + "\n\n" + packet</code> (<span class="file">reviewer_agent.py:698</span>).</p>
+<table>
+  <tr><th style="width:22%">Part</th><th>Content</th><th style="width:22%">Static / Dynamic</th></tr>
+  <tr><td><code>body</code></td><td><code>prompts/reviewer.md</code> — persona, read-only audit tools, failure-pattern playbook, no-plug/no-abstract guard, flag rules, Group <code>entity_scope</code> guardrail</td><td><span class="tag t-static">STATIC</span></td></tr>
+  <tr><td><code>packet</code></td><td><code>_format_review_packet</code> — filing line, whole-run fact roll-up, failing cross-checks + comparands, open conflicts, optional human guidance</td><td><span class="tag t-dyn">DYNAMIC</span> per-run</td></tr>
+</table>
+<p>First user message is small ("Investigate every failing cross-check… at most <code>{max_turns}</code> turns"). Trace/snapshot data is <em>not</em> pre-injected — pulled on demand. <strong>Tools (8):</strong> <code>calculator</code>, <code>read_facts</code>, <code>list_facts</code>, <code>trace_cascade_source_tool</code>, <code>view_pdf_pages</code>, <code>apply_fix</code> (guarded write), <code>mark_not_disclosed</code>, <code>raise_flag</code>.</p>
+
+<h3>3.6 Notes validator agent</h3>
+<p class="small">Built at <span class="file">notes/validator_agent.py:356</span>.</p>
+<p>System prompt = <code>prompts/notes_validator.md</code> (static) + <code>build_validator_prompt_body</code> (dynamic duplicate-candidate list, computed by deterministic Python before the run). Tools: <code>view_pdf_pages</code>, <code>read_cell</code>, <code>rewrite_cell</code> (Sheet 11/12 only, atomic-save + io_lock per gotcha #22), <code>flag_duplication</code>.</p>
+
+<!-- ============================================================ -->
+<h2 id="caching">4 — Caching review (current state)</h2>
+
+<h4>Configured today: nothing explicit</h4>
+<ul>
+  <li><code>_create_proxy_model()</code> (<span class="file">server.py:714</span>) builds models with <strong>only a provider</strong> — no caching settings. Note the routing: native <code>AnthropicModel</code> / <code>GoogleModel</code> are built <em>only in direct mode</em>; the proxy path (the default on Mac) returns <code>OpenAIChatModel</code> for <strong>every</strong> proxied model, including enterprise Claude IDs (<span class="file">server.py:768</span>). This is why the Anthropic fix is path-dependent (rec&nbsp;2).</li>
+  <li>Repo-wide grep for <code>cache_control</code> / <code>CachePoint</code> / <code>extra_headers</code> / <code>extra_body</code> / <code>anthropic-beta</code> / <code>cache_read_tokens</code> / <code>prompt_cache_key</code> / <code>prompt_cache_retention</code> → <strong>zero hits in production code</strong>. (The grep set is deliberately broad: it includes OpenAI's current prompt-cache controls <code>prompt_cache_key</code> and <code>prompt_cache_retention</code>, not just marker-based caching.) The only hits are in <span class="file">docs/Archive/experiments/</span> — the team built and ran cache experiments (incl. Gemini <code>cache_control</code> passthrough, OpenAI/Anthropic cached-token extraction) but never wired them in. Caching is formally deferred (Phase 5, "OUTSTANDING") in <code>docs/Archive/PLAN-token-cost-reduction.md</code>.</li>
+  <li><code>litellm_config.yaml</code> has no <code>cache:</code> block — only <code>drop_params: true</code> + master key.</li>
+  <li>No code reads cache-hit telemetry from <code>usage()</code>.</li>
+  <li><code>requirements.txt</code> pins <code>pydantic-ai&gt;=1.77.0</code> (where <code>CachePoint</code> and Anthropic cache settings exist), but the local interpreter has a stale <strong>0.8.1</strong> — reconcile before building on 1.77 APIs.</li>
+</ul>
+
+<h4>The team's real strategy is stripping, not caching</h4>
+<p><code>strip_stale_images</code> rewrites old image blobs to placeholders; <code>strip_duplicate_template</code> (<span class="file">extraction/history_processors.py:238</span>) collapses the repeated 12k-token template to a one-line pointer. These reduce per-turn tokens but are orthogonal to caching.</p>
+
+<h4>What actually happens per provider</h4>
+<table>
+  <tr><th style="width:18%">Provider</th><th style="width:10%">Default?</th><th>Caching today</th><th style="width:20%">Verdict</th></tr>
+  <tr><td>OpenAI (<code>openai.gpt-5.4</code>)</td><td>✅</td><td>Automatic prefix caching &gt;1024 tokens, no markers. Fixed system prompt is first and stable across turns → scope&nbsp;A cached server-side.</td><td><span class="verdict-ok">Working, unverified</span></td></tr>
+  <tr><td>Anthropic <em>direct</em> (<code>claude-*</code>, native <code>AnthropicModel</code>)</td><td>❌</td><td>Requires explicit <code>cache_control</code> / pydantic Anthropic cache settings; none set. Every turn re-bills full system prompt + history.</td><td><span class="verdict-zero">$0 caching — biggest gap</span></td></tr>
+  <tr><td>Anthropic <em>via proxy</em> (Claude on the Mac/enterprise LiteLLM, as <code>OpenAIChatModel</code>)</td><td>❌ (default Mac)</td><td>Caching would need OpenAI-format <code>cache_control</code> on content blocks + LiteLLM translating it through to Anthropic. <code>drop_params: true</code> in <code>litellm_config.yaml</code> may strip an unrecognized param — needs config work, not just agent settings.</td><td><span class="verdict-zero">$0 caching — harder fix</span></td></tr>
+  <tr><td>Gemini (direct on Mac, <span class="file">server.py:736</span>)</td><td>❌</td><td>Implicit caching only; no markers; LiteLLM passthrough not configured.</td><td><span class="verdict-part">Partial, unverified</span></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="costmodel">5 — The cost model from first principles</h2>
+
+<p>For one agent running <code>T</code> turns on a system prompt of size <code>S</code>, input cost is approximately:</p>
+<pre>input_tokens  ≈  T·S  +  Σ(growing history)</pre>
+<p>The <code>T·S</code> term dominates when <code>S</code> is large and fixed — exactly this codebase (multi-thousand-token prompts; <code>T</code> up to 40 for face/notes, up to 36 for the reviewer). This yields a strict lever order:</p>
+<ol>
+  <li><span class="kw">Reduce T</span> — kills input <em>and</em> output cost and latency at once. Highest theoretical lever.</li>
+  <li><span class="kw">Reduce S</span> — linear win on the dominant term.</li>
+  <li><span class="kw">Cache the residual S</span> — turns <code>T·S</code> into <code>S + (T−1)·0.1·S</code>.</li>
+</ol>
+<p>Caching is the <strong>cheapest and least risky</strong> action, so it's the right <em>first move</em> — but it is the <em>smallest</em> lever. It makes waste cheap rather than removing it. Don't cache a bloated prompt and declare victory.</p>
+
+<div class="callout ok">
+<p><strong>The key insight: strip and cache are complementary, not competing.</strong> Assign by content type:</p>
+<ul>
+  <li><strong>Needed re-sent every turn</strong> (rules, persona, tool schemas, template structure) → <strong>cache it.</strong> Can't drop it.</li>
+  <li><strong>Not needed re-sent</strong> (stale images, duplicate template) → <strong>strip it.</strong> ~100% reduction on all providers, beats caching's ~90%.</li>
+</ul>
+<p>So <code>strip_duplicate_template</code> is correct and superior to caching for that content. The only constraint is <strong>ordering</strong>: a strip that mutates a message <em>above</em> the cache breakpoint invalidates the cache. Since strips touch tool-return messages (after the system prompt) and the natural breakpoint is end-of-system-prompt, they're compatible by construction.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="recs">6 — Recommendations</h2>
+
+<ol class="steps">
+  <li>
+    <div><span class="h">Measure before touching anything.</span> <span class="tag t-p0">P0</span></div>
+    <p>Pull pydantic-ai's normalized <code>cache_read_tokens</code> <em>and</em> <code>cache_write_tokens</code> from <code>usage()</code> into the live path and onto the Telemetry tab — extend <code>_in_tokens</code> (<span class="file">server.py:110</span>), which today reads only <code>input_tokens</code>. <strong>Capture writes too:</strong> Anthropic bills cache writes at a premium, so a telemetry that counts only reads will report phantom savings and misprice write-heavy runs. Costs nothing at runtime and answers the question nobody can currently answer: <em>is OpenAI auto-caching even hitting today?</em> On the default path it may already be saving most of <code>T·S</code> — or 0% if the prefix is unstable. You are currently making a cost decision blind.</p>
+  </li>
+  <li>
+    <div><span class="h">Anthropic caching — path-dependent, not a one-liner.</span> <span class="tag t-p0">P0</span></div>
+    <p>Every Claude run (incl. the reviewer on a Claude model) pays full <code>T·S</code> with no caching, but the fix splits by route:</p>
+    <ul>
+      <li><strong>Direct mode</strong> (native <code>AnthropicModel</code>): set the cache breakpoint via pydantic-ai's Anthropic cache settings / <code>CachePoint</code> after the static system prefix. Confirm the exact 1.77 API against the installed build first — local env is stale 0.8.1.</li>
+      <li><strong>Proxy mode</strong> (the <em>default on Mac</em>; Claude routes as <code>OpenAIChatModel</code> through LiteLLM): the breakpoint must be expressed as OpenAI-format <code>cache_control</code> on content blocks and survive LiteLLM's translation to Anthropic. Verify <code>drop_params: true</code> (<code>litellm_config.yaml</code>) doesn't strip it; this likely needs proxy-config work, not just agent settings.</li>
+    </ul>
+    <p>So "one change at <code>_create_proxy_model</code>" was wrong — it's two mechanisms gated on <code>proxy_url</code>.</p>
+  </li>
+  <li>
+    <div><span class="h">Use OpenAI's explicit cache controls on the default path.</span> <span class="tag t-p1">P1</span></div>
+    <p>OpenAI auto-caches prefixes, but two documented controls sharpen it and the repo uses neither. <code>prompt_cache_key</code> (a routing hint) keeps requests with the same prefix on the same cache shard — set it per agent-type so the 5 face agents / N Sheet-12 sub-agents land on consistent caches. <code>prompt_cache_retention</code> (extended retention, ~24h) directly addresses the cross-run TTL limit that otherwise caps reuse to a few minutes. Both pass via <code>extra_body</code> on the OpenAI path. Cheap, and they compound with the telemetry from rec&nbsp;1.</p>
+  </li>
+  <li>
+    <div><span class="h">Look harder at PDF images than at text caching — likely the bigger fish.</span> <span class="tag t-p1">P1</span></div>
+    <p>The same PDF pages are rendered to images and sent to the model by the scout, then ~5 face agents, ~5 notes agents, then the reviewer. <code>tools/page_cache.py</code> caches the PNG <em>rendering</em> (CPU) but not the <em>vision tokens</em> — each agent re-pays the model for the same image. Within an agent, <code>strip_stale_images</code> handles repeats; <strong>across agents, nothing does.</strong> Cross-agent image caching is hard (independent prefixes), so the real lever is upstream: a richer scout extraction (<code>face_line_refs</code>, <code>inventory</code>, context) means fewer downstream <code>view_pdf_pages</code> calls — cutting vision tokens <em>and</em> <code>T</code>. Measure the vision-token share per agent before micro-optimizing text caching.</p>
+  </li>
+  <li>
+    <div><span class="h">Re-evaluate the dead <code>cache_template</code> path — opportunity, not just cleanup.</span> <span class="tag t-p1">P1</span></div>
+    <p>Embedding the template summary in the system prompt (vs a <code>read_template</code> tool call) saves a full turn per agent <em>and</em> makes the block cacheable. The catch: it inflates turn-1 cost. <strong>Pre-caching, tool-result + strip was right; post-caching, the calculus may flip</strong> because turn-1 cost amortizes while the saved turn is pure win. Re-run the numbers once telemetry exists. Either wire it properly or delete the dead parameter — don't leave a trap someone sets expecting it works.</p>
+  </li>
+  <li>
+    <div><span class="h">Move the Sheet-12 inventory slice to the prompt tail — but warm the cache first.</span> <span class="tag t-p2">P2</span></div>
+    <p>The N fan-out sub-agents share an identical large prompt except <code>=== INVENTORY ===</code>, rendered mid-prompt. Moving it to the end (the assigned-note list already lives in the user message) makes the full static prefix <em>eligible</em> to cache across the burst. <strong>Caveat (peer review):</strong> the sub-agents launch concurrently with only a 0.6s stagger (<code>_SUB_AGENT_LAUNCH_STAGGER_SECS</code>, <span class="file">notes/listofnotes_subcoordinator.py:82</span>), and a cache entry isn't readable until the first response that wrote it begins — so "first writes, N−1 read" assumes a warm cache that concurrency defeats. To realize the saving you'd need a deliberate warm-up (run one sub-agent to first-token before fanning out) or serialization, proven by the rec-1 telemetry. <strong>Scope honestly:</strong> this is a cross-agent (scope-B) optimization only; the dominant within-agent <code>T·S</code> caching warms naturally and is unaffected. The same warm-up caveat applies to the 5 parallel face agents and to the "second breakpoint after <code>_base.md</code>" idea in the next rec.</p>
+  </li>
+  <li>
+    <div><span class="h">Make the static/dynamic boundary a code boundary, not a string concat.</span> <span class="tag t-p2">P2</span></div>
+    <p>Today static rules and dynamic data are jammed into one <code>system_prompt</code> string (the reviewer's <code>body + packet</code> is the clearest case). For <em>within-run</em> caching this is fine — built once, stable across turns. The reason to separate is <strong>robustness</strong>: with static content as <code>system_prompt</code> and dynamic content as the first user message, the cache breakpoint falls naturally at the system/user boundary and can't be accidentally broken by editing the packet. Unlocks a second breakpoint after shared <code>_base.md</code> so it caches across the 5 parallel face agents (small, but free once you're placing breakpoints).</p>
+  </li>
+  <li>
+    <div><span class="h">Audit prompt assembly for non-determinism.</span> <span class="tag t-p2">P2</span></div>
+    <p>Cache keys hash the byte-exact prefix. Unsorted <code>dict</code>/<code>set</code> iteration, inconsistent float formatting, or run-varying data in the static region produces a different prefix and a guaranteed miss. Invisible within a run (built once); across runs and the 5-agent fan-out it's hit-vs-miss. Worth a deliberate pass once telemetry shows the real hit rate.</p>
+  </li>
+  <li>
+    <div><span class="h">Know the input/output split per agent — don't apply uniform effort.</span> <span class="tag t-p2">P2</span></div>
+    <p>Caching only touches input. Face extraction is input-heavy (big prompt, small writes) → high cache ROI. Notes agents emit up to 30k-char HTML cells → output-heavy → caching does little. The telemetry from step 1 should split this so effort goes where input dominates.</p>
+  </li>
+</ol>
+
+<h3>Sequencing</h3>
+<p>Telemetry (1) → Anthropic breakpoint (2) → <em>read the numbers</em> → let the data decide whether the real money is in vision tokens (3), turn reduction (4), or fan-out caching (5). Steps 1–2 are small, contained edits at known sites. Everything after 2 should be telemetry-driven — including, honestly, whether further caching work beats simply reducing <code>T</code>.</p>
+
+<!-- ============================================================ -->
+<h2 id="hygiene">7 — Documentation &amp; code hygiene</h2>
+<ul>
+  <li><strong>Stale docs are worse than no docs because they're trusted.</strong> Gotcha #18 says the reviewer cap is "8-25"; the code says <code>[12, 36]</code> (<span class="file">correction/reviewer_agent.py:823</span>). Gotcha #21 lists <code>load_open_conflicts</code> / <code>revert_to_original</code> as "tools"; they are helpers, not <code>@agent.tool</code>. Fix or delete.</li>
+  <li><strong>Dead parameter.</strong> <code>cache_template</code> is threaded through <code>create_extraction_agent</code> / <code>run.py</code> but never enabled — wire it (recommendation 4) or remove it.</li>
+  <li><strong>Environment drift.</strong> <code>pydantic-ai</code> pinned <code>&gt;=1.77</code> but local env on 0.8.1. Reconcile before relying on 1.77 caching APIs.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="flags">8 — Discrepancies flagged for the team</h2>
+<table>
+  <tr><th style="width:30%">Claim (CLAUDE.md / common belief)</th><th>Reality in code</th></tr>
+  <tr><td>Reviewer turn cap is "8-25" (gotcha #18)</td><td><code>compute_reviewer_turn_cap</code> = <code>[12, 36]</code> (<span class="file">correction/reviewer_agent.py:823</span>)</td></tr>
+  <tr><td><code>load_open_conflicts</code> / <code>revert_to_original</code> are reviewer "tools" (gotcha #21)</td><td>Helpers, not registered <code>@agent.tool</code> — they never enter the prompt</td></tr>
+  <tr><td>Template summary is embedded "for caching" (code comments)</td><td><code>cache_template=False</code> everywhere live; template comes via tool result + strip</td></tr>
+  <tr><td>"We have a token-cost-reduction strategy"</td><td>True, but it is <em>history stripping</em>; all caching work is explicitly deferred/OUTSTANDING</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="effectiveness">9 — Effectiveness problems (accuracy, not cost)</h2>
+
+<p>A separate axis from caching: defects in the <em>content</em> of the prompts that cause the agents to extract wrong numbers, mis-route disclosures, flail, or run out of budget. Severity reflects likely impact on output correctness. Tags: <span class="tag t-p0">HIGH</span> <span class="tag t-p1">MED</span> <span class="tag t-p2">LOW</span>.</p>
+
+<div class="callout">
+<p><strong>Why this matters more than it looks.</strong> The notes pipeline is deliberately all-LLM-judgement — no deterministic matching, no synonym dictionary, no downstream corrector (gotcha #14) — and extraction has only a weak verifier. <strong>In this architecture the prompt <em>is</em> the program</strong>: a defect converts directly into a wrong number or a dropped disclosure with nothing to catch it. Prompt quality is the largest single effectiveness lever in the system, ahead of model choice.</p>
+</div>
+
+<div class="callout ok">
+<p><strong>What already works (not flagged).</strong> <code>strip_stale_images</code> is stage-aware — keeps all images until the first write, strips only pre-write batches; it already fixed the run-126 re-fetch loop (<span class="file">extraction/history_processors.py:158</span>). The reviewer packet's comparands + <code>entity_scope</code> tags are good. The scout <code>scale_unit</code> 1000×-error mitigation is exemplary. The vision notes prompt is tight. Evidence-required-per-fact grounding is sound.</p>
+</div>
+
+<h3>Ranked by impact on accuracy</h3>
+
+<h4>1 — Flat contradictions inside a single assembled prompt <span class="tag t-p0">HIGH</span></h4>
+<p>The worst class: the model must <em>reconcile</em> conflicting rules and resolves it nondeterministically.</p>
+<table>
+  <tr><th style="width:34%">Conflict</th><th>Detail</th></tr>
+  <tr><td>"ONE NOTE, ONE CELL" vs "one note → multiple rows"</td><td><span class="file">_notes_base.md:11</span> (<em>"appears in exactly one cell across the entire workbook"</em>) collides with <span class="file">notes_listofnotes.md:35</span>, which <em>instructs</em> splitting one note across rows. Base intent is "no cross-<em>sheet</em> duplication" but the wording says "one cell." → under-split or over-split.</td></tr>
+  <tr><td>"skip it" vs "route to catch-all"</td><td>Base disposition <em>"…does not fit any template row, you skip it"</em> (<span class="file">_notes_base.md:7</span>) vs LoN <em>"land it on the catch-all row"</em> (<span class="file">notes_listofnotes.md:44</span>). An agent that internalises "skip" silently drops coverage.</td></tr>
+  <tr><td>Sheet-12 <em>internal</em> catch-all vs skip (peer review)</td><td>Even within the LoN prompt the boundary is fuzzy: line 44 routes unmatched notes to the catch-all, while the skip-reason list (<span class="file">notes_listofnotes.md:~80</span>) authorizes skipping when <em>"no row … fits and it isn't important enough for the catch-all row."</em> "Important enough" is an undefined judgement with no downstream check — same class of nondeterministic instruction.</td></tr>
+  <tr><td>Sign conventions stated 3–4 ways</td><td><code>_base.md</code> + each statement file + the injected <code>_sign_conventions.py</code> block describe the same dividend/OCI rule differently, with no "the injected block wins." SOCIE even receives a SOCF-worded sign block.</td></tr>
+</table>
+<p><strong>Fix:</strong> reword the base invariant to "content isn't duplicated <em>across sheets</em>" and bless intra-sheet multi-row splits; make the catch-all instruction explicitly override "skip" for Sheet&nbsp;12; state each sign rule once and mark the dynamic block authoritative.</p>
+
+<h4>2 — Hard-coded coordinates the agent is told to trust but can't verify <span class="tag t-p0">HIGH</span></h4>
+<p>Violates the codebase's own label-based, regeneration-survivable design (gotcha #3/#15). When a template regenerates, the prompt lies.</p>
+<ul>
+  <li><strong>SOCIE</strong> asserts rows 6–25 (CY) / 30–49 (PY) and <em>"this is a matrix template — not label matching"</em> (<span class="file">socie.md:40</span>) — i.e. trust the literals, don't verify. But the group overlay uses 3–25/27–49 and gotcha #12 confirms group blocks start at row 3. Off-by-one in the live template → every SOCIE write lands wrong, with no label-match safety net. Highest-risk single instruction in the face set, and the 24-column matrix ships with one bare example.</li>
+  <li>Notes templates hard-code "row 57", "rows 6–33", "27 data-entry rows" (<span class="file">notes_issued_capital.md</span>, <span class="file">notes_related_party.md</span>).</li>
+</ul>
+<p><strong>Fix:</strong> read movement-row numbers from <code>read_template()</code> rather than trusting literals; add one worked example per movement type (profit, dividend, share issue, OCI); reference labels, not absolute rows, in the notes prompts.</p>
+
+<h4>3 — The feedback loop gives the agent no gradient to act on <span class="tag t-p0">HIGH</span></h4>
+<p>An agent only improves if each turn yields actionable signal. Today a careful agent flails:</p>
+<ul>
+  <li><code>verify_totals</code> is <strong>near-vacuous for 4 of 5 statements</strong> — for SOPL/SOCI/SOCF it checks formula-driven identities that tie whenever numbers are <em>consistent</em>; it never compares to the PDF (<span class="file">verifier.py:1169</span>; <code>sopl.md</code> says "balance checks are SOFP-only"). The save-gate treats passing verify as license to save, so <strong>an agent filling consistently-wrong numbers sails through believing it is "verified."</strong> The prompts never warn that verify ≠ correctness here.</li>
+  <li>When verify fails, feedback is non-directive by design (gotcha #17, to prevent plugging) — but for SOCF the commonest error is a sign flip, and the feedback holds <code>computed_totals</code> yet never says "this gap matches row X — likely a sign error." The no-plug agent gets a failure with no direction and is told not to do the obvious thing → burns turns re-verifying with no new information.</li>
+  <li>Some prompts tell the agent to cross-check against statements it doesn't have (<span class="file">soci.md:38</span>, <span class="file">socf.md:48</span>) — those checks run later on merged workbooks; the face agent has no SOFP to compare and may stall.</li>
+</ul>
+<p><strong>Fix:</strong> give <em>directional</em> diagnosis without prescribing a plug ("equity side light by exactly the PPE figure — recheck that row's sign"); tell the agent verify is vacuous for non-SOFP and value-accuracy is its own responsibility; drop the impossible cross-checks from face prompts.</p>
+
+<h4>4 — Context starvation against the turn budget: the careful path is the expensive path <span class="tag t-p0">HIGH (reviewer)</span></h4>
+<p>The reviewer cap is <code>12 + 2·n_items</code>, clamped <code>[12, 36]</code> (<span class="file">reviewer_agent.py:823</span>), and <code>turn_count</code> increments per model→tools round-trip. But the prompt's own playbook prescribes ~6 round-trips per failing check (list_facts → trace lhs → trace rhs → read leaf → view PDF → apply_fix). With <code>n_items=4</code> the cap funds ~3 checks while the careful path needs ~6 each. <strong>The agent that obeys the prompt's discipline exhausts first — on exactly the hard runs the reviewer exists for.</strong> Two compounding causes:</p>
+<ul>
+  <li>The <strong>cascade trace is computed server-side already</strong> (<span class="file">reviewer_agent.py:224</span>) but withheld from the packet, forcing 2–3 rediscovery rounds per check.</li>
+  <li>The prompt reads as a serial recipe and never says "batch independent tool calls in one turn" — pydantic-ai supports parallel calls.</li>
+</ul>
+<p><strong>Fix (highest-ROI reviewer change):</strong> pre-inject the trace (children + signed coefficients + children-sum-vs-parent delta) into <code>_format_review_packet</code> — zero model cost, directly buys back the budget; and instruct tool-call batching.</p>
+
+<h4>5 — Confident wrong hints are worse than empty ones <span class="tag t-p0">HIGH (scout)</span></h4>
+<p>In a soft-hint design the value of a hint is <code>P(correct)·benefit − P(wrong)·misdirection</code>. The scout prompt inverts the sign on the hardest inputs: on scanned PDFs it is told to <em>"populate <code>face_line_refs</code> yourself"</em> from the image — transcribe every line-item→note-number mapping — with <strong>no confidence gate and no "leave note_num null if illegible,"</strong> despite applying exactly that "do NOT guess" discipline to face-page location (<span class="file">scout/agent.py:155,175</span>). A confidently-wrong note number sends the extraction agent to the wrong note pages first. Compounding: <code>save_infopack</code> reports <em>"saved successfully"</em> even when it silently dropped malformed inventory/ref entries (<span class="file">scout/agent.py:624,700</span>), so scout "succeeds" with an empty inventory and never self-corrects.</p>
+<p><strong>Fix:</strong> gate scanned-PDF refs on high confidence and null illegible note_nums; return surviving counts from <code>save_infopack</code> ("3 statements, 14 notes, 22 refs; 2 skipped — re-check") so the agent retries in-run.</p>
+
+<h4>6 — Positioning + repetition crowd out the task <span class="tag t-p1">MED (pervasive)</span></h4>
+<p>LLM attention favours start and end; this codebase fills the middle with generic sermons and repeats them. The no-plug rule appears <strong>4×</strong> (base, statement file, verifier footer, save-gate message) while the statement-specific "fill the sub-sheet first, here are the exact rows" sits buried mid-prompt. The Sheet-12 sub-agent's assigned batch is in a mid-prompt block labelled generically "Scout identified N notes" (<span class="file">notes/agent.py:561</span>) — not "YOUR ASSIGNED BATCH" — and <em>also</em> in the user message in a different format, so the agent reconciles two representations of its own scope (double-write / missed-note risk).</p>
+<p><strong>Fix:</strong> state shared rules once; move per-agent decision-critical content (assigned batch, target layout) to the end; relabel the inventory block as the batch.</p>
+
+<h4>7 — Temperature 1.0 forced globally on a precision task <span class="tag t-p1">MED — verify per model</span></h4>
+<p>Every agent hardcodes <code>ModelSettings(temperature=1.0)</code>. The reason is a real Gemini-3-through-proxy constraint — the unnumbered "Temperature Constraint" rule in CLAUDE.md (<span class="file">CLAUDE.md:140</span>; <em>not</em> gotcha #5, which is SSL) — but it is applied to <em>all</em> providers, including the default <code>openai.gpt-5.4</code> and any Claude reviewer. Financial extraction is a low-entropy transcription/arithmetic task; 1.0 maximises sampling variance.</p>
+<p><strong>Fix:</strong> make temperature provider-aware — force 1.0 only for Gemini, drop to ~0–0.2 elsewhere. <em>Caveat:</em> some GPT-5 reasoning models only accept the default temperature, so this may be a no-op on OpenAI but a real win on Anthropic — validate per model rather than assume.</p>
+
+<h4>8 — Absolute rounding tolerance manufactures unresolvable imbalances <span class="tag t-p1">MED</span></h4>
+<p>The SOFP balance check uses <code>abs(diff) &gt; 0.01</code> in absolute RM (<span class="file">verifier.py:482</span>). On an RM'000 statement, a legitimate ±RM1 source-rounding difference becomes a hard imbalance the agent is told not to plug → straight into the burn-turns-then-acknowledge loop. <strong>Fix:</strong> scale the tolerance to the statement's unit/magnitude.</p>
+
+<h3>Highest-ROI fixes (ascending risk)</h3>
+<ol class="steps">
+  <li><div><span class="h">Pre-inject the cascade trace into the reviewer packet (#4).</span></div><p>Data already computed server-side; pure win, no behaviour change.</p></li>
+  <li><div><span class="h">Resolve the notes contradictions (#1).</span></div><p>Flat contradictions in one prompt; cheap text edits, large accuracy effect with no downstream net.</p></li>
+  <li><div><span class="h">De-hardcode SOCIE rows → read from template + per-movement examples (#2).</span></div><p>Silent catastrophic mis-writes today.</p></li>
+  <li><div><span class="h">Make verifier feedback directional; warn that verify is vacuous for non-SOFP (#3).</span></div><p>Converts flailing turns into productive ones without weakening the no-plug guard.</p></li>
+  <li><div><span class="h">Provider-aware temperature (#7).</span></div><p>One-line change at agent construction; validate per model.</p></li>
+</ol>
+
+<div class="callout warn">
+<p><strong>Method note.</strong> These findings come from a full read of the prompt <code>.md</code> files, the verifier, the reviewer/scout assembly, and the agent loop. Severity is a judgement of likely correctness impact, not a measured error rate — the system has no per-finding telemetry yet (see Section 6, recommendation 1). Validate the high-severity items against a real failing run before and after each fix.</p>
+</div>
+
+<hr class="soft" />
+<p class="small">Generated for peer review. All file:line references are against the working tree at review time; verify against current <code>HEAD</code> before acting. No code was modified in producing this report.</p>
+
+</div>
+</body>
+</html>

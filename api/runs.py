@@ -178,6 +178,9 @@ async def get_run_detail_endpoint(run_id: int):
                     "completion_tokens": a.completion_tokens,
                     "turn_count": a.turn_count,
                     "tool_call_count": a.tool_call_count,
+                    # v15 cache telemetry: cache_read > 0 proves caching hit.
+                    "cache_read_tokens": getattr(a, "cache_read_tokens", 0),
+                    "cache_write_tokens": getattr(a, "cache_write_tokens", 0),
                 },
                 "turns": a.turns,
                 "events": [_serialize_event(e) for e in a.events],
@@ -193,6 +196,14 @@ async def get_run_detail_endpoint(run_id: int):
             "completion_tokens": sum(a.completion_tokens or 0 for a in detail.agents),
             "turn_count": sum(a.turn_count or 0 for a in detail.agents),
             "tool_call_count": sum(a.tool_call_count or 0 for a in detail.agents),
+            # v15 cache telemetry rollup — total cache reads/writes across the
+            # run so the Telemetry tab can show a hit rate at a glance.
+            "cache_read_tokens": sum(
+                getattr(a, "cache_read_tokens", 0) or 0 for a in detail.agents
+            ),
+            "cache_write_tokens": sum(
+                getattr(a, "cache_write_tokens", 0) or 0 for a in detail.agents
+            ),
         },
         "cross_checks": [
             {

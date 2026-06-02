@@ -580,6 +580,10 @@ export interface AgentTokenBreakdown {
   completion_tokens: number;
   turn_count: number;
   tool_call_count: number;
+  // v15 cache telemetry. Optional so a pre-v15 payload still type-checks;
+  // the panel defaults them to 0. cache_read_tokens > 0 == caching is hitting.
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
 }
 
 // v8 telemetry: one per-turn metrics row (a single agent.iter() node).
@@ -595,6 +599,9 @@ export interface AgentTurnJson {
   cumulative_tokens: number;
   cost_estimate: number;
   duration_ms: number;
+  // v15 cache telemetry deltas for this turn. Optional for back-compat.
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
 }
 
 export interface RunAgentJson {
@@ -625,6 +632,9 @@ export interface TelemetryRollupJson {
   completion_tokens: number;
   turn_count: number;
   tool_call_count: number;
+  // v15 cache telemetry rollup. Optional for back-compat; defaulted to 0.
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
 }
 
 // v8 conversation trace served by GET /api/runs/{id}/agents/{stmt}/trace.

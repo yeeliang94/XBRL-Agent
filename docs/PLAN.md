@@ -1,0 +1,157 @@
+# Implementation Plan: Prompt Caching (§6) + Agent Effectiveness (§9)
+
+**Overall Progress:** `18%` — Phase 0 ✅, Phase 1 ✅ (code + mocked tests; live gate pending user)
+**PRD Reference:** [docs/REVIEW-prompts-and-caching.html](REVIEW-prompts-and-caching.html) — §6 (caching recommendations) and §9 (effectiveness problems)
+**Last Updated:** 2026-06-02
+**Branch:** `prompt-caching-and-effectiveness`
+
+> **Phase 0.1 finding (resolves the report's open question):** the real runtime is `venv/bin/python` →
+> **pydantic-ai 1.77.0** (the `0.8.1` in the review was the *system* python, a red herring). Run all tests with
+> `venv/bin/python -m pytest`. Confirmed caching APIs on 1.77.0:
+> - Usage: normalized `cache_read_tokens` + `cache_write_tokens` (on `RequestUsage`/`RunUsage`).
+> - `CachePoint` exists.
+> - **Direct Anthropic:** `AnthropicModelSettings.anthropic_cache_instructions` / `anthropic_cache_tool_definitions` / `anthropic_cache_messages` — clean, no `extra_body` hack.
+> - **OpenAI:** `OpenAIChatModelSettings.openai_prompt_cache_key` / `openai_prompt_cache_retention` — first-class.
+> - Proxy-routed Claude is still `OpenAIChatModel`, so the `anthropic_*` flags won't apply there — that path stays the harder one (Step 2.2).
+
+## Summary
+Two parallel tracks from the peer-reviewed prompt/caching report. **Track A (caching, §6)** reduces LLM cost by first *measuring* cache effectiveness, then enabling provider-correct prompt caching — the rest of the caching work is deliberately gated on the telemetry so we never optimize blind. **Track B (effectiveness, §9)** fixes prompt/loop defects that make agents extract wrong numbers, drop disclosures, or run out of budget. Track B changes agent behavior, so every phase is validated against a real run plus its pinning test.
+
+## Key Decisions
+- **Telemetry comes first, and gates the rest of caching** — later §6 items (`cache_template` re-eval, Sheet-12 burst caching, non-determinism audit) are explicitly conditional on hit-rate data. We do not implement them on faith. *Why:* the report's whole argument is "don't cache a bloated prompt and declare victory"; without measurement we can't tell if OpenAI auto-caching already covers the win.
+- **Anthropic caching is path-dependent, not one chokepoint** — direct mode is native `AnthropicModel`; the default Mac path routes Claude as `OpenAIChatModel` through LiteLLM (`server.py:768`). Two mechanisms, gated on `proxy_url`. *Why:* a single `_create_proxy_model` change would silently no-op on the default path.
+- **Capture cache *writes*, not just reads** — Anthropic bills cache writes at a premium; reads-only telemetry reports phantom savings. *Why:* avoids mispricing write-heavy runs.
+- **Keep the no-plug guard intact while making verifier feedback directional** — we add diagnosis ("which side / likely sign error on row X"), we do **not** loosen the anti-plug rule (gotcha #17). *Why:* the goal is to give the agent a gradient, not permission to balance by plugging.
+- **Provider-aware temperature, Gemini stays at 1.0** — only lower temperature off Gemini, and validate per model (some GPT-5 reasoning models ignore it). *Why:* gotcha — Gemini-3-through-proxy genuinely requires 1.0 ([CLAUDE.md:140](../CLAUDE.md), the "Temperature Constraint" rule).
+- **De-hardcode coordinates rather than trust literals** — SOCIE/notes prompts should read row numbers from `read_template()`, matching the codebase's regeneration-survivable design (gotcha #3/#15). *Why:* literals drift when templates regenerate and there is no label-match safety net.
+- **Every effectiveness change updates its pinning test in the same step** — per CLAUDE.md, "done" = the pinning test passes. *Why:* several targets (verifier wording, notes prompt, SOCIE) are guarded by tests that will fail loudly if we change behavior without updating them.
+
+## Pre-Implementation Checklist
+- [ ] 🟥 Scope confirmed: Everything (§6 + §9) — confirmed by user
+- [ ] 🟥 Review report (Rev 2) is the source of truth; no separate PRD
+- [ ] 🟥 No conflicting in-progress work (`git status` clean except this plan + the review HTML)
+- [ ] 🟥 Capture a **baseline run** before any change (Phase 0) for before/after comparison
+
+---
+
+## Tasks
+
+### Phase 0: Pre-flight — environment + baseline
+- [x] 🟩 **Step 0.1: Reconcile pydantic-ai version** — DONE. venv = **1.77.0**; caching APIs confirmed (see header note). Run all tests with `venv/bin/python -m pytest`.
+- [ ] 🟨 **Step 0.2: Capture a baseline run** — HANDED TO USER (needs live LLM + key). Run `venv/bin/python run.py data/FINCO-Audited-Financial-Statement-2021.pdf --statements SOFP SOPL SOCI SOCF SOCIE` and record per-run token totals for before/after.
+  - **Verify:** a baseline `output/run_NNN/` exists with a filled workbook; token totals recorded.
+
+---
+
+### Phase 1: Cache telemetry (the gate for all of Track A)
+- [x] 🟩 **Step 1.1: Read + write cache tokens through the usage path** — DONE. Added `_cache_read_tokens` / `_cache_write_tokens` helpers (`agent_runner.py`, mirroring `_in_tokens`), captured per-turn deltas in the `agent.iter()` loop, and summed them into the `AgentResult` rollup in `coordinator._finalize`.
+  - **Verify:** ✅ `tests/test_db_schema_v15.py::test_cache_rollup_round_trips` + full backend suite (1881 passed).
+- [x] 🟩 **Step 1.2: Persist + display cache metrics** — DONE.
+  - [x] 🟩 Schema v14→v15: nullable `cache_read_tokens` / `cache_write_tokens` on `run_agents` + `run_agent_turns` (idempotent `ALTER`, same pattern as v8/v14) + `tests/test_db_schema_v15.py` pin.
+  - [x] 🟩 Repository: `RunAgent` fields, `finish_run_agent` params, `insert_agent_turns` columns, `fetch_run_agents` / `fetch_agent_turns` readers.
+  - [x] 🟩 Server: both `finish_run_agent` call sites pass the cache rollups; `api/runs.py` adds cache to `token_breakdown` + `telemetry_rollup`.
+  - [x] 🟩 Frontend: `types.ts` (optional fields), `AgentTelemetryPanel.tsx` (rollup line + two per-turn columns). ✅ vitest 632 passed, tsc clean.
+- [ ] 🟨 **Phase 1 Verify (gate):** HANDED TO USER — run the sample PDF (CLI or web UI) and read the Telemetry tab / `telemetry_rollup.cache_read_tokens`. On `openai.gpt-5.4` this answers the report's open question: *is auto-caching hitting today?* **This number decides Phase 3 scope.**
+
+> **PAUSE after Phase 1** — report the measured hit rate before proceeding. Track A phases 3+ are gated on it.
+
+---
+
+### Phase 2: Provider-correct explicit caching (P0)
+- [ ] 🟥 **Step 2.1: Anthropic breakpoint — direct mode** — set the cache breakpoint after the static system prefix for native `AnthropicModel` (direct path in `_create_proxy_model`, `server.py:789`).
+  - [ ] 🟥 Use the exact 1.77 API confirmed in Step 0.1 (Anthropic cache settings / `CachePoint`)
+  - [ ] 🟥 Apply at the agent-construction sites or model settings, after the stable system prompt
+  - **Verify:** a direct-Anthropic run (`--model claude-...` with `ANTHROPIC_API_KEY`) shows non-zero `cache_write_tokens` on turn 1 and `cache_read_tokens` on later turns in Telemetry.
+- [ ] 🟥 **Step 2.2: Anthropic breakpoint — proxy/LiteLLM mode** — express the breakpoint as OpenAI-format `cache_control` on content blocks for Claude routed as `OpenAIChatModel` (`server.py:768`), and ensure LiteLLM passes it through.
+  - [ ] 🟥 Verify `drop_params: true` (`litellm_config.yaml`) does not strip the cache param; adjust proxy config if needed
+  - **Verify:** a Claude run **through the local proxy** (`start.sh`) shows cache reads in Telemetry; if not, capture the LiteLLM log line proving where the param was dropped.
+- [ ] 🟥 **Step 2.3: OpenAI explicit cache controls** — set `prompt_cache_key` (per agent-type, for shard locality) and `prompt_cache_retention` (extended retention) via `extra_body` on the OpenAI path.
+  - **Verify:** default-path run hit rate (from Telemetry) is ≥ the Phase-1 baseline; note the delta.
+- [ ] 🟥 **Phase 2 Verify:** all three provider paths measured; cost-per-run delta vs. the Phase-0 baseline recorded here.
+
+> **PAUSE after Phase 2** — report measured savings per provider.
+
+---
+
+### Phase 3: Telemetry-gated caching follow-ups (only if Phase 1/2 data justifies)
+- [ ] 🟥 **Step 3.1: `cache_template` decision** — using real numbers, either wire the template summary into the cacheable system prefix (saves a `read_template` turn) **or** delete the dead parameter + stale comments. One or the other; no half state.
+  - **Verify:** if wired — turn count per face agent drops by 1 and the template block shows as cached; if deleted — `grep cache_template` returns only removal.
+- [ ] 🟥 **Step 3.2: Sheet-12 inventory → prompt tail + warm-up** — move the per-batch `=== INVENTORY ===` (`notes/agent.py:561`) to the end, and add a deliberate warm-up (run one sub-agent to first-token before fanning out) since the 0.6s concurrent stagger (`notes/listofnotes_subcoordinator.py:82`) defeats a cold cache.
+  - **Verify:** Sheet-12 burst shows cross-sub-agent cache reads in Telemetry (proves the warm-up works); coverage unchanged vs. baseline.
+- [ ] 🟥 **Step 3.3: Non-determinism audit** — sweep prompt assembly for unsorted `dict`/`set` iteration or run-varying data in the static region that silently breaks cross-run cache keys.
+  - **Verify:** two runs on the same PDF produce byte-identical static system-prefix bytes (hash compare).
+- [ ] 🟥 **Phase 3 Verify:** each sub-step either landed with a measured win or was explicitly dropped with the number that justified dropping it.
+
+---
+
+### Phase 4: Effectiveness — reviewer cascade-trace pre-injection (highest ROI, lowest risk)
+- [ ] 🟥 **Step 4.1: Pre-inject the trace into the review packet** — `_format_review_packet` (`correction/reviewer_agent.py:745`) already runs one fact query; also call `trace_cascade_source` (`reviewer_agent.py:224`) per failing check's target and render the children + signed coefficients + children-sum-vs-parent delta, so the reviewer doesn't burn 2–3 tool rounds rediscovering it.
+  - [ ] 🟥 Instruct tool-call batching in `prompts/reviewer.md` (trace lhs+rhs in one turn)
+  - [ ] 🟥 Update `tests/test_reviewer_tools.py` / reviewer prompt tests if packet shape is asserted
+  - **Verify:** on a known-failing run, the reviewer reaches its first `apply_fix` in fewer turns than baseline (compare `run_agent_turns`); fixes-per-budget improves.
+
+---
+
+### Phase 5: Effectiveness — notes prompt contradictions (§9 #1)
+- [ ] 🟥 **Step 5.1: Reconcile "ONE NOTE, ONE CELL" vs multi-row** — reword the base invariant (`prompts/_notes_base.md:11`) to "content isn't duplicated *across sheets*" and explicitly bless intra-sheet multi-row splits.
+- [ ] 🟥 **Step 5.2: Reconcile "skip" vs "catch-all"** — make the Sheet-12 catch-all instruction (`prompts/notes_listofnotes.md:44`) explicitly override the base "skip" disposition; define the "important enough for the catch-all" judgement or remove it (the §9 #1 internal-contradiction row).
+- [ ] 🟥 **Step 5.3: Sign-convention single source** — state each dividend/OCI sign rule once; mark the injected `_sign_conventions.py` block authoritative; stop feeding SOCIE a SOCF-worded block.
+  - [ ] 🟥 Update `tests/test_notes_prompt_phase1.py` assertions touched by the rewording
+  - **Verify:** notes run on the sample PDF — no cross-sheet duplicate of a note; previously-dropped catch-all notes now land; `pytest tests/test_notes_prompt_phase1.py` green.
+
+---
+
+### Phase 6: Effectiveness — de-hardcode SOCIE rows (§9 #2)
+- [ ] 🟥 **Step 6.1: Read movement rows from the template** — change `prompts/socie.md` to have the agent confirm movement-row numbers (profit, dividends, equity-at-end, share issue, OCI) from `read_template()` instead of trusting literal rows 6–25/30–49, which conflict with the group overlay (rows 3–25…).
+  - [ ] 🟥 Add one worked `write_facts` example per movement type (not one bare example for a 24-column matrix)
+  - [ ] 🟥 Re-check `tests/test_filing_level.py` (Company vs Group SOCIE routing) still passes
+  - **Verify:** SOCIE extraction on the sample PDF lands values on the correct movement rows for **both** Company and Group filings (open the filled workbook; spot-check profit/dividend rows).
+
+---
+
+### Phase 7: Effectiveness — directional verifier feedback (§9 #3)
+- [ ] 🟥 **Step 7.1: Add directional diagnosis without weakening no-plug** — extend SOPL/SOCI/SOCF feedback in `tools/verifier.py` to use the `computed_totals` already in hand ("gap matches row X — likely a sign error"), mirroring the SOFP `_sofp_imbalance_feedback`. Keep the `_NO_PLUG_FOOTER`.
+- [ ] 🟥 **Step 7.2: Warn that verify is vacuous for non-SOFP** — in the relevant prompts, tell the agent value-accuracy is its own responsibility for SOPL/SOCI/SOCF/SOCIE; drop the impossible cross-statement cross-checks from face prompts (`soci.md:38`, `socf.md:48`).
+  - [ ] 🟥 Update `tests/test_verifier_feedback_wording.py` (pins the wording; gotcha #17)
+  - **Verify:** force a sign-error case; the feedback now names the suspect row/side; `pytest tests/test_verifier_feedback_wording.py` green; no-plug rule still present.
+
+---
+
+### Phase 8: Effectiveness — scout hint confidence-gating (§9 #5)
+- [ ] 🟥 **Step 8.1: Gate scanned-PDF `face_line_refs`** — in `scout/agent.py`, instruct the scout to emit refs only at high confidence and null the `note_num` when the reference column is illegible (mirror the existing "do NOT guess" face-page rule).
+- [ ] 🟥 **Step 8.2: `save_infopack` survival counts** — return surviving counts ("3 statements, 14 notes, 22 refs; 2 skipped — re-check") instead of a bare "saved successfully", so the agent can self-correct in-run.
+  - [ ] 🟥 Update `tests/test_scout_*` assertions if the success string / ref schema is pinned
+  - **Verify:** a scanned/low-text PDF run — scout no longer emits confident wrong note numbers; the tool result reports counts; relevant scout tests green.
+
+---
+
+### Phase 9: Effectiveness — provider-aware temperature (§9 #7)
+- [ ] 🟥 **Step 9.1: Lower temperature off Gemini** — make temperature provider-aware (Gemini stays 1.0 per CLAUDE.md:140; OpenAI/Anthropic drop to ~0–0.2), validating per model since some GPT-5 reasoning models reject non-default temperature.
+  - [ ] 🟥 Confirm no test pins `temperature=1.0` for non-Gemini; update if so
+  - **Verify:** a Claude/OpenAI run still completes (no API rejection); spot-check that numeric extraction variance is not worse than baseline on a repeat run.
+
+---
+
+### Phase 10: Effectiveness — rounding tolerance (§9 #8)
+- [ ] 🟥 **Step 10.1: Scale the SOFP balance tolerance** — change the absolute `abs(diff) > 0.01` check (`tools/verifier.py:482`) to scale with the statement's unit/magnitude so a legitimate ±RM1 rounding on an RM'000 statement doesn't manufacture an unresolvable imbalance.
+  - [ ] 🟥 Update `tests/test_cross_checks.py` / verifier balance tests for the new tolerance
+  - **Verify:** an RM'000 statement with a genuine ±1 source rounding no longer trips the imbalance → acknowledge loop; a real >tolerance imbalance still fails.
+
+---
+
+## Cross-cutting verification (run after each behavior-changing phase)
+- [ ] 🟥 `python -m pytest tests/ -v` (backend; excludes live)
+- [ ] 🟥 `cd web && npx vitest run` (only if a frontend file changed — Phase 1.2)
+- [ ] 🟥 One real run on `data/FINCO-Audited-Financial-Statement-2021.pdf`, filled workbook opened in Excel so formulas evaluate (gotcha #4)
+
+## Rollback Plan
+If something goes badly wrong:
+- **Per-phase git revert** — each phase is its own commit (on a feature branch, not `main`); revert the offending commit. Prompts and `litellm_config.yaml` are text — trivially revertible.
+- **Templates are untouched** by this plan — if a workbook looks wrong, suspect the prompt/verifier change, not the template (do not hand-edit templates, gotcha #3).
+- **Reviewer facts** — Phase 4 doesn't write facts itself, but if a reviewer change misbehaves, "Revert to original" restores the pre-reviewer extraction from `run_fact_snapshots` (gotcha #21).
+- **Schema migration (Step 1.2)** — additive nullable columns only; a revert leaves them unused, not broken. Do not drop columns on rollback.
+- **State to check after any revert:** `git status` clean, `pytest tests/` green, one sample run produces a valid `filled.xlsx`.
+
+## Notes / deviations log
+- **2026-06-02 — Phase 0:** the review's "pydantic-ai is 0.8.1" was a red herring (system python). The real runtime (`venv`) is **1.77.0** with first-class caching APIs, so Phase 2 needs no `extra_body` hacks: `AnthropicModelSettings.anthropic_cache_instructions` (direct) and `OpenAIChatModelSettings.openai_prompt_cache_key` / `openai_prompt_cache_retention` (OpenAI). `CURRENT_SCHEMA_VERSION` had already drifted to **14** (CLAUDE.md says 13) — v15 builds on 14.
+- **2026-06-02 — Phase 1:** landed cache telemetry end-to-end (capture → schema v15 → repo → API payload → frontend). All tests I can run pass: backend 1881 passed / 2 skipped, frontend 632 passed, tsc clean. Live end-to-end verification (does a real run report non-zero cache reads) is handed to the user — it's the gate for Phase 3.
