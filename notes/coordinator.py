@@ -159,6 +159,9 @@ class NotesAgentResult:
     turns: list = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # v15 cache telemetry — bubbles from _SingleAgentOutcome (peer-review F2).
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     turn_count: int = 0
     tool_call_count: int = 0
 
@@ -432,6 +435,9 @@ class _SingleAgentOutcome:
     turns: list = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # v15 cache telemetry — summed from the per-turn deltas (peer-review F2).
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     tool_call_count: int = 0
 
 
@@ -581,6 +587,8 @@ async def _run_single_notes_agent(
                 turns=list(outcome.turns),
                 prompt_tokens=outcome.prompt_tokens,
                 completion_tokens=outcome.completion_tokens,
+                cache_read_tokens=outcome.cache_read_tokens,
+                cache_write_tokens=outcome.cache_write_tokens,
                 turn_count=len(outcome.turns),
                 tool_call_count=outcome.tool_call_count,
             )
@@ -800,6 +808,8 @@ async def _invoke_single_notes_agent_once(
         turns=list(_turn_records),
         prompt_tokens=sum(int(t.get("prompt_tokens") or 0) for t in _turn_records),
         completion_tokens=sum(int(t.get("completion_tokens") or 0) for t in _turn_records),
+        cache_read_tokens=sum(int(t.get("cache_read_tokens") or 0) for t in _turn_records),
+        cache_write_tokens=sum(int(t.get("cache_write_tokens") or 0) for t in _turn_records),
         tool_call_count=sum(int(t.get("_n_tool_calls") or 0) for t in _turn_records),
     )
 

@@ -13,15 +13,18 @@ from model_settings import build_model_settings, PINNED_TEMPERATURE
 
 
 class AnthropicModel:  # noqa: D401 — stand-in matching the real class name
-    pass
+    model_name = "claude-sonnet-4-6"
 
 
 class OpenAIChatModel:
-    pass
+    """Stand-in for the proxy/direct OpenAI-compatible model. ``model_name``
+    is what _resolved_provider classifies on (peer-review F1)."""
+    def __init__(self, model_name: str = "gpt-5.4"):
+        self.model_name = model_name
 
 
 class GoogleModel:
-    pass
+    model_name = "gemini-3-flash-preview"
 
 
 def test_anthropic_caches_instructions_and_tools():
@@ -53,6 +56,39 @@ def test_google_gets_plain_settings_no_cache_flags():
     assert s["temperature"] == PINNED_TEMPERATURE
     assert "openai_prompt_cache_key" not in s
     assert "anthropic_cache_instructions" not in s
+
+
+def test_proxy_routed_anthropic_does_not_get_openai_cache_params():
+    """Peer-review F1: Claude wrapped as OpenAIChatModel by the enterprise proxy
+    (model_name='bedrock.anthropic.claude-...') must NOT receive OpenAI-only
+    cache params — the proxy could reject them. It falls back to plain settings
+    (its caching is the documented Step 2.2 gap)."""
+    s = build_model_settings(
+        OpenAIChatModel("bedrock.anthropic.claude-sonnet-4-6"),
+        cache_key="xbrl-face-SOFP",
+    )
+    assert "openai_prompt_cache_key" not in s
+    assert "openai_prompt_cache_retention" not in s
+    assert s["temperature"] == PINNED_TEMPERATURE
+
+
+def test_proxy_routed_gemini_does_not_get_openai_cache_params():
+    """Peer-review F1: Gemini wrapped as OpenAIChatModel by the enterprise proxy
+    (model_name='vertex_ai.gemini-...') must NOT receive OpenAI cache params."""
+    s = build_model_settings(
+        OpenAIChatModel("vertex_ai.gemini-3.5-flash"),
+        cache_key="xbrl-scout",
+    )
+    assert "openai_prompt_cache_key" not in s
+    assert "openai_prompt_cache_retention" not in s
+
+
+def test_openai_via_registry_prefix_still_gets_cache_params():
+    """A proxied OpenAI model id ('openai.gpt-5.4') is still recognised."""
+    s = build_model_settings(
+        OpenAIChatModel("openai.gpt-5.4"), cache_key="xbrl-face-SOFP"
+    )
+    assert s["openai_prompt_cache_key"] == "xbrl-face-SOFP"
 
 
 def test_bare_string_model_falls_back_to_plain_settings():

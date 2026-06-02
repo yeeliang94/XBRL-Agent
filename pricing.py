@@ -273,6 +273,18 @@ def estimate_cost(
     as OUTPUT by the provider, not input. Charging them at the input rate
     materially undercounts cost for Claude/GPT-5 reasoning runs (fix for
     peer-review finding C5).
+
+    PRE-CACHE ESTIMATE (peer-review F2/F3): every prompt token is priced at the
+    flat input rate — this function does NOT yet discount prompt-cache *reads*
+    or surcharge Anthropic cache *writes*. So once caching is hitting, the
+    dollar figure OVERSTATES true cost (cached reads are billed cheaper by the
+    provider than the full input rate). The token-level truth is captured
+    separately in `run_agents.cache_read_tokens` / `cache_write_tokens` (schema
+    v15) and surfaced on the Telemetry tab, so caching impact is measurable in
+    tokens today; cache-aware *dollar* pricing is a tracked follow-up that
+    needs per-model cache rates (Anthropic write 1.25x / read 0.1x; OpenAI
+    cached-read discount; Gemini implicit) AND awareness that `input_tokens`
+    INCLUDES cached reads on OpenAI but EXCLUDES them on Anthropic.
     """
     input_price, output_price = get_model_pricing(model)
     input_cost = (prompt_tokens / 1_000_000) * input_price
