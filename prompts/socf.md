@@ -51,7 +51,9 @@ For **Direct** method (82 rows, 71 data-entry):
     positive add-back, while a "payment" or "purchase" is normally negative
     because it is a cash outflow.
 
-- Closing cash MUST equal SOFP cash and bank balances — this is a P0 cross-check.
+- Closing cash will be cross-checked against SOFP cash and bank balances LATER.
+  You only see the SOCF here, so you cannot perform that check yourself — enter
+  the cash-flow lines correctly so closing cash equals what the SOCF face reports.
 - Opening cash must equal prior year's closing cash.
 - Net change = Operating + Investing + Financing.
 - Opening + Net change = Closing.
