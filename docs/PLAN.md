@@ -1,6 +1,6 @@
 # Implementation Plan: Prompt Caching (§6) + Agent Effectiveness (§9)
 
-**Overall Progress:** `18%` — Phase 0 ✅, Phase 1 ✅ (code + mocked tests; live gate pending user)
+**Overall Progress:** `27%` — Phase 0 ✅, Phase 1 ✅, Phase 2 ✅ (code + mocked tests; live verify pending user)
 **PRD Reference:** [docs/REVIEW-prompts-and-caching.html](REVIEW-prompts-and-caching.html) — §6 (caching recommendations) and §9 (effectiveness problems)
 **Last Updated:** 2026-06-02
 **Branch:** `prompt-caching-and-effectiveness`
@@ -58,16 +58,19 @@ Two parallel tracks from the peer-reviewed prompt/caching report. **Track A (cac
 ---
 
 ### Phase 2: Provider-correct explicit caching (P0)
-- [ ] 🟥 **Step 2.1: Anthropic breakpoint — direct mode** — set the cache breakpoint after the static system prefix for native `AnthropicModel` (direct path in `_create_proxy_model`, `server.py:789`).
-  - [ ] 🟥 Use the exact 1.77 API confirmed in Step 0.1 (Anthropic cache settings / `CachePoint`)
-  - [ ] 🟥 Apply at the agent-construction sites or model settings, after the stable system prompt
-  - **Verify:** a direct-Anthropic run (`--model claude-...` with `ANTHROPIC_API_KEY`) shows non-zero `cache_write_tokens` on turn 1 and `cache_read_tokens` on later turns in Telemetry.
-- [ ] 🟥 **Step 2.2: Anthropic breakpoint — proxy/LiteLLM mode** — express the breakpoint as OpenAI-format `cache_control` on content blocks for Claude routed as `OpenAIChatModel` (`server.py:768`), and ensure LiteLLM passes it through.
-  - [ ] 🟥 Verify `drop_params: true` (`litellm_config.yaml`) does not strip the cache param; adjust proxy config if needed
-  - **Verify:** a Claude run **through the local proxy** (`start.sh`) shows cache reads in Telemetry; if not, capture the LiteLLM log line proving where the param was dropped.
-- [ ] 🟥 **Step 2.3: OpenAI explicit cache controls** — set `prompt_cache_key` (per agent-type, for shard locality) and `prompt_cache_retention` (extended retention) via `extra_body` on the OpenAI path.
-  - **Verify:** default-path run hit rate (from Telemetry) is ≥ the Phase-1 baseline; note the delta.
-- [ ] 🟥 **Phase 2 Verify:** all three provider paths measured; cost-per-run delta vs. the Phase-0 baseline recorded here.
+**Implemented via a single `build_model_settings(model, *, cache_key)` helper
+(`model_settings.py`) wired into all 6 multi-turn / repeated-prefix agents
+(extraction, notes, scout, reviewer, notes-validator, vision). One-shot
+structured agents `scout/vision.py` + `scout/calibrator.py` deliberately skipped
+— single request each (no repeated prefix to cache) and they carry no
+temperature pin today, so converting them would change behaviour for ~0 benefit.**
+- [x] 🟩 **Step 2.1: Anthropic breakpoint — direct mode** — DONE. `AnthropicModel` branch sets `anthropic_cache_instructions=True` + `anthropic_cache_tool_definitions=True` (caches the static system prompt + tool defs). Clean 1.77 API, no `CachePoint`/`extra_body` needed.
+  - **Verify (USER, live):** a direct-Anthropic run (`--model bedrock.anthropic.claude-...` direct mode with `ANTHROPIC_API_KEY`) shows non-zero `cache_write_tokens` on turn 1 and `cache_read_tokens` on later turns in Telemetry.
+- [ ] 🟨 **Step 2.2: Anthropic breakpoint — proxy/LiteLLM mode** — KNOWN GAP, documented not fixed. Claude through the proxy arrives as `OpenAIChatModel`, so it takes the OpenAI branch and the `anthropic_*` flags can't apply; caching it needs `cache_control` markers the OpenAI wire format can't carry from here. Flagged for a follow-up (proxy-side injection). The default model is OpenAI, so this isn't the common path.
+- [x] 🟩 **Step 2.3: OpenAI explicit cache controls** — DONE. `OpenAIChatModel` branch sets `openai_prompt_cache_key` (stable per agent-type) + `openai_prompt_cache_retention="24h"` via the first-class 1.77 settings (no `extra_body` hack needed). Covers direct OpenAI **and** every proxy-routed OpenAI model.
+  - **Verify (USER, live):** default-path run hit rate (Telemetry `cache_read_tokens`) ≥ Phase-1 baseline; note the delta.
+- [x] 🟩 **Mocked verification:** `tests/test_model_settings.py` (6 tests — per-provider dispatch, no cross-provider flag leakage, temperature seam for Phase 9). Full backend suite green.
+- [ ] 🟨 **Phase 2 Verify (USER, live):** measure per-provider cache reads/writes + cost-per-run delta vs. the Phase-0 baseline; record here.
 
 > **PAUSE after Phase 2** — report measured savings per provider.
 
@@ -155,3 +158,4 @@ If something goes badly wrong:
 ## Notes / deviations log
 - **2026-06-02 — Phase 0:** the review's "pydantic-ai is 0.8.1" was a red herring (system python). The real runtime (`venv`) is **1.77.0** with first-class caching APIs, so Phase 2 needs no `extra_body` hacks: `AnthropicModelSettings.anthropic_cache_instructions` (direct) and `OpenAIChatModelSettings.openai_prompt_cache_key` / `openai_prompt_cache_retention` (OpenAI). `CURRENT_SCHEMA_VERSION` had already drifted to **14** (CLAUDE.md says 13) — v15 builds on 14.
 - **2026-06-02 — Phase 1:** landed cache telemetry end-to-end (capture → schema v15 → repo → API payload → frontend). All tests I can run pass: backend 1881 passed / 2 skipped, frontend 632 passed, tsc clean. Live end-to-end verification (does a real run report non-zero cache reads) is handed to the user — it's the gate for Phase 3.
+- **2026-06-02 — Phase 2:** added `model_settings.py::build_model_settings` (provider-aware, dispatch by model type) and wired it into all 6 multi-turn agents. Direct-Anthropic caches instructions+tools; OpenAI (direct + proxy) sets cache_key+24h retention. 1.77's first-class settings meant **no `extra_body`/`CachePoint` hacks** — simpler than the report assumed. Removed the now-dead `ModelSettings` imports in the 6 files. Deferred: proxy-routed-Anthropic caching (Step 2.2 known gap) and the temperature seam (Phase 9 — helper already accepts a `temperature` override). New `tests/test_model_settings.py` (6) green.

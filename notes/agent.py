@@ -16,7 +16,7 @@ from typing import Any, List, Optional, Union
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
-from pydantic_ai.settings import ModelSettings
+from model_settings import build_model_settings
 
 from notes.coverage import CoverageReceipt
 from notes.payload import NotesPayload
@@ -1159,12 +1159,15 @@ def create_notes_agent(
         scout_context=scout_context,
     )
 
-    # Pin temperature=1.0 (CLAUDE.md gotcha #5).
+    # Pin temperature=1.0 ("Temperature Constraint" in CLAUDE.md). Phase 2:
+    # provider-correct prompt caching of the static system prompt + tool defs.
     agent = Agent(
         model,
         deps_type=NotesDeps,
         system_prompt=system_prompt,
-        model_settings=ModelSettings(temperature=1.0),
+        model_settings=build_model_settings(
+            model, cache_key=f"xbrl-notes-{template_type.value}"
+        ),
         # Token-cost reduction: strip stale page-image blobs (from
         # view_pdf_pages) out of the outbound request each turn. Transport
         # hygiene only — the notes all-LLM-judgement design (CLAUDE.md #14) is

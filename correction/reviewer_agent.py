@@ -855,7 +855,7 @@ def create_reviewer_agent(
     The system prompt carries the review packet from
     :func:`render_reviewer_prompt`.
     """
-    from pydantic_ai.settings import ModelSettings
+    from model_settings import build_model_settings
     from concept_model.facts_api import FactWrite
 
     deps = ReviewerDeps(
@@ -869,12 +869,13 @@ def create_reviewer_agent(
         filing_level=filing_level, filing_standard=filing_standard,
     )
     # Temperature pinned to 1.0 — Gemini 3 through the enterprise proxy
-    # requires it (mirrors extraction + correction agents).
+    # requires it (mirrors extraction + notes agents). Phase 2: provider-correct
+    # prompt caching of the static reviewer.md body + tool defs.
     agent = Agent(
         model,
         deps_type=ReviewerDeps,
         system_prompt=system_prompt,
-        model_settings=ModelSettings(temperature=1.0),
+        model_settings=build_model_settings(model, cache_key="xbrl-reviewer"),
     )
 
     @agent.tool
