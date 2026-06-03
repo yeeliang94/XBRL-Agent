@@ -259,3 +259,103 @@ async def test_coordinator_succeeds_when_workbook_written_and_save_called():
 
     assert result.status == "succeeded"
     assert result.workbook_path == "/tmp/SOFP_filled.xlsx"
+
+
+# ---------------------------------------------------------------------------
+# Side 5: a malformed `fields_json` must not crash the run (Windows run-35)
+# ---------------------------------------------------------------------------
+#
+# Incident: the model called save_result with an empty `fields_json`. The
+# unguarded `json.loads(fields_json)` raised
+# `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`, which escaped
+# the tool and pydantic-ai re-raised it — tearing down a fully extracted +
+# verified statement as a hard failure.
+#
+# Contract: the facts are already persisted (workbook + canonical DB) by save
+# time, so `fields_json` is a secondary artifact. An empty/whitespace arg is
+# tolerated as `{}` and FINALISES (no wasted retry turn); a genuinely
+# malformed arg still refuses with an actionable retry rather than silently
+# dropping content the model intended.
+
+def _extract_save_result_fn(agent):
+    for ts in getattr(agent, "toolsets", []) or []:
+        tools = getattr(ts, "tools", {}) or {}
+        if isinstance(tools, dict) and "save_result" in tools:
+            return tools["save_result"].function
+    raise AssertionError("save_result tool not registered on the agent")
+
+
+def _gate_open_ctx(tmp_path):
+    """Build a real (agent, deps, RunContext) with the save gate already open."""
+    from pydantic_ai.models.test import TestModel
+    from pydantic_ai import RunContext
+    from pydantic_ai.usage import RunUsage
+    from extraction.agent import create_extraction_agent
+    from token_tracker import TokenReport
+    from tools.verifier import VerificationResult
+
+    model = TestModel()
+    agent, deps = create_extraction_agent(
+        statement_type=StatementType.SOFP,
+        variant="CuNonCu",
+        pdf_path="/tmp/x.pdf",
+        template_path="/tmp/t.xlsx",
+        model=model,
+        output_dir=str(tmp_path),
+    )
+    deps.token_report = TokenReport(model="test-model")
+    deps.last_verify_result = VerificationResult(
+        is_balanced=True, matches_pdf=None, mismatches=[], mandatory_unfilled=[],
+    )
+    deps.filled_path = str(tmp_path / "SOFP_filled.xlsx")
+    ctx = RunContext(deps=deps, model=model, usage=RunUsage())
+    return agent, deps, ctx
+
+
+@pytest.mark.parametrize("empty_json", ["", "   ", "\n\t"])
+def test_save_result_finalises_on_empty_fields_json(tmp_path, empty_json):
+    """An empty/whitespace `fields_json` must NOT crash the run (the run-35
+    JSONDecodeError) and must NOT waste a retry turn — the facts are already
+    persisted, so it finalises with `{}`."""
+    agent, deps, ctx = _gate_open_ctx(tmp_path)
+    fn = _extract_save_result_fn(agent)
+
+    deps.save_attempts += 1
+    msg = fn(ctx, empty_json)  # must NOT raise
+
+    assert "Results saved to" in msg
+    assert deps.result_saved is True
+    assert (tmp_path / "SOFP_result.json").exists()
+
+
+@pytest.mark.parametrize("bad_json", ["not json{", "{unquoted: 1}", "[1, 2"])
+def test_save_result_refuses_malformed_fields_json_without_crashing(tmp_path, bad_json):
+    """Genuinely malformed JSON returns an actionable refusal string (so the
+    agent retries) instead of letting a JSONDecodeError escape and crash the
+    run — and without silently dropping the content the model intended."""
+    agent, deps, ctx = _gate_open_ctx(tmp_path)
+    fn = _extract_save_result_fn(agent)
+
+    deps.save_attempts += 1
+    msg = fn(ctx, bad_json)  # must NOT raise
+
+    assert isinstance(msg, str)
+    assert "save_result refused" in msg
+    assert "fields_json" in msg
+    # The statement is NOT finalised on a parse failure, and the error is
+    # recorded for the coordinator to attribute.
+    assert deps.result_saved is False
+    assert deps.last_save_error is not None
+
+
+def test_save_result_still_saves_on_valid_fields_json(tmp_path):
+    """Mirror: a valid JSON object still saves and flips result_saved."""
+    agent, deps, ctx = _gate_open_ctx(tmp_path)
+    fn = _extract_save_result_fn(agent)
+
+    deps.save_attempts += 1
+    msg = fn(ctx, json.dumps({"fields": [{"label": "Cash", "value": 1}]}))
+
+    assert "Results saved to" in msg
+    assert deps.result_saved is True
+    assert (tmp_path / "SOFP_result.json").exists()

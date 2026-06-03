@@ -771,7 +771,30 @@ def create_extraction_agent(
         if gate_error is not None:
             ctx.deps.last_save_error = gate_error
             return gate_error
-        fields = json.loads(fields_json)
+        # An empty/malformed `fields_json` must NOT crash the whole run. The
+        # facts are already on disk (workbook) and in the canonical DB by this
+        # point, so the JSON arg is a secondary artifact (`{stmt}_result.json`).
+        #   - empty / whitespace-only → the model omitted a redundant arg;
+        #     finalise with `{}` rather than burning a retry turn (Windows
+        #     incident, run 35: "Expecting value: line 1 column 1 (char 0)").
+        #   - genuinely malformed → the model tried to pass content but botched
+        #     it; refuse with an actionable retry instead of silently dropping
+        #     the values it intended (like every other tool, never a raw
+        #     JSONDecodeError escaping and tearing down the agent).
+        if not fields_json or not fields_json.strip():
+            fields = {}
+        else:
+            try:
+                fields = json.loads(fields_json)
+            except (json.JSONDecodeError, TypeError) as exc:
+                parse_error = (
+                    "save_result refused: `fields_json` was not valid JSON "
+                    f"({exc}). Pass the extracted values as a JSON object "
+                    'string, e.g. {"fields": [...]} (or omit it entirely — the '
+                    "workbook is already written). Then call save_result again."
+                )
+                ctx.deps.last_save_error = parse_error
+                return parse_error
         # Stamp the audited-gap metadata onto the persisted result so the
         # download / review surface can show WHY it was finalised flagged.
         if ctx.deps.completed_with_flag and isinstance(fields, dict):
