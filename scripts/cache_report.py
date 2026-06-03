@@ -25,16 +25,29 @@ from pathlib import Path
 
 DB = Path(__file__).resolve().parent.parent / "output" / "xbrl_agent.db"
 
+# Single source of provider classification (model_settings.classify_provider).
+# Imported via the repo root so this script and the live caching path can
+# never drift. A fallback keeps the diagnostic runnable even if the app deps
+# aren't importable — it must mirror classify_provider exactly.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+try:
+    from model_settings import classify_provider as _classify
+except Exception:  # noqa: BLE001 — keep the DB-only diagnostic self-sufficient
+    def _classify(model_name: str) -> str:
+        m = (model_name or "").lower()
+        if not m:
+            return "unknown"
+        if any(k in m for k in ("vertex_ai", "gemini", "google")):
+            return "google"
+        if any(k in m for k in ("anthropic", "claude", "bedrock")):
+            return "anthropic"
+        if m.startswith(("gpt-", "o1-", "o3-", "o4-")) or "openai" in m:
+            return "openai"
+        return "unknown"
+
 
 def _provider(model: str) -> str:
-    m = (model or "").lower()
-    if any(k in m for k in ("vertex_ai", "gemini", "google")):
-        return "google"
-    if any(k in m for k in ("anthropic", "claude", "bedrock")):
-        return "anthropic"
-    if m.startswith(("gpt-", "o1-", "o3-", "o4-")) or "openai" in m:
-        return "openai"
-    return "?"
+    return _classify(model)
 
 
 def _hit_rate(provider: str, prompt: int, read: int) -> float:

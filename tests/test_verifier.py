@@ -436,6 +436,71 @@ def test_verify_sopl_group_attribution_passes_when_sum_matches(tmp_path):
     assert not attribution_fails
 
 
+# ---------------------------------------------------------------------------
+# Peer-review follow-up (2026-06-03): the magnitude-scaled `_balance_tolerance`
+# now backs EVERY arithmetic-identity check, not just SOFP balance — so a ±1
+# rounding in a non-SOFP identity (here the SOPL owners+NCI attribution) is
+# absorbed too, while a real discrepancy still fails. Mirrors the SOFP pins.
+# ---------------------------------------------------------------------------
+
+
+def test_non_sofp_identity_absorbs_unit_rounding(tmp_path):
+    """SOPL Group owners+NCI summing to profit ±1 (rounding) is balanced —
+    under the old fixed 0.01 absolute check this manufactured an imbalance."""
+    path = tmp_path / "sopl_round_ok.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOPL-Function"
+    ws["A1"] = "Profit (loss)"
+    ws["B1"] = 121          # owners+NCI = 120, off by exactly 1 (rounding)
+    ws["D1"] = 100
+    ws["A2"] = "Profit (loss), attributable to, owners of parent"
+    ws["B2"] = 100
+    ws["D2"] = 100
+    ws["A3"] = "Profit (loss), attributable to, non-controlling interests"
+    ws["B3"] = 20
+    ws["D3"] = 0
+    ws["A4"] = "Total profit (loss)"
+    ws["B4"] = 121
+    ws["D4"] = 100
+    wb.save(str(path))
+
+    r = verify_statement(
+        str(path), StatementType.SOPL, variant="Function", filing_level="group",
+    )
+    owners_fails = [m for m in r.mismatches
+                    if "owners" in m.lower() and "non-controlling" in m.lower()]
+    assert not owners_fails, f"±1 rounding should pass: {r.mismatches!r}"
+
+
+def test_non_sofp_identity_still_flags_real_imbalance(tmp_path):
+    """A real >tolerance discrepancy in the same non-SOFP identity still fails."""
+    path = tmp_path / "sopl_round_bad.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOPL-Function"
+    ws["A1"] = "Profit (loss)"
+    ws["B1"] = 125          # owners+NCI = 120, off by 5 (real)
+    ws["D1"] = 100
+    ws["A2"] = "Profit (loss), attributable to, owners of parent"
+    ws["B2"] = 100
+    ws["D2"] = 100
+    ws["A3"] = "Profit (loss), attributable to, non-controlling interests"
+    ws["B3"] = 20
+    ws["D3"] = 0
+    ws["A4"] = "Total profit (loss)"
+    ws["B4"] = 125
+    ws["D4"] = 100
+    wb.save(str(path))
+
+    r = verify_statement(
+        str(path), StatementType.SOPL, variant="Function", filing_level="group",
+    )
+    assert r.is_balanced is False
+    assert any("owners" in m.lower() and "non-controlling" in m.lower()
+               for m in r.mismatches)
+
+
 def test_verify_sofp_group_checks_equity_attribution(tmp_path):
     """SOFP Group filing: owners + NCI must sum to Total equity."""
     path = tmp_path / "sofp_group_eq.xlsx"

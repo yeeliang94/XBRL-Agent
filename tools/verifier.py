@@ -23,17 +23,27 @@ from openpyxl.formula.tokenizer import Tokenizer
 # pushed toward a plug). Scale the tolerance to the statement's magnitude
 # with an absolute floor of one unit, so legitimate rounding passes while a
 # genuine missing line item (orders of magnitude larger) still fails.
+#
+# Peer-review follow-up (2026-06-03): the same ±1 rounding failure mode
+# applies to EVERY arithmetic-identity / cross-statement-equality check in
+# this module, not just the SOFP balance — a separately-rounded total feeds
+# the same agent-facing feedback loop. So `_balance_tolerance` is now used
+# for all of them (SOCIE closing equity, SOCF roll-forwards, SOPL/SOCI
+# attribution + TCI roll-ups, the cross-sheet equalities, and the pdf_values
+# reference comparison), replacing every remaining bare `0.01`.
 _BALANCE_REL_TOLERANCE = 1e-6
 _BALANCE_FLOOR = 1.0
 
 
 def _balance_tolerance(*magnitudes: float) -> float:
-    """Magnitude-scaled tolerance for a SOFP balance identity.
+    """Magnitude-scaled tolerance for an arithmetic-identity or
+    cross-statement-equality check.
 
     ``max(1.0, 1e-6 * largest-magnitude)`` — ~1 unit for ordinary
     statements, growing very slowly so a large entity's accumulated
     rounding is absorbed without ever tolerating a real, line-item-sized
-    discrepancy.
+    discrepancy. Pass the operands of the identity (total + components, or
+    the two sides of an equality) so the scale tracks the values compared.
     """
     scale = max((abs(m) for m in magnitudes), default=0.0)
     return max(_BALANCE_FLOOR, _BALANCE_REL_TOLERANCE * scale)
@@ -626,7 +636,7 @@ def verify_totals(
             if actual is None:
                 mismatches.append(f"Computed total '{key}' not found")
                 matches_pdf = False
-            elif abs(actual - expected) > 0.01:
+            elif abs(actual - expected) > _balance_tolerance(actual, expected):
                 mismatches.append(f"{key}: computed={actual}, expected={expected}")
                 matches_pdf = False
 
@@ -988,7 +998,7 @@ def _verify_socie(
 
         expected = restated + increase
         diff = closing - expected
-        if abs(diff) > 0.01:
+        if abs(diff) > _balance_tolerance(closing, restated, increase):
             is_balanced = False
             mismatches.append(
                 f"{label}: closing equity ({closing}) != "
@@ -1116,7 +1126,12 @@ def _verify_socf(
         if all(k in col_totals for k in ["net_operating", "net_investing", "net_financing", "net_increase_before_fx"]):
             expected = col_totals["net_operating"] + col_totals["net_investing"] + col_totals["net_financing"]
             actual = col_totals["net_increase_before_fx"]
-            if abs(actual - expected) > 0.01:
+            if abs(actual - expected) > _balance_tolerance(
+                actual,
+                col_totals["net_operating"],
+                col_totals["net_investing"],
+                col_totals["net_financing"],
+            ):
                 is_balanced = False
                 mismatches.append(
                     f"{pfx}Net increase before FX ({actual}) != "
@@ -1141,7 +1156,11 @@ def _verify_socf(
         if all(k in col_totals for k in ["cash_beginning", "cash_end", "net_increase_after_fx"]):
             expected = col_totals["cash_beginning"] + col_totals["net_increase_after_fx"]
             actual = col_totals["cash_end"]
-            if abs(actual - expected) > 0.01:
+            if abs(actual - expected) > _balance_tolerance(
+                actual,
+                col_totals["cash_beginning"],
+                col_totals["net_increase_after_fx"],
+            ):
                 is_balanced = False
                 mismatches.append(
                     f"{pfx}Cash at end ({actual}) != "
@@ -1275,7 +1294,7 @@ def _verify_sopl(
             attr_val = _get_cell_value(wb, ws, total_profit_row, cy_col, warnings=formula_warnings) or 0.0
             computed_totals[f"total_profit_attribution_cy{sfx}"] = attr_val
 
-            if abs(pl_val - attr_val) > 0.01:
+            if abs(pl_val - attr_val) > _balance_tolerance(pl_val, attr_val):
                 is_balanced = False
                 mismatches.append(
                     f"{pfx}Profit/loss ({pl_val}) != attribution total ({attr_val})"
@@ -1293,7 +1312,7 @@ def _verify_sopl(
             computed_totals[f"profit_owners_cy{sfx}"] = owners
             computed_totals[f"profit_nci_cy{sfx}"] = nci
             expected = owners + nci
-            if abs(pl_val - expected) > 0.01:
+            if abs(pl_val - expected) > _balance_tolerance(pl_val, owners, nci):
                 is_balanced = False
                 mismatches.append(
                     f"{pfx}Profit/loss ({pl_val}) != "
@@ -1407,7 +1426,7 @@ def _verify_soci(
 
             if oci_val is not None:
                 expected = pl_val + oci_val
-                if abs(ci_val - expected) > 0.01:
+                if abs(ci_val - expected) > _balance_tolerance(ci_val, pl_val, oci_val):
                     is_balanced = False
                     mismatches.append(
                         f"{pfx}Total CI ({ci_val}) != P&L ({pl_val}) "
@@ -1424,7 +1443,7 @@ def _verify_soci(
             ci_main = _get_cell_value(wb, ws, total_ci_rows[0], cy_col, warnings=formula_warnings) or 0.0
             ci_attr = _get_cell_value(wb, ws, total_ci_rows[1], cy_col, warnings=formula_warnings) or 0.0
             computed_totals[f"total_ci_attribution_cy{sfx}"] = ci_attr
-            if abs(ci_main - ci_attr) > 0.01:
+            if abs(ci_main - ci_attr) > _balance_tolerance(ci_main, ci_attr):
                 is_balanced = False
                 mismatches.append(
                     f"{pfx}Total CI ({ci_main}) != attribution total ({ci_attr})"
@@ -1535,7 +1554,7 @@ def verify_cross_sheet(
             computed_totals["socie_closing_equity"] = socie_closing
 
         if sofp_equity is not None and socie_closing is not None:
-            if abs(sofp_equity - socie_closing) > 0.01:
+            if abs(sofp_equity - socie_closing) > _balance_tolerance(sofp_equity, socie_closing):
                 is_balanced = False
                 mismatches.append(
                     f"SOFP Total equity ({sofp_equity}) != SOCIE Closing equity ({socie_closing})"
@@ -1562,7 +1581,7 @@ def verify_cross_sheet(
             computed_totals["soci_profit_loss"] = soci_profit
 
         if sopl_profit is not None and soci_profit is not None:
-            if abs(sopl_profit - soci_profit) > 0.01:
+            if abs(sopl_profit - soci_profit) > _balance_tolerance(sopl_profit, soci_profit):
                 is_balanced = False
                 mismatches.append(
                     f"SOPL Profit/loss ({sopl_profit}) != SOCI Profit/loss ({soci_profit})"
@@ -1589,7 +1608,7 @@ def verify_cross_sheet(
             computed_totals["sofp_cash"] = sofp_cash
 
         if socf_cash is not None and sofp_cash is not None:
-            if abs(socf_cash - sofp_cash) > 0.01:
+            if abs(socf_cash - sofp_cash) > _balance_tolerance(socf_cash, sofp_cash):
                 is_balanced = False
                 mismatches.append(
                     f"SOCF Cash at end ({socf_cash}) != SOFP Cash ({sofp_cash})"
@@ -1617,6 +1636,6 @@ def _check_pdf_values(
         actual = computed_totals.get(key)
         if actual is None:
             matches = False
-        elif abs(actual - expected) > 0.01:
+        elif abs(actual - expected) > _balance_tolerance(actual, expected):
             matches = False
     return matches

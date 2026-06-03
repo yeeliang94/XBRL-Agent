@@ -143,6 +143,16 @@ def test_v14_fixture_upgrades_cleanly(tmp_path):
             "INSERT INTO run_agents(run_id, statement_type, status, started_at) "
             "VALUES (1, 'SOFP', 'succeeded', '2026-05-01T00:00:00Z')"
         )
+        # Seed a pre-existing run_agent_turns row too, so the ALTER walks a
+        # POPULATED table on both sides — the per-turn cache columns must
+        # appear and read 0 on the legacy row.
+        conn.execute(
+            "INSERT INTO run_agent_turns(run_agent_id, turn_index, node_kind, "
+            "prompt_tokens, completion_tokens, total_tokens, cumulative_tokens, "
+            "cost_estimate, duration_ms, ts) "
+            "VALUES (1, 1, 'model_request', 1000, 50, 1050, 1050, 0.0, 120, "
+            "'2026-05-01T00:00:00Z')"
+        )
         conn.commit()
     finally:
         conn.close()
@@ -156,12 +166,19 @@ def test_v14_fixture_upgrades_cleanly(tmp_path):
             for required in _CACHE_COLS:
                 assert required in cols, f"{table} missing {required!r}"
         assert _schema_version(conn) >= 15
-        # Legacy row preserved; cache column defaults to 0.
+        # Legacy run_agents row preserved; cache column defaults to 0.
         row = conn.execute(
             "SELECT cache_read_tokens FROM run_agents "
             "WHERE statement_type = 'SOFP'"
         ).fetchone()
         assert row[0] == 0
+        # Legacy run_agent_turns row preserved; per-turn cache columns default 0
+        # without disturbing the pre-existing token figures.
+        turn = conn.execute(
+            "SELECT prompt_tokens, cache_read_tokens, cache_write_tokens "
+            "FROM run_agent_turns WHERE run_agent_id = 1 AND turn_index = 1"
+        ).fetchone()
+        assert turn == (1000, 0, 0)
     finally:
         conn.close()
 
