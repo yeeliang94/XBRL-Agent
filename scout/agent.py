@@ -766,8 +766,13 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
                 continue
     if skipped:
         logger.info("Scout inventory: %d entr(y/ies) skipped due to malformed data", skipped)
+    # Track whether we fell back to the cached deterministic inventory so the
+    # survival-count message below doesn't report a fallback count as if the
+    # agent had supplied it (that would mask the agent's own contribution).
+    used_inventory_fallback = False
     if not inventory:
         inventory = list(deps.notes_inventory)
+        used_inventory_fallback = True
 
     # Phase 2 — pull the LLM-supplied context fields through to the
     # Infopack constructor. Defensive narrowing is duplicated from
@@ -820,9 +825,17 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
     # in-run — e.g. if it expected 14 notes but only 12 survived, or if
     # entries were skipped as malformed.
     ref_total = sum(len(s.face_line_refs) for s in statements.values())
+    # When the save supplied no usable inventory we fell back to the cached
+    # discovery; say so explicitly rather than reporting the fallback count as
+    # the agent's own surviving entries.
+    note_phrase = (
+        f"{len(inventory)} note(s) (from cached discovery — none supplied here)"
+        if used_inventory_fallback
+        else f"{len(inventory)} note(s)"
+    )
     msg = (
         f"Infopack saved successfully: {len(statements)} statement(s), "
-        f"{len(inventory)} note(s), {ref_total} face-ref(s)."
+        f"{note_phrase}, {ref_total} face-ref(s)."
     )
     if skipped:
         msg += (

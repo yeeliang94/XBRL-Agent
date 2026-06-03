@@ -78,6 +78,30 @@ def _default_temperature(model: Any) -> float:
     return PINNED_TEMPERATURE
 
 
+def classify_provider(model_name: str) -> str:
+    """Classify a registry model-id STRING into its provider family.
+
+    Returns 'openai' | 'anthropic' | 'google' | 'unknown'. Pure string logic
+    (no pydantic-ai import needed), so a standalone diagnostic that only has a
+    model name — e.g. ``scripts/cache_report.py`` reading the audit DB — shares
+    exactly this classification instead of re-implementing it.
+
+    Order matters: anthropic/google markers (incl. their proxy prefixes
+    ``vertex_ai.*`` / ``bedrock.anthropic.*``) are checked before the OpenAI
+    markers.
+    """
+    name = (model_name or "").lower()
+    if not name:
+        return "unknown"
+    if any(k in name for k in ("vertex_ai", "gemini", "google")):
+        return "google"
+    if any(k in name for k in ("anthropic", "claude", "bedrock")):
+        return "anthropic"
+    if name.startswith(("gpt-", "o1-", "o3-", "o4-")) or "openai" in name:
+        return "openai"
+    return "unknown"
+
+
 def _resolved_provider(model: Any) -> str:
     """Best-effort provider of the *underlying* model, even when the Python
     type is ``OpenAIChatModel`` because of proxy routing.
@@ -88,21 +112,9 @@ def _resolved_provider(model: Any) -> str:
     the Python type alone would then attach OpenAI-only cache params
     (`prompt_cache_key`) to a Gemini/Claude request, which the proxy may reject
     if it doesn't drop unknown params. So we read the registry model id off
-    ``model.model_name`` and classify by it. Returns 'openai' | 'anthropic' |
-    'google' | 'unknown'.
+    ``model.model_name`` and classify by it via :func:`classify_provider`.
     """
-    name = (getattr(model, "model_name", "") or "").lower()
-    if not name:
-        return "unknown"
-    # Order matters: anthropic/google markers (incl. their proxy prefixes
-    # vertex_ai.* / bedrock.anthropic.*) are checked before the OpenAI markers.
-    if any(k in name for k in ("vertex_ai", "gemini", "google")):
-        return "google"
-    if any(k in name for k in ("anthropic", "claude", "bedrock")):
-        return "anthropic"
-    if name.startswith(("gpt-", "o1-", "o3-", "o4-")) or "openai" in name:
-        return "openai"
-    return "unknown"
+    return classify_provider(getattr(model, "model_name", "") or "")
 
 
 def build_model_settings(
