@@ -75,7 +75,9 @@ CELL INTERSECTIONS (row × column), not entire rows.
 - **Leave cells BLANK** where there is no activity. Do not enter zeros.
 - **Profit always goes to Retained earnings column (C)** — even if the entity calls it
   "accumulated fund", "revenue reserve", or "retained profit".
-- **Closing equity must match SOFP total equity** — this is a P0 cross-check.
+- **Closing equity will be cross-checked against SOFP total equity LATER.** You
+  only see the SOCIE here, so you cannot perform that check yourself — enter the
+  SOCIE movements correctly from this statement so closing equity is right.
 - **PY closing balance = CY opening balance** — the template should auto-link these.
 - **NCI column (W)** only for group/consolidated accounts.
 - **Dividends paid are entered as POSITIVE magnitudes.** The SOCIE template

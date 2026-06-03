@@ -77,41 +77,49 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
     except Exception:  # noqa: BLE001
         return None
 
-    # SOCF templates have one sheet but the helper is defensive.
-    target_sheet = None
-    for sn in wb.sheetnames:
-        if "socf" in sn.lower() or "sore" in sn.lower():
-            target_sheet = sn
-            break
-    if target_sheet is None:
-        return None
-    ws = wb[target_sheet]
+    # Always close the workbook (file handle + in-memory archive) on every
+    # exit path — this helper runs at prompt-build time and the codebase
+    # convention is to close openpyxl workbooks (Windows handle hazard,
+    # gotcha #22). The string-building below touches no worksheet, so the
+    # close happens once the rows are read.
+    try:
+        # SOCF templates have one sheet but the helper is defensive.
+        target_sheet = None
+        for sn in wb.sheetnames:
+            if "socf" in sn.lower() or "sore" in sn.lower():
+                target_sheet = sn
+                break
+        if target_sheet is None:
+            return None
+        ws = wb[target_sheet]
 
-    seen_rows: set[int] = set()
-    entries: list[tuple[int, int, str]] = []  # (target_row, sign, leaf_label)
+        seen_rows: set[int] = set()
+        entries: list[tuple[int, int, str]] = []  # (target_row, sign, leaf_label)
 
-    # Walk every row; if its label is a Total/subtotal AND col B has
-    # a formula we recognise, emit one line per leaf in that formula.
-    for r in range(1, ws.max_row + 1):
-        label = _label_at(ws, r)
-        if not label:
-            continue
-        if not ("total" in label.lower() or label.startswith("*")):
-            continue
-        formula = ws.cell(r, 2).value
-        if not isinstance(formula, str) or not formula.startswith("="):
-            continue
-        terms = _parse_total_formula(formula)
-        if not terms:
-            continue
-        for sign, _col, leaf_row in terms:
-            if leaf_row in seen_rows:
+        # Walk every row; if its label is a Total/subtotal AND col B has
+        # a formula we recognise, emit one line per leaf in that formula.
+        for r in range(1, ws.max_row + 1):
+            label = _label_at(ws, r)
+            if not label:
                 continue
-            seen_rows.add(leaf_row)
-            leaf_label = _label_at(ws, leaf_row)
-            if not leaf_label:
+            if not ("total" in label.lower() or label.startswith("*")):
                 continue
-            entries.append((leaf_row, sign, leaf_label))
+            formula = ws.cell(r, 2).value
+            if not isinstance(formula, str) or not formula.startswith("="):
+                continue
+            terms = _parse_total_formula(formula)
+            if not terms:
+                continue
+            for sign, _col, leaf_row in terms:
+                if leaf_row in seen_rows:
+                    continue
+                seen_rows.add(leaf_row)
+                leaf_label = _label_at(ws, leaf_row)
+                if not leaf_label:
+                    continue
+                entries.append((leaf_row, sign, leaf_label))
+    finally:
+        wb.close()
 
     if not entries:
         return None

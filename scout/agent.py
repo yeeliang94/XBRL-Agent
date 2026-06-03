@@ -703,6 +703,19 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
     raw_inventory = data.get("notes_inventory")
     if isinstance(raw_inventory, list):
         for idx, raw in enumerate(raw_inventory):
+            # Top-level entries must be dicts. A bare string / list would
+            # raise AttributeError on .get() below — which the except clause
+            # (KeyError/TypeError/ValueError) does NOT catch — and crash the
+            # whole save. Guard explicitly and count it as skipped so the
+            # Phase 8.2 survival-count contract holds. Mirrors the subnote
+            # guard below.
+            if not isinstance(raw, dict):
+                logger.warning(
+                    "Scout inventory entry %d is not a dict (%r); skipping",
+                    idx, raw,
+                )
+                skipped += 1
+                continue
             try:
                 pr = raw.get("page_range", [])
                 if isinstance(pr, (list, tuple)) and len(pr) == 2:
@@ -874,9 +887,9 @@ def create_scout_agent(
         statements_section=_build_statements_section(statements_to_find),
     )
 
-    # CLAUDE.md gotcha #5: Gemini 3 through the enterprise proxy requires
-    # temperature=1.0. Pin it explicitly instead of relying on upstream
-    # defaults (peer-review I2).
+    # Temperature is provider-aware (Phase 9, inside build_model_settings):
+    # Gemini stays 1.0 (CLAUDE.md gotcha #5 — Gemini 3 through the enterprise
+    # proxy requires it) and OpenAI reasoning models stay 1.0; others lowered.
     agent: Agent[ScoutDeps, str] = Agent(
         model,
         deps_type=ScoutDeps,

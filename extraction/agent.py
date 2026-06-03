@@ -561,10 +561,11 @@ def create_extraction_agent(
         scout_context=scout_context,
     )
 
-    # Pin temperature=1.0 explicitly. CLAUDE.md gotcha #5: Gemini 3 through
-    # the enterprise proxy requires T=1.0 — lower values cause failures or
-    # infinite loops. Relying on upstream defaults was fine in practice but
-    # brittle across provider/SDK versions (peer-review I2).
+    # Temperature is provider-aware (Phase 9, resolved inside
+    # build_model_settings): Gemini stays 1.0 (CLAUDE.md gotcha #5 — Gemini 3
+    # through the enterprise proxy requires T=1.0; lower values cause failures
+    # or infinite loops), OpenAI reasoning models stay 1.0 (they reject a
+    # non-default temperature), everything else is lowered for less jitter.
     agent = Agent(
         model,
         deps_type=ExtractionDeps,

@@ -4,8 +4,9 @@ The helper picks the caching mechanism from the model's TYPE (which is what
 ``_create_proxy_model`` hands the agent constructors). We test the dispatch with
 lightweight stand-ins whose class ``__name__`` matches the real model classes —
 that exercises the exact branch logic without needing provider API keys — and
-assert the returned settings carry the right flags. Temperature stays pinned at
-1.0 on every branch (the Gemini-through-proxy constraint; PLAN Phase 9 revisits).
+assert the returned settings carry the right flags. Temperature is provider-aware
+(PLAN Phase 9): Gemini + OpenAI-reasoning models stay 1.0, others are lowered —
+see the Phase 9 tests at the bottom of this file.
 """
 from __future__ import annotations
 
