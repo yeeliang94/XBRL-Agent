@@ -35,7 +35,9 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Dict, List, Literal, NamedTuple, Optional, Set, Any
+from typing import (
+    AsyncIterator, Callable, Dict, List, Literal, NamedTuple, Optional, Set, Any,
+)
 
 from dotenv import load_dotenv, set_key
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
@@ -160,6 +162,7 @@ def _export_canonical_workbooks(
     db_path,
     reporting_period_cy: Optional[str] = None,
     reporting_period_py: Optional[str] = None,
+    event_sink: Optional[Callable[[dict], None]] = None,
 ):
     """Phase C — replace agent-written workbooks with DB-exported ones.
 
@@ -172,6 +175,14 @@ def _export_canonical_workbooks(
     Best-effort per statement: if a single export fails we log it and leave
     that statement's agent workbook in place, so one bad template can't sink
     the whole download. Returns the list of StatementTypes actually exported.
+
+    ``event_sink`` (optional): when an export RAISES and we silently keep the
+    agent's scratch workbook, the download for that statement no longer
+    reflects the DB facts (e.g. a reviewer edit). Callers on the live SSE path
+    pass ``_enqueue_system_error`` so this degradation is surfaced loudly
+    instead of only logged (gotcha #20 / Option C, 2026-06-03). The benign
+    zero-fact fallback is NOT surfaced — the scratch workbook still carries
+    values there, so the download isn't degraded.
     """
     import shutil
     from statement_types import template_path as _tpl_path
@@ -207,16 +218,29 @@ def _export_canonical_workbooks(
                 reporting_period_py=reporting_period_py,
                 carry_forward_row1_from=scratch_path,
             )
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             logger.exception(
                 "canonical export failed for %s — keeping agent workbook",
                 stmt.value,
             )
+            if event_sink is not None:
+                event_sink({
+                    "type": "canonical_export_degraded",
+                    "message": (
+                        f"Could not re-export {stmt.value} from the corrected "
+                        f"facts ({type(_exc).__name__}); its download will show "
+                        f"the pre-review values until this is fixed. The "
+                        f"Concepts/Values page still reflects the DB facts."
+                    ),
+                })
             continue
         # Peer-review finding 1: only repoint the download at the DB export
         # when it actually carries facts. A zero-fact export is a blank
         # template — keep the agent's scratch workbook (which has values)
-        # rather than clobbering the download with an empty sheet.
+        # rather than clobbering the download with an empty sheet. This is
+        # benign + common (a statement with no canonical facts, a mocked run),
+        # so it is NOT surfaced via event_sink — only a genuine export
+        # exception (above) masks DB facts behind the scratch fallback.
         if applied <= 0:
             logger.warning(
                 "canonical export for %s applied 0 facts — keeping agent "
@@ -3037,6 +3061,7 @@ async def run_multi_agent_stream(
                     db_path=AUDIT_DB_PATH,
                     reporting_period_cy=_ip_cy,
                     reporting_period_py=_ip_py,
+                    event_sink=_enqueue_system_error,
                 )
             except Exception:
                 logger.exception(
@@ -3411,6 +3436,7 @@ async def run_multi_agent_stream(
                             filing_level=run_config.filing_level,
                             filing_standard=run_config.filing_standard,
                             db_path=AUDIT_DB_PATH,
+                            event_sink=_enqueue_system_error,
                         )
                         remerge = merge_workbooks(
                             all_workbook_paths, merged_path,

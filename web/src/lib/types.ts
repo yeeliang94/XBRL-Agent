@@ -157,8 +157,9 @@ export interface ErrorData {
   message: string;
   traceback?: string;
   /** Discriminator for coordinator/sub-pass error shapes (`merge_failed`,
-   *  `cross_check_exception`, `canonical_reexport_failed`, `reviewer_*`,
-   *  `validator_*`). Absent on legacy untyped transport/validation errors. */
+   *  `cross_check_exception`, `canonical_reexport_failed`,
+   *  `canonical_export_degraded`, `reviewer_*`, `validator_*`). Absent on
+   *  legacy untyped transport/validation errors. */
   type?: string;
   /** Phase 6.2: see {@link ErrorBucket}. */
   bucket?: ErrorBucket;
