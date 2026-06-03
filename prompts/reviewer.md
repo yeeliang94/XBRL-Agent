@@ -23,7 +23,10 @@ Don't tunnel on the one cell a check names — the real error is often a *leaf* 
 
 - `apply_fix(concept_uuid, value, reason, evidence, …)` — write the corrected value. `evidence` MUST cite the PDF page + the figure you read, e.g. `"page 42: Inventories 1,234"`. When the value is a pure reconciliation of already-grounded cells, write `evidence="arithmetic: 1000 + 234 = 1234"`.
 - `mark_not_disclosed(concept_uuid, reason, evidence, …)` — clear a leaf the source does NOT actually disclose (a false positive the extraction invented, mis-attached, or **duplicated**). Blanks the cell instead of forcing another number in. Still grounded: `evidence` must cite the page you checked, e.g. `"page 12: FVTPL 991,755 is disclosed ONCE; this is the duplicate copy"`.
-- For a *total* whose itemised breakdown the source genuinely does not disclose, pass `children_status="aggregate_only"` to `apply_fix` so the literal total is kept instead of recomputed.
+- **NEVER `apply_fix` a `*Total` / computed row with a bare value.** A total is *derived* — it equals the sum of its children, and on download its cell is a live `=SUM(...)` (or a cross-sheet `='…-Sub-…'!Bn`) formula. Forcing a total to a number its children don't produce desyncs the breakdown (a `partial_state` conflict — the sub-sheet leaves stop summing to the total) and the export can't materialise it, so the downloaded workbook silently keeps the OLD value. A deterministic guard now rejects this. Instead:
+  - If the total is wrong because a **leaf** below it is blank or misread → `apply_fix` the **leaf**. The cascade recomputes the total for you. This is almost always the right move.
+  - Only if the source **genuinely does not itemise** the breakdown (it discloses one bundled figure with no component lines) → pass `children_status="aggregate_only"` to `apply_fix`, which keeps the literal total and annotates it. Cite the page that shows the bundled total in `evidence`.
+  - Watch for double-counts when you do this: if a component (e.g. right-of-use assets) is ALSO disclosed on its own separate line that feeds the same parent total, do NOT roll it into another line as well.
 
 **FAILURE-PATTERN PLAYBOOK** — match the shape, then act:
 
@@ -37,6 +40,7 @@ A fix is rejected by a deterministic guard (not a suggestion) when:
 - **It is ungrounded** — `evidence` is empty. The reviewer never writes a number it can't ground.
 - **It targets an ABSTRACT section header** — never writable (invariant #17); write a leaf inside the section instead.
 - **It plugs a residual into a catch-all row** — `Other …`, `Miscellaneous`, `Administrative expenses` — with an arithmetic-only value. **NEVER plug a balancing residual into a catch-all row to force a balance** (invariant #17). NEVER write a residual you derived only to make a total tick over. Fix the real leaf, or leave the imbalance and flag it. (A genuine PDF-disclosed figure on an "Other …" line is fine — cite the page in `evidence` rather than an `arithmetic:` expression.)
+- **It overrides a COMPUTED total** with a value its children don't sum to and without `children_status="aggregate_only"` (gotcha #21). Fix the leaf below it, or pass `aggregate_only` for a genuinely un-itemised total — see the write-path rule above.
 
 Read every `rejected: …` message and re-investigate — never work around it.
 

@@ -327,3 +327,49 @@ def test_export_skips_failed_and_skipped_statements(seeded, tmp_path):
     )
     assert exported == []
     assert all_workbook_paths == {}
+
+
+def test_event_sink_fires_when_a_statement_export_fails(seeded, tmp_path, monkeypatch):
+    """Option C (2026-06-03): when a per-statement export RAISES and the helper
+    silently keeps the agent's scratch workbook, the download no longer reflects
+    the DB facts. A caller-supplied event_sink must be told, so the live SSE
+    stream surfaces the degradation loudly instead of only logging it."""
+    import server
+
+    db_path, run_id, _sheet, _row = seeded
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    scratch = session_dir / "SOFP_filled.xlsx"
+    scratch.write_bytes(CO_SOFP.read_bytes())
+    all_workbook_paths = {StatementType.SOFP: str(scratch)}
+    agent_results = [AgentResult(
+        statement_type=StatementType.SOFP, variant="CuNonCu",
+        status="succeeded", workbook_path=str(scratch))]
+
+    # Force the per-statement export to raise.
+    def _boom(*a, **k):
+        raise RuntimeError("export blew up")
+    monkeypatch.setattr(server, "export_run_to_xlsx", _boom, raising=False)
+    # The helper imports export_run_to_xlsx locally from the module, so patch
+    # there too.
+    import concept_model.exporter as _exp
+    monkeypatch.setattr(_exp, "export_run_to_xlsx", _boom)
+
+    events: list = []
+    exported = server._export_canonical_workbooks(
+        run_id=run_id,
+        agent_results=agent_results,
+        all_workbook_paths=all_workbook_paths,
+        session_dir=session_dir,
+        filing_level="company",
+        filing_standard="mfrs",
+        db_path=db_path,
+        event_sink=events.append,
+    )
+
+    # Export failed → scratch kept, and the degradation was surfaced.
+    assert exported == []
+    assert all_workbook_paths[StatementType.SOFP] == str(scratch)
+    assert len(events) == 1
+    assert events[0]["type"] == "canonical_export_degraded"
+    assert "SOFP" in events[0]["message"]

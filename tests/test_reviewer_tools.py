@@ -268,6 +268,63 @@ def test_guard_unit_passes_grounded_leaf(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Total-override invariant (gotcha #21, via facts_api) — pinned on the reviewer
+# path after the 2026-06-03 run-38 incident, where a total was forced above its
+# itemised leaves. A bare observed write to a COMPUTED total is refused; the
+# ONLY sanctioned override is children_status='aggregate_only'.
+# ---------------------------------------------------------------------------
+
+
+def test_bare_override_of_computed_total_is_rejected(tmp_path):
+    """A grounded value-override of a formula total with no aggregate_only
+    marker is refused (the reviewer must fix the leaf or pass aggregate_only)."""
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 30.0)
+    _wf(db, run_id, LEAF2, 20.0)  # children sum = 50
+    out = apply_reviewer_fix(db, run_id, FactWrite(
+        concept_uuid=SUBTOTAL, period="CY", entity_scope="Company",
+        value=80.0, value_status="observed", source="page total",
+        evidence="page 7: Total PPE 80", actor="reviewer",
+    ))
+    assert out.startswith("rejected"), out
+    assert "aggregate_only" in out.lower()
+    # The override must NOT have landed — the total stays as the agent left it.
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT value FROM run_concept_facts WHERE run_id=? AND concept_uuid=?",
+            (run_id, SUBTOTAL),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is None  # never written
+
+
+def test_aggregate_only_override_of_total_is_allowed(tmp_path):
+    """An explicit aggregate_only override is the sanctioned escape hatch for a
+    total the source discloses but does not itemise."""
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 30.0)
+    _wf(db, run_id, LEAF2, 20.0)
+    out = apply_reviewer_fix(db, run_id, FactWrite(
+        concept_uuid=SUBTOTAL, period="CY", entity_scope="Company",
+        value=80.0, value_status="observed", children_status="aggregate_only",
+        source="not itemised", evidence="page 7: Total PPE 80 (bundled)",
+        actor="reviewer",
+    ))
+    assert out.startswith("ok"), out
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT value, children_status FROM run_concept_facts "
+            "WHERE run_id=? AND concept_uuid=?", (run_id, SUBTOTAL),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row[0] == 80.0 and row[1] == "aggregate_only"
+
+
+# ---------------------------------------------------------------------------
 # Peer-review P1 — (sheet, row) resolution must be template-family scoped.
 # ---------------------------------------------------------------------------
 
