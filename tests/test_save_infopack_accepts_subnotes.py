@@ -158,6 +158,35 @@ def test_save_infopack_reports_survival_counts():
     assert [r.note_num for r in refs] == [4, None]
 
 
+def test_save_infopack_survives_non_dict_inventory_entry():
+    """Peer-review HIGH: a non-dict notes_inventory entry (a bare string the
+    LLM might emit) must be counted as skipped, NOT crash the save with an
+    uncaught AttributeError. The valid entry alongside it still loads."""
+    deps = _make_deps()
+    payload = {
+        "toc_page": 2,
+        "page_offset": 0,
+        "statements": {
+            "SOFP": {
+                "variant_suggestion": "CuNonCu",
+                "face_page": 5,
+                "note_pages": [],
+                "confidence": "HIGH",
+            },
+        },
+        "notes_inventory": [
+            "bad",  # non-dict — must be skipped, not crash
+            {"note_num": 2, "title": "ok", "page_range": [15, 22]},
+        ],
+    }
+    result = _save_infopack_impl(deps, json.dumps(payload))
+    low = result.lower()
+    assert "saved successfully" in low
+    assert "1 note(s)" in low  # only the valid entry survived
+    assert "skipped" in low and "re-check" in low
+    assert len(deps.infopack.notes_inventory) == 1
+
+
 def test_save_infopack_flags_skipped_inventory_entries():
     deps = _make_deps()
     payload = {
