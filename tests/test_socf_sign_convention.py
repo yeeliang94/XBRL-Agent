@@ -65,6 +65,32 @@ def test_socf_sign_block_present_for_mfrs_company() -> None:
     assert "lease" in lower
 
 
+def test_added_outflow_rows_get_negative_entry_guidance() -> None:
+    """RUN-REVIEW P2-2 follow-up: an ADDED (+1 coefficient) row that is a
+    cash OUTFLOW must be entered NEGATIVE — the *Total formula adds the
+    cell as-is, so a positive magnitude wrongly inflates the subtotal.
+
+    The original block only spelled out the gain/loss case for ADDED rows
+    and the payment case for SUBTRACTED rows, which led an agent to enter
+    the lease-principal payment (row 109, ADDED) as +3,732 instead of
+    -3,732 (the Amway discrepancy). Pin that the ADDED branch now names
+    the outflow case explicitly with a NEGATIVE instruction.
+    """
+    path = REPO / "XBRL-template-MFRS" / "Company" / "07-SOCF-Indirect.xlsx"
+    block = socf_sign_convention_block(path)
+    assert block is not None
+    # Row 109 is listed as ADDED (read straight from the +1*B109 term).
+    assert "Cash payments for the principal portion of the lease liability" in block
+    # The ADDED branch must now instruct a NEGATIVE entry for outflows and
+    # carry the worked lease-payment example with the correct sign.
+    assert "ADDED row that is a cash OUTFLOW" in block
+    assert "NEGATIVE" in block
+    assert "-3,732" in block
+    # And it must still warn that the same 'Cash payments' wording flips
+    # entry sign by ADDED/SUBTRACTED label, not by the row's name alone.
+    assert "obey the per-row ADDED/SUBTRACTED label" in block
+
+
 def test_socf_sign_block_for_mpers_group() -> None:
     """MPERS Group SOCF-Indirect carries fewer rows but the sign block
     must still come back populated. RUN-REVIEW MPERS coverage."""
