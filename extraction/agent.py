@@ -497,7 +497,6 @@ def create_extraction_agent(
     template_path: str,
     model: Union[str, Model] = "openai.gpt-5.4",
     output_dir: Optional[str] = None,
-    cache_template: bool = False,
     page_hints: Optional[dict] = None,
     scout_context: Optional[dict] = None,
     filing_level: str = "company",
@@ -515,7 +514,6 @@ def create_extraction_agent(
         template_path: Path to the XBRL Excel template.
         model: LLM model name or PydanticAI Model object.
         output_dir: Where to write output files.
-        cache_template: If True, embed template structure in system prompt.
         page_hints: Dict from scout with face_page and note_pages (soft guidance only).
     """
     if output_dir is None:
@@ -538,12 +536,13 @@ def create_extraction_agent(
         template_id=template_id,
     )
 
-    # Optionally embed template in system prompt for caching
+    # The template summary is NOT embedded in the system prompt — the agent
+    # reads it on demand via the read_template tool, whose result is cached by
+    # the provider after the first call (OpenAI auto-caching measured at ~77%
+    # cross-turn hit rate, PLAN Phase 1 gate). Phase 3.1 confirmed the embed
+    # path (the old `cache_template` flag) earns nothing on top of that and
+    # removed it.
     template_summary = None
-    if cache_template:
-        fields = _read_template_impl(template_path)
-        deps.template_fields = fields
-        template_summary = _summarize_template(fields)
 
     system_prompt = render_prompt(
         statement_type=statement_type,
@@ -601,12 +600,6 @@ def create_extraction_agent(
     def read_template(ctx: RunContext[ExtractionDeps]) -> str:
         """Read the template structure. Returns the full template summary
         (cached after the first call so repeated calls are free)."""
-        # Phase 2 (token-cost): when the summary is already embedded in the
-        # system prompt (cache_template=True), don't return a second full copy —
-        # that would land the ~12k-token summary twice. Point the agent at the
-        # copy it already has.
-        if cache_template:
-            return "Template structure already embedded in the system prompt above."
         if not ctx.deps.template_fields:
             ctx.deps.template_fields = _read_template_impl(ctx.deps.template_path)
         return _summarize_template(ctx.deps.template_fields)
