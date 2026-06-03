@@ -48,7 +48,6 @@ def run_agent(
     template_path: Optional[str] = None,
     model: str = "openai.gpt-5.4",  # resolved through _create_proxy_model
     output_dir: str = _DEFAULT_OUTPUT_DIR,
-    cache_template: bool = False,
     statements: Optional[Set[StatementType]] = None,
     filing_level: str = "company",
     notes: Optional[Set[NotesTemplateType]] = None,
@@ -74,7 +73,6 @@ def run_agent(
             resolved per-statement by the coordinator.
         model: default model string for all agents.
         output_dir: base output directory (a numbered run_XXX subdir is created).
-        cache_template: unused (kept for backward compat).
         statements: set of StatementType to extract. Defaults to all 5.
         notes: optional set of NotesTemplateType to fill in parallel with the
             face-statement extraction.
