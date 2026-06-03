@@ -148,14 +148,38 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
         )
     lines.append("")
     lines.append(
-        "If the formula ADDS a row, enter the magnitude that matches the "
-        "row's directional name (a 'Loss on disposal' row added by the "
-        "total takes a POSITIVE loss magnitude; a gain takes NEGATIVE)."
+        "If the formula ADDS a row, the total uses the cell's value AS-IS "
+        "(no sign flip), so YOU must supply the correct sign:"
+    )
+    lines.append(
+        "  - An ADDED row that is a cash OUTFLOW — its name is a 'payment', "
+        "'repayment', 'purchase', 'repurchase', 'acquisition', 'deposit "
+        "placed', a '…paid' line (dividends/interest/tax paid), or issuance "
+        "'expenses' — takes a NEGATIVE value. Do NOT enter the bare positive "
+        "magnitude: because the total ADDS (not subtracts) the cell, a "
+        "positive number would wrongly INCREASE the section subtotal. "
+        "(Worked example: 'Cash payments for the principal portion of the "
+        "lease liability' is ADDED, so enter -3,732, NOT 3,732.)"
+    )
+    lines.append(
+        "  - An ADDED row that is a cash INFLOW — 'Proceeds', 'Receipts', "
+        "'Withdrawal', 'Dividends received', 'Interest received' — takes a "
+        "POSITIVE value."
+    )
+    lines.append(
+        "  - An ADDED gain/loss adjustment row follows its directional name: "
+        "a 'Loss on disposal' takes a POSITIVE loss magnitude; a gain takes "
+        "NEGATIVE."
     )
     lines.append(
         "If the formula SUBTRACTS a row, enter a POSITIVE magnitude that "
         "matches the row's plain name and let the formula apply the sign "
         "flip — e.g. a 'Dividends paid' or 'Cash payments' row subtracted "
-        "by the total takes a POSITIVE magnitude (do NOT pre-negate it)."
+        "by the total takes a POSITIVE magnitude (do NOT pre-negate it). "
+        "NOTE the contrast with the ADDED case above: the SAME 'Cash "
+        "payments' wording flips entry sign depending on whether THIS "
+        "template's formula adds or subtracts that specific row — always "
+        "obey the per-row ADDED/SUBTRACTED label listed above, not the "
+        "row's name alone."
     )
     return "\n".join(lines)
