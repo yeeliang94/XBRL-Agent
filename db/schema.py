@@ -89,7 +89,22 @@ from pathlib import Path
 # IF NOT EXISTS walk-forward with no ALTER columns. Startup reconciles any
 # row left `running` by a dead process into a terminal error state
 # (see server._lifespan).
-CURRENT_SCHEMA_VERSION = 15
+# v16 (gold-standard eval/benchmark, docs/PLAN-eval-benchmark.md): adds four
+# additive tables backing the benchmark library + grading, plus one nullable
+# `runs.benchmark_id` column so a run knows which benchmark to grade against.
+#   - eval_benchmarks            — one row per benchmark document in the library
+#   - eval_benchmark_templates   — the EXACT statement variants a benchmark
+#                                  covers (template_id encodes the variant; a
+#                                  loose '{standard}-{level}-' prefix is
+#                                  insufficient — gotcha #21)
+#   - gold_concept_facts         — gold answers, mirrors run_concept_facts but
+#                                  keyed by benchmark_id instead of run_id
+#   - eval_scores                — one scorecard per (run, benchmark)
+# The three new tables are pure CREATE TABLE IF NOT EXISTS walk-forward; the
+# `runs.benchmark_id` ALTER is nullable so every legacy run reads NULL. Grading
+# is wrapped in try/except and gated on benchmark_id, so a normal run is
+# byte-for-byte unchanged. Pinned by tests/test_db_schema_v16.py.
+CURRENT_SCHEMA_VERSION = 16
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -133,7 +148,13 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- v10 audit column (was the monolith-experiment flag; experiment
         -- removed in the rewrite, always 'split' now). NULL on pre-v10 rows;
         -- SQLite default 'split' for new rows.
-        orchestration         TEXT DEFAULT 'split'
+        orchestration         TEXT DEFAULT 'split',
+        -- v16 eval column: the benchmark this run is graded against. NULL on
+        -- every normal (non-eval) run, so the grading hook stays inert unless
+        -- a benchmark was explicitly attached at run-start. No FK CASCADE
+        -- choice matters here (it points OUT to eval_benchmarks); ON DELETE
+        -- SET NULL keeps the run row if its benchmark is later deleted.
+        benchmark_id          INTEGER REFERENCES eval_benchmarks(id) ON DELETE SET NULL
     )
     """,
 
@@ -502,6 +523,82 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         updated_at    TEXT NOT NULL DEFAULT ''
     )
     """,
+
+    # -----------------------------------------------------------------
+    # v16: gold-standard eval / benchmark library (docs/PLAN-eval-benchmark.md).
+    # All four tables are additive; deleting a benchmark cascades to its
+    # template set + gold facts + scores via ON DELETE CASCADE.
+    # -----------------------------------------------------------------
+
+    # One row per benchmark document in the library. A benchmark is a
+    # financial-statement document with human-verified gold answers, tagged
+    # by filing standard + level (the picker filters on these).
+    """
+    CREATE TABLE IF NOT EXISTS eval_benchmarks (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        name             TEXT NOT NULL,             -- human label, e.g. "FINCO 2021 MFRS Company"
+        document         TEXT,                      -- source PDF name / ref
+        filing_standard  TEXT NOT NULL,             -- 'mfrs' | 'mpers'
+        filing_level     TEXT NOT NULL,             -- 'company' | 'group'
+        created_at       TEXT NOT NULL DEFAULT ''
+    )
+    """,
+
+    # The EXACT statement variants this benchmark covers. `template_id`
+    # encodes the variant ('mfrs-company-sofp-cunoncu-v1' vs
+    # '...-sofp-orderofliquidity-v1') — a loose '{standard}-{level}-' prefix is
+    # INSUFFICIENT because it spans both variants of every statement, whose
+    # concept uuids differ (gotcha #21). Grading + ingestion scope by
+    # `template_id IN (this set)`. `statement_type` is denormalised so the
+    # extract-page picker can filter without re-parsing template_ids.
+    """
+    CREATE TABLE IF NOT EXISTS eval_benchmark_templates (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        benchmark_id     INTEGER NOT NULL REFERENCES eval_benchmarks(id) ON DELETE CASCADE,
+        template_id      TEXT NOT NULL REFERENCES concept_templates(template_id),
+        statement_type   TEXT NOT NULL,             -- 'SOFP' | 'SOPL' | ... (for the picker)
+        UNIQUE(benchmark_id, template_id)
+    )
+    """,
+
+    # Gold facts — mirrors run_concept_facts, keyed by benchmark instead of
+    # run. The composite UNIQUE key is the upsert anchor. `value_status`
+    # follows the run-fact vocabulary ('observed' | 'explicit_zero' |
+    # 'not_disclosed'); grading treats 'not_disclosed' gold as out-of-scope.
+    """
+    CREATE TABLE IF NOT EXISTS gold_concept_facts (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        benchmark_id     INTEGER NOT NULL REFERENCES eval_benchmarks(id) ON DELETE CASCADE,
+        concept_uuid     TEXT NOT NULL REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
+        period           TEXT NOT NULL,             -- 'CY' | 'PY'
+        entity_scope     TEXT NOT NULL,             -- 'Company' | 'Group'
+        value            REAL,
+        value_status     TEXT NOT NULL DEFAULT 'observed',
+        source           TEXT,
+        updated_at       TEXT NOT NULL DEFAULT '',
+        UNIQUE(benchmark_id, concept_uuid, period, entity_scope)
+    )
+    """,
+
+    # One scorecard per (run, benchmark). Aggregate counts only — the MVP
+    # needs a number, not a per-cell drill-down list. `gold_cells` is the
+    # headline denominator (matched + missing + mismatch); `extra_cells` and
+    # `scale_mismatch` are surfaced as flags, NOT folded into the score.
+    """
+    CREATE TABLE IF NOT EXISTS eval_scores (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id           INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        benchmark_id     INTEGER NOT NULL REFERENCES eval_benchmarks(id) ON DELETE CASCADE,
+        gold_cells       INTEGER NOT NULL,          -- denominator = gradeable gold cells
+        matched_cells    INTEGER NOT NULL,          -- numerator
+        missing_cells    INTEGER NOT NULL,          -- gold has value, run empty/absent (counts wrong)
+        mismatch_cells   INTEGER NOT NULL,          -- both present, values differ (counts wrong)
+        extra_cells      INTEGER NOT NULL,          -- run filled, gold blank (WARNING, not in denominator)
+        scale_mismatch   INTEGER NOT NULL,          -- subset of mismatch that match after 10^k scaling (flag)
+        created_at       TEXT NOT NULL DEFAULT '',
+        UNIQUE(run_id, benchmark_id)
+    )
+    """,
 )
 
 
@@ -533,6 +630,11 @@ _CREATE_INDEXES: tuple[str, ...] = (
     # v12: both reviewer tables are always queried per-run.
     "CREATE INDEX IF NOT EXISTS ix_run_fact_snapshots_run_id ON run_fact_snapshots(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_reviewer_flags_run_id ON reviewer_flags(run_id)",
+    # v16: eval tables are queried per-benchmark (template set, gold grid) and
+    # per-run (scorecard lookup on the run page).
+    "CREATE INDEX IF NOT EXISTS ix_eval_benchmark_templates_benchmark_id ON eval_benchmark_templates(benchmark_id)",
+    "CREATE INDEX IF NOT EXISTS ix_gold_concept_facts_benchmark_id ON gold_concept_facts(benchmark_id)",
+    "CREATE INDEX IF NOT EXISTS ix_eval_scores_run_id ON eval_scores(run_id)",
 )
 
 
@@ -617,6 +719,15 @@ _V15_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("run_agents", "cache_write_tokens", "INTEGER DEFAULT 0"),
     ("run_agent_turns", "cache_read_tokens", "INTEGER DEFAULT 0"),
     ("run_agent_turns", "cache_write_tokens", "INTEGER DEFAULT 0"),
+)
+
+
+# v16 column: the eval benchmark a run is graded against (gold-standard eval).
+# Nullable, no default, so every legacy run reads NULL and the grading hook
+# stays inert. The four eval tables are created via CREATE TABLE IF NOT EXISTS
+# above; only this ALTER walks an existing v15 DB forward.
+_V16_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("runs", "benchmark_id", "INTEGER REFERENCES eval_benchmarks(id) ON DELETE SET NULL"),
 )
 
 
@@ -1151,6 +1262,49 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (15,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v15→v16 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v15 → v16: add the four eval/benchmark tables + the nullable
+        # `runs.benchmark_id` column (gold-standard eval). The tables are
+        # created above via CREATE TABLE IF NOT EXISTS, so older DBs just
+        # confirm they exist; the ALTER walks an existing v15 DB forward.
+        # Same BEGIN IMMEDIATE + duplicate-column tolerance as the earlier
+        # column steps (v14→v15). The ALTER's FK targets eval_benchmarks,
+        # which the CREATE-TABLE loop above already materialised.
+        if current_version is not None and current_version < 16:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 16:
+                    for table, col_name, col_ddl in _V16_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (16,),
                     )
                 conn.commit()
             except Exception:

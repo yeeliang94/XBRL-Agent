@@ -98,6 +98,12 @@ async def get_run_detail_endpoint(run_id: int):
     conn = server._open_audit_conn()
     try:
         detail = repo.get_run_detail(conn, run_id)
+        # v16 gold-standard eval: fetch the scorecard (if any) on the same
+        # connection so the Eval tab is gated + populated from one round-trip.
+        eval_score = (
+            repo.fetch_eval_score_for_run(conn, run_id)
+            if detail is not None else None
+        )
     finally:
         conn.close()
     if detail is None:
@@ -159,6 +165,11 @@ async def get_run_detail_endpoint(run_id: int):
         # not the config blob, so a corrupt/missing config still surfaces
         # the right path. Falls back to 'split' on legacy rows.
         "orchestration": getattr(run, "orchestration", "split"),
+        # v16 gold-standard eval: the benchmark this run graded against (None
+        # on normal runs — the frontend gates the Eval tab on it) plus the
+        # scorecard dict (None when not graded).
+        "benchmark_id": getattr(run, "benchmark_id", None),
+        "eval_score": eval_score,
         "agents": [
             {
                 "id": a.id,

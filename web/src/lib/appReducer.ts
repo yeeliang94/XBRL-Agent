@@ -112,7 +112,7 @@ export interface ToastState {
   tone: "success" | "error";
 }
 
-export type AppView = "extract" | "history" | "concepts";
+export type AppView = "extract" | "history" | "concepts" | "benchmarks";
 
 export type AppAction =
   | { type: "UPLOADED"; payload: { sessionId: string; filename: string; runId?: number | null } }
@@ -174,6 +174,11 @@ const RUN_RE = /^\/run\/(\d+)\/?$/;
 // for a run.  Mounted under selectedRunId so the App treats it the same
 // way it treats a History detail page.
 const CONCEPTS_RE = /^\/concepts\/(\d+)\/?$/;
+// Gold-standard eval (v16): `/benchmarks` lists the library; `/benchmarks/<n>`
+// opens the gold editor for one benchmark. The benchmark id rides on
+// `selectedRunId` (the generic "selected entity id" slot) so the existing
+// URL <-> state machinery carries it without a new field.
+const BENCHMARKS_RE = /^\/benchmarks\/(\d+)\/?$/;
 
 /** Derive the app view + selected/current run id from a pathname.
  *
@@ -195,6 +200,14 @@ export function parseRouteFromPath(
     const m = CONCEPTS_RE.exec(pathname);
     return {
       view: "concepts",
+      selectedRunId: m ? Number(m[1]) : null,
+      currentRunId: null,
+    };
+  }
+  if (pathname.startsWith("/benchmarks")) {
+    const m = BENCHMARKS_RE.exec(pathname);
+    return {
+      view: "benchmarks",
       selectedRunId: m ? Number(m[1]) : null,
       currentRunId: null,
     };

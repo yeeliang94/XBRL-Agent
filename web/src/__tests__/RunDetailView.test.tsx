@@ -840,4 +840,42 @@ describe("RunDetailView", () => {
       unmount();
     }
   });
+
+  // Gold-standard eval (v16): the Eval tab is gated on the run's benchmark_id.
+  test("Eval tab appears only when the run has a benchmark_id, and shows the score", () => {
+    // A normal run: no Eval tab in the run-detail tablist.
+    const { unmount } = render(
+      <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+    expect(within(tablist).queryByRole("tab", { name: /^eval$/i })).toBeNull();
+    unmount();
+
+    // An eval run: the tab is present and renders the scorecard when clicked.
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          benchmark_id: 5,
+          eval_score: {
+            benchmark_id: 5,
+            gold_cells: 473,
+            matched_cells: 412,
+            missing_cells: 11,
+            mismatch_cells: 50,
+            extra_cells: 4,
+            scale_mismatch: 3,
+            score: 412 / 473,
+          },
+        })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    const tablist2 = screen.getByRole("tablist", { name: /run detail sections/i });
+    const evalTab = within(tablist2).getByRole("tab", { name: /^eval$/i });
+    fireEvent.click(evalTab);
+    expect(screen.getByTestId("eval-headline").textContent).toBe("87%");
+    expect(screen.getByTestId("eval-flags").textContent).toContain("3 scale mismatch");
+    expect(screen.getByTestId("eval-flags").textContent).toContain("11 missing");
+  });
 });

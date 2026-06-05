@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { HistoryList } from "../components/HistoryList";
 import type { RunSummaryJson } from "../lib/types";
 
@@ -270,5 +270,37 @@ describe("HistoryList", () => {
     render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
     const row = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
     expect(row.textContent).not.toContain("MPERS");
+  });
+
+  // Gold-standard eval (v16): score column + sparkline.
+  test("renders the eval score as a percentage, or a dash when ungraded", () => {
+    const runs: RunSummaryJson[] = [
+      { ...makeRuns()[0], id: 1, benchmark_id: 3, eval_score: 0.87 },
+      { ...makeRuns()[1], id: 2 }, // ungraded
+    ];
+    render(<HistoryList runs={runs} onRunSelected={() => {}} />);
+    expect(screen.getByTestId("history-score-1").textContent).toBe("87%");
+    // The ungraded run shows a dash, not a percentage.
+    const row2 = screen.getByText("ACME-2023.pdf").closest("tr")!;
+    expect(within(row2).queryByTestId("history-score-2")).toBeNull();
+    expect(row2.textContent).toContain("—");
+  });
+
+  test("shows an eval-trend sparkline when >= 2 runs are graded", () => {
+    const runs: RunSummaryJson[] = [
+      { ...makeRuns()[0], id: 1, benchmark_id: 3, eval_score: 0.9 },
+      { ...makeRuns()[1], id: 2, benchmark_id: 3, eval_score: 0.7, status: "completed" },
+    ];
+    render(<HistoryList runs={runs} onRunSelected={() => {}} />);
+    expect(screen.getByTestId("history-eval-sparkline")).toBeTruthy();
+  });
+
+  test("no sparkline with fewer than two graded runs", () => {
+    const runs: RunSummaryJson[] = [
+      { ...makeRuns()[0], id: 1, benchmark_id: 3, eval_score: 0.9 },
+      { ...makeRuns()[1], id: 2 },
+    ];
+    render(<HistoryList runs={runs} onRunSelected={() => {}} />);
+    expect(screen.queryByTestId("history-eval-sparkline")).toBeNull();
   });
 });

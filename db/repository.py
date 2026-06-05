@@ -79,6 +79,9 @@ class Run:
     # (Phase 1) and the column is now always 'split' (retained for schema
     # stability + History read-back).
     orchestration: str = "split"
+    # v16 gold-standard eval: the benchmark this run is graded against, or
+    # None on every normal (non-eval) run.
+    benchmark_id: Optional[int] = None
 
 
 @dataclass
@@ -206,6 +209,12 @@ class RunSummary:
     # now — the monolith experiment was removed in the rewrite (Phase 1);
     # the column is retained for schema stability + History read-back.
     orchestration: str = "split"
+    # v16 gold-standard eval: the benchmark this run graded against (None on
+    # normal runs) and its headline accuracy score (matched / gold_cells, in
+    # [0, 1]); None when the run wasn't graded. Powers the History score
+    # column + sparkline.
+    benchmark_id: Optional[int] = None
+    eval_score: Optional[float] = None
 
 
 @dataclass
@@ -924,6 +933,7 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         started_at=_get("started_at", "") or "",
         ended_at=_get("ended_at"),
         orchestration=_get("orchestration", "split") or "split",
+        benchmark_id=_get("benchmark_id"),
     )
 
 
@@ -1176,6 +1186,19 @@ def list_runs(
             if ar["model"]:
                 models_by_run[rid].add(ar["model"])
 
+        # v16: batch-load eval scores for the whole page in ONE query (avoid an
+        # N+1). A run has at most one score; compute matched/gold_cells here so
+        # the History column + sparkline need no further math.
+        score_by_run: dict[int, float] = {}
+        score_sql = (
+            "SELECT run_id, gold_cells, matched_cells FROM eval_scores "
+            f"WHERE run_id IN ({placeholders})"
+        )
+        for sr in conn.execute(score_sql, tuple(run_ids)).fetchall():
+            gold = int(sr["gold_cells"])
+            if gold > 0:
+                score_by_run[sr["run_id"]] = int(sr["matched_cells"]) / gold
+
         summaries: list[RunSummary] = []
         for r in rows:
             started = r["started_at"] if "started_at" in r.keys() else ""
@@ -1200,6 +1223,8 @@ def list_runs(
                     # A row with a corrupt or pre-v10 config still surfaces the
                     # right path via the dedicated column.
                     orchestration=run.orchestration,
+                    benchmark_id=run.benchmark_id,
+                    eval_score=score_by_run.get(run.id),
                 )
             )
         return summaries
@@ -1332,3 +1357,108 @@ def delete_run(conn: sqlite3.Connection, run_id: int) -> bool:
     conn.execute("PRAGMA foreign_keys = ON")
     cur = conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
     return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Gold-standard eval / benchmark (v16) — scorecard persistence.
+# Benchmark + gold-fact CRUD lives in eval/store.py (the eval subsystem owns
+# its own writes); only the per-(run, benchmark) scorecard is persisted here,
+# alongside the other run-scoped tables.
+# ---------------------------------------------------------------------------
+
+def save_eval_score(
+    conn: sqlite3.Connection,
+    run_id: int,
+    benchmark_id: int,
+    card: Any,
+) -> None:
+    """Upsert the scorecard for a ``(run, benchmark)`` pair.
+
+    ``card`` is duck-typed (an ``eval.grader.ScoreCard``): we read its count
+    attributes without importing the eval package here, keeping the repo
+    layer free of subsystem dependencies. ``UNIQUE(run_id, benchmark_id)``
+    makes a re-grade overwrite the prior row.
+    """
+    now = _now()
+    conn.execute(
+        "INSERT INTO eval_scores(run_id, benchmark_id, gold_cells, "
+        "matched_cells, missing_cells, mismatch_cells, extra_cells, "
+        "scale_mismatch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(run_id, benchmark_id) DO UPDATE SET "
+        "gold_cells = excluded.gold_cells, "
+        "matched_cells = excluded.matched_cells, "
+        "missing_cells = excluded.missing_cells, "
+        "mismatch_cells = excluded.mismatch_cells, "
+        "extra_cells = excluded.extra_cells, "
+        "scale_mismatch = excluded.scale_mismatch, "
+        "created_at = excluded.created_at",
+        (
+            run_id, benchmark_id,
+            int(card.gold_cells), int(card.matched), int(card.missing),
+            int(card.mismatch), int(card.extra), int(card.scale_mismatch),
+            now,
+        ),
+    )
+
+
+def fetch_eval_score(
+    conn: sqlite3.Connection, run_id: int, benchmark_id: int
+) -> Optional[dict[str, Any]]:
+    """Return the scorecard dict for a ``(run, benchmark)`` pair, or ``None``.
+
+    The dict carries the raw counts plus a derived ``score`` (matched /
+    gold_cells, 0.0 when there are no gold cells) so the UI doesn't re-derive
+    it. ``benchmark_id`` is required because a run could in principle be graded
+    against more than one benchmark over its lifetime, though the MVP attaches
+    exactly one.
+    """
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT gold_cells, matched_cells, missing_cells, mismatch_cells, "
+            "extra_cells, scale_mismatch, created_at "
+            "FROM eval_scores WHERE run_id = ? AND benchmark_id = ?",
+            (run_id, benchmark_id),
+        ).fetchone()
+    finally:
+        conn.row_factory = prior_factory
+    if row is None:
+        return None
+    gold_cells = int(row["gold_cells"])
+    matched = int(row["matched_cells"])
+    return {
+        "benchmark_id": benchmark_id,
+        "gold_cells": gold_cells,
+        "matched_cells": matched,
+        "missing_cells": int(row["missing_cells"]),
+        "mismatch_cells": int(row["mismatch_cells"]),
+        "extra_cells": int(row["extra_cells"]),
+        "scale_mismatch": int(row["scale_mismatch"]),
+        "score": (matched / gold_cells) if gold_cells > 0 else 0.0,
+        "created_at": row["created_at"],
+    }
+
+
+def fetch_eval_score_for_run(
+    conn: sqlite3.Connection, run_id: int
+) -> Optional[dict[str, Any]]:
+    """Return the scorecard for a run regardless of which benchmark it used.
+
+    Convenience for the History list + run page, where the run row already
+    carries its single ``benchmark_id`` and we just want "the score for this
+    run". Returns the most recent row if (unexpectedly) more than one exists.
+    """
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT benchmark_id FROM eval_scores WHERE run_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+    finally:
+        conn.row_factory = prior_factory
+    if row is None:
+        return None
+    return fetch_eval_score(conn, run_id, int(row["benchmark_id"]))

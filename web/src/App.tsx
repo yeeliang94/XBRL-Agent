@@ -12,6 +12,7 @@ import { SettingsIcon } from "./components/icons";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
+import { BenchmarksPage } from "./pages/BenchmarksPage";
 import "./index.css";
 
 // ---------------------------------------------------------------------------
@@ -158,6 +159,13 @@ export default function App() {
       expected = state.selectedRunId != null
         ? `/concepts/${state.selectedRunId}`
         : "/";
+    } else if (state.view === "benchmarks") {
+      // Gold-standard eval (v16): /benchmarks lists; /benchmarks/<id> opens the
+      // gold editor. The benchmark id rides on selectedRunId (the generic
+      // selected-entity slot — see parseRouteFromPath).
+      expected = state.selectedRunId != null
+        ? `/benchmarks/${state.selectedRunId}`
+        : "/benchmarks";
     } else if (state.view === "history") {
       expected = state.selectedRunId != null
         ? `/history/${state.selectedRunId}`
@@ -487,12 +495,22 @@ export default function App() {
         style={
           state.view === "concepts"
             ? styles.mainFull
-            : state.view === "history"
+            : state.view === "history" || state.view === "benchmarks"
             ? styles.mainHistory
             : styles.main
         }
       >
-        {state.view === "concepts" ? (
+        {state.view === "benchmarks" ? (
+          // Gold-standard eval (v16): the benchmark library + gold editor.
+          // selectedRunId carries the selected benchmark id (the generic
+          // selected-entity slot).
+          <BenchmarksPage
+            selectedId={state.selectedRunId}
+            onSelectBenchmark={(id) =>
+              dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
+            }
+          />
+        ) : state.view === "concepts" ? (
           // `/concepts/{id}` is now an alias that opens the unified run page
           // on the Values tab (the standalone full-page Concepts surface was
           // folded into the tabbed run detail — see
