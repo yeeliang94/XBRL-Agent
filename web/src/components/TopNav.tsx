@@ -22,10 +22,17 @@ const ITEMS: { id: AppView; label: string }[] = [
   { id: "extract", label: "Extract" },
   { id: "history", label: "History" },
   { id: "concepts", label: "Template" },
+  // Gold-standard eval (v16): the benchmark library. Gated behind the same
+  // canonical-mode flag as Template (eval is built on the canonical store).
+  { id: "benchmarks", label: "Benchmarks" },
 ];
 
 export function TopNav({ view, onViewChange, showConcepts = true }: TopNavProps) {
-  const items = showConcepts ? ITEMS : ITEMS.filter((i) => i.id !== "concepts");
+  // Both the Template (concepts) and Benchmarks tabs are canonical-mode
+  // surfaces, so they share the same gate.
+  const items = showConcepts
+    ? ITEMS
+    : ITEMS.filter((i) => i.id !== "concepts" && i.id !== "benchmarks");
   return (
     <nav style={styles.nav} role="tablist" aria-label="Main navigation">
       {items.map((item) => {

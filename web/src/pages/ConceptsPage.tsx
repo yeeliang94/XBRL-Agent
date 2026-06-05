@@ -79,6 +79,14 @@ export interface ConceptsPageProps {
   // Null when the Concepts top-nav tab is opened without a run selected —
   // the page then shows a "pick a run" empty state instead of fetching.
   runId: number | null;
+  // Gold-standard eval (v16): when source==='benchmark' the SAME grid renders
+  // a benchmark's gold facts (/api/benchmarks/{id}/concepts) and edits PATCH
+  // /api/benchmarks/{id}/facts instead of the run-fact endpoints. A minimal
+  // prop, NOT a component-library extraction (scope discipline): the run-only
+  // chrome (PDF pane, conflicts, notes, recheck, download) is suppressed and a
+  // compact gold editor is rendered. `runId` is null in this mode.
+  source?: "run" | "benchmark";
+  benchmarkId?: number | null;
 }
 
 type Period = "CY" | "PY";
@@ -129,7 +137,17 @@ function treeColumns(showPeriods: boolean): string {
     : "minmax(260px, 1fr) minmax(150px, 190px) 120px minmax(120px, 180px)";
 }
 
-export function ConceptsPage({ runId }: ConceptsPageProps) {
+export function ConceptsPage({
+  runId,
+  source = "run",
+  benchmarkId = null,
+}: ConceptsPageProps) {
+  // Gold-standard eval (v16): in benchmark mode we read/write gold facts; the
+  // run-only effects (edited_count, conflicts, recheck) all short-circuit on
+  // `runId == null`, which is exactly the state in benchmark mode, so they stay
+  // inert without extra guards. `effectiveId` drives the one shared load.
+  const isBenchmark = source === "benchmark";
+  const effectiveId = isBenchmark ? benchmarkId : runId;
   const [concepts, setConcepts] = useState<ConceptRow[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -198,9 +216,14 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
   // unmount / runId change so a slow response can't land on a stale
   // component or clobber a newer run's data.
   useEffect(() => {
-    if (runId == null) return;
+    if (effectiveId == null) return;
     const controller = new AbortController();
-    fetch(`/api/runs/${runId}/concepts`, { signal: controller.signal })
+    // Eval (v16): benchmark mode reads gold facts from the benchmark concepts
+    // endpoint, which returns the same view-row shape so the grid is unchanged.
+    const url = isBenchmark
+      ? `/api/benchmarks/${effectiveId}/concepts`
+      : `/api/runs/${effectiveId}/concepts`;
+    fetch(url, { signal: controller.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -218,7 +241,7 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
     return () => {
       controller.abort();
     };
-  }, [runId]);
+  }, [effectiveId, isBenchmark]);
 
   // Refresh the edited-values count on load and after every successful edit
   // (conflictReloadKey is bumped on the same path).
@@ -281,7 +304,7 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
       value: number | null,
       opts?: { keepalive?: boolean; period?: Period; entity_scope?: "Company" | "Group" }
     ) => {
-      if (runId == null) return;
+      if (effectiveId == null) return;
       const keepalive = opts?.keepalive === true;
       const period = opts?.period ?? "CY";
       // Resolve the scope from the edit options, captured when the edit was
@@ -294,19 +317,22 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
         setEditStatus((s) => ({ ...s, [editKey]: "saving" }));
       }
       try {
-        const resp = await fetch(
-          `/api/runs/${runId}/facts/${concept_uuid}`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              value,
-              period,
-              entity_scope,
-            }),
-            keepalive,
-          }
-        );
+        // Eval (v16): benchmark gold edits go to the benchmark facts endpoint
+        // (composite key in the body); run edits keep the per-concept URL. Gold
+        // has no cascade, so the benchmark response carries no `recomputed`.
+        const resp = isBenchmark
+          ? await fetch(`/api/benchmarks/${effectiveId}/facts`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ concept_uuid, value, period, entity_scope }),
+              keepalive,
+            })
+          : await fetch(`/api/runs/${effectiveId}/facts/${concept_uuid}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ value, period, entity_scope }),
+              keepalive,
+            });
         if (keepalive) return;
         if (!resp.ok) {
           setEditStatus((s) => ({ ...s, [editKey]: "error" }));
@@ -345,14 +371,15 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
         );
         setEditStatus((s) => ({ ...s, [editKey]: "saved" }));
         // A leaf edit may open or clear a partial-state conflict in the
-        // cascade — refresh the reconciliation queue.
+        // cascade — refresh the reconciliation queue. (No-op for benchmark
+        // gold, which has no cascade/conflicts.)
         setConflictReloadKey((k) => k + 1);
       } catch (err) {
         if (keepalive) return;
         setEditStatus((s) => ({ ...s, [editKey]: "error" }));
       }
     },
-    [runId, activeScope]
+    [effectiveId, isBenchmark, activeScope]
   );
 
   // Phase 4.3 — re-run cross-checks against the current (edited) facts and
@@ -521,6 +548,96 @@ export function ConceptsPage({ runId }: ConceptsPageProps) {
   const editableCount = filtered.filter(
     (c) => c.editable === true && c.kind !== "ABSTRACT"
   ).length;
+
+  // Eval (v16): benchmark gold editor — a compact reuse of the same grid,
+  // without the run-only chrome (no PDF pane, conflicts, notes, download). Gold
+  // LEAF/MATRIX cells are editable; edits PATCH the benchmark facts endpoint.
+  if (isBenchmark) {
+    if (benchmarkId == null) {
+      return (
+        <div data-testid="benchmark-gold-empty" style={{ padding: pwc.space.xl }}>
+          <p style={styles.panelMuted}>Select a benchmark to edit its gold values.</p>
+        </div>
+      );
+    }
+    return (
+      <div
+        data-testid="benchmark-gold-editor"
+        style={{ display: "flex", flexDirection: "column", gap: pwc.space.lg }}
+      >
+        {loadError && (
+          <div style={styles.errorBanner}>Failed to load gold values: {loadError}</div>
+        )}
+        <section style={styles.toolbar} aria-label="Gold editor controls">
+          {templates.length > 1 && (
+            <div style={styles.controlGroup}>
+              <label htmlFor="gold-template" style={ui.fieldLabel}>Statement</label>
+              <select
+                id="gold-template"
+                data-testid="gold-template-select"
+                value={activeTemplate ?? ""}
+                onChange={(e) => {
+                  setActiveTemplate(e.target.value);
+                  setActiveSheet(null);
+                  setSearchQuery("");
+                }}
+                style={ui.select}
+              >
+                {templates.map((tid) => (
+                  <option key={tid} value={tid}>{tid}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {isGroupRun && (
+            <div style={styles.controlGroup}>
+              <span style={ui.fieldLabel}>Entity</span>
+              <SegmentedControl
+                testId="gold-entity-scope-toggle"
+                values={["Company", "Group"] as const}
+                activeValue={activeScope}
+                onChange={setActiveScope}
+                buttonTestId={(scope) => `gold-scope-btn-${scope}`}
+              />
+            </div>
+          )}
+          <div style={styles.searchGroup}>
+            <label htmlFor="gold-search" style={ui.fieldLabel}>Search</label>
+            <input
+              id="gold-search"
+              data-testid="gold-search"
+              type="search"
+              placeholder="Search across all templates"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ ...ui.input, width: "100%" }}
+            />
+          </div>
+        </section>
+        {filtered.length > 0 && filtered.every((r) => r.shape === "matrix") ? (
+          <ConceptMatrixGrid
+            rows={filtered}
+            onEditValue={onEditValue}
+            editStatus={editStatus}
+            selectedUuid={selectedConceptUuid}
+            onSelectRow={setSelectedConceptUuid}
+            activeScope={activeScope}
+            showPeriods={hasPyFacts}
+          />
+        ) : (
+          <ConceptTree
+            rows={filtered}
+            onEditValue={onEditValue}
+            editStatus={editStatus}
+            selectedUuid={selectedConceptUuid}
+            onSelectRow={setSelectedConceptUuid}
+            activeScope={activeScope}
+            showPeriods={hasPyFacts}
+          />
+        )}
+      </div>
+    );
+  }
 
   if (runId == null) {
     // No run selected → this surface becomes the global template settings

@@ -73,22 +73,29 @@ export function HistoryList({
 
   return (
     <div style={styles.container}>
+      {/* Gold-standard eval (v16): a compact sparkline of eval scores across
+          the listed runs (oldest → newest) so improvement is visible at a
+          glance. Only shown when ≥2 runs were graded. */}
+      <EvalSparkline runs={runs} />
       <table style={styles.table}>
         {/* Fixed column widths — without these the browser picks column
             widths from content, so a long filename could squash the
             timestamp/status columns. `table-layout: fixed` plus <col>
             widths makes the layout predictable regardless of content. */}
         <colgroup>
-          <col style={{ width: "44%" }} />
-          <col style={{ width: "18%" }} />
-          <col style={{ width: "18%" }} />
-          <col style={{ width: "20%" }} />
+          <col style={{ width: "40%" }} />
+          <col style={{ width: "16%" }} />
+          <col style={{ width: "14%" }} />
+          <col style={{ width: "14%" }} />
+          <col style={{ width: "16%" }} />
         </colgroup>
         <thead>
           <tr>
             <th style={styles.th}>Filename</th>
             <th style={styles.th}>When</th>
             <th style={styles.th}>Status</th>
+            {/* Gold-standard eval (v16): the run's benchmark accuracy. */}
+            <th style={{ ...styles.th, textAlign: "right" }}>Score</th>
             <th style={{ ...styles.th, textAlign: "right" }}>Duration</th>
           </tr>
         </thead>
@@ -158,6 +165,19 @@ export function HistoryList({
                   </span>
                 </td>
                 <td style={{ ...styles.td, textAlign: "right" }}>
+                  {run.eval_score != null ? (
+                    <span
+                      data-testid={`history-score-${run.id}`}
+                      style={styles.scoreValue}
+                      title={`Graded against benchmark ${run.benchmark_id}`}
+                    >
+                      {Math.round(run.eval_score * 100)}%
+                    </span>
+                  ) : (
+                    <span style={styles.dim}>—</span>
+                  )}
+                </td>
+                <td style={{ ...styles.td, textAlign: "right" }}>
                   <span style={styles.dim}>{formatDuration(run.duration_seconds)}</span>
                 </td>
               </tr>
@@ -165,6 +185,45 @@ export function HistoryList({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EvalSparkline — a tiny inline-SVG trend of eval scores across the listed
+// runs (gold-standard eval, v16). `runs` arrives newest-first; we reverse to
+// chronological so the line reads left→right = oldest→newest. Only rendered
+// when at least two runs were graded.
+// ---------------------------------------------------------------------------
+
+function EvalSparkline({ runs }: { runs: RunSummaryJson[] }) {
+  const scored = runs
+    .filter((r) => r.eval_score != null)
+    .slice()
+    .reverse() as Array<RunSummaryJson & { eval_score: number }>;
+  if (scored.length < 2) return null;
+
+  const W = 160;
+  const H = 32;
+  const PAD = 3;
+  const n = scored.length;
+  // Scores are already in [0, 1]; map directly to the vertical axis (1 = top).
+  const points = scored.map((r, i) => {
+    const x = PAD + (i * (W - 2 * PAD)) / (n - 1);
+    const y = PAD + (1 - r.eval_score) * (H - 2 * PAD);
+    return { x, y, score: r.eval_score };
+  });
+  const path = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const last = points[points.length - 1];
+
+  return (
+    <div data-testid="history-eval-sparkline" style={styles.sparklineWrap}>
+      <span style={styles.sparklineLabel}>Eval trend</span>
+      <svg width={W} height={H} role="img" aria-label="Eval score trend">
+        <path d={path} fill="none" stroke={pwc.orange500} strokeWidth={1.5} />
+        <circle cx={last.x} cy={last.y} r={2.5} fill={pwc.orange500} />
+      </svg>
+      <span style={styles.sparklineValue}>{Math.round(last.score * 100)}%</span>
     </div>
   );
 }
@@ -204,6 +263,34 @@ const styles = {
     borderBottom: `1px solid ${pwc.grey100}`,
     verticalAlign: "middle" as const,
     overflow: "hidden",
+  } as React.CSSProperties,
+  // Gold-standard eval score — mono, brand-orange so it reads as a metric.
+  scoreValue: {
+    fontFamily: pwc.fontMono,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    color: pwc.orange700,
+  } as React.CSSProperties,
+  sparklineWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    padding: `${pwc.space.md}px ${pwc.space.xl}px`,
+    borderBottom: `1px solid ${pwc.grey100}`,
+    background: pwc.grey50,
+  } as React.CSSProperties,
+  sparklineLabel: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: 600,
+    color: pwc.grey500,
+    textTransform: "uppercase" as const,
+  } as React.CSSProperties,
+  sparklineValue: {
+    fontFamily: pwc.fontMono,
+    fontSize: 13,
+    fontWeight: pwc.weight.medium,
+    color: pwc.orange700,
   } as React.CSSProperties,
   // Filename cell gets a left "selection rail" via border-left on the
   // row-selected variant below. Keeping padding identical to other cells
