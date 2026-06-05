@@ -503,6 +503,10 @@ export interface RunConfigPayload {
    *  explicitly selects notes templates; matches the face-statement
    *  ``models`` field shape for consistency. */
   notes_models?: Partial<Record<NotesTemplateType, string>>;
+  /** Gold-standard eval (v16): the benchmark to grade this run against, or
+   *  unset/null for a normal run. Set by the extract-page "Eval testing"
+   *  toggle; persisted on runs.benchmark_id and graded at run completion. */
+  benchmark_id?: number | null;
 }
 
 // --- Phase 10: Per-agent state for tab-based UI ---
@@ -566,6 +570,11 @@ export interface RunSummaryJson {
   has_merged_workbook: boolean;
   filing_level?: FilingLevel;
   filing_standard?: FilingStandard;
+  // Gold-standard eval (v16): the benchmark this run graded against (null on
+  // normal runs) + the headline accuracy in [0, 1] (null when not graded).
+  // Powers the History score column + sparkline.
+  benchmark_id?: number | null;
+  eval_score?: number | null;
 }
 
 export interface RunListResponse {
@@ -677,6 +686,37 @@ export interface RunDetailJson {
   cross_checks: RunCrossCheckJson[];
   // v8 telemetry rollup. Optional for back-compat with older payloads.
   telemetry_rollup?: TelemetryRollupJson;
+  // Gold-standard eval (v16): the benchmark this run graded against (null on
+  // normal runs — the Eval tab is gated on it) + the scorecard (null when not
+  // graded).
+  benchmark_id?: number | null;
+  eval_score?: EvalScoreJson | null;
+}
+
+// Gold-standard eval (v16) scorecard, as returned by GET /api/runs/{id}/eval
+// and embedded in the run detail. `score` = matched / gold_cells in [0, 1].
+export interface EvalScoreJson {
+  benchmark_id: number;
+  gold_cells: number;
+  matched_cells: number;
+  missing_cells: number;
+  mismatch_cells: number;
+  extra_cells: number;
+  scale_mismatch: number;
+  score: number;
+  created_at?: string;
+}
+
+// One benchmark in the library (GET /api/benchmarks list shape).
+export interface BenchmarkJson {
+  id: number;
+  name: string;
+  document: string | null;
+  filing_standard: string;
+  filing_level: string;
+  created_at: string;
+  statements: string[];
+  gold_cell_count: number;
 }
 
 export interface RunsFilterParams {

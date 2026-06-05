@@ -261,3 +261,49 @@ export async function fetchPdfPageCount(runId: number): Promise<number | null> {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Gold-standard eval / benchmark library (v16)
+// ---------------------------------------------------------------------------
+
+import type { BenchmarkJson, EvalScoreJson } from "./types";
+
+/** List every benchmark in the library. */
+export async function fetchBenchmarks(): Promise<BenchmarkJson[]> {
+  const data = await apiFetch<{ benchmarks: BenchmarkJson[] }>("/api/benchmarks");
+  // Tolerate a malformed/empty body (e.g. a stubbed fetch in tests) — always
+  // resolve to an array so callers can `.filter`/`.map` without guarding.
+  return Array.isArray(data?.benchmarks) ? data.benchmarks : [];
+}
+
+/** Create a benchmark from a human-filled MBRS template workbook. The template
+ *  set is auto-detected server-side from the workbook's sheets. */
+export async function createBenchmark(args: {
+  file: File;
+  name: string;
+  filing_standard: string;
+  filing_level: string;
+  document?: string;
+}): Promise<{ ok: boolean; id: number; ingested: number; statements: string[] }> {
+  const form = new FormData();
+  form.append("file", args.file);
+  form.append("name", args.name);
+  form.append("filing_standard", args.filing_standard);
+  form.append("filing_level", args.filing_level);
+  if (args.document) form.append("document", args.document);
+  return apiFetch("/api/benchmarks", { method: "POST", body: form });
+}
+
+/** Delete a benchmark (cascades to its templates + gold facts + scores). */
+export async function deleteBenchmark(id: number): Promise<void> {
+  await apiFetch(`/api/benchmarks/${id}`, { method: "DELETE" });
+}
+
+/** Fetch the scorecard for a run, or null when the run wasn't graded. */
+export async function fetchRunEval(runId: number): Promise<EvalScoreJson | null> {
+  try {
+    return await apiFetch<EvalScoreJson>(`/api/runs/${runId}/eval`);
+  } catch {
+    return null;
+  }
+}

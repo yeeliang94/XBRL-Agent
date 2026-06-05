@@ -1,0 +1,208 @@
+"""Gold-standard eval / benchmark routes (docs/PLAN-eval-benchmark.md, Step 7).
+
+Thin HTTP shell over ``eval/store.py`` (benchmark CRUD + gold grid) and the
+per-run scorecard in ``db/repository.py``. Shared helpers are reached through
+``server.X`` at call time, matching the other ``api/`` routers.
+
+Endpoints:
+  GET    /api/benchmarks                       — list the library
+  POST   /api/benchmarks                       — create from an uploaded xlsx
+  GET    /api/benchmarks/{id}                  — one benchmark (+ template set)
+  DELETE /api/benchmarks/{id}                  — remove a benchmark
+  GET    /api/benchmarks/{id}/concepts         — gold grid (ConceptsPage reuse)
+  PATCH  /api/benchmarks/{id}/facts            — spot-edit one gold value
+  GET    /api/runs/{id}/eval                   — the run's scorecard
+"""
+from __future__ import annotations
+
+import logging
+import tempfile
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
+
+import server
+
+logger = logging.getLogger("server")
+
+router = APIRouter()
+
+
+class GoldFactPatch(BaseModel):
+    concept_uuid: str
+    period: str = "CY"
+    entity_scope: str = "Company"
+    value: Optional[float] = None
+
+
+@router.get("/api/benchmarks")
+async def list_benchmarks_endpoint():
+    from eval import store
+
+    conn = server._open_audit_conn()
+    try:
+        return {"benchmarks": store.list_benchmarks(conn)}
+    finally:
+        conn.close()
+
+
+@router.post("/api/benchmarks")
+async def create_benchmark_endpoint(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    filing_standard: str = Form("mfrs"),
+    filing_level: str = Form("company"),
+    document: Optional[str] = Form(None),
+):
+    """Create a benchmark from a human-filled MBRS template workbook.
+
+    The template set is auto-detected from the workbook's sheets; gold facts
+    are reverse-ingested in the same transaction. Rejects a non-xlsx upload, a
+    bad standard/level, and a workbook matching no template (all 4xx).
+    """
+    from eval import store
+
+    if filing_standard not in ("mfrs", "mpers"):
+        raise HTTPException(status_code=400, detail="filing_standard must be mfrs or mpers")
+    if filing_level not in ("company", "group"):
+        raise HTTPException(status_code=400, detail="filing_level must be company or group")
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail="Only .xlsx workbooks are accepted.")
+
+    # Stream the upload to a temp file (capped like PDF uploads) so the whole
+    # workbook never lives in memory; ingest reads it, then we delete it.
+    _CHUNK = 1 * 1024 * 1024
+    total = 0
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    try:
+        try:
+            while True:
+                chunk = await file.read(_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > server.MAX_UPLOAD_SIZE:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Max size is "
+                               f"{server.MAX_UPLOAD_SIZE // (1024 * 1024)}MB.",
+                    )
+                tmp.write(chunk)
+        finally:
+            tmp.close()
+
+        conn = server._open_audit_conn()
+        try:
+            result = store.create_benchmark_from_workbook(
+                conn,
+                name=name,
+                document=document or file.filename,
+                filing_standard=filing_standard,
+                filing_level=filing_level,
+                xlsx_path=tmp.name,
+            )
+            conn.commit()
+        except ValueError as exc:
+            # Loud rejection (wrong file / no matching template) → 422 so the
+            # half-made benchmark rolls back with the transaction.
+            conn.rollback()
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception:
+            conn.rollback()
+            logger.exception("benchmark creation failed")
+            raise HTTPException(status_code=500, detail="Benchmark creation failed.")
+        finally:
+            conn.close()
+        return {"ok": True, **result}
+    finally:
+        try:
+            Path(tmp.name).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+@router.get("/api/benchmarks/{benchmark_id}")
+async def get_benchmark_endpoint(benchmark_id: int):
+    from eval import store
+
+    conn = server._open_audit_conn()
+    try:
+        bench = store.get_benchmark(conn, benchmark_id)
+    finally:
+        conn.close()
+    if bench is None:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    return bench
+
+
+@router.delete("/api/benchmarks/{benchmark_id}")
+async def delete_benchmark_endpoint(benchmark_id: int):
+    from eval import store
+
+    conn = server._open_audit_conn()
+    try:
+        removed = store.delete_benchmark(conn, benchmark_id)
+        conn.commit()
+    finally:
+        conn.close()
+    if not removed:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    return {"ok": True, "id": benchmark_id}
+
+
+@router.get("/api/benchmarks/{benchmark_id}/concepts")
+async def benchmark_concepts_endpoint(benchmark_id: int):
+    """Gold grid in the same shape as ``/api/runs/{id}/concepts`` so the
+    frontend ConceptsPage renders it unchanged (source='benchmark')."""
+    from eval import store
+
+    conn = server._open_audit_conn()
+    try:
+        bench = store.get_benchmark(conn, benchmark_id)
+        if bench is None:
+            raise HTTPException(status_code=404, detail="Benchmark not found")
+        concepts = store.benchmark_concepts(conn, benchmark_id)
+    finally:
+        conn.close()
+    # Keyed under both `run_id`-style fields the grid may read; `benchmark_id`
+    # is the canonical one here.
+    return {"benchmark_id": benchmark_id, "concepts": concepts}
+
+
+@router.patch("/api/benchmarks/{benchmark_id}/facts")
+async def patch_gold_fact_endpoint(benchmark_id: int, body: GoldFactPatch):
+    from eval import store
+
+    conn = server._open_audit_conn()
+    try:
+        if store.get_benchmark(conn, benchmark_id) is None:
+            raise HTTPException(status_code=404, detail="Benchmark not found")
+        try:
+            fact = store.patch_gold_fact(
+                conn, benchmark_id, body.concept_uuid,
+                period=body.period, entity_scope=body.entity_scope,
+                value=body.value,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, **fact}
+
+
+@router.get("/api/runs/{run_id}/eval")
+async def get_run_eval_endpoint(run_id: int):
+    """The run's scorecard for the Eval tab. 404 when the run wasn't graded."""
+    from db import repository as repo
+
+    conn = server._open_audit_conn()
+    try:
+        score = repo.fetch_eval_score_for_run(conn, run_id)
+    finally:
+        conn.close()
+    if score is None:
+        raise HTTPException(status_code=404, detail="Run has no eval score")
+    return score
