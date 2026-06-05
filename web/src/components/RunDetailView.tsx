@@ -5,6 +5,7 @@ import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
+import { EvalTab } from "./EvalTab";
 import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
@@ -285,7 +286,7 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
 
 // Tab identity for the run-detail surface. Review + Values are gated on
 // canonical mode (the reviewer diff + concept tree only exist there).
-export type RunTabKey = "overview" | "agents" | "notes" | "checks" | "telemetry" | "review" | "values";
+export type RunTabKey = "overview" | "agents" | "notes" | "checks" | "telemetry" | "review" | "values" | "eval";
 
 export function RunDetailView({
   detail, onDownload, onDelete, onRegenerateNotes, canonicalEnabled = false,
@@ -383,6 +384,11 @@ export function RunDetailView({
           { key: "review" as RunTabKey, label: "Review" },
           { key: "values" as RunTabKey, label: "Values" },
         ]
+      : []),
+    // Gold-standard eval (v16): the Eval scorecard tab only appears when this
+    // run was graded against a benchmark. A normal run never shows it.
+    ...(detail.benchmark_id != null
+      ? [{ key: "eval" as RunTabKey, label: "Eval" }]
       : []),
   ];
 
@@ -579,6 +585,14 @@ export function RunDetailView({
       {activeTab === "values" && canonicalEnabled && (
         <section style={styles.sectionFull} role="tabpanel" data-testid="run-detail-values">
           <ConceptsPage runId={detail.id} />
+        </section>
+      )}
+
+      {/* Gold-standard eval (v16): the scorecard. Lazy-mounted (only rendered
+          when this tab is active) and only present when the run was graded. */}
+      {activeTab === "eval" && detail.benchmark_id != null && (
+        <section style={styles.section} role="tabpanel" data-testid="run-detail-eval">
+          <EvalTab runId={detail.id} initialScore={detail.eval_score ?? null} />
         </section>
       )}
     </div>

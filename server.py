@@ -612,6 +612,37 @@ def _open_conflict_count(db_path, run_id) -> int:
                        exc_info=True)
         return 0
 
+
+def _grade_run_against_benchmark(db_path, run_id: int, benchmark_id: int):
+    """Grade a finished run against its benchmark and persist the scorecard.
+
+    Gold-standard eval (v16). Returns the score dict (the same shape
+    ``repo.fetch_eval_score`` returns) on success, or ``None`` on any failure.
+    Wrapped so a grading error NEVER fails the run — a run with a benchmark
+    that can't be graded simply lands without a score, mirroring the
+    soft-failure contract for merge / cross-check errors (gotcha #20).
+    """
+    import sqlite3
+    from db import repository as repo
+    from eval.grader import grade_run
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            card = grade_run(conn, run_id, benchmark_id)
+            repo.save_eval_score(conn, run_id, benchmark_id, card)
+            conn.commit()
+            return repo.fetch_eval_score(conn, run_id, benchmark_id)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — grading must never sink a run
+        logger.warning(
+            "eval grading failed for run %s vs benchmark %s — run completes "
+            "without a score", run_id, benchmark_id, exc_info=True,
+        )
+        return None
+
 # Phase mapping: tool name → EventPhase
 PHASE_MAP = {
     "read_template": "reading_template",
@@ -1694,6 +1725,12 @@ class RunConfigRequest(BaseModel):
     # clients posting it don't 422.
     model: Optional[str] = None
 
+    # Gold-standard eval (v16): the benchmark this run is graded against. None
+    # on every normal run — grading only fires when the extract-page "Eval
+    # testing" toggle attached a benchmark. Persisted on runs.benchmark_id so
+    # the end-of-run grading hook and the History/run-page surfaces can find it.
+    benchmark_id: Optional[int] = None
+
 
 class RunConfigPatchRequest(BaseModel):
     """Partial-update body for PATCH /api/runs/{id}.
@@ -1728,6 +1765,11 @@ class RunConfigPatchRequest(BaseModel):
     @classmethod
     def _normalize_orchestration(cls, v):
         return None if v is None else "split"
+
+    # Gold-standard eval (v16): the benchmark this draft run is graded
+    # against, persisted with the rest of the draft config. None leaves the
+    # run a normal (non-eval) run.
+    benchmark_id: Optional[int] = None
     # `infopack` is the scout-derived inventory the legacy `POST /api/run/
     # {session_id}` endpoint receives in its request body. For the
     # persistent-draft flow there is no separate "scout output store" on
@@ -2261,6 +2303,51 @@ def _validate_and_build_run(
         )
         return None, events, new_status
 
+    # Gold-standard eval (v16): if the user attached a benchmark, validate it
+    # BEFORE extraction so a stale / mismatched selection fails fast (cheap,
+    # pre-agent) instead of running for minutes and then producing a misleading
+    # 0% (a standard/level-mismatched benchmark shares no concept uuids with the
+    # run, so grading would silently match nothing). A config error here is
+    # treated like a bad model/infopack — `_fail_run`, not a soft skip.
+    #
+    # NOTE: this can only validate standard/level + existence. It CANNOT verify
+    # the uploaded PDF is the benchmark's document — two same-(standard,level)
+    # benchmarks share template_ids/uuids, so picking the wrong document's
+    # benchmark still grades against the wrong gold. That's an inherent user
+    # responsibility (cf. picking the wrong PDF); see CLAUDE.md gotcha #23.
+    if run_config.benchmark_id is not None and db_conn is not None:
+        from eval import store as _eval_store
+        bench = None
+        try:
+            bench = _eval_store.get_benchmark(db_conn, run_config.benchmark_id)
+        except Exception:
+            # A read failure shouldn't crash validation — fall through to the
+            # not-found path below, which fails the run with a clear message.
+            logger.warning(
+                "benchmark lookup failed for id %s", run_config.benchmark_id,
+                exc_info=True,
+            )
+        if bench is None:
+            events, new_status = _fail_run(
+                db_conn, run_id,
+                f"Eval benchmark {run_config.benchmark_id} not found. "
+                "Pick an existing benchmark or turn off eval testing.",
+            )
+            return None, events, new_status
+        if (
+            bench["filing_standard"] != run_config.filing_standard
+            or bench["filing_level"] != run_config.filing_level
+        ):
+            events, new_status = _fail_run(
+                db_conn, run_id,
+                f"Eval benchmark '{bench['name']}' is "
+                f"{bench['filing_standard'].upper()} {bench['filing_level']}, "
+                f"but this run is {run_config.filing_standard.upper()} "
+                f"{run_config.filing_level}. Pick a matching benchmark or turn "
+                "off eval testing.",
+            )
+            return None, events, new_status
+
     config = RunConfig(
         pdf_path=str(session_dir / "uploaded.pdf"),
         output_dir=output_dir,
@@ -2276,6 +2363,9 @@ def _validate_and_build_run(
         # fail-fast guard above.
         run_id=run_id,
         db_path=str(AUDIT_DB_PATH),
+        # Gold-standard eval (v16): carried through so the end-of-run grading
+        # hook can find the benchmark. None on every normal run.
+        benchmark_id=run_config.benchmark_id,
     )
 
     return _ValidatedRun(
@@ -2480,6 +2570,28 @@ async def run_multi_agent_stream(
                 except Exception:
                     pass
                 db_conn = None
+
+    # Gold-standard eval (v16): persist the benchmark this run grades against,
+    # on whichever runs row we resolved above (draft-start or fresh). Best-
+    # effort — a failure here must never abort the run (a missing benchmark_id
+    # just means the end-of-run grading hook stays inert, like a normal run).
+    if db_conn is not None and run_id is not None and run_config.benchmark_id:
+        try:
+            db_conn.execute(
+                "UPDATE runs SET benchmark_id = ? WHERE id = ?",
+                (run_config.benchmark_id, run_id),
+            )
+            db_conn.commit()
+        except Exception:
+            logger.warning(
+                "Failed to persist benchmark_id=%s on run %s — run will "
+                "complete but won't be graded.",
+                run_config.benchmark_id, run_id, exc_info=True,
+            )
+            try:
+                db_conn.rollback()
+            except Exception:
+                pass
 
     coordinator_result = None  # type: ignore[assignment]
     merge_result = None
@@ -4016,6 +4128,28 @@ async def run_multi_agent_stream(
         if _safe_mark_finished(db_conn, run_id, overall_status):
             terminal_status = overall_status
 
+        # === Gold-standard eval (v16) ===
+        # Grade the FINAL shipped output — after the reviewer pass +
+        # re-export/re-merge — so the score matches the workbook the user
+        # downloads (user decision 2026-06-04). Gated on the run carrying a
+        # benchmark_id; a normal run skips this entirely. Wrapped so a grading
+        # failure never changes the run's terminal status (gotcha #20).
+        eval_score = None
+        _benchmark_id = run_config.benchmark_id
+        if _benchmark_id and run_id is not None:
+            eval_score = _grade_run_against_benchmark(
+                AUDIT_DB_PATH, run_id, _benchmark_id
+            )
+            if eval_score is not None and client_connected:
+                try:
+                    yield {"event": "eval_score", "data": eval_score}
+                except (asyncio.CancelledError, GeneratorExit):
+                    client_connected = False
+                    logger.info(
+                        "Client disconnected at eval_score yield; finalizing",
+                        extra={"session_id": session_id},
+                    )
+
         # Emit cross-check results as SSE events
         checks_data = []
         for cr in cross_check_results:
@@ -4320,6 +4454,11 @@ def _run_summary_to_dict(summary) -> dict:
         "filing_level": summary.filing_level,
         "filing_standard": summary.filing_standard,
         "orchestration": getattr(summary, "orchestration", "split"),
+        # v16 gold-standard eval: the benchmark this run graded against (None
+        # on normal runs) + the headline accuracy in [0, 1] (None when not
+        # graded). Powers the History score column + sparkline.
+        "benchmark_id": getattr(summary, "benchmark_id", None),
+        "eval_score": getattr(summary, "eval_score", None),
     }
 
 
@@ -4442,6 +4581,7 @@ from api.reviewer import router as _reviewer_router
 from api.runs import router as _runs_router
 from api.notes import router as _notes_router
 from api.files import router as _files_router
+from api.eval import router as _eval_router
 
 app.include_router(_config_router)
 app.include_router(_uploads_router)
@@ -4450,6 +4590,7 @@ app.include_router(_reviewer_router)
 app.include_router(_runs_router)
 app.include_router(_notes_router)
 app.include_router(_files_router)
+app.include_router(_eval_router)
 
 # Re-export the moved handler functions as ``server.<name>`` so existing tests
 # that import a handler off this module (e.g. ``server.download_result(...)``)

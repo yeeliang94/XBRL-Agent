@@ -322,7 +322,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **13**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **16**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -369,6 +369,20 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   (`server._lifespan`) calls `repo.reconcile_stale_review_tasks` to retire
   any row left `running` by a dead process into a terminal error. Pinned by
   `tests/test_db_schema_v13.py`.
+- **v13 → v14:** adds `cross_checks.comparands_json` (reviewer holistic audit) —
+  the JSON list of values a check compared, so the reviewer gets concrete entry
+  points. Nullable `_V14_MIGRATION_COLUMNS`.
+- **v14 → v15:** adds cache-telemetry columns (`cache_read_tokens` /
+  `cache_write_tokens`) to `run_agents` + `run_agent_turns` (prompt-caching
+  measurement). All `INTEGER DEFAULT 0` (`_V15_MIGRATION_COLUMNS`).
+- **v15 → v16:** adds the four gold-standard-eval tables (`eval_benchmarks`,
+  `eval_benchmark_templates`, `gold_concept_facts`, `eval_scores`) PLUS one
+  nullable `runs.benchmark_id` column (`_V16_MIGRATION_COLUMNS`, FK →
+  eval_benchmarks ON DELETE SET NULL). Three pure `CREATE TABLE IF NOT EXISTS` +
+  one additive ALTER. `runs.benchmark_id` forward-references `eval_benchmarks`
+  (created later in the same CREATE loop); SQLite resolves FK targets lazily so
+  the forward ref is fine. Pinned by `tests/test_db_schema_v16.py`. See gotcha
+  #23 + docs/PLAN-eval-benchmark.md.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -941,6 +955,58 @@ caught at `server.py` (`"Notes validator run failed"`), so it failed soft
 and `concept_model/exporter.py` do the same load→save-in-place; they rarely
 race only because agents fill-then-verify across separate turns. If you add
 a tool that writes a workbook another tool reads, serialise + atomic-save.
+
+### 23. Gold-standard eval — gold is facts, scoped by template SET
+
+The `eval/` subsystem (schema v16) scores a run's extraction against a
+benchmark's human-verified gold answers. Gold lives in `gold_concept_facts`,
+the SAME shape as `run_concept_facts` (keyed by `concept_uuid + period +
+entity_scope`); grading (`eval/grader.py::grade_run`) is a set join on that key,
+so the score is exact, not a brittle cell-diff (sidesteps gotcha #4).
+
+Load-bearing invariants:
+
+- **Scope by the benchmark's explicit `template_id` SET, never a
+  `{standard}-{level}-` prefix.** `template_id` encodes the variant
+  (`...-sofp-cunoncu-v1` vs `...-sofp-orderofliquidity-v1`); uuids differ per
+  variant (gotcha #21). `eval_benchmark_templates` holds the set;
+  `eval/ingest.py` + `grade_run` both filter `template_id IN (set)`.
+- **Grade LEAF / MATRIX_CELL only.** COMPUTED totals are Excel-formula-derived
+  and excluded so they can't inflate the score. Grading keys on
+  `concept_uuid`, so cross-sheet alias coords (one uuid, two render coords —
+  schema v11) are counted once.
+- **Score = `matched / gold_cells`** where `gold_cells = matched + missing +
+  mismatch`. `extra_cells` (run filled a gold-blank leaf) + `scale_mismatch`
+  (`run == gold·10^k`) are **flags, NOT in the denominator** (open question:
+  whether extras should move the headline). `not_disclosed` gold is excluded
+  from the denominator and a run value there is ignored; `explicit_zero` gold
+  grades as numeric 0.
+- **Ingestion reuses `cell_resolver.resolve_cell`** — no new mapping logic. A
+  workbook matching no benchmark template is rejected loudly (`ValueError`); so
+  is a workbook that matches sheets but yields **zero gold cells** (a useless
+  0/0 benchmark — `eval/store.create_benchmark_from_workbook` raises → 422).
+- **Run-start validates the attached benchmark** (`_validate_and_build_run`):
+  it must exist and its `filing_standard`/`filing_level` must match the run, or
+  the run fails fast (config error, before extraction — not a soft skip). This
+  only catches standard/level + existence; it **cannot** verify the uploaded
+  PDF is the benchmark's document, because two same-`(standard, level)`
+  benchmarks share `template_id`s/uuids — picking the wrong *document's*
+  benchmark still grades against the wrong gold. That's inherent user
+  responsibility (like uploading the wrong PDF), not a validatable condition.
+  The extract-page picker filters to matching benchmarks and clears a stale
+  selection on a standard/level switch to make the mismatch hard to hit.
+- **Grading fires at run completion, after the reviewer + re-export/re-merge**
+  (`server._grade_run_against_benchmark`), gated on `runs.benchmark_id`, wrapped
+  in try/except (a grading failure never changes the run's terminal status —
+  gotcha #20). Emits an `eval_score` SSE event.
+- **Frontend reuses, never re-implements.** The gold editor is `ConceptsPage`
+  with a `source='benchmark'` prop (NOT a component extraction); the Eval tab,
+  Benchmarks page, extract-page toggle, and History score column are additive.
+
+Pinned by `tests/test_db_schema_v16.py`, `test_eval_grader.py`,
+`test_eval_ingest.py`, `test_eval_routes.py`, `test_eval_wiring.py`, and the
+`BenchmarksPage` / `EvalTab` / `ConceptsPage` / `HistoryList` / `PreRunPanel`
+frontend tests. Full plan: docs/PLAN-eval-benchmark.md.
 
 ## Testing
 

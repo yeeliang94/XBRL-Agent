@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { PreRunPanel } from "../components/PreRunPanel";
 import type { ModelEntry, ExtendedSettingsResponse } from "../lib/types";
 
@@ -159,6 +159,118 @@ describe("PreRunPanel", () => {
     if (onRun.mock.calls.length > 0) {
       const config = onRun.mock.calls[0][0];
       expect(config.statements).not.toContain("SOCIE");
+    }
+  });
+
+  // Gold-standard eval (v16): the "Eval testing" switch reveals a benchmark
+  // dropdown (filtered to the run's standard+level) and threads benchmark_id.
+  test("eval toggle reveals the benchmark picker and threads benchmark_id", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url: string) => {
+      if (typeof url === "string" && url === "/api/benchmarks") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            benchmarks: [
+              {
+                id: 9,
+                name: "FINCO 2021",
+                document: "FINCO.pdf",
+                filing_standard: "mfrs",
+                filing_level: "company",
+                created_at: "2026-06-04Z",
+                statements: ["SOFP"],
+                gold_cell_count: 42,
+              },
+            ],
+          }),
+        } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    }) as typeof fetch;
+
+    try {
+      render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />);
+      await waitFor(() => {
+        expect(screen.getAllByRole("checkbox")).toHaveLength(12);
+      });
+
+      // Toggle eval on → the benchmark dropdown loads + appears.
+      fireEvent.click(screen.getByTestId("eval-toggle"));
+      const select = await screen.findByTestId("eval-benchmark-select");
+      await waitFor(() => {
+        expect(within(select).getByRole("option", { name: /FINCO 2021/ })).toBeTruthy();
+      });
+      fireEvent.change(select, { target: { value: "9" } });
+
+      fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+      expect(onRun).toHaveBeenCalled();
+      expect(onRun.mock.calls[0][0].benchmark_id).toBe(9);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // P1 (peer-review): eval on without a valid benchmark must block Run.
+  test("eval enabled without a benchmark disables Run", async () => {
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    const originalFetch = globalThis.fetch;
+    // No benchmarks available → dropdown stays empty.
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true, status: 200, json: async () => ({ benchmarks: [] }),
+    })) as unknown as typeof fetch;
+    try {
+      render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(12));
+      const runBtn = screen.getByRole("button", { name: /run extraction/i }) as HTMLButtonElement;
+      expect(runBtn.disabled).toBe(false); // statements selected, eval off
+
+      fireEvent.click(screen.getByTestId("eval-toggle"));
+      await waitFor(() => expect(runBtn.disabled).toBe(true));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // P1: a stale benchmark selection is cleared when standard/level changes.
+  test("switching filing standard clears a now-incompatible benchmark", async () => {
+    const onRun = vi.fn();
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url: string) => {
+      if (url === "/api/benchmarks") {
+        return {
+          ok: true, status: 200,
+          json: async () => ({
+            benchmarks: [{
+              id: 9, name: "FINCO 2021", document: "FINCO.pdf",
+              filing_standard: "mfrs", filing_level: "company",
+              created_at: "2026-06-04Z", statements: ["SOFP"], gold_cell_count: 42,
+            }],
+          }),
+        } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    }) as typeof fetch;
+    try {
+      render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />);
+      await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(12));
+      fireEvent.click(screen.getByTestId("eval-toggle"));
+      const select = await screen.findByTestId("eval-benchmark-select");
+      await waitFor(() =>
+        expect(within(select).getByRole("option", { name: /FINCO 2021/ })).toBeTruthy());
+      fireEvent.change(select, { target: { value: "9" } });
+
+      // Switch to MPERS → the mfrs/company benchmark is no longer a candidate,
+      // so the stale selection is cleared and Run is blocked (no stale id sent).
+      fireEvent.click(screen.getByRole("button", { name: "MPERS" }));
+      const runBtn = screen.getByRole("button", { name: /run extraction/i }) as HTMLButtonElement;
+      await waitFor(() => expect(runBtn.disabled).toBe(true));
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 

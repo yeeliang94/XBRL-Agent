@@ -1093,4 +1093,61 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("value-input-ppe-1")).toBeNull();
   });
 
+  // Gold-standard eval (v16): benchmark mode reuses the grid against gold facts.
+  test("benchmark mode fetches gold concepts and edits PATCH the benchmark endpoint", async () => {
+    const goldGrid = {
+      benchmark_id: 5,
+      concepts: [
+        {
+          concept_uuid: "leaf-1",
+          parent_uuid: null,
+          kind: "LEAF",
+          canonical_label: "Cash",
+          display_label: null,
+          render_sheet: "SOFP-CuNonCu",
+          render_row: 10,
+          render_col: "B",
+          template_id: "mfrs-company-sofp-cunoncu-v1",
+          value: 100,
+          value_status: "observed",
+          children_status: null,
+          source: null,
+          evidence: null,
+          editable: true,
+          is_alias: false,
+        },
+      ],
+    };
+    const calls: { url: string; init?: RequestInit }[] = [];
+    mockFetch((url, init) => {
+      calls.push({ url, init });
+      if (url === "/api/benchmarks/5/concepts") return goldGrid;
+      if (url === "/api/benchmarks/5/facts") return { ok: true, value: 250 };
+      return {};
+    });
+    render(<ConceptsPage runId={null} source="benchmark" benchmarkId={5} />);
+
+    // The benchmark grid mounts (not the run TemplateSettings empty state).
+    expect(await screen.findByTestId("benchmark-gold-editor")).toBeTruthy();
+    // Gold value was loaded from the benchmark concepts endpoint.
+    expect(calls.some((c) => c.url === "/api/benchmarks/5/concepts")).toBe(true);
+
+    // Editing a gold LEAF value PATCHes the benchmark facts endpoint with the
+    // composite key in the body (not the run facts URL).
+    const input = await screen.findByTestId("value-input-leaf-1");
+    fireEvent.change(input, { target: { value: "250" } });
+    fireEvent.blur(input);
+    await waitFor(() => {
+      const patch = calls.find(
+        (c) => c.url === "/api/benchmarks/5/facts" && c.init?.method === "PATCH"
+      );
+      expect(patch).toBeTruthy();
+      const body = JSON.parse((patch!.init!.body as string) ?? "{}");
+      expect(body.concept_uuid).toBe("leaf-1");
+      expect(body.value).toBe(250);
+    });
+    // It must NOT hit the run facts endpoint.
+    expect(calls.some((c) => c.url.includes("/api/runs/"))).toBe(false);
+  });
+
 });
