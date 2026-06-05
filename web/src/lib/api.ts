@@ -284,7 +284,17 @@ export async function createBenchmark(args: {
   filing_standard: string;
   filing_level: string;
   document?: string;
-}): Promise<{ ok: boolean; id: number; ingested: number; statements: string[] }> {
+}): Promise<{
+  ok: boolean;
+  id: number;
+  ingested: number;
+  statements: string[];
+  // Number of gradeable cells dropped because the workbook's formulas were
+  // never recalculated (un-cached SOCIE/rollup formulas → None on read), plus
+  // an actionable message. Null/absent when nothing was lost.
+  skipped_formula_cells?: number;
+  warning?: string | null;
+}> {
   const form = new FormData();
   form.append("file", args.file);
   form.append("name", args.name);
@@ -292,6 +302,30 @@ export async function createBenchmark(args: {
   form.append("filing_level", args.filing_level);
   if (args.document) form.append("document", args.document);
   return apiFetch("/api/benchmarks", { method: "POST", body: form });
+}
+
+/**
+ * Seed a benchmark directly from a finished run's extracted facts — the
+ * lossless alternative to uploading a workbook (an un-recalculated export
+ * drops its SOCIE matrix + cross-sheet rollups, so sub-sheets vanish).
+ */
+export async function createBenchmarkFromRun(args: {
+  run_id: number;
+  name: string;
+  document?: string;
+}): Promise<{
+  ok: boolean;
+  id: number;
+  ingested: number;
+  statements: string[];
+  source_run_id: number;
+  source_run_status: string;
+}> {
+  return apiFetch("/api/benchmarks/from-run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
 }
 
 /** Delete a benchmark (cascades to its templates + gold facts + scores). */

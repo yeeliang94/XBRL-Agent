@@ -1060,6 +1060,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             type="button"
             role="switch"
             aria-checked={evalEnabled}
+            aria-label="Eval testing"
             data-testid="eval-toggle"
             onClick={() => setEvalEnabled((v) => !v)}
             style={{

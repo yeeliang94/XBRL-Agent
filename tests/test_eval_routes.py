@@ -229,3 +229,76 @@ def test_run_eval_endpoint(client):
         "VALUES ('2026-06-04Z', 'y.pdf', 'completed')"
     )
     assert tc.get("/api/runs/99999/eval").status_code == 404
+
+
+def test_create_benchmark_from_run_endpoint(client):
+    """POST /api/benchmarks/from-run seeds gold straight from a run's facts —
+    capturing all leaves with no workbook formula-cache loss (gotcha #23)."""
+    tc, db, template_id, srv = client
+
+    # Seed a finished run with a couple of LEAF facts + a COMPUTED total.
+    conn = sqlite3.connect(str(db))
+    try:
+        cur = conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, started_at, "
+            "run_config_json) VALUES (?, ?, ?, ?, ?)",
+            ("2026-06-05T00:00:00Z", "x.pdf", "completed_with_errors",
+             "2026-06-05T00:00:00Z",
+             json.dumps({"filing_standard": "mfrs", "filing_level": "company"})),
+        )
+        run_id = int(cur.lastrowid)
+        leaves = [r[0] for r in conn.execute(
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ? "
+            "AND kind = 'LEAF' ORDER BY render_sheet, render_row LIMIT 2",
+            (template_id,),
+        ).fetchall()]
+        computed = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ? "
+            "AND kind = 'COMPUTED' LIMIT 1", (template_id,),
+        ).fetchone()[0]
+        for u, v in ((leaves[0], 111.0), (leaves[1], 222.0)):
+            conn.execute(
+                "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
+                "entity_scope, value, value_status, source, updated_at) "
+                "VALUES (?, ?, 'CY', 'Company', ?, 'observed', 'pdf', 'z')",
+                (run_id, u, v),
+            )
+        conn.execute(
+            "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
+            "entity_scope, value, value_status, source, updated_at) "
+            "VALUES (?, ?, 'CY', 'Company', 333.0, 'observed', 'pdf', 'z')",
+            (run_id, computed),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = tc.post("/api/benchmarks/from-run",
+                   json={"run_id": run_id, "name": "Seeded from run"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["ingested"] == 2  # two leaves; COMPUTED excluded
+    assert body["source_run_id"] == run_id
+    assert "SOFP" in body["statements"]
+
+    # It shows up in the library with the right gold count.
+    lst = tc.get("/api/benchmarks").json()["benchmarks"]
+    assert any(b["id"] == body["id"] and b["gold_cell_count"] == 2 for b in lst)
+
+    # A not-yet-finished run is rejected with 422.
+    conn = sqlite3.connect(str(db))
+    try:
+        cur = conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, started_at, "
+            "run_config_json) VALUES (?, ?, 'failed', ?, ?)",
+            ("2026-06-05T01:00:00Z", "y.pdf", "2026-06-05T01:00:00Z",
+             json.dumps({"filing_standard": "mfrs", "filing_level": "company"})),
+        )
+        bad_run = int(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+    bad = tc.post("/api/benchmarks/from-run",
+                  json={"run_id": bad_run, "name": "bad"})
+    assert bad.status_code == 422, bad.text
