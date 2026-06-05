@@ -629,6 +629,11 @@ def _grade_run_against_benchmark(db_path, run_id: int, benchmark_id: int):
     try:
         conn = sqlite3.connect(str(db_path))
         conn.execute("PRAGMA foreign_keys = ON")
+        # Match the lifecycle path's pragmas: save_eval_score is a WRITE and
+        # grading fires at run-completion when other writers may be active. A
+        # default busy_timeout of 0 would raise SQLITE_BUSY on a transient
+        # lock, and the broad except below would silently drop the score.
+        conn.execute("PRAGMA busy_timeout = 5000")
         try:
             card = grade_run(conn, run_id, benchmark_id)
             repo.save_eval_score(conn, run_id, benchmark_id, card)

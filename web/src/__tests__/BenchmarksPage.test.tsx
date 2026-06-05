@@ -64,15 +64,63 @@ describe("BenchmarksPage", () => {
     expect(onSelect).toHaveBeenCalledWith(1);
   });
 
-  test("the add form requires a file before submitting", async () => {
+  test("upload mode requires a file before submitting", async () => {
     mockFetch((url) => (url === "/api/benchmarks" ? { benchmarks: [] } : {}));
     render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
     await screen.findByTestId("add-benchmark-form");
+    fireEvent.click(screen.getByTestId("bench-mode-upload"));
     fireEvent.change(screen.getByTestId("bench-name"), {
       target: { value: "My benchmark" },
     });
     fireEvent.click(screen.getByTestId("bench-submit"));
     expect(await screen.findByTestId("bench-error")).toHaveTextContent(/workbook/i);
+  });
+
+  test("from-run mode (default) requires a run number, then posts to /from-run", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    mockFetch((url, init) => {
+      calls.push({ url, init });
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      if (url === "/api/benchmarks/from-run")
+        return { ok: true, id: 7, ingested: 102, statements: ["SOFP", "SOCIE"], source_run_id: 159, source_run_status: "completed_with_errors" };
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    await screen.findByTestId("add-benchmark-form");
+
+    // Name without a run number → validation error.
+    fireEvent.change(screen.getByTestId("bench-name"), { target: { value: "From run 159" } });
+    fireEvent.click(screen.getByTestId("bench-submit"));
+    expect(await screen.findByTestId("bench-error")).toHaveTextContent(/run number/i);
+
+    // Partial / non-integer input must NOT silently seed run 159.
+    fireEvent.change(screen.getByTestId("bench-run-id"), { target: { value: "159.9" } });
+    fireEvent.click(screen.getByTestId("bench-submit"));
+    expect(await screen.findByTestId("bench-error")).toHaveTextContent(/run number/i);
+    expect(calls.some((c) => c.url === "/api/benchmarks/from-run")).toBe(false);
+
+    // With a valid run number it posts to the from-run endpoint and reports success.
+    fireEvent.change(screen.getByTestId("bench-run-id"), { target: { value: "159" } });
+    fireEvent.click(screen.getByTestId("bench-submit"));
+    expect(await screen.findByTestId("bench-ok")).toHaveTextContent(/102 gold cells/);
+    const post = calls.find((c) => c.url === "/api/benchmarks/from-run");
+    expect(post).toBeTruthy();
+    expect(JSON.parse(String(post!.init!.body))).toMatchObject({ run_id: 159, name: "From run 159" });
+  });
+
+  test("upload mode surfaces the un-cached-formula warning", async () => {
+    mockFetch((url, init) => {
+      if (url === "/api/benchmarks" && (init?.method ?? "GET") === "GET") return { benchmarks: [] };
+      return { ok: true, id: 3, ingested: 64, statements: ["SOFP"], skipped_formula_cells: 314, warning: "314 gradeable cell(s) were skipped because the workbook's formulas were never recalculated." };
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    await screen.findByTestId("add-benchmark-form");
+    fireEvent.click(screen.getByTestId("bench-mode-upload"));
+    fireEvent.change(screen.getByTestId("bench-name"), { target: { value: "Up" } });
+    const file = new File(["x"], "filled.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    fireEvent.change(screen.getByTestId("bench-file"), { target: { files: [file] } });
+    fireEvent.click(screen.getByTestId("bench-submit"));
+    expect(await screen.findByTestId("bench-warning")).toHaveTextContent(/314 gradeable cell/);
   });
 
   test("editor mode renders the gold editor for the selected benchmark", async () => {

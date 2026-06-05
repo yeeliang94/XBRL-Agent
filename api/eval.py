@@ -7,6 +7,7 @@ per-run scorecard in ``db/repository.py``. Shared helpers are reached through
 Endpoints:
   GET    /api/benchmarks                       — list the library
   POST   /api/benchmarks                       — create from an uploaded xlsx
+  POST   /api/benchmarks/from-run              — seed from a finished run's facts
   GET    /api/benchmarks/{id}                  — one benchmark (+ template set)
   DELETE /api/benchmarks/{id}                  — remove a benchmark
   GET    /api/benchmarks/{id}/concepts         — gold grid (ConceptsPage reuse)
@@ -35,6 +36,12 @@ class GoldFactPatch(BaseModel):
     period: str = "CY"
     entity_scope: str = "Company"
     value: Optional[float] = None
+
+
+class BenchmarkFromRun(BaseModel):
+    run_id: int
+    name: str
+    document: Optional[str] = None
 
 
 @router.get("/api/benchmarks")
@@ -69,7 +76,7 @@ async def create_benchmark_endpoint(
     if filing_level not in ("company", "group"):
         raise HTTPException(status_code=400, detail="filing_level must be company or group")
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(status_code=400, detail="Only .xlsx workbooks are accepted.")
+        raise HTTPException(status_code=400, detail="Only .xlsx / .xlsm workbooks are accepted.")
 
     # Stream the upload to a temp file (capped like PDF uploads) so the whole
     # workbook never lives in memory; ingest reads it, then we delete it.
@@ -121,6 +128,39 @@ async def create_benchmark_endpoint(
             Path(tmp.name).unlink(missing_ok=True)
         except OSError:
             pass
+
+
+@router.post("/api/benchmarks/from-run")
+async def create_benchmark_from_run_endpoint(body: BenchmarkFromRun):
+    """Seed a benchmark directly from a finished run's extracted facts.
+
+    The lossless alternative to uploading a workbook: copies the run's
+    LEAF/MATRIX_CELL facts (all sub-sheet + matrix leaves included) straight
+    into gold, sidestepping the openpyxl formula-cache loss that an
+    un-recalculated ``.xlsx`` upload suffers. Rejects an unknown or
+    not-yet-finished run (422).
+    """
+    from eval import store
+
+    conn = server._open_audit_conn()
+    try:
+        result = store.create_benchmark_from_run(
+            conn,
+            name=body.name,
+            run_id=body.run_id,
+            document=body.document,
+        )
+        conn.commit()
+    except ValueError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        conn.rollback()
+        logger.exception("benchmark from-run creation failed")
+        raise HTTPException(status_code=500, detail="Benchmark creation failed.")
+    finally:
+        conn.close()
+    return {"ok": True, **result}
 
 
 @router.get("/api/benchmarks/{benchmark_id}")

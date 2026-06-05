@@ -985,6 +985,28 @@ Load-bearing invariants:
   workbook matching no benchmark template is rejected loudly (`ValueError`); so
   is a workbook that matches sheets but yields **zero gold cells** (a useless
   0/0 benchmark — `eval/store.create_benchmark_from_workbook` raises → 422).
+- **Two ways to author gold; prefer seeding from a run (2026-06-05).** Upload
+  ingest reads `openpyxl(data_only=True)`, which returns `None` for any
+  formula cell with **no cached value** — exactly the state of a freshly
+  machine-exported workbook (the SOCIE matrix + cross-sheet face rollups are
+  live formulas, computed only when Excel opens the file). So uploading an
+  un-recalculated export silently drops most sub-sheet/matrix leaves (the
+  2026-06-05 incident: gold seeded from `run_159_filled.xlsx` captured 64 of
+  102 facts, SOCIE collapsing 42→6). `ingest_workbook` now COUNTS those lost
+  gradeable cells (`IngestResult.skipped_formula_cells`) and surfaces a
+  `warning` in the create response. The lossless path is
+  `eval/store.create_benchmark_from_run` (`POST /api/benchmarks/from-run`):
+  it copies `run_concept_facts` (LEAF/MATRIX_CELL, scoped to the templates the
+  run wrote) straight into `gold_concept_facts`, bypassing the xlsx round-trip
+  entirely. Only seedable from a **complete** terminal run (`completed` /
+  `completed_with_errors`) — draft/running/failed/`aborted` (Stop-All partial
+  merge) are refused. It also re-rejects the **0/0 gold** the workbook path
+  guards (a run whose gradeable facts are all `not_disclosed`/blank copies rows
+  but grades 0/0 — the reject uses grader-equivalent denominator semantics, not
+  the raw copied-row count). Hand-correct values afterwards in the gold
+  editor. Pinned by `tests/test_eval_from_run.py`,
+  `test_eval_ingest.py::test_ingest_counts_uncached_formula_cells_as_warning`,
+  and `test_eval_routes.py::test_create_benchmark_from_run_endpoint`.
 - **Run-start validates the attached benchmark** (`_validate_and_build_run`):
   it must exist and its `filing_standard`/`filing_level` must match the run, or
   the run fails fast (config error, before extraction — not a soft skip). This
@@ -1002,6 +1024,16 @@ Load-bearing invariants:
 - **Frontend reuses, never re-implements.** The gold editor is `ConceptsPage`
   with a `source='benchmark'` prop (NOT a component extraction); the Eval tab,
   Benchmarks page, extract-page toggle, and History score column are additive.
+- **COMPUTED totals are derived on-read for DISPLAY, never persisted as gold.**
+  Gold stores only leaves (ingest skips COMPUTED), so the gold editor's total
+  rows would render blank. `eval/store.gold_display_totals` re-derives them from
+  the gold leaves at query time (edge-sum + blank-child semantics mirroring the
+  run cascade, minus the conflict machinery) and `benchmark_concepts` merges
+  them into `value` + `scope_facts`. It writes nothing — grading stays
+  leaf-only and unaffected; a coordinate already carrying a gold value (e.g. an
+  ingested SOCIE MATRIX total) wins over the re-derivation. There is NO
+  gold-side equivalent of `concept_model/cascade.py` (which is `run_id`-only).
+  Pinned by `test_eval_ingest.py::test_benchmark_concepts_derives_computed_totals_from_gold_leaves`.
 
 Pinned by `tests/test_db_schema_v16.py`, `test_eval_grader.py`,
 `test_eval_ingest.py`, `test_eval_routes.py`, `test_eval_wiring.py`, and the

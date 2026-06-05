@@ -50,6 +50,13 @@ class IngestResult:
     """Outcome of ingesting one workbook into a benchmark's gold facts."""
     ingested: int = 0
     skipped: int = 0
+    # Gradeable cells (LEAF/MATRIX_CELL) SILENTLY dropped because the workbook
+    # cell holds a live formula with no cached value — openpyxl's
+    # ``data_only=True`` reads those as ``None``. A machine-exported workbook
+    # stores the SOCIE matrix + cross-sheet face rollups this way, so an upload
+    # of an un-recalculated export loses them (the 2026-06-05 sub-sheet-loss
+    # incident). Surfaced as a warning; seeding from a run avoids it entirely.
+    skipped_formula_cells: int = 0
     matched_sheets: list[str] = field(default_factory=list)
     unmatched_sheets: list[str] = field(default_factory=list)
 
@@ -62,8 +69,13 @@ def _now() -> str:
 
 # Matches accountant-style numbers a human might type as text:
 # "1,595", "(95)", "-95", "1234.5", "1,234.56". A bare dash / "N/A" / blank
-# returns None (ambiguous nil — we don't guess a value for gold).
-_NUMBER_RE = re.compile(r"^\(?-?[\d,]+(?:\.\d+)?\)?$")
+# returns None (ambiguous nil — we don't guess a value for gold). Parentheses
+# must be BALANCED — "(95)" is a negative, but an unbalanced "(95" / "95)" is
+# malformed text and rejected (the old `\(?...\)?` form silently coerced it to
+# a positive value and stored it as gold).
+_NUMBER_RE = re.compile(
+    r"^(?:\([\d,]+(?:\.\d+)?\)|-?[\d,]+(?:\.\d+)?)$"
+)
 
 
 def parse_accounting_number(raw) -> float | None:
@@ -182,14 +194,22 @@ def ingest_workbook(
     # data_only=True returns the cached computed value, not the formula text —
     # exactly what we want for human-typed leaf cells.
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+    # A second view that keeps formula STRINGS (data_only=False) so we can tell
+    # an empty cell apart from an un-recalculated formula cell. Only consulted
+    # on the None path, and only the cheap "starts with '='" check runs per
+    # blank cell — resolve_cell fires solely for actual formula cells. Loaded
+    # inside the try so a failure here still closes ``wb`` in the finally.
+    wb_formulas = None
     result = IngestResult()
     try:
+        wb_formulas = openpyxl.load_workbook(xlsx_path, data_only=False)
         for ws in wb.worksheets:
             template_id = sheet_map.get(ws.title)
             if template_id is None:
                 result.unmatched_sheets.append(ws.title)
                 continue
             result.matched_sheets.append(ws.title)
+            ws_f = wb_formulas[ws.title]
             max_col = min(ws.max_column or 0, _MAX_VALUE_COL)
             for row in range(1, (ws.max_row or 0) + 1):
                 for col in range(2, max_col + 1):
@@ -197,6 +217,18 @@ def ingest_workbook(
                         ws.cell(row=row, column=col).value
                     )
                     if value is None:
+                        # Distinguish a genuinely blank cell from a gradeable
+                        # cell lost to a missing formula cache (so the caller
+                        # can warn instead of silently shipping sparse gold).
+                        raw_f = ws_f.cell(row=row, column=col).value
+                        if isinstance(raw_f, str) and raw_f.startswith("="):
+                            resolved_f = resolve_cell(
+                                conn, template_id, ws.title, row, col
+                            )
+                            if resolved_f is not None and kinds.get(
+                                resolved_f[0]
+                            ) in ("LEAF", "MATRIX_CELL"):
+                                result.skipped_formula_cells += 1
                         continue
                     resolved = resolve_cell(conn, template_id, ws.title, row, col)
                     if resolved is None:
@@ -224,6 +256,8 @@ def ingest_workbook(
                     result.ingested += 1
     finally:
         wb.close()
+        if wb_formulas is not None:
+            wb_formulas.close()
 
     if not result.matched_sheets:
         raise ValueError(
@@ -235,8 +269,8 @@ def ingest_workbook(
 
     logger.info(
         "ingest_workbook: benchmark %s — %d gold facts from %d sheets "
-        "(%d cells skipped)",
+        "(%d cells skipped, %d gradeable cells lost to un-cached formulas)",
         benchmark_id, result.ingested, len(result.matched_sheets),
-        result.skipped,
+        result.skipped, result.skipped_formula_cells,
     )
     return result

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { fetchBenchmarks, createBenchmark, deleteBenchmark } from "../lib/api";
+import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, deleteBenchmark } from "../lib/api";
 import type { BenchmarkJson } from "../lib/types";
 import { ConceptsPage } from "./ConceptsPage";
 
@@ -182,46 +182,74 @@ function BenchmarkCard({
 }
 
 function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
+  // "run" (recommended) seeds gold straight from a finished run's facts —
+  // lossless. "upload" reverse-ingests a filled workbook, which silently drops
+  // un-recalculated formula cells (SOCIE matrix + cross-sheet rollups).
+  const [mode, setMode] = useState<"run" | "upload">("run");
   const [name, setName] = useState("");
   const [standard, setStandard] = useState("mfrs");
   const [level, setLevel] = useState("company");
   const [file, setFile] = useState<File | null>(null);
+  const [runId, setRunId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const submit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       setError(null);
       setOk(null);
-      if (!file) {
-        setError("Choose a filled .xlsx workbook to ingest.");
-        return;
-      }
+      setWarning(null);
       if (!name.trim()) {
         setError("Give the benchmark a name.");
         return;
       }
       setBusy(true);
       try {
-        const res = await createBenchmark({
-          file,
-          name: name.trim(),
-          filing_standard: standard,
-          filing_level: level,
-        });
-        setOk(`Created "${name.trim()}" — ${res.ingested} gold cells from ${res.statements.join(", ")}.`);
-        setName("");
-        setFile(null);
-        onCreated();
+        if (mode === "run") {
+          // Strict digits only — Number.parseInt would silently accept
+          // "159abc" / "159.9" and seed the WRONG run's gold.
+          const trimmed = runId.trim();
+          if (!/^[1-9]\d*$/.test(trimmed)) {
+            setError("Enter the run number to seed gold from (e.g. 159).");
+            setBusy(false);
+            return;
+          }
+          const res = await createBenchmarkFromRun({
+            run_id: Number(trimmed),
+            name: name.trim(),
+          });
+          setOk(`Created "${name.trim()}" — ${res.ingested} gold cells from ${res.statements.join(", ")} (run ${res.source_run_id}).`);
+          setName("");
+          setRunId("");
+          onCreated();
+        } else {
+          if (!file) {
+            setError("Choose a filled .xlsx workbook to ingest.");
+            setBusy(false);
+            return;
+          }
+          const res = await createBenchmark({
+            file,
+            name: name.trim(),
+            filing_standard: standard,
+            filing_level: level,
+          });
+          setOk(`Created "${name.trim()}" — ${res.ingested} gold cells from ${res.statements.join(", ")}.`);
+          if (res.warning) setWarning(res.warning);
+          setName("");
+          setFile(null);
+          onCreated();
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
     },
-    [file, name, standard, level, onCreated]
+    [mode, file, name, runId, standard, level, onCreated]
   );
 
   return (
@@ -232,6 +260,28 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
       className={uiClass.card}
     >
       <div style={styles.formTitle}>Add benchmark</div>
+      <div role="radiogroup" aria-label="Gold source" style={styles.modeRow}>
+        <label style={styles.modeOption}>
+          <input
+            type="radio"
+            name="bench-mode"
+            data-testid="bench-mode-run"
+            checked={mode === "run"}
+            onChange={() => setMode("run")}
+          />
+          From a run (recommended — captures sub-sheets)
+        </label>
+        <label style={styles.modeOption}>
+          <input
+            type="radio"
+            name="bench-mode"
+            data-testid="bench-mode-upload"
+            checked={mode === "upload"}
+            onChange={() => setMode("upload")}
+          />
+          From an uploaded workbook
+        </label>
+      </div>
       <div style={styles.formGrid}>
         <div style={styles.formField}>
           <label htmlFor="bench-name" style={ui.fieldLabel}>Name</label>
@@ -244,43 +294,64 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             placeholder="FINCO 2021 MFRS Company"
           />
         </div>
-        <div style={styles.formField}>
-          <label htmlFor="bench-standard" style={ui.fieldLabel}>Standard</label>
-          <select
-            id="bench-standard"
-            data-testid="bench-standard"
-            style={ui.select}
-            value={standard}
-            onChange={(e) => setStandard(e.target.value)}
-          >
-            <option value="mfrs">MFRS</option>
-            <option value="mpers">MPERS</option>
-          </select>
-        </div>
-        <div style={styles.formField}>
-          <label htmlFor="bench-level" style={ui.fieldLabel}>Level</label>
-          <select
-            id="bench-level"
-            data-testid="bench-level"
-            style={ui.select}
-            value={level}
-            onChange={(e) => setLevel(e.target.value)}
-          >
-            <option value="company">Company</option>
-            <option value="group">Group</option>
-          </select>
-        </div>
-        <div style={styles.formField}>
-          <label htmlFor="bench-file" style={ui.fieldLabel}>Filled workbook (.xlsx)</label>
-          <input
-            id="bench-file"
-            data-testid="bench-file"
-            type="file"
-            accept=".xlsx,.xlsm"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            style={{ fontSize: 14 }}
-          />
-        </div>
+        {mode === "run" ? (
+          <div style={styles.formField}>
+            <label htmlFor="bench-run-id" style={ui.fieldLabel}>Run number</label>
+            <input
+              id="bench-run-id"
+              data-testid="bench-run-id"
+              style={ui.input}
+              inputMode="numeric"
+              value={runId}
+              onChange={(e) => setRunId(e.target.value)}
+              placeholder="e.g. 159"
+            />
+            <span style={styles.fieldHint}>
+              Standard / level are taken from the run. Edit the gold values
+              afterwards in the benchmark editor.
+            </span>
+          </div>
+        ) : (
+          <>
+            <div style={styles.formField}>
+              <label htmlFor="bench-standard" style={ui.fieldLabel}>Standard</label>
+              <select
+                id="bench-standard"
+                data-testid="bench-standard"
+                style={ui.select}
+                value={standard}
+                onChange={(e) => setStandard(e.target.value)}
+              >
+                <option value="mfrs">MFRS</option>
+                <option value="mpers">MPERS</option>
+              </select>
+            </div>
+            <div style={styles.formField}>
+              <label htmlFor="bench-level" style={ui.fieldLabel}>Level</label>
+              <select
+                id="bench-level"
+                data-testid="bench-level"
+                style={ui.select}
+                value={level}
+                onChange={(e) => setLevel(e.target.value)}
+              >
+                <option value="company">Company</option>
+                <option value="group">Group</option>
+              </select>
+            </div>
+            <div style={styles.formField}>
+              <label htmlFor="bench-file" style={ui.fieldLabel}>Filled workbook (.xlsx)</label>
+              <input
+                id="bench-file"
+                data-testid="bench-file"
+                type="file"
+                accept=".xlsx,.xlsm"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                style={{ fontSize: 14 }}
+              />
+            </div>
+          </>
+        )}
       </div>
       <div style={styles.formActions}>
         <button
@@ -295,6 +366,11 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
         {error && <span data-testid="bench-error" style={styles.formError}>{error}</span>}
         {ok && <span data-testid="bench-ok" style={styles.formOk}>{ok}</span>}
       </div>
+      {warning && (
+        <div data-testid="bench-warning" style={styles.formWarning}>
+          ⚠ {warning}
+        </div>
+      )}
     </form>
   );
 }
@@ -347,6 +423,34 @@ const styles = {
     flexDirection: "column" as const,
     gap: pwc.space.xs,
   } as React.CSSProperties,
+  fieldHint: {
+    fontSize: 12,
+    color: pwc.grey700,
+    lineHeight: 1.4,
+  } as React.CSSProperties,
+  modeRow: {
+    display: "flex",
+    gap: pwc.space.lg,
+    flexWrap: "wrap" as const,
+    fontSize: 13,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  modeOption: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.xs,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  formWarning: {
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    background: pwc.warningBg,
+    border: `1px solid ${pwc.warningBorder}`,
+    borderLeft: `3px solid ${pwc.warningText}`,
+    borderRadius: pwc.radius.sm,
+    color: pwc.warningText,
+    fontSize: 13,
+    lineHeight: 1.5,
+  } as React.CSSProperties,
   formActions: {
     display: "flex",
     alignItems: "center",
@@ -358,7 +462,7 @@ const styles = {
     fontSize: 13,
   } as React.CSSProperties,
   formOk: {
-    color: pwc.successText ?? pwc.grey800,
+    color: pwc.successText,
     fontSize: 13,
   } as React.CSSProperties,
   errorBanner: {
