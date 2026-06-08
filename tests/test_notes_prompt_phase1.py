@@ -163,17 +163,26 @@ def test_sofp_prompt_does_not_carry_rejected_quota_rule():
     )
 
 
-def test_sopl_prompt_has_template_first_breakdown_rule():
-    """prompts/sopl.md must carry the same template-first rule for the
-    Analysis sub-sheet."""
+def test_sopl_prompt_is_coarse_not_template_first():
+    """SOPL is the deliberate EXCEPTION to the template-first decomposition
+    rule (2026-06-09). Unlike SOFP, the SOPL agent must take the face figure
+    as-is and route rollup lines to the section catch-all leaf WITHOUT
+    splitting into granular Analysis sub-sheet fields — real income-statement
+    notes are incomplete and lump the remainder into "Others", so chasing a
+    full breakdown makes the agent loop. The detailed contract is pinned in
+    tests/test_sopl_coarse_posture.py; this test guards that the SOPL prompt
+    has NOT been re-aligned to the template-first decomposition wording that
+    the rest of this suite enforces for the other statements."""
     body = (_PROMPT_DIR / "sopl.md").read_text(encoding="utf-8")
     flat = _flatten(body)
-    assert "matching" in flat and "analysis" in flat, (
-        "prompts/sopl.md must reference matching note lines to Analysis "
-        "sub-sheet fields (template-first rule)"
+    # The coarse posture must be stated.
+    assert "coarse" in flat and ("do not split" in flat or "not split" in flat), (
+        "prompts/sopl.md must state the coarse, do-not-split posture"
     )
-    assert "lump" in flat or "single line" in flat, (
-        "prompts/sopl.md must call out the lumping failure mode"
+    # And it must NOT carry the template-first decompose instruction the
+    # decompose-era prompt used (the failure mode we reversed).
+    assert "fill the analysis sub-sheet first" not in flat, (
+        "prompts/sopl.md must not re-introduce the decompose-first wording"
     )
 
 
