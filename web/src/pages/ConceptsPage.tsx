@@ -2262,6 +2262,13 @@ const styles = {
   panelCard: {
     ...ui.card,
     overflow: "hidden",
+    // The parent menu column is a bounded flex column (maxHeight ~100vh). Without
+    // this, panels inherit flex-shrink:1 and get squashed BELOW their content
+    // height; combined with overflow:hidden that silently clips the tail of the
+    // sheet list (Notes + expanded sub-sheets) with no scrollbar. flexShrink:0
+    // keeps each panel at its natural height so the column's own overflowY:auto
+    // scrolls the whole rail and every entry stays reachable.
+    flexShrink: 0,
   } as React.CSSProperties,
   panelHeader: {
     display: "flex",
