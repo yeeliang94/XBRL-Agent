@@ -82,8 +82,8 @@ def test_factory_registers_read_and_write_tools(seeded):
         model=TestModel(call_tools=[]), db_path=db, run_id=run_id)
     names = _tool_names(agent)
     # Read tools.
-    assert {"calculator", "read_facts", "trace_cascade_source_tool",
-            "view_pdf_pages"} <= names
+    assert {"calculator", "lookup_definitions", "read_facts",
+            "trace_cascade_source_tool", "view_pdf_pages"} <= names
     # Write tools.
     assert {"apply_fix", "mark_not_disclosed", "raise_flag"} <= names
 

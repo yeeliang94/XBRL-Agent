@@ -149,6 +149,13 @@ export function HistoryList({
                       MPERS
                     </span>
                   )}
+                  {run.denomination && run.denomination !== "thousands" && (
+                    // Non-default denomination only. "thousands" (RM '000) is
+                    // the common case and implied; a badge on every row is noise.
+                    <span style={{ ...styles.inlineBadge, background: pwc.grey100, color: pwc.grey700 }}>
+                      {run.denomination === "units" ? "RM" : "RM mil"}
+                    </span>
+                  )}
                 </td>
                 <td style={styles.td}>
                   <span style={styles.dim}>{formatDate(run.created_at)}</span>

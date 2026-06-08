@@ -10,6 +10,7 @@
 export const TOOL_LABELS: Record<string, string> = {
   // Extraction agent tools
   calculator: "Calculating",
+  lookup_definitions: "Looking up definitions",
   read_template: "Reading template",
   view_pdf_pages: "Checking PDF pages",
   // write_facts is the current tool name (rewrite Phase 3). fill_workbook is
@@ -136,10 +137,27 @@ export function argsPreview(toolName: string, args: Record<string, unknown>): st
   }
 
   if (toolName === "calculator") {
+    const MAX = 48;
+    // Batched form (Plan D): args.expressions is a string[]. Show the count
+    // plus the first expression. Fall back to the legacy single-string form
+    // so History replay of pre-batch runs still renders.
+    const expressions = args.expressions as string[] | undefined;
+    if (Array.isArray(expressions) && expressions.length > 0) {
+      const first = String(expressions[0]);
+      const head = first.length > MAX ? `${first.slice(0, MAX)}...` : first;
+      return expressions.length > 1 ? `${expressions.length} checks: ${head}` : head;
+    }
     const expression = args.expression as string | undefined;
     if (!expression) return "";
-    const MAX = 48;
     return expression.length > MAX ? `${expression.slice(0, MAX)}...` : expression;
+  }
+
+  if (toolName === "lookup_definitions") {
+    const queries = args.queries as string[] | undefined;
+    if (!Array.isArray(queries) || queries.length === 0) return "";
+    const MAX = 48;
+    const joined = queries.join(", ");
+    return joined.length > MAX ? `${joined.slice(0, MAX)}...` : joined;
   }
 
   if (toolName === "read_template") {
@@ -233,7 +251,26 @@ export function resultSummary(toolName: string, summary: string): ResultSummary 
     }
 
     if (toolName === "calculator") {
-      const parsed = JSON.parse(summary) as { result?: unknown; error?: unknown };
+      const parsed = JSON.parse(summary) as
+        | { result?: unknown; error?: unknown }
+        | Array<{ result?: unknown; error?: unknown }>;
+      // Batched form (Plan D): a JSON array of per-expression results. Summarise
+      // as "N ok" / "N ok, M failed"; warn-toned if anything errored.
+      if (Array.isArray(parsed)) {
+        if (parsed.length === 0) return null;
+        const failed = parsed.filter((r) => typeof r.error === "string").length;
+        const ok = parsed.length - failed;
+        if (parsed.length === 1) {
+          const only = parsed[0];
+          if (typeof only.result === "string") return { text: String(only.result), tone: "success" };
+          if (typeof only.error === "string") return { text: "error", tone: "warn" };
+          return null;
+        }
+        return failed > 0
+          ? { text: `${ok} ok, ${failed} failed`, tone: "warn" }
+          : { text: `${ok} checks ok`, tone: "success" };
+      }
+      // Legacy single-result form (pre-batch History replay).
       if (typeof parsed.result === "string") {
         return { text: parsed.result, tone: "success" };
       }

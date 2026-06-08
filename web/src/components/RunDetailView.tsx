@@ -110,6 +110,14 @@ function ConfigBlock({
     label: "Filing level",
     value: (config.filing_level === "group" ? "Group" : "Company"),
   });
+  entries.push({
+    label: "Denomination",
+    value: (
+      config.denomination === "units" ? "RM"
+        : config.denomination === "millions" ? "RM mil"
+        : "RM '000"
+    ),
+  });
   // Notes — only surface when the run actually selected any. Empty lists
   // would render as "Notes: —" for every face-only run, which is noise.
   const notesToRun = Array.isArray(config.notes_to_run)

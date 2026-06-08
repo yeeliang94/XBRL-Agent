@@ -35,6 +35,7 @@ from scout.notes_discoverer import NoteInventoryEntry
 from token_tracker import TokenReport
 from tools import page_cache
 from tools.calculator import calculator_result_json as _calculator_impl
+from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from tools.template_reader import TemplateField, read_template as _read_template_impl
 from extraction.history_processors import strip_stale_images
@@ -1187,7 +1188,21 @@ def create_notes_agent(
         and + - * /. Use explicit negatives such as -123; accounting
         parentheses are treated as ordinary grouping.
         """
+        # Single-expression by design: only the extraction agent batches
+        # (Plan D) because it runs many subtotal/reconciliation checks per
+        # turn. Notes arithmetic is sparse, so the simpler signature stays.
         return _calculator_impl(expression)
+
+    @agent.tool
+    def lookup_definitions(ctx: RunContext[NotesDeps], queries: List[str]) -> str:
+        """Look up the OFFICIAL SSM concept definition(s) for one or more terms.
+
+        Use this when uncertain which note concept a disclosure belongs to —
+        e.g. distinguishing similar payables / receivables / provisions rows.
+        Pass all the terms to compare in ONE call. Scoped automatically to this
+        run's filing standard.
+        """
+        return _lookup_definitions_impl(queries, ctx.deps.filing_standard)
 
     @agent.tool
     async def read_template(ctx: RunContext[NotesDeps]) -> str:

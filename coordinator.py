@@ -142,6 +142,11 @@ class RunConfig:
     # routing through the MFRS template tree unchanged. Set to "mpers"
     # to route through XBRL-template-MPERS/ and enable the SoRE variant.
     filing_standard: str = "mfrs"
+    # Presentation denomination the user declares for the source statements
+    # ("units" | "thousands" | "millions"). Threaded to the agents so they treat
+    # the scale as authoritative instead of guessing it from the PDF header.
+    # Default "thousands" (RM '000) keeps every pre-existing caller unchanged.
+    denomination: str = "thousands"
     # Canonical mode (Phase B): when both are set, extraction agents project
     # their cell writes into run_concept_facts for this run via the facts
     # API. Both None in legacy mode. db_path is the audit/canonical SQLite DB.
@@ -391,6 +396,7 @@ async def run_extraction(
                 agent_id=agent_id,
                 filing_level=config.filing_level,
                 filing_standard=config.filing_standard,
+                denomination=getattr(config, "denomination", "thousands"),
                 run_id=getattr(config, "run_id", None),
                 db_path=getattr(config, "db_path", None),
             ),
@@ -477,6 +483,7 @@ async def _run_single_agent(
     agent_id: str = "",
     filing_level: str = "company",
     filing_standard: str = "mfrs",
+    denomination: str = "thousands",
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
 ) -> AgentResult:
@@ -574,6 +581,7 @@ async def _run_single_agent(
             scout_context=scout_context,
             filing_level=filing_level,
             filing_standard=filing_standard,
+            denomination=denomination,
             run_id=run_id,
             db_path=db_path,
             template_id=template_id,

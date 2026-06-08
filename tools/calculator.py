@@ -51,6 +51,31 @@ def calculator_result_json(expression: str) -> str:
     return json.dumps({"result": _format_decimal(result)})
 
 
+def calculator_batch_json(expressions: list[str]) -> str:
+    """Evaluate many expressions in one call; return a JSON array of results.
+
+    Each element is ``{"expression": ..., "result": ...}`` on success or
+    ``{"expression": ..., "error": ...}`` on failure. Errors are isolated
+    per item — one bad expression does NOT fail the whole batch — so the agent
+    can verify many subtotals in a single turn (instead of one tool call per
+    turn, which burns the iteration budget). A non-list or empty input returns
+    a single structured error rather than raising.
+    """
+    if not isinstance(expressions, list) or not expressions:
+        return json.dumps(
+            {"error": "Pass a non-empty list of expressions, e.g. ['1+2', '10-3']."}
+        )
+    out: list[dict[str, str]] = []
+    for expr in expressions:
+        try:
+            value = calculate(expr)
+        except CalculatorError as exc:
+            out.append({"expression": str(expr), "error": str(exc)})
+        else:
+            out.append({"expression": str(expr), "result": _format_decimal(value)})
+    return json.dumps(out)
+
+
 def _normalise_expression(expression: str) -> str:
     if not isinstance(expression, str) or not expression.strip():
         raise CalculatorError("Expression must be a non-empty string.")

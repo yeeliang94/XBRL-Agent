@@ -20,7 +20,8 @@ from model_settings import build_model_settings
 
 from statement_types import StatementType
 from token_tracker import TokenReport
-from tools.calculator import calculator_result_json as _calculator_impl
+from tools.calculator import calculator_batch_json as _calculator_impl
+from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
 from tools.template_reader import read_template as _read_template_impl, TemplateField
 from tools.pdf_viewer import render_pages_to_png_bytes, count_pdf_pages
 from tools.fill_workbook import fill_workbook as _fill_workbook_impl, FactWrite
@@ -46,6 +47,7 @@ class ExtractionDeps:
         page_hints: Optional[dict] = None,
         filing_level: str = "company",
         filing_standard: str = "mfrs",
+        denomination: str = "thousands",
         run_id: Optional[int] = None,
         db_path: Optional[str] = None,
         template_id: Optional[str] = None,
@@ -70,6 +72,10 @@ class ExtractionDeps:
         # overlays (Phase 6.2) can inject MPERS-vs-MFRS labelling. Not used
         # for behaviour changes in Phase 2; this is wiring-only.
         self.filing_standard = filing_standard
+        # User-declared presentation denomination ("units"|"thousands"|
+        # "millions"). Surfaced to the prompt so the agent treats the scale as
+        # authoritative instead of guessing it from the PDF header.
+        self.denomination = denomination
         # Per-statement output filename for workbook isolation
         self.filled_filename = f"{statement_type.value}_filled.xlsx"
         # Mutable state
@@ -501,6 +507,7 @@ def create_extraction_agent(
     scout_context: Optional[dict] = None,
     filing_level: str = "company",
     filing_standard: str = "mfrs",
+    denomination: str = "thousands",
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
     template_id: Optional[str] = None,
@@ -531,6 +538,7 @@ def create_extraction_agent(
         page_hints=page_hints,
         filing_level=filing_level,
         filing_standard=filing_standard,
+        denomination=denomination,
         run_id=run_id,
         db_path=db_path,
         template_id=template_id,
@@ -551,6 +559,7 @@ def create_extraction_agent(
         page_hints=page_hints,
         filing_level=filing_level,
         filing_standard=filing_standard,
+        denomination=denomination,
         # RUN-REVIEW P2-2: pass the live template path so SOCF/SoRE
         # prompts get a per-row sign-from-formula block injected.
         template_path=template_path,
@@ -586,15 +595,35 @@ def create_extraction_agent(
     # --- Tools ---
 
     @agent.tool
-    def calculator(ctx: RunContext[ExtractionDeps], expression: str) -> str:
-        """Evaluate arithmetic exactly.
+    def calculator(ctx: RunContext[ExtractionDeps], expressions: List[str]) -> str:
+        """Evaluate arithmetic exactly. Pass ALL the checks you want in ONE call.
 
         Use this for subtotal checks and reconciliations after reading numbers
-        from the PDF. Supports numbers, parentheses, unary signs, and + - * /.
-        Use explicit negatives such as -123; accounting parentheses are
-        treated as ordinary grouping.
+        from the PDF. Pass a LIST of expressions — e.g.
+        ``["1595+2809", "100-95", "12+34+56"]`` — and they are all evaluated in
+        a single turn; do not call this once per subtotal. Each supports
+        numbers, parentheses, unary signs, and + - * /. Use explicit negatives
+        such as -123; accounting parentheses are treated as ordinary grouping.
+        Returns one result (or per-item error) per expression, in order.
         """
-        return _calculator_impl(expression)
+        return _calculator_impl(expressions)
+
+    @agent.tool
+    def lookup_definitions(ctx: RunContext[ExtractionDeps], queries: List[str]) -> str:
+        """Look up the OFFICIAL SSM concept definition(s) for one or more terms.
+
+        Use this when you are torn between similar template rows — e.g. "Other
+        current payables" vs "Other current non-trade payables", or "Accruals"
+        vs "Deferred income" — to decide on substance rather than guessing.
+
+        Pass ALL the terms you want to compare in ONE call, e.g.
+        ``["other current non-trade payables", "accruals", "deferred income"]``
+        — batching avoids burning a turn per term. Returns, per term, the
+        best-matching concepts with their authoritative definitions; an
+        explicit "no concept matched" when nothing fits. Scoped automatically
+        to this run's filing standard.
+        """
+        return _lookup_definitions_impl(queries, ctx.deps.filing_standard)
 
     @agent.tool
     def read_template(ctx: RunContext[ExtractionDeps]) -> str:

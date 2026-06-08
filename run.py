@@ -52,6 +52,7 @@ def run_agent(
     filing_level: str = "company",
     notes: Optional[Set[NotesTemplateType]] = None,
     filing_standard: str = "mfrs",
+    denomination: str = "thousands",
 ) -> AgentResult:
     """Run a CLI extraction through the SAME canonical pipeline as the web server.
 
@@ -121,6 +122,7 @@ def run_agent(
         notes_to_run=sorted(n.value for n in notes),
         filing_level=filing_level,
         filing_standard=filing_standard,
+        denomination=denomination,
     )
 
     merged_path = str(session_dir / "filled.xlsx")
@@ -248,6 +250,12 @@ def build_parser():
                         help="Filing standard: mfrs (default, routes to "
                              "XBRL-template-MFRS/) or mpers (routes to "
                              "XBRL-template-MPERS/ and enables SoRE).")
+    parser.add_argument("--denomination", default="thousands",
+                        choices=["units", "thousands", "millions"],
+                        help="Presentation scale the filer declares for the "
+                             "source figures: thousands (default, RM '000), "
+                             "units (RM), or millions (RM mil). Treated as "
+                             "authoritative by the agents (no guessing).")
     return parser
 
 
@@ -263,7 +271,7 @@ if __name__ == "__main__":
     model = args.model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
 
     print(f"Model: {model}")
-    print(f"Standard: {args.standard}   Level: {args.level}")
+    print(f"Standard: {args.standard}   Level: {args.level}   Denomination: {args.denomination}")
     print(f"Statements: {', '.join(s.value for s in stmts)}")
     if notes_set:
         print(f"Notes: {', '.join(sorted(n.value for n in notes_set))}")
@@ -275,6 +283,7 @@ if __name__ == "__main__":
         notes=notes_set,
         filing_level=args.level,
         filing_standard=args.standard,
+        denomination=args.denomination,
     )
     if args.output_dir:
         kwargs["output_dir"] = args.output_dir

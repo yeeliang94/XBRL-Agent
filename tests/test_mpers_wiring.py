@@ -398,6 +398,20 @@ def test_run_cli_parses_standard_flag() -> None:
     assert default_args.standard == "mfrs"
 
 
+def test_run_cli_parses_denomination_flag() -> None:
+    """Peer-review MEDIUM: run.py exposes --denomination so the CLI can set the
+    user-authoritative scale; default stays "thousands"."""
+    from run import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(
+        ["data/foo.pdf", "--denomination", "millions", "--statements", "SOFP"],
+    )
+    assert args.denomination == "millions"
+    default_args = parser.parse_args(["data/foo.pdf", "--statements", "SOFP"])
+    assert default_args.denomination == "thousands"
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — Server (mpers_wiring_server)
 # ---------------------------------------------------------------------------

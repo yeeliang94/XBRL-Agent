@@ -418,6 +418,7 @@ export default function App() {
         use_scout: false,
         filing_level: prev?.filing_level || "company",
         filing_standard: prev?.filing_standard || "mfrs",
+        denomination: prev?.denomination || "thousands",
       };
     } else {
       const nt = role as NotesTemplateType;
@@ -430,6 +431,7 @@ export default function App() {
         use_scout: false,
         filing_level: prev?.filing_level || "company",
         filing_standard: prev?.filing_standard || "mfrs",
+        denomination: prev?.denomination || "thousands",
         notes_to_run: [nt],
         notes_models: prevNotesModel ? { [nt]: prevNotesModel } : {},
       };

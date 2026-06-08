@@ -1703,6 +1703,15 @@ class RunConfigRequest(BaseModel):
     # changes. `"mpers"` routes through XBRL-template-MPERS/ and enables
     # the SoRE variant on SOCIE.
     filing_standard: Literal["mfrs", "mpers"] = "mfrs"
+    # Presentation denomination the user declares for the source statements.
+    # The figures in MBRS statements are reported at a scale ("RM '000",
+    # "RM mil", or actual RM); the agent transcribes figures verbatim and uses
+    # this to know the unit authoritatively instead of guessing it from the
+    # PDF header (a wrong unit silently 1000×'s every value). Vocabulary mirrors
+    # scout's `scale_unit`. Default "thousands" (RM '000) is the common
+    # Malaysian case; the scout still detects the scale and the run flags a
+    # warning if it disagrees with this declaration.
+    denomination: Literal["units", "thousands", "millions"] = "thousands"
     # Notes templates to fill, as NotesTemplateType.value strings (e.g.
     # ["CORP_INFO", "ISSUED_CAPITAL"]). Empty = face-only run.
     notes_to_run: List[str] = []
@@ -1758,6 +1767,11 @@ class RunConfigPatchRequest(BaseModel):
     use_scout: Optional[bool] = None
     filing_level: Optional[Literal["company", "group"]] = None
     filing_standard: Optional[Literal["mfrs", "mpers"]] = None
+    # Mirrors RunConfigRequest.denomination. Must be present here too, or a
+    # debounced draft PATCH silently drops a non-default scale and the
+    # draft-start path rebuilds the run at the "thousands" default — defeating
+    # the whole point of the user-authoritative denomination.
+    denomination: Optional[Literal["units", "thousands", "millions"]] = None
     notes_to_run: Optional[List[str]] = None
     notes_models: Optional[Dict[str, str]] = None
     # Only `split` exists (monolith removed). Unset (None) stays None so a
@@ -2362,6 +2376,7 @@ def _validate_and_build_run(
         models=models,
         filing_level=run_config.filing_level,
         filing_standard=run_config.filing_standard,
+        denomination=run_config.denomination,
         # Canonical mode is mandatory: always thread the run_id + DB into
         # the coordinator so extraction agents project their writes into
         # run_concept_facts. Bootstrap success is guaranteed by the
@@ -4458,6 +4473,7 @@ def _run_summary_to_dict(summary) -> dict:
         "has_merged_workbook": bool(summary.merged_workbook_path),
         "filing_level": summary.filing_level,
         "filing_standard": summary.filing_standard,
+        "denomination": summary.denomination,
         "orchestration": getattr(summary, "orchestration", "split"),
         # v16 gold-standard eval: the benchmark this run graded against (None
         # on normal runs) + the headline accuracy in [0, 1] (None when not

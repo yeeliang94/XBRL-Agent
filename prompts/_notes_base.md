@@ -127,6 +127,10 @@ equipment), include both: prose first (in `<p>` blocks), then the table.
 Use `calculator()` for any column-total or roll-forward arithmetic in
 these schedules. Do not compute subtotals or reconciliations mentally.
 
+When uncertain which note concept a disclosure belongs to, call
+`lookup_definitions([...])` to read the OFFICIAL SSM definition of each
+candidate and decide on substance. Pass all the terms to compare in one call.
+
 === CELL FORMAT ===
 
 **Output is HTML.** The post-run editor renders your content as rich
