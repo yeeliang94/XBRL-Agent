@@ -205,6 +205,10 @@ class RunSummary:
     # Which taxonomy the templates came from. Stored on runs.run_config_json
     # under the same key; legacy rows (pre-MPERS wiring) default to MFRS.
     filing_standard: str = "mfrs"
+    # User-declared presentation denomination, stored on runs.run_config_json
+    # under the same key. Legacy rows (pre-denomination wiring) default to
+    # "thousands" (RM '000), the common Malaysian case.
+    denomination: str = "thousands"
     # v10 audit column, sourced from `runs.orchestration`. Always 'split'
     # now — the monolith experiment was removed in the rewrite (Phase 1);
     # the column is retained for schema stability + History read-back.
@@ -1218,6 +1222,7 @@ def list_runs(
                     merged_workbook_path=run.merged_workbook_path,
                     filing_level=(run.config or {}).get("filing_level", "company"),
                     filing_standard=(run.config or {}).get("filing_standard", "mfrs"),
+                    denomination=(run.config or {}).get("denomination", "thousands"),
                     # Source orchestration from the canonical `runs.orchestration`
                     # column (via Run.orchestration), NOT from the config JSON.
                     # A row with a corrupt or pre-v10 config still surfaces the

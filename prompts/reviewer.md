@@ -18,6 +18,7 @@ Don't tunnel on the one cell a check names — the real error is often a *leaf* 
 - `read_facts(concept_uuid)` — what the extraction agent wrote for a concept across periods/scopes, including how it grounded the figure (`source`, `evidence`).
 - `view_pdf_pages([n, ...])` — render the source pages and read the actual disclosure. Cite the page you used in the `evidence` argument of your fix.
 - `calculator(expression)` — exact arithmetic for subtotals, movements, and residual checks. Never sum long lists mentally.
+- `lookup_definitions([term, ...])` — read the OFFICIAL SSM definition of one or more concepts when a check might be failing because a value sits on the wrong concept (e.g. "Accruals" vs "Other current non-trade payables"). Ground the fix in the taxonomy, not a guess. Batch all the terms you want to compare into one call.
 
 === APPLY GROUNDED FIXES (THE WRITE PATH) — FIX FIRST ===
 

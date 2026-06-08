@@ -19,6 +19,7 @@ def render_prompt(
     page_hints: Optional[dict] = None,
     filing_level: str = "company",
     filing_standard: str = "mfrs",
+    denomination: str = "thousands",
     template_path: Optional[str] = None,
     scout_context: Optional[dict] = None,
 ) -> str:
@@ -82,7 +83,13 @@ def render_prompt(
     # fields, render them BEFORE navigation so the agent reads the
     # entity/period/unit framing first and then starts viewing pages.
     parts = [base, statement_prompt]
-    context_block = _render_scout_context_block(scout_context or {})
+    # Authoritative filer-declared denomination (always rendered on the face
+    # path). The scout-observed scale line is suppressed in the context block
+    # below so the agent gets one, unambiguous, authoritative scale statement
+    # plus a cross-check warning if scout disagrees.
+    scout_scale = (scout_context or {}).get("scale_unit")
+    parts.append(_render_denomination_block(denomination, scout_scale))
+    context_block = _render_scout_context_block(scout_context or {}, suppress_scale=True)
     if context_block:
         parts.append(context_block)
     parts.append(nav)
@@ -244,7 +251,66 @@ _SCALE_UNIT_LABELS = {
 }
 
 
-def _render_scout_context_block(context: dict) -> str:
+def _render_denomination_block(
+    denomination: str, scout_scale_unit: Optional[str] = None
+) -> str:
+    """Render the presentation-scale block, framed by how the scale was set.
+
+    ``denomination`` is the run's declared scale. The framing is "soften
+    default-only": ``thousands`` is the toggle's DEFAULT, so the user may not
+    have consciously declared it — it keeps the softer "VERIFY against the
+    header" framing (the pre-denomination safety net). ``units`` / ``millions``
+    can only arise from a deliberate user choice (the default is thousands), so
+    those are framed AUTHORITATIVE ("do not guess the unit"). An explicit
+    ``thousands`` also lands in the verify branch — harmless, since confirming
+    thousands when it is thousands costs nothing and thousands is the
+    overwhelmingly common Malaysian case; distinguishing it from the untouched
+    default would need a "was-touched" flag threaded through the whole config,
+    which isn't worth it. Either way the system transcribes figures verbatim
+    (no scaling math anywhere) — the scale is interpretive context only.
+
+    When the scout's independently-detected ``scout_scale_unit`` DISAGREES
+    with the declared denomination, a loud reconciliation warning is appended
+    (the "scout cross-check"): the user may have picked the wrong toggle, so
+    the agent is told to re-read the header before writing. This never blocks
+    the run.
+    """
+    label = _SCALE_UNIT_LABELS.get(denomination, denomination)
+    if denomination == "thousands":
+        # Default scale — may be untouched, so keep the verify-the-header nudge.
+        lines = [
+            "=== PRESENTATION DENOMINATION (DEFAULT — VERIFY) ===",
+            (
+                f"The run is using the default scale of {label}. VERIFY this "
+                f"against the statement header before writing any number — a "
+                f"wrong unit produces a 1000× error. Transcribe each figure "
+                f"EXACTLY as printed in the PDF; do NOT rescale, multiply, or "
+                f"divide values."
+            ),
+        ]
+    else:
+        # Non-default scale — only a deliberate user choice reaches here, so
+        # treat it as the filer's authoritative declaration.
+        lines = [
+            "=== PRESENTATION DENOMINATION (DECLARED BY FILER — AUTHORITATIVE) ===",
+            (
+                f"The source statements are presented in {label}. This is the "
+                f"filer's declared scale — treat it as AUTHORITATIVE; do not guess "
+                f"the unit. Transcribe each figure EXACTLY as printed in the PDF; "
+                f"do NOT rescale, multiply, or divide values."
+            ),
+        ]
+    if scout_scale_unit in _SCALE_UNIT_LABELS and scout_scale_unit != denomination:
+        lines.append(
+            f"WARNING: the scout read the statement header as "
+            f"{_SCALE_UNIT_LABELS[scout_scale_unit]}, which DISAGREES with the "
+            f"declared {label}. Re-read the statement header to confirm the "
+            f"scale before writing any number — a wrong unit produces a 1000× error."
+        )
+    return "\n".join(lines)
+
+
+def _render_scout_context_block(context: dict, suppress_scale: bool = False) -> str:
     """Render the Phase 2 entity / period / unit context block.
 
     Returns an empty string when scout couldn't enrich (no fields set
@@ -255,6 +321,11 @@ def _render_scout_context_block(context: dict) -> str:
     ``context`` is a dict of the form coordinator.py builds from the
     Infopack top-level fields. Missing keys / None values are treated
     as "scout did not observe this" and skipped.
+
+    ``suppress_scale`` — when True, the scout-observed scale line is omitted
+    because the caller renders the authoritative filer-declared denomination
+    block instead (see ``_render_denomination_block``). The notes path leaves
+    this False so its scale guidance is unchanged.
     """
     entity = context.get("entity_name")
     period_cy = context.get("reporting_period_cy")
@@ -265,10 +336,13 @@ def _render_scout_context_block(context: dict) -> str:
 
     # If absolutely nothing useful was captured, omit the block entirely
     # so the prompt stays as compact as it was before Phase 2 on
-    # degraded runs (scanned PDF + LLM didn't observe).
+    # degraded runs (scanned PDF + LLM didn't observe). When scale is
+    # suppressed (authoritative denomination rendered elsewhere), it no
+    # longer counts toward "something useful".
+    scale_is_useful = (not suppress_scale) and scale_unit != "unknown"
     if (
         not entity and not period_cy and not period_py
-        and scale_unit == "unknown" and consolidation == "unknown"
+        and not scale_is_useful and consolidation == "unknown"
     ):
         return ""
 
@@ -290,19 +364,22 @@ def _render_scout_context_block(context: dict) -> str:
     # Scale-unit warning is the load-bearing one. The wording is
     # deliberately strong because a wrong unit silently inflates every
     # extracted value by 1000× (gotcha #17's sibling failure mode).
-    if scale_unit in _SCALE_UNIT_LABELS:
-        lines.append(
-            f"Scale: {_SCALE_UNIT_LABELS[scale_unit]} — VERIFY against "
-            f"the statement header before writing any number. A wrong "
-            f"unit produces a 1000× error."
-        )
-    elif scale_unit == "unknown":
-        lines.append(
-            "Scale: UNKNOWN — scout could not confirm. You MUST read "
-            "the statement header (e.g. 'All values in RM '000') before "
-            "writing any number. Do not assume thousands. A wrong unit "
-            "produces a 1000× error."
-        )
+    # Suppressed when the caller renders the authoritative filer-declared
+    # denomination block instead (face path).
+    if not suppress_scale:
+        if scale_unit in _SCALE_UNIT_LABELS:
+            lines.append(
+                f"Scale: {_SCALE_UNIT_LABELS[scale_unit]} — VERIFY against "
+                f"the statement header before writing any number. A wrong "
+                f"unit produces a 1000× error."
+            )
+        elif scale_unit == "unknown":
+            lines.append(
+                "Scale: UNKNOWN — scout could not confirm. You MUST read "
+                "the statement header (e.g. 'All values in RM '000') before "
+                "writing any number. Do not assume thousands. A wrong unit "
+                "produces a 1000× error."
+            )
     if consolidation != "unknown":
         lines.append(
             f"Consolidation level: {consolidation} (scout claim — verify)"

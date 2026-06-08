@@ -89,18 +89,26 @@ three components to those rows. Do NOT write RM1,200,000 only to the face
 statement or only to a generic "cash and bank balances" row when the
 component rows exist.
 
-=== CRITICAL RULES ===
+=== MAPPING GUIDANCE (apply judgement — not a rulebook) ===
 
-- When a note's breakdown is finer than the sub-sheet, roll up into the
-  coarsest matching field. Never fabricate template rows.
-- "Accruals" in the template means ONLY the accruals line. If the PDF note shows
-  "Accrued bonus" and "Accruals" as separate items, SUM them into the "Accruals" field.
-  Do NOT put accrued bonus into "Other current non-trade payables".
-- "Deferred income" in the PDF maps to "Deferred income" on the sub-sheet (row under
-  Current non-trade payables), NOT "Contract liabilities" on the main sheet — unless the
-  PDF explicitly labels it as "Contract liabilities" per MFRS 15.
-- "Deposits" in receivable notes → "Deposits" under Current non-trade receivables.
-  Do NOT put deposits into "Other current non-trade receivables".
+Map each line on the SUBSTANCE of what the note describes, not on surface
+wording. The points below are common patterns to reason from, not a closed
+list of commands. When two similar rows could both fit, call
+`lookup_definitions([...])` to read their official SSM definitions and choose
+on substance. Never fabricate template rows.
+
+- When a note's breakdown is finer than the sub-sheet, roll it up into the
+  coarsest matching field that still reflects the item's nature.
+- Accrual-flavoured liabilities (accrued bonus, accrued interest, accrued
+  expenses) normally belong in "Accruals" — that row is their proper home —
+  rather than the residual "Other current non-trade payables". Sum several
+  accrual lines into "Accruals" unless the note clearly treats one as
+  something distinct.
+- "Deferred income" / "income received in advance" normally maps to the
+  "Deferred income" row rather than "Contract liabilities" — unless the AFS
+  itself invokes MFRS 15 contract-liability treatment.
+- "Deposits" in receivable notes normally maps to the dedicated "Deposits"
+  row rather than "Other current non-trade receivables".
 - Always include "section" for ambiguous labels (current vs non-current).
 
 === NO-RESIDUAL-PLUG RULE (sub-sheet) ===
@@ -127,10 +135,16 @@ equipment` to match a face total.
 
 === AFS NOTE → SSM ROW MAPPING (known confusing cases) ===
 
-These mappings cover terms commonly used in Malaysian AFS notes. Both MFRS
-and MPERS templates use the same SSM labels, so this list applies to
-both standards (rows referenced are illustrative — use the live template
-to find the actual row numbers in your variant).
+These cover terms commonly used in Malaysian AFS notes. Treat them as worked
+examples of the underlying reasoning, NOT as an exhaustive rulebook: each one
+illustrates a principle (e.g. "trade vs other" turns on the nature of the item,
+not the counterparty). Apply that principle with judgement to whatever the note
+in front of you actually says, and when a case here doesn't quite fit — or two
+rows still look plausible — call `lookup_definitions([...])` to read the
+official SSM definitions and decide on substance. Both MFRS and MPERS templates
+use the same SSM labels, so this applies to both standards (rows referenced are
+illustrative — use the live template to find the actual row numbers in your
+variant).
 
 Inventories:
 - "Consumer products at cost / at NRV" → `Finished goods`. NOT
@@ -171,8 +185,8 @@ Payables:
 
 PPE detail:
 - "Plant and machinery" → `Plant and equipment` (or `Machinery` if a
-  dedicated row exists). Do NOT use `Other property, plant and
-  equipment` as a default landing row.
+  dedicated row exists). Prefer the dedicated component row over `Other
+  property, plant and equipment` as a landing row.
 - "Capital work-in-progress" / "Assets under construction" →
   `Construction in progress / Asset work-in progress`.
 - "Renovations and improvements" → if there's no dedicated row,
@@ -182,5 +196,5 @@ PPE detail:
 
 Cash:
 - "Fixed deposits with licensed banks" → `Deposits placed with licensed
-  banks` (under Cash equivalents). Do NOT route through
+  banks` (under Cash equivalents); prefer it over
   `Other banking arrangements`.

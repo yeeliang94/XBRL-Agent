@@ -448,6 +448,18 @@ export type FilingStandard = "mfrs" | "mpers";
  *  preselects the toggle from this; the user toggle always wins. */
 export type DetectedStandard = FilingStandard | "unknown";
 
+/** Presentation denomination the user declares for the source statements.
+ *  The agent transcribes figures verbatim and treats this as the authoritative
+ *  scale instead of guessing it. Default "thousands" (RM '000). */
+export type Denomination = "units" | "thousands" | "millions";
+
+/** Human labels for the denomination toggle. */
+export const DENOMINATION_LABELS: Record<Denomination, string> = {
+  units: "RM",
+  thousands: "RM '000",
+  millions: "RM mil",
+};
+
 /** Registered variant names per (statement, filing_standard). Mirrors the
  *  backend `variants_for_standard` — SoRE is MPERS-only, everything else
  *  is available on both. NotPrepared is a meta-variant for SOCI only. */
@@ -497,6 +509,10 @@ export interface RunConfigPayload {
   /** Filing standard — MFRS or MPERS. Defaults to MFRS server-side; the
    *  UI always sends it explicitly so history carries the toggle state. */
   filing_standard: FilingStandard;
+  /** Presentation denomination the filer declares for the source figures.
+   *  Defaults to "thousands" server-side; the UI always sends it so history
+   *  carries the toggle state. */
+  denomination: Denomination;
   notes_to_run?: NotesTemplateType[];
   /** Per-notes-template model overrides. Unspecified templates fall back
    *  to the run's default model on the backend. Sent only when the user
@@ -570,6 +586,7 @@ export interface RunSummaryJson {
   has_merged_workbook: boolean;
   filing_level?: FilingLevel;
   filing_standard?: FilingStandard;
+  denomination?: Denomination;
   // Gold-standard eval (v16): the benchmark this run graded against (null on
   // normal runs) + the headline accuracy in [0, 1] (null when not graded).
   // Powers the History score column + sparkline.
@@ -682,6 +699,7 @@ export interface RunDetailJson {
   config: Record<string, unknown> | null;
   filing_level?: FilingLevel;
   filing_standard?: FilingStandard;
+  denomination?: Denomination;
   agents: RunAgentJson[];
   cross_checks: RunCrossCheckJson[];
   // v8 telemetry rollup. Optional for back-compat with older payloads.

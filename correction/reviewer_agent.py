@@ -35,6 +35,7 @@ from typing import Any, Optional, Sequence
 from pydantic_ai import Agent, RunContext
 
 from tools.calculator import calculator_result_json as _calculator_impl
+from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
 
 
 _PROMPT_PATH = (
@@ -957,7 +958,22 @@ def create_reviewer_agent(
 
         Supports numbers, parentheses, unary signs, and + - * /.
         """
+        # Single-expression by design: only the extraction agent batches
+        # (Plan D), which runs many checks per turn. The reviewer verifies one
+        # fix at a time, so the simpler signature stays.
         return _calculator_impl(expression)
+
+    @agent.tool
+    def lookup_definitions(ctx: RunContext[ReviewerDeps], queries: list[str]) -> str:
+        """Look up the OFFICIAL SSM concept definition(s) for one or more terms.
+
+        Use this when auditing whether a value sits on the right concept — e.g.
+        to confirm "Accruals" vs "Other current non-trade payables", or
+        "Deferred income" vs "Contract liabilities" — so a correction is
+        grounded in the taxonomy, not a guess. Pass all the terms to compare in
+        ONE call. Scoped automatically to this run's filing standard.
+        """
+        return _lookup_definitions_impl(queries, ctx.deps.filing_standard)
 
     @agent.tool
     def read_facts(

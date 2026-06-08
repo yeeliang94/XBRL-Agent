@@ -7,6 +7,7 @@ import type {
   RunConfigPayload,
   FilingLevel,
   FilingStandard,
+  Denomination,
   DetectedStandard,
   NotesTemplateType,
   SSEEvent,
@@ -17,6 +18,7 @@ import {
   mapStatements,
   NOTES_TEMPLATE_TYPES,
   variantsFor,
+  DENOMINATION_LABELS,
 } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -179,6 +181,11 @@ function _seedFilingStandard(cfg: Record<string, unknown> | null | undefined): F
   return v === "mpers" ? "mpers" : "mfrs";
 }
 
+function _seedDenomination(cfg: Record<string, unknown> | null | undefined): Denomination {
+  const v = cfg?.denomination;
+  return v === "units" || v === "millions" ? v : "thousands";
+}
+
 function _seedStatementsEnabled(
   cfg: Record<string, unknown> | null | undefined,
 ): Record<StatementType, boolean> {
@@ -312,6 +319,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // toggle — operator intent wins over detection.
   const [filingStandard, setFilingStandard] = useState<FilingStandard>(
     () => _seedFilingStandard(initialConfig),
+  );
+  // Presentation denomination the filer declares for the source figures.
+  // Default RM '000 (the common Malaysian case); the agent treats this as
+  // authoritative and the scout cross-checks it.
+  const [denomination, setDenomination] = useState<Denomination>(
+    () => _seedDenomination(initialConfig),
   );
   // When rehydrating, treat the persisted standard as user intent — scout
   // must NOT silently overwrite a user's saved choice on a refresh.
@@ -904,6 +917,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       use_scout: scoutEnabled,
       filing_level: filingLevel,
       filing_standard: filingStandard,
+      denomination,
       notes_to_run,
       notes_models,
       // Gold-standard eval (v16): attach the benchmark only when the toggle is
@@ -912,8 +926,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     };
   }, [
     statementsEnabled, variantSelections, modelOverrides, infopack,
-    scoutEnabled, filingLevel, filingStandard, notesEnabled, notesModelOverrides,
-    evalEnabled, evalBenchmarkId,
+    scoutEnabled, filingLevel, filingStandard, denomination, notesEnabled,
+    notesModelOverrides, evalEnabled, evalBenchmarkId,
   ]);
 
   const handleRun = useCallback(() => {
@@ -1036,6 +1050,40 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 }}
               >
                 {level === "company" ? "Company" : "Group"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Presentation denomination the filer declares for the source figures.
+          The agent treats this as authoritative (no guessing) and transcribes
+          values verbatim; the scout cross-checks it. Mirrors the toggles above. */}
+      <div style={styles.section}>
+        <span style={styles.sectionLabel}>Denomination</span>
+        <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+          {(["units", "thousands", "millions"] as const).map((d, idx) => {
+            const active = denomination === d;
+            return (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setDenomination(d)}
+                style={{
+                  fontFamily: pwc.fontHeading,
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 500,
+                  padding: "8px 24px",
+                  border: "none",
+                  borderRight: idx < 2 ? `1px solid ${pwc.grey200}` : "none",
+                  borderRadius: 0,
+                  background: active ? pwc.orange500 : pwc.white,
+                  color: active ? pwc.white : pwc.grey700,
+                  cursor: "pointer",
+                  transition: "background 0.15s, color 0.15s",
+                }}
+              >
+                {DENOMINATION_LABELS[d]}
               </button>
             );
           })}

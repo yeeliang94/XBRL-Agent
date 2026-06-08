@@ -90,6 +90,32 @@ def test_patch_updates_run_config(draft_session):
     assert persisted["filing_standard"] == "mpers"
 
 
+def test_patch_persists_denomination(draft_session):
+    """Peer-review HIGH: a PATCHed non-default denomination must persist.
+
+    RunConfigPatchRequest must carry `denomination`, or the debounced draft
+    PATCH silently drops it (Pydantic ignores the unknown field) and the
+    draft-start path rebuilds the run at the "thousands" default — defeating
+    the user-authoritative scale. This pins the field onto the patch model
+    and the merged config.
+    """
+    client, run_id, output_dir = draft_session
+
+    resp = client.patch(
+        f"/api/runs/{run_id}",
+        json={"statements": ["SOFP"], "denomination": "millions"},
+    )
+    assert resp.status_code == 200, resp.text
+    persisted = _read_config(output_dir, run_id)
+    assert persisted["denomination"] == "millions", (
+        "denomination must survive the PATCH merge — see peer-review HIGH"
+    )
+
+    # An invalid denomination is a 422, not a silent corruption.
+    bad = client.patch(f"/api/runs/{run_id}", json={"denomination": "lakhs"})
+    assert bad.status_code == 422
+
+
 def test_patch_rejected_on_non_draft(draft_session):
     """Once a run is no longer `draft`, PATCH must 409. Editing a running
     or completed run's stored config would lie about what was extracted."""

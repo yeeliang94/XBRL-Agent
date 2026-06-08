@@ -109,6 +109,21 @@ describe("argsPreview", () => {
     expect(argsPreview("calculator", { expression: "1,234 + 66" })).toBe("1,234 + 66");
   });
 
+  // Batched calculator (Plan D): args.expressions is a string[].
+  test("calculator (batched) shows count + first expression", () => {
+    expect(argsPreview("calculator", { expressions: ["1+2", "10-3", "4*5"] }))
+      .toBe("3 checks: 1+2");
+  });
+
+  test("calculator (batched, single) shows just the expression", () => {
+    expect(argsPreview("calculator", { expressions: ["1+2"] })).toBe("1+2");
+  });
+
+  test("lookup_definitions previews the queries", () => {
+    expect(argsPreview("lookup_definitions", { queries: ["accruals", "deferred income"] }))
+      .toBe("accruals, deferred income");
+  });
+
   // read_template — shows just the filename, not the full path.
   test("read_template with a full path → filename only", () => {
     const args = { path: "/x/y/01-SOFP-CuNonCu.xlsx" };
@@ -215,6 +230,23 @@ describe("resultSummary", () => {
     expect(resultSummary("calculator", '{"error":"Division by zero."}')).toEqual({
       text: "error",
       tone: "warn",
+    });
+  });
+  // Batched calculator (Plan D): result is a JSON array of per-expression items.
+  test("calculator batched array (all ok) → success / count", () => {
+    expect(
+      resultSummary("calculator", '[{"expression":"1+2","result":"3"},{"expression":"4*5","result":"20"}]'),
+    ).toEqual({ text: "2 checks ok", tone: "success" });
+  });
+  test("calculator batched array (some failed) → warn / counts", () => {
+    expect(
+      resultSummary("calculator", '[{"expression":"1+2","result":"3"},{"expression":"2**8","error":"bad op"}]'),
+    ).toEqual({ text: "1 ok, 1 failed", tone: "warn" });
+  });
+  test("calculator batched array (single item) → exact result", () => {
+    expect(resultSummary("calculator", '[{"expression":"1+2","result":"3"}]')).toEqual({
+      text: "3",
+      tone: "success",
     });
   });
   test("unknown tool / unparseable summary → null (caller falls back to duration)", () => {

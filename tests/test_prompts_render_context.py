@@ -91,15 +91,24 @@ class TestFullPromptAssembly:
         )
         assert "SCOUT-OBSERVED CONTEXT" in prompt
         assert "FINCO Berhad" in prompt
-        assert "1000×" in prompt
+        # Scale is now carried by the denomination block (default "thousands");
+        # the scout scale line is suppressed on the face path. The default
+        # scale uses the softer "DEFAULT — VERIFY" framing (soften
+        # default-only). With scout + declared scale agreeing, no disagreement
+        # warning fires.
+        assert "PRESENTATION DENOMINATION (DEFAULT — VERIFY" in prompt
+        assert "thousands (RM '000)" in prompt
 
-    def test_face_prompt_omits_block_when_no_context(self):
+    def test_face_prompt_omits_scout_block_when_no_context(self):
         prompt = render_prompt(
             statement_type=StatementType.SOFP,
             variant="CuNonCu",
         )
-        # Today's prompt should be entirely unchanged on a no-context run.
+        # No scout enrichment → no scout-observed block. The denomination block
+        # is always present; the default scale uses the "DEFAULT — VERIFY"
+        # framing (soften default-only).
         assert "SCOUT-OBSERVED CONTEXT" not in prompt
+        assert "PRESENTATION DENOMINATION (DEFAULT — VERIFY" in prompt
 
     def test_notes_prompt_includes_context_block(self):
         prompt = render_notes_prompt(
