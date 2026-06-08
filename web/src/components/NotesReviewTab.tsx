@@ -37,6 +37,7 @@ import {
   type NotesSheet,
 } from "../lib/notesCells";
 import { copyHtmlAsRichText } from "../lib/clipboard";
+import { notesSheetDisplayName } from "../lib/sheetLabels";
 import "./NotesReviewTab.css";
 
 // Debounce window for the PATCH save. Matched to the 1.5s decision in
@@ -51,6 +52,10 @@ export interface NotesReviewTabProps {
    *  this to the existing rerun endpoint. Optional so a standalone
    *  render (e.g. in a screenshot test) still works. */
   onRegenerate?: (runId: number) => void;
+  /** Sheet to focus when the reviewer picks a notes sub-tab in the
+   *  SheetNavigator: that section auto-expands and scrolls into view. null /
+   *  undefined = no focus (the default stacked, all-collapsed view). */
+  focusSheet?: string | null;
 }
 
 /** Editor lifecycle status chip per cell. */
@@ -91,7 +96,7 @@ const TIPTAP_EXTENSIONS = [
   TableCell,
 ];
 
-export function NotesReviewTab({ runId, onRegenerate }: NotesReviewTabProps) {
+export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
   // failure surfaces in a single banner instead of per-cell flicker.
@@ -212,6 +217,7 @@ export function NotesReviewTab({ runId, onRegenerate }: NotesReviewTabProps) {
               key={`${runId}:${sh.sheet}`}
               runId={runId}
               sheet={sh}
+              focus={focusSheet === sh.sheet}
             />
           ))}
         </div>
@@ -238,18 +244,33 @@ export function NotesReviewTab({ runId, onRegenerate }: NotesReviewTabProps) {
 function SheetSection({
   runId,
   sheet,
+  focus = false,
 }: {
   runId: number;
   sheet: NotesSheet;
+  /** When true (the reviewer picked this notes sub-tab), the section opens
+   *  and scrolls into view. */
+  focus?: boolean;
 }) {
   // Collapsed by default so a run with 3-5 sheets doesn't mount every
   // TipTap editor on first paint. Matches the agent-card pattern above
-  // in RunDetailView — reviewer clicks the heading to reveal rows.
-  const [expanded, setExpanded] = useState(false);
+  // in RunDetailView — reviewer clicks the heading to reveal rows. A focused
+  // section starts open so the picked note is immediately readable.
+  const [expanded, setExpanded] = useState(focus);
   const rowCount = sheet.rows.length;
+  const sectionRef = useRef<HTMLElement | null>(null);
+
+  // When this section becomes the focused one (sub-tab click), expand it and
+  // bring it into view. Keyed on `focus` so switching between sub-tabs
+  // re-scrolls; the manual heading toggle stays independent.
+  useEffect(() => {
+    if (!focus) return;
+    setExpanded(true);
+    sectionRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }, [focus]);
 
   return (
-    <section style={styles.sheetSection}>
+    <section ref={sectionRef} style={styles.sheetSection}>
       {/* Button-inside-h4 keeps the heading role so
           getByRole("heading", { level: 4, name }) still works while
           letting the whole header act as the toggle. */}
@@ -266,8 +287,9 @@ function SheetSection({
           <span
             style={styles.sheetHeadingText}
             data-testid="sheet-title"
+            title={sheet.sheet}
           >
-            {sheet.sheet}
+            {notesSheetDisplayName(sheet.sheet)}
           </span>
           {/* Row count is visual-only metadata; aria-hidden keeps the
               heading's accessible name equal to the sheet title so

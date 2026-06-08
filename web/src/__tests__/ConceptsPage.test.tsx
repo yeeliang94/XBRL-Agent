@@ -767,6 +767,52 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
   });
 
+  test("face templates render as friendly short codes, not raw ids", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes_cells")) return { sheets: [] };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    // The nav item keeps its raw-id testid (routing is unchanged) but the
+    // visible label is the short code.
+    const navBtn = screen.getByTestId("sheet-nav-mfrs-company-sofp-cunoncu-v1");
+    expect(navBtn.textContent).toContain("SOFP");
+    expect(navBtn.textContent).not.toContain("mfrs-company-sofp");
+  });
+
+  test("Notes expands into per-sheet sub-tabs with friendly names", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes_cells"))
+        return {
+          sheets: [
+            { sheet: "Notes-CI", rows: [] },
+            { sheet: "Notes-SummaryofAccPol", rows: [] },
+          ],
+        };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
+    // Sub-tabs appear once the notes_cells fetch resolves.
+    const ci = await waitFor(() =>
+      screen.getByTestId("sheet-nav-notes-Notes-CI")
+    );
+    expect(ci.textContent).toContain("Corporate Information");
+    expect(
+      screen.getByTestId("sheet-nav-notes-Notes-SummaryofAccPol").textContent
+    ).toContain("Summary of Accounting Policies");
+    // Picking a sub-tab keeps the notes panel and marks it current.
+    fireEvent.click(ci);
+    expect(screen.getByTestId("review-notes-panel")).toBeTruthy();
+    expect(ci.getAttribute("aria-current")).toBe("true");
+  });
+
   test("renders a Generate final Excel link to the download endpoint", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
