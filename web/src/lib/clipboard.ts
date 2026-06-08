@@ -44,12 +44,37 @@
 // regardless of the host editor's surface colour. If you change either
 // colour, update the other side AND update CLAUDE.md gotcha #16's
 // note on this divergence.
+// Uniform paste face. M-Tool (the SSM MBRS preparation tool) lays each
+// pasted cell out under a fixed A4 page and its default face does not match
+// the filing house style. Normalising every copied cell to Arial 10pt here —
+// at the clipboard boundary — keeps the DB / sanitiser style-free while making
+// the paste land in the expected font. Use `10pt` (NOT `10px`): paste targets
+// like M-Tool / Word interpret a bare font size in points.
+const _CLIPBOARD_FONT = "font-family: Arial, sans-serif; font-size: 10pt;";
+// Width constraint: a faithful transcription of a wide movement table sizes
+// to its content and, on paste into M-Tool's fixed A4 page, overflows and
+// clips the right-hand columns. `width: 100%` + `table-layout: fixed` pins
+// the table to the container width and shares it across columns, so a wide
+// table WRAPS its cells to fit the page instead of spilling past it (no
+// column is lost; the rows just get taller). `max-width: 100%` is belt-and-
+// braces for paste targets that lay the table out in an auto-width box.
 const _CLIPBOARD_TABLE_STYLE =
-  "border-collapse: collapse; margin: 8px 0;";
+  "border-collapse: collapse; margin: 8px 0; " +
+  "width: 100%; max-width: 100%; table-layout: fixed;";
 const _CLIPBOARD_CELL_STYLE_BASE =
-  "border: 1px solid #999; padding: 4px 8px; vertical-align: top;";
+  "border: 1px solid #999; padding: 4px 8px; vertical-align: top; " +
+  "overflow-wrap: break-word; word-break: break-word; " +
+  _CLIPBOARD_FONT;
 const _CLIPBOARD_HEADER_EXTRA =
   " background: #f3f4f6; font-weight: 600;";
+// Prose blocks: the same Arial 10pt face plus a bottom margin so consecutive
+// paragraphs get breathing space on paste. Without the margin, `<p>` tags
+// reach M-Tool with no spacing and the paragraphs jam together (the reported
+// "no line break between paragraphs"). Margin mirrors the in-app editor
+// (`NotesReviewTab.css` `.tiptap p { margin: 0 0 8px 0 }`).
+const _CLIPBOARD_PARAGRAPH_STYLE = _CLIPBOARD_FONT + " margin: 0 0 8px 0;";
+const _CLIPBOARD_HEADING_STYLE =
+  _CLIPBOARD_FONT + " margin: 12px 0 6px 0; font-weight: 600;";
 
 // Numeric-cell heuristic: matches accountant-style numbers including
 // thousands-separated values (`1,595`), parenthesised negatives
@@ -64,10 +89,15 @@ const _NUMERIC_CELL_RE =
  *  (or Word / Outlook / Gmail) renders with visible borders,
  *  comfortable cell padding, and right-aligned numeric cells.
  *
+ *  Also normalises the whole fragment to an Arial 10pt face and gives
+ *  paragraphs / headings a bottom margin so prose pastes with a
+ *  consistent font and visible breathing space between paragraphs.
+ *
  *  Pure transformation: takes raw editor HTML, returns decorated HTML.
  *  Does NOT mutate any DOM the caller may still be using (parses into
  *  a detached `<div>`). Safe to call on any HTML the sanitiser
- *  produced — non-table content passes through untouched.
+ *  produced — prose-only content is wrapped in a font-bearing container
+ *  rather than passed through untouched.
  *
  *  Why only at clipboard time and not in the DB / sanitiser:
  *    - The sanitiser's job is to strip authoring-side styling so two
@@ -80,11 +110,7 @@ const _NUMERIC_CELL_RE =
  *      version.
  */
 export function decorateHtmlForClipboard(html: string): string {
-  if (!html || (!html.includes("<table") && !html.includes("<th") && !html.includes("<td"))) {
-    // Fast-path: nothing tabular to decorate. Avoids a parse + reserialise
-    // round-trip on the common short-prose case.
-    return html;
-  }
+  if (!html) return html;
   const tmp = document.createElement("div");
   tmp.innerHTML = html;
 
@@ -112,7 +138,23 @@ export function decorateHtmlForClipboard(html: string): string {
     _mergeStyle(td, _CLIPBOARD_CELL_STYLE_BASE + align);
   }
 
-  return tmp.innerHTML;
+  // Prose: Arial 10pt + a bottom margin so non-table cells paste with a
+  // consistent face and visible gaps between paragraphs.
+  for (const p of Array.from(tmp.querySelectorAll("p"))) {
+    _mergeStyle(p, _CLIPBOARD_PARAGRAPH_STYLE);
+  }
+  for (const h of Array.from(tmp.querySelectorAll("h3"))) {
+    _mergeStyle(h, _CLIPBOARD_HEADING_STYLE);
+  }
+  for (const list of Array.from(tmp.querySelectorAll("ul, ol, li"))) {
+    _mergeStyle(list, _CLIPBOARD_FONT);
+  }
+
+  // Carry the font on the wrapping container too, so any element we did not
+  // explicitly style (bare <strong>, <em>, loose text) still inherits Arial
+  // 10pt in the paste target rather than the host editor's default face.
+  _mergeStyle(tmp, _CLIPBOARD_FONT);
+  return tmp.outerHTML;
 }
 
 /** Append an inline style fragment to a node's existing `style=` attr.
