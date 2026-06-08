@@ -75,12 +75,40 @@ describe("copyHtmlAsRichText", () => {
   // style-free, so the decoration is clipboard-only.
   // -------------------------------------------------------------------------
 
-  test("decorateHtmlForClipboard_passes_through_non_table_html_unchanged", () => {
-    // Fast-path: prose-only HTML should not be touched. Avoids a parse +
-    // reserialise round-trip that would normalise quoting and whitespace
-    // for no benefit.
-    const html = "<p>Hello <strong>world</strong></p>";
-    expect(decorateHtmlForClipboard(html)).toBe(html);
+  test("decorateHtmlForClipboard_applies_arial_font_and_paragraph_spacing_to_prose", () => {
+    // Prose-only cells are normalised to Arial 10pt and given a bottom
+    // margin so consecutive paragraphs don't jam together on paste into
+    // M-Tool (the reported "no line break between paragraphs"). The DB /
+    // sanitiser stay style-free, so the clipboard is the only surface that
+    // applies the face.
+    const out = decorateHtmlForClipboard(
+      "<p>First paragraph.</p><p>Second <strong>paragraph</strong>.</p>",
+    );
+    // Every paragraph carries Arial 10pt + the 8px bottom margin.
+    expect(out).toMatch(
+      /<p[^>]*style="[^"]*font-family: Arial[^"]*">First paragraph\.</,
+    );
+    expect(out).toMatch(/<p[^>]*style="[^"]*font-size: 10pt/);
+    expect(out).toMatch(/<p[^>]*style="[^"]*margin: 0 0 8px 0/);
+    // Inline emphasis inside the paragraph survives untouched.
+    expect(out).toContain("<strong>paragraph</strong>");
+    // The wrapping container also carries the font so un-styled inline
+    // content still inherits Arial 10pt.
+    expect(out).toMatch(/^<div[^>]*style="[^"]*font-family: Arial/);
+  });
+
+  test("decorateHtmlForClipboard_applies_arial_10pt_to_table_cells", () => {
+    // Tables paste in the same Arial 10pt face as prose so a mixed
+    // prose+schedule cell reads uniformly in M-Tool.
+    const out = decorateHtmlForClipboard(
+      "<table><tr><th>A</th></tr><tr><td>1,000</td></tr></table>",
+    );
+    expect(out).toMatch(
+      /<th[^>]*style="[^"]*font-family: Arial[^"]*font-size: 10pt/,
+    );
+    expect(out).toMatch(
+      /<td[^>]*style="[^"]*font-family: Arial[^"]*font-size: 10pt/,
+    );
   });
 
   test("decorateHtmlForClipboard_adds_borders_and_padding_to_tables", () => {
@@ -100,6 +128,19 @@ describe("copyHtmlAsRichText", () => {
     // Headers also pick up the grey background and bold weight.
     expect(out).toMatch(/<th[^>]*style="[^"]*background: #f3f4f6/);
     expect(out).toMatch(/<th[^>]*style="[^"]*font-weight: 600/);
+  });
+
+  test("decorateHtmlForClipboard_constrains_table_width_to_container", () => {
+    // A wide movement table sizes to content and overflows M-Tool's fixed
+    // A4 page, clipping its right-hand columns. Fixed layout + full-width
+    // pins the table to the container and wraps cells to fit instead.
+    const out = decorateHtmlForClipboard(
+      "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
+    );
+    expect(out).toMatch(/<table[^>]*style="[^"]*width: 100%/);
+    expect(out).toMatch(/<table[^>]*style="[^"]*table-layout: fixed/);
+    // Cells wrap long content rather than forcing the column wider.
+    expect(out).toMatch(/<td[^>]*style="[^"]*overflow-wrap: break-word/);
   });
 
   test("decorateHtmlForClipboard_right_aligns_numeric_cells", () => {
