@@ -5,6 +5,8 @@ import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesReviewTab } from "../components/NotesReviewTab";
 import { PdfSourcePane } from "../components/PdfSourcePane";
+import { fetchNotesCells, sortSheetsBySlot } from "../lib/notesCells";
+import { templateDisplayName, notesSheetDisplayName } from "../lib/sheetLabels";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { downloadFilledUrl } from "../lib/api";
 import type { CrossCheckResult } from "../lib/types";
@@ -188,6 +190,14 @@ export function ConceptsPage({
   // Sub-sheet filter (M3 nested nav): when set, the tree shows only this
   // render_sheet within the active template. null = all sheets of the template.
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
+  // Notes sub-tabs: the notes sheet names present for this run (in MBRS slot
+  // order), and which one the reviewer has selected. The names let the
+  // SheetNavigator expand Notes into per-sheet sub-tabs (mirroring the face
+  // statements); `activeNotesSheet` is forwarded to NotesReviewTab so it
+  // expands + scrolls to that section. Empty list = no notes → Notes stays a
+  // single entry. Notes only apply to runs (not the benchmark gold editor).
+  const [notesSheets, setNotesSheets] = useState<string[]>([]);
+  const [activeNotesSheet, setActiveNotesSheet] = useState<string | null>(null);
   // 3-column workspace layout: the Menu and Source PDF columns are both
   // resizable (drag handle) and hideable (collapse to a thin rail). The
   // Results column flexes to fill the rest.
@@ -242,6 +252,25 @@ export function ConceptsPage({
       controller.abort();
     };
   }, [effectiveId, isBenchmark]);
+
+  // Load the run's notes sheet names so the SheetNavigator can show Notes
+  // sub-tabs. Run-only (the gold editor has no notes). A run with no notes
+  // (404 / empty) leaves the list empty, so Notes stays a single entry.
+  useEffect(() => {
+    if (runId == null || isBenchmark) return;
+    let cancelled = false;
+    fetchNotesCells(runId)
+      .then((resp) => {
+        if (cancelled) return;
+        setNotesSheets(sortSheetsBySlot(resp.sheets).map((s) => s.sheet));
+      })
+      .catch(() => {
+        if (!cancelled) setNotesSheets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, isBenchmark]);
 
   // Refresh the edited-values count on load and after every successful edit
   // (conflictReloadKey is bumped on the same path).
@@ -584,7 +613,7 @@ export function ConceptsPage({
                 style={ui.select}
               >
                 {templates.map((tid) => (
-                  <option key={tid} value={tid}>{tid}</option>
+                  <option key={tid} value={tid}>{templateDisplayName(tid)}</option>
                 ))}
               </select>
             </div>
@@ -669,6 +698,8 @@ export function ConceptsPage({
           activeTemplate={activeTemplate}
           activeSheet={activeSheet}
           notesKey={NOTES_KEY}
+          notesSheets={notesSheets}
+          activeNotesSheet={activeNotesSheet}
           conflictCounts={conflictCounts}
           onSelectTemplate={(tid) => {
             // Switching sheets clears any active search so the chosen sheet's
@@ -677,11 +708,19 @@ export function ConceptsPage({
             setSearchQuery("");
             setActiveTemplate(tid);
             setActiveSheet(null);
+            // Selecting the Notes header (or any face template) clears the
+            // notes sub-sheet focus so the editor shows all notes again.
+            setActiveNotesSheet(null);
           }}
           onSelectSheet={(tid, sheet) => {
             setSearchQuery("");
             setActiveTemplate(tid);
             setActiveSheet(sheet);
+          }}
+          onSelectNotesSheet={(sheet) => {
+            setSearchQuery("");
+            setActiveTemplate(NOTES_KEY);
+            setActiveNotesSheet(sheet);
           }}
         />
       </CollapsiblePanel>
@@ -852,7 +891,7 @@ export function ConceptsPage({
 
         {notesActive ? (
           <div data-testid="review-notes-panel">
-            <NotesReviewTab runId={runId} />
+            <NotesReviewTab runId={runId} focusSheet={activeNotesSheet} />
           </div>
         ) : filtered.length > 0 && filtered.every((r) => r.shape === "matrix") ? (
           // Only render the matrix grid when EVERY visible row is matrix.
@@ -1755,19 +1794,30 @@ function SheetNavigator({
   activeTemplate,
   activeSheet,
   notesKey,
+  notesSheets,
+  activeNotesSheet,
   conflictCounts,
   onSelectTemplate,
   onSelectSheet,
+  onSelectNotesSheet,
 }: {
   templates: string[];
   sheetsByTemplate: Record<string, string[]>;
   activeTemplate: string | null;
   activeSheet: string | null;
   notesKey: string;
+  notesSheets: string[];
+  activeNotesSheet: string | null;
   conflictCounts: Record<string, number>;
   onSelectTemplate: (templateId: string) => void;
   onSelectSheet: (templateId: string, sheet: string) => void;
+  onSelectNotesSheet: (sheet: string) => void;
 }) {
+  const notesActive = activeTemplate === notesKey;
+  // Mirror the face-statement pattern: when Notes is the active surface and the
+  // run has notes sheets, expand them as sub-tabs so the reviewer jumps to one
+  // note directly instead of scrolling the single stacked editor.
+  const showNotesSubSheets = notesActive && notesSheets.length > 0;
   return (
     <nav
       data-testid="sheet-navigator"
@@ -1800,7 +1850,9 @@ function SheetNavigator({
                 fontWeight: active && activeSheet == null ? 600 : 500,
               }}
             >
-              <span style={styles.sideNavLabel}>{tid}</span>
+              <span style={styles.sideNavLabel} title={tid}>
+                {templateDisplayName(tid)}
+              </span>
               {count > 0 && (
                 <span
                   data-testid={`sheet-nav-count-${tid}`}
@@ -1839,21 +1891,52 @@ function SheetNavigator({
           </div>
         );
       })}
-      <button
-        type="button"
-        data-testid={`sheet-nav-${notesKey}`}
-        aria-current={activeTemplate === notesKey ? "true" : undefined}
-        onClick={() => onSelectTemplate(notesKey)}
-        style={{
-          ...styles.sideNavItem,
-          background: activeTemplate === notesKey ? pwc.orange50 : pwc.white,
-          color: activeTemplate === notesKey ? pwc.orange700 : pwc.grey800,
-          borderColor: activeTemplate === notesKey ? pwc.orange400 : pwc.grey200,
-          fontWeight: activeTemplate === notesKey ? 600 : 500,
-        }}
-      >
-        <span style={styles.sideNavLabel}>Notes</span>
-      </button>
+      <div>
+        <button
+          type="button"
+          data-testid={`sheet-nav-${notesKey}`}
+          aria-current={notesActive && activeNotesSheet == null ? "true" : undefined}
+          onClick={() => onSelectTemplate(notesKey)}
+          style={{
+            ...styles.sideNavItem,
+            // Highlight the Notes header only when showing all notes; a
+            // selected sub-tab dims it (mirrors the face-template behaviour).
+            background: notesActive && activeNotesSheet == null ? pwc.orange50 : pwc.white,
+            color: notesActive && activeNotesSheet == null ? pwc.orange700 : pwc.grey800,
+            borderColor: notesActive ? pwc.orange400 : pwc.grey200,
+            fontWeight: notesActive && activeNotesSheet == null ? 600 : 500,
+          }}
+        >
+          <span style={styles.sideNavLabel}>Notes</span>
+        </button>
+        {showNotesSubSheets && (
+          <div style={styles.sideNavSubGroup}>
+            {notesSheets.map((sheet) => {
+              const sheetActive = notesActive && activeNotesSheet === sheet;
+              return (
+                <button
+                  key={sheet}
+                  type="button"
+                  data-testid={`sheet-nav-notes-${sheet}`}
+                  aria-current={sheetActive ? "true" : undefined}
+                  onClick={() => onSelectNotesSheet(sheet)}
+                  style={{
+                    ...styles.sideNavSubItem,
+                    background: sheetActive ? pwc.orange50 : pwc.white,
+                    color: sheetActive ? pwc.orange700 : pwc.grey700,
+                    borderColor: sheetActive ? pwc.orange400 : pwc.grey200,
+                    fontWeight: sheetActive ? 600 : 400,
+                  }}
+                >
+                  <span style={styles.sideNavLabel} title={sheet}>
+                    {notesSheetDisplayName(sheet)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </nav>
   );
 }
@@ -2338,6 +2421,14 @@ const styles = {
     flexDirection: "column" as const,
     gap: pwc.space.sm,
     minWidth: 0,
+    // Bound the sheet list to its own scroll area so the lower entries —
+    // notably Notes and its sub-tabs — are always reachable even when the
+    // page is embedded in the Values tab (where the column's outer scroll
+    // can be clipped by the tab container). Without this the tail of the
+    // list got pushed off-screen with no way to scroll to it.
+    maxHeight: "min(52vh, 540px)",
+    overflowY: "auto" as const,
+    paddingRight: pwc.space.xs,
   } as React.CSSProperties,
   sideNavItem: {
     display: "flex",

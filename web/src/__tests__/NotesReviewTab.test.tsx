@@ -102,10 +102,15 @@ afterEach(() => {
 // Sheet sections are collapsed by default (each sheet is its own card
 // the reviewer can minimize). Tests that assert on cell-level contents
 // need to click every sheet-heading toggle first so the rows mount.
-// Matched by the "Notes-…" prefix that the sheet heading text carries.
+// Select by the sheet-title testid (label-agnostic) and click its enclosing
+// toggle button — the visible heading text is now a friendly display name
+// ("Corporate Information"), not the raw "Notes-…" sheet id.
 function expandAllSheets() {
-  const toggles = screen.getAllByRole("button", { name: /^Notes-/i });
-  toggles.forEach((t) => fireEvent.click(t));
+  const titles = screen.getAllByTestId("sheet-title");
+  titles.forEach((t) => {
+    const btn = t.closest("button");
+    if (btn) fireEvent.click(btn);
+  });
 }
 
 describe("NotesReviewTab — read-only render (Step 9)", () => {
@@ -113,8 +118,10 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
     await waitFor(() => {
-      expect(screen.getByText("Notes-CI")).toBeInTheDocument();
-      expect(screen.getByText("Notes-SummaryofAccPol")).toBeInTheDocument();
+      expect(screen.getByText("Corporate Information")).toBeInTheDocument();
+      expect(
+        screen.getByText("Summary of Accounting Policies"),
+      ).toBeInTheDocument();
     });
   });
 
@@ -177,22 +184,37 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     // most reliable signal that render has happened.
     await waitFor(() => {
       expect(
-        screen.getByText("Notes-RelatedPartytran"),
+        screen.getByText("Related Party Transactions"),
       ).toBeInTheDocument();
     });
     // Read the sheet-title spans rather than raw h4 textContent so the
     // assertion isn't coupled to the chevron/row-count chrome inside
-    // the collapsible heading.
+    // the collapsible heading. Titles now render as friendly display names
+    // but the slot order is still enforced.
     const titles = screen
       .getAllByTestId("sheet-title")
       .map((s) => s.textContent);
     expect(titles).toEqual([
-      "Notes-CI",
-      "Notes-SummaryofAccPol",
-      "Notes-Listofnotes",
-      "Notes-Issuedcapital",
-      "Notes-RelatedPartytran",
+      "Corporate Information",
+      "Summary of Accounting Policies",
+      "List of Notes",
+      "Issued Capital",
+      "Related Party Transactions",
     ]);
+  });
+
+  test("focusSheet auto-expands the picked section, others stay collapsed", async () => {
+    mockFetchOnce(SAMPLE);
+    render(
+      <NotesReviewTab runId={42} focusSheet="Notes-SummaryofAccPol" />,
+    );
+    // The focused section opens on mount → its row label is visible without a
+    // manual heading click.
+    await waitFor(() =>
+      expect(screen.getByText("Revenue")).toBeInTheDocument(),
+    );
+    // A non-focused section stays collapsed (its row content is not mounted).
+    expect(screen.queryByText("Corporate info")).toBeNull();
   });
 });
 
