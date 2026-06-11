@@ -205,6 +205,56 @@ Step-by-step for the owner (each produces a client ID + secret):
    SSE survives a long run; History persists across an app restart
    (proves `/home/data` wiring); `/api/*` without a cookie ⇒ 401.
 
+## Multi-environment workflow (Mac → personal GitHub → enterprise Windows + Azure)
+
+The owner's actual day-to-day topology, and how auth behaves in each spot:
+
+```
+Mac (develop) ──push──▶ personal GitHub ──GitHub Actions──▶ Azure App Service  (production, AUTH_MODE=oidc)
+                              │
+                          git pull
+                              ▼
+                   enterprise Windows machine  (local use only, AUTH_MODE=dev)
+```
+
+Principles that make this work with zero per-machine code changes:
+
+- **One codebase, per-environment config.** All differences live in `.env`
+  (local) / App Settings (Azure), never in code. `.env` stays gitignored;
+  ship a `.env.example` documenting every auth variable. The same `git pull`
+  on Windows keeps working exactly as today — deployment to Azure is a
+  *parallel* consumer of the GitHub repo (Actions fires on push to `main`),
+  not a change to the pull workflow.
+- **`main` = deployable.** Day-to-day work happens on branches; merging to
+  `main` is what triggers the Azure deploy. This is the one workflow-habit
+  change: don't push half-finished work to `main` once Actions is wired.
+- **Enterprise Windows runs `AUTH_MODE=dev`.** SSO there is unnecessary
+  (the machine is the access control; the app binds to localhost) and
+  unreliable: the corporate proxy blocks direct Google calls (403 — see
+  docs/PORTING-WINDOWS.md) and would MITM the OIDC token exchange. Dev mode
+  sidesteps all of it. The `WEBSITE_SITE_NAME` guard (§1.3) still ensures
+  dev mode can never reach Azure.
+- **If real SSO on Windows is ever wanted:** Microsoft login should work on
+  the corporate network (it's the same Entra infrastructure as M365);
+  Google likely stays blocked. `localhost` redirect URIs are
+  machine-independent — the same `http://localhost:8002/...` registration
+  covers Mac *and* Windows. The outbound token-exchange call needs the
+  corporate proxy env vars + the existing `truststore` injection (gotcha
+  #5), which already handles the MITM root CA.
+- **Secrets placement per environment:** Mac `.env` (dev IdP secrets,
+  optional), Windows `.env` (none needed in dev mode), GitHub repo secrets
+  (only the Azure deploy credential), Azure App Settings (everything
+  production). The IdP client secrets and `SESSION_SECRET` exist **only**
+  in Azure App Settings — they are never needed on either laptop unless
+  testing the real OIDC flow locally.
+
+> **Governance flag (raise-once, owner's call):** production will be
+> client-confidential data running on a *personal* Azure subscription,
+> deployed from a *personal* GitHub repo, with the enterprise machine
+> pulling from it. Depending on firm policy that combination may need
+> sign-off; moving later means re-pointing GitHub Actions at an enterprise
+> subscription — the app itself doesn't change.
+
 ## Phase 4 — Hardening (after it works)
 
 - **Key Vault references** for secrets instead of plain App Settings.
