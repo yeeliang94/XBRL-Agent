@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XBRL Agent — Orchestration Hardening &amp; Agent-Effectiveness Plan</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --muted:#5b5b5b; --faint:#8a8a8a;
+    --line:#e3e3e0; --bg:#fbfbfa; --card:#ffffff;
+    --accent:#d04a02;        /* PwC orange */
+    --accent-soft:#fbe9df;
+    --good:#1a7f4b; --good-soft:#e6f3ec;
+    --bad:#b3261e;  --bad-soft:#fbe8e7;
+    --warn:#9a6700; --warn-soft:#fdf3d8;
+    --info:#1d4f91; --info-soft:#e8eef7;
+    --code-bg:#f4f4f2; --code-ink:#2a2a2a;
+    --mono:"SF Mono",ui-monospace,"Menlo",Consolas,monospace;
+    --sans:-apple-system,"Helvetica Neue",Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:16px; line-height:1.6; -webkit-font-smoothing:antialiased}
+  .wrap{max-width:960px; margin:0 auto; padding:0 28px}
+  .hero{border-bottom:1px solid var(--line); background:var(--card); padding:56px 0 40px}
+  .kicker{font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:700; margin:0 0 14px}
+  h1{font-size:32px; line-height:1.18; margin:0 0 16px; font-weight:700; letter-spacing:-.01em}
+  .lede{font-size:17px; color:var(--muted); margin:0; max-width:46em}
+  .meta{margin-top:24px; font-size:13px; color:var(--faint); display:flex; gap:20px; flex-wrap:wrap}
+  .meta b{color:var(--muted); font-weight:600}
+  main{padding:48px 0 80px}
+  h2{font-size:24px; margin:60px 0 8px; padding-top:16px; font-weight:700; letter-spacing:-.01em; border-top:1px solid var(--line)}
+  h2 .num{color:var(--accent); margin-right:10px}
+  p{margin:12px 0}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono); font-size:.86em; background:var(--code-bg); color:var(--code-ink); padding:.1em .38em; border-radius:4px}
+  .toc{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:22px 26px; margin:36px 0 8px}
+  .toc h4{margin:0 0 12px; text-transform:uppercase; letter-spacing:.1em; font-size:11.5px; color:var(--faint)}
+  .toc ol{margin:0; padding-left:20px; columns:2; column-gap:36px}
+  .toc li{margin:5px 0; break-inside:avoid}
+  .toc a{color:var(--ink); font-size:14.5px}
+  table{border-collapse:collapse; width:100%; margin:18px 0; font-size:14px; background:var(--card)}
+  th,td{border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top}
+  th{background:var(--code-bg); font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted)}
+  td.c,th.c{text-align:center; white-space:nowrap}
+  .callout{border-radius:10px; padding:16px 20px; margin:20px 0; border:1px solid; font-size:15px}
+  .callout p:first-child{margin-top:0}.callout p:last-child{margin-bottom:0}
+  .callout .tag{font-weight:700; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; display:block; margin-bottom:6px}
+  .c-principle{background:var(--accent-soft); border-color:#f1cbb4}
+  .c-principle .tag{color:var(--accent)}
+  .c-warn{background:var(--warn-soft); border-color:#ecd9a0}
+  .c-warn .tag{color:var(--warn)}
+  /* item cards */
+  .item{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:22px 26px 18px; margin:26px 0}
+  .item h3{font-size:18px; margin:0 0 4px; font-weight:650; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+  .iid{font-family:var(--mono); font-size:13px; color:var(--accent); font-weight:700}
+  .badges{margin-left:auto; display:flex; gap:6px}
+  .b{font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:2px 9px; border-radius:99px; white-space:nowrap}
+  .b-effort{background:var(--info-soft); color:var(--info)}
+  .b-phase{background:var(--code-bg); color:var(--muted)}
+  .block{margin:14px 0 0; padding-top:10px; border-top:1px dashed var(--line); font-size:14.5px}
+  .block .tag{display:block; font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); margin-bottom:4px}
+  .block.prob .tag{color:var(--bad)}
+  .block.change .tag{color:var(--accent)}
+  .block.accept .tag{color:var(--good)}
+  .block ol{margin:6px 0 4px; padding-left:22px}
+  .block li{margin:5px 0}
+  .block p{margin:6px 0 4px}
+  ul{margin:8px 0; padding-left:22px}
+  li{margin:4px 0}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="kicker">XBRL Agent · Engineering Plan</p>
+    <h1>Orchestration Hardening &amp; Agent-Effectiveness Plan</h1>
+    <p class="lede">Concrete, per-item implementation plans for the 32 improvements selected from
+    the June 2026 harness survey of the scout, extraction, reviewer, and notes agents.
+    Each item
+    names the files it touches, the helpers it reuses, the pinning tests that gate it, and an
+    observable acceptance criterion.</p>
+    <div class="meta">
+      <span><b>Date</b> 2026-06-11</span>
+      <span><b>Branch</b> claude/agent-orchestration-hardening-ruyrbd</span>
+      <span><b>Items</b> 32 (numbered 1–19, 23–30, 32, N1–N4)</span>
+    </div>
+  </div>
+</header>
+
+<main>
+<div class="wrap">
+
+<div class="callout c-principle">
+  <span class="tag">Scope note</span>
+  <p>Four items from the original survey were explicitly removed by the owner and are <b>not</b> in
+  this plan: the <code>view_region</code> zoom tool, deterministic table pre-extraction, all OCR
+  workflows (including OCR-indexed search and the printed-folio page map), and confidence-routed
+  review. Item numbering is kept from the working session so the gaps (20–22, 31) are intentional.</p>
+</div>
+
+<div class="toc">
+  <h4>Contents</h4>
+  <ol>
+    <li><a href="#summary">Summary table</a></li>
+    <li><a href="#phasing">Suggested execution phasing</a></li>
+    <li><a href="#group-a">A — Scout hardening (1–5)</a></li>
+    <li><a href="#group-b">B — Extraction hardening (6–10)</a></li>
+    <li><a href="#group-c">C — Reviewer hardening (11–15)</a></li>
+    <li><a href="#group-d">D — Orchestrator-wide (16–18)</a></li>
+    <li><a href="#group-e">E — Agent effectiveness (19, 23–25)</a></li>
+    <li><a href="#group-f">F — Learning &amp; orchestration (26–30)</a></li>
+    <li><a href="#group-g">G — Notes pipeline (N1–N4)</a></li>
+    <li><a href="#group-h">H — Architecture (32)</a></li>
+  </ol>
+</div>
+
+<h2 id="summary"><span class="num">§1</span>Summary table</h2>
+
+<table>
+  <thead><tr><th class="c">#</th><th>Item</th><th class="c">Group</th><th class="c">Effort</th><th class="c">Gotcha touched</th><th class="c">Phase</th></tr></thead>
+  <tbody>
+    <tr><td class="c"><a href="#item-16">16</a></td><td>Cross-checks off the event loop, with timeout</td><td class="c">D</td><td class="c">S</td><td class="c">#19 #20</td><td class="c">P1</td></tr>
+    <tr><td class="c"><a href="#item-8">8</a></td><td>Atomic workbook saves everywhere</td><td class="c">B</td><td class="c">S</td><td class="c">#22</td><td class="c">P1</td></tr>
+    <tr><td class="c"><a href="#item-18">18</a></td><td>Wedged-task logging on cancellation</td><td class="c">D</td><td class="c">S</td><td class="c">#10</td><td class="c">P1</td></tr>
+    <tr><td class="c"><a href="#item-15">15</a></td><td>elapsed_seconds in reviewer outcome</td><td class="c">C</td><td class="c">S</td><td class="c">—</td><td class="c">P1</td></tr>
+    <tr><td class="c"><a href="#item-1">1</a></td><td>Scout per-turn + wall-clock timeout</td><td class="c">A</td><td class="c">M</td><td class="c">#18</td><td class="c">P2</td></tr>
+    <tr><td class="c"><a href="#item-2">2</a></td><td>Persist scout conversation trace</td><td class="c">A</td><td class="c">S</td><td class="c">#6</td><td class="c">P2</td></tr>
+    <tr><td class="c"><a href="#item-3">3</a></td><td>Loud warnings on infopack coercions</td><td class="c">A</td><td class="c">S</td><td class="c">#13 #17</td><td class="c">P2</td></tr>
+    <tr><td class="c"><a href="#item-4">4</a></td><td>note_num sanity bounds</td><td class="c">A</td><td class="c">S</td><td class="c">#13</td><td class="c">P2</td></tr>
+    <tr><td class="c"><a href="#item-5">5</a></td><td>Explicit scanned-PDF signal</td><td class="c">A</td><td class="c">S</td><td class="c">#13</td><td class="c">P2</td></tr>
+    <tr><td class="c"><a href="#item-6">6</a></td><td>Face-agent wall-clock cap</td><td class="c">B</td><td class="c">S–M</td><td class="c">#18</td><td class="c">P3</td></tr>
+    <tr><td class="c"><a href="#item-7">7</a></td><td>Per-agent token budget</td><td class="c">B</td><td class="c">S</td><td class="c">#6 #18</td><td class="c">P3</td></tr>
+    <tr><td class="c"><a href="#item-9">9</a></td><td>Structured error_type taxonomy (schema v17)</td><td class="c">B</td><td class="c">M</td><td class="c">#11</td><td class="c">P3</td></tr>
+    <tr><td class="c"><a href="#item-10">10</a></td><td>Transient-error retry for face agents</td><td class="c">B</td><td class="c">M</td><td class="c">—</td><td class="c">P3</td></tr>
+    <tr><td class="c"><a href="#item-17">17</a></td><td>AgentLoopSpec consolidation (wall-clock first-class)</td><td class="c">D</td><td class="c">M–L</td><td class="c">#18</td><td class="c">P3 (last)</td></tr>
+    <tr><td class="c"><a href="#item-11">11</a></td><td>Surface cascade failures (revert + post-pass)</td><td class="c">C</td><td class="c">S</td><td class="c">#21</td><td class="c">P4</td></tr>
+    <tr><td class="c"><a href="#item-12">12</a></td><td>Stale-download marker after failed re-export</td><td class="c">C</td><td class="c">S</td><td class="c">#21</td><td class="c">P4</td></tr>
+    <tr><td class="c"><a href="#item-13">13</a></td><td>Snapshot race fix (BEGIN IMMEDIATE)</td><td class="c">C</td><td class="c">S</td><td class="c">#21</td><td class="c">P4</td></tr>
+    <tr><td class="c"><a href="#item-14">14</a></td><td>apply_fix rejection telemetry</td><td class="c">C</td><td class="c">S</td><td class="c">#17 #21</td><td class="c">P4</td></tr>
+    <tr><td class="c"><a href="#item-19">19</a></td><td>search_pdf_text tool</td><td class="c">E</td><td class="c">S–M</td><td class="c">#13</td><td class="c">P5</td></tr>
+    <tr><td class="c"><a href="#item-24">24</a></td><td>Magnitude (scale-unit) sanity check</td><td class="c">E</td><td class="c">S</td><td class="c">#17</td><td class="c">P5</td></tr>
+    <tr><td class="c"><a href="#item-23">23</a></td><td>Face-agent coverage receipts</td><td class="c">E</td><td class="c">M</td><td class="c">#13 #17</td><td class="c">P5</td></tr>
+    <tr><td class="c"><a href="#item-25">25</a></td><td>Reviewer reverse-lookup tool</td><td class="c">E</td><td class="c">M</td><td class="c">#21</td><td class="c">P5</td></tr>
+    <tr><td class="c"><a href="#item-N4">N4</a></td><td>Generalized citation-consistency check</td><td class="c">G</td><td class="c">S–M</td><td class="c">#14</td><td class="c">P6</td></tr>
+    <tr><td class="c"><a href="#item-N2">N2</a></td><td>Single-sheet notes coverage receipts</td><td class="c">G</td><td class="c">M</td><td class="c">#14</td><td class="c">P6</td></tr>
+    <tr><td class="c"><a href="#item-N1">N1</a></td><td>Notes↔face numeric tie-out checks</td><td class="c">G</td><td class="c">M</td><td class="c">#14 #21</td><td class="c">P6</td></tr>
+    <tr><td class="c"><a href="#item-N3">N3</a></td><td>Notes review coverage (validator extension)</td><td class="c">G</td><td class="c">L</td><td class="c">#16 #22</td><td class="c">P6</td></tr>
+    <tr><td class="c"><a href="#item-26">26</a></td><td>Eval regression harness</td><td class="c">F</td><td class="c">M</td><td class="c">#23</td><td class="c">P7</td></tr>
+    <tr><td class="c"><a href="#item-27">27</a></td><td>Mine reviewer flags into exemplars</td><td class="c">F</td><td class="c">M</td><td class="c">#21</td><td class="c">P7</td></tr>
+    <tr><td class="c"><a href="#item-28">28</a></td><td>Per-entity advisory memory</td><td class="c">F</td><td class="c">M</td><td class="c">#13 #14</td><td class="c">P7</td></tr>
+    <tr><td class="c"><a href="#item-30">30</a></td><td>Context compaction (history processor)</td><td class="c">F</td><td class="c">M</td><td class="c">#2 #6</td><td class="c">P7</td></tr>
+    <tr><td class="c"><a href="#item-29">29</a></td><td>Delegation sub-agents (design first)</td><td class="c">F</td><td class="c">L</td><td class="c">#14</td><td class="c">Future</td></tr>
+    <tr><td class="c"><a href="#item-32">32</a></td><td>Excel-free verification pipeline</td><td class="c">H</td><td class="c">L</td><td class="c">#3 #4 #22</td><td class="c">Future</td></tr>
+  </tbody>
+</table>
+
+<h2 id="phasing"><span class="num">§2</span>Suggested execution phasing</h2>
+
+<p>Phases are ordered by risk-reduction per unit of effort, and by dependency. Each phase is
+independently shippable; nothing in a later phase blocks an earlier one.</p>
+
+<table>
+  <thead><tr><th class="c">Phase</th><th>Theme</th><th>Items</th><th>Why this order</th></tr></thead>
+  <tbody>
+    <tr><td class="c">P1</td><td>Stop the bleeding</td><td>16, 8, 18, 15</td><td>All small; #16 unblocks the whole server's event loop, #8 closes a documented incident class (gotcha #22).</td></tr>
+    <tr><td class="c">P2</td><td>Scout parity</td><td>1, 2, 3, 4, 5</td><td>The scout is the only agent with no harness; a scout hang stalls every run before it starts.</td></tr>
+    <tr><td class="c">P3</td><td>Extraction bounds</td><td>6, 7, 9, 10, then 17</td><td>Face agents are the longest runners and currently unbounded in wall-time and spend. 17 consolidates after 1 &amp; 6 prove the pattern.</td></tr>
+    <tr><td class="c">P4</td><td>Reviewer consistency</td><td>11, 12, 13, 14</td><td>Closes the silent DB↔xlsx split-brain and race windows around revert/re-review.</td></tr>
+    <tr><td class="c">P5</td><td>Effectiveness tools</td><td>19, 24, 23, 25</td><td>Highest agent-quality return; 19 (search) also speeds every later live test cycle.</td></tr>
+    <tr><td class="c">P6</td><td>Notes quality</td><td>N4, N2, N1, N3</td><td>Ordered smallest-first; N1/N3 close the "nobody checks notes numbers / nobody reviews notes" blind spots.</td></tr>
+    <tr><td class="c">P7</td><td>Learning loops</td><td>26, 27, 28, 30</td><td>Compounding payoff once the harnesses above stabilise run quality.</td></tr>
+    <tr><td class="c">Future</td><td>Design-first projects</td><td>29, 32</td><td>Each needs its own plan doc before code; scheduled when their pain recurs.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout c-warn">
+  <span class="tag">House rule reminder</span>
+  <p>Per CLAUDE.md, every item that brushes a load-bearing invariant must land <b>with its pinning
+  test in the same commit</b>, and "done" means the named test passes — not "looks right". Each card
+  below names its tests for exactly that reason.</p>
+</div>
+
+<!-- ================= GROUP A ================= -->
+<h2 id="group-a"><span class="num">A</span>Scout hardening</h2>
+<p>The scout feeds page hints, face-line refs, the notes inventory, and entity context to every
+downstream agent — yet it is the only agent with no per-turn timeout, no wall-clock cap, no trace
+persistence, and several silent-coercion paths. These five items bring it to parity with the
+face/notes harnesses.</p>
+
+<section class="item" id="item-1">
+  <h3><span class="iid">1</span> Scout per-turn + wall-clock timeout
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 2</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p><code>run_scout_streaming</code> (<code>scout/agent.py</code> ~L1188) iterates
+    <code>agent.iter()</code> with only a between-turns check against
+    <code>MAX_AGENT_ITERATIONS</code>. A single stalled model request hangs the scout — and the run
+    — indefinitely. This is the exact failure mode <code>NOTES_TURN_TIMEOUT</code>
+    (<code>notes/coordinator.py:128</code>) was added to fix for notes agents. The SSE endpoint
+    (<code>api/uploads.py:128–246</code>) has no server-side timeout either.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Migrate the scout's iteration loop onto <code>agent_runner.iter_with_turn_timeout</code>
+      (or fully onto <code>run_agent_loop</code> with a scout <code>AgentLoopSpec</code>): add
+      <code>SCOUT_TURN_TIMEOUT = 180.0</code> module constant in <code>scout/agent.py</code>.</li>
+      <li>Wrap the whole scout run in a monotonic wall-clock check mirroring
+      <code>server._run_reviewer_pass</code>: <code>XBRL_SCOUT_WALLCLOCK_S</code> env override,
+      default <code>300</code>, <code>0</code> disables (same resolver semantics as
+      <code>XBRL_CORRECTION_WALLCLOCK_S</code>).</li>
+      <li>On expiry, emit a structured SSE <code>error</code> event ("scout timed out — run can
+      proceed without hints") and return a degraded-but-valid empty <code>Infopack</code>, since the
+      whole pipeline already degrades gracefully on missing scout output (gotcha #13).</li>
+      <li>Apply the same wrapper to the non-streaming <code>run_scout</code> path
+      (<code>scout/agent.py</code> ~L1131–1185) used by the CLI.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>agent_runner.iter_with_turn_timeout</code> / <code>AgentLoopSpec</code> (rewrite Phase 2);
+    the wall-clock resolver pattern in <code>server.py:903–918</code>.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_scout_turn_timeout.py</code> mirroring
+    <code>tests/test_notes_turn_timeout</code> (stalled-model stub → structured timeout, not hang);
+    a wall-clock case with a tiny cap. Existing scout suites
+    (<code>test_scout_face_line_refs_wiring.py</code>, <code>test_scout_populates_context.py</code>)
+    stay green.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A scout whose model never responds terminates within
+    <code>SCOUT_TURN_TIMEOUT + ε</code> with a structured SSE error, and the upload page shows the
+    failure instead of an eternal spinner.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #18: turn caps must stay below pydantic-ai's silent 50 — unchanged here; the scout
+    already uses <code>MAX_AGENT_ITERATIONS</code>. Gotcha #13: timeout fallback must NOT introduce
+    page restrictions — it returns an empty infopack, never a partial "allowed pages" set.</p></div>
+</section>
+
+<section class="item" id="item-2">
+  <h3><span class="iid">2</span> Persist scout conversation trace
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>The scout never calls <code>save_agent_trace</code> — when it misses a statement, mislabels a
+    variant, or hallucinates a page there is no transcript to debug. Face and notes agents persist
+    traces on success <em>and</em> failure (gotcha #6: "the trace viewer is useful exactly when
+    debugging a failure"); the scout is the one agent that doesn't.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>On scout completion in <code>run_scout_streaming</code>, call
+      <code>agent_tracing.save_agent_trace(result, output_dir, "SCOUT", turns=…)</code> writing
+      <code>scout_conversation_trace.json</code> into the session output dir.</li>
+      <li>On the new timeout / exception paths (item 1), use the best-effort
+      <code>save_messages_trace</code> fallback from <code>agent_run.ctx.state.message_history</code>
+      — same pattern the face coordinator uses for partial runs.</li>
+      <li>(Optional, same shape as existing) extend
+      <code>GET /api/runs/{id}/agents/{stmt}/trace</code> to accept <code>SCOUT</code> as a
+      pseudo-statement so the trace viewer can open it; the path-containment check already
+      generalises.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>agent_tracing.save_agent_trace</code> / <code>save_messages_trace</code> (100 KB payload
+    cap, binary elision) — no new serialisation code.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_agent_tracing.py</code>: scout success writes the file; scout failure
+    writes the partial-history fallback. Hybrid-storage rule asserted (trace on disk, never in
+    SQLite).</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>Every scout invocation — success, timeout, crash — leaves
+    <code>scout_conversation_trace.json</code> in the session dir.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #6 hybrid storage: verbatim content stays on disk, not the DB. Honour the 100 KB
+    per-payload cap (scout turns include page images — the binary-elision path matters).</p></div>
+</section>
+
+<section class="item" id="item-3">
+  <h3><span class="iid">3</span> Loud warnings on infopack coercions
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p><code>_save_infopack_impl</code> (<code>scout/agent.py</code> ~L785–787) and
+    <code>Infopack.from_json</code> (<code>scout/infopack.py</code> ~L337–358) silently coerce
+    invalid <code>scale_unit</code> / <code>consolidation_level</code> / <code>detected_standard</code>
+    values to <code>"unknown"</code>. Given that a wrong scale unit "silently inflates every
+    extracted value" (gotcha #13's own wording, sibling of #17), a coercion is a signal worth
+    surfacing, not swallowing.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>At each coercion site, <code>logger.warning("scout emitted invalid %s=%r — coerced to
+      'unknown'", field, raw)</code>.</li>
+      <li>Add a <code>coerced_fields</code> list to the survival-count telemetry block the save
+      already emits (<code>scout/agent.py</code> ~L827–844) so degradation is visible in the SSE
+      stream / logs, not only server-side.</li>
+      <li>Same treatment in <code>from_json</code>'s malformed-entry drops (~L233–335): count
+      dropped face refs / inventory entries into the same telemetry summary.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The existing survival-count emission — extend its payload rather than inventing a new event
+    type (the frontend SSE filter only recognises the fixed vocabulary; see the warnings-on-complete
+    precedent in <code>notes/coordinator.py</code>).</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New cases in the infopack suite (<code>tests/test_infopack_context_schema.py</code> area):
+    invalid scale_unit → coerced AND warning logged (use <code>caplog</code>) AND counted in the
+    telemetry dict.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>No silent coercions remain: every coercion or dropped entry is visible in logs and in the
+    save-time telemetry summary.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Coercion behaviour itself is unchanged (defensive deserialisation stays — gotcha #13's
+    graceful degradation); only the observability changes.</p></div>
+</section>
+
+<section class="item" id="item-4">
+  <h3><span class="iid">4</span> note_num sanity bounds
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p><code>FaceLineRef.note_num</code> is validated only as <code>≥ 1</code>
+    (<code>scout/infopack.py:62–71</code>); the vision inventory schema allows 1–999
+    (<code>scout/notes_discoverer_vision.py:58</code> <code>Field(ge=1, le=999)</code>). A
+    hallucinated "Note 743" on a 30-note filing sends a face agent hunting for a note that doesn't
+    exist.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Add a module constant <code>MAX_PLAUSIBLE_NOTE_NUM = 150</code> in
+      <code>scout/infopack.py</code>.</li>
+      <li>In <code>_save_infopack_impl</code>, drop (with a warning, feeding item 3's telemetry) any
+      LLM-emitted <code>FaceLineRef</code> whose <code>note_num</code> exceeds the bound — or, when
+      the deterministic inventory is non-empty, exceeds <code>max(inventory note_num) + 5</code>
+      (tighter, evidence-based bound).</li>
+      <li>Tighten the vision schema to <code>le=150</code>; keep the
+      <code>Field(ge=1, …)</code> contract gotcha #13 documents so the
+      <code>int(item["note_num"])</code> coercions in <code>notes/coverage.py:256</code> are
+      untouched.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>Existing drop-with-warning machinery in <code>from_json</code>; item 3's telemetry list.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_scout_face_line_refs_schema.py</code>: ref with
+    <code>note_num=743</code> dropped + warned; ref at the boundary kept. Vision schema test for the
+    new ceiling. <code>tests/test_sheet12_ignores_subnotes.py</code> stays green (sub-note refs are
+    strings, unaffected).</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>No infopack can carry a face-line ref pointing at a note number beyond the plausible bound;
+    drops are visible in telemetry.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #13: hints stay advisory — this filters obviously-invalid hints, it does not restrict
+    pages or enforce hint usage. The negative assertions in <code>tests/test_page_hints.py</code>
+    must stay green.</p></div>
+</section>
+
+<section class="item" id="item-5">
+  <h3><span class="iid">5</span> Explicit scanned-PDF signal from face-structure reads
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>On scanned PDFs the deterministic regex (<code>scout/face_structure.py:85–152</code>) returns
+    <code>[]</code> silently. The scout's prompt tells it to populate <code>face_line_refs</code>
+    itself in that case, but nothing tells the LLM the regex came back empty, and nothing detects
+    when the LLM <em>also</em> fails to populate — downstream face agents just silently lose the
+    structural hint.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li><code>_read_face_structure_impl</code> (<code>scout/agent.py</code> ~L309–354): when the
+      regex yields zero refs, include <code>"scanned_hint": true</code> and one explicit sentence in
+      the tool's JSON return ("no text layer found — likely a scanned page; populate
+      face_line_refs from the page image yourself").</li>
+      <li>In <code>_save_infopack_impl</code>: when the regex was empty AND the LLM submitted no
+      refs for a statement that was read in detail, log a warning and count it in item 3's
+      telemetry ("face refs unavailable for SOFP — scanned page, LLM did not populate").</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The existing <code>face_read_in_detail</code> flag and the cached-regex-vs-LLM merge logic at
+    <code>scout/agent.py</code> ~L620–681.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_scout_face_line_refs_wiring.py</code>: empty-regex path returns the
+    hint field; save-time warning fires when both sources are empty. Prompt-render tests
+    (<code>test_prompts_render_scout_face_refs.py</code>) unchanged — empty refs still fall through
+    to the bare hint block.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A scanned-PDF scout run either produces LLM-populated face refs or a visible warning naming
+    the statements that lost them — never a silent gap.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #13's graceful degradation is preserved: empty refs remain valid output. The
+    confidence-gating from PLAN Phase 8 (scanned face-refs survival counts) is the adjacent code —
+    extend, don't fork, its counters.</p></div>
+</section>
+
+<!-- ================= GROUP B ================= -->
+<h2 id="group-b"><span class="num">B</span>Extraction hardening</h2>
+<p>The face loop already has a 180s per-turn timeout, a 40-iteration cap, and timeout/iteration-cap
+salvage paths. What it lacks: an overall time ceiling, a spend ceiling, transient-error tolerance,
+atomic file writes, and a failure taxonomy.</p>
+
+<section class="item" id="item-6">
+  <h3><span class="iid">6</span> Face-agent wall-clock cap
+    <span class="badges"><span class="b b-effort">Effort S–M</span><span class="b b-phase">Phase 3</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p><code>coordinator.py::_run_single_agent</code> (~L473–615) bounds each turn (180s) and the
+    turn count (40) but not the total: 40 slow-but-compliant turns is legally ~2 hours per agent.
+    The correction and notes-validator passes both received wall-clock caps (gotcha #18); the face
+    agents — the longest-running components — never did.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Add <code>FACE_WALLCLOCK_TIMEOUT</code> (default <code>1800.0</code>) to
+      <code>coordinator.py</code>, resolved via <code>XBRL_FACE_WALLCLOCK_S</code> with the same
+      positive/zero-disables semantics as <code>XBRL_CORRECTION_WALLCLOCK_S</code>
+      (<code>server.py:903–918</code>).</li>
+      <li>Check <code>time.monotonic()</code> against the cap at the top of each loop iteration in
+      <code>_run_single_agent</code> (the same in-loop placement as
+      <code>server._run_reviewer_pass</code> ~L1136).</li>
+      <li>On expiry, route through the <b>existing salvage logic</b> (coordinator.py ~L776–858): if
+      <code>deps.filled_path</code> exists and the last verification was clean → status
+      <code>succeeded</code> with reason <code>wallclock_after_write</code>; else
+      <code>failed</code> with a structured message. Save the partial trace via the existing
+      best-effort helper.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The timeout/iteration-cap salvage branches (do not write a third copy — extract a small
+    <code>_salvage_or_fail(reason)</code> helper used by all three exits); the wall-clock env
+    resolver from server.py.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_face_wallclock_cap.py</code>: tiny cap + slow-stub model → terminal
+    result within bound; salvage case (workbook written + clean verify) lands
+    <code>succeeded</code>; pre-write case lands <code>failed</code>.
+    <code>tests/test_max_agent_iterations_below_pydantic_cap.py</code> unaffected.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>No face agent can run past the cap; expiry after a clean write keeps the user's workbook
+    (mirrors the Stop-All partial-merge philosophy, gotcha #10).</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #18: this is additive defence-in-depth — the 40-turn cap and 180s turn timeout stay
+    exactly as-is.</p></div>
+</section>
+
+<section class="item" id="item-7">
+  <h3><span class="iid">7</span> Per-agent token budget
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 3</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Iterations are bounded; tokens are not. A verbose model on a large PDF can burn millions of
+    tokens within 40 legal turns — runaway cost with no early exit. The per-turn cumulative-usage
+    delta is already computed for v8 telemetry (gotcha #6), so the measurement exists; only the
+    ceiling is missing.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>In <code>agent_runner.run_agent_loop</code>, accumulate the per-turn total-token delta it
+      already derives; compare against a new optional <code>AgentLoopSpec.token_budget</code>.</li>
+      <li>Resolve the budget from <code>XBRL_MAX_TOKENS_PER_AGENT</code> (default <code>0</code> =
+      disabled — opt-in first, flip the default after observing real run costs).</li>
+      <li>On breach, raise a structured <code>TokenBudgetExceeded(RuntimeError)</code>; map it in
+      <code>_run_single_agent</code> to the same salvage-or-fail handling as
+      <code>IterationLimitReached</code>, with reason <code>token_budget_exceeded</code>.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The v8 per-turn usage delta in <code>run_agent_loop</code>; the
+    <code>IterationLimitReached</code> exception/handling pattern; item 6's
+    <code>_salvage_or_fail</code> helper.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New cases in the agent-runner suite: budget breach → structured exception at the next turn
+    boundary; budget=0 → never fires; salvage mapping in the coordinator test alongside item 6's.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>With a budget set, an agent stops within one turn of crossing it and reports
+    <code>token_budget_exceeded</code> in its result (and item 9's <code>error_type</code>).</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #6: per-turn token figures are best-effort deltas — the budget check tolerates that
+    (it bounds spend approximately, which is its job; exactness is not required).</p></div>
+</section>
+
+<section class="item" id="item-8">
+  <h3><span class="iid">8</span> Atomic workbook saves everywhere
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Gotcha #22 fixed the notes validator with <code>_atomic_save_workbook</code> (tempfile +
+    <code>os.replace</code>) after the 2026-05-29 Windows <code>EOFError</code> incident, and
+    explicitly flags the same load→save-in-place pattern as <b>latent</b> in
+    <code>tools/fill_workbook.py</code> and <code>concept_model/exporter.py</code>. Verified: neither
+    file contains <code>os.replace</code> today. pydantic-ai's parallel tool execution makes the
+    race one prompt-tweak away from recurring.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Move <code>_atomic_save_workbook</code> out of <code>notes/validator_agent.py</code> into a
+      shared <code>utils/workbook_io.py</code> (keep a re-export alias in the validator so its
+      imports and tests are untouched).</li>
+      <li>Replace the direct <code>wb.save(path)</code> in <code>tools/fill_workbook.py</code>
+      (~L402) and in <code>concept_model/exporter.py</code>'s write path with the atomic helper.</li>
+      <li>Audit remaining live-path savers (<code>notes/writer.py</code>,
+      <code>workbook_merger.py</code>) and convert them in the same pass — one mechanism, zero
+      stragglers.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The proven helper itself — atomic on Windows + POSIX, already battle-tested by
+    <code>tests/test_notes_validator_agent.py::TestWorkbookIoRaceSafety</code>.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p><code>TestWorkbookIoRaceSafety</code> stays green against the moved helper. New unit test:
+    <code>fill_workbook</code> writes via <code>os.replace</code> (monkeypatch-spy), and a
+    mid-save-interrupt simulation leaves the old file intact.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>No live code path saves a workbook with in-place <code>wb.save()</code>; a reader
+    concurrent with any save sees old-or-new, never a truncated zip.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Directly closes gotcha #22's "latent elsewhere — don't reintroduce the pattern" warning.
+    Update that gotcha's text when this lands.</p></div>
+</section>
+
+<section class="item" id="item-9">
+  <h3><span class="iid">9</span> Structured <code>error_type</code> taxonomy (schema v17)
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 3</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Every agent failure collapses into one free-text <code>error</code> string in
+    <code>run_agents</code>. Post-mortems and the Telemetry tab can't distinguish "DB projection
+    failed" from "save-gate never opened" from "turn timed out" without string-grepping.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li><code>db/schema.py</code>: bump <code>CURRENT_SCHEMA_VERSION</code> 16→17; add nullable
+      <code>run_agents.error_type TEXT</code> via <code>_V17_MIGRATION_COLUMNS</code> (additive
+      ALTER, follows the v15 columns pattern). No CHECK constraint — same rationale as
+      <code>runs.status</code>.</li>
+      <li>Define the vocabulary as constants next to <code>AgentResult</code>:
+      <code>turn_timeout · iteration_capped · wallclock · token_budget_exceeded ·
+      projection_failed · save_gate_refused · tool_exception · cancelled · no_write</code>.</li>
+      <li>Set it at each failure branch in <code>coordinator.py::_run_single_agent</code> and the
+      notes coordinator's terminal results; thread through
+      <code>repo.finish_run_agent</code> into the row.</li>
+      <li>Surface read-only in the run-detail Agents tab + History API payloads (additive field;
+      frontend renders a small badge).</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The v11–v16 migration-step pattern (idempotent walk-forward, nullable column);
+    salvage-reason strings from items 6/7 double as <code>error_type</code> values.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_db_schema_v17.py</code> (fresh-init + v16→v17 walk, per the series);
+    coordinator test asserting each failure branch writes its taxonomy value.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>Every failed/cancelled agent row carries a non-null <code>error_type</code>; History can be
+    grouped by failure class.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #11: column must be nullable (SQLite ALTER constraint); old DBs walk forward
+    one version at a time; each step idempotent.</p></div>
+</section>
+
+<section class="item" id="item-10">
+  <h3><span class="iid">10</span> Transient-error retry for face agents
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 3</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Notes agents retry once on any non-cancellation error plus a separate 3-deep rate-limit
+    budget with honoured retry-after (<code>notes/coordinator.py:510–646</code>). Face agents have
+    <b>zero</b> retries (<code>coordinator.py:884–905</code>): one transient proxy blip or 429 fails
+    the whole statement.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Wrap the single-attempt body of <code>_run_single_agent</code> in a retry loop that fires
+      <b>only</b> for errors classified transient: <code>notes/_rate_limit.is_rate_limit_error</code>
+      (429s, honouring <code>compute_backoff_delay</code> with up to
+      <code>RATE_LIMIT_MAX_RETRIES</code>) and connection-class errors
+      (<code>httpx.ConnectError</code>/<code>ConnectTimeout</code>) with exactly one retry.</li>
+      <li>Generic exceptions keep today's fail-fast behaviour — face retries re-bill a large PDF
+      context, so no blanket retry budget.</li>
+      <li>Schedule backoff sleeps inside the try so a user abort during backoff lands on the
+      CancelledError branch (the notes loop's <code>pending_backoff</code> pattern, verbatim).</li>
+      <li>Emit the existing retry-marker status event style ("retrying (attempt 2) — last error: …")
+      so operators see it live.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>notes/_rate_limit.py</code> wholesale (classification, backoff, budget constants); the
+    notes coordinator's dual-budget loop as the structural template.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_face_transient_retry.py</code> (failure-injection, modelled on
+    <code>tests/test_notes_retry_budget.py</code>): 429 → backoff → success; ConnectError → one
+    retry; ValueError → no retry; cancel-during-backoff → status <code>cancelled</code>.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A single transient provider failure no longer fails a statement; a real code error still
+    fails fast on first occurrence.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Keep the retry whole-attempt (fresh agent + deps) like the notes loop — never resume a
+    half-run conversation. The DB projection (gotcha #21 Phase B) is idempotent per write-batch,
+    so a retried attempt re-projecting is safe; verify with the existing projection tests.</p></div>
+</section>
+
+<!-- ================= GROUP C ================= -->
+<h2 id="group-c"><span class="num">C</span>Reviewer hardening</h2>
+<p>The reviewer loop itself (dynamic turn cap, 180s turns, 300s wall-clock, snapshot-before-write,
+durable <code>run_review_tasks</code>) is sound. These items close the consistency windows around
+its edges — where the DB, the workbook on disk, and the user's mental model can drift apart.</p>
+
+<section class="item" id="item-11">
+  <h3><span class="iid">11</span> Surface cascade failures (revert + post-pass)
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>After "Revert to original", <code>concept_model/versioning.py</code> (~L178–180) runs
+    <code>recompute_after_turn</code> outside the transaction and <b>swallows</b> any exception —
+    the user sees "reverted ✓" while totals are stale and no conflict rows flag it. The reviewer's
+    post-pass re-cascade (<code>server.py</code> ~L1266–1272) swallows identically.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li><code>versioning.revert_to_original</code>: catch the recompute exception, return
+      <code>cascade_ok: false</code> + <code>cascade_error: str</code> in its result instead of
+      suppressing.</li>
+      <li><code>api/reviewer.py</code> revert endpoint: propagate those fields; the response stays
+      200 (facts ARE restored) but carries the warning.</li>
+      <li><code>server._run_reviewer_pass</code>: record <code>outcome["cascade_error"]</code> on the
+      post-pass recompute failure path.</li>
+      <li><code>web/src/components/ReviewTab.tsx</code>: render a warning banner when either field
+      is set ("values restored, but totals could not be recomputed — re-run review or re-check").</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The Review tab's existing flag/banner styling (theme tokens from
+    <code>web/src/lib/theme.ts</code> — gotcha #7, inline styles only).</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_reviewer_versioning.py</code>: recompute raises →
+    <code>cascade_ok=false</code> returned, facts still restored. Route test in
+    <code>tests/test_reviewer_routes.py</code> for the surfaced field. Frontend test for the
+    banner.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A cascade failure after revert or review is visible to the user within the same response —
+    never a silent stale-totals window.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Keep the recompute outside the revert transaction (deliberate — it opens its own
+    connection); only the reporting changes. Gotcha #21's revert guarantee ("restore with one
+    click") is strengthened, not altered.</p></div>
+</section>
+
+<section class="item" id="item-12">
+  <h3><span class="iid">12</span> Stale-download marker after failed re-export
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>After a manual re-review, <code>_reexport_remerge_durable</code> is best-effort: if it fails,
+    <code>run_concept_facts</code> has moved but <code>filled.xlsx</code> hasn't — the Review tab's
+    diff (DB-fed) is correct while the download is stale, with no signal. The inline pass has
+    <code>canonical_export_degraded</code> for per-statement export failures; the re-review path has
+    nothing.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Make <code>_reexport_remerge_durable</code> return success/failure instead of swallowing;
+      on failure write <code>export_stale: true</code> + the error into the re-review outcome dict
+      persisted to <code>run_review_tasks.outcome_json</code>.</li>
+      <li><code>GET /api/runs/{id}/re-review/status</code> already returns the outcome — the field
+      rides along for free.</li>
+      <li>Review tab: badge "download may be stale — re-export failed" with a retry affordance
+      (re-call the durable re-export; endpoint can be the existing download path's re-export-from-
+      facts, which already regenerates on demand).</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>run_review_tasks</code> durability (schema v13) — no new table; the download
+    endpoint's existing re-export-from-facts fallback (<code>server.py</code> ~L360–390) is the
+    natural retry mechanism.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_reviewer_routes.py</code>: forced re-export failure →
+    <code>export_stale</code> in status payload; outcome survives restart (rides the existing
+    simulated-restart test).</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>DB↔xlsx divergence after a re-review is impossible to miss from the Review tab.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #21's "no xlsx split-brain" intent; gotcha #10's never-double-fault rule — the
+    failure write itself stays inside the swallowing <code>_save_review_task</code> (terminal
+    writes are best-effort by design).</p></div>
+</section>
+
+<section class="item" id="item-13">
+  <h3><span class="iid">13</span> Snapshot race fix
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>The reviewer's re-entrancy guard covers <code>run_review_tasks</code>, but the
+    <code>has_snapshot()</code> check and <code>snapshot_facts()</code> write
+    (<code>server.py</code> ~L1042–1059, <code>concept_model/versioning.py:45–89</code>) use two
+    separate connections. Two concurrent passes can interleave between check and write, and a
+    second snapshot would overwrite the first — destroying the original-extraction restore
+    point.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Add <code>versioning.ensure_snapshot(db_path, run_id) -&gt; bool</code> that performs
+      check + insert inside one <code>BEGIN IMMEDIATE</code> transaction (the write-lock-up-front
+      pattern <code>notes/persistence.py</code> already uses) and returns whether it created a new
+      snapshot.</li>
+      <li>Replace the two-step call sites in <code>_run_reviewer_pass</code> with the new helper.
+      Keep the documented overwrite-on-re-review semantics by passing an explicit
+      <code>overwrite=</code> flag where that behaviour is wanted (the deliberate "re-review
+      reverts to original extraction" rule, <code>versioning.py:51</code>).</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The <code>BEGIN IMMEDIATE</code> transaction pattern from notes persistence; existing
+    snapshot insert SQL unchanged.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_reviewer_versioning.py</code>: two threads racing
+    <code>ensure_snapshot</code> → exactly one snapshot row-set, no partial overwrite (thread +
+    barrier test, same style as the workbook-race tests).</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>Concurrent re-review launches cannot corrupt or double-write the restore point.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #21: snapshot-before-any-write is the load-bearing reversibility invariant — this
+    makes it atomic, semantics unchanged.</p></div>
+</section>
+
+<section class="item" id="item-14">
+  <h3><span class="iid">14</span> apply_fix rejection telemetry
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p><code>evaluate_apply_fix_guard</code> (<code>correction/reviewer_agent.py</code> ~L450–508)
+    returns rejection strings to the model, but nothing structured lands anywhere. There is no way
+    to know whether the no-plug guard fires in real runs, or whether
+    <code>prompts/reviewer.md</code> needs tuning to reduce ungrounded attempts.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Have the guard return a machine-readable rejection <em>kind</em> alongside the message:
+      <code>ungrounded · abstract_row · catchall_plug · computed_override</code>.</li>
+      <li>Tally per-kind counters in <code>ReviewerDeps</code> on each rejection; include the dict
+      as <code>outcome["fix_rejections"]</code> in <code>_run_reviewer_pass</code> (rides into
+      <code>run_review_tasks.outcome_json</code> for free).</li>
+      <li>Log one WARN per rejection with kind + concept label.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The existing counter pattern (<code>writes_performed</code>/<code>flags_raised</code> in
+    deps); outcome-dict persistence already in place.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_reviewer_tools.py</code>: each guard branch increments its kind;
+    outcome carries the dict. Existing guard-behaviour tests unchanged — rejection messages keep
+    their text (the model-facing contract).</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>Every reviewer pass reports how many fixes were refused and why, queryable from the status
+    endpoint.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #17/#21: guard behaviour is untouched — telemetry only. Don't soften any rejection
+    path while instrumenting it.</p></div>
+</section>
+
+<section class="item" id="item-15">
+  <h3><span class="iid">15</span> elapsed_seconds in reviewer outcome
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>The outcome dict (<code>server.py</code> ~L962–966) reports <code>turns_used / max_turns</code>
+    but not wall-clock elapsed. "Exhausted at 299s of a 300s cap" vs "exhausted at 120s" is the
+    difference between raising the cap and fixing a slow tool — currently indistinguishable.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Record <code>time.monotonic()</code> at pass start (already done for the cap check);
+      add <code>outcome["elapsed_seconds"] = round(now - start, 1)</code> on every exit path,
+      including exhaustion and error.</li>
+      <li>Do the same for the notes-validator pass outcome while in the file (same pattern,
+      <code>server.py</code> ~L1417–1543).</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The monotonic start timestamp the wall-clock guard already holds.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>One assertion added to the existing reviewer-outcome tests: field present and ≥ 0 on
+    success, exhaustion, and error paths.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>Every reviewer/validator outcome answers "how close to the cap were we" without log
+    spelunking.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>None brushed — additive field on an internal dict.</p></div>
+</section>
+
+<!-- ================= GROUP D ================= -->
+<h2 id="group-d"><span class="num">D</span>Orchestrator-wide</h2>
+
+<section class="item" id="item-16">
+  <h3><span class="iid">16</span> Cross-checks off the event loop, with timeout
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Verified: all three call sites — <code>server.py:473</code> (re-check from facts),
+    <code>:3372</code> (initial pass), <code>:3688</code> (post-correction) — call
+    <code>run_cross_checks</code> <b>synchronously inside async handlers</b>. While it opens and
+    evaluates workbooks, the event loop cannot service SSE queues for <em>any</em> session. It also
+    has no timeout at all, unlike every agent pass (gotcha #18's asymmetry).</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Wrap each call:
+      <code>await asyncio.wait_for(asyncio.to_thread(run_cross_checks, …),
+      timeout=CROSS_CHECK_TIMEOUT)</code>; constant in <code>server.py</code>, default
+      <code>120.0</code>, env <code>XBRL_CROSS_CHECK_TIMEOUT_S</code> (0 disables), same resolver as
+      the other wall-clocks.</li>
+      <li>Map <code>TimeoutError</code> into the <b>existing</b> structured
+      <code>cross_check_exception</code> error path (gotcha #20): empty results, run lands
+      <code>completed_with_errors</code>, <code>run_complete</code> still fires.</li>
+      <li><code>_recheck_from_facts</code> is called from sync request handlers — there, use a plain
+      thread + join-with-timeout or keep it sync but bounded; pick per call-site and keep the
+      best-effort never-raise contract documented in its docstring.</li>
+      <li>Confirm <code>run_cross_checks</code> touches no shared mutable state before threading it
+      (it takes paths + config in, returns results out — review during implementation).</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The <code>cross_check_exception</code> structured-error machinery
+    (<code>tests/test_silent_exception_surfacing.py</code>); the per-pass progress events of gotcha
+    #19 (emission points unchanged — they go through the event queue, not the checker).</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_silent_exception_surfacing.py</code>: a hanging checker stub →
+    timeout → structured error → terminal status preserved. Event-loop liveness test: SSE heartbeat
+    continues while a slow checker runs (asyncio test with a sleeping to_thread stub).
+    <code>tests/test_cross_check_progress_events.py</code> stays green.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A pathological workbook can no longer freeze the server or pin a run in
+    <code>running</code>; SSE stays live during cross-checking.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #19: never yield directly from the generator outside the queue-drain pattern —
+    threading the checker doesn't change emission paths. Gotcha #10: terminal-status contract
+    preserved on the timeout branch.</p></div>
+</section>
+
+<section class="item" id="item-17">
+  <h3><span class="iid">17</span> AgentLoopSpec consolidation — wall-clock as a first-class field
+    <span class="badges"><span class="b b-effort">Effort M–L</span><span class="b b-phase">Phase 3 (last)</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Five harnesses grew timeout/cap/telemetry machinery semi-independently: face + notes already
+    share <code>agent_runner.run_agent_loop</code>, but the reviewer and notes-validator carry
+    hand-rolled in-loop wall-clock checks in <code>server.py</code>, and the scout (pre-item-1) had
+    nothing. Every new hardening fix currently lands five times.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Add <code>wallclock_timeout: float | None</code> to <code>AgentLoopSpec</code>; implement
+      the monotonic check once inside <code>run_agent_loop</code>, raising a structured
+      <code>WallclockExceeded</code>.</li>
+      <li>Migrate callers in order of blast radius: scout (item 1's loop), face (item 6's check),
+      reviewer (<code>server.py</code> ~L1119–1136), notes validator (~L1440–1445) — each replacing
+      its inline check with the spec field; per-caller exception mapping stays local.</li>
+      <li>Delete the per-caller loops only after each caller's suite is green; keep the
+      re-export alias for <code>_iter_with_turn_timeout</code> (the
+      <code>tests/test_notes_turn_timeout</code> import contract noted in
+      <code>notes/coordinator.py:21–24</code>).</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>AgentLoopSpec</code> itself — this finishes the rewrite-Phase-2 consolidation it
+    started.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New spec-level test (wallclock in <code>run_agent_loop</code> fires for any caller);
+    every migrated caller's existing timeout tests must pass unmodified — they pin behaviour, the
+    refactor must be invisible to them.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>One implementation of turn-timeout + wall-clock + per-turn telemetry serves all five
+    harnesses; no hand-rolled loop checks remain in <code>server.py</code>.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Sequenced AFTER items 1 and 6 so the pattern is proven before the refactor. Respect
+    <code>bound_inner_streams=False</code> notes semantics (the long-write_notes carve-out).
+    Gotcha #18's cap relationships unchanged.</p></div>
+</section>
+
+<section class="item" id="item-18">
+  <h3><span class="iid">18</span> Wedged-task logging on cancellation
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>The Stop-All cancel paths (<code>coordinator.py</code> ~L439–452 and
+    <code>notes/coordinator.py:326–332</code>) cancel children and wait 5s. A task wedged in an
+    uninterruptible call survives that wait and leaks silently — there is no signal it ever
+    happened.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Capture the return of <code>asyncio.wait(…, timeout=5.0)</code>; for any still-pending
+      task, <code>logger.warning("cancellation timeout: task %s still pending after 5s — possible
+      leak", task.get_name())</code>.</li>
+      <li>Apply identically in both coordinators (face + notes); include the session id where
+      available so leaks are attributable.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>Tasks are already created with <code>name=agent_id</code> — the log line is free.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New case in the cancellation suites (alongside
+    <code>tests/test_stop_all_preserves_partial.py</code>): a stubborn task (shielded sleep stub) →
+    warning logged, coordinator still raises CancelledError normally.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A leaked task after Stop-All is visible in logs with its agent id — observable, even though
+    not force-killable.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #10: the cancel handler must never double-fault — logging only, no new awaits that
+    can raise.</p></div>
+</section>
+
+<!-- ================= GROUP E ================= -->
+<h2 id="group-e"><span class="num">E</span>Agent effectiveness</h2>
+
+<section class="item" id="item-19">
+  <h3><span class="iid">19</span> <code>search_pdf_text</code> tool
+    <span class="badges"><span class="b b-effort">Effort S–M</span><span class="b b-phase">Phase 5</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Extraction agents have exactly seven tools — none can <em>search</em> the PDF. An agent
+    hunting for "amounts owing by directors" pages through images one viewport at a time. The
+    reviewer has the same blindness when verifying a disputed figure's source. Notes agents suffer
+    most (disclosures scattered across dozens of pages).</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>New <code>tools/pdf_search.py</code>: <code>search_pdf_text(pdf_path, queries:
+      list[str], max_hits=20)</code> over the PyMuPDF text layer; returns
+      <code>(pdf_page, snippet≤200 chars)</code> hits, case-insensitive, multiple queries batched
+      in one call (the batched-<code>calculator</code> convention). All page numbers on the
+      <b>PDF-page scale</b> the other tools use.</li>
+      <li>Scanned detection: if the document's text layer is empty (or a page-sample yields no
+      text), return a single explicit message — "this document appears scanned; text search is
+      unavailable, navigate with page images and scout hints" — never an empty list the model
+      could misread as "term absent".</li>
+      <li>Register as an <code>@agent.tool</code> in <code>extraction/agent.py</code>,
+      <code>notes/agent.py</code>, and the reviewer (<code>correction/reviewer_agent.py</code>);
+      one prompt paragraph each describing intended use (find pages, then VERIFY by viewing).</li>
+      <li>Cap result payload size; truncate snippets at word boundaries; include total-match count
+      when hits are clipped.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>PyMuPDF is already a dependency (<code>tools/pdf_viewer.py</code>, scout); the
+    page-bounds validation style of <code>view_pdf_pages</code>; the batched-input convention from
+    <code>calculator</code> / <code>lookup_definitions</code>.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_pdf_search.py</code>: hits on a text fixture (reuse the FINCO sample
+    with the auto-skip-if-absent pattern from <code>test_pdf_viewer.py</code>); scanned/empty-layer
+    message; hit cap + snippet truncation; registration asserted for all three agents.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>On a text PDF, an agent can locate a phrase in one tool call; on a scanned PDF it is told
+    so explicitly in one tool call.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #13: search is a navigation aid — results carry no page restrictions and the framing
+    is "go look and verify". OCR indexing is explicitly out of scope (owner decision).</p></div>
+</section>
+
+<section class="item" id="item-23">
+  <h3><span class="iid">23</span> Face-agent coverage receipts
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 5</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>The Sheet-12 fan-out's coverage receipts (every batch note accounted for as written/skipped,
+    unaccounted = loud warning) are the best anti-silent-omission pattern in the codebase — and
+    they exist only there. Face agents have the equivalent expectation list sitting unused: scout's
+    <code>face_line_refs</code>.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Generalise the receipt model from <code>notes/coverage.py</code> into a small shared
+      shape (<code>CoverageReceipt</code> already fits; parametrise the entry key from
+      <code>note_num</code> to a generic label/ref).</li>
+      <li>When (and only when) the infopack carries non-empty <code>face_line_refs</code> for a
+      statement, register a <code>submit_face_coverage</code> tool on that face agent
+      (conditional registration mirrors <code>submit_batch_coverage</code> in
+      <code>notes/agent.py</code> ~L666–680) with the refs as the expectation list.</li>
+      <li>Save-gate integration is a <b>nudge, not a block</b>: on first <code>save_result</code>
+      without a receipt, append one reminder line to the gate response; never refuse the save for
+      coverage (the gate's refusal semantics stay balance/mandatory-only).</li>
+      <li>Unaccounted refs become <code>AgentResult.warnings</code> lines ("scout saw 'Trade
+      receivables (Note 18)' on the face page — agent did not account for it"), riding the existing
+      warnings channel to SSE/History.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>notes/coverage.py</code> receipt validation; <code>_submit_coverage_impl</code>
+    (<code>notes/agent.py</code> ~L801); the warnings plumbing through
+    <code>AgentResult</code>.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_face_coverage_receipts.py</code>: tool registered only with refs
+    present; full receipt → no warnings; missing entries → per-ref warnings; save never blocked by
+    coverage. <code>tests/test_page_hints.py</code> negative assertions stay green (hints remain
+    soft).</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>On scout-hinted runs, every scout-observed face line is either written or explicitly
+    skipped-with-reason in the run record.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #13 (hints advisory) and #17 (honest completion — never force the agent to plug to
+    satisfy coverage; an explicit "could not find" skip is a valid receipt entry).</p></div>
+</section>
+
+<section class="item" id="item-24">
+  <h3><span class="iid">24</span> Magnitude (scale-unit) sanity check
+    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 5</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>A wrong <code>scale_unit</code> silently multiplies every value by 1000 (gotcha #13/#17
+    sibling). Defence today is prompt wording only. A CY value ~10³ᵏ× its PY counterpart is a
+    near-certain unit error and is trivially detectable deterministically.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>In <code>tools/verifier.py</code>, add a magnitude pass: for each row with both CY and PY
+      numeric values, flag <code>|log10(CY/PY)| ≥ 2.7</code> (catches 10³ with tolerance; ignore
+      zeros/sign flips/values &lt; 1000 to avoid small-number noise).</li>
+      <li>Emit WARN lines in the verify result ("'Revenue': CY is ~1000× PY — check the statement's
+      thousands/millions header"), rendered through <code>_format_verify_result</code>'s existing
+      feedback block (<code>extraction/agent.py</code> ~L393–448). Advisory only — never part of the
+      save-gate refusal conditions.</li>
+      <li>Group filings: run per entity-scope column pair, reusing the verifier's existing dual-pass
+      structure (gotcha #12).</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The verifier's row-walk + non-directive feedback conventions
+    (<code>tests/test_verifier_feedback_wording.py</code> sets the tone contract).</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New cases in <code>tests/test_verifier.py</code>: 1000× row flagged; 2× row not flagged;
+    zero/blank rows skipped; wording stays non-directive (no "plug" suggestions).</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A thousands-vs-units mistake surfaces as an explicit verify warning during the run instead
+    of surviving to review.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #17: feedback must stay diagnostic, never directive toward catch-all plugs; the
+    save-gate refusal set is unchanged.</p></div>
+</section>
+
+<section class="item" id="item-25">
+  <h3><span class="iid">25</span> Reviewer reverse-lookup tool
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 5</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>The reviewer can trace a template row to its source (<code>trace_cascade_source</code>) but
+    not the inverse: given a figure it found in the PDF, it has no way to ask "which template rows
+    could this belong to" — it falls back to paging through <code>list_facts</code> output.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>New reviewer tool <code>find_candidate_rows(value: float, label_hint: str = "")</code> in
+      <code>correction/reviewer_agent.py</code>: matches <code>run_concept_facts</code> values
+      within rounding tolerance (±1, mirroring the verifier's tolerance convention) and/or fuzzy
+      label matches over <code>concept_nodes.label</code>.</li>
+      <li>Scope ALL lookups by the run's <code>template_prefix</code> exactly like
+      <code>_resolve_concept</code> (~L97–171) — the gotcha #21 Group/MPERS scoping rule.</li>
+      <li>Return ≤10 candidates with (sheet, row, label, current value, entity_scope); honour the
+      review packet's entity-scope hints on Group filings.</li>
+      <li>One paragraph in <code>prompts/reviewer.md</code> describing when to reach for it
+      (investigating "where should this PDF figure live").</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>_resolve_concept</code>'s prefix-scoped query shape; <code>notes/labels</code>-style
+    normalisation for the label fuzzy match; the existing tool-registration block.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_reviewer_tools.py</code>: template-prefix scoping asserted (the
+    MFRS/MPERS same-(sheet,row) trap); value-tolerance hit; result cap; Group entity-scope
+    surfaced.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>The reviewer can resolve "PDF page 30 shows 1,595k — where does it belong?" in one tool call,
+    correctly scoped to the run's template family.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #21 scoping is the load-bearing constraint — an unscoped lookup resolves an arbitrary
+    template's concept. Read-only tool; the apply_fix guard path is untouched.</p></div>
+</section>
+
+<!-- ================= GROUP F ================= -->
+<h2 id="group-f"><span class="num">F</span>Learning &amp; orchestration</h2>
+
+<section class="item" id="item-26">
+  <h3><span class="iid">26</span> Eval regression harness
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 7</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Prompts are the most-edited, least-tested artifact in the repo. The v16 eval subsystem
+    (gotcha #23) can already grade a run exactly against gold — but nothing connects it to the
+    development loop, so prompt changes ship on "looks right".</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>New <code>scripts/eval_regression.py</code>: for each selected benchmark, run the
+      pipeline on the benchmark's PDF (CLI path, benchmark attached), then <code>grade_run</code>
+      and print a per-concept diff (matched/missing/mismatch deltas) against the benchmark's best
+      stored score in <code>eval_scores</code>.</li>
+      <li>Exit non-zero on headline-score regression beyond a <code>--tolerance</code>; write a
+      markdown report artifact per run.</li>
+      <li>Mark as live-LLM tooling (the <code>-m live</code> convention) — it spends real tokens
+      and is run before merging prompt changes, not in default CI.</li>
+      <li>Document the workflow in the script docstring + a short section in
+      <code>docs/PLAN-eval-benchmark.md</code>'s successor notes.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>eval/grader.py::grade_run</code>, <code>eval_scores</code> storage,
+    <code>run.py</code>'s CLI entry; benchmark seeding via the existing from-run path
+    (<code>eval/store.create_benchmark_from_run</code>).</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Unit-test the diff/threshold logic with stubbed grade results (no live calls):
+    regression detected, tolerance honoured, report rendered. Live execution covered by the
+    <code>-m live</code> lane.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A prompt PR can state "eval suite: SOFP 96%→96%, SOCIE 88%→91%" with one command.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #23's grading invariants (leaf-only, template-SET scoping, extras-as-flags) are
+    consumed, never re-implemented.</p></div>
+</section>
+
+<section class="item" id="item-27">
+  <h3><span class="iid">27</span> Mine reviewer flags into prompt exemplars
+    <span class="badges"><span class="b b-effort">Effort M (recurring)</span><span class="b b-phase">Phase 7</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Every <code>stuck</code>/<code>disputes_prior</code> flag plus its user answer
+    (<code>reviewer_flags</code>, schema v12) is a labelled example of where agent judgement failed
+    — currently written once and never read again.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>New <code>scripts/export_reviewer_flags.py</code>: dump flags + categories + reasoning +
+      user answers across runs to markdown/JSON, grouped by statement and flag kind.</li>
+      <li>Define the curation loop as process, not automation: monthly (or per N runs), review the
+      export, distil recurring patterns into 1–3 worked examples or rule clarifications in the
+      relevant <code>prompts/*.md</code> — each prompt change then validated by item 26's harness.</li>
+      <li>Deliberately NO automatic prompt injection — curation stays human (consistent with the
+      all-LLM-judgement philosophy and prompt-stability invariants).</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>reviewer_flags</code> + answers already persisted; <code>utils/sanitize</code> for the
+    export (the side-log sanitisation precedent).</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Script unit test over a seeded DB fixture: grouping, answered/unanswered split, sanitised
+    output.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>One command produces a reviewable failure-pattern digest; at least one curation cycle
+    executed and measured via item 26 before calling the loop established.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Prompt edits driven by this loop still obey the pinning-test rule — e.g. changes near the
+    no-residual-plug wording must update <code>tests/test_prompt_residual_plug_rule.py</code>
+    deliberately, not accidentally.</p></div>
+</section>
+
+<section class="item" id="item-28">
+  <h3><span class="iid">28</span> Per-entity advisory memory
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 7</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Re-processing the same entity's next-year filing starts from zero: variant, scale unit, and
+    page offset are re-discovered every time, with fresh opportunities for error on facts that
+    rarely change year-over-year.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>At run start, match the scout's <code>entity_name</code> (normalised) against prior
+      <code>completed</code> runs' stored infopacks/config (read-only over existing
+      <code>runs</code> data + on-disk infopack JSON — no new tables in v1).</li>
+      <li>When matched, render one advisory prompt block into face + notes prompts: prior filing's
+      variant per statement, <code>scale_unit</code>, <code>page_offset</code>, filing standard —
+      wrapped in the established <code>(prior-year run — VERIFY against THIS PDF)</code> framing,
+      with the same loud wording tier <code>scale_unit</code> hints already use.</li>
+      <li>Surface the match in the pre-run panel so the user can disable it per run (entity-name
+      collisions exist; the user is the authority).</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The scout-context prompt-block pattern (<code>tests/test_prompts_render_context.py</code>
+    family); <code>Infopack.from_json</code> for reading prior packs; History queries in
+    <code>db/repository</code>.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_entity_memory.py</code>: match → block rendered with VERIFY framing; no
+    match / disabled → block absent; degraded prior pack → fields omitted gracefully.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A repeat entity's run shows the prior-year hint block in agent prompts, and disabling it is
+    one click.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Strictly advisory (gotcha #13 discipline); no deterministic matching enters the notes
+    pipeline (gotcha #14's design rule) — hints inform judgement, they never bypass it.</p></div>
+</section>
+
+<section class="item" id="item-29">
+  <h3><span class="iid">29</span> Delegation sub-agents (design first)
+    <span class="badges"><span class="b b-effort">Effort L</span><span class="b b-phase">Future</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Face agents accumulate page images and note detail in one long context; deep note-reads
+    bloat the conversation that also has to do template writing and verification. The Sheet-12
+    fan-out proves the cheap-sub-agent pattern works; nothing lets a face agent use it.</p></div>
+  <div class="block change"><span class="tag">Concrete change (design doc first, then build)</span>
+    <ol>
+      <li>Write <code>docs/PLAN-delegation-subagents.md</code> covering: tool shape
+      (<code>delegate_note_read(note_num, question)</code> returning a compact structured summary),
+      sub-agent prompt, model selection via the <code>pricing</code> registry (cheap model default),
+      concurrency budget shared with <code>resolve_notes_parallel</code> semantics, timeout/retry
+      (one retry, like notes sub-agents), and telemetry rollup (the Sheet-12 "sub-agents merge into
+      one row" precedent, gotcha #6).</li>
+      <li>Prototype on ONE statement (SOFP) behind an env flag; measure token + accuracy deltas via
+      item 26 before widening.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>notes/listofnotes_subcoordinator.py</code> (fan-out, retry, receipt, rollup) as the
+    structural template; <code>pricing.resolve_notes_parallel</code> for width.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Defined in the design doc; minimum — delegation tool registration gated by flag, sub-agent
+    failure degrades to "agent reads the note itself" (never fails the parent).</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>Design doc approved; prototype shows measured token reduction at non-inferior eval score
+    before any default-on decision.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #14's retry-budget discipline; gotcha #18's iteration caps apply per sub-agent;
+    keep-it-minimum rule — hence design-first, prototype-gated.</p></div>
+</section>
+
+<section class="item" id="item-30">
+  <h3><span class="iid">30</span> Context compaction (history processor)
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 7</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Long extractions re-bill stale tool results every turn: verbose verify failures from turn 5
+    ride along to turn 35. <code>extraction/history_processors.py</code> already strips stale
+    images — text results have no equivalent.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Add a second history processor alongside <code>strip_stale_images</code>: tool results
+      older than N turns (default 6) whose payload exceeds ~1.5k chars are replaced by a one-line
+      summary ("verify_totals (turn 5): imbalance RM 2,340 — superseded; latest result is in
+      recent turns"). Always keep the most recent result of each tool verbatim.</li>
+      <li>Never compact: <code>read_template</code> output (the agent's map — cached and referenced
+      repeatedly) and the system prompt.</li>
+      <li>Measure with the v15 cache-telemetry columns before/after on a live run; tune N and the
+      size threshold from data. Register for notes agents too if the win holds.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The history-processor registration mechanism (gotcha #2: <code>agent.iter()</code> +
+    processors, no monkey-patching); v15 cache telemetry for measurement.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_history_compaction.py</code>: old verbose result summarised; latest
+    result untouched; read_template exempt; message-history shape stays valid for pydantic-ai
+    1.77.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>Measured prompt-token reduction on a long run with no eval-score regression (item 26 is the
+    yardstick).</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #6: the on-disk conversation trace must keep the verbatim originals — compaction
+    applies to the live prompt only, never to <code>save_agent_trace</code> output. Note: compaction
+    can reduce prompt-cache hit rates — the v15 measurement gate exists precisely to catch a net
+    loss.</p></div>
+</section>
+
+<!-- ================= GROUP G ================= -->
+<h2 id="group-g"><span class="num">G</span>Notes pipeline</h2>
+<p>Two structural blind spots found this session: <b>nobody ties notes numbers to face figures</b>
+(sheets 13/14 carry numeric rows that never get checked against <code>run_concept_facts</code>),
+and <b>nobody reviews notes</b> (the reviewer's world is concept facts; notes get only the dedup
+validator and an 8-pair citation check). The dormant <code>notes_cells.concept_uuid</code> column
+(schema v6) was built for this linkage and is currently unused.</p>
+
+<section class="item" id="item-N1">
+  <h3><span class="iid">N1</span> Notes↔face numeric tie-out checks
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 6</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Numeric rows on sheets 13/14 (e.g. an employee-benefits figure that should reconcile with
+    SOPL) are written by notes agents and never validated against the face statements' canonical
+    facts. A transcription error there survives every existing check.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>New module <code>cross_checks/notes_face_tieouts.py</code> with a hand-curated pairing
+      table (notes-sheet row label ↔ face concept), starting with the 5–10 unambiguous pairs
+      (employee benefits, income tax expense, depreciation, finance costs…) — the conservative-dict
+      convention <code>notes_consistency.py</code> established.</li>
+      <li>Face side reads <code>run_concept_facts</code> by concept (not cell coords — sidesteps
+      gotcha #4); notes side reads the merged workbook's numeric cells via the existing
+      <code>cross_checks/util.py</code> helpers.</li>
+      <li>WARN severity only (never blocks); <code>applies_to_standard</code>-aware per gotcha #15;
+      Group filings compare the matching entity-scope column per gotcha #12's column map.</li>
+      <li>Wire next to the <code>check_notes_consistency</code> call sites
+      (<code>server.py:3404, 3711</code>), inside item 16's timeout wrapper.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>cross_checks/util.py</code> label/value lookups; the conservative-pairing philosophy
+    and WARN plumbing of <code>notes_consistency.py</code>; concept-fact reads via the eval-grader's
+    query shape.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_notes_face_tieouts.py</code>: matched pair within tolerance → pass;
+    1000×-off pair → WARN; unmapped topics → silent (no fabricated pairings); MPERS sheet-number
+    shift (11–15) respected.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A notes numeric value that contradicts its face counterpart produces a visible WARN in the
+    cross-checks tab.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #14: no deterministic matching enters the notes <em>writing</em> path — this is
+    post-hoc validation only. Gotcha #4: compare via concepts/labels, never reference-file cell
+    diffs.</p></div>
+</section>
+
+<section class="item" id="item-N2">
+  <h3><span class="iid">N2</span> Single-sheet notes coverage receipts
+    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 6</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Only the Sheet-12 fan-out has the receipt handshake (<code>submit_batch_coverage</code> is
+    conditionally registered, <code>notes/agent.py</code> ~L666–680). Sheets 10/11/13/14 have just
+    the cruder all-or-nothing <code>_NoWriteError</code> guard — partial coverage is invisible.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Register the existing receipt tool for single-sheet agents, with the expectation list =
+      the inventory subset relevant to that template (the template's phase mapping in
+      <code>notes/constants.py</code> / registry determines relevance; pass it from the
+      coordinator).</li>
+      <li>Reuse <code>notes/coverage.py</code> validation verbatim (full-accounting check,
+      skip-reason entries).</li>
+      <li>Lift receipt outcomes into <code>NotesAgentResult.warnings</code> through the same
+      builder the fan-out uses (<code>_build_write_warnings</code>'s receipt section —
+      <code>notes/coordinator.py:1273–1291</code> — extracted to be shared).</li>
+      <li>Keep PLAN §4 Checkpoint C semantics: partial coverage with a receipt is still
+      <code>succeeded</code>-with-warnings; only the existing no-write guard fails the sheet.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The complete Sheet-12 receipt stack — model, tool impl, warning builder; this is plumbing,
+    not new machinery.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>New <code>tests/test_single_sheet_coverage.py</code>: receipt accounted → clean; uncovered
+    entries → per-note warnings; no receipt → "did not submit receipt" warnings; success status
+    preserved on partial coverage.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>Every notes sheet reports which inventory notes it covered, skipped, or left unaccounted —
+    not just Sheet 12.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #14's retry budget and "partial coverage is success" rules unchanged;
+    <code>tests/test_notes_retry_budget.py</code> must stay green.</p></div>
+</section>
+
+<section class="item" id="item-N3">
+  <h3><span class="iid">N3</span> Notes review coverage (validator extension)
+    <span class="badges"><span class="b b-effort">Effort L</span><span class="b b-phase">Phase 6</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>The reviewer never looks at notes; the notes post-validator
+    (<code>notes/validator_agent.py</code>) only deduplicates Sheet-11/12 overlap. Notes content
+    quality — wrong evidence pages, missing disclosures vs the inventory — has no reviewing agent
+    at all.</p></div>
+  <div class="block change"><span class="tag">Concrete change (two stages)</span>
+    <ol>
+      <li><b>Stage 1 — extend the validator.</b> Add two checks to the existing validator pass:
+      (a) evidence-page spot checks — for a sample of filled cells, view the cited PDF page and
+      confirm the note ref appears (reuses its existing <code>view_pdf_pages</code>); (b)
+      completeness — diff filled rows against the scout inventory subset (N2's relevance mapping)
+      and report inventory notes with no corresponding content anywhere. Findings ride the
+      validator's existing outcome/warnings channel.</li>
+      <li><b>Stage 2 (optional, separate decision).</b> Populate the dormant
+      <code>notes_cells.concept_uuid</code> at persist time
+      (<code>notes/persistence.persist_notes_cells</code>) by resolving sheet/row against
+      <code>concept_nodes</code>, giving the reviewer read access to notes context when
+      investigating face↔notes discrepancies (N1's WARN output becomes its entry point). Gate
+      behind its own mini-plan — reviewer scope expansion needs its own guard review.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The validator's agent harness (io_lock + atomic save — gotcha #22 — wall-clock wrap,
+    sidecar loading); scout inventory; N2's template-relevance mapping;
+    <code>cell_resolver</code>-style lookups for stage 2.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend <code>tests/test_notes_validator_agent.py</code>: spot-check finding surfaces as
+    warning; completeness gap reported; failure still soft (validator failure must not crash the
+    run — the existing contract). Stage 2: uuid populated on persist, null-safe on unmatched
+    rows.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A notes cell citing the wrong page, or an inventory note with no content, is flagged in the
+    run's warnings without manual inspection.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #16: evidence column stays read-only; <code>notes_cells</code> remains canonical;
+    the v6 column is nullable so stage 2 is backward-compatible. Gotcha #22's locking discipline
+    applies to any new workbook reads.</p></div>
+</section>
+
+<section class="item" id="item-N4">
+  <h3><span class="iid">N4</span> Generalized citation-consistency check
+    <span class="badges"><span class="b b-effort">Effort S–M</span><span class="b b-phase">Phase 6</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p><code>cross_checks/notes_consistency.py</code> compares evidence page numbers for only ~8
+    hand-curated topic pairs. The underlying failure (one sub-agent cites the printed folio, another
+    the PDF page) applies to <em>any</em> two cells citing the same note ref.</p></div>
+  <div class="block change"><span class="tag">Concrete change</span>
+    <ol>
+      <li>Add a second, generic pass to the module: parse each filled cell's evidence string for
+      <code>(note_ref, page)</code> using its existing permissive regex; group by normalised note
+      ref <em>across all notes sheets</em>; WARN when one ref's cited pages disagree by more than
+      the note's known page-range span (inventory-aware tolerance, since multi-page notes
+      legitimately cite different pages).</li>
+      <li>Keep the curated-pairs pass as-is (it catches same-topic-different-ref cases the generic
+      pass can't).</li>
+      <li>Same wiring + severity as today; runs inside item 16's timeout wrapper.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p>The module's evidence-parsing regex, short-circuit-on-unparseable convention, and WARN
+    plumbing; scout inventory page ranges for tolerance.</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Extend the notes-consistency tests: same ref + divergent pages → WARN; same ref within the
+    note's page range → silent; unparseable evidence → silent skip (no false positives).</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>The FINCO folio-drift bug class is caught for any note ref, not only the curated topics.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Keep the module's "never fabricate a pairing" conservatism: the generic pass groups by the
+    agents' own citations, inferring nothing.</p></div>
+</section>
+
+<!-- ================= GROUP H ================= -->
+<h2 id="group-h"><span class="num">H</span>Architecture</h2>
+
+<section class="item" id="item-32">
+  <h3><span class="iid">32</span> Excel-free verification pipeline
+    <span class="badges"><span class="b b-effort">Effort L</span><span class="b b-phase">Future</span></span></h3>
+  <div class="block prob"><span class="tag">Problem / evidence</span>
+    <p>Facts are DB-canonical, but arithmetic/validation semantics still live in template Excel
+    formulas — so the verifier, cross-checks, recalc, and merge all round-trip through openpyxl.
+    Most telling symptom: <code>_recheck_from_facts</code> rebuilds a workbook from DB facts just to
+    run xlsx-based checks on it. This keeps the gotcha #22 race class and the DB↔xlsx split-brain
+    class alive, and makes every check slow (one reason item 16 is needed at all).</p></div>
+  <div class="block change"><span class="tag">Concrete change (phased; each phase independently shippable)</span>
+    <ol>
+      <li><b>32a — fact-based cross-checks.</b> Re-implement the cross-check registry to read
+      <code>run_concept_facts</code> by concept uuid (the eval-grader pattern, and the
+      <code>comparands_json</code> v14 column already records comparands this way). Each migrated
+      check keeps its message format so the frontend and History are untouched; xlsx checks remain
+      as a shadow during transition, diffed in tests.</li>
+      <li><b>32b — cascade-backed verify_totals.</b> Replace formula evaluation in
+      <code>tools/verifier.py</code> with reads of the cascade's computed totals
+      (<code>concept_model/cascade.py</code> over the imported calc-linkbase edges); keep the
+      tolerance + feedback-wording contracts byte-compatible
+      (<code>tests/test_verifier_feedback_wording.py</code> pins them).</li>
+      <li><b>32c — DB-rendered read_template.</b> Serve the agent's template summary from
+      <code>concept_nodes</code> (labels, kinds, abstract flags, mandatory markers) instead of
+      parsing xlsx per agent.</li>
+      <li>End state: openpyxl remains only at the edges — template import
+      (<code>concept_model/parser.py</code>), final export (<code>exporter.py</code>), eval
+      ingest, and generator scripts. Write <code>docs/PLAN-excel-free-verification.md</code> first;
+      this card is the charter, not the spec.</li>
+    </ol></div>
+  <div class="block reuse"><span class="tag">Reuse</span>
+    <p><code>concept_model/cascade.py</code>, the calc-linkbase edges the importer already builds,
+    <code>eval/grader.py</code>'s uuid-join idiom, <code>comparands_json</code> (v14).</p></div>
+  <div class="block tests"><span class="tag">Pinning tests</span>
+    <p>Per phase: shadow-diff tests (fact-based result == xlsx-based result on the e2e fixtures)
+    before each xlsx path is retired; the full <code>tests/test_cross_checks.py</code> and verifier
+    suites migrate with their checks, never deleted ahead of parity proof.</p></div>
+  <div class="block accept"><span class="tag">Acceptance criteria</span>
+    <p>A run completes extraction → verification → cross-checks → review without opening a single
+    workbook; xlsx is generated exactly once, at export.</p></div>
+  <div class="block inv"><span class="tag">Invariant notes</span>
+    <p>Gotcha #3: the calculation linkbase stays the source of math truth — 32b reads the same
+    semantics from the imported edges instead of the formula cells. Gotcha #4's reference-diff trap
+    disappears with cell-diffing itself. Schedule when xlsx races or split-brain bugs recur, or
+    after P1–P6 stabilise — not before.</p></div>
+</section>
+
+<p style="margin-top:56px; color:var(--faint); font-size:13px">Generated 2026-06-11 from the
+orchestration-hardening working session · branch
+<code>claude/agent-orchestration-hardening-ruyrbd</code> · file/line anchors reflect the tree at
+commit time and may drift as items land.</p>
+
+</div>
+</main>
+</body>
+</html>
