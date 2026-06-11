@@ -199,7 +199,14 @@ Step-by-step for the owner (each produces a client ID + secret):
 5. **CI/CD:** GitHub Actions workflow — build the frontend
    (`cd web && npm ci && npm run build`), run backend + frontend tests,
    deploy via `azure/webapps-deploy` with a publish profile (or OIDC
-   federated credentials). Deploy on push to `main` only.
+   federated credentials). **Deploy trigger is `workflow_dispatch` only**
+   (manual "Run workflow" button from the `main` branch) — the owner
+   explicitly does not want pushes to auto-deploy. Tests still gate the
+   deploy on each manual run. Alternatives considered and rejected:
+   push-to-main auto-deploy (rejected — no control over when production
+   updates), environment approval gates (needs paid GitHub plan on a
+   private repo), tag-triggered deploys (extra git ceremony for the same
+   control), and CLI deploys from the Mac (no test gate).
 6. **Smoke checklist:** login via both providers; non-allowlisted account
    rejected; 15-min timeout fires; upload→extract→download a sample PDF;
    SSE survives a long run; History persists across an app restart
@@ -223,11 +230,12 @@ Principles that make this work with zero per-machine code changes:
   (local) / App Settings (Azure), never in code. `.env` stays gitignored;
   ship a `.env.example` documenting every auth variable. The same `git pull`
   on Windows keeps working exactly as today — deployment to Azure is a
-  *parallel* consumer of the GitHub repo (Actions fires on push to `main`),
-  not a change to the pull workflow.
-- **`main` = deployable.** Day-to-day work happens on branches; merging to
-  `main` is what triggers the Azure deploy. This is the one workflow-habit
-  change: don't push half-finished work to `main` once Actions is wired.
+  *parallel* consumer of the GitHub repo, not a change to the pull workflow.
+- **Deploys are manual, never automatic.** The deploy workflow runs only
+  via the GitHub Actions "Run workflow" button (`workflow_dispatch`, from
+  `main`) — pushing code never updates production (Phase 3 §5). Keeping
+  `main` in a deployable state is still good hygiene, since that's the
+  branch the button ships.
 - **Enterprise Windows runs `AUTH_MODE=dev`.** SSO there is unnecessary
   (the machine is the access control; the app binds to localhost) and
   unreliable: the corporate proxy blocks direct Google calls (403 — see
