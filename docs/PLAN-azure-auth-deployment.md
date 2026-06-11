@@ -7,7 +7,7 @@ requirements conversation with the project owner.
 
 | Decision | Choice |
 |---|---|
-| Hosting | Azure App Service (Linux) |
+| Hosting | Azure App Service (Linux) in the **company/enterprise Azure subscription**; deploys run manually from the enterprise Windows laptop |
 | Login methods | SSO only — **Microsoft** and **Google** buttons (no username/password) |
 | Users | Small known team; access controlled by an **email allowlist** |
 | Session | Auto-logout after **15 minutes of inactivity** (sliding window) |
@@ -180,6 +180,33 @@ Step-by-step for the owner (each produces a client ID + secret):
 
 ## Phase 3 — Azure provisioning + deployment
 
+### 3.0 Enterprise prerequisites (confirm with the Azure/cloud admin first)
+
+Because the subscription is corporate, several things the personal-cloud
+path takes for granted need confirming before any resources are created:
+
+- **Subscription permissions:** rights to create a resource group + App
+  Service (or have the admin create them and grant Contributor on the
+  resource group).
+- **Entra app registrations** are often locked down in enterprise tenants —
+  Phase 2 step 1 may need to go through IT. Tenant policy may also forbid
+  "any org + personal accounts" registrations; if so, register
+  single-tenant (corporate accounts only) and let the **Google** button
+  cover non-corporate users — the email allowlist remains the real gate
+  either way.
+- **Tenancy policies:** allowed regions (Southeast Asia?), naming/tagging
+  conventions, and whether a public-facing App Service is permitted or
+  Private Endpoint / VPN-only access is mandated (the latter changes how
+  the team reaches the app, not the app itself).
+- **Outbound LLM traffic:** the firm may require routing through its
+  GenAI shared-service proxy instead of direct provider keys — the app
+  already supports this (`LLM_PROXY_URL`, proxy mode), and it would also
+  resolve the confidentiality lever flagged above.
+- **Azure CLI on the corporate laptop:** whether installing it is allowed
+  (see §3.5 fallbacks if not).
+
+### 3.1 — 3.6 Provisioning + deployment
+
 1. **Resources** (portal or `az` CLI): resource group `rg-xbrl-agent`
    in **Southeast Asia**; Linux App Service plan — start **B2**
    (3.5 GB RAM; B1's 1.75 GB is tight for PyMuPDF + concurrent agents),
@@ -196,23 +223,35 @@ Step-by-step for the owner (each produces a client ID + secret):
    `OUTPUT_DIR`/`AUDIT_DB_PATH`; SSE keepalive comments; startup command
    `uvicorn server:app --host 0.0.0.0 --port 8000` (single worker — see
    single-instance invariant) wired so `mount_spa` still runs.
-5. **CI/CD:** GitHub Actions workflow — build the frontend
-   (`cd web && npm ci && npm run build`), run backend + frontend tests,
-   deploy via `azure/webapps-deploy` with a publish profile (or OIDC
-   federated credentials). **Deploy trigger is `workflow_dispatch` only**
-   (manual "Run workflow" button from the `main` branch) — the owner
-   explicitly does not want pushes to auto-deploy. Tests still gate the
-   deploy on each manual run. Alternatives considered and rejected:
-   push-to-main auto-deploy (rejected — no control over when production
-   updates), environment approval gates (needs paid GitHub plan on a
-   private repo), and tag-triggered deploys (extra git ceremony for the
-   same control). **Escape hatch — direct deploy from the Mac:** ship a
-   `scripts/deploy_local.sh` that mirrors the Actions job (frontend
-   build, backend + frontend tests, zip, `az webapp deploy
-   --type zip`) so a laptop deploy goes through the same gates. Raw
-   `az webapp deploy` without the script is possible but unguarded
-   (no tests, easy to forget the `web/dist` build, and production
-   drifts from GitHub history) — use the script.
+5. **Deployment — manual, from the enterprise Windows laptop.** GitHub
+   Actions **cannot** deploy here: that would require enterprise Azure
+   credentials inside a personal GitHub repo (policy violation, and
+   conditional access would likely block it anyway). Instead:
+   - **Primary path: `scripts\deploy_azure.bat`** (mirroring `start.bat`
+     conventions — `PYTHONUTF8=1`, Node auto-discovery). Steps, aborting
+     on any failure: warn if the working tree has uncommitted changes →
+     `npm ci && npm run build` (web/dist) → backend + frontend tests →
+     stamp the current commit hash into a `version.txt` inside the
+     package (keeps "what's live?" answerable) → zip (exclude `output/`,
+     `.env`, `node_modules`, `backup-originals/`; **include** the
+     `XBRL-template-*` and `SSMxT_2022v1.0` runtime data) →
+     `az webapp deploy --type zip`. Raw `az webapp deploy` without the
+     script is unguarded (no tests, stale `web/dist`) — use the script.
+   - **Corporate-proxy note:** the `az` CLI has the same MITM-cert issue
+     as gotcha #5 — it may need `HTTPS_PROXY` plus `REQUESTS_CA_BUNDLE`
+     pointed at the corporate root CA. Document the working values in the
+     script's header once known.
+   - **Fallbacks if the Azure CLI can't be installed:** (a) per-user
+     `pip install azure-cli` (no admin MSI required); (b) **Azure Cloud
+     Shell** — a terminal in the Azure portal with `az`, `git`, `node`,
+     and Python preinstalled: clone the GitHub repo there (private repo
+     ⇒ a GitHub fine-grained PAT) and run the build + deploy entirely in
+     the browser, nothing installed on the laptop; (c) last resort:
+     build the zip with the script's package step and drag-drop it onto
+     the App Service's Kudu/"Deployment Center" page in the portal.
+   - **GitHub Actions remains, tests-only:** build + pytest + vitest on
+     every push (no Azure credentials anywhere). Green checks on GitHub
+     mean "safe to pull and deploy from Windows".
 6. **Smoke checklist:** login via both providers; non-allowlisted account
    rejected; 15-min timeout fires; upload→extract→download a sample PDF;
    SSE survives a long run; History persists across an app restart
@@ -223,25 +262,34 @@ Step-by-step for the owner (each produces a client ID + secret):
 The owner's actual day-to-day topology, and how auth behaves in each spot:
 
 ```
-Mac (develop) ──push──▶ personal GitHub ──GitHub Actions──▶ Azure App Service  (production, AUTH_MODE=oidc)
-                              │
-                          git pull
+Mac (develop) ──push──▶ personal GitHub
+                              │  git pull (manual, as today)
                               ▼
-                   enterprise Windows machine  (local use only, AUTH_MODE=dev)
+            enterprise Windows laptop  (local use, AUTH_MODE=dev)
+                              │  scripts\deploy_azure.bat (manual)
+                              ▼
+            enterprise Azure App Service  (production, AUTH_MODE=oidc)
 ```
+
+The Windows laptop is the **bridge**: it is the only machine with both the
+code (pulled from personal GitHub) and enterprise Azure access. Enterprise
+Azure credentials must **never** be stored in the personal GitHub repo
+(neither as Actions secrets nor in files) — which is also why GitHub
+Actions cannot be the deploy path here.
 
 Principles that make this work with zero per-machine code changes:
 
 - **One codebase, per-environment config.** All differences live in `.env`
   (local) / App Settings (Azure), never in code. `.env` stays gitignored;
   ship a `.env.example` documenting every auth variable. The same `git pull`
-  on Windows keeps working exactly as today — deployment to Azure is a
-  *parallel* consumer of the GitHub repo, not a change to the pull workflow.
-- **Deploys are manual, never automatic.** The deploy workflow runs only
-  via the GitHub Actions "Run workflow" button (`workflow_dispatch`, from
-  `main`) — pushing code never updates production (Phase 3 §5). Keeping
-  `main` in a deployable state is still good hygiene, since that's the
-  branch the button ships.
+  on Windows keeps working exactly as today — the deploy script is simply
+  the next command after it.
+- **Deploys are manual, never automatic.** Production updates only when the
+  owner runs the deploy script on the Windows laptop (Phase 3 §5). Pushing
+  to GitHub never touches Azure. GitHub Actions is kept for **tests only**
+  (build + pytest + vitest on push — needs no Azure credentials), so GitHub
+  still tells you whether what you pushed is deployable before you pull it
+  on Windows.
 - **Enterprise Windows runs `AUTH_MODE=dev`.** SSO there is unnecessary
   (the machine is the access control; the app binds to localhost) and
   unreliable: the corporate proxy blocks direct Google calls (403 — see
@@ -262,12 +310,12 @@ Principles that make this work with zero per-machine code changes:
   in Azure App Settings — they are never needed on either laptop unless
   testing the real OIDC flow locally.
 
-> **Governance flag (raise-once, owner's call):** production will be
-> client-confidential data running on a *personal* Azure subscription,
-> deployed from a *personal* GitHub repo, with the enterprise machine
-> pulling from it. Depending on firm policy that combination may need
-> sign-off; moving later means re-pointing GitHub Actions at an enterprise
-> subscription — the app itself doesn't change.
+> **Governance flag (raise-once, owner's call):** hosting in the
+> enterprise Azure subscription is the right home for client-confidential
+> data. The remaining wrinkle is that the *source code* lives in a
+> personal GitHub repo that the enterprise laptop pulls from; firm policy
+> may prefer an enterprise repo (GitHub EMU / Azure DevOps). Migrating
+> later is a remote swap — the app and this plan don't change.
 
 ## Phase 4 — Hardening (after it works)
 
