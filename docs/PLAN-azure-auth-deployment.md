@@ -205,8 +205,14 @@ Step-by-step for the owner (each produces a client ID + secret):
    deploy on each manual run. Alternatives considered and rejected:
    push-to-main auto-deploy (rejected — no control over when production
    updates), environment approval gates (needs paid GitHub plan on a
-   private repo), tag-triggered deploys (extra git ceremony for the same
-   control), and CLI deploys from the Mac (no test gate).
+   private repo), and tag-triggered deploys (extra git ceremony for the
+   same control). **Escape hatch — direct deploy from the Mac:** ship a
+   `scripts/deploy_local.sh` that mirrors the Actions job (frontend
+   build, backend + frontend tests, zip, `az webapp deploy
+   --type zip`) so a laptop deploy goes through the same gates. Raw
+   `az webapp deploy` without the script is possible but unguarded
+   (no tests, easy to forget the `web/dist` build, and production
+   drifts from GitHub history) — use the script.
 6. **Smoke checklist:** login via both providers; non-allowlisted account
    rejected; 15-min timeout fires; upload→extract→download a sample PDF;
    SSE survives a long run; History persists across an app restart
