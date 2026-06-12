@@ -1050,11 +1050,11 @@ async def _run_reviewer_pass(
     try:
         if not has_snapshot(db_path, run_id):
             snapshot_facts(db_path, run_id)
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("Reviewer snapshot failed for run %s", run_id)
-        outcome["error"] = f"snapshot failed: {type(e).__name__}: {e}"
-        await _emit("error", {"type": "reviewer_exception",
-                              "message": outcome["error"]})
+        outcome["error"] = "snapshot_failed"
+        msg = "Reviewer snapshot failed; see server logs for details."
+        await _emit("error", {"type": "reviewer_exception", "message": msg})
         await _emit("complete", {"success": False, "error": outcome["error"]})
         return outcome
 
@@ -1091,11 +1091,11 @@ async def _run_reviewer_pass(
             pdf_path=pdf_path,
             failed_checks=failed_payload, conflicts=conflicts, guidance=guidance,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("Reviewer agent construction failed")
-        outcome["error"] = f"agent construction failed: {type(e).__name__}: {e}"
-        await _emit("error", {"type": "reviewer_exception",
-                              "message": outcome["error"]})
+        outcome["error"] = "agent_construction_failed"
+        msg = "Reviewer agent construction failed; see server logs for details."
+        await _emit("error", {"type": "reviewer_exception", "message": msg})
         await _emit("complete", {"success": False, "error": outcome["error"]})
         return outcome
 
@@ -1228,11 +1228,15 @@ async def _run_reviewer_pass(
             "success": False, "error": "reviewer_wallclock_exceeded",
             "writes_performed": deps.writes_performed,
         })
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        # The agent loop runs LLM calls whose exceptions can embed the bearer
+        # token in str(e); surface a stable code, log the trace server-side
+        # only (mirrors /test-connection).
         logger.exception("Reviewer run failed")
-        outcome["error"] = str(e)
-        await _emit("error", {"type": "reviewer_exception", "message": str(e)})
-        await _emit("complete", {"success": False, "error": str(e)})
+        outcome["error"] = "reviewer_exception"
+        msg = "Reviewer run failed; see server logs for details."
+        await _emit("error", {"type": "reviewer_exception", "message": msg})
+        await _emit("complete", {"success": False, "error": outcome["error"]})
     finally:
         # Phase 4: persist the reviewer's transcript so its turn-by-turn
         # judgement is auditable in the Review tab (gotcha #6 — a FAILED /
