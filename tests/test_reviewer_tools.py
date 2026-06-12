@@ -558,3 +558,91 @@ def test_packet_renders_comparands_both_sides():
     assert "[lhs]" in packet and "[rhs]" in packet
     assert "-20633.0" in packet and "-20678.0" in packet
     assert "SOPL" in packet and "SOCIE" in packet
+
+
+# --- template-family scoping on the WRITE path (apply_reviewer_fix) ---
+
+def _add_offfamily_leaf(db, uid):
+    """Insert one LEAF under a DIFFERENT template family than _seed's
+    (mpers-company-… vs _seed's mfrs-company-…)."""
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO concept_templates(template_id, source_path, shape) "
+            "VALUES ('mpers-company-sofp-test-v1', 'x.xlsx', 'linear')"
+        )
+        conn.execute(
+            "INSERT INTO concept_nodes(concept_uuid, template_id, kind, "
+            "canonical_label, render_sheet, render_row, render_col) VALUES "
+            "(?, 'mpers-company-sofp-test-v1', 'LEAF', 'Buildings', "
+            "'SOFP-Sub-CuNonCu', 37, 'B')",
+            (uid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_OFF_FAMILY = "00000000-0000-0000-0000-0000000000ff"
+
+
+def test_apply_reviewer_fix_rejects_off_family_concept(tmp_path):
+    """A concept_uuid from another template family is refused, not written.
+
+    concept_uuid is a globally-unique PK so the lookup *finds* the concept,
+    but writing an off-family fact would land an unrenderable row (gotcha #21).
+    Mirrors the read path's template_prefix scoping.
+    """
+    db, run_id = _seed(tmp_path)
+    _add_offfamily_leaf(db, _OFF_FAMILY)
+
+    out = apply_reviewer_fix(
+        db, run_id,
+        FactWrite(
+            concept_uuid=_OFF_FAMILY, period="CY", entity_scope="Company",
+            value=999.0, value_status="observed",
+            source="why", evidence="page 5: Buildings 999", actor="reviewer",
+        ),
+        template_prefix="mfrs-company-",
+    )
+    assert out.startswith("rejected:"), out
+    assert "not this run's family" in out
+    # And nothing was written for the off-family concept.
+    conn = sqlite3.connect(str(db))
+    n = conn.execute(
+        "SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ? "
+        "AND concept_uuid = ?", (run_id, _OFF_FAMILY),
+    ).fetchone()[0]
+    conn.close()
+    assert n == 0
+
+
+def test_apply_reviewer_fix_allows_in_family_concept(tmp_path):
+    """A grounded write to a concept in the run's own family succeeds."""
+    db, run_id = _seed(tmp_path)
+    out = apply_reviewer_fix(
+        db, run_id,
+        FactWrite(
+            concept_uuid=LEAF1, period="CY", entity_scope="Company",
+            value=1234.0, value_status="observed",
+            source="corrected", evidence="page 5: Freehold land 1234",
+            actor="reviewer",
+        ),
+        template_prefix="mfrs-company-",
+    )
+    assert out.startswith("ok"), out
+
+
+def test_apply_reviewer_fix_unscoped_still_writes_off_family(tmp_path):
+    """Without a template_prefix (pure-fn unit calls) scoping is skipped."""
+    db, run_id = _seed(tmp_path)
+    _add_offfamily_leaf(db, _OFF_FAMILY)
+    out = apply_reviewer_fix(
+        db, run_id,
+        FactWrite(
+            concept_uuid=_OFF_FAMILY, period="CY", entity_scope="Company",
+            value=999.0, value_status="observed",
+            source="why", evidence="page 5: Buildings 999", actor="reviewer",
+        ),
+    )
+    assert out.startswith("ok"), out

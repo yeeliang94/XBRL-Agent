@@ -63,8 +63,36 @@ async def re_review(run_id: int, body: Optional[dict] = None):
     # Model precedence: explicit per-request override (the Review-tab picker)
     # → the configured reviewer default → the run's model → TEST_MODEL.
     override = (body or {}).get("model") if isinstance(body, dict) else None
+    # Validate a client-supplied override the same way Settings does — a bad
+    # value would otherwise pick an arbitrary (possibly priciest) provider/model
+    # straight into _create_proxy_model.
+    if isinstance(override, str) and override.strip():
+        override = override.strip()
+        if len(override) > 128:
+            raise HTTPException(
+                status_code=422, detail="model override exceeds 128 characters.",
+            )
+        # Unknown id is a soft warning, not an error — mirrors the Settings
+        # default_models path: the registry may have been edited without a
+        # restart, or a new model added but not yet loaded. The length cap
+        # above already bounds abuse.
+        known_model_ids = {m["id"] for m in server._load_available_models() if "id" in m}
+        if known_model_ids and override not in known_model_ids:
+            logger.warning(
+                "re-review model override %r not in config/models.json", override,
+            )
+    else:
+        override = None
+    # Bound free-text guidance — it's folded verbatim into the reviewer prompt,
+    # so an unbounded value is a cost / prompt-stuffing vector (matches the
+    # human_answer cap on the flag-answer endpoint).
+    guidance_in = (body or {}).get("guidance") if isinstance(body, dict) else None
+    if isinstance(guidance_in, str) and len(guidance_in) > 8000:
+        raise HTTPException(
+            status_code=422, detail="guidance exceeds 8000 characters.",
+        )
     model_name = (
-        (override if isinstance(override, str) and override else None)
+        override
         or server._reviewer_model_name()
         or config.get("model")
         or os.environ.get("TEST_MODEL", "openai.gpt-5.4")

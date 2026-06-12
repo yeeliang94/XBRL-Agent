@@ -19,6 +19,7 @@ from facts, so the facts snapshot is the whole backup.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -121,24 +122,31 @@ def revert_to_original(db_path: str | Path, run_id: int) -> dict[str, Any]:
     restored leaves. The snapshot itself is left in place so a later
     re-review still reverts to the same original extraction.
 
-    Returns ``{"reverted": bool, "facts_restored": int}``. ``reverted`` is
-    False when no snapshot exists (nothing to revert to) — the caller can
-    surface that to the user instead of silently no-opping.
+    Returns ``{"reverted": bool, "facts_restored": int, "recomputed": bool}``.
+    ``reverted`` is False when no snapshot exists (nothing to revert to) — the
+    caller can surface that to the user instead of silently no-opping.
+    ``recomputed`` is False when the restore succeeded but the post-restore
+    cascade raised, so the caller can warn that parent totals may be stale.
     """
     from concept_model.cascade import recompute_after_turn
 
     conn = _open_conn(db_path)
     try:
+        now = _now()
+        # Acquire the write lock BEFORE checking for the snapshot, so the
+        # existence check and the wipe-and-restore are one atomic unit. A
+        # concurrent first-snapshot (auto-reviewer) or a second revert can no
+        # longer slip between "does a snapshot exist?" and the DELETE.
+        conn.execute("BEGIN IMMEDIATE")
         snap = conn.execute(
             "SELECT COUNT(*) FROM run_fact_snapshots WHERE run_id = ?",
             (run_id,),
         ).fetchone()[0]
         if snap == 0:
             # No original backup — refuse rather than wipe the live facts.
-            return {"reverted": False, "facts_restored": 0}
+            conn.rollback()  # release the write lock; nothing to do
+            return {"reverted": False, "facts_restored": 0, "recomputed": False}
 
-        now = _now()
-        conn.execute("BEGIN IMMEDIATE")
         # Wipe the live facts and re-insert the snapshot. We DELETE+INSERT
         # rather than UPSERT because the reviewer may have added facts that
         # don't exist in the snapshot — those must disappear on revert.
@@ -176,9 +184,22 @@ def revert_to_original(db_path: str | Path, run_id: int) -> dict[str, Any]:
         conn.close()
 
     # Recompute outside the transaction (cascade opens its own connection
-    # and commits) so a recompute failure can't roll back the restore.
-    recompute_after_turn(db_path, run_id)
-    return {"reverted": True, "facts_restored": int(restored)}
+    # and commits) so a recompute failure can't roll back the restore. Catch
+    # + signal rather than propagate: the restore already committed, so a
+    # cascade error means "restored but totals may be stale", not "revert
+    # failed" — the caller surfaces a soft warning off ``recomputed``.
+    recomputed = True
+    try:
+        recompute_after_turn(db_path, run_id)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "post-revert cascade failed for run %s", run_id
+        )
+        recomputed = False
+    return {
+        "reverted": True, "facts_restored": int(restored),
+        "recomputed": recomputed,
+    }
 
 
 def compute_review_diff(db_path: str | Path, run_id: int) -> list[dict[str, Any]]:
