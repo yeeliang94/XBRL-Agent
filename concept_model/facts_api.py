@@ -378,6 +378,44 @@ def apply_fact(
     }
 
 
+def clear_facts_for_template(db_path, run_id: int, template_id: str) -> int:
+    """Delete one run's facts (and their conflicts) for ONE template family.
+
+    Item 10 retry hygiene (peer-review HIGH, 2026-06-12): face-agent
+    retries run a FRESH whole attempt, but ``write_facts`` projections are
+    upserts keyed ``(run_id, concept_uuid, period, entity_scope)`` — a fact
+    only the FAILED attempt wrote would silently survive into the retried
+    attempt's export (the download renders from the DB). The retry wrapper
+    calls this before relaunching so the new attempt is authoritative for
+    its own statement; other statements' facts (other template_ids) are
+    untouched. Conflicts scoped to the same concepts are swept too so the
+    post-extraction cascade re-derives them from the fresh facts.
+
+    Returns the number of fact rows deleted.
+    """
+    conn = _open_conn(str(db_path))
+    try:
+        cur = conn.execute(
+            "DELETE FROM run_concept_facts WHERE run_id = ? "
+            "AND concept_uuid IN "
+            "(SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
+            (run_id, template_id),
+        )
+        conn.execute(
+            "DELETE FROM run_concept_conflicts WHERE run_id = ? "
+            "AND concept_uuid IN "
+            "(SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
+            (run_id, template_id),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def write_fact(db_path, run_id: int, body: "FactWrite") -> dict:
     """Open the audit DB, apply one fact write, close. Convenience wrapper
     around :func:`apply_fact` for in-process callers that don't already hold

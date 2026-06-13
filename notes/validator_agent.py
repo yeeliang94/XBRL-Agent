@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -35,6 +34,11 @@ from model_settings import build_model_settings
 
 from notes.writer import payload_sidecar_path
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
+# Promoted to utils/workbook_io.py (item 8) so every workbook saver shares
+# one atomic mechanism. Re-exported under the original private name to keep
+# this module's import/test contract (tests/test_notes_validator_agent.py)
+# untouched.
+from utils.workbook_io import atomic_save_workbook as _atomic_save_workbook
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +123,48 @@ def load_sidecar_entries(sidecar_paths: List[str]) -> list[dict]:
         if isinstance(data, list):
             out.extend(e for e in data if isinstance(e, dict))
     return out
+
+
+def _top_note_num(ref) -> Optional[int]:
+    """Top-level integer note number of a ref ('2.5(g)' → 2, 18 → 18).
+
+    Returns None when the ref carries no leading integer (so a malformed ref
+    can't masquerade as note 0). Mirrors the per-note_num coercion notes/
+    coverage already uses — this is permitted per gotcha #14 (we report gaps by
+    integer note_num; we do NOT match a note's CONTENT to a row).
+    """
+    if ref is None:
+        return None
+    head = str(ref).strip().split(".")[0].split("(")[0]
+    try:
+        return int(head)
+    except (ValueError, TypeError):
+        return None
+
+
+def inventory_coverage_gaps(
+    inventory_note_nums: list[int],
+    entries: list[dict],
+) -> list[int]:
+    """N3 Stage 1 — inventory note_nums with NO content on ANY notes sheet.
+
+    Deterministic + gotcha-#14-safe: it reports COVERAGE by integer note_num
+    (which inventory notes never got written anywhere), exactly the kind of
+    per-note_num check ``notes/coverage.py`` already does. It does NOT judge
+    whether a note's CONTENT is adequate or on the right page — that is the
+    validator AGENT's judgement (the evidence spot-check), never a code-side
+    row-to-content match.
+
+    ``entries`` are the writer's sidecar rows, each carrying
+    ``source_note_refs``. A note is "covered" if any entry cites it.
+    """
+    written: set[int] = set()
+    for e in entries:
+        for ref in e.get("source_note_refs", []) or []:
+            num = _top_note_num(ref)
+            if num is not None:
+                written.add(num)
+    return sorted(n for n in set(inventory_note_nums) if n not in written)
 
 
 def detect_cross_sheet_duplicates_by_ref(
@@ -326,12 +372,20 @@ def create_notes_validator_agent(
     filing_standard: str,
     model: Union[str, Model],
     output_dir: str,
+    inventory_note_nums: Optional[List[int]] = None,
 ) -> tuple[Agent[NotesValidatorAgentDeps, str], NotesValidatorAgentDeps, dict]:
     """Build the notes post-validator agent.
 
     Returns (agent, deps, context) where `context` is a dict describing
     what the detectors found before the run — useful for test assertions
     and for the coordinator to short-circuit when there are no candidates.
+
+    ``inventory_note_nums`` (N3 Stage 1) is the scout's notes inventory by
+    integer note_num. When supplied, the deterministic
+    :func:`inventory_coverage_gaps` reports which inventory notes have NO
+    content on ANY sheet, surfaced in ``context['coverage_gaps']`` and the
+    prompt so the validator agent investigates them (gotcha-#14-safe: code
+    reports gaps by note_num, the AGENT judges content adequacy).
     """
     deps = NotesValidatorAgentDeps(
         merged_workbook_path=merged_workbook_path,
@@ -346,11 +400,22 @@ def create_notes_validator_agent(
     entries = load_sidecar_entries(sidecar_paths)
     duplicates = detect_cross_sheet_duplicates_by_ref(entries)
     overlap = detect_cross_sheet_overlap_candidates(entries)
+    # N3 Stage 1: which inventory notes never got written anywhere.
+    coverage_gaps = inventory_coverage_gaps(inventory_note_nums or [], entries)
 
     base_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
     dynamic_prompt = build_validator_prompt_body(
         duplicates, overlap, filing_level, filing_standard,
     )
+    if coverage_gaps:
+        dynamic_prompt += (
+            "\n\n=== COVERAGE GAPS (scout saw these notes; no content was "
+            "written for them on ANY sheet) ===\n"
+            f"Inventory note numbers with no content: {coverage_gaps}.\n"
+            "For each, view the cited PDF pages and judge: is this note "
+            "genuinely absent from the filing (fine), or was it missed? Report "
+            "missed disclosures — do NOT fabricate content."
+        )
     system_prompt = f"{base_prompt}\n\n{dynamic_prompt}"
 
     agent = Agent(
@@ -466,32 +531,12 @@ def create_notes_validator_agent(
         "duplicates": duplicates,
         "overlap_candidates": overlap,
         "entry_count": len(entries),
+        # N3 Stage 1: inventory notes with no content anywhere (advisory).
+        "coverage_gaps": coverage_gaps,
     }
     return agent, deps, context
 
 
-def _atomic_save_workbook(wb: "openpyxl.Workbook", path: str) -> None:
-    """Save `wb` to `path` atomically.
-
-    openpyxl's `save` rewrites the `.xlsx` zip in place, which is not atomic
-    on any platform (Windows surfaces it most readily): a concurrent reader
-    can see a truncated zip and raise EOFError. We write to a sibling
-    tempfile on the same filesystem and `os.replace` it into place —
-    `os.replace` is atomic on POSIX and Windows, so a concurrent reader
-    always sees either the old or the new file, never a partial one.
-    """
-    directory = os.path.dirname(os.path.abspath(path))
-    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx", dir=directory)
-    os.close(fd)
-    try:
-        wb.save(tmp_path)
-        os.replace(tmp_path, path)
-    except BaseException:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
 
 
 def _rewrite_cell_impl(

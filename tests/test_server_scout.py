@@ -87,6 +87,34 @@ class TestScoutEndpoint:
         assert "SOFP" in ip["statements"]
         assert ip["statements"]["SOFP"]["face_page"] == 42
 
+    def test_scout_degraded_timeout_reports_failure_not_success(self, app_client):
+        """Codex review: a scout that timed out returns a degraded pack. The
+        route must report `scout_complete success:false degraded:true` — never
+        a `success:true` completion that contradicts the `scout_timeout` error
+        the agent already emitted. The run can still proceed (gotcha #13)."""
+        client, session_id = app_client
+        degraded = _fake_infopack()
+        degraded.degraded = True
+        degraded.degraded_reason = "Scout stalled past the 90s per-turn timeout."
+
+        with patch(
+            "scout.runner.run_scout_streaming",
+            new_callable=AsyncMock,
+            return_value=degraded,
+        ):
+            resp = client.post(f"/api/scout/{session_id}")
+
+        assert resp.status_code == 200
+        events = _parse_sse(resp.text)
+        complete = [e for e in events if e["event"] == "scout_complete"]
+        assert len(complete) == 1
+        data = complete[0]["data"]
+        assert data["success"] is False
+        assert data["degraded"] is True
+        assert "per-turn timeout" in data["message"]
+        # The pack is still forwarded so the run can proceed without hints.
+        assert "infopack" in data
+
     def test_scout_endpoint_404_no_pdf(self, app_client):
         """Scout endpoint returns 404 if no PDF uploaded."""
         client, session_id = app_client
@@ -191,7 +219,7 @@ class TestScoutEndpoint:
 
         captured: dict = {}
 
-        async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False):
+        async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False, **_kwargs):
             captured["force_vision_inventory"] = force_vision_inventory
             return infopack
 
@@ -211,7 +239,7 @@ class TestScoutEndpoint:
 
         captured: dict = {}
 
-        async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False):
+        async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False, **_kwargs):
             captured["force_vision_inventory"] = force_vision_inventory
             return infopack
 
@@ -266,7 +294,7 @@ class TestScoutEndpoint:
         infopack = _fake_infopack()
 
         # Mock run_scout_streaming to yield structured events
-        async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False):
+        async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False, **_kwargs):
             if on_event:
                 await on_event("tool_call", {
                     "tool_name": "find_toc",
@@ -322,6 +350,74 @@ class TestScoutEndpoint:
             for e in events
         )
         assert has_cancel, f"No cancellation event found in: {event_types}"
+
+
+class TestScoutTraceRoute:
+    """Item 2 (PLAN-orchestration-hardening): after a scout run, the SCOUT
+    trace is reachable through the EXISTING per-agent trace route — proving
+    the run_agents whitelist gate was actually opened (a SCOUT row exists),
+    not just that the file landed on disk."""
+
+    def test_scout_trace_route_returns_200_after_scout_run(
+        self, app_client, session_dir,
+    ):
+        client, session_id = app_client
+        _sid, d, tmp_path = session_dir
+
+        # Seed the audit DB the way an upload would: schema + a draft runs
+        # row carrying this session's id and output dir.
+        import sqlite3
+        import server
+        from db import repository as repo
+        from db.schema import init_db
+        init_db(server.AUDIT_DB_PATH)
+        conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+        try:
+            run_id = repo.create_run(
+                conn, pdf_filename="f.pdf", session_id=session_id,
+                output_dir=str(d), config=None, scout_enabled=True,
+                status="draft",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        captured: dict = {}
+
+        async def fake_streaming(pdf_path, model, on_event=None, *,
+                                 force_vision_inventory=False,
+                                 output_dir=None, **_kwargs):
+            captured["output_dir"] = output_dir
+            # Simulate item 2's trace persistence inside the scout.
+            if output_dir:
+                (Path(output_dir) / "SCOUT_conversation_trace.json").write_text(
+                    json.dumps({"messages": []}), encoding="utf-8",
+                )
+            return _fake_infopack()
+
+        with patch("scout.runner.run_scout_streaming", side_effect=fake_streaming):
+            resp = client.post(f"/api/scout/{session_id}")
+        assert resp.status_code == 200
+
+        # The endpoint threaded the session dir in as the trace destination.
+        assert captured.get("output_dir") == str(d)
+
+        # The SCOUT run_agents row exists and is terminal.
+        conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+        try:
+            row = conn.execute(
+                "SELECT statement_type, status FROM run_agents "
+                "WHERE run_id = ?", (run_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None and row[0] == "SCOUT"
+        assert row[1] == "succeeded"
+
+        # And the trace route serves it — whitelist gate open.
+        trace_resp = client.get(f"/api/runs/{run_id}/agents/SCOUT/trace")
+        assert trace_resp.status_code == 200, trace_resp.text
+        assert "messages" in trace_resp.json()
 
 
 def _parse_sse(text: str) -> list[dict]:

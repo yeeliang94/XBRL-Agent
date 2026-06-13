@@ -30,8 +30,9 @@ registers thin ``@agent.tool`` wrappers around them.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -43,6 +44,8 @@ from pydantic_ai import Agent, RunContext
 from tools.calculator import calculator_result_json as _calculator_impl
 from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
 
+
+logger = logging.getLogger("server")
 
 _PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "reviewer.md"
@@ -362,6 +365,89 @@ def list_run_facts(
     return [dict(r) for r in rows]
 
 
+def _normalize_for_match(label: str) -> str:
+    """Lowercase + collapse whitespace for fuzzy label matching (item 25)."""
+    return " ".join((label or "").strip().lstrip("*").lower().split())
+
+
+def find_candidate_rows(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    value: float,
+    label_hint: str = "",
+    template_prefix: Optional[str] = None,
+    entity_scope: Optional[str] = None,
+    tolerance: float = 1.0,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Reverse-lookup: given a PDF figure, which template rows could it be?
+
+    The reviewer can trace a row DOWN to its source, but not the inverse —
+    "I see 1,595k on page 30, where should it live?". This matches the run's
+    facts by value (within ``tolerance``, ±1 mirrors the verifier convention)
+    and/or by a fuzzy label match against ``concept_nodes.canonical_label``.
+
+    Family-scoped via ``template_prefix`` (gotcha #21 — the SAME (sheet, row)
+    exists under each standard×level with a different uuid, so an unscoped
+    lookup resolves an arbitrary template's concept). On a Group filing pass
+    ``entity_scope`` to narrow to the relevant column. Returns ≤``limit``
+    candidates, value-matches first. Read-only.
+    """
+    import difflib
+
+    conn = _open_conn(db_path)
+    try:
+        sql = (
+            "SELECT n.render_sheet, n.render_row, n.canonical_label, n.kind, "
+            "f.concept_uuid, f.period, f.entity_scope, f.value, f.value_status "
+            "FROM run_concept_facts f "
+            "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
+            "WHERE f.run_id = ?"
+        )
+        params: list[Any] = [run_id]
+        if template_prefix:
+            sql += " AND n.template_id LIKE ?"
+            params.append(f"{template_prefix}%")
+        if entity_scope:
+            sql += " AND f.entity_scope = ?"
+            params.append(entity_scope)
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    hint = _normalize_for_match(label_hint)
+    scored: list[tuple[int, float, dict[str, Any]]] = []
+    for r in rows:
+        v = r["value"]
+        value_match = (
+            isinstance(v, (int, float))
+            and abs(float(v) - float(value)) <= tolerance
+        )
+        label_ratio = 0.0
+        if hint:
+            lab = _normalize_for_match(r["canonical_label"])
+            if hint in lab or lab in hint:
+                label_ratio = 1.0
+            else:
+                label_ratio = difflib.SequenceMatcher(None, hint, lab).ratio()
+        label_match = label_ratio >= 0.6
+        if not (value_match or label_match):
+            continue
+        # Rank: a value match is the strongest signal (tier 0); a label-only
+        # match is tier 1, ordered by descending label similarity.
+        tier = 0 if value_match else 1
+        scored.append((tier, -label_ratio, {
+            "sheet": r["render_sheet"], "row": r["render_row"],
+            "label": r["canonical_label"], "kind": r["kind"],
+            "concept_uuid": r["concept_uuid"], "period": r["period"],
+            "entity_scope": r["entity_scope"], "current_value": r["value"],
+            "value_status": r["value_status"],
+        }))
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return [c for _, _, c in scored[:limit]]
+
+
 def _repeated_values(facts: Sequence[dict[str, Any]]) -> dict[float, list[str]]:
     """Group non-zero numeric LEAF values that appear on >1 distinct (sheet,row).
 
@@ -453,6 +539,64 @@ def _is_arithmetic_only_evidence(evidence: str | None) -> bool:
     return evidence.strip().lower().startswith("arithmetic")
 
 
+# Machine-readable rejection kinds (item 14 — apply_fix rejection telemetry).
+# These ride into ``outcome["fix_rejections"]`` so a pass reports how many
+# fixes it refused and why, queryable from the re-review status endpoint.
+#   ungrounded       — no PDF/arithmetic grounding
+#   abstract_row     — write to an ABSTRACT section header (gotcha #17)
+#   catchall_plug    — arithmetic residual plugged into a catch-all row (#17)
+#   computed_override — bare observed write to a formula concept (facts_api)
+REJECTION_KINDS = (
+    "ungrounded", "abstract_row", "catchall_plug", "computed_override",
+)
+
+
+def classify_apply_fix_guard(
+    concept: sqlite3.Row | dict,
+    *,
+    evidence: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Run the no-plug guard, returning ``(kind, message)``.
+
+    ``kind`` is one of :data:`REJECTION_KINDS` (the machine-readable tag for
+    telemetry); ``message`` is the same model-facing ``"rejected: …"`` string
+    the guard has always produced. Both are ``None`` when the write passes.
+    The message text is the model-facing contract — do not change it without
+    updating the guard-behaviour tests.
+    """
+    kind = concept["kind"]
+    label = concept["canonical_label"]
+    sheet = concept["render_sheet"]
+    row = concept["render_row"]
+
+    if not (evidence and str(evidence).strip()):
+        return "ungrounded", (
+            "rejected: ungrounded write refused — cite the PDF page + the "
+            "figure you read in `evidence` (or 'arithmetic: <expr>' when the "
+            "value is a pure reconciliation of already-grounded cells). The "
+            "reviewer never writes a number it can't ground."
+        )
+
+    if kind == "ABSTRACT":
+        return "abstract_row", (
+            f"rejected: {sheet} row {row} ({label!r}) is an ABSTRACT section "
+            f"header — never writable (invariant #17). Write a leaf row "
+            f"inside the section instead."
+        )
+
+    if _is_catchall_label(label) and _is_arithmetic_only_evidence(evidence):
+        return "catchall_plug", (
+            f"rejected: {sheet} row {row} ({label!r}) is a catch-all / "
+            f"residual row, and an arithmetic-only value is a balancing plug. "
+            f"Never plug a residual into a catch-all to force a balance "
+            f"(invariant #17). Fix the real leaf, or leave the imbalance "
+            f"flagged. (A PDF-cited disclosure on this row is fine — cite the "
+            f"page instead of an arithmetic expression.)"
+        )
+
+    return None, None
+
+
 def evaluate_apply_fix_guard(
     concept: sqlite3.Row | dict,
     *,
@@ -479,39 +623,23 @@ def evaluate_apply_fix_guard(
 
     The guard runs BEFORE ``apply_fact`` and returns the same
     ``"rejected: …"`` shape the facts API produces, so the agent reads one
-    consistent failure contract and re-investigates.
+    consistent failure contract and re-investigates. Thin wrapper over
+    :func:`classify_apply_fix_guard` (item 14) — it drops the telemetry kind.
     """
-    kind = concept["kind"]
-    label = concept["canonical_label"]
-    sheet = concept["render_sheet"]
-    row = concept["render_row"]
+    return classify_apply_fix_guard(concept, evidence=evidence)[1]
 
-    if not (evidence and str(evidence).strip()):
-        return (
-            "rejected: ungrounded write refused — cite the PDF page + the "
-            "figure you read in `evidence` (or 'arithmetic: <expr>' when the "
-            "value is a pure reconciliation of already-grounded cells). The "
-            "reviewer never writes a number it can't ground."
-        )
 
-    if kind == "ABSTRACT":
-        return (
-            f"rejected: {sheet} row {row} ({label!r}) is an ABSTRACT section "
-            f"header — never writable (invariant #17). Write a leaf row "
-            f"inside the section instead."
-        )
+def _tally_rejection(rejections: Optional[dict], kind: str, label: Optional[str]) -> None:
+    """Bump a per-kind rejection counter + log one WARN (item 14).
 
-    if _is_catchall_label(label) and _is_arithmetic_only_evidence(evidence):
-        return (
-            f"rejected: {sheet} row {row} ({label!r}) is a catch-all / "
-            f"residual row, and an arithmetic-only value is a balancing plug. "
-            f"Never plug a residual into a catch-all to force a balance "
-            f"(invariant #17). Fix the real leaf, or leave the imbalance "
-            f"flagged. (A PDF-cited disclosure on this row is fine — cite the "
-            f"page instead of an arithmetic expression.)"
-        )
-
-    return None
+    ``rejections`` is the dict carried on ``ReviewerDeps``; ``None`` (the
+    pure-function unit-test call shape) skips telemetry. The WARN makes a
+    refused fix visible in logs even when nobody reads the outcome dict.
+    """
+    logger.warning("apply_fix rejected (%s) for concept %r", kind, label)
+    if rejections is None:
+        return
+    rejections[kind] = rejections.get(kind, 0) + 1
 
 
 def apply_reviewer_fix(
@@ -520,6 +648,7 @@ def apply_reviewer_fix(
     fact,
     *,
     template_prefix: Optional[str] = None,
+    rejections: Optional[dict] = None,
 ) -> str:
     """Run the no-plug guard, then write one reviewer fix through apply_fact.
 
@@ -570,9 +699,11 @@ def apply_reviewer_fix(
                 f"with trace_cascade_source_tool to get the right concept_uuid."
             )
 
-        # Deterministic guard NEXT — invariant #17 + grounding.
-        rejection = evaluate_apply_fix_guard(concept, evidence=fact.evidence)
+        # Deterministic guard NEXT — invariant #17 + grounding. Use the
+        # classifier so a refusal is tallied per kind for telemetry (item 14).
+        kind, rejection = classify_apply_fix_guard(concept, evidence=fact.evidence)
         if rejection is not None:
+            _tally_rejection(rejections, kind, concept["canonical_label"])
             return rejection
 
         apply_fact(conn, run_id, fact)  # commits on success
@@ -594,6 +725,13 @@ def apply_reviewer_fix(
         ).strip()
     except HTTPException as exc:
         conn.rollback()
+        # facts_api refuses a bare observed write to a formula concept
+        # (COMPUTED / matrix total) — tally it as computed_override (item 14).
+        detail = str(exc.detail or "")
+        if "formula concept" in detail:
+            _tally_rejection(
+                rejections, "computed_override", concept["canonical_label"]
+            )
         return f"rejected: {exc.detail}"
     except Exception as exc:  # noqa: BLE001 — report, don't crash the loop
         conn.rollback()
@@ -680,6 +818,10 @@ class ReviewerDeps:
     # Counters surfaced to the orchestrator so it knows whether to re-export.
     writes_performed: int = 0
     flags_raised: int = 0
+    # Item 14: per-kind apply_fix rejection tally (REJECTION_KINDS), surfaced as
+    # outcome["fix_rejections"] so a pass reports how many fixes it refused +
+    # why — without softening any guard. Empty until the first refusal.
+    rejections: dict = field(default_factory=dict)
 
 
 def _family_prefix(filing_standard: str, filing_level: str) -> str:
@@ -1068,6 +1210,50 @@ def create_reviewer_agent(
         )
         return _format_fact_listing(facts)
 
+    # Registered under the model-facing name ``find_candidate_rows`` (the name
+    # prompts/reviewer.md advertises) while the Python identifier differs —
+    # a same-named wrapper would shadow the module-level helper and recurse
+    # into the tool itself (TypeError on every live call).
+    @agent.tool(name="find_candidate_rows")
+    def find_candidate_rows_tool(
+        ctx: RunContext[ReviewerDeps],
+        value: float,
+        label_hint: str = "",
+        entity_scope: str = "",
+    ) -> str:
+        """Reverse-lookup: given a figure (and optional label), which rows is it?
+
+        Use when you've read a number in the PDF and need to know where it
+        belongs — the inverse of trace_cascade_source_tool. Matches the run's
+        facts by value (±1) and/or a fuzzy label match. On a GROUP filing pass
+        ``entity_scope`` ('Group' | 'Company') to narrow to the right column.
+        Returns up to 10 candidates with their sheet, row, label, current value,
+        and concept_uuid — scoped to THIS run's template family. Verify the
+        right one in the PDF before apply_fix.
+        """
+        cands = find_candidate_rows(
+            ctx.deps.db_path, ctx.deps.run_id,
+            value=value, label_hint=label_hint or "",
+            template_prefix=_family_prefix(
+                ctx.deps.filing_standard, ctx.deps.filing_level),
+            entity_scope=entity_scope or None,
+        )
+        if not cands:
+            return (
+                f"No candidate rows matched value≈{value}"
+                + (f" / label~{label_hint!r}" if label_hint else "")
+                + ". Try a wider label hint, or trace down from a known total."
+            )
+        lines = [f"{len(cands)} candidate(s) for value≈{value}"
+                 + (f" / label~{label_hint!r}" if label_hint else "") + ":"]
+        for c in cands:
+            lines.append(
+                f"  {c['sheet']}!row{c['row']} {c['label']!r} [{c['kind']}] "
+                f"{c['period']}/{c['entity_scope']}: {c['current_value']} "
+                f"uuid={c['concept_uuid']}"
+            )
+        return "\n".join(lines)
+
     @agent.tool
     def trace_cascade_source_tool(
         ctx: RunContext[ReviewerDeps],
@@ -1137,6 +1323,22 @@ def create_reviewer_agent(
         return results
 
     @agent.tool
+    def search_pdf_text(ctx: RunContext[ReviewerDeps], queries: list[str]) -> str:
+        """Find where phrase(s) appear in the PDF text, then VERIFY by viewing.
+
+        When verifying a disputed figure's source, pass ALL the phrases in ONE
+        call (e.g. ``["Total PPE", "amounts owing by directors"]``). Returns,
+        per phrase, the PDF page numbers + a snippet of each case-insensitive
+        hit. Use it to locate candidate pages fast, then view_pdf_pages to read
+        and confirm before apply_fix — a text hit is a pointer, not proof. On a
+        scanned PDF it says so explicitly.
+        """
+        from tools.pdf_search import search_pdf_text_json
+        if not ctx.deps.pdf_path:
+            return '{"error": "Source PDF is not available for this run.", "results": []}'
+        return search_pdf_text_json(ctx.deps.pdf_path, queries)
+
+    @agent.tool
     def apply_fix(
         ctx: RunContext[ReviewerDeps],
         concept_uuid: str,
@@ -1167,6 +1369,7 @@ def create_reviewer_agent(
             ),
             template_prefix=_family_prefix(
                 ctx.deps.filing_standard, ctx.deps.filing_level),
+            rejections=ctx.deps.rejections,
         )
         if out.startswith("ok"):
             ctx.deps.writes_performed += 1
@@ -1201,6 +1404,7 @@ def create_reviewer_agent(
             ),
             template_prefix=_family_prefix(
                 ctx.deps.filing_standard, ctx.deps.filing_level),
+            rejections=ctx.deps.rejections,
         )
         if out.startswith("ok"):
             ctx.deps.writes_performed += 1

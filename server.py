@@ -33,6 +33,14 @@ import threading
 import time
 import traceback
 import uuid
+from concurrent.futures import (
+    ThreadPoolExecutor as _CCThreadPoolExecutor,
+    # On Python 3.10, concurrent.futures.TimeoutError is NOT the builtin
+    # TimeoutError (they were only aliased in 3.11) — `except TimeoutError`
+    # alone misses a Future.result(timeout=...) expiry there. Catch both
+    # everywhere the executor pattern occurs (harmless no-op on >= 3.11).
+    TimeoutError as _FuturesTimeoutError,
+)
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import (
@@ -470,10 +478,28 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
             "filing_standard": filing_standard,
         }
         tolerance = float(os.environ.get("XBRL_TOLERANCE_RM", "1.0"))
-        results = run_cross_checks(
+        # Item 16: this helper is called from sync request handlers, so the
+        # bound is a thread + join-with-timeout rather than asyncio.wait_for.
+        # On expiry the worker is abandoned (see _CROSS_CHECK_EXECUTOR note)
+        # and the TimeoutError rides the existing best-effort except → None.
+        timeout = float(CROSS_CHECK_TIMEOUT)
+        future = _CROSS_CHECK_EXECUTOR.submit(
+            run_cross_checks,
             build_default_cross_checks(), all_workbook_paths, check_config,
             tolerance=tolerance,
         )
+        try:
+            results = future.result(
+                timeout=None if timeout == float("inf") else timeout,
+            )
+        except (_FuturesTimeoutError, TimeoutError):
+            # Both spellings: on Py 3.10 Future.result raises the distinct
+            # concurrent.futures.TimeoutError; on >= 3.11 they're aliases.
+            logger.warning(
+                "re-check cross-check pass exceeded %.0fs cap for run %s — "
+                "abandoning worker thread", timeout, run_id,
+            )
+            return None
         from cross_checks.framework import comparands_to_json
         return [
             {
@@ -910,12 +936,137 @@ def _resolve_wallclock(env_var: str, default: float) -> float:
     except ValueError:
         return default
 
+def _agent_row_error_type(
+    status: str, explicit: Optional[str], error: Optional[str],
+) -> Optional[str]:
+    """Item 9 acceptance guarantee: every failed/cancelled run_agents row
+    carries a non-null error_type. Prefer the coordinator's explicit
+    classification; derive from status + free-text error otherwise."""
+    if explicit:
+        return explicit
+    if status == "cancelled":
+        return "cancelled"
+    if status == "failed":
+        return _error_type_for_outcome(error or "unknown")
+    return None
+
+
+def _error_type_for_outcome(error: Optional[str]) -> Optional[str]:
+    """Map a reviewer/validator outcome error code onto the item-9 failure
+    taxonomy (coordinator.py ERROR_TYPE_*) for run_agents.error_type.
+
+    The pseudo-agents report free-form-ish codes; this keeps the DB column
+    on the shared vocabulary so History can group all agents uniformly.
+    """
+    if not error:
+        return None
+    exact = {
+        "cancelled": "cancelled",
+        "reviewer_exhausted": "iteration_capped",
+        "reviewer_wallclock_exceeded": "wallclock",
+        "validator_wallclock_exceeded": "wallclock",
+    }
+    if error in exact:
+        return exact[error]
+    lowered = error.lower()
+    if "wall-clock" in lowered or "wallclock" in lowered:
+        return "wallclock"
+    if "per-turn timeout" in lowered or "stalled past" in lowered:
+        return "turn_timeout"
+    return "tool_exception"
+
+
 CORRECTION_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
     "XBRL_CORRECTION_WALLCLOCK_S", 300.0,
 )
 NOTES_VALIDATOR_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
     "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", 300.0,
 )
+
+# PLAN-orchestration-hardening item 16: cross-checks used to run
+# synchronously inside async handlers — while openpyxl walked workbooks the
+# event loop couldn't service SSE queues for ANY session, and the pass had
+# no timeout at all (unlike every agent pass). Now every pass runs on a
+# worker thread, bounded by this wall-clock cap. Same resolver semantics as
+# the other caps: positive seconds, 0/negative disables.
+CROSS_CHECK_TIMEOUT: float = _resolve_wallclock(
+    "XBRL_CROSS_CHECK_TIMEOUT_S", 120.0,
+)
+
+# Honest limitation: a timeout abandons the worker — wait_for bounds the
+# await, not the thread. The work is openpyxl + arithmetic (slow-pathological
+# is plausible, infinite-hang is not), so instead of subprocess isolation we
+# bound the blast radius: a small dedicated pool means abandoned workers
+# can't pile up unbounded across requests.
+_CROSS_CHECK_EXECUTOR = _CCThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="cross-check",
+)
+
+
+async def _run_cross_checks_bounded(
+    checks: list,
+    workbook_paths: dict,
+    check_config: dict,
+    *,
+    tolerance: float,
+    on_check=None,
+) -> list:
+    """Run ``cross_checks.framework.run_all`` off the event loop, bounded.
+
+    Raises ``TimeoutError`` on cap expiry — callers map it into the existing
+    structured ``cross_check_exception`` path (gotcha #20), so a pathological
+    workbook lands the run ``completed_with_errors`` instead of pinning it in
+    ``running`` or freezing SSE for every session.
+
+    The ``on_check`` progress callback is re-dispatched onto the event loop
+    via ``call_soon_threadsafe`` — emission still goes through the event
+    queue on the loop thread (gotcha #19), never directly from the worker.
+    """
+    from cross_checks.framework import run_all as _run_all
+
+    loop = asyncio.get_running_loop()
+    # Read the module global at call time so tests can monkeypatch it.
+    import server as _self
+    timeout = float(getattr(_self, "CROSS_CHECK_TIMEOUT", CROSS_CHECK_TIMEOUT))
+
+    # Peer-review fix (2026-06-12): a timeout abandons the worker, but the
+    # worker keeps calling on_check — without this gate, late
+    # cross_check_result frames would reach the SSE stream AFTER the pass
+    # was classified cross_check_exception, showing results from a
+    # timed-out pass. Guarded on BOTH sides: the worker thread stops
+    # scheduling new dispatches, and already-scheduled loop callbacks drop
+    # on arrival.
+    _cb_state = {"active": True}
+    cb = None
+    if on_check is not None:
+        def _forward(idx: int, total: int, result) -> None:  # noqa: ANN001
+            if _cb_state["active"]:
+                on_check(idx, total, result)
+
+        def cb(idx: int, total: int, result) -> None:  # noqa: ANN001
+            if _cb_state["active"]:
+                loop.call_soon_threadsafe(_forward, idx, total, result)
+
+    future = loop.run_in_executor(
+        _CROSS_CHECK_EXECUTOR,
+        lambda: _run_all(
+            checks, workbook_paths, check_config,
+            tolerance=tolerance, on_check=cb,
+        ),
+    )
+    try:
+        return await asyncio.wait_for(
+            future, timeout=None if timeout == float("inf") else timeout,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        _cb_state["active"] = False
+        logger.warning(
+            "cross-check pass exceeded %.0fs cap — abandoning worker thread "
+            "(it may still be running in the background)", timeout,
+        )
+        raise TimeoutError(
+            f"cross-check pass exceeded the {timeout:.0f}s wall-clock cap"
+        ) from None
 
 
 async def _run_reviewer_pass(
@@ -949,21 +1100,33 @@ async def _run_reviewer_pass(
     import asyncio as _asyncio
     import time as _wc_time
     import server as _server_self
-    from notes.coordinator import _iter_with_turn_timeout
-    from pydantic_ai import Agent
-    from pydantic_ai.messages import (
-        FunctionToolCallEvent, FunctionToolResultEvent,
+    from agent_runner import (
+        AgentLoopSpec,
+        CallToolsCapExceeded,
+        WallclockExceeded,
+        run_agent_loop,
     )
     from correction.reviewer_agent import (
         create_reviewer_agent, compute_reviewer_turn_cap,
     )
-    from concept_model.versioning import snapshot_facts, has_snapshot
+    from concept_model.versioning import ensure_snapshot
 
     outcome: dict = {
         "invoked": False, "writes_performed": 0, "flags_raised": 0,
         "error": None, "total_tokens": 0, "total_cost": 0.0,
         "exhausted": False, "turns_used": 0, "max_turns": 0,
+        # Item 15: wall-clock elapsed for this pass, set on every exit path.
+        # "Exhausted at 299s of a 300s cap" vs "exhausted at 120s" is the
+        # difference between raising the cap and fixing a slow tool.
+        "elapsed_seconds": 0.0,
     }
+    _pass_start = _wc_time.monotonic()
+
+    def _stamp_elapsed() -> None:
+        outcome["elapsed_seconds"] = round(
+            _wc_time.monotonic() - _pass_start, 1,
+        )
+
     # Normalise the failing cross-checks (CrossCheckResult objects) into the
     # plain-dict shape the review packet renderer expects. `comparands` carry
     # the values each check compared (Phase 2) so the reviewer gets concrete
@@ -1037,6 +1200,7 @@ async def _run_reviewer_pass(
         await _emit("error", {"type": "reviewer_no_facts", "message": msg})
         await _emit("complete", {"success": False,
                                  "error": outcome["error"]})
+        _stamp_elapsed()
         return outcome
 
     # Snapshot the ORIGINAL facts before the reviewer writes anything. This
@@ -1048,14 +1212,19 @@ async def _run_reviewer_pass(
     # the ORIGINAL extraction snapshot intact so "revert" always goes back to
     # the first extraction, never to a prior reviewer state (Step 13 verify).
     try:
-        if not has_snapshot(db_path, run_id):
-            snapshot_facts(db_path, run_id)
+        # ensure_snapshot folds the existence check + create into one
+        # BEGIN IMMEDIATE transaction (item 13): two concurrent passes can no
+        # longer both pass "no snapshot yet" and double-write the restore point.
+        # Create-if-absent only — an existing snapshot is preserved (always the
+        # ORIGINAL extraction, never a prior reviewer state; Step 13 verify).
+        ensure_snapshot(db_path, run_id)
     except Exception:  # noqa: BLE001
         logger.exception("Reviewer snapshot failed for run %s", run_id)
         outcome["error"] = "snapshot_failed"
         msg = "Reviewer snapshot failed; see server logs for details."
         await _emit("error", {"type": "reviewer_exception", "message": msg})
         await _emit("complete", {"success": False, "error": outcome["error"]})
+        _stamp_elapsed()
         return outcome
 
     max_turns = compute_reviewer_turn_cap(
@@ -1097,6 +1266,7 @@ async def _run_reviewer_pass(
         msg = "Reviewer agent construction failed; see server logs for details."
         await _emit("error", {"type": "reviewer_exception", "message": msg})
         await _emit("complete", {"success": False, "error": outcome["error"]})
+        _stamp_elapsed()
         return outcome
 
     prompt = (
@@ -1115,67 +1285,59 @@ async def _run_reviewer_pass(
     })
 
     turn_count = 0
-    _wc_start = _wc_time.monotonic()
     _wallclock_cap = float(getattr(
         _server_self, "CORRECTION_WALLCLOCK_TIMEOUT", CORRECTION_WALLCLOCK_TIMEOUT,
     ))
 
-    class _WallclockExceeded(Exception):
-        pass
+    # Item 17: the hand-rolled iteration loop (per-turn timeout + in-loop
+    # wall-clock + call-tools turn cap + tool-event streaming) migrated onto
+    # agent_runner.run_agent_loop. Wire-contract preservation: the reviewer
+    # never emitted token_update / text_delta / thinking events, so the
+    # filtered emit below forwards only the tool events it always emitted.
+    # The call-tools cap (NOT a raw node cap) keeps the reviewer's dynamic
+    # 8-25 turn budget semantics; max_iters is set far above it so the
+    # generic node cap can never fire first.
+    async def _loop_emit(event_type: str, data: dict) -> None:
+        if event_type in ("tool_call", "tool_result"):
+            await _emit(event_type, data)
 
-    class _TurnCapExceeded(Exception):
-        pass
+    _turn_records: list = []
+
+    def _call_tools_turns() -> int:
+        return sum(
+            1 for t in _turn_records if t.get("node_kind") == "call_tools"
+        )
+
+    loop_spec = AgentLoopSpec(
+        agent_role=agent_id,
+        model=model,
+        turn_timeout=(
+            _wallclock_cap if _wallclock_cap < CORRECTION_TURN_TIMEOUT
+            else CORRECTION_TURN_TIMEOUT
+        ),
+        phase_map={},
+        phase_message=lambda role, phase: "",
+        # Never the binding constraint — the call-tools cap is. ~2 nodes per
+        # tool turn + slack keeps pydantic-ai's silent request_limit=50
+        # relationship unchanged (model requests ≈ max_turns + 1 ≤ 26).
+        max_iters=max_turns * 2 + 10,
+        call_tools_cap=max_turns,
+        wallclock_timeout=_wallclock_cap,
+        stream_model_nodes=False,
+        # Pre-migration behaviour: only node-to-node advancement was timed,
+        # never the inner tool/model streams — so a legitimately long tool
+        # call (e.g. apply_fix workbook IO) isn't cancelled mid-execution at
+        # the per-turn timeout. Same opt-out as notes/coordinator.py's
+        # notes_spec (bound_inner_streams=False precedent).
+        bound_inner_streams=False,
+    )
 
     try:
         async with agent.iter(prompt, deps=deps) as agent_run:
-            async for node in _iter_with_turn_timeout(
-                agent_run,
-                _wallclock_cap if _wallclock_cap < CORRECTION_TURN_TIMEOUT
-                else CORRECTION_TURN_TIMEOUT,
-            ):
-                if _wc_time.monotonic() - _wc_start > _wallclock_cap:
-                    raise _WallclockExceeded(
-                        f"Reviewer exceeded wall-clock cap of {_wallclock_cap}s "
-                        f"after {deps.writes_performed} write(s)."
-                    )
-                if Agent.is_call_tools_node(node):
-                    turn_count += 1
-                    if turn_count > max_turns:
-                        # Route exhaustion through an exception (mirrors
-                        # _WallclockExceeded) instead of returning here, so the
-                        # shared post-pass cascade at the end of the function
-                        # still runs. Leaf writes the reviewer made BEFORE
-                        # hitting the cap must propagate to parent totals before
-                        # the caller re-exports, or the download ships stale
-                        # totals (peer-review P2).
-                        raise _TurnCapExceeded()
-                    async with node.stream(agent_run.ctx) as tool_stream:
-                        async for event in tool_stream:
-                            if isinstance(event, FunctionToolCallEvent):
-                                args = event.part.args
-                                if isinstance(args, str):
-                                    try:
-                                        parsed = json.loads(args)
-                                    except (json.JSONDecodeError, TypeError):
-                                        parsed = {}
-                                elif isinstance(args, dict):
-                                    parsed = args
-                                else:
-                                    parsed = {}
-                                await _emit("tool_call", {
-                                    "tool_name": event.part.tool_name,
-                                    "tool_call_id": event.part.tool_call_id,
-                                    "args": parsed,
-                                })
-                            elif isinstance(event, FunctionToolResultEvent):
-                                content = event.result.content
-                                summary = str(content)[:800] if content else ""
-                                await _emit("tool_result", {
-                                    "tool_name": event.result.tool_name,
-                                    "tool_call_id": event.result.tool_call_id,
-                                    "result_summary": summary,
-                                    "duration_ms": 0,
-                                })
+            await run_agent_loop(
+                agent_run, deps, loop_spec, _loop_emit, _turn_records,
+            )
+        turn_count = _call_tools_turns()
         outcome["writes_performed"] = deps.writes_performed
         outcome["flags_raised"] = deps.flags_raised
         outcome["turns_used"] = turn_count
@@ -1196,10 +1358,12 @@ async def _run_reviewer_pass(
         await _emit("complete", {"success": False, "error": "Cancelled by user"})
         outcome["error"] = "cancelled"
         raise
-    except _TurnCapExceeded:
+    except CallToolsCapExceeded:
         # Exhausted the turn budget. Record + emit here, then fall through to
-        # the shared cascade so pre-exhaustion leaf writes propagate (peer-review
-        # P2). turn_count was incremented past the cap, hence turn_count - 1.
+        # the shared cascade so pre-exhaustion leaf writes propagate (peer-
+        # review P2). run_agent_loop raises BEFORE processing the over-cap
+        # node, so the recorded call-tools turns equal the cap exactly.
+        turns_used = _call_tools_turns()
         msg = (
             f"Reviewer exhausted its turn budget ({max_turns}) after "
             f"{deps.writes_performed} write(s)."
@@ -1207,7 +1371,7 @@ async def _run_reviewer_pass(
         logger.warning(msg)
         outcome.update({
             "error": "reviewer_exhausted", "exhausted": True,
-            "turns_used": turn_count - 1,
+            "turns_used": turns_used,
             "writes_performed": deps.writes_performed,
             "flags_raised": deps.flags_raised,
         })
@@ -1215,10 +1379,15 @@ async def _run_reviewer_pass(
         await _emit("complete", {
             "success": False, "error": "reviewer_exhausted",
             "writes_performed": deps.writes_performed,
-            "turns_used": turn_count - 1, "max_turns": max_turns,
+            "turns_used": turns_used, "max_turns": max_turns,
         })
-    except _WallclockExceeded as wc:
-        msg = str(wc)
+    except WallclockExceeded:
+        # Keep the pre-migration message (it names the writes performed,
+        # which the generic loop exception can't know).
+        msg = (
+            f"Reviewer exceeded wall-clock cap of {_wallclock_cap}s "
+            f"after {deps.writes_performed} write(s)."
+        )
         logger.warning(msg)
         outcome["error"] = "reviewer_wallclock_exceeded"
         outcome["writes_performed"] = deps.writes_performed
@@ -1267,14 +1436,24 @@ async def _run_reviewer_pass(
                     exc_info=True,
                 )
 
+    # Item 14: surface the per-kind apply_fix rejection tally. deps is bound
+    # for every non-cancel exit (construction failures returned earlier), so
+    # one assignment here covers success / exhaustion / wallclock / exception.
+    outcome["fix_rejections"] = dict(deps.rejections)
+
     # Re-cascade so the reviewer's leaf fixes propagate to parent totals
-    # before the caller re-exports + re-merges from facts.
+    # before the caller re-exports + re-merges from facts. Item 11: a recompute
+    # failure here leaves parent totals stale while leaf fixes are committed —
+    # surface it on the outcome (rides into run_review_tasks.outcome_json) so
+    # the Review tab can warn instead of showing silently-stale totals.
     try:
         from concept_model.cascade import recompute_after_turn
         recompute_after_turn(db_path, run_id)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         logger.exception("post-reviewer cascade failed for run %s", run_id)
+        outcome["cascade_error"] = f"{type(exc).__name__}: {exc}"
 
+    _stamp_elapsed()
     return outcome
 
 
@@ -1288,6 +1467,7 @@ async def _run_notes_validator_pass(
     output_dir: str,
     event_queue,
     agent_id: str = NOTES_VALIDATOR_AGENT_ID,
+    inventory_note_nums: Optional[list] = None,
 ) -> dict:
     """Run the notes post-validator once after the merge.
 
@@ -1308,19 +1488,21 @@ async def _run_notes_validator_pass(
         }
     """
     import asyncio as _asyncio
-    from notes.coordinator import _iter_with_turn_timeout
+    from agent_runner import AgentLoopSpec, WallclockExceeded, run_agent_loop
     from notes.validator_agent import create_notes_validator_agent
     from notes.writer import payload_sidecar_path
-    from pydantic_ai.messages import (
-        FunctionToolCallEvent,
-        FunctionToolResultEvent,
-    )
-    from pydantic_ai import Agent
 
     outcome: dict = {
         "invoked": False, "writes_performed": 0, "error": None,
         "context": {},
+        # Item 15: wall-clock elapsed for this pass, set on every exit path
+        # (same diagnostic as the reviewer outcome — how close to the cap?).
+        "elapsed_seconds": 0.0,
     }
+    _pass_start = time.monotonic()
+
+    def _stamp_elapsed() -> None:
+        outcome["elapsed_seconds"] = round(time.monotonic() - _pass_start, 1)
 
     # Trigger condition: both Sheet 11 and Sheet 12 must have run. Keys
     # may be NotesTemplateType enums (from the coordinator) or bare
@@ -1362,6 +1544,7 @@ async def _run_notes_validator_pass(
             filing_standard=filing_standard,
             model=model,
             output_dir=output_dir,
+            inventory_note_nums=inventory_note_nums,
         )
     except Exception as e:  # noqa: BLE001
         logger.exception("Notes validator construction failed")
@@ -1373,6 +1556,7 @@ async def _run_notes_validator_pass(
         await _emit("error", {"type": "notes_validator_exception",
                               "message": outcome["error"]})
         await _emit("complete", {"success": False, "error": outcome["error"]})
+        _stamp_elapsed()
         return outcome
 
     outcome["context"] = context
@@ -1386,19 +1570,31 @@ async def _run_notes_validator_pass(
     # so the tab shows a human-readable skip reason and flips to green.
     # Both events carry agent_id via _emit so the frontend router can seed
     # the tab and route them into it.
-    if not context["duplicates"] and not context["overlap_candidates"]:
+    # N3 Stage 1: coverage gaps (inventory notes with no content anywhere) are
+    # also a reason to run the agent — it must view those pages and judge
+    # whether each gap is a genuine non-disclosure or a missed note. Without
+    # this the agent would short-circuit and the gap investigation (the value
+    # of N3 Stage 1) would never happen (peer-review HIGH).
+    _coverage_gaps = context.get("coverage_gaps") or []
+    if (
+        not context["duplicates"]
+        and not context["overlap_candidates"]
+        and not _coverage_gaps
+    ):
         logger.info(
-            "Notes validator skipped — no cross-sheet duplicate candidates."
+            "Notes validator skipped — no cross-sheet duplicate candidates "
+            "and no coverage gaps."
         )
         await _emit("status", {
             "phase": "complete",
-            "message": "No cross-sheet duplicates to review — skipped.",
+            "message": "No cross-sheet duplicates or coverage gaps to review — skipped.",
         })
         await _emit("complete", {
             "success": True,
             "writes_performed": 0,
             "skipped": True,
         })
+        _stamp_elapsed()
         return outcome
 
     outcome["invoked"] = True
@@ -1407,15 +1603,17 @@ async def _run_notes_validator_pass(
         "message": (
             f"Notes validator scanning {len(context['duplicates'])} "
             f"ref-based + {len(context['overlap_candidates'])} overlap "
-            f"candidate(s)."
+            f"candidate(s) + {len(_coverage_gaps)} coverage gap(s)."
         ),
     })
 
     prompt = (
-        "Resolve every candidate in your system prompt in one pass. "
-        "Apply the 'Material Accounting Policies → Sheet 11; else Sheet 12' "
-        "rule using the PDF as source of truth. Log each decision via "
-        "flag_duplication."
+        "Resolve every duplicate/overlap candidate in your system prompt in "
+        "one pass (apply 'Material Accounting Policies → Sheet 11; else "
+        "Sheet 12' using the PDF as source of truth; log each via "
+        "flag_duplication). If a COVERAGE GAPS block is present, also view the "
+        "cited pages for each listed note and judge whether it is genuinely "
+        "absent or was missed — report missed disclosures, never fabricate."
     )
 
     # PLAN-stop-and-validation-visibility Phase 3 + peer-review fix
@@ -1432,49 +1630,37 @@ async def _run_notes_validator_pass(
         NOTES_VALIDATOR_WALLCLOCK_TIMEOUT,
     ))
 
-    class _ValidatorWallclockExceeded(Exception):
-        """Distinguishes wall-clock breach from per-turn TimeoutError."""
+    # Item 17: hand-rolled loop migrated onto agent_runner.run_agent_loop
+    # (same shape as the reviewer pass above). The validator only ever
+    # emitted tool events, so the filtered emit preserves the wire contract.
+    async def _loop_emit(event_type: str, data: dict) -> None:
+        if event_type in ("tool_call", "tool_result"):
+            await _emit(event_type, data)
+
+    _turn_records: list = []
+    loop_spec = AgentLoopSpec(
+        agent_role=agent_id,
+        model=model,
+        turn_timeout=(
+            _wallclock_cap if _wallclock_cap < NOTES_VALIDATOR_TURN_TIMEOUT
+            else NOTES_VALIDATOR_TURN_TIMEOUT
+        ),
+        phase_map={},
+        phase_message=lambda role, phase: "",
+        wallclock_timeout=_wallclock_cap,
+        stream_model_nodes=False,
+        # The validator's rewrite_cell does a locked workbook load+save —
+        # exactly the long-tool class the per-turn timeout must not cancel
+        # mid-execution. Same opt-out as notes/coordinator.py's notes_spec
+        # (bound_inner_streams=False precedent).
+        bound_inner_streams=False,
+    )
 
     try:
         async with agent.iter(prompt, deps=deps) as agent_run:
-            async for node in _iter_with_turn_timeout(
-                agent_run,
-                _wallclock_cap if _wallclock_cap < NOTES_VALIDATOR_TURN_TIMEOUT else NOTES_VALIDATOR_TURN_TIMEOUT,
-            ):
-                if _wc_time.monotonic() - _wc_start > _wallclock_cap:
-                    raise _ValidatorWallclockExceeded(
-                        f"Notes validator exceeded wall-clock cap "
-                        f"of {_wallclock_cap}s after "
-                        f"{deps.writes_performed} write(s)."
-                    )
-                if Agent.is_call_tools_node(node):
-                    async with node.stream(agent_run.ctx) as tool_stream:
-                        async for event in tool_stream:
-                            if isinstance(event, FunctionToolCallEvent):
-                                args = event.part.args
-                                if isinstance(args, str):
-                                    try:
-                                        parsed = json.loads(args)
-                                    except (json.JSONDecodeError, TypeError):
-                                        parsed = {}
-                                elif isinstance(args, dict):
-                                    parsed = args
-                                else:
-                                    parsed = {}
-                                await _emit("tool_call", {
-                                    "tool_name": event.part.tool_name,
-                                    "tool_call_id": event.part.tool_call_id,
-                                    "args": parsed,
-                                })
-                            elif isinstance(event, FunctionToolResultEvent):
-                                content = event.result.content
-                                summary = str(content)[:800] if content else ""
-                                await _emit("tool_result", {
-                                    "tool_name": event.result.tool_name,
-                                    "tool_call_id": event.result.tool_call_id,
-                                    "result_summary": summary,
-                                    "duration_ms": 0,
-                                })
+            await run_agent_loop(
+                agent_run, deps, loop_spec, _loop_emit, _turn_records,
+            )
         outcome["writes_performed"] = deps.writes_performed
         # Persist the agent's correction log next to the merged workbook
         # so operators have a durable audit trail of validator actions.
@@ -1496,8 +1682,12 @@ async def _run_notes_validator_pass(
         await _emit("complete", {"success": False, "error": "Cancelled by user"})
         outcome["error"] = "cancelled"
         raise
-    except _ValidatorWallclockExceeded as wc:
-        msg = str(wc)
+    except WallclockExceeded:
+        # Keep the pre-migration message (names the writes performed).
+        msg = (
+            f"Notes validator exceeded wall-clock cap of {_wallclock_cap}s "
+            f"after {deps.writes_performed} write(s)."
+        )
         logger.warning(msg)
         outcome["error"] = "validator_wallclock_exceeded"
         outcome["writes_performed"] = deps.writes_performed
@@ -1550,6 +1740,7 @@ async def _run_notes_validator_pass(
         outcome["error"] = str(e)
         await _emit("error", {"message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
+    _stamp_elapsed()
     return outcome
 
 
@@ -1820,6 +2011,18 @@ def _auto_review_enabled() -> bool:
     return os.environ.get("XBRL_AUTO_REVIEW", "true").lower() == "true"
 
 
+def _entity_memory_enabled() -> bool:
+    """Whether per-entity advisory memory injects prior-year prompt hints (item 28).
+
+    Controlled by ``XBRL_ENTITY_MEMORY`` (default on). Read fresh each call so a
+    Settings toggle takes effect without a restart. Delegates to the single
+    resolver in ``entity_memory`` so the server and coordinator agree.
+    """
+    from entity_memory import entity_memory_enabled
+
+    return entity_memory_enabled()
+
+
 def _reviewer_model_name() -> Optional[str]:
     """The configured reviewer model id, or None to inherit the run's model.
 
@@ -1884,6 +2087,8 @@ def _load_extended_settings() -> dict:
         "tolerance_rm": tolerance,
         # Reviewer pass auto-trigger (docs/Archive/PLAN-reviewer-agent.md). Default on.
         "auto_review": _auto_review_enabled(),
+        # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
+        "entity_memory": _entity_memory_enabled(),
     }
 
 
@@ -2042,6 +2247,97 @@ def _attempt_partial_merge(
         logger.exception("_attempt_partial_merge raised unexpectedly")
         out["error"] = "internal error"
         return out
+
+
+def _run_notes_face_tieouts(merged_path: str, run_id: int,
+                            filing_level: str, filing_standard: str) -> list:
+    """N1: reconcile curated notes figures against their face counterparts.
+
+    Advisory + never raises — folded as ``warning`` cross-checks so a notes
+    numeric value that contradicts the face statement is visible in the
+    Cross-checks tab.
+    """
+    from cross_checks.framework import CrossCheckResult
+    try:
+        from cross_checks.notes_face_tieouts import check_notes_face_tieouts
+        warns = check_notes_face_tieouts(
+            merged_path, filing_level=filing_level, filing_standard=filing_standard)
+    except Exception:  # noqa: BLE001 — advisory, never fail a run
+        logger.warning(
+            "notes↔face tie-out check raised on run %s", run_id, exc_info=True)
+        return []
+    return [
+        CrossCheckResult(
+            name=f"Notes↔face tie-out: {w.topic}",
+            status="warning",
+            expected=w.face_value,
+            actual=w.notes_value,
+            message=w.message,
+        )
+        for w in warns
+    ]
+
+
+def _run_notes_citation_consistency(merged_path: str, run_id: int) -> list:
+    """N4: run the generic citation-consistency pass and fold to CrossCheckResults.
+
+    Advisory + never raises — a failure returns []. Folded as ``warning``-status
+    cross-checks so it rides the same persistence + SSE + UI path as the curated
+    pass. Inventory page-range tolerance is a future enhancement; the default
+    span already catches gross folio-vs-PDF drift.
+    """
+    from cross_checks.framework import CrossCheckResult
+    try:
+        from cross_checks.notes_consistency import check_notes_citation_consistency
+        warns = check_notes_citation_consistency(merged_path)
+    except Exception:  # noqa: BLE001 — advisory, never fail a run
+        logger.warning(
+            "notes citation-consistency check raised on run %s",
+            run_id, exc_info=True,
+        )
+        return []
+    return [
+        CrossCheckResult(
+            name=f"Notes citation: Note {w.note_ref}",
+            status="warning",
+            message=w.message,
+        )
+        for w in warns
+    ]
+
+
+async def _run_notes_advisory_bounded(fn, *args, run_id: int, label: str) -> list:
+    """Dispatch an advisory notes check off the event loop, bounded.
+
+    Both advisory passes (`_run_notes_citation_consistency`,
+    `_run_notes_face_tieouts`) load the full merged workbook with openpyxl —
+    blocking work that must never run on the event loop (the exact failure
+    mode ``_run_cross_checks_bounded`` exists for). Same executor + timeout
+    bound; but unlike the real cross-check pass these are advisory-only, so
+    this helper NEVER raises (invariant #10): a timeout or dispatch failure
+    logs + returns [].
+    """
+    loop = asyncio.get_running_loop()
+    # Read the module global at call time so tests can monkeypatch it.
+    import server as _self
+    timeout = float(getattr(_self, "CROSS_CHECK_TIMEOUT", CROSS_CHECK_TIMEOUT))
+    try:
+        future = loop.run_in_executor(_CROSS_CHECK_EXECUTOR, lambda: fn(*args))
+        return await asyncio.wait_for(
+            future, timeout=None if timeout == float("inf") else timeout,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.warning(
+            "%s advisory check exceeded %.0fs cap on run %s — skipping "
+            "(worker thread abandoned)", label, timeout, run_id,
+        )
+        return []
+    except Exception:  # noqa: BLE001 — advisory, never fail a run
+        logger.warning(
+            "%s advisory check failed to dispatch on run %s",
+            label, run_id, exc_info=True,
+        )
+        return []
 
 
 def _emit_cross_check_summary(
@@ -2371,6 +2667,39 @@ def _validate_and_build_run(
             )
             return None, events, new_status
 
+    # Item 28 — per-entity advisory memory. Persist this run's infopack so it
+    # can seed FUTURE matches, then look up whether this entity was processed
+    # before and, if so, build an advisory the coordinator renders into the
+    # prompts (advisory-only; entity-name collisions are why every line is
+    # framed "verify against THIS PDF"). Best-effort: a failure here never
+    # blocks the run — the feature degrades to "no prior-year hint".
+    prior_year_advisory = None
+    if infopack is not None:
+        from entity_memory import (
+            entity_memory_enabled,
+            fetch_prior_runs,
+            find_prior_year_match,
+            persist_infopack,
+        )
+
+        persist_infopack(output_dir, infopack)
+        if entity_memory_enabled() and infopack.entity_name:
+            try:
+                prior_year_advisory = find_prior_year_match(
+                    fetch_prior_runs(db_conn, exclude_run_id=run_id),
+                    entity_name=infopack.entity_name,
+                    exclude_run_id=run_id,
+                )
+                if prior_year_advisory is not None:
+                    logger.info(
+                        "Entity memory: matched run %s (%s) for entity %r",
+                        prior_year_advisory.prior_run_id,
+                        prior_year_advisory.pdf_filename,
+                        infopack.entity_name,
+                    )
+            except Exception:  # noqa: BLE001 — advisory; never fail the run
+                logger.warning("Entity-memory match failed", exc_info=True)
+
     config = RunConfig(
         pdf_path=str(session_dir / "uploaded.pdf"),
         output_dir=output_dir,
@@ -2390,6 +2719,8 @@ def _validate_and_build_run(
         # Gold-standard eval (v16): carried through so the end-of-run grading
         # hook can find the benchmark. None on every normal run.
         benchmark_id=run_config.benchmark_id,
+        # Item 28 — matched prior-year advisory (or None).
+        prior_year_advisory=prior_year_advisory,
     )
 
     return _ValidatedRun(
@@ -2454,7 +2785,7 @@ async def run_multi_agent_stream(
     from notes_types import NotesTemplateType
     from statement_types import StatementType, get_variant, variants_for
     from workbook_merger import merge as merge_workbooks
-    from cross_checks.framework import run_all as run_cross_checks, DEFAULT_TOLERANCE_RM
+    from cross_checks.framework import DEFAULT_TOLERANCE_RM
     from cross_checks.notes_consistency import check_notes_consistency
     from db.schema import init_db
     from db import repository as repo
@@ -2947,6 +3278,9 @@ async def run_multi_agent_stream(
             # if the row-creation above failed (run_id is None).
             run_id=run_id,
             audit_db_path=str(AUDIT_DB_PATH),
+            # Item 28 — same matched prior-year advisory the face coordinator
+            # received (read off the resolved RunConfig).
+            prior_year_advisory=getattr(config, "prior_year_advisory", None),
         )
         notes_task = asyncio.create_task(
             run_notes_extraction(
@@ -3373,7 +3707,11 @@ async def run_multi_agent_stream(
                 )
 
         try:
-            cross_check_results = run_cross_checks(
+            # Item 16: threaded + bounded so a slow/pathological workbook
+            # can't freeze SSE for every session or pin the run in
+            # ``running``. A TimeoutError lands on the same structured
+            # cross_check_exception path as any other crash.
+            cross_check_results = await _run_cross_checks_bounded(
                 all_checks, all_workbook_paths, check_config,
                 tolerance=tolerance,
                 on_check=_on_initial_check,
@@ -3421,6 +3759,18 @@ async def run_multi_agent_stream(
                     status="warning",
                     message=w.message,
                 ))
+            # N4: generic citation-consistency pass — catches folio-vs-PDF
+            # drift for ANY note ref, not just the curated topic pairs.
+            # Dispatched off-loop (openpyxl full-workbook load blocks).
+            cross_check_results.extend(await _run_notes_advisory_bounded(
+                _run_notes_citation_consistency, merged_path, run_id,
+                run_id=run_id, label="notes-citation"))
+            # N1: notes↔face numeric tie-outs — a notes figure that contradicts
+            # its face counterpart surfaces as a WARN.
+            cross_check_results.extend(await _run_notes_advisory_bounded(
+                _run_notes_face_tieouts, merged_path, run_id,
+                run_config.filing_level, run_config.filing_standard,
+                run_id=run_id, label="notes-face-tieout"))
 
         # PLAN-stop-and-validation-visibility Phase 5: surface the
         # initial cross-check pass as per-check SSE events so the
@@ -3689,7 +4039,8 @@ async def run_multi_agent_stream(
                             )
 
                     try:
-                        cross_check_results = run_cross_checks(
+                        # Item 16: threaded + bounded (see the initial pass).
+                        cross_check_results = await _run_cross_checks_bounded(
                             all_checks, merged_paths_by_stmt, check_config,
                             tolerance=tolerance,
                             on_check=_on_post_check,
@@ -3725,6 +4076,21 @@ async def run_multi_agent_stream(
                                 status="warning",
                                 message=w.message,
                             ))
+                        # N4: generic citation-consistency pass
+                        # (off-loop, bounded — see helper).
+                        cross_check_results.extend(
+                            await _run_notes_advisory_bounded(
+                                _run_notes_citation_consistency,
+                                merged_path, run_id,
+                                run_id=run_id, label="notes-citation"))
+                        # N1: notes↔face numeric tie-outs.
+                        cross_check_results.extend(
+                            await _run_notes_advisory_bounded(
+                                _run_notes_face_tieouts,
+                                merged_path, run_id,
+                                run_config.filing_level,
+                                run_config.filing_standard,
+                                run_id=run_id, label="notes-face-tieout"))
 
                     # PLAN-stop-and-validation-visibility Phase 5:
                     # surface the post-correction re-run as a separate
@@ -3796,6 +4162,17 @@ async def run_multi_agent_stream(
                 # means the run didn't request the post-validator's
                 # required notes templates.
                 _emit_stage("validating_notes")
+                # N3 Stage 1: hand the scout's inventory note numbers to the
+                # validator so it can report coverage gaps (notes with no
+                # content on any sheet). Best-effort — degrades to no gaps.
+                _inv_nums = []
+                try:
+                    for _e in getattr(infopack, "notes_inventory", None) or []:
+                        _n = getattr(_e, "note_num", None)
+                        if _n is not None:
+                            _inv_nums.append(int(_n))
+                except Exception:  # noqa: BLE001
+                    _inv_nums = []
                 validator_task = asyncio.create_task(_run_notes_validator_pass(
                     merged_workbook_path=merged_path,
                     pdf_path=str(session_dir / "uploaded.pdf"),
@@ -3805,6 +4182,7 @@ async def run_multi_agent_stream(
                     model=model,
                     output_dir=output_dir,
                     event_queue=event_queue,
+                    inventory_note_nums=_inv_nums,
                 ))
                 async for event in _drain_while_running(validator_task):
                     persist_event(event)
@@ -3898,6 +4276,13 @@ async def run_multi_agent_stream(
                         # v15 cache telemetry rollups (§6 rec 1: measure first).
                         cache_read_tokens=getattr(agent_result, "cache_read_tokens", 0),
                         cache_write_tokens=getattr(agent_result, "cache_write_tokens", 0),
+                        # v17 (item 9): machine-readable failure class —
+                        # explicit from the coordinator, derived otherwise.
+                        error_type=_agent_row_error_type(
+                            agent_result.status,
+                            getattr(agent_result, "error_type", None),
+                            agent_result.error,
+                        ),
                     )
                     # v8: persist the per-turn metrics rows. Telemetry is
                     # advisory — a write failure here must never fault the
@@ -3982,6 +4367,13 @@ async def run_multi_agent_stream(
                         # v15 cache telemetry rollups (§6 rec 1: measure first).
                         cache_read_tokens=getattr(notes_agent_result, "cache_read_tokens", 0),
                         cache_write_tokens=getattr(notes_agent_result, "cache_write_tokens", 0),
+                        # v17 (item 9): machine-readable failure class —
+                        # explicit from the coordinator, derived otherwise.
+                        error_type=_agent_row_error_type(
+                            notes_agent_result.status,
+                            getattr(notes_agent_result, "error_type", None),
+                            notes_agent_result.error,
+                        ),
                     )
                     # v8: persist per-turn metrics rows for notes agents too.
                     # Advisory — never fault the run on a telemetry write.
@@ -4018,6 +4410,9 @@ async def run_multi_agent_stream(
                             workbook_path=None,
                             total_tokens=int(_co.get("total_tokens", 0)),
                             total_cost=float(_co.get("total_cost", 0.0)),
+                            # v17 (item 9): classify the reviewer outcome.
+                            error_type=_error_type_for_outcome(
+                                _co.get("error")),
                         )
                     except Exception:
                         logger.warning(
@@ -4036,6 +4431,9 @@ async def run_multi_agent_stream(
                             db_conn, validator_run_agent_id,
                             status=status,
                             workbook_path=None,
+                            # v17 (item 9): classify the validator outcome.
+                            error_type=_error_type_for_outcome(
+                                (validator_outcome or {}).get("error")),
                         )
                     except Exception:
                         logger.warning(

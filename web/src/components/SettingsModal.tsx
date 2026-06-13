@@ -8,8 +8,8 @@ interface Props {
   onClose: () => void;
   // The /api/settings response carries the extended fields (incl. auto_review)
   // at runtime; typed optional so the existing getSettings helper stays assignable.
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; entity_memory?: boolean }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; entity_memory: boolean }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
 }
 
@@ -181,6 +181,8 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
   const [apiKeyPreview, setApiKeyPreview] = useState("");
   // Reviewer auto-trigger toggle (docs/Archive/PLAN-reviewer-agent.md). Default on.
   const [autoReview, setAutoReview] = useState(true);
+  // Per-entity advisory memory toggle (item 28). Default on.
+  const [entityMemory, setEntityMemory] = useState(true);
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -224,6 +226,7 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
         setApiKey("");
         // Default to on when the field is absent (older backend).
         setAutoReview(s.auto_review !== false);
+        setEntityMemory(s.entity_memory !== false);
       })
       .catch((e) => {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load settings");
@@ -256,6 +259,7 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
         model,
         proxy_url: proxyUrl,
         auto_review: autoReview,
+        entity_memory: entityMemory,
         ...(apiKey ? { api_key: apiKey } : {}),
       });
       setSaved(true);
@@ -271,7 +275,7 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
     } finally {
       setSaving(false);
     }
-  }, [model, proxyUrl, apiKey, autoReview, saveSettings]);
+  }, [model, proxyUrl, apiKey, autoReview, entityMemory, saveSettings]);
 
   // --- Test connection ---
   const handleTestConnection = useCallback(async () => {
@@ -421,6 +425,24 @@ export function SettingsModal({ isOpen, onClose, getSettings, saveSettings, test
           <p style={styles.helperText}>
             When off, runs with failed cross-checks finish without the reviewer;
             you can still trigger it manually from a run's Review tab.
+          </p>
+        </div>
+
+        {/* Per-entity advisory memory toggle (item 28) */}
+        <div style={styles.fieldGroup}>
+          <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={entityMemory}
+              onChange={(e) => setEntityMemory(e.target.checked)}
+              aria-label="Reuse prior-year hints for repeat entities"
+            />
+            <span style={styles.label}>Reuse prior-year hints for repeat entities</span>
+          </label>
+          <p style={styles.helperText}>
+            When a run's entity was processed before, last year's variant, scale
+            unit, and page offset are shown to the agents as advisory hints to
+            verify against the current PDF. Turn off if entity names collide.
           </p>
         </div>
 

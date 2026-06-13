@@ -171,6 +171,79 @@ async def scout_pdf(session_id: str, request: Request):
     # wiring as extraction agents (critical for enterprise proxy on Windows).
     scout_model = server._create_proxy_model(scout_model_name, proxy_url, api_key)
 
+    # Item 2 (PLAN-orchestration-hardening): give the scout an audit
+    # presence. The draft `runs` row already exists from upload time, so we
+    # can (a) thread the session dir in as the trace destination and
+    # (b) create a SCOUT run_agents row — which is what opens the
+    # `GET /api/runs/{id}/agents/SCOUT/trace` whitelist gate (api/runs.py
+    # rejects statements with no run_agents row BEFORE the path check).
+    # All best-effort: an audit-DB hiccup must never block the scout.
+    def _resolve_scout_run_id() -> Optional[int]:
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+            try:
+                row = conn.execute(
+                    "SELECT id FROM runs WHERE session_id = ? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+                return int(row[0]) if row else None
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Could not resolve run for scout session %s", session_id,
+                exc_info=True,
+            )
+            return None
+
+    def _record_scout_agent_row(run_id: int) -> Optional[int]:
+        try:
+            import sqlite3
+            from db import repository as repo
+            conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+            try:
+                agent_row_id = repo.create_run_agent(
+                    conn, run_id, "SCOUT", model=scout_model_name,
+                )
+                conn.commit()
+                return agent_row_id
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Could not create SCOUT run_agents row for run %s", run_id,
+                exc_info=True,
+            )
+            return None
+
+    def _finish_scout_agent_row(
+        agent_row_id: int, status: str, error: str = "scout failed",
+    ) -> None:
+        try:
+            import sqlite3
+            from db import repository as repo
+            conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+            try:
+                repo.finish_run_agent(
+                    conn, agent_row_id, status,
+                    # v17 (item 9): SCOUT rows carry the failure class too.
+                    # Pass the real failure detail (e.g. the scout timeout
+                    # reason) so a degraded scout derives turn_timeout /
+                    # wallclock rather than a generic class.
+                    error_type=server._agent_row_error_type(
+                        status, None, error),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Could not finish SCOUT run_agents row %s", agent_row_id,
+                exc_info=True,
+            )
+
     async def scout_stream():
         import asyncio
         import task_registry
@@ -182,6 +255,13 @@ async def scout_pdf(session_id: str, request: Request):
             await event_queue.put((event_type, data))
 
         scout_task: Optional[asyncio.Task] = None
+        scout_run_id = _resolve_scout_run_id()
+        scout_agent_row_id = (
+            _record_scout_agent_row(scout_run_id)
+            if scout_run_id is not None else None
+        )
+        scout_row_status = "failed"
+        scout_error_detail = "scout failed"
         try:
             yield f"event: status\ndata: {json.dumps({'phase': 'scouting', 'message': 'Starting scout...'})}\n\n"
 
@@ -191,6 +271,7 @@ async def scout_pdf(session_id: str, request: Request):
                 model=scout_model,
                 on_event=on_event,
                 force_vision_inventory=force_vision_inventory,
+                output_dir=str(session_dir),
             ))
 
             # Register so abort endpoints can cancel it
@@ -213,9 +294,35 @@ async def scout_pdf(session_id: str, request: Request):
 
             # to_json() returns a JSON string; parse it to embed as a nested dict
             infopack_dict = json.loads(infopack.to_json())
-            yield f"event: scout_complete\ndata: {json.dumps({'success': True, 'infopack': infopack_dict})}\n\n"
+
+            # Honesty (Codex review): a scout that hit its per-turn or
+            # wall-clock timeout returns a degraded (often empty) pack. It
+            # must NOT be reported as a successful scout — the agent already
+            # emitted a `scout_timeout` error, so a `success: true` completion
+            # would contradict it and overwrite the timeout signal. Mark the
+            # audit row failed (deriving turn_timeout / wallclock from the
+            # reason) and emit `scout_complete success:false`. The run can
+            # still proceed without hints (gotcha #13) — only the reporting
+            # is corrected.
+            if getattr(infopack, "degraded", False):
+                scout_row_status = "failed"
+                scout_error_detail = (
+                    getattr(infopack, "degraded_reason", None)
+                    or "Scout degraded before completing."
+                )
+                payload = {
+                    "success": False,
+                    "degraded": True,
+                    "message": scout_error_detail,
+                    "infopack": infopack_dict,
+                }
+                yield f"event: scout_complete\ndata: {json.dumps(payload)}\n\n"
+            else:
+                scout_row_status = "succeeded"
+                yield f"event: scout_complete\ndata: {json.dumps({'success': True, 'infopack': infopack_dict})}\n\n"
 
         except asyncio.CancelledError:
+            scout_row_status = "cancelled"
             logger.info("Scout cancelled by user", extra={"session_id": session_id})
             yield f"event: scout_cancelled\ndata: {json.dumps({'message': 'Scout cancelled by user'})}\n\n"
 
@@ -225,6 +332,7 @@ async def scout_pdf(session_id: str, request: Request):
             # internals or credentials (mirrors the generic-response policy in
             # /api/test-connection). The client gets the exception summary.
             logger.exception("Scout failed", extra={"session_id": session_id})
+            scout_error_detail = str(e) or "scout failed"
             yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
 
         finally:
@@ -237,6 +345,12 @@ async def scout_pdf(session_id: str, request: Request):
                     pass
             # Clean up the task registry entry to avoid stale references
             task_registry.unregister(session_id, "scout")
+            # Item 2: finalize the SCOUT audit row so the trace route's
+            # whitelist gate stays open and History/Telemetry can list it.
+            if scout_agent_row_id is not None:
+                _finish_scout_agent_row(
+                    scout_agent_row_id, scout_row_status, scout_error_detail,
+                )
 
     return StreamingResponse(
         scout_stream(),

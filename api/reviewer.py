@@ -271,6 +271,9 @@ async def re_review(run_id: int, body: Optional[dict] = None):
                     total_tokens=int(outcome.get("total_tokens", 0) or 0),
                     total_cost=float(outcome.get("total_cost", 0.0) or 0.0),
                     turn_count=int(outcome.get("turns_used", 0) or 0),
+                    # v17 (item 9): classify the manual re-review outcome.
+                    error_type=server._error_type_for_outcome(
+                        outcome.get("error")),
                 )
                 conn.commit()
             finally:
@@ -286,7 +289,12 @@ async def re_review(run_id: int, body: Optional[dict] = None):
         model = server._create_proxy_model(model_name, proxy_url, api_key)
         failed, conflicts, combined, pdf_path = _gather()
         correction_agent_id = _ensure_correction_agent_row()
-        outcome: dict = {}
+        # Sentinel error: if _run_reviewer_pass RAISES (vs returning an error
+        # outcome), the finally below must still close the CORRECTION row as
+        # failed with a non-null v17 error_type — a bare {} would close it
+        # status="completed"/error_type=NULL while run_review_tasks records
+        # ok:false (split-brain). The real return overwrites this.
+        outcome: dict = {"error": "reviewer_pass_raised"}
         try:
             outcome = await server._run_reviewer_pass(
                 failed_checks=failed, conflicts=conflicts, model=model,
@@ -296,7 +304,14 @@ async def re_review(run_id: int, body: Optional[dict] = None):
                 guidance=combined,
             )
             if outcome.get("writes_performed", 0) > 0:
-                server._reexport_remerge_durable(run_id)
+                # Item 12: capture the re-export result. _reexport_remerge_durable
+                # returns False when run_concept_facts moved but filled.xlsx did
+                # NOT — the Review-tab diff (DB-fed) is then correct while the
+                # download is stale. Flag it on the outcome (rides into
+                # run_review_tasks.outcome_json) so the Review tab can show a
+                # "download may be stale" badge instead of a silent divergence.
+                if not server._reexport_remerge_durable(run_id):
+                    outcome["export_stale"] = True
                 # The reviewer changed facts — refresh the persisted cross-checks
                 # so the Review tab and any later re-review see current pass/fail
                 # state, not the pre-fix failures (peer-review P1), then safely
@@ -395,4 +410,8 @@ async def revert_to_original_endpoint(run_id: int):
     # the restored facts re-introduce failures.
     await asyncio.to_thread(server._refresh_persisted_cross_checks, run_id)
     await asyncio.to_thread(server._safe_downgrade_run_status, run_id)
+    # Item 11: `out` carries cascade_ok / cascade_error — the facts ARE
+    # restored (200), but if the post-revert recompute failed the response
+    # rides the warning to the Review tab instead of a silent stale-totals
+    # window. Spread it verbatim.
     return {"ok": True, **out}

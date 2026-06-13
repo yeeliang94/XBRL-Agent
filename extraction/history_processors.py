@@ -30,6 +30,7 @@ from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
     ModelRequest,
+    ModelResponse,
     ToolReturnPart,
 )
 
@@ -217,6 +218,132 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
             else:
                 new_content.append(item)
         new_part = dataclasses.replace(part, content=new_content)
+        out = _replace_part(out, mi, pi, new_part)
+
+    return out
+
+
+# --- Stale text-result compaction (item 30) -------------------------------
+#
+# Long extractions re-bill every old tool result on every turn: a verbose
+# `verify_totals` imbalance dump from turn 5 rides along, unchanged, to turn 35.
+# `strip_stale_images` only trims image blobs; bulky *text* payloads had no
+# equivalent. This processor replaces stale, oversized text tool-returns with a
+# one-line pointer so the agent still sees that the call happened (and was
+# superseded) without paying for the full body every turn.
+#
+# Defaults are deliberately conservative — only results that are BOTH old
+# (older than COMPACT_AFTER_TURNS model responses ago) AND large
+# (>= COMPACT_MIN_CHARS) are touched, and the most recent result of each tool
+# is always kept verbatim so the agent's current working state is never
+# summarised away.
+
+# A result is eligible only once this many model responses have happened after
+# it — i.e. it is at least this many turns in the past.
+COMPACT_AFTER_TURNS = 6
+
+# Only compact payloads at least this large; small results aren't worth the
+# fidelity loss and a one-line summary wouldn't save meaningful tokens.
+COMPACT_MIN_CHARS = 1500
+
+
+def _model_responses_after(
+    messages: List[ModelMessage], message_index: int
+) -> int:
+    """Count model responses after `message_index` — i.e. how many turns ago.
+
+    A turn boundary is a `ModelResponse` (the model's reply that closes a
+    request→response exchange). A `ToolReturnPart` lives in a `ModelRequest`,
+    so the number of `ModelResponse`s that follow its message is how many turns
+    have elapsed since that result was produced.
+    """
+    return sum(
+        1
+        for msg in messages[message_index + 1 :]
+        if isinstance(msg, ModelResponse)
+    )
+
+
+def _summarize_text_result(tool_name: str, text: str, turns_ago: int) -> str:
+    """One-line replacement for a compacted result, preserving a breadcrumb.
+
+    Keeps the tool name, the age, the original size, and the first line of the
+    payload so the agent can still tell what the call was and that a fresher
+    result supersedes it — without re-billing the full body.
+    """
+    stripped = text.strip()
+    first_line = stripped.splitlines()[0][:120] if stripped else ""
+    return (
+        f"[{tool_name} result from ~{turns_ago} turns ago, {len(text)} chars "
+        f"— compacted to save tokens; a more recent result for this tool "
+        f"appears later in the conversation. First line was: {first_line}]"
+    )
+
+
+def compact_old_text_results(
+    messages: List[ModelMessage],
+) -> List[ModelMessage]:
+    """Replace stale, oversized text tool-results with a one-line summary.
+
+    Companion to `strip_stale_images` (which owns image blobs) — this targets
+    bulky *text* payloads (verbose `verify_totals` dumps, long error lists).
+
+    Rules (all must hold for a result to be compacted):
+
+    - **Not the most recent result of its tool.** The latest result of every
+      tool name is kept verbatim — that's the agent's current working state.
+    - **Old enough.** At least `COMPACT_AFTER_TURNS` model responses have
+      happened since the result was produced.
+    - **Large enough.** Rendered text is at least `COMPACT_MIN_CHARS`.
+    - **Not an image batch.** Image-carrying returns are `strip_stale_images`'s
+      job; this processor never touches them.
+    - **Not a `read_template` summary.** The template map is referenced
+      repeatedly and is already deduped by `strip_duplicate_template`; never
+      compact it here.
+    - **Not a write confirmation.** A `write_facts` / `write_notes` /
+      `fill_workbook` return is the agent's only record of WHAT it already
+      wrote (rows, refusals, partial errors). Compacting an old one risks the
+      agent forgetting committed rows and looping on re-writes — the exact
+      class of regression the stage-aware image rule exists to prevent.
+      Exempted the same way `read_template` summaries are (code-review fix,
+      2026-06-13).
+
+    Purity contract identical to the other processors — the input list is never
+    mutated; every changed part is rebuilt with `dataclasses.replace`.
+    """
+    tool_returns = list(_tool_return_parts(messages))
+    if not tool_returns:
+        return messages
+
+    # The most recent message index per tool name — exempt from compaction.
+    # _tool_return_parts yields in message order, so the last write per tool
+    # name wins.
+    last_idx_per_tool: dict[str, int] = {}
+    for mi, _pi, part in tool_returns:
+        last_idx_per_tool[part.tool_name] = mi
+
+    out = messages
+    for mi, pi, part in tool_returns:
+        # Image batches and template summaries are owned by the other two
+        # processors; never double-handle them here.
+        if _part_has_image(part) or _is_template_summary(part):
+            continue
+        # Write confirmations are the durable record of what already landed
+        # in the workbook/DB — never compact them (see docstring rule).
+        if part.tool_name in _WRITE_TOOL_NAMES:
+            continue
+        # Keep the freshest result of each tool verbatim.
+        if last_idx_per_tool.get(part.tool_name) == mi:
+            continue
+        turns_ago = _model_responses_after(messages, mi)
+        if turns_ago < COMPACT_AFTER_TURNS:
+            continue
+        text = _part_text(part)
+        if len(text) < COMPACT_MIN_CHARS:
+            continue
+        new_part = dataclasses.replace(
+            part, content=_summarize_text_result(part.tool_name, text, turns_ago)
+        )
         out = _replace_part(out, mi, pi, new_part)
 
     return out

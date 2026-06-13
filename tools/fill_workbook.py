@@ -7,6 +7,7 @@ from typing import Annotated, Optional, Sequence, Union
 import openpyxl
 from pydantic import BaseModel, StringConstraints
 
+from utils.workbook_io import atomic_save_workbook
 from tools.section_headers import (
     discover_section_headers,
     header_set,
@@ -399,7 +400,10 @@ def fill_workbook(
             # stale provenance from values that were later replaced.
             evidence_cell.value = mapping.evidence
 
-    wb.save(output_path)
+    # Item 8 / gotcha #22: atomic save — pydantic-ai runs batched tool calls
+    # concurrently, so a reader hitting this path mid-save must see
+    # old-or-new, never a truncated zip.
+    atomic_save_workbook(wb, output_path)
     wb.close()
 
     # RUN-REVIEW P1-1: scan successful writes for double-bookings now

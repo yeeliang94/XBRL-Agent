@@ -26,7 +26,11 @@ from tools.template_reader import read_template as _read_template_impl, Template
 from tools.pdf_viewer import render_pages_to_png_bytes, count_pdf_pages
 from tools.fill_workbook import fill_workbook as _fill_workbook_impl, FactWrite
 from tools.verifier import verify_statement as _verify_statement_impl
-from extraction.history_processors import strip_stale_images, strip_duplicate_template
+from extraction.history_processors import (
+    compact_old_text_results,
+    strip_stale_images,
+    strip_duplicate_template,
+)
 from prompts import render_prompt
 
 logger = logging.getLogger(__name__)
@@ -139,6 +143,15 @@ class ExtractionDeps:
         # concept, e.g. row-1 date cells) stays advisory, never fatal.
         self.projection_failed: bool = False
         self.projection_error: Optional[str] = None
+        # Item 23 (face coverage receipts): the scout's face_line_refs for this
+        # statement (advisory expectation list). Populated from page_hints in
+        # the factory. `face_coverage_receipt` holds the agent's submitted
+        # receipt (None until submit_face_coverage runs); the coordinator turns
+        # any unaccounted ref into an AgentResult.warnings line at finalize.
+        # Coverage NEVER blocks the save (gotcha #13/#17).
+        self.face_line_refs: list[dict] = []
+        self.face_coverage_submitted: bool = False
+        self.face_coverage_receipt = None
 
 
 def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
@@ -445,6 +458,16 @@ def _format_verify_result(result) -> str:
         # Clean verification — surface the verifier's note as status, not a
         # demand for action, so the agent moves on to save_result.
         lines.append(f"Status: {result.feedback}")
+    # Item 24: magnitude warnings are ADVISORY — surfaced under their own
+    # header (never "Action required"), and they NEVER block save_result. They
+    # ask the agent to double-check a likely thousands/millions slip, not to
+    # change a balanced statement (gotcha #17: diagnostic, not directive).
+    if getattr(result, "magnitude_warnings", None):
+        lines.append(
+            "\nAdvisory — possible scale-unit issues (verify against the "
+            "statement header; do NOT plug or force a change if the figure is "
+            "correct):\n" + "\n".join(f"- {w}" for w in result.magnitude_warnings)
+        )
     return "\n".join(lines)
 
 
@@ -544,6 +567,14 @@ def create_extraction_agent(
         template_id=template_id,
     )
 
+    # Item 23: the scout's face-line refs become the coverage expectation list.
+    # Only well-formed entries (a non-empty label) count — empty refs fall
+    # through to today's bare-hint behaviour (gotcha #13 graceful degradation).
+    _face_refs = (page_hints or {}).get("face_line_refs") or []
+    deps.face_line_refs = [
+        r for r in _face_refs if isinstance(r, dict) and r.get("label")
+    ]
+
     # The template summary is NOT embedded in the system prompt — the agent
     # reads it on demand via the read_template tool, whose result is cached by
     # the provider after the first call (OpenAI auto-caching measured at ~77%
@@ -586,10 +617,15 @@ def create_extraction_agent(
             model, cache_key=f"xbrl-face-{statement_type.value}"
         ),
         # Token-cost reduction: strip re-billed payloads from the outbound
-        # request each turn — stale page images and the repeated template
-        # summary. Pure functions over the message list; see
+        # request each turn — stale page images, the repeated template summary,
+        # and (item 30) stale oversized text results superseded by fresher ones.
+        # Pure functions over the message list; see
         # extraction/history_processors.py and docs/Archive/PLAN-token-cost-reduction.md.
-        history_processors=[strip_stale_images, strip_duplicate_template],
+        history_processors=[
+            strip_stale_images,
+            strip_duplicate_template,
+            compact_old_text_results,
+        ],
     )
 
     # --- Tools ---
@@ -669,6 +705,22 @@ def create_extraction_agent(
             results.append(BinaryContent(data=rendered[p], media_type="image/png"))
 
         return results
+
+    @agent.tool
+    def search_pdf_text(ctx: RunContext[ExtractionDeps], queries: List[str]) -> str:
+        """Find where phrase(s) appear in the PDF text, then VERIFY by viewing.
+
+        Pass ALL the phrases you're hunting for in ONE call, e.g.
+        ``["amounts owing by directors", "deferred tax", "Note 18"]`` — each is
+        matched case-insensitively across the whole document. Returns, per
+        phrase, the PDF page numbers + a short snippet of each hit (and the true
+        total-match count when the list is clipped). Use it to FIND candidate
+        pages fast, then call view_pdf_pages to read and confirm — a text hit is
+        a pointer, not proof. On a scanned PDF (no text layer) it says so
+        explicitly; navigate with page images + scout hints instead.
+        """
+        from tools.pdf_search import search_pdf_text_json
+        return search_pdf_text_json(ctx.deps.pdf_path, queries)
 
     @agent.tool
     def write_facts(ctx: RunContext[ExtractionDeps], facts: List[FactWrite]) -> str:
@@ -853,6 +905,59 @@ def create_extraction_agent(
                 f"({ctx.deps.unresolved_summary}). The statement is finalised "
                 f"for human review. Cost report saved to {report_path}."
             )
-        return f"Results saved to {json_path}. Cost report saved to {report_path}."
+        msg = f"Results saved to {json_path}. Cost report saved to {report_path}."
+        # Item 23: nudge (never block) — if the scout flagged face lines and the
+        # agent never submitted a coverage receipt, remind it once. The save
+        # ALWAYS succeeds regardless; coverage is advisory (gotcha #13/#17).
+        if ctx.deps.face_line_refs and not ctx.deps.face_coverage_submitted:
+            msg += (
+                "\nReminder: the scout flagged face lines for this statement. "
+                "Call submit_face_coverage to record which you wrote or "
+                "skipped (this does not change the save — it's an audit trail)."
+            )
+        return msg
+
+    # Item 23: register the coverage tool ONLY when the scout actually gave us
+    # an expectation list for this statement (conditional registration mirrors
+    # the Sheet-12 submit_batch_coverage). With no refs, the tool is absent and
+    # the agent behaves exactly as before.
+    if deps.face_line_refs:
+        @agent.tool
+        def submit_face_coverage(ctx: RunContext[ExtractionDeps], receipt_json: str) -> str:
+            """Account for every scout-observed face line (written | skipped).
+
+            Pass a JSON list, one object per scout-flagged line:
+            ``[{"ref": "Trade receivables", "action": "written"},
+               {"ref": "Other investments", "action": "skipped",
+                "reason": "not disclosed on the face statement"}]``.
+            ``ref`` is the line label the scout reported. This is an AUDIT
+            receipt — it never changes your saved values and never forces a
+            write. If a line genuinely isn't on the face statement, mark it
+            'skipped' with a reason; never plug a row to satisfy coverage.
+            """
+            from extraction.coverage import (
+                FaceCoverageReceipt, face_coverage_warnings,
+            )
+            try:
+                receipt = FaceCoverageReceipt.from_json(receipt_json)
+            except (ValueError, json.JSONDecodeError) as exc:
+                return (
+                    f"submit_face_coverage refused: receipt was not valid "
+                    f"({exc}). Pass a JSON list of {{ref, action[, reason]}} "
+                    f"objects."
+                )
+            errors = receipt.validate(ctx.deps.face_line_refs)
+            ctx.deps.face_coverage_receipt = receipt
+            ctx.deps.face_coverage_submitted = True
+            warnings = face_coverage_warnings(ctx.deps.face_line_refs, receipt)
+            parts = ["Coverage receipt recorded."]
+            if errors:
+                parts.append("Issues: " + "; ".join(errors))
+            if warnings:
+                parts.append(
+                    f"{len(warnings)} scout-observed line(s) still "
+                    f"unaccounted: " + "; ".join(w.split(" — ")[0] for w in warnings)
+                )
+            return " ".join(parts)
 
     return agent, deps

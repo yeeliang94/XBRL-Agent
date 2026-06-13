@@ -24,6 +24,7 @@ from openpyxl.utils import get_column_letter
 
 from notes_types import NotesTemplateType
 from statement_types import StatementType
+from utils.workbook_io import atomic_save_workbook
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,10 @@ def merge(
         )
 
     try:
-        merged.save(output_path)
+        # Item 8 / gotcha #22: atomic save — a reader concurrent with the
+        # merge (download endpoint, validator) sees old-or-new, never a
+        # truncated zip.
+        atomic_save_workbook(merged, output_path)
     except Exception as e:
         return MergeResult(success=False, output_path=output_path, errors=[f"Failed to save: {e}"])
     finally:

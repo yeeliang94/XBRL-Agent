@@ -178,6 +178,91 @@ class VerificationResult:
     # `verify_totals` feedback can route the agent back to the gap instead
     # of silently shipping a blank cell. Empty list = no gaps.
     mandatory_unfilled: list[str] = field(default_factory=list)
+    # Item 24: advisory magnitude warnings (e.g. "CY is ~1000x PY — check the
+    # thousands/millions header"). ADVISORY ONLY — never part of the save-gate
+    # refusal conditions (gotcha #17: diagnostic, never directive toward a plug).
+    magnitude_warnings: list[str] = field(default_factory=list)
+
+
+# Item 24 — magnitude (scale-unit) sanity check. A wrong `scale_unit` silently
+# multiplies every value by 1000 (gotcha #13/#17 sibling). A CY value ~10^k×
+# its PY counterpart is a near-certain unit error and is trivially detectable.
+# log10(1000)=3; the 2.7 threshold catches a 10^3 slip with tolerance while a
+# real 2x YoY move (log10≈0.3) stays silent.
+_MAGNITUDE_LOG10_THRESHOLD = 2.7
+# Ignore small numbers so a 1→2000 noise pair (counts, ratios, single shares)
+# can't trip it — a scale-unit error matters on real monetary magnitudes.
+_MAGNITUDE_MIN_VALUE = 1000.0
+# Cap on rendered per-row warnings. A statement-wide scale-unit error flags
+# EVERY row — repeating ~8KB of identical advisories per verify call buries
+# the signal. The first N rows are listed; the rest collapse into one line
+# that names the likely statement-wide cause (still diagnostic, never a
+# directive to plug/adjust — gotcha #17).
+_MAGNITUDE_MAX_WARNINGS = 10
+
+
+def _scan_magnitude_warnings(path: str, filing_level: str) -> list[str]:
+    """Flag rows whose CY value is ~10^k× its PY value — a likely unit error.
+
+    Walks every DATA-ENTRY cell (numeric literals, not formula totals) across
+    all sheets, comparing the CY/PY column pair for each entity scope (gotcha
+    #12: Company B/C; Group adds Company D/E). Same-sign, both-≥1000 pairs whose
+    |log10(CY/PY)| ≥ 2.7 get one non-directive WARN. SOCIE's columns are equity
+    components, not CY/PY — the caller skips it. Never raises; a scan failure
+    returns no warnings (advisory feature must not break verification).
+    """
+    import math
+
+    warnings: list[str] = []
+    try:
+        wb = openpyxl.load_workbook(path, data_only=False)
+    except Exception:  # noqa: BLE001 — advisory only
+        return warnings
+    try:
+        # (cy_col, py_col, scope_prefix) — PY sits one column right of CY.
+        pairs = [(cy, cy + 1, pfx) for cy, pfx in _cy_columns(filing_level)]
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                # Col-A label (row[0]); skip header/blank rows.
+                if not row or row[0].value is None:
+                    continue
+                label = str(row[0].value).strip().lstrip("*").strip()
+                if not label:
+                    continue
+                for cy_col, py_col, pfx in pairs:
+                    cy = ws.cell(row[0].row, cy_col).value
+                    py = ws.cell(row[0].row, py_col).value
+                    if not isinstance(cy, (int, float)) or not isinstance(py, (int, float)):
+                        continue  # formula cell (str) or blank — only judge literals
+                    cy_f, py_f = float(cy), float(py)
+                    # Skip zeros, sign flips, and small-number noise.
+                    if cy_f == 0 or py_f == 0:
+                        continue
+                    if (cy_f > 0) != (py_f > 0):
+                        continue
+                    if abs(cy_f) < _MAGNITUDE_MIN_VALUE or abs(py_f) < _MAGNITUDE_MIN_VALUE:
+                        continue
+                    if abs(math.log10(abs(cy_f) / abs(py_f))) >= _MAGNITUDE_LOG10_THRESHOLD:
+                        scope = f"{pfx} " if pfx else ""
+                        warnings.append(
+                            f"{scope}'{label}': CY ({cy_f:,.0f}) is ~"
+                            f"{abs(cy_f) / abs(py_f):,.0f}x PY ({py_f:,.0f}) — check "
+                            f"the statement's thousands/millions header (possible "
+                            f"scale-unit error)."
+                        )
+    finally:
+        wb.close()
+    # Bound the advisory: list the first N rows, collapse the remainder into
+    # one diagnostic line (non-directive — gotcha #17).
+    if len(warnings) > _MAGNITUDE_MAX_WARNINGS:
+        overflow = len(warnings) - _MAGNITUDE_MAX_WARNINGS
+        warnings = warnings[:_MAGNITUDE_MAX_WARNINGS]
+        warnings.append(
+            f"... and {overflow} more rows show the same pattern — this "
+            f"strongly suggests a statement-wide scale-unit error (verify "
+            f"the statement header's stated unit)."
+        )
+    return warnings
 
 
 # The exact labels we look for in the SOFP main sheet to verify balance
@@ -866,9 +951,9 @@ def verify_statement(
         raise FileNotFoundError(f"Template not found: {path}")
 
     if name == StatementType.SOFP.value:
-        return verify_totals(path, pdf_values=pdf_values, filing_level=filing_level)
+        result = verify_totals(path, pdf_values=pdf_values, filing_level=filing_level)
     elif name == StatementType.SOCIE.value:
-        return _verify_socie(
+        result = _verify_socie(
             path,
             variant=variant,
             pdf_values=pdf_values,
@@ -876,20 +961,26 @@ def verify_statement(
             filing_standard=filing_standard,
         )
     elif name == StatementType.SOCF.value:
-        return _verify_socf(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
+        result = _verify_socf(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
     elif name == StatementType.SOPL.value:
-        return _verify_sopl(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
+        result = _verify_sopl(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
     elif name == StatementType.SOCI.value:
-        return _verify_soci(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
+        result = _verify_soci(path, variant=variant, pdf_values=pdf_values, filing_level=filing_level)
+    else:
+        result = VerificationResult(
+            is_balanced=None,
+            matches_pdf=None,
+            computed_totals={},
+            pdf_values=pdf_values or {},
+            mismatches=[],
+            feedback=f"No intra-statement balance check defined for {name}/{variant or 'Default'}.",
+        )
 
-    return VerificationResult(
-        is_balanced=None,
-        matches_pdf=None,
-        computed_totals={},
-        pdf_values=pdf_values or {},
-        mismatches=[],
-        feedback=f"No intra-statement balance check defined for {name}/{variant or 'Default'}.",
-    )
+    # Item 24: advisory magnitude scan. Skip SOCIE — its columns are equity
+    # components, not a CY/PY pair, so the column-pair logic would false-positive.
+    if name != StatementType.SOCIE.value:
+        result.magnitude_warnings = _scan_magnitude_warnings(path, filing_level)
+    return result
 
 
 # ---------------------------------------------------------------------------

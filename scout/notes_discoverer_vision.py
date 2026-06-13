@@ -27,6 +27,7 @@ from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models import Model
 from model_settings import build_model_settings
 
+from scout.infopack import MAX_PLAUSIBLE_NOTE_NUM
 from scout.notes_discoverer import NoteInventoryEntry, SubNoteInventoryEntry
 from tools.pdf_viewer import render_pages_to_png_bytes
 
@@ -68,7 +69,11 @@ class _VisionSubNote(BaseModel):
 class _VisionNote(BaseModel):
     """One note header as seen on a batch of rendered pages."""
 
-    note_num: int = Field(ge=1, le=999)
+    # Item 4: ceiling tightened from 999 to the shared plausibility bound —
+    # a vision pass hallucinating "Note 743" misroutes downstream agents.
+    # ``ge=1`` is a documented contract (gotcha #13): the int coercions in
+    # notes/coverage.py depend on it.
+    note_num: int = Field(ge=1, le=MAX_PLAUSIBLE_NOTE_NUM)
     title: str = Field(min_length=2, max_length=200)
     # Page the note's header is visible on.
     first_page: int = Field(ge=1)

@@ -436,6 +436,8 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   tolerance_rm: number;
   /** Whether the reviewer pass auto-runs after extraction (Settings toggle). */
   auto_review: boolean;
+  /** Whether per-entity advisory memory injects prior-year prompt hints (item 28). */
+  entity_memory?: boolean;
 }
 
 export type FilingLevel = "company" | "group";
@@ -642,6 +644,11 @@ export interface RunAgentJson {
   workbook_path: string | null;
   total_tokens: number | null;
   total_cost: number | null;
+  // v17 (item 9): machine-readable failure class (turn_timeout,
+  // iteration_capped, wallclock, token_budget_exceeded, projection_failed,
+  // save_gate_refused, tool_exception, cancelled, no_write). Null on
+  // success; optional so legacy payloads still type-check.
+  error_type?: string | null;
   // v8 telemetry. Optional so a legacy detail payload (or an older backend)
   // still type-checks; the API client defaults them.
   token_breakdown?: AgentTokenBreakdown;

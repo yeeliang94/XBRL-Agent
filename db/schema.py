@@ -104,7 +104,15 @@ from pathlib import Path
 # `runs.benchmark_id` ALTER is nullable so every legacy run reads NULL. Grading
 # is wrapped in try/except and gated on benchmark_id, so a normal run is
 # byte-for-byte unchanged. Pinned by tests/test_db_schema_v16.py.
-CURRENT_SCHEMA_VERSION = 16
+#
+# v17 (PLAN-orchestration-hardening item 9) adds run_agents.error_type — the
+# machine-readable failure class (turn_timeout · iteration_capped · wallclock
+# · token_budget_exceeded · projection_failed · save_gate_refused ·
+# tool_exception · cancelled · no_write; constants in coordinator.py). One
+# nullable additive ALTER; no CHECK constraint on purpose (same rationale as
+# runs.status — a new value must not require a migration). Pinned by
+# tests/test_db_schema_v17.py.
+CURRENT_SCHEMA_VERSION = 17
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -184,7 +192,11 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- works); cache_write = tokens written to cache (Anthropic prices
         -- these at a premium, so cost accounting must see them). Default 0.
         cache_read_tokens  INTEGER DEFAULT 0,
-        cache_write_tokens INTEGER DEFAULT 0
+        cache_write_tokens INTEGER DEFAULT 0,
+        -- v17: machine-readable failure class (item 9 taxonomy; see
+        -- coordinator.py ERROR_TYPE_* constants). NULL on success and on
+        -- legacy rows. No CHECK constraint on purpose.
+        error_type      TEXT
     )
     """,
 
@@ -728,6 +740,14 @@ _V15_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # above; only this ALTER walks an existing v15 DB forward.
 _V16_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("runs", "benchmark_id", "INTEGER REFERENCES eval_benchmarks(id) ON DELETE SET NULL"),
+)
+
+
+# v17 column: structured failure taxonomy for agent rows (item 9 of
+# PLAN-orchestration-hardening). Nullable TEXT, no default — every legacy
+# row and every succeeded agent reads NULL.
+_V17_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("run_agents", "error_type", "TEXT"),
 )
 
 
@@ -1305,6 +1325,45 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (16,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v16→v17 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v16 → v17: add run_agents.error_type (item 9 failure taxonomy).
+        # One nullable additive ALTER — same BEGIN IMMEDIATE + duplicate-
+        # column tolerance as the earlier column steps.
+        if current_version is not None and current_version < 17:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 17:
+                    for table, col_name, col_ddl in _V17_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (17,),
                     )
                 conn.commit()
             except Exception:

@@ -106,6 +106,11 @@ class NotesRunConfig:
     # persistence) skips the persist step cleanly.
     run_id: Optional[int] = None
     audit_db_path: Optional[str] = None
+    # Item 28 — per-entity advisory memory. Set by the server when this run's
+    # entity matched a prior completed run (an entity_memory.PriorYearAdvisory).
+    # Rendered into each notes prompt as advisory-only prior-year hints; None
+    # when no match / disabled.
+    prior_year_advisory: Any = None
 
     def model_for(self, template_type: NotesTemplateType) -> Any:
         """Resolve the model instance to use for a given notes template.
@@ -127,6 +132,10 @@ class NotesRunConfig:
 # minutes-long stalls that triggered the fix.
 NOTES_TURN_TIMEOUT: float = 180.0
 
+# Item 18: cancel-path grace period before a surviving child task is
+# logged as a possible leak (mirrors coordinator.CANCEL_GRACE_PERIOD_S).
+CANCEL_GRACE_PERIOD_S: float = 5.0
+
 # `_iter_with_turn_timeout` is imported from agent_runner above (the per-step
 # timeout helper used to be defined here; rewrite Phase 2 moved it).
 
@@ -137,6 +146,11 @@ class NotesAgentResult:
     status: str  # succeeded / failed / cancelled
     workbook_path: Optional[str] = None
     error: Optional[str] = None
+    # v17 (item 9): machine-readable failure class (coordinator.py
+    # ERROR_TYPE_* vocabulary). None on success; when left None on a
+    # failed/cancelled result, server persistence derives it from status +
+    # error so the run_agents row never carries NULL on a failure.
+    error_type: Optional[str] = None
     # Non-fatal issues surfaced to History / SSE without flipping status.
     # Populated from writer skip-list (unresolvable labels, formula-cell
     # collisions) and borderline fuzzy matches. Keeping status=succeeded
@@ -252,6 +266,15 @@ async def run_notes_extraction(
             "consolidation_level": infopack.consolidation_level,
         }
 
+    # Item 28 — attach the matched prior-year advisory (statement=None on the
+    # notes path: no per-statement variant line, just the shared hints).
+    # getattr keeps test/CLI configs that predate the field working.
+    _prior_advisory = getattr(config, "prior_year_advisory", None)
+    if _prior_advisory is not None:
+        if scout_context is None:
+            scout_context = {}
+        scout_context["_prior_year"] = _prior_advisory.to_prompt_dict(None)
+
     # Launch one task per template.
     ordered = sorted(config.notes_to_run, key=lambda t: list(NotesTemplateType).index(t))
 
@@ -328,7 +351,18 @@ async def run_notes_extraction(
             if not task.done():
                 task.cancel()
         if tasks:
-            await asyncio.wait(list(tasks.values()), timeout=5.0)
+            _, still_pending = await asyncio.wait(
+                list(tasks.values()), timeout=CANCEL_GRACE_PERIOD_S,
+            )
+            # Item 18: surface wedged tasks that outlive the cancel grace
+            # period (logging only — never double-fault, gotcha #10).
+            for t in still_pending:
+                logger.warning(
+                    "cancellation timeout: task %s (session %s) still "
+                    "pending after %.0fs — possible leak",
+                    t.get_name(), session_id or "<none>",
+                    CANCEL_GRACE_PERIOD_S,
+                )
         raise
 
     # Step 6 of the notes rich-editor plan: persist per-cell HTML for
@@ -660,10 +694,17 @@ async def _run_single_notes_agent(
         "attempts": len(attempts),
         "failures_path": failures_path,
     })
+    # v17 (item 9): classify the terminal failure from the last attempt —
+    # a per-turn stall is operationally distinct from a code error.
+    last_exc_class = attempts[-1]["error_type"] if attempts else ""
     return NotesAgentResult(
         template_type=template_type,
         status="failed",
         error=last_error,
+        error_type=(
+            "turn_timeout" if last_exc_class == "TimeoutError"
+            else "tool_exception"
+        ),
     )
 
 

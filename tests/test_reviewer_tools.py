@@ -325,6 +325,93 @@ def test_aggregate_only_override_of_total_is_allowed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Item 14 — apply_fix rejection telemetry (per-kind tally, guard text unchanged)
+# ---------------------------------------------------------------------------
+
+
+def test_rejection_tally_counts_each_kind(tmp_path):
+    """Each guard branch + the computed-override refusal bumps its own kind in
+    the rejections dict; a successful write bumps nothing (item 14)."""
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 30.0)
+    _wf(db, run_id, LEAF2, 20.0)
+    rej: dict = {}
+
+    # ungrounded — empty evidence.
+    apply_reviewer_fix(db, run_id, FactWrite(
+        concept_uuid=LEAF1, period="CY", entity_scope="Company",
+        value=31.0, value_status="observed", source="x", evidence=None,
+        actor="reviewer"), rejections=rej)
+    # abstract_row — write to the ABSTRACT header.
+    apply_reviewer_fix(db, run_id, FactWrite(
+        concept_uuid=ABSTRACT, period="CY", entity_scope="Company",
+        value=1.0, value_status="observed", source="x", evidence="page 1",
+        actor="reviewer"), rejections=rej)
+    # catchall_plug — arithmetic value on the "Other …" leaf.
+    apply_reviewer_fix(db, run_id, FactWrite(
+        concept_uuid=OTHER, period="CY", entity_scope="Company",
+        value=12.0, value_status="observed", source="x",
+        evidence="arithmetic: 50 - 38", actor="reviewer"), rejections=rej)
+    # computed_override — bare observed write to the formula total.
+    apply_reviewer_fix(db, run_id, FactWrite(
+        concept_uuid=SUBTOTAL, period="CY", entity_scope="Company",
+        value=80.0, value_status="observed", source="x",
+        evidence="page 7: total 80", actor="reviewer"), rejections=rej)
+
+    assert rej == {
+        "ungrounded": 1, "abstract_row": 1,
+        "catchall_plug": 1, "computed_override": 1,
+    }
+
+    # A grounded leaf fix tallies nothing.
+    before = dict(rej)
+    apply_reviewer_fix(db, run_id, FactWrite(
+        concept_uuid=LEAF1, period="CY", entity_scope="Company",
+        value=35.0, value_status="observed", source="fix",
+        evidence="page 7: land 35", actor="reviewer"), rejections=rej)
+    assert rej == before
+
+
+def test_classify_guard_returns_kind_and_message(tmp_path):
+    """The classifier exposes the kind while the message text is unchanged
+    (the model-facing contract evaluate_apply_fix_guard still returns)."""
+    from correction.reviewer_agent import classify_apply_fix_guard
+
+    db, run_id = _seed(tmp_path)
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        abstract = conn.execute(
+            "SELECT concept_uuid, kind, canonical_label, render_sheet, "
+            "render_row FROM concept_nodes WHERE concept_uuid = ?", (ABSTRACT,),
+        ).fetchone()
+        leaf = conn.execute(
+            "SELECT concept_uuid, kind, canonical_label, render_sheet, "
+            "render_row FROM concept_nodes WHERE concept_uuid = ?", (LEAF1,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    kind, msg = classify_apply_fix_guard(abstract, evidence="page 1")
+    assert kind == "abstract_row"
+    assert msg == evaluate_apply_fix_guard(abstract, evidence="page 1")
+
+    kind2, msg2 = classify_apply_fix_guard(leaf, evidence="page 42")
+    assert kind2 is None and msg2 is None
+
+
+def test_apply_fix_without_rejections_dict_is_safe(tmp_path):
+    """The pure-function call shape (no rejections dict) still works — telemetry
+    is optional, guard behaviour unchanged."""
+    db, run_id = _seed(tmp_path)
+    out = apply_reviewer_fix(db, run_id, FactWrite(
+        concept_uuid=LEAF1, period="CY", entity_scope="Company",
+        value=1.0, value_status="observed", source="x", evidence=None,
+        actor="reviewer"))
+    assert out.startswith("rejected")
+
+
+# ---------------------------------------------------------------------------
 # Peer-review P1 — (sheet, row) resolution must be template-family scoped.
 # ---------------------------------------------------------------------------
 
@@ -360,6 +447,172 @@ def test_resolve_concept_is_template_scoped(tmp_path):
                               template_prefix="mfrs-group-")
     assert gp["found"] is True
     assert gp["concept"]["concept_uuid"] == GROUP_UID
+
+
+# ---------------------------------------------------------------------------
+# Item 25 — reviewer reverse-lookup tool (find_candidate_rows)
+# ---------------------------------------------------------------------------
+
+
+def test_find_candidate_rows_matches_value_within_tolerance(tmp_path):
+    from correction.reviewer_agent import find_candidate_rows
+
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 1595.0)   # Freehold land
+    _wf(db, run_id, LEAF2, 999.0)    # Buildings
+    # ±1 tolerance: 1595.4 matches LEAF1, not LEAF2.
+    cands = find_candidate_rows(db, run_id, value=1595.4)
+    uuids = {c["concept_uuid"] for c in cands}
+    assert LEAF1 in uuids and LEAF2 not in uuids
+    hit = next(c for c in cands if c["concept_uuid"] == LEAF1)
+    assert hit["sheet"] == "SOFP-Sub-CuNonCu" and hit["row"] == 36
+    assert hit["label"] == "Freehold land"
+
+
+def test_find_candidate_rows_matches_label_hint(tmp_path):
+    from correction.reviewer_agent import find_candidate_rows
+
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 1595.0)
+    _wf(db, run_id, LEAF2, 50.0)
+    # Value far off, but the label hint resolves Buildings (LEAF2).
+    cands = find_candidate_rows(db, run_id, value=9_999_999, label_hint="buildings")
+    assert any(c["concept_uuid"] == LEAF2 for c in cands)
+
+
+def test_find_candidate_rows_is_template_scoped(tmp_path):
+    """The MFRS/MPERS same-(sheet,row) trap (gotcha #21): an unscoped lookup
+    would surface a different family's row with the same value."""
+    from correction.reviewer_agent import find_candidate_rows
+
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 1595.0)
+    GROUP_UID = "00000000-0000-0000-0000-0000000000e9"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO concept_templates(template_id, source_path, shape) "
+            "VALUES ('mfrs-group-sofp-test-v1', 'g.xlsx', 'linear')")
+        conn.execute(
+            "INSERT INTO concept_nodes(concept_uuid, template_id, kind, "
+            "canonical_label, render_sheet, render_row, render_col) VALUES "
+            "(?, 'mfrs-group-sofp-test-v1', 'LEAF', 'Freehold land', "
+            "'SOFP-Sub-CuNonCu', 36, 'B')", (GROUP_UID,))
+        conn.commit()  # commit BEFORE write_fact (separate connection)
+    finally:
+        conn.close()
+    # A fact for the group-family node with the same value.
+    from concept_model.facts_api import write_fact, FactWrite
+    write_fact(db, run_id, FactWrite(
+        concept_uuid=GROUP_UID, period="CY", entity_scope="Company",
+        value=1595.0, value_status="observed", source="x", actor="agent"))
+
+    co = find_candidate_rows(db, run_id, value=1595.0, template_prefix="mfrs-company-")
+    uuids = {c["concept_uuid"] for c in co}
+    assert LEAF1 in uuids and GROUP_UID not in uuids
+
+
+def test_find_candidate_rows_caps_results(tmp_path):
+    from correction.reviewer_agent import find_candidate_rows
+
+    db, run_id = _seed(tmp_path)
+    # 15 distinct concepts all sharing the same value → capped at 10.
+    conn = sqlite3.connect(str(db))
+    from concept_model.facts_api import write_fact, FactWrite
+    for i in range(15):
+        uid = f"00000000-0000-0000-0000-0000000a{i:04d}"
+        conn.execute(
+            "INSERT INTO concept_nodes(concept_uuid, template_id, kind, "
+            "canonical_label, render_sheet, render_row, render_col) VALUES "
+            "(?, ?, 'LEAF', ?, 'SOFP-Sub-CuNonCu', ?, 'B')",
+            (uid, _TEMPLATE, f"Row {i}", 100 + i))
+        conn.commit()
+        write_fact(db, run_id, FactWrite(
+            concept_uuid=uid, period="CY", entity_scope="Company", value=42.0,
+            value_status="observed", source="x", actor="agent"))
+    conn.close()
+    cands = find_candidate_rows(db, run_id, value=42.0)
+    assert len(cands) == 10
+
+
+def test_find_candidate_rows_honours_group_entity_scope(tmp_path):
+    from correction.reviewer_agent import find_candidate_rows
+    from concept_model.facts_api import write_fact, FactWrite
+
+    db, run_id = _seed(tmp_path)
+    # Same concept, two scopes, same value — the scope filter narrows it.
+    write_fact(db, run_id, FactWrite(
+        concept_uuid=LEAF1, period="CY", entity_scope="Company", value=1595.0,
+        value_status="observed", source="x", actor="agent"))
+    write_fact(db, run_id, FactWrite(
+        concept_uuid=LEAF1, period="CY", entity_scope="Group", value=1595.0,
+        value_status="observed", source="x", actor="agent"))
+    grp = find_candidate_rows(db, run_id, value=1595.0, entity_scope="Group")
+    assert grp and all(c["entity_scope"] == "Group" for c in grp)
+
+
+def _get_registered_tool(agent, name):
+    """Find the registered pydantic-ai Tool by its MODEL-FACING name."""
+    for ts in agent.toolsets:
+        tools = getattr(ts, "tools", {})
+        if isinstance(tools, dict) and name in tools:
+            return tools[name]
+    raise AssertionError(f"tool {name!r} not registered on the agent")
+
+
+def test_wired_find_candidate_rows_tool_delegates_not_recurses(tmp_path):
+    """Pin the WIRED tool, not just the module helper.
+
+    A previous same-named ``@agent.tool`` wrapper shadowed the module-level
+    ``find_candidate_rows`` helper and recursively invoked the TOOL itself —
+    ``TypeError: got multiple values for argument 'value'`` on every live
+    call. The wrapper must keep the model-facing name ``find_candidate_rows``
+    (prompts/reviewer.md advertises it) while its Python identifier differs.
+    """
+    from types import SimpleNamespace
+    from pydantic_ai.models.test import TestModel
+    from correction.reviewer_agent import create_reviewer_agent
+
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 1595.0)
+
+    agent, deps = create_reviewer_agent(
+        model=TestModel(call_tools=[]), db_path=db, run_id=run_id)
+    tool = _get_registered_tool(agent, "find_candidate_rows")
+    # The Python identifier must differ from the model-facing name, or the
+    # wrapper shadows the module helper it delegates to and recurses.
+    assert tool.function.__name__ != "find_candidate_rows"
+
+    # Invoke the registered tool function end-to-end against the seeded DB.
+    out = tool.function(SimpleNamespace(deps=deps), 1595.0)
+    assert isinstance(out, str)
+    assert "SOFP-Sub-CuNonCu!row36" in out
+    assert "Freehold land" in out
+    assert LEAF1 in out
+
+
+def test_wired_find_candidate_rows_runs_through_agent_loop(tmp_path):
+    """Full pydantic-ai invocation: TestModel calls the tool by its
+    advertised name and the run completes (pre-fix this raised TypeError)."""
+    from pydantic_ai.models.test import TestModel
+    from correction.reviewer_agent import create_reviewer_agent
+
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 1595.0)
+
+    agent, deps = create_reviewer_agent(
+        model=TestModel(call_tools=["find_candidate_rows"]),
+        db_path=db, run_id=run_id)
+    result = agent.run_sync("review", deps=deps)
+
+    returns = [
+        part for msg in result.all_messages()
+        for part in getattr(msg, "parts", [])
+        if getattr(part, "tool_name", None) == "find_candidate_rows"
+        and type(part).__name__ == "ToolReturnPart"
+    ]
+    assert returns, "find_candidate_rows was never invoked"
+    assert all("candidate" in str(r.content) for r in returns)
 
 
 # ---------------------------------------------------------------------------

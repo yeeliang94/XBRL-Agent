@@ -273,3 +273,144 @@ def test_reads_group_filing_evidence_column_f(tmp_path: Path):
     warnings = check_notes_consistency(str(wb_path))
     assert len(warnings) == 1
     assert "printed folio" in warnings[0].message
+
+
+def test_group_numeric_value_in_col_d_does_not_mask_col_f_citation(tmp_path: Path):
+    """Group filings: numeric notes rows hold VALUES in col D (gotcha #14 —
+    B/C/D/E are value columns, evidence moves to col F). The reader must not
+    take the number in col D as "evidence" — it must fall through to the real
+    citation in col F so the note ref is parsed and the pages compared."""
+    wb_path = tmp_path / "filled.xlsx"
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for sheet_name, label, col_d_value, col_f_evidence in [
+        ("Notes-SummaryofAccPol",
+         "Description of accounting policy for employee benefits",
+         1_595_000,  # numeric value in col D (Company CY on a group filing)
+         "Page 27, Note 2.5(g)"),
+        ("Notes-Listofnotes",
+         "Disclosure of employee benefits expense",
+         1_595_000,
+         "Page 25, Note 2.5(g)"),  # printed folio, not PDF page
+    ]:
+        ws = wb.create_sheet(sheet_name)
+        ws.cell(row=2, column=1, value=label)
+        ws.cell(row=2, column=4, value=col_d_value)
+        ws.cell(row=2, column=6, value=col_f_evidence)
+    wb.save(str(wb_path))
+
+    warnings = check_notes_consistency(str(wb_path))
+    assert len(warnings) == 1
+    assert warnings[0].sheet_11_pages == [27]
+    assert warnings[0].sheet_12_pages == [25]
+    assert "printed folio" in warnings[0].message
+
+
+# ---------------------------------------------------------------------------
+# N4 — generalized citation-consistency pass (any note ref, not just curated)
+# ---------------------------------------------------------------------------
+
+from cross_checks.notes_consistency import check_notes_citation_consistency
+
+
+def test_generic_same_ref_divergent_pages_warns(tmp_path: Path):
+    path = tmp_path / "wb.xlsx"
+    _build_workbook(
+        path,
+        sheet11_rows=[("Disclosure A", "Page 30, Note 18")],
+        sheet12_rows=[("Disclosure B", "Page 300, Note 18")],
+    )
+    warns = check_notes_citation_consistency(str(path))
+    assert len(warns) == 1
+    assert warns[0].note_ref == "18"
+    assert "folio" in warns[0].message.lower()
+
+
+def test_generic_same_ref_close_pages_silent(tmp_path: Path):
+    path = tmp_path / "wb.xlsx"
+    _build_workbook(
+        path,
+        sheet11_rows=[("Disclosure A", "Page 30, Note 18")],
+        sheet12_rows=[("Disclosure B", "Page 31, Note 18")],
+    )
+    # Span 1 ≤ default tolerance → no warning.
+    assert check_notes_citation_consistency(str(path)) == []
+
+
+def test_generic_unparseable_evidence_skipped(tmp_path: Path):
+    path = tmp_path / "wb.xlsx"
+    _build_workbook(
+        path,
+        sheet11_rows=[("Disclosure A", "Note 18 (see disclosure)")],
+        sheet12_rows=[("Disclosure B", "Note 18 elsewhere")],
+    )
+    # No parseable pages → skipped, no false positive.
+    assert check_notes_citation_consistency(str(path)) == []
+
+
+def test_generic_single_citation_silent(tmp_path: Path):
+    path = tmp_path / "wb.xlsx"
+    _build_workbook(
+        path,
+        sheet11_rows=[("Disclosure A", "Page 30, Note 18")],
+        sheet12_rows=[("Other topic", "Page 40, Note 22")],
+    )
+    # Each ref cited once → nothing to compare.
+    assert check_notes_citation_consistency(str(path)) == []
+
+
+def test_generic_inventory_span_tolerance_suppresses(tmp_path: Path):
+    path = tmp_path / "wb.xlsx"
+    _build_workbook(
+        path,
+        sheet11_rows=[("Disclosure A", "Page 30, Note 18")],
+        sheet12_rows=[("Disclosure B", "Page 300, Note 18")],
+    )
+    # A generous known span for note 18 absorbs the spread → silent.
+    assert check_notes_citation_consistency(str(path), note_spans={18: 500}) == []
+
+
+def test_generic_duplicate_label_rows_each_contribute(tmp_path: Path):
+    """Two rows on ONE sheet sharing a label must NOT collapse — each citation
+    counts, so divergent pages for the same ref are still caught (peer-review)."""
+    path = tmp_path / "wb.xlsx"
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    s = wb.create_sheet("Notes-Listofnotes")
+    s.cell(1, 1, "")
+    s.cell(1, 4, "Source")
+    # Same label "Balance at the end of period" on two rows, both citing Note
+    # 18 but with grossly divergent pages (folio vs PDF).
+    s.cell(2, 1, "Balance at the end of period")
+    s.cell(2, 4, "Page 30, Note 18")
+    s.cell(3, 1, "Balance at the end of period")
+    s.cell(3, 4, "Page 300, Note 18")
+    wb.save(str(path))
+
+    warns = check_notes_citation_consistency(str(path))
+    assert len(warns) == 1
+    assert warns[0].note_ref == "18"
+    # Both same-label rows are present in the citation list (not collapsed).
+    assert len(warns[0].citations) == 2
+
+
+def test_generic_group_numeric_col_d_falls_through_to_col_f(tmp_path: Path):
+    """Group filing, generic pass: a numeric VALUE in col D must not be taken
+    as evidence — the citation lives in col F (gotcha #14) and its note ref
+    must still be parsed so divergent pages are caught."""
+    path = tmp_path / "wb.xlsx"
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    s = wb.create_sheet("Notes-Issuedcapital")
+    s.cell(2, 1, "Balance at the end of period")
+    s.cell(2, 4, 5_000_000)                  # numeric value (Company CY)
+    s.cell(2, 6, "Page 30, Note 18")         # real citation in col F
+    s.cell(3, 1, "Shares issued during financial year")
+    s.cell(3, 4, 250_000)
+    s.cell(3, 6, "Page 300, Note 18")        # folio drift
+    wb.save(str(path))
+
+    warns = check_notes_citation_consistency(str(path))
+    assert len(warns) == 1
+    assert warns[0].note_ref == "18"
+    assert len(warns[0].citations) == 2

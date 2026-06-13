@@ -182,6 +182,9 @@ async def get_run_detail_endpoint(run_id: int):
                 "workbook_path": a.workbook_path,
                 "total_tokens": a.total_tokens,
                 "total_cost": a.total_cost,
+                # v17 (item 9): machine-readable failure class; None on
+                # success / legacy rows. Frontend renders it as a badge.
+                "error_type": getattr(a, "error_type", None),
                 # v8 telemetry: per-agent token split + iteration counts, and
                 # the per-turn metrics rows the Telemetry tab renders.
                 "token_breakdown": {

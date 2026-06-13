@@ -194,6 +194,43 @@ describe("RunDetailView", () => {
     expect(agentsSection.textContent?.toLowerCase()).toContain("failed");
   });
 
+  test("failed agent with error_type renders the failure-class badge (item 9)", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          agents: [
+            makeAgent(),
+            makeAgent({
+              id: 2,
+              statement_type: "SOPL",
+              status: "failed",
+              error_type: "token_budget_exceeded",
+              workbook_path: null,
+            }),
+          ],
+        })}
+        onDownload={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    clickRunTab(/agents/i);
+    const badges = screen.getAllByTestId("agent-error-type");
+    expect(badges).toHaveLength(1); // only the failed agent carries it
+    expect(badges[0].textContent).toBe("token budget exceeded");
+  });
+
+  test("succeeded agents render no error_type badge", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail()}
+        onDownload={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    clickRunTab(/agents/i);
+    expect(screen.queryAllByTestId("agent-error-type")).toHaveLength(0);
+  });
+
   test("renders cross-check table with the sofp_balance check", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,

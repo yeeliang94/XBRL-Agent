@@ -192,7 +192,7 @@ face/notes harnesses.</p>
 
 <section class="item" id="item-1">
   <h3><span class="iid">1</span> Scout per-turn + wall-clock timeout
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 2</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 2</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p><code>run_scout_streaming</code> (<code>scout/agent.py</code> ~L1188) iterates
     <code>agent.iter()</code> with only a between-turns check against
@@ -236,7 +236,7 @@ face/notes harnesses.</p>
 
 <section class="item" id="item-2">
   <h3><span class="iid">2</span> Persist scout conversation trace
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>The scout never calls <code>save_agent_trace</code> — when it misses a statement, mislabels a
     variant, or hallucinates a page there is no transcript to debug. Face and notes agents persist
@@ -244,16 +244,26 @@ face/notes harnesses.</p>
     debugging a failure"); the scout is the one agent that doesn't.</p></div>
   <div class="block change"><span class="tag">Concrete change</span>
     <ol>
+      <li><b>Wire the audit context into the scout entry point first.</b> Today
+      <code>run_scout</code> / <code>run_scout_streaming</code> (<code>scout/agent.py:1131</code> /
+      <code>:1188</code>) take <em>no</em> <code>output_dir</code> / <code>run_id</code> — they only
+      return an <code>Infopack</code>. Add an <code>output_dir</code> kwarg (and <code>run_id</code>
+      if the SCOUT row of step 3 is taken) threaded from the coordinator's scout launch site, so the
+      trace has a destination. Without this the next step has nowhere to write.</li>
       <li>On scout completion in <code>run_scout_streaming</code>, call
       <code>agent_tracing.save_agent_trace(result, output_dir, "SCOUT", turns=…)</code> writing
       <code>scout_conversation_trace.json</code> into the session output dir.</li>
       <li>On the new timeout / exception paths (item 1), use the best-effort
       <code>save_messages_trace</code> fallback from <code>agent_run.ctx.state.message_history</code>
       — same pattern the face coordinator uses for partial runs.</li>
-      <li>(Optional, same shape as existing) extend
-      <code>GET /api/runs/{id}/agents/{stmt}/trace</code> to accept <code>SCOUT</code> as a
-      pseudo-statement so the trace viewer can open it; the path-containment check already
-      generalises.</li>
+      <li><b>Make the trace reachable — the path check is not enough.</b>
+      <code>GET /api/runs/{id}/agents/{stmt}/trace</code> rejects any statement not in the run's
+      <code>run_agents</code> rows BEFORE the path-containment check
+      (<code>api/runs.py:260–265</code>: <code>known = {a.statement_type …}</code> → 404). So either
+      (a) create + finalize a <code>SCOUT</code> <code>run_agents</code> row at scout launch
+      (preferred — also lets History/Telemetry list the scout), or (b) special-case
+      <code>"SCOUT"</code> into the <code>known</code> whitelist. The path-containment check
+      generalises once <code>SCOUT</code> clears that gate, not before.</li>
     </ol></div>
   <div class="block reuse"><span class="tag">Reuse</span>
     <p><code>agent_tracing.save_agent_trace</code> / <code>save_messages_trace</code> (100 KB payload
@@ -261,7 +271,10 @@ face/notes harnesses.</p>
   <div class="block tests"><span class="tag">Pinning tests</span>
     <p>Extend <code>tests/test_agent_tracing.py</code>: scout success writes the file; scout failure
     writes the partial-history fallback. Hybrid-storage rule asserted (trace on disk, never in
-    SQLite).</p></div>
+    SQLite). <b>Plus a route-reachability test</b> (<code>tests/test_run_routes.py</code> or sibling):
+    after a scout run, <code>GET /api/runs/{id}/agents/SCOUT/trace</code> returns 200 — proving the
+    <code>run_agents</code> whitelist gate of step 4 was actually opened, not just that the file
+    exists on disk.</p></div>
   <div class="block accept"><span class="tag">Acceptance criteria</span>
     <p>Every scout invocation — success, timeout, crash — leaves
     <code>scout_conversation_trace.json</code> in the session dir.</p></div>
@@ -272,7 +285,7 @@ face/notes harnesses.</p>
 
 <section class="item" id="item-3">
   <h3><span class="iid">3</span> Loud warnings on infopack coercions
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p><code>_save_infopack_impl</code> (<code>scout/agent.py</code> ~L785–787) and
     <code>Infopack.from_json</code> (<code>scout/infopack.py</code> ~L337–358) silently coerce
@@ -308,7 +321,7 @@ face/notes harnesses.</p>
 
 <section class="item" id="item-4">
   <h3><span class="iid">4</span> note_num sanity bounds
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p><code>FaceLineRef.note_num</code> is validated only as <code>≥ 1</code>
     (<code>scout/infopack.py:62–71</code>); the vision inventory schema allows 1–999
@@ -346,7 +359,7 @@ face/notes harnesses.</p>
 
 <section class="item" id="item-5">
   <h3><span class="iid">5</span> Explicit scanned-PDF signal from face-structure reads
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 2</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>On scanned PDFs the deterministic regex (<code>scout/face_structure.py:85–152</code>) returns
     <code>[]</code> silently. The scout's prompt tells it to populate <code>face_line_refs</code>
@@ -388,7 +401,7 @@ atomic file writes, and a failure taxonomy.</p>
 
 <section class="item" id="item-6">
   <h3><span class="iid">6</span> Face-agent wall-clock cap
-    <span class="badges"><span class="b b-effort">Effort S–M</span><span class="b b-phase">Phase 3</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S–M</span><span class="b b-phase">Phase 3</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p><code>coordinator.py::_run_single_agent</code> (~L473–615) bounds each turn (180s) and the
     turn count (40) but not the total: 40 slow-but-compliant turns is legally ~2 hours per agent.
@@ -428,7 +441,7 @@ atomic file writes, and a failure taxonomy.</p>
 
 <section class="item" id="item-7">
   <h3><span class="iid">7</span> Per-agent token budget
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 3</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 3</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Iterations are bounded; tokens are not. A verbose model on a large PDF can burn millions of
     tokens within 40 legal turns — runaway cost with no early exit. The per-turn cumulative-usage
@@ -461,7 +474,7 @@ atomic file writes, and a failure taxonomy.</p>
 
 <section class="item" id="item-8">
   <h3><span class="iid">8</span> Atomic workbook saves everywhere
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Gotcha #22 fixed the notes validator with <code>_atomic_save_workbook</code> (tempfile +
     <code>os.replace</code>) after the 2026-05-29 Windows <code>EOFError</code> incident, and
@@ -497,23 +510,33 @@ atomic file writes, and a failure taxonomy.</p>
 
 <section class="item" id="item-9">
   <h3><span class="iid">9</span> Structured <code>error_type</code> taxonomy (schema v17)
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 3</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 3</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Every agent failure collapses into one free-text <code>error</code> string in
     <code>run_agents</code>. Post-mortems and the Telemetry tab can't distinguish "DB projection
     failed" from "save-gate never opened" from "turn timed out" without string-grepping.</p></div>
   <div class="block change"><span class="tag">Concrete change</span>
     <ol>
-      <li><code>db/schema.py</code>: bump <code>CURRENT_SCHEMA_VERSION</code> 16→17; add nullable
-      <code>run_agents.error_type TEXT</code> via <code>_V17_MIGRATION_COLUMNS</code> (additive
-      ALTER, follows the v15 columns pattern). No CHECK constraint — same rationale as
-      <code>runs.status</code>.</li>
+      <li><code>db/schema.py</code>: bump <code>CURRENT_SCHEMA_VERSION</code> to the next available
+      version (16→17 <em>as of this writing</em> — use whatever the committed value + 1 is when this
+      lands, since another migration may merge first); add nullable
+      <code>run_agents.error_type TEXT</code> via the matching <code>_Vn_MIGRATION_COLUMNS</code>
+      tuple (additive ALTER, follows the v15 columns pattern). No CHECK constraint — same rationale
+      as <code>runs.status</code>.</li>
       <li>Define the vocabulary as constants next to <code>AgentResult</code>:
       <code>turn_timeout · iteration_capped · wallclock · token_budget_exceeded ·
       projection_failed · save_gate_refused · tool_exception · cancelled · no_write</code>.</li>
-      <li>Set it at each failure branch in <code>coordinator.py::_run_single_agent</code> and the
-      notes coordinator's terminal results; thread through
-      <code>repo.finish_run_agent</code> into the row.</li>
+      <li>Add an <code>error_type: str | None = None</code> parameter to
+      <code>repo.finish_run_agent</code> (<code>db/repository.py:484</code>) and its UPDATE — it has
+      no such column today; defaulting to <code>None</code> keeps the many legacy call sites working
+      (same compatibility pattern as the v8 telemetry rollups already on that signature).</li>
+      <li>Set it at <b>every</b> failure branch that finishes a row, not just the face coordinator:
+      <code>coordinator.py::_run_single_agent</code>, the notes coordinator's terminal results, AND
+      the pseudo-agents that also call <code>finish_run_agent</code> — the CORRECTION/reviewer row
+      (<code>api/reviewer.py</code> <code>_finalize_correction_agent_row</code>) and
+      <code>NOTES_VALIDATOR</code> (and <code>SCOUT</code> once item 2 creates its row). Otherwise the
+      acceptance criterion ("every failed/cancelled agent row") is unmet and those rows carry
+      <code>NULL</code>.</li>
       <li>Surface read-only in the run-detail Agents tab + History API payloads (additive field;
       frontend renders a small badge).</li>
     </ol></div>
@@ -533,7 +556,7 @@ atomic file writes, and a failure taxonomy.</p>
 
 <section class="item" id="item-10">
   <h3><span class="iid">10</span> Transient-error retry for face agents
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 3</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 3</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Notes agents retry once on any non-cancellation error plus a separate 3-deep rate-limit
     budget with honoured retry-after (<code>notes/coordinator.py:510–646</code>). Face agents have
@@ -577,7 +600,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-11">
   <h3><span class="iid">11</span> Surface cascade failures (revert + post-pass)
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>After "Revert to original", <code>concept_model/versioning.py</code> (~L178–180) runs
     <code>recompute_after_turn</code> outside the transaction and <b>swallows</b> any exception —
@@ -614,7 +637,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-12">
   <h3><span class="iid">12</span> Stale-download marker after failed re-export
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>After a manual re-review, <code>_reexport_remerge_durable</code> is best-effort: if it fails,
     <code>run_concept_facts</code> has moved but <code>filled.xlsx</code> hasn't — the Review tab's
@@ -623,11 +646,19 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
     nothing.</p></div>
   <div class="block change"><span class="tag">Concrete change</span>
     <ol>
-      <li>Make <code>_reexport_remerge_durable</code> return success/failure instead of swallowing;
-      on failure write <code>export_stale: true</code> + the error into the re-review outcome dict
-      persisted to <code>run_review_tasks.outcome_json</code>.</li>
+      <li><b>(Already done — do not re-do.)</b> <code>_reexport_remerge_durable</code> already
+      returns <code>bool</code> (<code>server.py:4307</code>); it does not swallow the result. The
+      actual gap is the <em>consumer</em>: the manual re-review path calls it and <b>discards the
+      return</b> (<code>api/reviewer.py:270</code>:
+      <code>if outcome.get("writes_performed",0)&gt;0: server._reexport_remerge_durable(run_id)</code>).
+      Capture that bool and, on <code>False</code>, write <code>export_stale: true</code> + the error
+      into the re-review outcome dict persisted to <code>run_review_tasks.outcome_json</code>.</li>
       <li><code>GET /api/runs/{id}/re-review/status</code> already returns the outcome — the field
       rides along for free.</li>
+      <li>Prior art to cite, not duplicate: the download endpoint <b>already fail-closes</b> when a
+      re-export fails and post-run manual edits would otherwise be served stale
+      (<code>api/files.py:197+</code>). This item adds the <em>Review-tab signal</em> for the
+      re-review-write case; it is not a second fail-safe on the download.</li>
       <li>Review tab: badge "download may be stale — re-export failed" with a retry affordance
       (re-call the durable re-export; endpoint can be the existing download path's re-export-from-
       facts, which already regenerates on demand).</li>
@@ -650,7 +681,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-13">
   <h3><span class="iid">13</span> Snapshot race fix
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>The reviewer's re-entrancy guard covers <code>run_review_tasks</code>, but the
     <code>has_snapshot()</code> check and <code>snapshot_facts()</code> write
@@ -663,11 +694,17 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
       <li>Add <code>versioning.ensure_snapshot(db_path, run_id) -&gt; bool</code> that performs
       check + insert inside one <code>BEGIN IMMEDIATE</code> transaction (the write-lock-up-front
       pattern <code>notes/persistence.py</code> already uses) and returns whether it created a new
-      snapshot.</li>
-      <li>Replace the two-step call sites in <code>_run_reviewer_pass</code> with the new helper.
-      Keep the documented overwrite-on-re-review semantics by passing an explicit
-      <code>overwrite=</code> flag where that behaviour is wanted (the deliberate "re-review
-      reverts to original extraction" rule, <code>versioning.py:51</code>).</li>
+      snapshot. The helper is <b>create-if-absent only</b>: when a snapshot already exists it is a
+      no-op and returns <code>False</code>, never re-copies.</li>
+      <li>Replace the two-step <code>if not has_snapshot(): snapshot_facts()</code> call sites in
+      <code>_run_reviewer_pass</code> (<code>server.py</code> ~L1050–1052) with the new helper.
+      <b>Do NOT add an <code>overwrite=</code> flag on the reviewer path.</b> The invariant is that a
+      manual re-review must keep the ORIGINAL extraction snapshot intact so "Revert to original"
+      always restores the first extraction, never a prior reviewer state (the current caller-side
+      guard, <code>server.py:1047–1049</code>, encodes exactly this). Note: <code>snapshot_facts</code>'s
+      own docstring (<code>versioning.py:51</code>) describes its <em>internal</em> delete-then-copy —
+      that is the atomicity of a single snapshot write, NOT a "re-review overwrites" semantic. Any
+      overwrite capability stays private/test-only and named as dangerous.</li>
     </ol></div>
   <div class="block reuse"><span class="tag">Reuse</span>
     <p>The <code>BEGIN IMMEDIATE</code> transaction pattern from notes persistence; existing
@@ -685,7 +722,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-14">
   <h3><span class="iid">14</span> apply_fix rejection telemetry
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 4</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p><code>evaluate_apply_fix_guard</code> (<code>correction/reviewer_agent.py</code> ~L450–508)
     returns rejection strings to the model, but nothing structured lands anywhere. There is no way
@@ -717,7 +754,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-15">
   <h3><span class="iid">15</span> elapsed_seconds in reviewer outcome
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>The outcome dict (<code>server.py</code> ~L962–966) reports <code>turns_used / max_turns</code>
     but not wall-clock elapsed. "Exhausted at 299s of a 300s cap" vs "exhausted at 120s" is the
@@ -747,7 +784,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-16">
   <h3><span class="iid">16</span> Cross-checks off the event loop, with timeout
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Verified: all three call sites — <code>server.py:473</code> (re-check from facts),
     <code>:3372</code> (initial pass), <code>:3688</code> (post-correction) — call
@@ -769,6 +806,16 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
       best-effort never-raise contract documented in its docstring.</li>
       <li>Confirm <code>run_cross_checks</code> touches no shared mutable state before threading it
       (it takes paths + config in, returns results out — review during implementation).</li>
+      <li><b>Orphaned-worker note (honest limitation).</b> <code>wait_for</code> bounds the
+      <em>await</em>, not the thread — a wedged <code>run_cross_checks</code> keeps running in the
+      background after the timeout fires. For this codebase that is acceptable: the work is
+      openpyxl + arithmetic (slow-pathological is plausible, infinite-hang is not), and a truly
+      killable timeout would need subprocess isolation that is <b>out of scope / over-engineering
+      here</b>. Bound the blast radius instead: run cross-checks through a small shared
+      <code>ThreadPoolExecutor</code> (or a module-level <code>asyncio.Semaphore</code>) so abandoned
+      workers can't pile up unbounded across requests, and <code>logger.warning</code> on the
+      timeout branch so an abandoned worker is visible in logs. Revisit subprocess isolation only if
+      a real hang is ever observed.</li>
     </ol></div>
   <div class="block reuse"><span class="tag">Reuse</span>
     <p>The <code>cross_check_exception</code> structured-error machinery
@@ -790,7 +837,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-17">
   <h3><span class="iid">17</span> AgentLoopSpec consolidation — wall-clock as a first-class field
-    <span class="badges"><span class="b b-effort">Effort M–L</span><span class="b b-phase">Phase 3 (last)</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M–L</span><span class="b b-phase">Phase 3 (last)</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Five harnesses grew timeout/cap/telemetry machinery semi-independently: face + notes already
     share <code>agent_runner.run_agent_loop</code>, but the reviewer and notes-validator carry
@@ -827,7 +874,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-18">
   <h3><span class="iid">18</span> Wedged-task logging on cancellation
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 1</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>The Stop-All cancel paths (<code>coordinator.py</code> ~L439–452 and
     <code>notes/coordinator.py:326–332</code>) cancel children and wait 5s. A task wedged in an
@@ -860,7 +907,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-19">
   <h3><span class="iid">19</span> <code>search_pdf_text</code> tool
-    <span class="badges"><span class="b b-effort">Effort S–M</span><span class="b b-phase">Phase 5</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S–M</span><span class="b b-phase">Phase 5</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Extraction agents have exactly seven tools — none can <em>search</em> the PDF. An agent
     hunting for "amounts owing by directors" pages through images one viewport at a time. The
@@ -901,7 +948,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-23">
   <h3><span class="iid">23</span> Face-agent coverage receipts
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 5</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 5</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>The Sheet-12 fan-out's coverage receipts (every batch note accounted for as written/skipped,
     unaccounted = loud warning) are the best anti-silent-omission pattern in the codebase — and
@@ -942,7 +989,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-24">
   <h3><span class="iid">24</span> Magnitude (scale-unit) sanity check
-    <span class="badges"><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 5</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S</span><span class="b b-phase">Phase 5</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>A wrong <code>scale_unit</code> silently multiplies every value by 1000 (gotcha #13/#17
     sibling). Defence today is prompt wording only. A CY value ~10³ᵏ× its PY counterpart is a
@@ -975,7 +1022,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-25">
   <h3><span class="iid">25</span> Reviewer reverse-lookup tool
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 5</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 5</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>The reviewer can trace a template row to its source (<code>trace_cascade_source</code>) but
     not the inverse: given a figure it found in the PDF, it has no way to ask "which template rows
@@ -1013,7 +1060,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-26">
   <h3><span class="iid">26</span> Eval regression harness
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 7</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 7</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Prompts are the most-edited, least-tested artifact in the repo. The v16 eval subsystem
     (gotcha #23) can already grade a run exactly against gold — but nothing connects it to the
@@ -1048,7 +1095,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-27">
   <h3><span class="iid">27</span> Mine reviewer flags into prompt exemplars
-    <span class="badges"><span class="b b-effort">Effort M (recurring)</span><span class="b b-phase">Phase 7</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M (recurring)</span><span class="b b-phase">Phase 7</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Every <code>stuck</code>/<code>disputes_prior</code> flag plus its user answer
     (<code>reviewer_flags</code>, schema v12) is a labelled example of where agent judgement failed
@@ -1080,7 +1127,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-28">
   <h3><span class="iid">28</span> Per-entity advisory memory
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 7</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 7</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Re-processing the same entity's next-year filing starts from zero: variant, scale unit, and
     page offset are re-discovered every time, with fresh opportunities for error on facts that
@@ -1114,12 +1161,18 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-29">
   <h3><span class="iid">29</span> Delegation sub-agents (design first)
-    <span class="badges"><span class="b b-effort">Effort L</span><span class="b b-phase">Future</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--info-soft);color:var(--info)">Spec expanded 2026-06-13</span><span class="b b-effort">Effort L</span><span class="b b-phase">Future</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Face agents accumulate page images and note detail in one long context; deep note-reads
     bloat the conversation that also has to do template writing and verification. The Sheet-12
     fan-out proves the cheap-sub-agent pattern works; nothing lets a face agent use it.</p></div>
   <div class="block change"><span class="tag">Concrete change (design doc first, then build)</span>
+    <p><b>Detailed spec (expanded 2026-06-13; charter 2026-06-12):</b>
+    <code>docs/PLAN-delegation-subagents.md</code> — now a full code-grounded spec:
+    tool + structured-return schema, read-only sub-agent factory, runner control
+    flow, file-by-file change list, 7 pinning tests, and the exact eval
+    measurement protocol. Prototype-gated on SOFP behind
+    <code>XBRL_DELEGATE_READS</code>, measured via item 26.</p>
     <ol>
       <li>Write <code>docs/PLAN-delegation-subagents.md</code> covering: tool shape
       (<code>delegate_note_read(note_num, question)</code> returning a compact structured summary),
@@ -1146,7 +1199,7 @@ its edges — where the DB, the workbook on disk, and the user's mental model ca
 
 <section class="item" id="item-30">
   <h3><span class="iid">30</span> Context compaction (history processor)
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 7</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 7</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Long extractions re-bill stale tool results every turn: verbose verify failures from turn 5
     ride along to turn 35. <code>extraction/history_processors.py</code> already strips stale
@@ -1189,7 +1242,7 @@ validator and an 8-pair citation check). The dormant <code>notes_cells.concept_u
 
 <section class="item" id="item-N1">
   <h3><span class="iid">N1</span> Notes↔face numeric tie-out checks
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 6</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 6</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Numeric rows on sheets 13/14 (e.g. an employee-benefits figure that should reconcile with
     SOPL) are written by notes agents and never validated against the face statements' canonical
@@ -1227,11 +1280,32 @@ validator and an 8-pair citation check). The dormant <code>notes_cells.concept_u
 
 <section class="item" id="item-N2">
   <h3><span class="iid">N2</span> Single-sheet notes coverage receipts
-    <span class="badges"><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 6</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--bad-soft);color:var(--bad)">Closed (won't do) 2026-06-13</span><span class="b b-effort">Effort M</span><span class="b b-phase">Phase 6</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Only the Sheet-12 fan-out has the receipt handshake (<code>submit_batch_coverage</code> is
     conditionally registered, <code>notes/agent.py</code> ~L666–680). Sheets 10/11/13/14 have just
     the cruder all-or-nothing <code>_NoWriteError</code> guard — partial coverage is invisible.</p></div>
+  <div class="block prob"><span class="tag">Closed — won't do (owner decision, 2026-06-13)</span>
+    <p><b>Owner decision 2026-06-13: closed permanently.</b> The "are notes being
+    missed?" signal this item was meant to deliver is already shipped by N3 Stage 1
+    in a gotcha-#14-safe way. The residual N2 (a self-reported per-sheet audit
+    receipt with no code-side expectation) is not worth a new tool on the notes hot
+    path. Recorded here so it is not re-opened by a future survey. The original
+    premise-blocker analysis is retained below for audit.</p></div>
+  <div class="block prob"><span class="tag">Deferred — premise blocker (2026-06-12)</span>
+    <p>The card's expectation list ("inventory subset relevant to that template, from the phase
+    mapping in <code>notes/constants.py</code>") does not exist: <code>NOTES_PHASE_MAP</code> is a
+    tool-name→UI-phase map, unrelated to note relevance. Single-sheet agents receive the FULL
+    inventory (<code>notes/coordinator.py</code>), and there is no per-sheet relevance subset — by
+    design, gotcha #14 forbids deterministic note→sheet matching in the notes pipeline. Using the
+    full inventory as the expectation forces every single-sheet agent to skip-with-reason dozens of
+    unrelated notes (turn-burning noise); a deterministic relevance map would violate gotcha #14.
+    <b>Resolution:</b> item <a href="#item-N3">N3 Stage 1</a> (shipped) delivers the underlying
+    "are notes being missed?" signal in a gotcha-#14-safe way — deterministic per-<code>note_num</code>
+    coverage gaps across ALL sheets, in the validator outcome. A future N2 would be a purely
+    self-reported per-sheet audit receipt (no code-side expectation, internal-consistency validation
+    only); deferred pending a decision on whether that marginal signal warrants a new tool on the
+    notes hot path.</p></div>
   <div class="block change"><span class="tag">Concrete change</span>
     <ol>
       <li>Register the existing receipt tool for single-sheet agents, with the expectation list =
@@ -1263,7 +1337,7 @@ validator and an 8-pair citation check). The dormant <code>notes_cells.concept_u
 
 <section class="item" id="item-N3">
   <h3><span class="iid">N3</span> Notes review coverage (validator extension)
-    <span class="badges"><span class="b b-effort">Effort L</span><span class="b b-phase">Phase 6</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort L</span><span class="b b-phase">Phase 6</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>The reviewer never looks at notes; the notes post-validator
     (<code>notes/validator_agent.py</code>) only deduplicates Sheet-11/12 overlap. Notes content
@@ -1274,8 +1348,13 @@ validator and an 8-pair citation check). The dormant <code>notes_cells.concept_u
       <li><b>Stage 1 — extend the validator.</b> Add two checks to the existing validator pass:
       (a) evidence-page spot checks — for a sample of filled cells, view the cited PDF page and
       confirm the note ref appears (reuses its existing <code>view_pdf_pages</code>); (b)
-      completeness — diff filled rows against the scout inventory subset (N2's relevance mapping)
-      and report inventory notes with no corresponding content anywhere. Findings ride the
+      completeness. <b>Stay clear of forbidden deterministic notes-matching</b> (gotcha #14: no
+      synonym/label content matching). The split is: deterministic code only <em>assembles
+      candidates and reports gaps by integer <code>note_num</code></em> — i.e. which inventory
+      <code>note_num</code>s have no content on any sheet (this is the same kind of per-<code>note_num</code>
+      coverage check <code>notes/coverage.py</code> already does, which IS permitted). Judging whether
+      a note's <em>content</em> is adequate / on the right evidence pages is the
+      <b>validator agent's judgement</b>, never a code-side row-to-content match. Findings ride the
       validator's existing outcome/warnings channel.</li>
       <li><b>Stage 2 (optional, separate decision).</b> Populate the dormant
       <code>notes_cells.concept_uuid</code> at persist time
@@ -1304,7 +1383,7 @@ validator and an 8-pair citation check). The dormant <code>notes_cells.concept_u
 
 <section class="item" id="item-N4">
   <h3><span class="iid">N4</span> Generalized citation-consistency check
-    <span class="badges"><span class="b b-effort">Effort S–M</span><span class="b b-phase">Phase 6</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--good-soft);color:var(--good)">Done 2026-06-12</span><span class="b b-effort">Effort S–M</span><span class="b b-phase">Phase 6</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p><code>cross_checks/notes_consistency.py</code> compares evidence page numbers for only ~8
     hand-curated topic pairs. The underlying failure (one sub-agent cites the printed folio, another
@@ -1338,7 +1417,7 @@ validator and an 8-pair citation check). The dormant <code>notes_cells.concept_u
 
 <section class="item" id="item-32">
   <h3><span class="iid">32</span> Excel-free verification pipeline
-    <span class="badges"><span class="b b-effort">Effort L</span><span class="b b-phase">Future</span></span></h3>
+    <span class="badges"><span class="b" style="background:var(--info-soft);color:var(--info)">Designed 2026-06-12</span><span class="b b-effort">Effort L</span><span class="b b-phase">Future</span></span></h3>
   <div class="block prob"><span class="tag">Problem / evidence</span>
     <p>Facts are DB-canonical, but arithmetic/validation semantics still live in template Excel
     formulas — so the verifier, cross-checks, recalc, and merge all round-trip through openpyxl.
@@ -1346,6 +1425,10 @@ validator and an 8-pair citation check). The dormant <code>notes_cells.concept_u
     run xlsx-based checks on it. This keeps the gotcha #22 race class and the DB↔xlsx split-brain
     class alive, and makes every check slow (one reason item 16 is needed at all).</p></div>
   <div class="block change"><span class="tag">Concrete change (phased; each phase independently shippable)</span>
+    <p><b>Charter drafted 2026-06-12:</b>
+    <code>docs/PLAN-excel-free-verification.md</code> (phases 32a–32c, each gated
+    on a fact-based-vs-xlsx shadow-diff parity proof before the xlsx path is
+    retired).</p>
     <ol>
       <li><b>32a — fact-based cross-checks.</b> Re-implement the cross-check registry to read
       <code>run_concept_facts</code> by concept uuid (the eval-grader pattern, and the

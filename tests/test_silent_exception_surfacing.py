@@ -340,6 +340,165 @@ def test_post_correction_cross_check_exception_finalizes_with_errors(session_env
     )
 
 
+def test_hanging_cross_check_times_out_and_finalizes(session_env, monkeypatch):
+    """PLAN-orchestration-hardening item 16: cross-checks now run on a worker
+    thread bounded by ``CROSS_CHECK_TIMEOUT``. A wedged checker must surface
+    as a structured ``cross_check_exception`` (timeout message) and the run
+    must still reach run_complete — never pinned in ``running``."""
+    import time as _time
+    import server
+    client, session_id, out = session_env
+    monkeypatch.setattr(server, "CROSS_CHECK_TIMEOUT", 0.3)
+
+    agent_results = [
+        AgentResult(
+            statement_type=StatementType.SOFP, variant="CuNonCu",
+            status="succeeded",
+            workbook_path=str(out / session_id / "SOFP_filled.xlsx"),
+        ),
+    ]
+    run_config = {
+        "statements": ["SOFP"],
+        "variants": {"SOFP": "CuNonCu"},
+        "models": {},
+        "infopack": None,
+        "use_scout": False,
+    }
+
+    def _wedged_run_all(*args, **kwargs):
+        _time.sleep(3.0)
+        return []
+
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch(
+             "coordinator.run_extraction",
+             side_effect=_happy_coordinator(agent_results),
+         ), \
+         patch(
+             "workbook_merger.merge",
+             return_value=MergeResult(
+                 success=True,
+                 output_path=str(out / session_id / "filled.xlsx"),
+                 sheets_copied=1,
+             ),
+         ), \
+         patch("cross_checks.framework.run_all", side_effect=_wedged_run_all), \
+         patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
+        resp = client.post(f"/api/run/{session_id}", json=run_config)
+
+    assert resp.status_code == 200
+    body = resp.text
+
+    assert "cross_check_exception" in body, (
+        "A timed-out cross-check pass must surface as a typed "
+        f"cross_check_exception event. Body[:800]: {body[:800]!r}"
+    )
+    assert "wall-clock cap" in body, (
+        "The timeout error message must name the wall-clock cap so the "
+        f"operator knows what fired. Body[:800]: {body[:800]!r}"
+    )
+    # Run still finalizes (gotcha #10 terminal-status contract).
+    assert "event: run_complete" in body
+    rc_token = "event: run_complete\ndata: "
+    rc_idx = body.index(rc_token)
+    rc_payload = body[rc_idx + len(rc_token):body.index("\n", rc_idx + len(rc_token))]
+    assert '"success": false' in rc_payload
+
+
+@pytest.mark.asyncio
+async def test_event_loop_stays_live_during_slow_cross_check():
+    """Item 16 liveness pin: while a slow checker runs on its worker thread,
+    the event loop must keep servicing other coroutines (pre-fix, the sync
+    call starved SSE for every session). Also pins that on_check callbacks
+    are re-dispatched onto the loop thread, in order."""
+    import asyncio
+    import threading
+    import time as _time
+    import server
+
+    loop_thread_id = threading.get_ident()
+    seen_callbacks: list = []
+
+    def _on_check(idx, total, result):
+        # Must run on the event-loop thread (call_soon_threadsafe), never
+        # directly on the cross-check worker (gotcha #19 emission contract).
+        seen_callbacks.append((idx, threading.get_ident()))
+
+    def _slow_run_all(checks, paths, config, tolerance=1.0, on_check=None):
+        for i in range(3):
+            _time.sleep(0.15)
+            if on_check is not None:
+                on_check(i, 3, None)
+        return ["done"]
+
+    ticks = 0
+
+    async def _heartbeat():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    hb = asyncio.ensure_future(_heartbeat())
+    try:
+        with patch("cross_checks.framework.run_all", side_effect=_slow_run_all):
+            results = await server._run_cross_checks_bounded(
+                [], {}, {}, tolerance=1.0, on_check=_on_check,
+            )
+    finally:
+        hb.cancel()
+
+    assert results == ["done"]
+    # The loop serviced other work while the checker slept on its thread.
+    assert ticks >= 3, f"event loop starved during cross-check (ticks={ticks})"
+    # Give pending call_soon_threadsafe dispatches a beat to land.
+    await asyncio.sleep(0.05)
+    assert [idx for idx, _ in seen_callbacks] == [0, 1, 2]
+    assert all(tid == loop_thread_id for _, tid in seen_callbacks), (
+        "on_check must be re-dispatched onto the event-loop thread"
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_late_progress_frames_after_cross_check_timeout(monkeypatch):
+    """Peer-review fix (2026-06-12): a timed-out cross-check pass abandons
+    its worker thread, but the worker keeps calling on_check. Late
+    cross_check_result frames must NOT reach the stream after the pass was
+    classified cross_check_exception."""
+    import asyncio
+    import time as _time
+    import server
+
+    monkeypatch.setattr(server, "CROSS_CHECK_TIMEOUT", 0.2)
+
+    late_calls: list = []
+
+    def _on_check(idx, total, result):
+        late_calls.append(idx)
+
+    def _slow_run_all(checks, paths, config, tolerance=1.0, on_check=None):
+        # Outlive the cap, THEN report progress — exactly the abandoned-
+        # worker scenario.
+        _time.sleep(0.5)
+        if on_check is not None:
+            for i in range(3):
+                on_check(i, 3, None)
+        return []
+
+    with patch("cross_checks.framework.run_all", side_effect=_slow_run_all):
+        with pytest.raises(TimeoutError):
+            await server._run_cross_checks_bounded(
+                [], {}, {}, tolerance=1.0, on_check=_on_check,
+            )
+        # Give the abandoned worker time to finish and any stray
+        # call_soon_threadsafe dispatches time to land.
+        await asyncio.sleep(0.6)
+
+    assert late_calls == [], (
+        f"late progress frames leaked after timeout: {late_calls}"
+    )
+
+
 def test_validation_failure_error_carries_fatal_bucket(session_env):
     """Phase 6.2: an input-validation failure (here, an unknown statement
     type) takes the ``_fail_run`` path — the run terminates as ``failed``
@@ -367,3 +526,74 @@ def test_validation_failure_error_carries_fatal_bucket(session_env):
     )
     # And the run still finalizes via run_complete (success=false).
     assert "event: run_complete" in body
+
+
+# ---------------------------------------------------------------------------
+# Code-review pin (2026-06-13): the advisory notes checks
+# (_run_notes_citation_consistency / _run_notes_face_tieouts) are dispatched
+# through _run_notes_advisory_bounded — off the event loop, time-bounded, and
+# NEVER raising (invariant #10). These pin the wrapper's contract.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_notes_advisory_bounded_swallows_raising_check(caplog):
+    """A check fn that raises must log + return [] — never fail the run."""
+    import logging
+    import server
+
+    def _boom(*_a):
+        raise RuntimeError("advisory blew up")
+
+    with caplog.at_level(logging.WARNING, logger="server"):
+        out = await server._run_notes_advisory_bounded(
+            _boom, "/tmp/merged.xlsx", 1, run_id=1, label="notes-citation",
+        )
+
+    assert out == []
+    assert any("notes-citation" in r.message for r in caplog.records), (
+        "the swallowed failure must be logged with its label"
+    )
+
+
+@pytest.mark.asyncio
+async def test_notes_advisory_bounded_times_out_returns_empty(monkeypatch):
+    """A hanging check is bounded by CROSS_CHECK_TIMEOUT and lands as [] —
+    the worker is abandoned, the run proceeds."""
+    import time as _time
+    import server
+
+    monkeypatch.setattr(server, "CROSS_CHECK_TIMEOUT", 0.2)
+
+    def _hang(*_a):
+        _time.sleep(3)
+        return ["too late"]
+
+    out = await server._run_notes_advisory_bounded(
+        _hang, run_id=1, label="notes-face-tieout",
+    )
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_notes_advisory_bounded_runs_off_the_event_loop():
+    """The check executes on the cross-check executor thread, never on the
+    event loop (openpyxl full-workbook loads block)."""
+    import threading
+    import server
+
+    loop_thread_id = threading.get_ident()
+
+    def _which_thread(*_a):
+        t = threading.current_thread()
+        return [(t.name, threading.get_ident())]
+
+    out = await server._run_notes_advisory_bounded(
+        _which_thread, run_id=1, label="thread-probe",
+    )
+    assert out, "the check's return value must pass through"
+    name, tid = out[0]
+    assert tid != loop_thread_id, "advisory check must not run on the loop"
+    assert name.startswith("cross-check"), (
+        f"expected the dedicated cross-check pool, got thread {name!r}"
+    )

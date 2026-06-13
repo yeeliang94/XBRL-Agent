@@ -186,6 +186,56 @@ describe("SettingsModal — P3 enhancements", () => {
     expect(testConnection).not.toHaveBeenCalled();
   });
 
+  test("entity memory toggle defaults to ON when entity_memory is absent from settings", async () => {
+    // Older backends omit the field; `s.entity_memory !== false` must read as on.
+    renderModal(); // defaultSettings carries no entity_memory key
+    await waitFor(() =>
+      expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).toBeInTheDocument());
+    expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).toBeChecked();
+  });
+
+  test("entity memory toggle reflects an explicit entity_memory:false from settings", async () => {
+    renderModal({ entity_memory: false });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).toBeInTheDocument());
+    expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).not.toBeChecked();
+  });
+
+  test("toggling entity memory off sends entity_memory:false in the save body", async () => {
+    const { saveSettings } = renderModal();
+    await waitFor(() =>
+      expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("Reuse prior-year hints for repeat entities"));
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(saveSettings).toHaveBeenCalled());
+    expect(saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ entity_memory: false }),
+    );
+  });
+
+  test("auto review toggle defaults to ON when auto_review is absent from settings", async () => {
+    renderModal(); // defaultSettings carries no auto_review key
+    await waitFor(() =>
+      expect(screen.getByLabelText("Automatically run the reviewer after extraction")).toBeInTheDocument());
+    expect(screen.getByLabelText("Automatically run the reviewer after extraction")).toBeChecked();
+  });
+
+  test("toggling auto review off sends auto_review:false in the save body", async () => {
+    const { saveSettings } = renderModal();
+    await waitFor(() =>
+      expect(screen.getByLabelText("Automatically run the reviewer after extraction")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("Automatically run the reviewer after extraction"));
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(saveSettings).toHaveBeenCalled());
+    expect(saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ auto_review: false }),
+    );
+  });
+
   test("uses PwC theme colors for validation states", async () => {
     renderModal();
     await waitFor(() => expect(screen.getByDisplayValue(defaultSettings.model)).toBeInTheDocument());

@@ -7,6 +7,7 @@ from tools.verifier import (
     _evaluate_formula,
     _resolve_cell_value,
     verify_statement,
+    _scan_magnitude_warnings,
 )
 from statement_types import StatementType
 
@@ -606,3 +607,97 @@ def test_verify_sopl_group_flags_company_column_unfilled(tmp_path):
         str(path), StatementType.SOPL, variant="Function", filing_level="group"
     )
     assert any("Revenue" in s for s in r.mandatory_unfilled)
+
+
+# ---------------------------------------------------------------------------
+# Item 24 — magnitude (scale-unit) sanity check
+# ---------------------------------------------------------------------------
+
+def _magnitude_wb(tmp_path, rows, *, group=False):
+    """Build a workbook with (label, cy, py[, cy_company, py_company]) rows."""
+    path = tmp_path / "mag.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOFP-CuNonCu"
+    for i, r in enumerate(rows, start=2):
+        ws.cell(i, 1, r[0])
+        ws.cell(i, 2, r[1])
+        ws.cell(i, 3, r[2])
+        if group and len(r) >= 5:
+            ws.cell(i, 4, r[3])
+            ws.cell(i, 5, r[4])
+    wb.save(str(path))
+    return str(path)
+
+
+def test_magnitude_flags_1000x_row(tmp_path):
+    path = _magnitude_wb(tmp_path, [("Revenue", 1_595_000, 1_595)])
+    warns = _scan_magnitude_warnings(path, "company")
+    assert len(warns) == 1
+    assert "Revenue" in warns[0]
+    assert "1,000x" in warns[0] or "1,000" in warns[0]
+
+
+def test_magnitude_ignores_normal_yoy_move(tmp_path):
+    # A genuine 2x year-on-year move (both ≥1000) must NOT be flagged.
+    path = _magnitude_wb(tmp_path, [("Revenue", 2000, 1000)])
+    assert _scan_magnitude_warnings(path, "company") == []
+
+
+def test_magnitude_skips_zero_and_small(tmp_path):
+    path = _magnitude_wb(tmp_path, [
+        ("Zero PY", 5000, 0),            # zero → skipped (no ratio)
+        ("Small", 999, 1),              # below 1000 floor → noise, skipped
+        ("Sign flip", 5_000_000, -5000),  # sign flip → skipped
+    ])
+    assert _scan_magnitude_warnings(path, "company") == []
+
+
+def test_magnitude_wording_is_non_directive(tmp_path):
+    path = _magnitude_wb(tmp_path, [("Revenue", 1_595_000, 1_595)])
+    warn = _scan_magnitude_warnings(path, "company")[0].lower()
+    # Diagnostic, never a directive to plug / balance (gotcha #17).
+    assert "plug" not in warn
+    assert "scale-unit" in warn or "thousands" in warn
+
+
+def test_magnitude_group_company_columns(tmp_path):
+    # The 1000x slip is in the COMPANY columns (D/E) on a group filing.
+    path = _magnitude_wb(
+        tmp_path,
+        [("Revenue", 2000, 1500, 1_595_000, 1_595)],
+        group=True,
+    )
+    warns = _scan_magnitude_warnings(path, "group")
+    assert len(warns) == 1
+    assert warns[0].startswith("Company ")
+
+
+def test_magnitude_warnings_capped_with_collapse_line(tmp_path):
+    # A statement-wide scale-unit error flags EVERY row; the advisory must cap
+    # at 10 listed rows and collapse the rest into ONE non-directive line —
+    # not repeat ~8KB of identical warnings per verify call.
+    rows = [(f"Line item {i}", 1_000_000 * (i + 1), 1_000 * (i + 1))
+            for i in range(25)]
+    path = _magnitude_wb(tmp_path, rows)
+    warns = _scan_magnitude_warnings(path, "company")
+    assert len(warns) == 11, "10 listed rows + 1 collapse line"
+    collapse = warns[-1]
+    assert "and 15 more rows show the same pattern" in collapse
+    assert "statement-wide scale-unit error" in collapse
+    assert "verify the statement header's stated unit" in collapse
+    # Non-directive (gotcha #17): diagnostic only, never an instruction to
+    # plug or adjust values.
+    lowered = collapse.lower()
+    assert "plug" not in lowered
+    assert "adjust" not in lowered
+
+
+def test_verify_statement_attaches_magnitude_warnings(tmp_path):
+    # End-to-end: verify_statement surfaces the advisory list on the result.
+    path = _magnitude_wb(tmp_path, [
+        ("Total assets", 400, 600),
+        ("Revenue", 1_595_000, 1_595),
+    ])
+    r = verify_statement(str(path), StatementType.SOFP, filing_level="company")
+    assert any("Revenue" in w for w in r.magnitude_warnings)
