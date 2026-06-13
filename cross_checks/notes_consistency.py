@@ -143,9 +143,11 @@ def _read_label_and_evidence(
     """Build {normalised label: evidence} for every row with content.
 
     ``evidence_cols`` covers both Company (col D = 4) and Group (col F = 6)
-    layouts. We scan both and take the first non-empty string — a single
-    workbook only ever has one of the two populated for a given row, so
-    precedence doesn't matter.
+    layouts. We scan both and take the first non-empty STRING. The string
+    guard matters on Group filings: numeric notes rows hold VALUES in col D
+    (gotcha #14 — B/C/D/E are value columns, evidence moves to col F), so
+    accepting any non-empty cell would capture the number as "evidence" and
+    never reach the real citation in col F.
     """
     # Peer-review S5: openpyxl's per-cell `ws.cell(row, col)` accessor
     # is roughly an order of magnitude slower than `iter_rows`, which
@@ -167,12 +169,186 @@ def _read_label_and_evidence(
             if len(row) < col:
                 continue
             v = row[col - 1]
-            if v and str(v).strip():
-                evidence = str(v).strip()
+            # Strings only: on Group filings numeric notes rows carry the
+            # VALUE in col D and the citation in col F (gotcha #14) —
+            # a numeric cell must fall through to the next evidence col.
+            if isinstance(v, str) and v.strip():
+                evidence = v.strip()
                 break
         if evidence:
             out[label] = evidence
     return out
+
+
+# ---------------------------------------------------------------------------
+# N4 — generalized citation-consistency check.
+#
+# The curated-pairs pass above only compares ~10 hand-coded topic pairs across
+# Sheets 11/12. But the underlying failure — one sub-agent cites the printed
+# folio, another the PDF page — applies to ANY two cells citing the same note
+# ref. This second pass groups EVERY filled cell's citation by its note ref
+# across all notes sheets and WARNs when one ref's cited pages diverge grossly
+# (span beyond the note's known page range). It infers nothing about which
+# rows pair up — it groups by the agents' OWN citations, so it never fabricates
+# a pairing (the module's conservatism invariant).
+# ---------------------------------------------------------------------------
+
+# A note ref token: "Note 2.5(g)", "Note 18", "note 2.14(a)". Captures the ref
+# body after the "Note " marker, leaving the page parsing to _PAGE_TOKEN.
+_NOTE_REF_TOKEN = re.compile(
+    r"\bnote\s+(\d+(?:\.\d+)*(?:\([a-z0-9]+\))*)",
+    re.IGNORECASE,
+)
+
+# Default allowed page span for a note when the inventory doesn't tell us its
+# range — generous so the generic pass only flags GROSS drift (folio-vs-PDF),
+# leaving tight same-topic drift to the curated pass.
+_DEFAULT_NOTE_SPAN = 3
+
+
+@dataclass
+class CitationWarning:
+    """One note ref cited with grossly divergent pages across cells."""
+    status: str  # always "warning"
+    note_ref: str
+    citations: list[tuple[str, list[int]]]  # (location, pages)
+    message: str
+
+
+def _extract_note_refs(evidence: str) -> list[str]:
+    """Note refs in an evidence string ('2.5(g)', '18'), lowercased."""
+    if not evidence:
+        return []
+    return [m.group(1).lower() for m in _NOTE_REF_TOKEN.finditer(evidence)]
+
+
+def _top_note_num(ref: str) -> Optional[int]:
+    """Top-level integer note number of a ref ('2.5(g)' → 2)."""
+    head = ref.split(".")[0].split("(")[0]
+    try:
+        return int(head)
+    except ValueError:
+        return None
+
+
+def _read_rows_label_and_evidence(
+    ws, label_col: int = 1, evidence_cols: tuple[int, ...] = (4, 6),
+) -> list[tuple[int, str, str]]:
+    """Row-level (row, label, evidence) for every populated row.
+
+    Unlike :func:`_read_label_and_evidence` (which keys by normalised label and
+    so COLLAPSES duplicate-label rows — fine for the curated pass that looks up
+    unique policy labels), the generic citation pass must see EVERY cell:
+    notes sheets legitimately repeat labels ("Balance at the end of period",
+    "Total"), and two same-label rows citing one note ref with divergent pages
+    is exactly the drift N4 hunts (peer-review MEDIUM). Keyed by row, nothing
+    is overwritten.
+    """
+    max_col = max((label_col, *evidence_cols)) if evidence_cols else label_col
+    out: list[tuple[int, str, str]] = []
+    row_idx = 0
+    for row in ws.iter_rows(
+        min_row=1, max_row=ws.max_row, max_col=max_col, values_only=True,
+    ):
+        row_idx += 1
+        raw_label = row[label_col - 1] if len(row) >= label_col else None
+        if not raw_label or not str(raw_label).strip():
+            continue
+        evidence = ""
+        for col in evidence_cols:
+            if len(row) < col:
+                continue
+            v = row[col - 1]
+            # Strings only: on Group filings numeric notes rows carry the
+            # VALUE in col D and the citation in col F (gotcha #14) —
+            # a numeric cell must fall through to the next evidence col.
+            if isinstance(v, str) and v.strip():
+                evidence = v.strip()
+                break
+        if evidence:
+            out.append((row_idx, _norm(str(raw_label)), evidence))
+    return out
+
+
+def check_notes_citation_consistency(
+    workbook_path: str,
+    note_spans: Optional[dict[int, int]] = None,
+    default_span: int = _DEFAULT_NOTE_SPAN,
+) -> list[CitationWarning]:
+    """Generic citation-consistency pass across ALL notes sheets.
+
+    Groups every filled cell's citation by its note ref. A ref cited on two or
+    more cells whose pages are disjoint AND span more than the note's allowed
+    range (``note_spans[top_note_num]`` if known, else ``default_span``) yields
+    one WARN. Evidence with no parseable page or no single note ref is skipped
+    (never a false positive). Advisory only — never raises.
+    """
+    path = Path(workbook_path)
+    if not path.exists():
+        return []
+    try:
+        wb = openpyxl.load_workbook(str(path), data_only=True)
+    except Exception:  # noqa: BLE001 — advisory, never raise
+        return []
+    try:
+        notes_sheets = [n for n in wb.sheetnames if n.lower().startswith("notes-")]
+        # ref -> list of (location, page-set)
+        by_ref: dict[str, list[tuple[str, set[int]]]] = {}
+        for sheet_name in notes_sheets:
+            # Row-level read (not label-keyed) so duplicate-label rows on one
+            # sheet each contribute a citation (peer-review MEDIUM).
+            for row_idx, label, evidence in _read_rows_label_and_evidence(
+                wb[sheet_name]
+            ):
+                refs = _extract_note_refs(evidence)
+                # Only single-ref evidence — multi-ref strings can't be
+                # attributed to one note unambiguously, so we skip them.
+                if len(set(refs)) != 1:
+                    continue
+                pages = _extract_pages(evidence)
+                if not pages:
+                    continue
+                by_ref.setdefault(refs[0], []).append(
+                    (f"{sheet_name}!row{row_idx} {label}", pages)
+                )
+
+        warnings: list[CitationWarning] = []
+        for ref, cites in by_ref.items():
+            if len(cites) < 2:
+                continue
+            page_sets = [p for _, p in cites]
+            union = set().union(*page_sets)
+            span = max(union) - min(union)
+            allowed = default_span
+            top = _top_note_num(ref)
+            if note_spans and top is not None and top in note_spans:
+                allowed = max(note_spans[top], 0)
+            if span <= allowed:
+                continue
+            # Require at least one disjoint pair — overlapping citations of a
+            # genuinely multi-page note are consistent even if the span is wide.
+            disjoint = any(
+                page_sets[i].isdisjoint(page_sets[j])
+                for i in range(len(page_sets))
+                for j in range(i + 1, len(page_sets))
+            )
+            if not disjoint:
+                continue
+            warnings.append(CitationWarning(
+                status="warning",
+                note_ref=ref,
+                citations=[(loc, sorted(p)) for loc, p in cites],
+                message=(
+                    f"Note {ref} is cited with disjoint pages that span "
+                    f"{span} (> allowed {allowed}): "
+                    + "; ".join(f"{loc} → {sorted(p)}" for loc, p in cites)
+                    + ". One citation may use the printed folio instead of the "
+                    "PDF page."
+                ),
+            ))
+        return warnings
+    finally:
+        wb.close()
 
 
 def check_notes_consistency(

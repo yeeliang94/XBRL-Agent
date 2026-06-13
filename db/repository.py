@@ -106,6 +106,9 @@ class RunAgent:
     # v15 cache telemetry rollups. Defaulted so pre-v15 rows read 0.
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # v17 (item 9): machine-readable failure class. None on success and on
+    # legacy rows.
+    error_type: Optional[str] = None
     # Phase 7: per-agent SSE-equivalent events hydrated by get_run_detail().
     # Defaulted via field(default_factory=list) so legacy callers that build
     # RunAgent directly (e.g. fetch_run_agents) don't break — a bare `= []`
@@ -495,6 +498,7 @@ def finish_run_agent(
     tool_call_count: int = 0,
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
+    error_type: str | None = None,
 ) -> None:
     """Mark an agent row as finished with final status + metrics.
 
@@ -510,17 +514,21 @@ def finish_run_agent(
     `tool_call_count` are the run-level rollups the Telemetry tab reads.
     They default to 0 so the many legacy call sites (notes, correction,
     validator) keep working unchanged.
+
+    v17 (item 9): `error_type` is the machine-readable failure class
+    (coordinator.py ERROR_TYPE_* constants). Defaults to None so legacy
+    call sites keep working — same compatibility pattern as the v8 rollups.
     """
     if variant is not None:
         conn.execute(
             "UPDATE run_agents SET status = ?, ended_at = ?, workbook_path = ?, "
             "total_tokens = ?, total_cost = ?, prompt_tokens = ?, "
             "completion_tokens = ?, turn_count = ?, tool_call_count = ?, "
-            "cache_read_tokens = ?, cache_write_tokens = ?, "
+            "cache_read_tokens = ?, cache_write_tokens = ?, error_type = ?, "
             "variant = ? WHERE id = ?",
             (status, _now(), workbook_path, total_tokens, total_cost,
              prompt_tokens, completion_tokens, turn_count, tool_call_count,
-             cache_read_tokens, cache_write_tokens,
+             cache_read_tokens, cache_write_tokens, error_type,
              variant, run_agent_id),
         )
     else:
@@ -528,11 +536,11 @@ def finish_run_agent(
             "UPDATE run_agents SET status = ?, ended_at = ?, workbook_path = ?, "
             "total_tokens = ?, total_cost = ?, prompt_tokens = ?, "
             "completion_tokens = ?, turn_count = ?, tool_call_count = ?, "
-            "cache_read_tokens = ?, cache_write_tokens = ? "
+            "cache_read_tokens = ?, cache_write_tokens = ?, error_type = ? "
             "WHERE id = ?",
             (status, _now(), workbook_path, total_tokens, total_cost,
              prompt_tokens, completion_tokens, turn_count, tool_call_count,
-             cache_read_tokens, cache_write_tokens,
+             cache_read_tokens, cache_write_tokens, error_type,
              run_agent_id),
         )
 
@@ -976,6 +984,8 @@ def fetch_run_agents(conn: sqlite3.Connection, run_id: int) -> list[RunAgent]:
             # v15 cache rollups — _row_get guard so a pre-v15 row hydrates as 0.
             cache_read_tokens=_row_get(r, "cache_read_tokens", 0),
             cache_write_tokens=_row_get(r, "cache_write_tokens", 0),
+            # v17 (item 9) — pre-v17 rows hydrate as None.
+            error_type=_row_get(r, "error_type", None),
         )
         for r in rows
     ]

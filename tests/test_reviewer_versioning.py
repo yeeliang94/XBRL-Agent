@@ -13,6 +13,7 @@ import pytest
 from db.schema import init_db
 from concept_model.versioning import (
     snapshot_facts,
+    ensure_snapshot,
     revert_to_original,
     compute_review_diff,
     has_snapshot,
@@ -223,6 +224,116 @@ def test_revert_without_snapshot_is_safe_noop(tmp_path):
     assert out["reverted"] is False
     # Live facts untouched.
     assert _fact_value(db, run_id, LEAF1) == 100.0
+
+
+# ---------------------------------------------------------------------------
+# Item 11 — cascade failure after revert is reported, not swallowed
+# ---------------------------------------------------------------------------
+
+
+def test_revert_surfaces_cascade_failure(tmp_path, monkeypatch):
+    """A post-restore recompute crash must surface (cascade_ok=false +
+    cascade_error) while the facts ARE still restored — never a silent
+    stale-totals window (item 11)."""
+    db, run_id = _seed(tmp_path)
+    _write_fact(db, run_id, LEAF1, 100.0)
+    _write_fact(db, run_id, LEAF2, 50.0)
+    snapshot_facts(db, run_id)
+    _write_fact(db, run_id, LEAF1, 200.0, source="reviewer", actor="reviewer")
+
+    # Force the recompute to blow up (revert imports it at call time).
+    import concept_model.cascade as cascade_mod
+
+    def _boom(*a, **k):
+        raise RuntimeError("cascade exploded")
+
+    monkeypatch.setattr(cascade_mod, "recompute_after_turn", _boom)
+
+    out = revert_to_original(db, run_id)
+    assert out["reverted"] is True            # restore committed
+    assert out["cascade_ok"] is False
+    assert out["recomputed"] is False         # legacy mirror field
+    assert "cascade exploded" in (out["cascade_error"] or "")
+    # The leaf is back to its original value despite the cascade failure.
+    assert _fact_value(db, run_id, LEAF1) == 100.0
+
+
+def test_revert_cascade_ok_true_on_clean_recompute(tmp_path):
+    db, run_id = _seed(tmp_path)
+    _write_fact(db, run_id, LEAF1, 100.0)
+    snapshot_facts(db, run_id)
+    _write_fact(db, run_id, LEAF1, 200.0, actor="reviewer")
+    out = revert_to_original(db, run_id)
+    assert out["cascade_ok"] is True
+    assert out["cascade_error"] is None
+
+
+# ---------------------------------------------------------------------------
+# Item 13 — ensure_snapshot is atomic + create-if-absent only
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_snapshot_creates_then_noops(tmp_path):
+    db, run_id = _seed(tmp_path)
+    _write_fact(db, run_id, LEAF1, 100.0)
+    _write_fact(db, run_id, LEAF2, 50.0)
+    assert ensure_snapshot(db, run_id) is True   # created
+    assert has_snapshot(db, run_id)
+    # A second call must NOT re-copy (would clobber the original extraction).
+    _write_fact(db, run_id, LEAF1, 999.0)
+    assert ensure_snapshot(db, run_id) is False   # no-op
+    conn = sqlite3.connect(str(db))
+    try:
+        leaf1_snap = conn.execute(
+            "SELECT value FROM run_fact_snapshots WHERE run_id = ? "
+            "AND concept_uuid = ?", (run_id, LEAF1),
+        ).fetchone()[0]
+        cnt = conn.execute(
+            "SELECT COUNT(*) FROM run_fact_snapshots WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    # Still the ORIGINAL 100.0, exactly two rows — the no-op preserved it.
+    assert leaf1_snap == 100.0 and cnt == 2
+
+
+def test_ensure_snapshot_race_creates_exactly_one(tmp_path):
+    """Two threads racing ensure_snapshot → exactly one snapshot row-set,
+    never a double-write (item 13 — BEGIN IMMEDIATE serialises them)."""
+    import threading
+
+    db, run_id = _seed(tmp_path)
+    _write_fact(db, run_id, LEAF1, 100.0)
+    _write_fact(db, run_id, LEAF2, 50.0)
+
+    barrier = threading.Barrier(2)
+    results: list[bool] = []
+    lock = threading.Lock()
+
+    def _racer():
+        barrier.wait()
+        created = ensure_snapshot(db, run_id)
+        with lock:
+            results.append(created)
+
+    threads = [threading.Thread(target=_racer) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Exactly one creator; the other no-ops.
+    assert sorted(results) == [False, True]
+    conn = sqlite3.connect(str(db))
+    try:
+        cnt = conn.execute(
+            "SELECT COUNT(*) FROM run_fact_snapshots WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert cnt == 2   # two facts → two snapshot rows, not four
 
 
 # ---------------------------------------------------------------------------

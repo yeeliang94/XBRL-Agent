@@ -322,7 +322,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **16**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **17**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -383,6 +383,16 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   (created later in the same CREATE loop); SQLite resolves FK targets lazily so
   the forward ref is fine. Pinned by `tests/test_db_schema_v16.py`. See gotcha
   #23 + docs/PLAN-eval-benchmark.md.
+- **v16 → v17:** adds the nullable failure-taxonomy column
+  `run_agents.error_type TEXT` (`_V17_MIGRATION_COLUMNS`,
+  PLAN-orchestration-hardening item 9). Vocabulary constants live next to
+  `AgentResult` in `coordinator.py` (`turn_timeout · iteration_capped ·
+  wallclock · token_budget_exceeded · projection_failed · save_gate_refused
+  · tool_exception · cancelled · no_write`); no CHECK constraint on purpose
+  (same rationale as `runs.status`). Server persistence guarantees every
+  failed/cancelled agent row carries a non-null value
+  (`server._agent_row_error_type` derives one when the coordinator didn't
+  set it explicitly). Pinned by `tests/test_db_schema_v17.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -951,10 +961,15 @@ caught at `server.py` (`"Notes validator run failed"`), so it failed soft
 (no dedup) rather than crashing the run. Pinned by
 `tests/test_notes_validator_agent.py::TestWorkbookIoRaceSafety`.
 
-**Latent elsewhere — don't reintroduce the pattern:** `tools/fill_workbook.py`
-and `concept_model/exporter.py` do the same load→save-in-place; they rarely
-race only because agents fill-then-verify across separate turns. If you add
-a tool that writes a workbook another tool reads, serialise + atomic-save.
+**Closed everywhere (2026-06-12, PLAN-orchestration-hardening item 8):** the
+helper was promoted to `utils/workbook_io.py::atomic_save_workbook` (the
+validator keeps a `_atomic_save_workbook` re-export alias for its
+import/test contract) and every live-path saver now routes through it —
+`tools/fill_workbook.py`, `concept_model/exporter.py`, `notes/writer.py`,
+`workbook_merger.py` (`tools/recalc.py` and `notes/persistence.py` already
+used tmp+replace shapes). Pinned by `tests/test_workbook_io_atomic.py`.
+If you add a NEW tool that writes a workbook another tool reads, use the
+shared helper — never a bare in-place `wb.save(path)`.
 
 ### 23. Gold-standard eval — gold is facts, scoped by template SET
 

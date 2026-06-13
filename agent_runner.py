@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, List, Mapping
@@ -49,6 +50,51 @@ class IterationLimitReached(RuntimeError):
     pydantic-ai's silent ``request_limit`` of 50 (gotcha #18) so the structured
     "Hit iteration limit" path fires instead of ``UsageLimitExceeded``.
     """
+
+
+class WallclockExceeded(RuntimeError):
+    """Agent exceeded its whole-run wall-clock cap
+    (``AgentLoopSpec.wallclock_timeout``) — items 6/17 of
+    PLAN-orchestration-hardening. Checked between loop iterations, so it
+    bounds the many-quick-turns scenario the per-turn timeout can't catch.
+    """
+
+
+class TokenBudgetExceeded(RuntimeError):
+    """Agent crossed its cumulative token budget
+    (``AgentLoopSpec.token_budget``) — item 7 of
+    PLAN-orchestration-hardening. Checked at each turn boundary against the
+    cumulative usage pydantic-ai reports, so spend is bounded approximately
+    (within one turn) — exactness is not required (gotcha #6).
+    """
+
+
+class CallToolsCapExceeded(RuntimeError):
+    """Agent exceeded its CALL-TOOLS turn cap
+    (``AgentLoopSpec.call_tools_cap``) — the reviewer's dynamic 8-25 turn
+    budget counts tool-calling turns, not raw node iterations (item 17
+    migration). Raised before the over-cap node is processed, so the last
+    recorded turn count equals the cap exactly.
+    """
+
+
+def resolve_token_budget() -> int:
+    """XBRL_MAX_TOKENS_PER_AGENT: cumulative-token ceiling per agent run.
+
+    Default 0 = disabled (opt-in first; flip after observing real run
+    costs). Non-numeric / negative values disable rather than crash.
+    """
+    raw = os.environ.get("XBRL_MAX_TOKENS_PER_AGENT", "")
+    if not raw:
+        return 0
+    try:
+        v = int(raw)
+    except ValueError:
+        logger.warning(
+            "XBRL_MAX_TOKENS_PER_AGENT=%r is not an int; budget disabled", raw,
+        )
+        return 0
+    return v if v > 0 else 0
 
 
 def _in_tokens(u) -> int:
@@ -141,6 +187,27 @@ class AgentLoopSpec:
     # timeout — preserving notes' exact prior behaviour (peer-review MEDIUM,
     # rewrite Phase 2).
     bound_inner_streams: bool = True
+    # Items 6/17: whole-run wall-clock cap (seconds). Checked at the top of
+    # each loop iteration — bounds the 40-slow-but-compliant-turns scenario
+    # the per-turn timeout can't catch. None (or <= 0) disables; raises
+    # WallclockExceeded on breach.
+    wallclock_timeout: float | None = None
+    # Item 7: cumulative token ceiling for the whole run. 0 disables.
+    # Checked at each turn boundary against pydantic-ai's cumulative usage;
+    # raises TokenBudgetExceeded on breach.
+    token_budget: int = 0
+    # Item 17 (reviewer migration): cap on CALL-TOOLS turns specifically —
+    # the reviewer's dynamic budget counts tool-calling turns, not raw node
+    # iterations (a node loop interleaves model-request nodes between
+    # them). None disables; raises CallToolsCapExceeded on breach.
+    call_tools_cap: int | None = None
+    # Item 17 (reviewer/validator migration): those passes never streamed
+    # model-request nodes (no text_delta/thinking events on their wire
+    # contract), and their tests drive them with non-streaming
+    # FunctionModels — calling node.stream() on one raises. False skips the
+    # model-node streaming block; the node still executes when the loop
+    # advances. Face/notes keep the default True.
+    stream_model_nodes: bool = True
 
 
 async def run_agent_loop(
@@ -171,6 +238,14 @@ async def run_agent_loop(
     tool_start_times: dict[str, float] = {}
     thinking_counter = 0
     iteration = 0
+    call_tools_seen = 0
+    # Items 6/17: whole-run wall-clock anchor for spec.wallclock_timeout.
+    loop_start = time.monotonic()
+    wallclock_cap = (
+        float(spec.wallclock_timeout)
+        if spec.wallclock_timeout and spec.wallclock_timeout > 0
+        else None
+    )
     # Running cumulative usage so each node's per-turn figure is a delta
     # (pydantic-ai's usage() is cumulative). Cache read/write track the same
     # way so the per-turn rows show when a turn hit (or wrote) the cache.
@@ -195,6 +270,15 @@ async def run_agent_loop(
                 f"Hit iteration limit ({spec.max_iters}). "
                 f"Agent appears stuck in a loop."
             )
+        # Items 6/17: in-loop wall-clock check (same placement as the
+        # reviewer's hand-rolled guard in server._run_reviewer_pass).
+        if wallclock_cap is not None and (
+            time.monotonic() - loop_start > wallclock_cap
+        ):
+            raise WallclockExceeded(
+                f"{spec.agent_role}: exceeded the {wallclock_cap:.0f}s "
+                f"wall-clock cap after {iteration - 1} turn(s)."
+            )
 
         node_start = time.monotonic()
         node_tool_names: list[str] = []
@@ -205,6 +289,17 @@ async def run_agent_loop(
         )
 
         if Agent.is_call_tools_node(node):
+            call_tools_seen += 1
+            if (
+                spec.call_tools_cap is not None
+                and call_tools_seen > spec.call_tools_cap
+            ):
+                # Raised BEFORE the over-cap node is processed, so
+                # turn_records carries exactly `call_tools_cap` tool turns.
+                raise CallToolsCapExceeded(
+                    f"{spec.agent_role}: exceeded the "
+                    f"{spec.call_tools_cap}-turn tool budget."
+                )
             async with node.stream(agent_run.ctx) as tool_stream:
                 async for event in _inner(tool_stream):
                     if isinstance(event, FunctionToolCallEvent):
@@ -247,7 +342,7 @@ async def run_agent_loop(
                             "duration_ms": duration_ms,
                         })
 
-        elif Agent.is_model_request_node(node):
+        elif Agent.is_model_request_node(node) and spec.stream_model_nodes:
             thinking_id = f"{spec.agent_role}_think_{thinking_counter}"
             thinking_active = False
             async with node.stream(agent_run.ctx) as model_stream:
@@ -321,5 +416,17 @@ async def run_agent_loop(
             prev_cache_read, prev_cache_write = cache_read_t, cache_write_t
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("per-turn telemetry capture skipped for %s", spec.agent_role)
+
+        # Item 7: token-budget check at the turn boundary, AFTER the turn's
+        # telemetry is recorded so salvage paths still see the real spend.
+        # `total` is pydantic-ai's cumulative usage — the same number the v8
+        # per-turn deltas derive from, so the bound is approximate within
+        # one turn (gotcha #6: that's its job; exactness not required).
+        if spec.token_budget and total > spec.token_budget:
+            raise TokenBudgetExceeded(
+                f"{spec.agent_role}: cumulative token usage {total} crossed "
+                f"the {spec.token_budget}-token budget after {iteration} "
+                f"turn(s)."
+            )
 
     return iteration

@@ -175,6 +175,66 @@ describe("ReviewTab", () => {
     });
   });
 
+  test("warns when a re-review reports a stale download (export_stale)", async () => {
+    // Item 12: the reviewer wrote facts but the re-export failed — the
+    // download is stale. The Review tab must warn (not error).
+    const posts: { url: string; init?: RequestInit }[] = [];
+    mockApi(posts, { ok: true, invoked: true, writes_performed: 2, flags_raised: 0, export_stale: true });
+    render(<ReviewTab runId={7} />);
+    await waitFor(() => screen.getByTestId("review-tab"));
+    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("review-warning").textContent).toMatch(/stale/i);
+    });
+  });
+
+  test("warns when a re-review reports a cascade failure (cascade_error)", async () => {
+    // Item 11: the reviewer wrote facts but the post-review recompute failed —
+    // parent totals may be stale. The polled outcome carries cascade_error →
+    // a warning banner (not an error; the pass itself succeeded).
+    const posts: { url: string; init?: RequestInit }[] = [];
+    mockApi(posts, { ok: true, invoked: true, writes_performed: 2, flags_raised: 0, cascade_error: "RuntimeError: boom" });
+    render(<ReviewTab runId={7} />);
+    await waitFor(() => screen.getByTestId("review-tab"));
+    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("review-warning").textContent)
+        .toMatch(/totals could not be recomputed after the review/i);
+    });
+  });
+
+  test("joins both warnings when cascade_error and export_stale co-occur", async () => {
+    // Items 11+12 together: the warnings array is joined into one banner —
+    // both messages must survive the join.
+    const posts: { url: string; init?: RequestInit }[] = [];
+    mockApi(posts, {
+      ok: true, invoked: true, writes_performed: 2, flags_raised: 0,
+      cascade_error: "RuntimeError: boom", export_stale: true,
+    });
+    render(<ReviewTab runId={7} />);
+    await waitFor(() => screen.getByTestId("review-tab"));
+    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    await waitFor(() => {
+      const text = screen.getByTestId("review-warning").textContent ?? "";
+      expect(text).toMatch(/totals could not be recomputed after the review/i);
+      expect(text).toMatch(/downloadable workbook may be stale/i);
+    });
+  });
+
+  test("warns when a revert reports a cascade failure (cascade_ok:false)", async () => {
+    // Item 11: the revert restored facts but the recompute failed — totals may
+    // be stale. The revert response carries cascade_ok:false → a warning banner.
+    const posts: { url: string; init?: RequestInit }[] = [];
+    mockApi(posts, { ok: true, reverted: true, cascade_ok: false, cascade_error: "RuntimeError: boom" });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ReviewTab runId={7} />);
+    await waitFor(() => screen.getByTestId("review-tab"));
+    fireEvent.click(screen.getByRole("button", { name: /revert to original/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("review-warning").textContent).toMatch(/could not be recomputed/i);
+    });
+  });
+
   test("flag answer box posts to /flags/{id}/answer", async () => {
     const posts: { url: string; init?: RequestInit }[] = [];
     mockApi(posts);

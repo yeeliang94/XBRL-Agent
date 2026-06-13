@@ -4,6 +4,7 @@ Each statement type has a .md file in this directory containing its system promp
 render_prompt() loads the appropriate file and interpolates runtime values.
 """
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -92,6 +93,14 @@ def render_prompt(
     context_block = _render_scout_context_block(scout_context or {}, suppress_scale=True)
     if context_block:
         parts.append(context_block)
+    # Item 28 — per-entity advisory memory. The matched prior-year payload rides
+    # inside scout_context under the namespaced "_prior_year" key (set by
+    # coordinator.run_extraction) so it needs no new threading. Rendered after
+    # the scout context so the agent reads this-year framing first, then the
+    # prior-year "verify" hints.
+    prior_block = _render_prior_year_advisory_block((scout_context or {}).get("_prior_year") or {})
+    if prior_block:
+        parts.append(prior_block)
     parts.append(nav)
 
     # Group filing overlay — appended after navigation so the agent sees
@@ -383,6 +392,83 @@ def _render_scout_context_block(context: dict, suppress_scale: bool = False) -> 
     if consolidation != "unknown":
         lines.append(
             f"Consolidation level: {consolidation} (scout claim — verify)"
+        )
+    return "\n".join(lines)
+
+
+# Hard cap on the prior-run filename rendered into the advisory block. A
+# filename is plenty identifiable in 80 chars; anything longer is suspicious
+# payload, not provenance.
+_ADVISORY_FILENAME_MAX_CHARS = 80
+
+
+def _sanitize_advisory_filename(raw: object) -> str:
+    """Sanitise a prior run's pdf_filename before rendering it into a prompt.
+
+    The upload filename is user-controlled free text rendered verbatim into
+    FUTURE runs' prompts via the prior-year advisory block — a cross-run
+    prompt-injection channel (code-review fix, 2026-06-13). Strip newlines and
+    other control characters (so a filename can't fake additional prompt
+    lines), collapse whitespace, and cap the length.
+    """
+    if not isinstance(raw, str):
+        return ""
+    cleaned = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", raw)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:_ADVISORY_FILENAME_MAX_CHARS]
+
+
+def _render_prior_year_advisory_block(prior: dict) -> str:
+    """Render the per-entity advisory block (item 28) from a matched prior run.
+
+    ``prior`` is the per-statement payload from
+    ``entity_memory.PriorYearAdvisory.to_prompt_dict`` — slowly-changing
+    observations from a prior filing of the SAME entity (variant, scale unit,
+    page offset, filing standard). Every line is framed "(prior-year run —
+    VERIFY against THIS PDF)" because entity-name collisions and year-over-year
+    changes are real: these are hints to confirm, never facts to trust.
+
+    Returns "" when nothing useful is carried so degraded matches add no noise.
+    """
+    if not prior:
+        return ""
+    variant = prior.get("variant")
+    scale_unit = prior.get("scale_unit")
+    page_offset = prior.get("page_offset")
+    filing_standard = prior.get("filing_standard")
+    if not (variant or scale_unit or page_offset is not None or filing_standard):
+        return ""
+
+    run_id = prior.get("prior_run_id")
+    pdf = _sanitize_advisory_filename(prior.get("pdf_filename")) or "a prior filing"
+    lines = [
+        "=== PRIOR-YEAR RUN (advisory — VERIFY EACH AGAINST THIS PDF) ===",
+        f"This entity was processed before (run {run_id}, {pdf}). Last year's "
+        f"observations are listed below. They change slowly year-over-year, so "
+        f"they are useful starting points — but you MUST confirm each against "
+        f"the CURRENT PDF; do not assume they still hold.",
+    ]
+    if variant:
+        lines.append(
+            f"Prior variant for this statement: {variant} "
+            f"(prior-year run — verify the statement's shape this year)."
+        )
+    if filing_standard:
+        lines.append(
+            f"Prior filing standard: {filing_standard} (prior-year run — verify)."
+        )
+    if scale_unit:
+        # Scale carries the loud wording: a wrong unit silently inflates every
+        # value by 1000× (gotcha #17). The current filer-declared denomination
+        # block above is authoritative; this only flags a year-over-year change.
+        lines.append(
+            f"Prior scale unit: {scale_unit} — VERIFY against THIS PDF's header. "
+            f"If it changed since last year a stale assumption is a 1000× error."
+        )
+    if page_offset is not None:
+        lines.append(
+            f"Prior page offset (printed folio vs PDF page): {page_offset} "
+            f"(prior-year run — verify; re-scanned PDFs shift this)."
         )
     return "\n".join(lines)
 

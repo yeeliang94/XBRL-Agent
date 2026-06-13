@@ -102,6 +102,8 @@ async def test_reviewer_pass_snapshots_then_applies_grounded_fix(tmp_path):
 
     assert outcome["invoked"] is True
     assert outcome["writes_performed"] == 1
+    # Item 15: every reviewer outcome answers "how close to the cap were we".
+    assert outcome["elapsed_seconds"] >= 0
 
     conn = sqlite3.connect(str(db))
     try:
@@ -154,6 +156,38 @@ async def test_reviewer_pass_saves_conversation_trace(tmp_path):
     payload = json.loads(trace.read_text(encoding="utf-8"))
     # The trace carries the conversation (same shape as extraction traces).
     assert "messages" in payload and isinstance(payload["messages"], list)
+
+
+@pytest.mark.asyncio
+async def test_reviewer_loop_spec_does_not_bound_inner_streams(tmp_path, monkeypatch):
+    """Code-review pin (2026-06-13): the reviewer's apply_fix does workbook
+    IO — a legitimately long tool call the 180s per-turn timeout must NOT
+    cancel mid-execution. The pass's AgentLoopSpec must keep the
+    pre-migration semantics (bound_inner_streams=False, same opt-out as
+    notes/coordinator.py's notes_spec)."""
+    import agent_runner
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    captured: dict = {}
+    real_loop = agent_runner.run_agent_loop
+
+    async def _spy(agent_run, deps, spec, emit, turn_records):
+        captured["spec"] = spec
+        return await real_loop(agent_run, deps, spec, emit, turn_records)
+
+    monkeypatch.setattr(agent_runner, "run_agent_loop", _spy)
+    failed = [CrossCheckResult(
+        name="sofp_assets_balance", status="failed", expected=170.0,
+        actual=150.0, diff=20.0, message="off by 20", target_sheet="SOFP",
+        target_row=10)]
+    await _run_reviewer_pass(
+        failed_checks=failed, conflicts=[], model=FunctionModel(_fix_cash_scripted),
+        filing_level="company", event_queue=asyncio.Queue(), db_path=db,
+        run_id=run_id)
+
+    assert "spec" in captured, "reviewer pass should reach run_agent_loop"
+    assert captured["spec"].bound_inner_streams is False
 
 
 @pytest.mark.asyncio
@@ -220,6 +254,8 @@ async def test_reviewer_refuses_run_with_zero_facts(tmp_path):
 
     assert outcome["error"] == "no_extracted_facts_to_review"
     assert outcome["writes_performed"] == 0
+    # Item 15: elapsed is stamped on the error path too.
+    assert outcome["elapsed_seconds"] >= 0
     conn = sqlite3.connect(str(db))
     try:
         snaps = conn.execute(
@@ -259,6 +295,8 @@ async def test_exhausted_reviewer_still_cascades(tmp_path, monkeypatch):
     assert outcome["exhausted"] is True
     assert outcome["error"] == "reviewer_exhausted"
     assert outcome["writes_performed"] >= 1
+    # Item 15: elapsed is stamped on the exhaustion path too.
+    assert outcome["elapsed_seconds"] >= 0
     conn = sqlite3.connect(str(db))
     try:
         # Cascade ran on the way out: parent reflects the leaf fix (120 + 50),

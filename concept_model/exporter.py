@@ -25,6 +25,8 @@ from typing import Any
 
 import openpyxl
 
+from utils.workbook_io import atomic_save_workbook
+
 
 _DEFAULT_SOURCE_COL = {
     "company": "D",   # MFRS/MPERS Company templates: D = Source
@@ -335,7 +337,9 @@ def export_run_to_xlsx(
         wb, reporting_period_cy, reporting_period_py, carry_forward_row1_from
     )
 
-    wb.save(xlsx_path)
+    # Item 8 / gotcha #22: atomic save so a concurrent reader of the export
+    # target never sees a truncated zip.
+    atomic_save_workbook(wb, xlsx_path)
 
     # Side-channel JSON for not_disclosed leaves.  Always written
     # (even if empty) so downstream tools don't have to special-case

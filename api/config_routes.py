@@ -34,6 +34,8 @@ async def get_config():
         # Whether the reviewer pass auto-runs after extraction (Settings
         # toggle). Surfaced here so the SPA can label the run accordingly.
         "auto_review": server._auto_review_enabled(),
+        # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
+        "entity_memory": server._entity_memory_enabled(),
     }
 
 
@@ -127,6 +129,10 @@ async def update_settings(body: dict):
     if "auto_review" in body:
         set_key(str(ENV_FILE), "XBRL_AUTO_REVIEW",
                 "true" if body["auto_review"] else "false")
+    # Item 28 — per-entity advisory memory toggle (prior-year prompt hints).
+    if "entity_memory" in body:
+        set_key(str(ENV_FILE), "XBRL_ENTITY_MEMORY",
+                "true" if body["entity_memory"] else "false")
     if "tolerance_rm" in body:
         set_key(str(ENV_FILE), "XBRL_TOLERANCE_RM", str(body["tolerance_rm"]))
 

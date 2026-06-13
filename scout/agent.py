@@ -12,8 +12,10 @@ Public API:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,7 +36,12 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 
-from agent_tracing import MAX_AGENT_ITERATIONS
+from agent_runner import iter_with_turn_timeout
+from agent_tracing import (
+    MAX_AGENT_ITERATIONS,
+    save_agent_trace,
+    save_messages_trace,
+)
 from statement_types import StatementType, variants_for, get_variant
 from scout.infopack import Infopack, StatementPageRef
 from scout.toc_locator import find_toc_candidate_pages
@@ -54,6 +61,65 @@ logger = logging.getLogger(__name__)
 # Cap how many pages the agent can render in a single view_pages call
 # to avoid blowing the context window with images.
 MAX_VIEW_PAGES = 5
+
+# Item 1 (PLAN-orchestration-hardening): the scout was the only agent with
+# no per-turn timeout and no wall-clock cap — a single stalled model request
+# hung the run before it started. Same per-turn threshold as the face/notes
+# harnesses (NOTES_TURN_TIMEOUT / FACE_TURN_TIMEOUT).
+SCOUT_TURN_TIMEOUT: float = 180.0
+
+
+def _resolve_scout_wallclock() -> float:
+    """XBRL_SCOUT_WALLCLOCK_S: positive seconds; 0/negative disables.
+
+    Same resolver semantics as XBRL_CORRECTION_WALLCLOCK_S (server.py).
+    """
+    raw = os.environ.get("XBRL_SCOUT_WALLCLOCK_S", "")
+    if not raw:
+        return 300.0
+    try:
+        v = float(raw)
+        return v if v > 0 else float("inf")
+    except ValueError:
+        return 300.0
+
+
+SCOUT_WALLCLOCK_TIMEOUT: float = _resolve_scout_wallclock()
+
+
+class ScoutWallclockExceeded(Exception):
+    """Scout exceeded its whole-run wall-clock cap (item 1)."""
+
+
+def _empty_infopack() -> Infopack:
+    """Degraded-but-valid fallback when the scout times out.
+
+    The pipeline already degrades gracefully on missing scout output
+    (gotcha #13): empty statements / inventory mean downstream agents get
+    no hints — NEVER page restrictions.
+    """
+    return Infopack(toc_page=1, page_offset=0)
+
+
+def _save_scout_trace(agent_run: Any, output_dir: Optional[str]) -> None:
+    """Best-effort scout trace persistence (item 2, gotcha #6).
+
+    Success paths use the finished result; failure/timeout paths fall back
+    to the partial message history (a partial run has no ``.result``) —
+    the trace matters most exactly when the scout failed. Never raises.
+    """
+    if not output_dir or agent_run is None:
+        return
+    try:
+        result = getattr(agent_run, "result", None)
+        if result is not None:
+            save_agent_trace(result, output_dir, "SCOUT")
+        else:
+            save_messages_trace(
+                agent_run.ctx.state.message_history, output_dir, "SCOUT",
+            )
+    except Exception:  # noqa: BLE001 — a trace failure must not mask the run
+        logger.warning("Failed to save scout trace", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +376,7 @@ def _read_face_structure_impl(
     deps: ScoutDeps,
     statement_type_str: str,
     face_page: int,
-) -> list[dict]:
+) -> Union[list[dict], dict]:
     """Run the deterministic face-structure parser over a face page.
 
     Pulls the page text directly via PyMuPDF (no LLM call) and feeds it to
@@ -344,6 +410,29 @@ def _read_face_structure_impl(
 
     refs = read_face_structure(page_text)
     deps.face_line_refs_by_statement[st] = refs
+
+    # Item 5: zero refs means the LLM must take over — say so explicitly
+    # instead of returning a bare [] it could misread as "no noted lines".
+    if not refs:
+        if not page_text.strip():
+            message = (
+                "no text layer found on this page — likely a scanned page; "
+                "populate face_line_refs for this statement in your "
+                "save_infopack JSON yourself from the rendered page image"
+            )
+        else:
+            message = (
+                "the page has a text layer but the deterministic parser "
+                "found no note-referenced line items; verify visually and "
+                "populate face_line_refs yourself in the save_infopack JSON "
+                "if the face page does show line items"
+            )
+        return {
+            "scanned_hint": True,
+            "face_line_refs": [],
+            "message": message,
+        }
+
     # Return JSON-serialisable dicts so the agent can see exactly what
     # was captured. The save_infopack stage reads from the cache, not
     # from this return value — but surfacing the parse to the LLM lets
@@ -593,6 +682,25 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
     except json.JSONDecodeError as e:
         return f"Error: invalid JSON — {e}"
 
+    # Item 3 telemetry: every coercion / drop below is counted here and
+    # surfaced in the save-time summary message (which rides the tool_result
+    # SSE event), so degradation is visible to the agent AND the operator —
+    # not only in server-side logs.
+    coerced_fields: list[str] = []
+    dropped_refs = 0
+    face_refs_missing: list[str] = []
+
+    # Item 4: plausibility ceiling for LLM-emitted note references. When
+    # the deterministic inventory exists, tighten to its max + 5 (evidence-
+    # based); otherwise the hard MAX_PLAUSIBLE_NOTE_NUM ceiling applies.
+    from scout.infopack import MAX_PLAUSIBLE_NOTE_NUM
+    note_num_bound = MAX_PLAUSIBLE_NOTE_NUM
+    if deps.notes_inventory:
+        note_num_bound = min(
+            MAX_PLAUSIBLE_NOTE_NUM,
+            max(e.note_num for e in deps.notes_inventory) + 5,
+        )
+
     # Build Infopack from the agent's JSON
     statements: dict[StatementType, StatementPageRef] = {}
     for key, ref_data in data.get("statements", {}).items():
@@ -633,9 +741,11 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
                         "%s face_line_refs[%d] is not a dict; skipping",
                         key, idx,
                     )
+                    dropped_refs += 1
                     continue
                 label = raw.get("label", "")
                 if not isinstance(label, str) or not label.strip():
+                    dropped_refs += 1
                     continue
                 raw_note = raw.get("note_num")
                 note_num: Optional[int]
@@ -646,6 +756,18 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
                         note_num = int(raw_note)
                     except (TypeError, ValueError):
                         note_num = None
+                # Item 4: drop refs citing implausible note numbers — a
+                # hallucinated "Note 743" sends a face agent hunting for a
+                # note that doesn't exist. Hints stay advisory (gotcha #13);
+                # this only filters obviously-invalid ones.
+                if note_num is not None and note_num > note_num_bound:
+                    logger.warning(
+                        "%s face_line_refs[%d] (%r) cites implausible "
+                        "note_num %d (bound %d); dropping",
+                        key, idx, label, note_num, note_num_bound,
+                    )
+                    dropped_refs += 1
+                    continue
                 section_raw = raw.get("section")
                 section = section_raw if isinstance(section_raw, str) and section_raw else None
                 try:
@@ -658,6 +780,7 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
                     logger.warning(
                         "%s face_line_refs[%d] rejected: %s", key, idx, e,
                     )
+                    dropped_refs += 1
 
         # Pick the source by the resolution rule and decide the
         # face_read_in_detail boolean. The flag is True iff at least
@@ -669,6 +792,21 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
         face_read_in_detail = bool(
             chosen_refs or ref_data.get("face_read_in_detail", False)
         )
+
+        # Item 5: the regex ran and found nothing (scanned page / no
+        # parsable structure) AND the LLM didn't populate refs either —
+        # downstream face agents silently lose the structural hint. Name
+        # the statement so the gap is visible, never silent.
+        if (
+            st in deps.face_line_refs_by_statement
+            and not cached_refs
+            and not llm_refs
+        ):
+            logger.warning(
+                "face refs unavailable for %s — scanned/parse-empty page, "
+                "LLM did not populate", key,
+            )
+            face_refs_missing.append(key)
 
         try:
             statements[st] = StatementPageRef(
@@ -779,12 +917,49 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
     # Infopack.from_json so the save-side surface refuses bad values
     # too (LLMs occasionally return "thousands_of_millions" or other
     # near-misses; coercing to "unknown" is safer than trusting them).
-    from scout.infopack import _VALID_SCALE_UNIT, _VALID_CONSOLIDATION
+    from scout.infopack import (
+        _VALID_SCALE_UNIT,
+        _VALID_CONSOLIDATION,
+        _VALID_DETECTED_STANDARD,
+    )
 
+    # Item 3: each coercion warns AND lands in the telemetry summary — a
+    # wrong scale_unit silently inflates every extracted value (gotcha #13
+    # wording), so a coercion is a signal worth surfacing, not swallowing.
+    # The coercion behaviour itself is unchanged (graceful degradation).
     raw_scale = data.get("scale_unit", "unknown")
-    scale_unit = raw_scale if raw_scale in _VALID_SCALE_UNIT else "unknown"
+    if raw_scale in _VALID_SCALE_UNIT:
+        scale_unit = raw_scale
+    else:
+        logger.warning(
+            "scout emitted invalid scale_unit=%r — coerced to 'unknown'",
+            raw_scale,
+        )
+        coerced_fields.append("scale_unit")
+        scale_unit = "unknown"
     raw_consol = data.get("consolidation_level", "unknown")
-    consolidation_level = raw_consol if raw_consol in _VALID_CONSOLIDATION else "unknown"
+    if raw_consol in _VALID_CONSOLIDATION:
+        consolidation_level = raw_consol
+    else:
+        logger.warning(
+            "scout emitted invalid consolidation_level=%r — coerced to "
+            "'unknown'", raw_consol,
+        )
+        coerced_fields.append("consolidation_level")
+        consolidation_level = "unknown"
+    # detected_standard used to flow into the Infopack un-narrowed at save
+    # time (only from_json narrowed on reload) — narrow here too so the
+    # live SSE consumer sees the same value a reload would.
+    raw_standard = data.get("detected_standard", deps.detected_standard)
+    if raw_standard in _VALID_DETECTED_STANDARD:
+        detected_standard = raw_standard
+    else:
+        logger.warning(
+            "scout emitted invalid detected_standard=%r — coerced to "
+            "'unknown'", raw_standard,
+        )
+        coerced_fields.append("detected_standard")
+        detected_standard = "unknown"
 
     def _str_or_none(value: object) -> Optional[str]:
         return value if isinstance(value, str) and value.strip() else None
@@ -802,7 +977,8 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
         notes_inventory=inventory,
         # Agent can override (rarely useful); otherwise carry the cached
         # deterministic guess built during find_toc / parse_toc_text.
-        detected_standard=data.get("detected_standard", deps.detected_standard),
+        # Narrowed above (item 3) so invalid values land as "unknown".
+        detected_standard=detected_standard,
         entity_name=entity_name,
         reporting_period_cy=reporting_period_cy,
         reporting_period_py=reporting_period_py,
@@ -841,6 +1017,24 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
         msg += (
             f" {skipped} inventory entr(y/ies) skipped as malformed — "
             f"re-check those notes if the count looks low."
+        )
+    # Item 3/4/5 telemetry: degradation rides the save summary (visible in
+    # the tool_result SSE event and to the agent itself), not only logs.
+    if coerced_fields:
+        msg += (
+            f" Coerced to 'unknown' (invalid values): "
+            f"{', '.join(coerced_fields)}."
+        )
+    if dropped_refs:
+        msg += (
+            f" {dropped_refs} face-ref(s) dropped (malformed or "
+            f"implausible note_num)."
+        )
+    if face_refs_missing:
+        msg += (
+            f" Face refs unavailable for: {', '.join(face_refs_missing)} "
+            f"(scanned/parse-empty page — populate face_line_refs from the "
+            f"page image or downstream agents lose the structural hint)."
         )
     return msg
 
@@ -1003,10 +1197,13 @@ def create_scout_agent(
         """Parse a face page's text into a structured list of line items.
 
         Deterministic — runs a regex over the page text PyMuPDF extracted.
-        No LLM call. Cheap and exact on text PDFs; returns ``[]`` on scanned
-        PDFs (where PyMuPDF text is empty). Downstream face agents read
-        the captured list as advisory hints: "here are the visible line
-        items and their cited note numbers, verify before using."
+        No LLM call. Cheap and exact on text PDFs. When it finds nothing
+        (scanned page, or a text page the parser couldn't structure) it
+        returns a ``scanned_hint`` object telling you to populate
+        face_line_refs yourself — never a bare empty list. Downstream face
+        agents read the captured list as advisory hints: "here are the
+        visible line items and their cited note numbers, verify before
+        using."
 
         Call this once per statement, AFTER confirming the face page with
         view_pages. On scanned PDFs (empty result), populate face_line_refs
@@ -1135,11 +1332,21 @@ async def run_scout(
     on_progress: Optional[Any] = None,
     *,
     force_vision_inventory: bool = False,
+    output_dir: Optional[str] = None,
 ) -> Infopack:
     """Run the scout agent on a PDF and return an Infopack.
 
     This is the backward-compatible entry point — same signature as the old
-    pipeline-based run_scout() in scout/runner.py.
+    pipeline-based run_scout() in scout/runner.py. ``output_dir`` (item 2)
+    is where the conversation trace lands; None skips trace persistence.
+
+    Known limitation (peer-review, 2026-06-12): this path drives the agent
+    through the opaque ``agent.run`` — on a wall-clock timeout the coroutine
+    is cancelled and there is NO reachable message history, so the timeout
+    exit cannot leave a trace (it logs the degradation instead). The
+    streaming entry point below traces every exit including timeouts; the
+    only production caller (the SSE scout endpoint) uses it. Use
+    ``run_scout_streaming`` when trace-on-failure matters.
     """
     agent, deps = create_scout_agent(
         pdf_path=pdf_path,
@@ -1163,8 +1370,41 @@ async def run_scout(
         f"Start by calling find_toc to locate the Table of Contents."
     )
 
-    # Run the agent — it will call tools and eventually save_infopack
-    result = await agent.run(prompt, deps=deps)
+    # Item 1: bound the whole non-streaming run with the wall-clock cap.
+    # ``agent.run`` is opaque (no per-turn hook), so the cap is the only
+    # guard here; the streaming path below adds the per-turn timeout too.
+    # Read the module global at call time so tests can monkeypatch it.
+    import scout.agent as _self
+    wallclock = float(getattr(_self, "SCOUT_WALLCLOCK_TIMEOUT",
+                              SCOUT_WALLCLOCK_TIMEOUT))
+    try:
+        result = await asyncio.wait_for(
+            agent.run(prompt, deps=deps),
+            timeout=None if wallclock == float("inf") else wallclock,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.warning(
+            "Scout exceeded its wall-clock cap of %.0fs — proceeding "
+            "without scout hints (gotcha #13 degradation).", wallclock,
+        )
+        if on_progress:
+            await on_progress(
+                "Scout timed out — the run can proceed without hints."
+            )
+        # Same degradation honesty as run_scout_streaming: flag the pack so a
+        # caller never reports a timed-out scout as "succeeded".
+        degraded_pack = deps.infopack or _empty_infopack()
+        degraded_pack.degraded = True
+        degraded_pack.degraded_reason = (
+            f"Scout exceeded its wall-clock cap of {wallclock:.0f}s."
+        )
+        return degraded_pack
+
+    if output_dir:
+        try:
+            save_agent_trace(result, output_dir, "SCOUT")
+        except Exception:  # noqa: BLE001 — best-effort (gotcha #6 pattern)
+            logger.warning("Failed to save scout trace", exc_info=True)
 
     if on_progress:
         await on_progress("Scout complete.")
@@ -1192,6 +1432,7 @@ async def run_scout_streaming(
     on_event: Optional[Any] = None,
     *,
     force_vision_inventory: bool = False,
+    output_dir: Optional[str] = None,
 ) -> Infopack:
     """Run the scout agent with structured event streaming.
 
@@ -1203,6 +1444,8 @@ async def run_scout_streaming(
         force_vision_inventory: when True, discover_notes_inventory skips
             the PyMuPDF-regex fast path — use when the caller knows the
             PDF is scanned.
+        output_dir: where the scout conversation trace is persisted
+            (item 2, gotcha #6). None skips trace persistence.
     """
     agent, deps = create_scout_agent(
         pdf_path=pdf_path,
@@ -1228,83 +1471,148 @@ async def run_scout_streaming(
         if on_event:
             await on_event(event_type, data)
 
+    # Item 1: per-turn timeout (shared agent_runner helper) + whole-run
+    # wall-clock cap. When the cap is shorter than the per-turn timeout
+    # (test overrides), the per-turn wrap inherits it so a stalled first
+    # turn still terminates within the cap. Read the module globals at
+    # call time so tests can monkeypatch them.
+    import scout.agent as _self
+    wallclock = float(getattr(_self, "SCOUT_WALLCLOCK_TIMEOUT",
+                              SCOUT_WALLCLOCK_TIMEOUT))
+    turn_timeout = float(getattr(_self, "SCOUT_TURN_TIMEOUT",
+                                 SCOUT_TURN_TIMEOUT))
+    if wallclock < turn_timeout:
+        turn_timeout = wallclock
+    wc_start = time.monotonic()
+
     iteration_count = 0
-    async with agent.iter(prompt, deps=deps) as agent_run:
-        async for node in agent_run:
-            iteration_count += 1
-            if iteration_count > MAX_AGENT_ITERATIONS:
-                raise RuntimeError(f"Scout hit iteration limit ({MAX_AGENT_ITERATIONS}).")
+    agent_run_obj: Any = None
+    try:
+        async with agent.iter(prompt, deps=deps) as agent_run:
+            agent_run_obj = agent_run
+            async for node in iter_with_turn_timeout(agent_run, turn_timeout):
+                iteration_count += 1
+                if iteration_count > MAX_AGENT_ITERATIONS:
+                    raise RuntimeError(f"Scout hit iteration limit ({MAX_AGENT_ITERATIONS}).")
+                if time.monotonic() - wc_start > wallclock:
+                    raise ScoutWallclockExceeded(
+                        f"Scout exceeded its wall-clock cap of "
+                        f"{wallclock:.0f}s."
+                    )
 
-            if Agent.is_call_tools_node(node):
-                async with node.stream(agent_run.ctx) as tool_stream:
-                    async for event in tool_stream:
-                        if isinstance(event, FunctionToolCallEvent):
-                            raw_args = event.part.args
-                            if isinstance(raw_args, str):
-                                try:
-                                    parsed_args = json.loads(raw_args)
-                                except (json.JSONDecodeError, TypeError):
+                if Agent.is_call_tools_node(node):
+                    async with node.stream(agent_run.ctx) as tool_stream:
+                        # Inner stream wrapped too (agent_runner contract):
+                        # the actual HTTP/token streaming happens HERE, so a
+                        # provider that stalls mid-stream must hit the same
+                        # per-turn timeout as one that stalls between nodes.
+                        async for event in iter_with_turn_timeout(
+                            tool_stream, turn_timeout
+                        ):
+                            if isinstance(event, FunctionToolCallEvent):
+                                raw_args = event.part.args
+                                if isinstance(raw_args, str):
+                                    try:
+                                        parsed_args = json.loads(raw_args)
+                                    except (json.JSONDecodeError, TypeError):
+                                        parsed_args = {}
+                                elif isinstance(raw_args, dict):
+                                    parsed_args = raw_args
+                                else:
                                     parsed_args = {}
-                            elif isinstance(raw_args, dict):
-                                parsed_args = raw_args
-                            else:
-                                parsed_args = {}
-                            await _emit("tool_call", {
-                                "tool_name": event.part.tool_name,
-                                "tool_call_id": event.part.tool_call_id,
-                                "args": parsed_args,
-                            })
-                            tool_start_times[event.part.tool_call_id] = time.monotonic()
-                            # Also emit as progress text for the existing status display
-                            await _emit("status", {
-                                "phase": "scouting",
-                                "message": f"Calling {event.part.tool_name}...",
-                            })
-
-                        elif isinstance(event, FunctionToolResultEvent):
-                            content = event.result.content
-                            summary = str(content)[:500] if content else ""
-                            call_id = event.result.tool_call_id
-                            start_t = tool_start_times.pop(call_id, None)
-                            duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
-                            await _emit("tool_result", {
-                                "tool_name": event.result.tool_name,
-                                "tool_call_id": call_id,
-                                "result_summary": summary,
-                                "duration_ms": duration_ms,
-                            })
-
-            elif Agent.is_model_request_node(node):
-                thinking_id = f"scout_think_{thinking_counter}"
-                thinking_active = False
-                async with node.stream(agent_run.ctx) as model_stream:
-                    async for event in model_stream:
-                        if isinstance(event, PartDeltaEvent):
-                            delta = event.delta
-                            if isinstance(delta, TextPartDelta):
-                                if thinking_active:
-                                    await _emit("thinking_end", {
-                                        "thinking_id": thinking_id,
-                                        "summary": "",
-                                        "full_length": 0,
-                                    })
-                                    thinking_active = False
-                                    thinking_counter += 1
-                                    thinking_id = f"scout_think_{thinking_counter}"
-                                await _emit("text_delta", {"content": delta.content_delta})
-                            elif isinstance(delta, ThinkingPartDelta):
-                                thinking_active = True
-                                await _emit("thinking_delta", {
-                                    "content": delta.content_delta or "",
-                                    "thinking_id": thinking_id,
+                                await _emit("tool_call", {
+                                    "tool_name": event.part.tool_name,
+                                    "tool_call_id": event.part.tool_call_id,
+                                    "args": parsed_args,
                                 })
-                if thinking_active:
-                    await _emit("thinking_end", {
-                        "thinking_id": thinking_id,
-                        "summary": "",
-                        "full_length": 0,
-                    })
-                    thinking_counter += 1
+                                tool_start_times[event.part.tool_call_id] = time.monotonic()
+                                # Also emit as progress text for the existing status display
+                                await _emit("status", {
+                                    "phase": "scouting",
+                                    "message": f"Calling {event.part.tool_name}...",
+                                })
+
+                            elif isinstance(event, FunctionToolResultEvent):
+                                content = event.result.content
+                                summary = str(content)[:500] if content else ""
+                                call_id = event.result.tool_call_id
+                                start_t = tool_start_times.pop(call_id, None)
+                                duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
+                                await _emit("tool_result", {
+                                    "tool_name": event.result.tool_name,
+                                    "tool_call_id": call_id,
+                                    "result_summary": summary,
+                                    "duration_ms": duration_ms,
+                                })
+
+                elif Agent.is_model_request_node(node):
+                    thinking_id = f"scout_think_{thinking_counter}"
+                    thinking_active = False
+                    async with node.stream(agent_run.ctx) as model_stream:
+                        # Same per-step timeout on the model token stream —
+                        # a stalled model request used to hang here forever.
+                        async for event in iter_with_turn_timeout(
+                            model_stream, turn_timeout
+                        ):
+                            if isinstance(event, PartDeltaEvent):
+                                delta = event.delta
+                                if isinstance(delta, TextPartDelta):
+                                    if thinking_active:
+                                        await _emit("thinking_end", {
+                                            "thinking_id": thinking_id,
+                                            "summary": "",
+                                            "full_length": 0,
+                                        })
+                                        thinking_active = False
+                                        thinking_counter += 1
+                                        thinking_id = f"scout_think_{thinking_counter}"
+                                    await _emit("text_delta", {"content": delta.content_delta})
+                                elif isinstance(delta, ThinkingPartDelta):
+                                    thinking_active = True
+                                    await _emit("thinking_delta", {
+                                        "content": delta.content_delta or "",
+                                        "thinking_id": thinking_id,
+                                    })
+                    if thinking_active:
+                        await _emit("thinking_end", {
+                            "thinking_id": thinking_id,
+                            "summary": "",
+                            "full_length": 0,
+                        })
+                        thinking_counter += 1
+    except (asyncio.TimeoutError, TimeoutError, ScoutWallclockExceeded) as exc:
+        # Item 1: a stalled turn (per-turn timeout) or the whole-run cap.
+        # Emit a structured SSE error, persist the partial trace (item 2 —
+        # the trace matters most on failure), and degrade to whatever the
+        # scout managed to save — never page restrictions (gotcha #13).
+        reason = str(exc) or (
+            f"Scout stalled past the {turn_timeout:.0f}s per-turn timeout."
+        )
+        logger.warning("%s — proceeding without scout hints", reason)
+        # Persist the partial trace BEFORE emitting: a raising on_event (e.g.
+        # a disconnected SSE client) must not skip the trace — it matters most
+        # exactly when the run is failing (gotcha #6).
+        _save_scout_trace(agent_run_obj, output_dir)
+        await _emit("error", {
+            "type": "scout_timeout",
+            "message": f"{reason} The run can proceed without scout hints.",
+        })
+        # Honesty: flag the pack degraded so the caller marks the audit row
+        # failed (with the timeout error_type) and emits scout_complete
+        # success:false — never "succeeded". The run still proceeds without
+        # hints (gotcha #13); only the reporting is corrected.
+        degraded_pack = deps.infopack or _empty_infopack()
+        degraded_pack.degraded = True
+        degraded_pack.degraded_reason = reason
+        return degraded_pack
+    except BaseException:
+        # Iteration cap, cancellation, or a real crash: persist the partial
+        # trace, then let the caller's existing handling decide (the SSE
+        # endpoint already surfaces these as error / scout_cancelled).
+        _save_scout_trace(agent_run_obj, output_dir)
+        raise
+
+    _save_scout_trace(agent_run_obj, output_dir)
 
     if deps.infopack is not None:
         # Same safety net as run_scout — see _populate_inventory_via_vision.

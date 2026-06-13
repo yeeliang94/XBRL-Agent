@@ -281,6 +281,75 @@ def test_manual_re_review_creates_correction_agent_row_and_trace_is_reachable(
     assert "messages" in tr.json()
 
 
+def _seed_conflict(db, run_id):
+    """Seed an open conflict so the reviewer pass is invoked."""
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO run_concept_conflicts(run_id, concept_uuid, period, "
+        "entity_scope, kind, detail, status, created_at) VALUES "
+        "(?, ?, 'CY', 'Company', 'partial_state', 'x', 'open', '2026Z')",
+        (run_id, PARENT))
+    conn.commit()
+    conn.close()
+
+
+def test_re_review_flags_export_stale_when_reexport_fails(client, monkeypatch):
+    """Item 12: when the reviewer writes facts but the re-export fails, the
+    download is stale while the DB-fed diff is current. The status outcome must
+    carry export_stale=true so the Review tab can warn."""
+    tc, db, run_id, srv = client
+    _wf(db, run_id, LEAF1, 100.0)
+    _seed_conflict(db, run_id)
+    _patch_for_rereview(srv, monkeypatch)
+    # Force the re-export to fail AFTER the reviewer's write lands.
+    monkeypatch.setattr(srv, "_reexport_remerge_durable", lambda rid: False)
+
+    r = tc.post(f"/api/runs/{run_id}/re-review", json={})
+    assert r.status_code == 200, r.text
+    done = _await_rereview(tc, run_id)
+    assert done["invoked"] is True
+    assert done.get("writes_performed", 0) > 0
+    assert done.get("export_stale") is True
+
+
+def test_re_review_no_export_stale_on_success(client, monkeypatch):
+    """A successful re-export leaves export_stale absent/false (item 12)."""
+    tc, db, run_id, srv = client
+    _wf(db, run_id, LEAF1, 100.0)
+    _seed_conflict(db, run_id)
+    _patch_for_rereview(srv, monkeypatch)  # re-export stubbed to return True
+    r = tc.post(f"/api/runs/{run_id}/re-review", json={})
+    assert r.status_code == 200, r.text
+    done = _await_rereview(tc, run_id)
+    assert not done.get("export_stale")
+
+
+def test_revert_surfaces_cascade_error_field(client, monkeypatch):
+    """Item 11 (route level): a post-revert cascade failure rides the revert
+    response as cascade_ok=false + cascade_error, while the facts ARE restored
+    (200, not 500)."""
+    tc, db, run_id, srv = client
+    _wf(db, run_id, LEAF1, 100.0)
+    from concept_model.versioning import snapshot_facts
+    snapshot_facts(db, run_id)
+    _wf(db, run_id, LEAF1, 200.0, actor="reviewer")
+    monkeypatch.setattr(srv, "_reexport_remerge_durable", lambda rid: True)
+    monkeypatch.setattr(srv, "_refresh_persisted_cross_checks", lambda rid: True)
+    monkeypatch.setattr(srv, "_safe_downgrade_run_status", lambda rid: None)
+
+    import concept_model.cascade as cascade_mod
+    monkeypatch.setattr(
+        cascade_mod, "recompute_after_turn",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    r = tc.post(f"/api/runs/{run_id}/revert-to-original")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["reverted"] is True
+    assert body["cascade_ok"] is False
+    assert "boom" in (body.get("cascade_error") or "")
+
+
 def test_refresh_persisted_cross_checks_replaces_rows(client, monkeypatch):
     """Peer-review P1: manual re-review / revert must refresh the persisted
     cross_checks so the Review tab + a later re-review don't read stale rows.
@@ -737,3 +806,37 @@ def test_revert_409_when_no_snapshot(client):
     _wf(db, run_id, LEAF1, 100.0)
     r = tc.post(f"/api/runs/{run_id}/revert-to-original")
     assert r.status_code == 409
+
+
+def test_re_review_pass_raising_closes_correction_row_failed(client, monkeypatch):
+    """v17 split-brain guard: if _run_reviewer_pass RAISES (vs returning an
+    error outcome), the CORRECTION run_agents row must still close
+    status='failed' with a non-null error_type — not 'completed'/NULL while
+    run_review_tasks records ok:false."""
+    tc, db, run_id, srv = client
+    _wf(db, run_id, LEAF1, 100.0)
+    _seed_conflict(db, run_id)
+
+    async def _raising_pass(**kwargs):
+        raise RuntimeError("kaboom mid-pass")
+
+    monkeypatch.setattr(srv, "_run_reviewer_pass", _raising_pass)
+    monkeypatch.setattr(srv, "_create_proxy_model", lambda *a, **k: object())
+
+    r = tc.post(f"/api/runs/{run_id}/re-review", json={})
+    assert r.status_code == 200, r.text
+    done = _await_rereview(tc, run_id)
+    assert done["ok"] is False
+    assert "kaboom" in (done.get("error") or "")
+
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT status, error_type FROM run_agents "
+        "WHERE run_id=? AND statement_type='CORRECTION' "
+        "ORDER BY id DESC LIMIT 1",
+        (run_id,)).fetchone()
+    conn.close()
+    assert row is not None, "CORRECTION row was never created"
+    assert row[0] == "failed"
+    assert row[1] is not None
+    assert row[1] == "tool_exception"

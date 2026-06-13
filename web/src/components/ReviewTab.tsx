@@ -61,6 +61,19 @@ interface ReReviewOutcome {
   writes_performed?: number;
   flags_raised?: number;
   model?: string;
+  // Item 11: set when the post-pass cascade failed — facts changed but parent
+  // totals may be stale. Item 12: set when the re-export failed — DB facts
+  // moved but the downloadable filled.xlsx did not (download may be stale).
+  cascade_error?: string;
+  export_stale?: boolean;
+}
+
+interface RevertOutcome {
+  ok?: boolean;
+  reverted?: boolean;
+  // Item 11: false when the restore committed but the recompute raised.
+  cascade_ok?: boolean;
+  cascade_error?: string;
 }
 
 function fmt(v: number | null): string {
@@ -117,6 +130,10 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
   // A non-error outcome message (e.g. "nothing to review", "no changes") so a
   // re-review never looks like "nothing happened" (peer-review / run #146).
   const [notice, setNotice] = useState<string | null>(null);
+  // Soft warnings that aren't failures: a stale-totals cascade error (item 11)
+  // or a stale-download re-export failure (item 12). The action succeeded —
+  // these qualify the result, so they render as a warning banner, not an error.
+  const [warning, setWarning] = useState<string | null>(null);
   // Per-flag answer-box text, keyed by flag id.
   const [answers, setAnswers] = useState<Record<number, string>>({});
   // Reviewer model picker — the same model list the rest of the app uses.
@@ -170,6 +187,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
     setBusy("review");
     setActionError(null);
     setNotice(null);
+    setWarning(null);
     try {
       const r = await fetch(`/api/runs/${runId}/re-review`, {
         method: "POST",
@@ -203,6 +221,16 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
           setNotice(`Reviewer applied ${result.writes_performed} change(s)${usedModel}. ` +
             `Flags raised: ${result?.flags_raised ?? 0}.`);
         }
+        // Item 11/12: the pass succeeded but may carry a soft warning — stale
+        // totals (cascade failed) or a stale download (re-export failed).
+        const warnings: string[] = [];
+        if (result?.cascade_error) {
+          warnings.push("Totals could not be recomputed after the review — re-run the review or re-check.");
+        }
+        if (result?.export_stale) {
+          warnings.push("The downloadable workbook may be stale — the re-export failed. Re-run the review to regenerate it.");
+        }
+        setWarning(warnings.length ? warnings.join(" ") : null);
       }
       await load();
     } catch (e) {
@@ -218,11 +246,20 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
     }
     setBusy("revert");
     setActionError(null);
+    setWarning(null);
+    setNotice(null);
     try {
       const r = await fetch(`/api/runs/${runId}/revert-to-original`, {
         method: "POST",
       });
       if (!r.ok) throw new Error(await errorDetail(r));
+      // Item 11: the revert restored the facts (200) but the recompute may
+      // have failed — surface that as a warning so the user doesn't trust
+      // stale parent totals.
+      const out: RevertOutcome = await r.json().catch(() => ({}));
+      if (out && out.cascade_ok === false) {
+        setWarning("Values were restored, but totals could not be recomputed — re-run the review or re-check.");
+      }
       await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Revert failed");
@@ -259,6 +296,9 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       )}
       {notice && (
         <p style={styles.notice} role="status" data-testid="review-notice">{notice}</p>
+      )}
+      {warning && (
+        <p style={styles.warning} role="alert" data-testid="review-warning">{warning}</p>
       )}
       {/* Reviewer-version indicator + revert */}
       <div style={styles.headerRow}>
@@ -447,6 +487,17 @@ const styles = {
     color: pwc.info,
     background: pwc.infoBg,
     border: `1px solid ${pwc.infoBorder}`,
+    borderRadius: pwc.radius.sm,
+    padding: pwc.space.sm,
+    fontSize: 13,
+    margin: `0 0 ${pwc.space.md}px`,
+  } as const,
+  // Soft warning banner (items 11/12): stale totals / stale download. Warning
+  // palette, distinct from the info `notice` and the red `error`.
+  warning: {
+    color: pwc.warningText,
+    background: pwc.warningBg,
+    border: `1px solid ${pwc.warningBorder}`,
     borderRadius: pwc.radius.sm,
     padding: pwc.space.sm,
     fontSize: 13,

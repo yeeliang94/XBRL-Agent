@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Dict, Set, List, Union
@@ -24,6 +25,9 @@ from agent_tracing import MAX_AGENT_ITERATIONS  # noqa: F401 (re-export)
 from agent_runner import (
     AgentLoopSpec,
     IterationLimitReached,
+    TokenBudgetExceeded,
+    WallclockExceeded,
+    resolve_token_budget,
     run_agent_loop,
 )
 from statement_types import (
@@ -54,6 +58,48 @@ PHASE_MAP = {
 # would otherwise pin the coordinator to `running` until MAX_AGENT_ITERATIONS
 # triggers (which only fires *between* iterations, not during one).
 FACE_TURN_TIMEOUT: float = 180.0
+
+# Item 18: grace period the Stop-All cancel path waits for children to
+# acknowledge cancellation before declaring any survivor a possible leak.
+# Module-level so the wedged-task pinning test can shrink it.
+CANCEL_GRACE_PERIOD_S: float = 5.0
+
+
+def _resolve_face_wallclock() -> float:
+    """XBRL_FACE_WALLCLOCK_S: positive seconds; 0/negative disables.
+
+    Item 6: the face loop bounds each turn (180s) and the turn count (40)
+    but 40 slow-but-compliant turns was legally ~2 hours per agent. Same
+    resolver semantics as XBRL_CORRECTION_WALLCLOCK_S (server.py).
+    """
+    raw = os.environ.get("XBRL_FACE_WALLCLOCK_S", "")
+    if not raw:
+        return 1800.0
+    try:
+        v = float(raw)
+        return v if v > 0 else float("inf")
+    except ValueError:
+        return 1800.0
+
+
+FACE_WALLCLOCK_TIMEOUT: float = _resolve_face_wallclock()
+
+
+def _is_transient_error(e: BaseException) -> bool:
+    """Shared transient-error predicate for the face retry path (item 10).
+
+    True for provider 429s and connection-class errors — the only classes
+    ``_run_single_agent_attempt`` re-raises and the retry wrapper in
+    ``_run_single_agent`` retries. One definition for both sites (code-review
+    fix, 2026-06-13) so the classifications can't drift apart.
+    """
+    import httpx
+    from notes._rate_limit import is_rate_limit_error
+
+    return bool(
+        is_rate_limit_error(e)
+        or isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
+    )
 
 
 def _safe_usage_backfill(agent_run, model, label: str) -> tuple[int, float]:
@@ -157,6 +203,27 @@ class RunConfig:
     # run completion); it rides along so the server's grading hook can read it
     # off the resolved config.
     benchmark_id: Optional[int] = None
+    # Item 28 — per-entity advisory memory. When the server matched this run's
+    # entity to a prior completed run, it sets an entity_memory.PriorYearAdvisory
+    # here. The coordinator renders its per-statement payload into the prompt
+    # (advisory only — see entity_memory.py). None when no match / disabled.
+    prior_year_advisory: Any = None
+
+
+# Item 9 (PLAN-orchestration-hardening): structured failure taxonomy for
+# run_agents.error_type (schema v17). One value per failure CLASS so
+# post-mortems and the Telemetry tab can group without string-grepping the
+# free-text error. No CHECK constraint in the DB on purpose — adding a new
+# value must not require a migration (same rationale as runs.status).
+ERROR_TYPE_TURN_TIMEOUT = "turn_timeout"
+ERROR_TYPE_ITERATION_CAPPED = "iteration_capped"
+ERROR_TYPE_WALLCLOCK = "wallclock"
+ERROR_TYPE_TOKEN_BUDGET = "token_budget_exceeded"
+ERROR_TYPE_PROJECTION_FAILED = "projection_failed"
+ERROR_TYPE_SAVE_GATE_REFUSED = "save_gate_refused"
+ERROR_TYPE_TOOL_EXCEPTION = "tool_exception"
+ERROR_TYPE_CANCELLED = "cancelled"
+ERROR_TYPE_NO_WRITE = "no_write"
 
 
 @dataclass
@@ -170,6 +237,10 @@ class AgentResult:
     status: str
     workbook_path: Optional[str] = None
     error: Optional[str] = None
+    # Item 9: machine-readable failure class (one of the ERROR_TYPE_*
+    # constants above). None on success; persisted to run_agents.error_type
+    # (schema v17) so History can group failures without string-grepping.
+    error_type: Optional[str] = None
     # Honest-completion flag (2026-05-29): set when the agent finalised the
     # statement via acknowledge_unresolved — the workbook is saved and the
     # data preserved, but a known verify gap (imbalance / unfilled mandatory)
@@ -198,6 +269,11 @@ class AgentResult:
     # cost accounting sees the (Anthropic-priced) write side too.
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # Item 23: advisory warnings — currently the face-coverage receipts
+    # (scout-observed face lines the agent left unaccounted). Surfaced on the
+    # live `complete` SSE event (the UI records it) AND attached here on the
+    # returned result. Never affects status; an empty list is the norm.
+    warnings: list = field(default_factory=list)
 
 
 @dataclass
@@ -345,6 +421,18 @@ async def run_extraction(
                 "consolidation_level": infopack.consolidation_level,
             }
 
+        # Item 28 — attach the matched prior-year advisory (if any) under a
+        # namespaced key so the prompt renderer can surface it without any new
+        # threading. Kept advisory-only; see entity_memory.py + render_prompt.
+        # getattr keeps test/CLI configs that predate the field working.
+        prior_advisory = getattr(config, "prior_year_advisory", None)
+        if prior_advisory is not None:
+            if scout_context is None:
+                scout_context = {}
+            scout_context["_prior_year"] = prior_advisory.to_prompt_dict(
+                stmt_type.value
+            )
+
         # Resolve template path for this variant against the requested
         # standard so MPERS runs land on XBRL-template-MPERS/ and SoRE on
         # an MFRS run is rejected at the registry layer rather than silently
@@ -444,10 +532,22 @@ async def run_extraction(
                 task.cancel()
         # Wait briefly for cancellations to propagate
         if task_map:
-            await asyncio.wait(
+            _, still_pending = await asyncio.wait(
                 [t for t, _, _ in task_map.values()],
-                timeout=5.0,
+                timeout=CANCEL_GRACE_PERIOD_S,
             )
+            # Item 18 (PLAN-orchestration-hardening): a task wedged in an
+            # uninterruptible call survives the grace period and leaks
+            # silently. We can't force-kill it, but we CAN make it visible.
+            # Logging only — no new awaits that can raise (gotcha #10: the
+            # cancel handler must never double-fault).
+            for t in still_pending:
+                logger.warning(
+                    "cancellation timeout: task %s (session %s) still "
+                    "pending after %.0fs — possible leak",
+                    t.get_name(), session_id or "<none>",
+                    CANCEL_GRACE_PERIOD_S,
+                )
         results = []
         raise  # Re-raise so the caller's CancelledError handler runs
     finally:
@@ -487,7 +587,226 @@ async def _run_single_agent(
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
 ) -> AgentResult:
-    """Run a single extraction agent, streaming events into event_queue if provided."""
+    """Run one extraction agent with transient-error retry (item 10).
+
+    Each attempt is whole (fresh agent + deps — never resume a half-run
+    conversation, matching the notes loop). Only errors classified
+    transient retry: provider 429s consume the shared rate-limit budget
+    with honoured retry-after backoff; connection-class errors get exactly
+    one retry. Generic exceptions keep the fail-fast behaviour — face
+    retries re-bill a large PDF context, so there is no blanket budget.
+    The DB fact projection is idempotent per write-batch (gotcha #21
+    Phase B), so a retried attempt re-projecting is safe.
+    """
+    import httpx
+    from notes._rate_limit import (
+        RATE_LIMIT_MAX_RETRIES,
+        compute_backoff_delay,
+        is_rate_limit_error,
+    )
+
+    agent_role = statement_type.value
+
+    async def _emit(event_type: str, data: dict) -> None:
+        if event_queue is not None:
+            await event_queue.put(_build_event(event_type, agent_id, agent_role, data))
+
+    async def _safe_emit(event_type: str, data: dict) -> None:
+        # Awaiting queue.put inside an active cancellation can itself be
+        # cancelled (the notes loop's peer-review #3) — never let that trap
+        # the structured return below.
+        try:
+            await _emit(event_type, data)
+        except asyncio.CancelledError:
+            pass
+
+    rl_retries = 0
+    connect_retry_used = False
+    total_attempts = 0
+    last_error: Optional[str] = None
+    # Code-review fix (2026-06-13): tokens/cost burned by FAILED transient
+    # attempts. The attempt annotates its usage onto the re-raised exception
+    # (``_xbrl_attempt_tokens`` / ``_xbrl_attempt_cost``); accumulated here
+    # and added to the final AgentResult on every exit path, so retried
+    # statements don't under-report provider spend.
+    failed_attempt_tokens = 0
+    failed_attempt_cost = 0.0
+
+    def _with_prior_attempt_usage(result: AgentResult) -> AgentResult:
+        if failed_attempt_tokens or failed_attempt_cost:
+            result.total_tokens = int(result.total_tokens or 0) + failed_attempt_tokens
+            result.total_cost = float(result.total_cost or 0.0) + failed_attempt_cost
+        return result
+    # Backoff is scheduled on the previous iteration and consumed at the
+    # top of the next, inside the try — so a user abort during backoff
+    # lands on the CancelledError branch (the notes loop's
+    # ``pending_backoff`` pattern, verbatim).
+    pending_backoff: float = 0.0
+
+    def _clear_failed_attempt_facts() -> None:
+        """Retry hygiene (peer-review HIGH, 2026-06-12): ``write_facts``
+        projections are UPSERTS — a fact only the failed attempt wrote
+        would silently survive into the fresh attempt's export (the
+        download renders from the DB). Clear this statement's template-
+        scoped facts so the retried attempt is authoritative. Raises on
+        failure: shipping stale facts silently is worse than failing the
+        statement (same philosophy as the projection_failed gate)."""
+        if run_id is not None and db_path:
+            from concept_model.parser import _derive_template_id
+            from concept_model.facts_api import clear_facts_for_template
+            template_id = _derive_template_id(Path(template_path))
+            cleared = clear_facts_for_template(db_path, run_id, template_id)
+            if cleared:
+                logger.info(
+                    "%s: cleared %d stale fact(s) from the failed attempt "
+                    "before retrying", agent_role, cleared,
+                )
+        # Code-review fix (2026-06-13): also drop the failed attempt's
+        # scratch workbook. A Stop-All during the retry window partial-merges
+        # whatever {stmt}_filled.xlsx is on disk (gotcha #10) — which would
+        # be a workbook whose DB facts were just cleared above (split-brain).
+        # Best-effort: the retried attempt rewrites the file anyway.
+        try:
+            scratch = Path(output_dir) / f"{statement_type.value}_filled.xlsx"
+            if scratch.exists():
+                scratch.unlink()
+                logger.info(
+                    "%s: removed the failed attempt's scratch workbook %s "
+                    "before retrying", agent_role, scratch,
+                )
+        except OSError:
+            logger.warning(
+                "%s: could not remove the failed attempt's scratch workbook",
+                agent_role, exc_info=True,
+            )
+
+    while True:
+        total_attempts += 1
+        try:
+            if pending_backoff > 0:
+                await asyncio.sleep(pending_backoff)
+                pending_backoff = 0.0
+            if total_attempts > 1:
+                _clear_failed_attempt_facts()
+                await _emit("status", {
+                    "phase": "reading_template",
+                    "message": (
+                        f"{agent_role}: retrying (attempt {total_attempts}) "
+                        f"— last error: {last_error or 'unknown'}"
+                    ),
+                })
+            return _with_prior_attempt_usage(await _run_single_agent_attempt(
+                statement_type=statement_type,
+                variant=variant,
+                pdf_path=pdf_path,
+                template_path=template_path,
+                model=model,
+                output_dir=output_dir,
+                page_hints=page_hints,
+                scout_context=scout_context,
+                event_queue=event_queue,
+                agent_id=agent_id,
+                filing_level=filing_level,
+                filing_standard=filing_standard,
+                denomination=denomination,
+                run_id=run_id,
+                db_path=db_path,
+            ))
+        except asyncio.CancelledError:
+            # Abort during the backoff sleep (in-attempt cancellation is
+            # already converted to a structured result by the attempt).
+            # Reaching this branch means a transient attempt failed and we
+            # were sleeping before the retry — its facts/scratch are still
+            # on disk + in the DB and were never cleared (the top-of-attempt
+            # clear runs AFTER the sleep). The Stop-All partial merge ships
+            # whatever {stmt}_filled.xlsx + DB facts exist (gotcha #10), so
+            # clear the discarded attempt here too. Best-effort: a cleanup
+            # hiccup must never mask the cancellation.
+            try:
+                _clear_failed_attempt_facts()
+            except Exception:  # noqa: BLE001 — cancellation must win
+                logger.warning(
+                    "%s: failed-attempt cleanup during cancellation skipped",
+                    agent_role, exc_info=True,
+                )
+            await _safe_emit("complete", {
+                "success": False, "error": "Cancelled by user",
+            })
+            return _with_prior_attempt_usage(AgentResult(
+                statement_type=statement_type,
+                variant=variant,
+                status="cancelled",
+                error="Cancelled by user",
+                error_type=ERROR_TYPE_CANCELLED,
+            ))
+        except Exception as e:  # noqa: BLE001 — transient-only retry filter
+            # The attempt re-raises ONLY errors classified transient (429s
+            # + connection-class); everything else was already converted to
+            # a structured failed AgentResult inside the attempt. The
+            # shared `_is_transient_error` predicate gates the retry
+            # branches so the two classifications can't drift apart.
+            last_error = str(e)
+            failed_attempt_tokens += int(getattr(e, "_xbrl_attempt_tokens", 0) or 0)
+            failed_attempt_cost += float(getattr(e, "_xbrl_attempt_cost", 0.0) or 0.0)
+            if _is_transient_error(e):
+                if is_rate_limit_error(e) and rl_retries < RATE_LIMIT_MAX_RETRIES:
+                    pending_backoff = compute_backoff_delay(e, rl_retries)
+                    rl_retries += 1
+                    logger.warning(
+                        "Face agent %s hit 429 (rl-retry %d/%d) — sleeping %.2fs: %s",
+                        agent_role, rl_retries, RATE_LIMIT_MAX_RETRIES,
+                        pending_backoff, e,
+                    )
+                    continue
+                if (
+                    isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
+                    and not connect_retry_used
+                ):
+                    connect_retry_used = True
+                    logger.warning(
+                        "Face agent %s hit a connection error — one retry: %s",
+                        agent_role, e,
+                    )
+                    continue
+            # Budget exhausted — terminal structured failure.
+            logger.exception(
+                "Face agent %s failed after %d attempt(s)",
+                agent_role, total_attempts,
+            )
+            await _safe_emit("error", {"message": last_error})
+            await _safe_emit("complete", {"success": False, "error": last_error})
+            return _with_prior_attempt_usage(AgentResult(
+                statement_type=statement_type,
+                variant=variant,
+                status="failed",
+                error=last_error,
+                error_type=ERROR_TYPE_TOOL_EXCEPTION,
+            ))
+
+
+async def _run_single_agent_attempt(
+    statement_type: StatementType,
+    variant: str,
+    pdf_path: str,
+    template_path: str,
+    model: Any,
+    output_dir: str,
+    page_hints: Optional[Dict] = None,
+    scout_context: Optional[Dict] = None,
+    event_queue: Optional[asyncio.Queue] = None,
+    agent_id: str = "",
+    filing_level: str = "company",
+    filing_standard: str = "mfrs",
+    denomination: str = "thousands",
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+) -> AgentResult:
+    """One whole extraction attempt, streaming events into event_queue.
+
+    Raises (rather than converting) errors classified transient so the
+    retry wrapper in ``_run_single_agent`` can decide (item 10); every
+    other outcome is returned as a structured AgentResult.
+    """
     agent_role = statement_type.value
     # Canonical mode: derive the concept template_id from the template path
     # (deterministic — matches the importer's id) so fact writes link to the
@@ -508,6 +827,26 @@ async def _run_single_agent(
     # Each dict mirrors the run_agent_turns columns plus `_n_tool_calls`
     # (used only for the run-level rollup, ignored by the DB writer).
     _turn_records: list[dict] = []
+
+    def _face_warnings() -> list:
+        """Coverage warnings for scout-observed face lines the agent never
+        accounted for (item 23). Pure read of deps state with no side effects,
+        so it is safe to call BEFORE emitting the `complete` event — that's how
+        the warnings reach the live SSE stream the UI records, instead of being
+        computed in _finalize after `complete` already fired (the prior bug:
+        they only ever reached the server log). Returns [] when scout supplied
+        no face_line_refs. Best-effort: never raises."""
+        try:
+            from extraction.coverage import face_coverage_warnings
+            refs = getattr(deps, "face_line_refs", None) or []
+            if not refs:
+                return []
+            return face_coverage_warnings(
+                refs, getattr(deps, "face_coverage_receipt", None)
+            )
+        except Exception:  # noqa: BLE001 — advisory
+            logger.debug("face coverage warnings skipped for %s", agent_role)
+            return []
 
     def _finalize(result: AgentResult) -> AgentResult:
         """Attach captured per-turn metrics + rollups to an AgentResult.
@@ -539,6 +878,17 @@ async def _run_single_agent(
             )
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("turn telemetry finalize skipped for %s", agent_role)
+        # Item 23: attach face-coverage warnings (scout-observed lines the agent
+        # never accounted for). Computed from deps state so the no-receipt case
+        # (every line unaccounted) is captured too. The success/salvage paths
+        # already put these on the live `complete` SSE event before calling
+        # _finalize; recompute here so the failure paths also carry them on the
+        # returned AgentResult. Best-effort, never fatal.
+        warns = _face_warnings()
+        if warns:
+            result.warnings = warns
+            for w in warns:
+                logger.warning("%s coverage: %s", agent_role, w)
         return result
 
     def _save_trace_best_effort(run_obj) -> None:
@@ -568,6 +918,85 @@ async def _run_single_agent(
                 )
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("best-effort trace save skipped for %s", agent_role)
+
+    async def _salvage_or_fail(
+        deps,
+        agent_run,
+        *,
+        reason: str,
+        fail_message: str,
+        salvage_log: str,
+        salvage_event_key: str,
+        require_clean_verify: bool,
+    ) -> AgentResult:
+        """Shared exit for the bounded-abort paths — turn timeout, iteration
+        cap, wall-clock (item 6), token budget (item 7).
+
+        If a workbook landed on disk (and the last verify was clean, where
+        the bound demands it) the work is done — salvage as succeeded
+        rather than throwing away a balanced statement. Otherwise fail with
+        the structured ``reason`` (item 9 error_type). The fatal-projection
+        gate (rewrite Phase 4.1) is honoured on every path: a workbook
+        whose facts never reached the DB is not salvageable, because the
+        download renders from the DB.
+        """
+        _tokens, _cost = _safe_usage_backfill(agent_run, model, statement_type.value)
+        _save_trace_best_effort(agent_run)
+        if deps.projection_failed:
+            err_msg = (
+                f"{statement_type.value}: fact-store projection failed — "
+                f"{deps.projection_error or 'see logs'}. Cannot salvage a "
+                "bounded-abort run whose facts never reached the database."
+            )
+            logger.error(err_msg)
+            await _emit("error", {"message": err_msg, "type": "projection_failed"})
+            await _emit("complete", {
+                "success": False, "error": err_msg,
+                "workbook_path": deps.filled_path,
+            })
+            return _finalize(AgentResult(
+                statement_type=statement_type, variant=variant, status="failed",
+                workbook_path=deps.filled_path, error=err_msg,
+                error_type=ERROR_TYPE_PROJECTION_FAILED,
+                total_tokens=_tokens, total_cost=_cost,
+            ))
+        salvageable = bool(deps.filled_path) and (
+            _verify_is_clean(deps.last_verify_result)
+            if require_clean_verify else True
+        )
+        if salvageable:
+            logger.warning(
+                "%s/%s: %s — salvaging (workbook at %s).",
+                statement_type.value, variant, salvage_log, deps.filled_path,
+            )
+            await _emit("complete", {
+                "success": True,
+                "workbook_path": deps.filled_path,
+                salvage_event_key: True,
+                # Item 23: surface coverage warnings on the live event here too,
+                # so a salvaged statement reports unaccounted face lines.
+                "warnings": _face_warnings(),
+            })
+            return _finalize(AgentResult(
+                statement_type=statement_type,
+                variant=variant,
+                status="succeeded",
+                workbook_path=deps.filled_path,
+                total_tokens=_tokens,
+                total_cost=_cost,
+            ))
+        logger.warning(fail_message)
+        await _emit("error", {"message": fail_message, "type": reason})
+        await _emit("complete", {"success": False, "error": fail_message})
+        return _finalize(AgentResult(
+            statement_type=statement_type,
+            variant=variant,
+            status="failed",
+            error=fail_message,
+            error_type=reason,
+            total_tokens=_tokens,
+            total_cost=_cost,
+        ))
 
     try:
         agent, deps = create_extraction_agent(
@@ -608,6 +1037,12 @@ async def _run_single_agent(
                 f"{role}: {phase.replace('_', ' ').title()}"
             ),
             set_turn_counter=True,
+            # Item 6: whole-run wall-clock cap (the 40-turn + 180s/turn
+            # guards alone legally allowed ~2h per agent). Item 7: opt-in
+            # cumulative token ceiling. Both read at call time so test
+            # monkeypatches of the module constant / env var take effect.
+            wallclock_timeout=FACE_WALLCLOCK_TIMEOUT,
+            token_budget=resolve_token_budget(),
         )
         async with agent.iter(prompt, deps=deps) as agent_run:
             await run_agent_loop(
@@ -651,6 +1086,7 @@ async def _run_single_agent(
                 variant=variant,
                 status="failed",
                 error=err_msg,
+                error_type=ERROR_TYPE_NO_WRITE,
                 total_tokens=final_tokens,
                 total_cost=final_cost,
             ))
@@ -688,6 +1124,7 @@ async def _run_single_agent(
                 status="failed",
                 workbook_path=deps.filled_path,
                 error=err_msg,
+                error_type=ERROR_TYPE_SAVE_GATE_REFUSED,
                 total_tokens=final_tokens,
                 total_cost=final_cost,
             ))
@@ -719,6 +1156,7 @@ async def _run_single_agent(
                 status="failed",
                 workbook_path=deps.filled_path,
                 error=err_msg,
+                error_type=ERROR_TYPE_PROJECTION_FAILED,
                 total_tokens=final_tokens,
                 total_cost=final_cost,
             ))
@@ -729,10 +1167,15 @@ async def _run_single_agent(
                 "%s/%s: finalised WITH FLAG — %s",
                 statement_type.value, variant, flag,
             )
+        coverage_warnings = _face_warnings()
         await _emit("complete", {
             "success": True,
             "workbook_path": deps.filled_path,
             "flag": flag,
+            # Item 23: ride the live SSE stream the UI records (not just the
+            # server log). Empty list is the norm — scout supplied no
+            # face_line_refs, or the agent accounted for every one.
+            "warnings": coverage_warnings,
         })
 
         return _finalize(AgentResult(
@@ -746,127 +1189,69 @@ async def _run_single_agent(
         ))
 
     except asyncio.TimeoutError:
-        # _iter_with_turn_timeout fired: the LLM stalled on a single
-        # node iteration past FACE_TURN_TIMEOUT. Mirror the notes
-        # coordinator's policy — if a workbook already landed on disk
-        # the result is salvageable; otherwise it's a hard failure.
-        _tokens, _cost = _safe_usage_backfill(agent_run, model, statement_type.value)
-        _save_trace_best_effort(agent_run)
-        # Store-first contract (Phase 4.1): a salvage-as-succeeded must honour
-        # the SAME fatal-projection gate as the normal-completion path. A
-        # workbook on disk whose facts never reached the DB is not salvageable
-        # — the download renders from the DB.
-        if deps.projection_failed:
-            err_msg = (
-                f"{statement_type.value}: fact-store projection failed — "
-                f"{deps.projection_error or 'see logs'}. Cannot salvage a "
-                "stalled run whose facts never reached the database."
-            )
-            logger.error(err_msg)
-            await _emit("error", {"message": err_msg, "type": "projection_failed"})
-            await _emit("complete", {
-                "success": False, "error": err_msg,
-                "workbook_path": deps.filled_path,
-            })
-            return _finalize(AgentResult(
-                statement_type=statement_type, variant=variant, status="failed",
-                workbook_path=deps.filled_path, error=err_msg,
-                total_tokens=_tokens, total_cost=_cost,
-            ))
-        if deps.filled_path:
-            logger.warning(
-                "%s/%s: LLM stalled past %ss after write — treating as done "
-                "(workbook at %s).",
-                statement_type.value, variant, FACE_TURN_TIMEOUT,
-                deps.filled_path,
-            )
-            await _emit("complete", {
-                "success": True,
-                "workbook_path": deps.filled_path,
-                "stalled_after_write": True,
-            })
-            return _finalize(AgentResult(
-                statement_type=statement_type,
-                variant=variant,
-                status="succeeded",
-                workbook_path=deps.filled_path,
-                total_tokens=_tokens,
-                total_cost=_cost,
-            ))
-        err_msg = (
-            f"{statement_type.value}: LLM stalled past {FACE_TURN_TIMEOUT}s "
-            "without writing a workbook."
+        # iter_with_turn_timeout fired: the LLM stalled on a single node
+        # iteration past FACE_TURN_TIMEOUT. Mirror the notes coordinator's
+        # policy — a workbook already on disk is salvageable (no clean-
+        # verify requirement, preserving the pre-item-6 behaviour).
+        return await _salvage_or_fail(
+            deps, agent_run,
+            reason=ERROR_TYPE_TURN_TIMEOUT,
+            fail_message=(
+                f"{statement_type.value}: LLM stalled past "
+                f"{FACE_TURN_TIMEOUT}s without writing a workbook."
+            ),
+            salvage_log=(
+                f"LLM stalled past {FACE_TURN_TIMEOUT}s after write — "
+                f"treating as done"
+            ),
+            salvage_event_key="stalled_after_write",
+            require_clean_verify=False,
         )
-        logger.warning(err_msg)
-        await _emit("error", {"message": err_msg, "type": "turn_timeout"})
-        await _emit("complete", {"success": False, "error": err_msg})
-        return _finalize(AgentResult(
-            statement_type=statement_type,
-            variant=variant,
-            status="failed",
-            error=err_msg,
-            total_tokens=_tokens,
-            total_cost=_cost,
-        ))
 
     except IterationLimitReached as e:
-        # The agent burned its whole iteration budget. If a workbook already
-        # landed AND the last verify was clean, the work is done — salvage it
-        # as succeeded (parity with the TimeoutError path) rather than throwing
-        # away a balanced statement (run_id=126 SOPL). Otherwise hard-fail, but
-        # still surface the structured "Hit iteration limit" message.
-        _tokens, _cost = _safe_usage_backfill(agent_run, model, statement_type.value)
-        _save_trace_best_effort(agent_run)
-        # Store-first contract (Phase 4.1): same fatal-projection gate as the
-        # normal-completion + timeout-salvage paths — never salvage a run whose
-        # facts never reached the DB.
-        if deps.projection_failed:
-            err_msg = (
-                f"{statement_type.value}: fact-store projection failed — "
-                f"{deps.projection_error or 'see logs'}. Cannot salvage an "
-                "iteration-capped run whose facts never reached the database."
-            )
-            logger.error(err_msg)
-            await _emit("error", {"message": err_msg, "type": "projection_failed"})
-            await _emit("complete", {
-                "success": False, "error": err_msg,
-                "workbook_path": deps.filled_path,
-            })
-            return _finalize(AgentResult(
-                statement_type=statement_type, variant=variant, status="failed",
-                workbook_path=deps.filled_path, error=err_msg,
-                total_tokens=_tokens, total_cost=_cost,
-            ))
-        if deps.filled_path and _verify_is_clean(deps.last_verify_result):
-            logger.warning(
-                "%s/%s: hit iteration cap after a clean write — salvaging "
-                "(workbook at %s).",
-                statement_type.value, variant, deps.filled_path,
-            )
-            await _emit("complete", {
-                "success": True,
-                "workbook_path": deps.filled_path,
-                "iteration_capped_after_write": True,
-            })
-            return _finalize(AgentResult(
-                statement_type=statement_type,
-                variant=variant,
-                status="succeeded",
-                workbook_path=deps.filled_path,
-                total_tokens=_tokens,
-                total_cost=_cost,
-            ))
+        # The agent burned its whole iteration budget. If a workbook landed
+        # AND the last verify was clean, salvage (run_id=126 SOPL) rather
+        # than throwing away a balanced statement.
         logger.warning("Agent %s/%s hit iteration limit", statement_type.value, variant)
-        await _emit("error", {"message": str(e)})
-        await _emit("complete", {"success": False, "error": str(e)})
-        return _finalize(AgentResult(
-            statement_type=statement_type,
-            variant=variant,
-            status="failed",
-            error=str(e),
-            total_tokens=_tokens,
-            total_cost=_cost,
-        ))
+        return await _salvage_or_fail(
+            deps, agent_run,
+            reason=ERROR_TYPE_ITERATION_CAPPED,
+            fail_message=str(e),
+            salvage_log="hit iteration cap after a clean write",
+            salvage_event_key="iteration_capped_after_write",
+            require_clean_verify=True,
+        )
+
+    except WallclockExceeded as e:
+        # Item 6: the whole-run wall-clock cap (FACE_WALLCLOCK_TIMEOUT /
+        # XBRL_FACE_WALLCLOCK_S). Expiry after a clean write keeps the
+        # user's workbook (the Stop-All partial-merge philosophy).
+        logger.warning(
+            "Agent %s/%s exceeded wall-clock cap", statement_type.value, variant,
+        )
+        return await _salvage_or_fail(
+            deps, agent_run,
+            reason=ERROR_TYPE_WALLCLOCK,
+            fail_message=str(e),
+            salvage_log="exceeded wall-clock cap after a clean write",
+            salvage_event_key="wallclock_after_write",
+            require_clean_verify=True,
+        )
+
+    except TokenBudgetExceeded as e:
+        # Item 7: cumulative token budget (XBRL_MAX_TOKENS_PER_AGENT).
+        # Same salvage-or-fail handling as the iteration cap.
+        logger.warning(
+            "Agent %s/%s exceeded token budget", statement_type.value, variant,
+        )
+        return await _salvage_or_fail(
+            deps, agent_run,
+            reason=ERROR_TYPE_TOKEN_BUDGET,
+            fail_message=str(e),
+            salvage_log="crossed token budget after a clean write",
+            salvage_event_key="token_budget_exceeded_after_write",
+            require_clean_verify=True,
+        )
 
     except asyncio.CancelledError:
         # Per-agent cancellation from the abort API. CancelledError is a
@@ -879,9 +1264,30 @@ async def _run_single_agent(
             variant=variant,
             status="cancelled",
             error="Cancelled by user",
+            error_type=ERROR_TYPE_CANCELLED,
         ))
 
     except Exception as e:
+        # Item 10: errors classified transient (provider 429s, connection-
+        # class — the shared `_is_transient_error` predicate) re-raise so
+        # the retry wrapper can run a fresh whole attempt. Save the partial
+        # trace first — the retry overwrites it, so the LAST attempt's
+        # trace is what survives. The attempt's tokens/cost are annotated
+        # onto the exception so the wrapper can accumulate them into the
+        # final AgentResult (retried statements must not under-report
+        # provider spend — code-review fix, 2026-06-13).
+        if _is_transient_error(e):
+            _run = locals().get("agent_run")
+            _save_trace_best_effort(_run)
+            if _run is not None:
+                _t, _c = _safe_usage_backfill(_run, model, statement_type.value)
+                try:
+                    e._xbrl_attempt_tokens = _t  # type: ignore[attr-defined]
+                    e._xbrl_attempt_cost = _c  # type: ignore[attr-defined]
+                except Exception:  # noqa: BLE001 — telemetry is advisory
+                    pass
+            raise
+
         logger.exception("Agent %s/%s failed", statement_type.value, variant,
                          extra={"statement_type": statement_type.value, "variant": variant})
         # Backfill tokens if the run got far enough to bind agent_run (the
@@ -900,6 +1306,7 @@ async def _run_single_agent(
             variant=variant,
             status="failed",
             error=str(e),
+            error_type=ERROR_TYPE_TOOL_EXCEPTION,
             total_tokens=_tokens,
             total_cost=_cost,
         ))

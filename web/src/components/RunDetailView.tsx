@@ -254,6 +254,16 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
             <span style={styles.agentVariant}>({agent.variant})</span>
           )}
           {statusBadge(agentStatusDisplay(agent.status))}
+          {agent.error_type && (
+            // v17 (item 9): machine-readable failure class — lets an
+            // operator see WHY a row failed without opening the trace.
+            <span
+              data-testid="agent-error-type"
+              style={styles.agentErrorType}
+            >
+              {agent.error_type.replace(/_/g, " ")}
+            </span>
+          )}
         </div>
         <div style={styles.agentMetaRow}>
           <span>{displayModelId(agent.model)}</span>
@@ -861,6 +871,15 @@ const styles = {
   agentVariant: {
     color: pwc.grey500,
     fontSize: 13,
+  } as React.CSSProperties,
+  // v17 (item 9): muted mono chip naming the failure class on failed rows.
+  agentErrorType: {
+    color: pwc.grey500,
+    fontFamily: pwc.fontMono,
+    fontSize: 11,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: pwc.radius.sm,
+    padding: "1px 6px",
   } as React.CSSProperties,
   agentMetaRow: {
     display: "flex",

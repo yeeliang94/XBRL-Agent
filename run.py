@@ -3,7 +3,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Set
+from typing import Dict, Optional, Set
 
 from dotenv import load_dotenv
 
@@ -24,6 +24,11 @@ class AgentResult:
     output_json_path: str
     output_excel_path: str
     errors: list[str]
+    # The audit-DB run id this invocation created, captured from the
+    # ``run_complete`` SSE event. Lets callers (e.g. the eval regression
+    # harness) grade exactly THIS run instead of guessing via MAX(id) — which
+    # races a concurrent web/CLI run. None if the event never carried one.
+    run_id: Optional[int] = None
 
 
 def _next_run_dir(base_dir: str) -> str:
@@ -53,6 +58,7 @@ def run_agent(
     notes: Optional[Set[NotesTemplateType]] = None,
     filing_standard: str = "mfrs",
     denomination: str = "thousands",
+    variants: Optional[Dict[str, str]] = None,
 ) -> AgentResult:
     """Run a CLI extraction through the SAME canonical pipeline as the web server.
 
@@ -123,10 +129,14 @@ def run_agent(
         filing_level=filing_level,
         filing_standard=filing_standard,
         denomination=denomination,
+        # Explicit per-statement variants (e.g. {"SOFP": "OrderOfLiquidity"}).
+        # Without these the coordinator resolves the registry DEFAULT variant,
+        # so a non-default benchmark would extract the wrong template shape.
+        variants=dict(variants or {}),
     )
 
     merged_path = str(session_dir / "filled.xlsx")
-    final: dict = {"success": False, "merged": None, "errors": []}
+    final: dict = {"success": False, "merged": None, "errors": [], "run_id": None}
 
     async def _drive() -> None:
         async for evt in run_multi_agent_stream(
@@ -150,6 +160,10 @@ def run_agent(
             elif ev == "run_complete":
                 final["success"] = bool(data.get("success"))
                 final["merged"] = data.get("merged_workbook")
+                # run_complete carries the audit-DB run id (server.py); capture
+                # it so the caller grades exactly this run, not a guessed one.
+                if data.get("run_id") is not None:
+                    final["run_id"] = data.get("run_id")
                 for s in data.get("statements_failed", []) or []:
                     final["errors"].append(f"{s}: extraction failed")
                 for s in data.get("notes_failed", []) or []:
@@ -164,6 +178,7 @@ def run_agent(
         output_json_path=str(session_dir / "result.json"),
         output_excel_path=final["merged"] or merged_path,
         errors=final["errors"],
+        run_id=final["run_id"],
     )
 
 

@@ -90,6 +90,61 @@ def snapshot_facts(db_path: str | Path, run_id: int) -> int:
         conn.close()
 
 
+def ensure_snapshot(db_path: str | Path, run_id: int) -> bool:
+    """Create the original-extraction snapshot if absent — atomically.
+
+    Item 13 (snapshot race fix). The two-step ``if not has_snapshot():
+    snapshot_facts()`` call site used two separate connections, so two
+    concurrent reviewer passes could both observe "no snapshot yet" and the
+    second would overwrite the first — destroying the original-extraction
+    restore point. This folds the existence check and the create into ONE
+    ``BEGIN IMMEDIATE`` transaction (write-lock-up-front, the pattern
+    ``notes/persistence.py`` uses), so only one racer can ever create it.
+
+    Create-if-absent ONLY: when a snapshot already exists this is a no-op that
+    returns ``False`` and never re-copies — the snapshot must always stay the
+    ORIGINAL extraction, never a later reviewer state (gotcha #21). Any
+    overwrite capability is reserved for :func:`snapshot_facts` (test/internal),
+    which is intentionally NOT what the reviewer path calls.
+
+    Returns ``True`` when it created a new snapshot, ``False`` when one already
+    existed.
+    """
+    conn = _open_conn(db_path)
+    try:
+        now = _now()
+        # Take the write lock up front so the COUNT check and the INSERT are
+        # one atomic unit — a concurrent ensure_snapshot blocks here until we
+        # commit, then sees the row and no-ops.
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM run_fact_snapshots WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()[0]
+        if existing:
+            conn.rollback()  # release the lock; nothing to create
+            return False
+        conn.execute(
+            """
+            INSERT INTO run_fact_snapshots(
+                run_id, concept_uuid, period, entity_scope, value,
+                value_status, children_status, source, evidence, snapshot_at
+            )
+            SELECT run_id, concept_uuid, period, entity_scope, value,
+                   value_status, children_status, source, evidence, ?
+            FROM run_concept_facts WHERE run_id = ?
+            """,
+            (now, run_id),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def has_snapshot(db_path: str | Path, run_id: int) -> bool:
     """True when a reviewer snapshot exists for the run.
 
@@ -122,11 +177,15 @@ def revert_to_original(db_path: str | Path, run_id: int) -> dict[str, Any]:
     restored leaves. The snapshot itself is left in place so a later
     re-review still reverts to the same original extraction.
 
-    Returns ``{"reverted": bool, "facts_restored": int, "recomputed": bool}``.
+    Returns ``{"reverted": bool, "facts_restored": int, "recomputed": bool,
+    "cascade_ok": bool, "cascade_error": str | None}``.
     ``reverted`` is False when no snapshot exists (nothing to revert to) — the
     caller can surface that to the user instead of silently no-opping.
-    ``recomputed`` is False when the restore succeeded but the post-restore
-    cascade raised, so the caller can warn that parent totals may be stale.
+    ``cascade_ok`` (mirrored by the legacy ``recomputed``) is False when the
+    restore succeeded but the post-restore cascade raised; ``cascade_error``
+    then carries the exception text. Item 11: the failure is reported instead
+    of swallowed so the Review tab can warn "values restored, but totals could
+    not be recomputed" rather than show a silent stale-totals window.
     """
     from concept_model.cascade import recompute_after_turn
 
@@ -189,16 +248,23 @@ def revert_to_original(db_path: str | Path, run_id: int) -> dict[str, Any]:
     # cascade error means "restored but totals may be stale", not "revert
     # failed" — the caller surfaces a soft warning off ``recomputed``.
     recomputed = True
+    cascade_error: str | None = None
     try:
         recompute_after_turn(db_path, run_id)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — restore already committed
         logging.getLogger(__name__).exception(
             "post-revert cascade failed for run %s", run_id
         )
         recomputed = False
+        # Surface a stable, token-free message (the cascade reads only the DB,
+        # so its exceptions never embed secrets) so the caller can show it.
+        cascade_error = f"{type(exc).__name__}: {exc}"
     return {
         "reverted": True, "facts_restored": int(restored),
         "recomputed": recomputed,
+        # Item 11: explicit cascade-health fields the API/UI surface.
+        "cascade_ok": recomputed,
+        "cascade_error": cascade_error,
     }
 
 

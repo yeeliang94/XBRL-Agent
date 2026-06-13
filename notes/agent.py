@@ -546,9 +546,15 @@ def render_notes_prompt(
     # inventory so the agent sees the verification framing first.
     # Empty string when scout couldn't enrich (rendered prompt
     # unchanged from pre-Phase-2 behaviour).
-    from prompts import _render_scout_context_block
+    from prompts import _render_scout_context_block, _render_prior_year_advisory_block
 
     context_block_str = _render_scout_context_block(scout_context or {})
+    # Item 28 — per-entity advisory memory. The matched prior-year payload rides
+    # inside scout_context under "_prior_year" (notes path passes statement=None
+    # so no per-statement variant line is rendered).
+    prior_block_str = _render_prior_year_advisory_block(
+        (scout_context or {}).get("_prior_year") or {}
+    )
 
     parts = [
         base,
@@ -559,6 +565,8 @@ def render_notes_prompt(
     ]
     if context_block_str:
         parts.append(context_block_str)
+    if prior_block_str:
+        parts.append(prior_block_str)
     parts.append("=== INVENTORY ===\n" + _render_inventory_preview(inventory))
     # Phase 4: MPERS-specific overlay (suffix convention + narrower
     # taxonomy + SoRE slot note). Rendered after the per-template body
@@ -1203,6 +1211,22 @@ def create_notes_agent(
         run's filing standard.
         """
         return _lookup_definitions_impl(queries, ctx.deps.filing_standard)
+
+    @agent.tool
+    async def search_pdf_text(ctx: RunContext[NotesDeps], queries: List[str]) -> str:
+        """Find where note disclosure phrase(s) appear in the PDF, then verify.
+
+        Notes are scattered across dozens of pages; pass ALL the phrases you're
+        hunting for in ONE call (e.g. ``["employee benefits", "lease
+        liabilities", "Note 24"]``). Returns, per phrase, the PDF page numbers +
+        a snippet of each hit (case-insensitive). Use it to locate the right
+        pages fast, then view_pdf_pages to read them — a text hit is a pointer,
+        not proof. On a scanned PDF it says so explicitly.
+        """
+        from tools.pdf_search import search_pdf_text_json
+        return await asyncio.to_thread(
+            search_pdf_text_json, ctx.deps.pdf_path, queries,
+        )
 
     @agent.tool
     async def read_template(ctx: RunContext[NotesDeps]) -> str:

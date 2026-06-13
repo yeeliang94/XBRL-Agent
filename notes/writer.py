@@ -39,6 +39,7 @@ from notes.html_sanitize import sanitize_notes_html
 import openpyxl
 
 from notes.payload import NotesPayload
+from utils.workbook_io import atomic_save_workbook
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +238,8 @@ def write_notes_workbook(
             })
 
     try:
-        wb.save(output_path)
+        # Item 8 / gotcha #22: atomic save — old-or-new, never truncated.
+        atomic_save_workbook(wb, output_path)
     finally:
         wb.close()
 

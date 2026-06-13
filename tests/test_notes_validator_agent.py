@@ -42,6 +42,64 @@ class TestValidatorFactory:
         assert "flag_duplication" in tool_names
 
 
+class TestInventoryCoverageGaps:
+    """N3 Stage 1: deterministic per-note_num coverage-gap reporting."""
+
+    def test_gaps_are_inventory_notes_with_no_content(self):
+        from notes.validator_agent import inventory_coverage_gaps
+
+        entries = [
+            {"sheet": "Notes-Listofnotes", "source_note_refs": ["2.5(g)"]},
+            {"sheet": "Notes-SummaryofAccPol", "source_note_refs": ["18"]},
+        ]
+        # Inventory has notes 2, 5, 18, 24 — 2 and 18 are covered, 5 and 24 not.
+        gaps = inventory_coverage_gaps([2, 5, 18, 24], entries)
+        assert gaps == [5, 24]
+
+    def test_no_gaps_when_all_covered(self):
+        from notes.validator_agent import inventory_coverage_gaps
+
+        entries = [{"source_note_refs": ["2"]}, {"source_note_refs": ["5.1"]}]
+        assert inventory_coverage_gaps([2, 5], entries) == []
+
+    def test_empty_inventory_no_gaps(self):
+        from notes.validator_agent import inventory_coverage_gaps
+        assert inventory_coverage_gaps([], [{"source_note_refs": ["2"]}]) == []
+
+    def test_malformed_ref_does_not_mask_a_note(self):
+        from notes.validator_agent import inventory_coverage_gaps
+        # A non-numeric ref must not be coerced to note 0 / hide a gap.
+        entries = [{"source_note_refs": ["see disclosure", None]}]
+        assert inventory_coverage_gaps([3], entries) == [3]
+
+    def test_factory_surfaces_coverage_gaps_in_context(self, tmp_path):
+        from notes.validator_agent import create_notes_validator_agent
+
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        wb.create_sheet("Notes-SummaryofAccPol")
+        wb.create_sheet("Notes-Listofnotes")
+        merged = tmp_path / "merged.xlsx"
+        wb.save(str(merged))
+
+        sidecar = tmp_path / "NOTES_LIST_OF_NOTES_filled_payloads.json"
+        sidecar.write_text(json.dumps([
+            {"sheet": "Notes-Listofnotes", "row": 5, "col": 2,
+             "source_note_refs": ["18"], "content_preview": "x"},
+        ]), encoding="utf-8")
+
+        _agent, _deps, ctx = create_notes_validator_agent(
+            merged_workbook_path=str(merged),
+            pdf_path=str(tmp_path / "x.pdf"),
+            sidecar_paths=[str(sidecar)],
+            filing_level="company", filing_standard="mfrs",
+            model=TestModel(), output_dir=str(tmp_path),
+            inventory_note_nums=[12, 18, 20],
+        )
+        # 18 is covered; 12 and 20 are gaps.
+        assert ctx["coverage_gaps"] == [12, 20]
+
+
 class TestDetection:
     """Steps 5.3 and 5.4: pure detection helpers."""
 
@@ -362,6 +420,8 @@ class TestServerHook:
             event_queue=queue,
         )
         assert outcome["invoked"] is False
+        # Item 15: elapsed is stamped even on the skip path.
+        assert outcome["elapsed_seconds"] >= 0
 
         events: list[dict] = []
         while not queue.empty():
@@ -378,6 +438,140 @@ class TestServerHook:
         assert complete_event["data"]["success"] is True
         # agent_id must be present so the frontend can route to the tab.
         assert complete_event["data"].get("agent_id")
+
+    @pytest.mark.asyncio
+    async def test_coverage_gaps_only_invokes_validator(self, tmp_path, monkeypatch):
+        """N3 Stage 1 (peer-review HIGH): a run with missed inventory notes but
+        NO duplicate/overlap candidates must still invoke the validator so it
+        can investigate the gaps — not short-circuit."""
+        import asyncio
+        import agent_runner
+        from server import _run_notes_validator_pass
+        from notes.writer import payload_sidecar_path
+
+        acc_xlsx = tmp_path / "NOTES_ACC_POLICIES_filled.xlsx"
+        lon_xlsx = tmp_path / "NOTES_LIST_OF_NOTES_filled.xlsx"
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        wb.create_sheet("Notes-SummaryofAccPol")
+        wb.create_sheet("Notes-Listofnotes")
+        merged_path = tmp_path / "merged.xlsx"
+        wb.save(str(merged_path))
+        # Empty sidecars → zero dup/overlap candidates AND nothing written, so
+        # inventory note 99 is an uncovered gap.
+        for xlsx_path in (acc_xlsx, lon_xlsx):
+            payload_sidecar_path(str(xlsx_path)).write_text(
+                json.dumps([]), encoding="utf-8")
+
+        # Stub the heavy agent loop — we're testing the invoke DECISION, not
+        # the agent's behaviour.
+        async def _noop_loop(*a, **k):
+            return None
+        monkeypatch.setattr(agent_runner, "run_agent_loop", _noop_loop)
+
+        queue: asyncio.Queue = asyncio.Queue()
+        outcome = await _run_notes_validator_pass(
+            merged_workbook_path=str(merged_path),
+            pdf_path=str(tmp_path / "x.pdf"),
+            notes_template_outputs={
+                "ACC_POLICIES": str(acc_xlsx),
+                "LIST_OF_NOTES": str(lon_xlsx),
+            },
+            filing_level="company", filing_standard="mfrs",
+            model=TestModel(), output_dir=str(tmp_path),
+            event_queue=queue, inventory_note_nums=[99],
+        )
+        assert outcome["context"]["coverage_gaps"] == [99]
+        assert outcome["invoked"] is True
+
+    @pytest.mark.asyncio
+    async def test_validator_loop_spec_does_not_bound_inner_streams(self, tmp_path, monkeypatch):
+        """Code-review pin (2026-06-13): the validator's rewrite_cell does a
+        LOCKED workbook load+save — a legitimately long tool call the 180s
+        per-turn timeout must NOT cancel mid-execution. The pass's
+        AgentLoopSpec must keep the pre-migration semantics
+        (bound_inner_streams=False, the notes/coordinator.py notes_spec
+        opt-out precedent)."""
+        import asyncio
+        import agent_runner
+        from server import _run_notes_validator_pass
+        from notes.writer import payload_sidecar_path
+
+        acc_xlsx = tmp_path / "NOTES_ACC_POLICIES_filled.xlsx"
+        lon_xlsx = tmp_path / "NOTES_LIST_OF_NOTES_filled.xlsx"
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        wb.create_sheet("Notes-SummaryofAccPol")
+        wb.create_sheet("Notes-Listofnotes")
+        merged_path = tmp_path / "merged.xlsx"
+        wb.save(str(merged_path))
+        # Empty sidecars + an uncovered inventory note → the invoke path.
+        for xlsx_path in (acc_xlsx, lon_xlsx):
+            payload_sidecar_path(str(xlsx_path)).write_text(
+                json.dumps([]), encoding="utf-8")
+
+        captured: dict = {}
+
+        async def _capture_loop(agent_run, deps, spec, emit, turn_records):
+            captured["spec"] = spec
+            return None
+
+        monkeypatch.setattr(agent_runner, "run_agent_loop", _capture_loop)
+
+        queue: asyncio.Queue = asyncio.Queue()
+        outcome = await _run_notes_validator_pass(
+            merged_workbook_path=str(merged_path),
+            pdf_path=str(tmp_path / "x.pdf"),
+            notes_template_outputs={
+                "ACC_POLICIES": str(acc_xlsx),
+                "LIST_OF_NOTES": str(lon_xlsx),
+            },
+            filing_level="company", filing_standard="mfrs",
+            model=TestModel(), output_dir=str(tmp_path),
+            event_queue=queue, inventory_note_nums=[99],
+        )
+        assert outcome["invoked"] is True
+        assert "spec" in captured, "validator pass should reach run_agent_loop"
+        assert captured["spec"].bound_inner_streams is False
+
+    @pytest.mark.asyncio
+    async def test_no_gaps_no_candidates_still_short_circuits(self, tmp_path):
+        """The skip path is preserved when there are neither candidates nor
+        coverage gaps (every inventory note covered)."""
+        import asyncio
+        from server import _run_notes_validator_pass
+        from notes.writer import payload_sidecar_path
+
+        acc_xlsx = tmp_path / "NOTES_ACC_POLICIES_filled.xlsx"
+        lon_xlsx = tmp_path / "NOTES_LIST_OF_NOTES_filled.xlsx"
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        wb.create_sheet("Notes-SummaryofAccPol")
+        wb.create_sheet("Notes-Listofnotes")
+        merged_path = tmp_path / "merged.xlsx"
+        wb.save(str(merged_path))
+        # Sidecar covers note 5; inventory is only note 5 → no gaps.
+        payload_sidecar_path(str(lon_xlsx)).write_text(json.dumps([
+            {"sheet": "Notes-Listofnotes", "row": 5, "col": 2,
+             "source_note_refs": ["5"], "content_preview": "x"},
+        ]), encoding="utf-8")
+        payload_sidecar_path(str(acc_xlsx)).write_text(
+            json.dumps([]), encoding="utf-8")
+
+        queue: asyncio.Queue = asyncio.Queue()
+        outcome = await _run_notes_validator_pass(
+            merged_workbook_path=str(merged_path),
+            pdf_path=str(tmp_path / "x.pdf"),
+            notes_template_outputs={
+                "ACC_POLICIES": str(acc_xlsx),
+                "LIST_OF_NOTES": str(lon_xlsx),
+            },
+            filing_level="company", filing_standard="mfrs",
+            model=TestModel(), output_dir=str(tmp_path),
+            event_queue=queue, inventory_note_nums=[5],
+        )
+        assert outcome["context"]["coverage_gaps"] == []
+        assert outcome["invoked"] is False
 
 
 def _agent_tool_names(agent) -> set[str]:

@@ -219,6 +219,12 @@ need in a single call (e.g. `[30, 31, 32]` in one request) rather than
 one page per turn. The tool renders them in parallel and the vision
 model sees them together, so batching is both faster and cheaper.
 
+Notes are scattered across many pages — to find WHERE a disclosure is,
+call `search_pdf_text([phrase, ...])` (e.g. `["lease liabilities",
+"Note 24"]`) and it returns the PDF pages mentioning each phrase in one
+call. Jump to those pages with `view_pdf_pages` and read them — a text
+hit is a pointer, not proof. On a scanned PDF it tells you so.
+
 When two tool calls are independent, issue them in the same response
 instead of waiting one turn at a time. For example, if you already need
 both the live row-label catalog and specific PDF pages, you may call

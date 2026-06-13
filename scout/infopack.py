@@ -43,6 +43,26 @@ _VALID_CONSOLIDATION: set[str] = {"company", "group", "both", "unknown"}
 # Source-honesty (rewrite Phase 6.3): how the notes inventory was built.
 _VALID_INVENTORY_SOURCE: set[str] = {"text", "vision", "none", "unknown"}
 
+def _registered_variant_names(st: StatementType) -> set[str]:
+    """Closed set of registered variant names for a statement.
+
+    Used by ``Infopack.from_json`` to whitelist-clamp ``variant_suggestion``
+    the way ``scale_unit`` is clamped against ``_VALID_SCALE_UNIT`` — the
+    registry (statement_types.VARIANTS) is the single source of truth, so no
+    literal list is duplicated here.
+    """
+    from statement_types import variants_for
+
+    return {v.name for v in variants_for(st)}
+
+
+# Item 4 (PLAN-orchestration-hardening): hard ceiling on a plausible
+# disclosure-note number. Malaysian filings rarely exceed ~60 notes; a
+# hallucinated "Note 743" on a 30-note filing sends a face agent hunting
+# for a note that doesn't exist. Save-time filtering tightens further to
+# max(inventory note_num) + 5 when the deterministic inventory exists.
+MAX_PLAUSIBLE_NOTE_NUM = 150
+
 
 @dataclass
 class FaceLineRef:
@@ -155,6 +175,16 @@ class Infopack:
     # scanned PDFs — hidden determinism worth surfacing), "none" (nothing
     # found), or "unknown" (no inventory pass ran). Advisory/telemetry only.
     inventory_source: str = "unknown"
+    # Degradation honesty: True iff the scout pass did NOT complete normally
+    # (per-turn timeout / wall-clock cap) and this pack is whatever partial
+    # state it had managed to build. The run can still proceed without hints
+    # (gotcha #13), but the caller must NOT report the scout as "succeeded" —
+    # it marks the audit row failed (with the timeout error_type) and emits
+    # `scout_complete success:false`. Runtime-only signal: intentionally NOT
+    # serialised, so a persisted/reloaded pack reads back as non-degraded (a
+    # re-run's scout might succeed).
+    degraded: bool = False
+    degraded_reason: Optional[str] = None
 
     # -- Serialisation ---------------------------------------------------------
 
@@ -222,6 +252,11 @@ class Infopack:
         """Deserialize from a JSON string produced by to_json()."""
         data = json.loads(raw)
         statements: dict[StatementType, StatementPageRef] = {}
+        # Item 3: count what defensive deserialisation drops so degradation
+        # is visible in one summary line, not only in scattered per-entry
+        # warnings (each drop site below already warns individually).
+        dropped_face_refs = 0
+        malformed_inventory = 0
         for key, ref_data in data.get("statements", {}).items():
             st = StatementType(key)
             # Decode the optional Phase 1a face_line_refs list. Malformed
@@ -236,6 +271,7 @@ class Infopack:
                         "Infopack statements[%s].face_line_refs[%d] is not "
                         "a dict (%r); skipping", key, idx, raw,
                     )
+                    dropped_face_refs += 1
                     continue
                 label = raw.get("label", "")
                 if not isinstance(label, str) or not label.strip():
@@ -243,6 +279,7 @@ class Infopack:
                         "Infopack statements[%s].face_line_refs[%d] has "
                         "empty/non-string label; skipping", key, idx,
                     )
+                    dropped_face_refs += 1
                     continue
                 raw_note = raw.get("note_num")
                 note_num: Optional[int]
@@ -271,8 +308,28 @@ class Infopack:
                         "Infopack statements[%s].face_line_refs[%d] rejected: %s",
                         key, idx, e,
                     )
+                    dropped_face_refs += 1
+            # Whitelist-clamp variant_suggestion against the registered
+            # variants for this statement — same posture as scale_unit
+            # below. A persisted infopack is re-rendered into FUTURE runs'
+            # prompts (entity_memory prior-year advisory), so free-form
+            # scout-LLM output here is a cross-run prompt-injection channel
+            # unless laundered at parse time (code-review fix, 2026-06-13).
+            variant_raw = ref_data["variant_suggestion"]
+            if not isinstance(variant_raw, str):
+                logger.warning(
+                    "Infopack statements[%s].variant_suggestion %r is not a "
+                    "string; coercing to ''", key, variant_raw,
+                )
+                variant_raw = ""
+            elif variant_raw and variant_raw not in _registered_variant_names(st):
+                logger.warning(
+                    "Infopack statements[%s].variant_suggestion %r is not a "
+                    "registered variant; coercing to ''", key, variant_raw,
+                )
+                variant_raw = ""
             statements[st] = StatementPageRef(
-                variant_suggestion=ref_data["variant_suggestion"],
+                variant_suggestion=variant_raw,
                 face_page=ref_data["face_page"],
                 note_pages=ref_data.get("note_pages", []),
                 confidence=ref_data.get("confidence", "HIGH"),
@@ -295,6 +352,7 @@ class Infopack:
                     "Infopack notes_inventory[%d] has malformed page_range %r; "
                     "defaulting to (0, 0)", idx, pr,
                 )
+                malformed_inventory += 1
                 page_range = (0, 0)
 
             # Phase 1b — decode nested subnotes. Malformed entries are
@@ -370,6 +428,15 @@ class Infopack:
         inv_source = data.get("inventory_source", "unknown")
         if inv_source not in _VALID_INVENTORY_SOURCE:
             inv_source = "unknown"
+
+        # Item 3: one loud summary so a degraded load can't hide in the
+        # per-entry warning noise above.
+        if dropped_face_refs or malformed_inventory:
+            logger.warning(
+                "Infopack load degraded: %d face ref(s) dropped, %d "
+                "inventory entr(y/ies) with malformed page_range",
+                dropped_face_refs, malformed_inventory,
+            )
 
         return cls(
             toc_page=data["toc_page"],

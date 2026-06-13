@@ -48,6 +48,7 @@ export async function updateSettings(
     scout_enabled_default: boolean;
     tolerance_rm: number;
     auto_review: boolean;
+    entity_memory: boolean;
   }>,
 ): Promise<{ status: string }> {
   return apiFetch<{ status: string }>("/api/settings", {

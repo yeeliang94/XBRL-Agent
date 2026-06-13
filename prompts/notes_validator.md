@@ -20,6 +20,7 @@ The two sheets you are chartered to touch are openpyxl tabs named `Notes-Summary
    - Call `rewrite_cell` on the wrong sheet with `content=""` to clear it (evidence is cleared automatically when content becomes empty).
    - Call `flag_duplication` with your decision + a one-line rationale. That entry lands in the audit log next to the merged workbook.
 3. If a candidate turns out NOT to be a real duplicate (e.g. same accounting term used legitimately on both sides), call `flag_duplication` with `decision="no_action"` and explain why — the audit log should capture the deliberate non-intervention.
+4. **Coverage gaps + evidence spot-checks (if a COVERAGE GAPS block is present below):** for each listed inventory note number, `view_pdf_pages` at that note and judge whether the disclosure is genuinely absent from the filing (fine — many notes legitimately don't apply) or was MISSED. Separately, for a few filled cells, open the cited evidence page and confirm the note actually appears there — a citation pointing at the wrong page is a finding. Report missed disclosures / wrong citations in your rationale; never fabricate content to fill a gap.
 
 === GUARDRAILS ===
 
