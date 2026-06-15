@@ -144,7 +144,7 @@ def test_stop_all_after_partial_completion_preserves_merged_workbook(session_env
                  sheets_copied=2,
              ),
          ), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -218,7 +218,7 @@ def test_stop_all_emits_partial_merge_sse_event(session_env):
                  sheets_copied=2,
              ),
          ), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -267,7 +267,7 @@ def test_stop_all_with_no_partial_files_does_not_emit_partial_merge(session_env)
              "workbook_merger.merge",
              return_value=MergeResult(success=False, errors=["no inputs"]),
          ), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200

@@ -99,7 +99,7 @@ async def test_notes_to_run_is_accepted_and_passed_to_coordinator(tmp_path: Path
     with patch("server._create_proxy_model", return_value="fake"), \
          patch("coordinator.run_extraction", side_effect=mock_face), \
          patch("notes.coordinator.run_notes_extraction", side_effect=mock_notes), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
             "variants": {},
@@ -186,7 +186,7 @@ async def test_notes_models_resolved_per_template(tmp_path: Path, monkeypatch):
     with patch("server._create_proxy_model", side_effect=fake_proxy_model), \
          patch("coordinator.run_extraction", return_value=__import__("coordinator").CoordinatorResult()), \
          patch("notes.coordinator.run_notes_extraction", side_effect=mock_notes), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
             "notes_to_run": ["CORP_INFO", "ACC_POLICIES"],
@@ -243,7 +243,7 @@ async def test_notes_models_unknown_key_ignored(tmp_path: Path, monkeypatch):
     with patch("server._create_proxy_model", return_value="fake"), \
          patch("coordinator.run_extraction", return_value=__import__("coordinator").CoordinatorResult()), \
          patch("notes.coordinator.run_notes_extraction", side_effect=mock_notes), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
             "notes_to_run": ["CORP_INFO"],

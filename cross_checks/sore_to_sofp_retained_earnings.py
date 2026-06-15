@@ -127,3 +127,88 @@ class SoREToSOFPRetainedEarningsCheck:
             message="; ".join(parts),
             comparands=comparands,
         )
+
+    def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
+        """Fact-based twin of :meth:`run` (item 32). MPERS-only. SoRE closing
+        retained earnings and SOFP retained earnings are both linear concepts."""
+        from cross_checks.facts_util import primary_scope, read_labelled_value
+
+        scope = primary_scope(ctx.filing_level)
+        # SoRE lives under the SOCIE statement slot (the coordinator writes the
+        # variant that ran to that key); read its template's facts.
+        sore = read_labelled_value(
+            ctx, StatementType.SOCIE, "retained earnings at end of period",
+            "CY", scope)
+        # Single-element candidate list → exact-match-first, mirroring the xlsx
+        # path's deliberate avoidance of substring drift (peer-review I3).
+        sofp = read_labelled_value(
+            ctx, StatementType.SOFP, ["Retained earnings"], "CY", scope)
+        sore_re, sofp_re = sore.value, sofp.value
+        sore_sheet = sore.sheet or "SoRE"
+        sofp_sheet = sofp.sheet or "SOFP"
+
+        if sore_re is None or sofp_re is None:
+            return CrossCheckResult(
+                name=self.name,
+                status="failed",
+                message=(
+                    f"Could not find retained earnings values: "
+                    f"SoRE={sore_re}, SOFP={sofp_re}"
+                ),
+            )
+
+        diff = abs(sore_re - sofp_re)
+        group_passed = diff <= tolerance
+        # The xlsx path hardcodes the "Group:" prefix here (it does not route
+        # through filing_level_prefix) — mirror that verbatim for parity.
+        parts = [f"Group: SoRE ({sore_re}) vs SOFP ({sofp_re}), diff={diff:.2f}"]
+
+        co_sore_re = None
+        co_sofp_re = None
+        co_passed = True
+        if ctx.filing_level == "group":
+            co_sore_re = read_labelled_value(
+                ctx, StatementType.SOCIE,
+                "retained earnings at end of period", "CY", "Company").value
+            co_sofp_re = read_labelled_value(
+                ctx, StatementType.SOFP, ["Retained earnings"], "CY", "Company").value
+            if co_sore_re is None or co_sofp_re is None:
+                co_passed = False
+                parts.append(
+                    f"Company: missing retained earnings (SoRE={co_sore_re}, SOFP={co_sofp_re})"
+                )
+            else:
+                co_diff = abs(co_sore_re - co_sofp_re)
+                co_passed = co_diff <= tolerance
+                parts.append(
+                    f"Company: SoRE ({co_sore_re}) vs SOFP ({co_sofp_re}), diff={co_diff:.2f}"
+                )
+
+        comparands = [
+            Comparand(label="Retained earnings at end of period",
+                      sheet=sore_sheet, value=sore_re, role="lhs",
+                      statement=StatementType.SOCIE.value),
+            Comparand(label="Retained earnings", sheet=sofp_sheet,
+                      value=sofp_re, role="rhs",
+                      statement=StatementType.SOFP.value),
+        ]
+        if ctx.filing_level == "group":
+            comparands += [
+                Comparand(label="Retained earnings at end of period [company]",
+                          sheet=sore_sheet, value=co_sore_re, role="lhs",
+                          statement=StatementType.SOCIE.value),
+                Comparand(label="Retained earnings [company]", sheet=sofp_sheet,
+                          value=co_sofp_re, role="rhs",
+                          statement=StatementType.SOFP.value),
+            ]
+
+        return CrossCheckResult(
+            name=self.name,
+            status="passed" if group_passed and co_passed else "failed",
+            expected=sore_re,
+            actual=sofp_re,
+            diff=diff,
+            tolerance=tolerance,
+            message="; ".join(parts),
+            comparands=comparands,
+        )

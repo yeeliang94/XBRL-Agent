@@ -139,7 +139,7 @@ async def test_disconnect_after_agent_complete_still_finalizes_run(session_env):
              output_path=str(merged_wb),
              sheets_copied=1,
          )), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         gen = run_multi_agent_stream(
             session_id=session_id,
             session_dir=session_dir,

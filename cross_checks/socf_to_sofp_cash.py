@@ -112,3 +112,88 @@ class SOCFToSOFPCashCheck:
             message="; ".join(parts),
             comparands=comparands,
         )
+
+    def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
+        """Fact-based twin of :meth:`run` (item 32). Reads SOCF closing cash and
+        SOFP cash from ``run_concept_facts`` by uuid; both are linear (non-
+        matrix) concepts."""
+        from cross_checks.facts_util import primary_scope, read_labelled_value
+        from cross_checks.util import filing_level_prefix
+
+        scope = primary_scope(ctx.filing_level)
+        socf = read_labelled_value(
+            ctx, StatementType.SOCF, "cash and cash equivalents at end of period",
+            "CY", scope)
+        sofp = read_labelled_value(
+            ctx, StatementType.SOFP,
+            ["cash and cash equivalents", "total cash and bank balances"],
+            "CY", scope)
+        socf_cash, sofp_cash = socf.value, sofp.value
+        socf_sheet = socf.sheet or "SOCF"
+        sofp_sheet = sofp.sheet or "SOFP"
+
+        if socf_cash is None or sofp_cash is None:
+            return CrossCheckResult(
+                name=self.name, status="failed",
+                message=f"Could not find cash values: SOCF={socf_cash}, SOFP={sofp_cash}",
+            )
+
+        diff = abs(socf_cash - sofp_cash)
+        group_passed = diff <= tolerance
+        primary_label = filing_level_prefix(ctx.filing_level, with_period=False)
+        parts = [f"{primary_label}: SOCF ({socf_cash}) vs SOFP ({sofp_cash}), diff={diff:.2f}"]
+        if not group_passed and sofp_cash == 0 and socf_cash != 0:
+            parts.append(
+                "SOFP cash is 0 but SOCF closing cash is non-zero — the "
+                "SOFP face likely has a cash line with no separate note. "
+                "Fill SOFP cash from the face statement; do not rework SOCF."
+            )
+
+        co_socf_cash = None
+        co_sofp_cash = None
+        co_passed = True
+        if ctx.filing_level == "group":
+            co_socf_cash = read_labelled_value(
+                ctx, StatementType.SOCF,
+                "cash and cash equivalents at end of period", "CY", "Company").value
+            co_sofp_cash = read_labelled_value(
+                ctx, StatementType.SOFP,
+                ["cash and cash equivalents", "total cash and bank balances"],
+                "CY", "Company").value
+            if co_socf_cash is None or co_sofp_cash is None:
+                co_passed = False
+                parts.append(
+                    f"Company: missing cash values (SOCF={co_socf_cash}, SOFP={co_sofp_cash})"
+                )
+            else:
+                co_diff = abs(co_socf_cash - co_sofp_cash)
+                co_passed = co_diff <= tolerance
+                parts.append(
+                    f"Company: SOCF ({co_socf_cash}) vs SOFP ({co_sofp_cash}), diff={co_diff:.2f}"
+                )
+
+        comparands = [
+            Comparand(label="Cash and cash equivalents at end of period",
+                      sheet=socf_sheet, value=socf_cash, role="lhs",
+                      statement=StatementType.SOCF.value),
+            Comparand(label="Cash and cash equivalents", sheet=sofp_sheet,
+                      value=sofp_cash, role="rhs",
+                      statement=StatementType.SOFP.value),
+        ]
+        if ctx.filing_level == "group":
+            comparands += [
+                Comparand(label="Cash and cash equivalents at end of period "
+                          "[company]", sheet=socf_sheet, value=co_socf_cash,
+                          role="lhs", statement=StatementType.SOCF.value),
+                Comparand(label="Cash and cash equivalents [company]",
+                          sheet=sofp_sheet, value=co_sofp_cash, role="rhs",
+                          statement=StatementType.SOFP.value),
+            ]
+
+        return CrossCheckResult(
+            name=self.name,
+            status="passed" if group_passed and co_passed else "failed",
+            expected=socf_cash, actual=sofp_cash, diff=diff, tolerance=tolerance,
+            message="; ".join(parts),
+            comparands=comparands,
+        )

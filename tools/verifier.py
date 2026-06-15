@@ -1,3 +1,4 @@
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -279,34 +280,48 @@ def _resolve_cell_value(
     visited: Optional[set[str]] = None,
     warnings: Optional[list[str]] = None,
 ) -> float:
-    """Resolve a cell's value, recursing through formulas with cycle detection."""
+    """Resolve a cell's value, recursing through formulas with cycle detection.
+
+    ``visited`` tracks the cells on the CURRENT recursion path only — a cell is
+    added on entry and removed on exit (try/finally). This guards against genuine
+    cycles (A→B→A) while still letting a cell that is legitimately referenced via
+    two SEPARATE paths (a "diamond") contribute on each path. Using a permanent
+    visited-set instead silently dropped the second contribution — e.g. an
+    indirect-SOCF reconciliation line added directly to the operating total
+    (+1) and subtracted inside "cash generated from operations" (−1) would have
+    its cancelling −1 path skipped, over-counting the total. (Fixed 2026-06-15;
+    pinned by tests/test_verifier_formula.py diamond-reference cases.)
+    """
     if visited is None:
         visited = set()
 
     key = f"{sheet_name}!{cell_ref}"
     if key in visited:
-        return 0.0  # cycle — break it
+        return 0.0  # cycle on the current path — break it
     visited.add(key)
-
     try:
-        raw = wb[sheet_name][cell_ref].value
-    except KeyError:
-        if warnings is not None:
-            warnings.append(f"Missing reference: sheet '{sheet_name}' or cell {cell_ref} not found")
-        return 0.0
+        try:
+            raw = wb[sheet_name][cell_ref].value
+        except KeyError:
+            if warnings is not None:
+                warnings.append(f"Missing reference: sheet '{sheet_name}' or cell {cell_ref} not found")
+            return 0.0
 
-    if raw is None:
-        return 0.0
+        if raw is None:
+            return 0.0
 
-    if isinstance(raw, str) and raw.startswith("="):
-        return _evaluate_formula(wb, sheet_name, raw, visited, warnings)
+        if isinstance(raw, str) and raw.startswith("="):
+            return _evaluate_formula(wb, sheet_name, raw, visited, warnings)
 
-    try:
-        return float(raw)
-    except (ValueError, TypeError):
-        if warnings is not None:
-            warnings.append(f"Unparseable value in {sheet_name}!{cell_ref}: {raw!r}")
-        return 0.0
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            if warnings is not None:
+                warnings.append(f"Unparseable value in {sheet_name}!{cell_ref}: {raw!r}")
+            return 0.0
+    finally:
+        # Pop off the current path so sibling/diamond references re-evaluate.
+        visited.discard(key)
 
 
 def _expand_range(range_ref: str) -> list[str]:
@@ -925,6 +940,19 @@ def _collect_unfilled_mandatory(
     return unfilled
 
 
+def _fact_based_verify_enabled() -> bool:
+    """Item 32 (32b) transition flag. When on AND the caller threads
+    ``db_path``/``run_id``/``template_id``, ``verify_statement`` reads the
+    cascade-persisted totals from ``run_concept_facts`` (``verifier_facts``)
+    instead of opening the workbook and evaluating formulas. Default OFF until
+    every statement's fact path is ported + shadow-proven and flipped on (plan
+    Step 2.4). Read at call time so tests can toggle it via the environment.
+    """
+    return os.environ.get("XBRL_FACT_BASED_VERIFY", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def verify_statement(
     path: str,
     statement_type: "object",  # statement_types.StatementType, duck-typed
@@ -932,6 +960,9 @@ def verify_statement(
     pdf_values: Optional[dict[str, float]] = None,
     filing_level: str = "company",
     filing_standard: str = "mfrs",
+    db_path: Optional[str] = None,
+    run_id: Optional[int] = None,
+    template_id: Optional[str] = None,
 ) -> VerificationResult:
     """Verify a filled workbook for a given statement type.
 
@@ -941,11 +972,45 @@ def verify_statement(
     - SOCF: Cash at end == Cash at beginning + Net increase after FX
     - SOPL: Profit == Revenue - Costs (attribution check)
     - SOCI: Total comprehensive income == P&L + Total OCI (attribution check)
+
+    Item 32 (32b): when ``XBRL_FACT_BASED_VERIFY`` is on and the DB context
+    (``db_path``/``run_id``/``template_id``) is supplied, statements whose fact
+    path is ported read ``run_concept_facts`` instead of the workbook. The
+    cascade is recomputed on entry (idempotent) so totals are never stale.
+    Statements not yet ported, or a missing DB context, fall through to the
+    xlsx path below unchanged.
     """
     from statement_types import StatementType
 
     name = statement_type.value if hasattr(statement_type, "value") else str(statement_type)
 
+    if (
+        _fact_based_verify_enabled()
+        and db_path and run_id is not None and template_id
+    ):
+        import sqlite3
+
+        from concept_model.cascade import recompute_after_turn
+        from tools.verifier_facts import verify_statement_facts
+
+        # Q4 (recompute on entry) — totals fresh regardless of tool ordering.
+        recompute_after_turn(db_path, run_id)
+        conn = sqlite3.connect(db_path)
+        try:
+            fact_result = verify_statement_facts(
+                conn, run_id, template_id, statement_type,
+                variant=variant, pdf_values=pdf_values,
+                filing_level=filing_level, filing_standard=filing_standard,
+            )
+        finally:
+            conn.close()
+        if fact_result is not None:
+            return fact_result
+        # else: statement not yet ported — fall through to the xlsx path.
+
+    # The xlsx path needs the workbook on disk; the fact path above does not
+    # (item 32 — Excel-free verification), so this guard sits AFTER the fact
+    # branch. A ported statement with a valid DB context never reaches here.
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Template not found: {path}")

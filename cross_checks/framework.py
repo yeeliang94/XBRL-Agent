@@ -171,6 +171,126 @@ def build_default_cross_checks() -> list:
     ]
 
 
+@dataclass
+class FactsContext:
+    """Everything a fact-based cross-check needs to read ``run_concept_facts``.
+
+    Item 32 (Excel-free verification): the fact-based ``run_facts`` path
+    receives this instead of ``workbook_paths``. It carries the run's DB
+    connection, the per-statement ``template_id`` map (so each check reads its
+    own statements' facts, scoped per gotcha #21), and the filing axes.
+    """
+    conn: Any                                  # sqlite3.Connection (live read)
+    run_id: int
+    template_ids: Dict[StatementType, str]
+    filing_level: str = "company"
+    filing_standard: str = "mfrs"
+
+
+def run_all_facts(
+    checks: list,
+    ctx: "FactsContext",
+    run_config: dict,
+    tolerance: float = DEFAULT_TOLERANCE_RM,
+    on_check: "Optional[Any]" = None,
+) -> list[CrossCheckResult]:
+    """Fact-based sibling of :func:`run_all` (item 32, behind
+    ``XBRL_FACT_BASED_CHECKS``).
+
+    Identical gating semantics to ``run_all`` — missing-statement → pending,
+    missing template_id (the fact-world analogue of a missing workbook) →
+    failed, filing-standard gate → not_applicable, ``applies_to`` gate →
+    not_applicable — then calls ``check.run_facts(ctx, tolerance)`` instead of
+    ``check.run(workbook_paths, …)``. Kept as a separate function (rather than
+    overloading ``run_all``) so the xlsx path stays byte-for-byte untouched
+    during the shadow-diff transition.
+    """
+    statements_run = run_config.get("statements_to_run", set())
+    results: list[CrossCheckResult] = []
+    total = len(checks)
+
+    def _fire_progress(idx: int, result: CrossCheckResult) -> None:
+        if on_check is None:
+            return
+        try:
+            on_check(idx, total, result)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "on_check progress callback raised on check #%d", idx,
+                exc_info=True,
+            )
+
+    for idx, check in enumerate(checks):
+        try:
+            missing = check.required_statements - statements_run
+            if missing:
+                missing_names = sorted(s.value for s in missing)
+                results.append(CrossCheckResult(
+                    name=check.name,
+                    status="pending",
+                    message=(
+                        f"{', '.join(missing_names)} not extracted in this run; "
+                        f"cannot verify {check.name}"
+                    ),
+                ))
+                continue
+
+            # The fact-world analogue of "workbook missing": a required
+            # statement has no resolved template_id, so its facts can't be
+            # scoped. Keep the same wording as the xlsx path so the message
+            # stays byte-compatible.
+            missing_templates = check.required_statements - set(ctx.template_ids)
+            if missing_templates:
+                missing_names = sorted(s.value for s in missing_templates)
+                results.append(CrossCheckResult(
+                    name=check.name,
+                    status="failed",
+                    message=(
+                        f"Workbook missing for {', '.join(missing_names)} "
+                        f"(agent may have failed); cannot run {check.name}"
+                    ),
+                ))
+                continue
+
+            check_standards = getattr(
+                check, "applies_to_standard", DEFAULT_APPLIES_TO_STANDARD,
+            )
+            if ctx.filing_standard not in check_standards:
+                allowed = ", ".join(sorted(check_standards)).upper() or "(none)"
+                results.append(CrossCheckResult(
+                    name=check.name,
+                    status="not_applicable",
+                    message=(
+                        f"{check.name} only applies to {allowed} filings "
+                        f"(this run is {ctx.filing_standard.upper()})"
+                    ),
+                ))
+                continue
+
+            if not check.applies_to(run_config):
+                results.append(CrossCheckResult(
+                    name=check.name,
+                    status="not_applicable",
+                    message=f"{check.name} does not apply to the current variant configuration",
+                ))
+                continue
+
+            try:
+                result = check.run_facts(ctx, tolerance)
+            except Exception as e:  # noqa: BLE001
+                result = CrossCheckResult(
+                    name=check.name,
+                    status="failed",
+                    message=f"Check raised an exception: {e}",
+                )
+            results.append(result)
+        finally:
+            if results and len(results) > idx:
+                _fire_progress(idx, results[idx])
+
+    return results
+
+
 def run_all(
     checks: list,
     workbook_paths: Dict[StatementType, str],

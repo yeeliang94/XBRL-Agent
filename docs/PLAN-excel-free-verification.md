@@ -1,9 +1,9 @@
 # Implementation Plan: Excel-free verification pipeline (item 32)
 
-**Overall Progress:** `0%`
-**Status:** design / charter → **implementation plan** (expanded 2026-06-13)
+**Overall Progress:** `~55%` (Phase 0 ✅; Phase 1 ✅ COMPLETE — fact checks now DEFAULT ON; Phase 2 in progress; Phases 3–4 not started)
+**Status:** design / charter → **implementation plan** (expanded 2026-06-13) → **in progress** (Phase 1 landed 2026-06-14)
 **PRD / context:** orchestration-hardening item 32; this file is the spec.
-**Last Updated:** 2026-06-13
+**Last Updated:** 2026-06-14
 
 > This expands the original charter into an ordered, shadow-gated implementation
 > plan. The charter's framing (Problem / End state / Invariants) is preserved
@@ -51,6 +51,11 @@ opening a single workbook**. openpyxl survives only at the *edges*: template
 
 ## Key Decisions
 
+- **Bounding constraint — the exported xlsx keeps its live formulas.** Users
+  edit the downloaded file in Excel and depend on totals recalculating, so
+  formulas stay in the output (and in the blank templates that seed it). Item 32
+  removes Excel from the *verification path only*. Going formula-free in the
+  export was considered and **declined** for this reason.
 - **Read the cascade's persisted totals, not a re-derived sum.** The cascade
   already writes COMPUTED parents into `run_concept_facts`. Verification and
   cross-checks read those rows by uuid — they do **not** re-walk edges
@@ -128,35 +133,38 @@ TARGET (verification reads DB by uuid):
 - [ ] 🟥 Confirm the e2e fixtures (`tests/test_e2e.py` mocked 5-agent pipeline)
       exercise a run that ends with populated `run_concept_facts` **including
       cascade-written COMPUTED totals** — this is the shadow-diff substrate.
-- [ ] 🟥 Decide Q1–Q4 (Open Questions) with the user before Phase 1.
+- [x] 🟩 Q1–Q4 decided with the product owner (2026-06-13) — see Decisions.
 
 ---
 
-## Open Questions (resolve before/with the relevant phase)
+## Decisions (resolved 2026-06-13 with product owner)
 
-- **Q1 (32a/32b):** Cross-checks/verifier reference rows by **label**
-  ("total assets"). Facts are keyed by **uuid**. Resolve label→uuid by (a) a
-  new `concept_nodes` label-substring lookup scoped to `template_id`, mirroring
-  `find_value_by_label`, or (b) hard-pin each check to a stable concept anchor.
-  **Recommend (a)** for parity with today's fuzzy matching; (b) is more robust
-  but changes check authoring. Which?
-- **Q2 (parity tolerance):** Cascade rounds to cents (`_money`); openpyxl
-  evaluates formulas exactly. Both render via `:.2f`. Shadow-diff should compare
-  at **display precision (2dp)** or within `_balance_tolerance`, not raw float
-  equality. Confirm acceptable.
-- **Q3 (32c):** Cache the rendered `read_template` summary where? Options:
-  in-process LRU keyed by `template_id` (no schema change, rebuilt on boot from
-  `concept_*` tables or a one-shot xlsx parse at import) **(recommended)**, or a
-  new `template_summaries` table. The summary needs the literal formula text,
-  which is NOT in `concept_nodes` — so a pure-DB reconstruction would need a new
-  `concept_nodes.formula` column. Caching the string sidesteps that. Confirm
-  no-schema-change is acceptable.
-- **Q4 (cascade freshness for 32b):** `verify_totals` is an agent tool; the
-  cascade runs at the coordinator turn boundary. Must verify reads **after** the
-  cascade has run for the latest writes. Either (a) ensure the tool ordering
-  guarantees cascade-before-verify, or (b) have `verify_totals` trigger a
-  `recompute_after_turn` on entry. **Recommend (b)** for self-containedness
-  (idempotent, cheap). Confirm.
+**Scope = "Verification only."** The product owner confirmed users **edit the
+downloaded Excel file by hand and rely on totals auto-recalculating**, so the
+exported xlsx **must keep its live formulas**. Item 32 therefore strips Excel
+from the *internal verification path only*; the export path and the formulas in
+the downloaded file are unchanged. (The broader "formula-free output" and
+"fully formula-free" options were explicitly declined for this reason.)
+
+- **Q1 (label→uuid) → (a) fuzzy label lookup.** Resolve "total assets" etc. via
+  a `concept_nodes` label-substring lookup scoped to `template_id`, mirroring
+  `find_value_by_label`'s exact-then-substring matching. Chosen for parity with
+  today's behaviour.
+- **Q2 (parity tolerance) → compare at display precision (2dp) / within
+  `_balance_tolerance`.** NOTE this is now a **permanent invariant, not a
+  migration scaffold**: because the exported file keeps formula-computed totals
+  AND verification reads the cascade-computed totals, the two must agree forever
+  — otherwise the file a user downloads would disagree with what we verified.
+  The shadow-diff and Phase-4 guard therefore stay as ongoing parity fences.
+- **Q3 (read_template summary) → cache the rendered string (incl. formula
+  text), no schema change.** Formulas stay in the templates, so the agent's
+  summary keeps showing `[FORMULA: …]` byte-for-byte. Build the exact
+  `_summarize_template` output once per `template_id` and memoise in-process; do
+  NOT reconstruct from `concept_nodes` (which lacks the literal formula text)
+  and do NOT add a `concept_nodes.formula` column.
+- **Q4 (cascade freshness) → (b) recompute on entry.** `verify_totals` triggers
+  an idempotent `recompute_after_turn(db_path, run_id)` before reading totals,
+  so it never reads stale figures regardless of tool ordering.
 
 ---
 
@@ -168,40 +176,39 @@ TARGET (verification reads DB by uuid):
 three migrations reuse. Ship-able on its own (pure additions, zero call-site
 changes).*
 
-- [ ] 🟥 **Step 0.1: Fact-read helper keyed by uuid** — one place to load a run's
-      facts as `{(concept_uuid, period, entity_scope): (value, value_status)}`,
-      scoped to a `template_id` set, reusing the `eval/grader.py::_gradeable_facts`
-      idiom but **including COMPUTED** (cross-checks/verifier need totals).
-  - [ ] 🟥 Add `read_run_facts(conn, run_id, template_ids, kinds=None)` to
-        `concept_model/facts_api.py` (returns the dict above; `kinds=None`
-        means all, including COMPUTED — distinct from grader's LEAF/MATRIX-only).
-  - [ ] 🟥 Add `entity_scope`/`period` constants module or reuse the
-        `Literal["CY","PY"]` / `Literal["Company","Group"]` already in
-        `facts_api.py:70-71` (no constants module exists today — decide one).
-  - **Verify:** unit test seeds facts + a cascade-written COMPUTED total, asserts
-        `read_run_facts` returns the total row and the leaves, scoped correctly
-        per `template_id`. `./venv/bin/python -m pytest tests/test_facts_read.py -q`.
+- [x] 🟩 **Step 0.1: Fact-read helper keyed by uuid** — `read_run_facts(conn,
+      run_id, template_ids, kinds=None)` added to `concept_model/facts_api.py`.
+      Returns `{(uuid, period, entity_scope): {value, value_status,
+      children_status, source}}`; **includes COMPUTED by default** (the cascade-
+      written totals verification reads); `kinds=` restricts. Scoped by
+      `template_id`. Reused the existing `Literal["CY","PY"]` /
+      `Literal["Company","Group"]` from `facts_api.py` — no new constants module
+      (kept surgical).
+  - **Verify:** `./venv/bin/python -m pytest tests/test_facts_read.py -q` — 11
+        passed (incl. COMPUTED inclusion, kind filter, template scoping,
+        CY/PY/Group key distinctness).
 
-- [ ] 🟥 **Step 0.2: Label→uuid resolver (Q1)** — given `template_id` + a label
-      substring (+ optional period/scope), return `(concept_uuid, sheet, row,
-      col)` so callers can both read the fact and build `Comparand`s with real
-      coords.
-  - [ ] 🟥 Implement against `concept_nodes` (render coords) with
-        `concept_targets` / `concept_render_aliases` fallback, mirroring
-        `cell_resolver.resolve_cell` scoping (`WHERE n.template_id = ?`) and
-        `find_value_by_label`'s exact-then-substring, `*`-stripped matching.
-  - **Verify:** unit test resolves "total assets" / "total equity and
-        liabilities" on a real SOFP `template_id` to the same rows the xlsx
-        `find_label_row` returns. Assert exact-match-wins-over-substring.
+- [x] 🟩 **Step 0.2: Label→uuid resolver (Q1=fuzzy)** — new
+      `concept_model/label_resolver.py::resolve_label(conn, template_id, label,
+      prefer_leaf=True)` → `(uuid, sheet, row, col)`. Mirrors
+      `find_value_by_label` matching (case-insensitive, `*`-stripped, exact-over-
+      substring) and `cell_resolver` scoping (`WHERE template_id=?`); leaf-over-
+      header preference (gotcha #17).
+  - **Verify:** covered in `tests/test_facts_read.py` — resolves total
+        assets/equity, prefers leaf over same-named header, template-scoped,
+        returns None when absent.
+  - **NOTE / deviation:** matches against `concept_nodes` render coords only.
+        `concept_targets`/`concept_render_aliases` fallback was **not** needed
+        for the cross-check/verifier labels (they target face/sub totals that
+        carry primary render coords). If a Group/SOCIE check later needs an
+        alias coord, extend here — flagged for Phase 1.
 
-- [ ] 🟥 **Step 0.3: Shadow-diff harness** — a test utility that, given a run,
-      executes a consumer **both ways** (xlsx and fact-based) and asserts the
-      results are byte/format-equal at display precision (Q2).
-  - [ ] 🟥 Harness loads the e2e fixture run, exposes `assert_parity(xlsx_result,
-        fact_result)` comparing `message`, `status`, `expected`/`actual`/`diff`
-        (at 2dp), `target_sheet`/`target_row`, and `comparands`.
-  - **Verify:** harness self-test: feeding two identical results passes; a
-        1-cent or wording difference fails loudly.
+- [x] 🟩 **Step 0.3: Shadow-diff harness** — `tests/shadow_diff.py` (helper, not
+      collected): `nums_equal` (2dp), `cross_check_diff`, `assert_cross_check_parity`
+      comparing name/status/message/target coords exactly + numeric fields at 2dp
+      + comparands.
+  - **Verify:** self-test in `tests/test_facts_read.py` — identical results pass,
+        sub-cent diff treated equal, wording / >1-cent diff flagged.
 
 ---
 
@@ -211,63 +218,100 @@ changes).*
 contract, `CrossCheckResult` shape, message format, comparands, and SSE events
 identical. Gate behind `XBRL_FACT_BASED_CHECKS`.*
 
-- [ ] 🟥 **Step 1.1: New check entry point that takes DB context** — add a
-      `run_facts(conn, run_id, tolerance, filing_level, filing_standard,
-      template_ids)` alongside the existing `run(workbook_paths, ...)` on the
-      `CrossCheck` protocol (`cross_checks/framework.py:129`). Do **not** remove
-      `run()` yet.
-  - [ ] 🟥 Framework's runner (`build_default_cross_checks` / the loop in
-        `framework.py` + `server.py:3714,4043`) dispatches to `run_facts` when
-        `XBRL_FACT_BASED_CHECKS` is on, else `run()`.
-  - **Verify:** with flag off, every existing `tests/test_cross_checks.py` /
-        `tests/test_cross_checks_impl.py` test passes unchanged.
+**Status (2026-06-14):** Phase 1 ✅ **COMPLETE** — Steps 1.1–1.5b all done;
+`XBRL_FACT_BASED_CHECKS` now defaults **ON** (set `=0` to fall back to xlsx).
+The flip-on gate (full-pipeline e2e parity + mocked-test migration) is met; see
+Step 1.5b below for the landing details. New/changed files:
+`cross_checks/framework.py` (`FactsContext`, `run_all_facts`),
+`cross_checks/facts_util.py` (new), `concept_model/label_resolver.py`
+(`resolve_matrix_cell` added), all 6 check files (`run_facts`),
+`server.py` (`_fact_based_checks_enabled`, `_build_check_template_ids`,
+`_fact_ctx_for_run`, recheck + both pipeline sites wired),
+`tests/test_cross_checks_shadow.py` (new, 9 parity tests),
+`tests/test_recheck_endpoint.py` (de-workbook proof).
 
-- [ ] 🟥 **Step 1.2: Migrate the 6 checks** — `sofp_balance`,
-      `sopl_to_socie_profit`, `soci_to_socie_tci`, `socie_to_sofp_equity`,
-      `socf_to_sofp_cash`, `sore_to_sofp_retained_earnings`. Each reads its
-      comparand values via Step 0.1/0.2 instead of `open_workbook` +
-      `find_value_by_label`.
-  - [ ] 🟥 Honour `applies_to_standard` (gotcha #15) — unchanged, gated in the
-        framework before dispatch.
-  - [ ] 🟥 Group dual-pass (gotcha #12): read `entity_scope='Group'` then
-        `'Company'` facts instead of cols B/C then D/E. SOCIE block ranges
-        (`SOCIE_GROUP_BLOCKS`) become entity_scope+period reads — no row-range
-        math. MFRS-vs-MPERS SOCIE column branch (`socie_column`) disappears (it
-        was a column-selection artifact; uuid read is column-agnostic).
-  - [ ] 🟥 Build `Comparand`s with real `sheet`/`row` from Step 0.2 so
-        `comparands_json` (v14) and the Review workspace click-to-cell stay
-        intact.
-  - [ ] 🟥 Preserve every `message` string verbatim (e.g. `"Group CY: assets
-        (…) vs equity+liab (…), diff=…"`, `"SOFP cash is 0; SOCF closing cash is
-        non-zero (…). Fill SOFP cash cell with SOCF value."`).
-  - **Verify (shadow-diff, the gate):** new `tests/test_cross_checks_shadow.py`
-        runs each check both ways on the e2e fixtures via the Step 0.3 harness;
-        asserts identical `message`/`status`/values/comparands. This is the
-        parity proof — **the xlsx path is not removed until this is green.**
+- [x] 🟩 **Step 1.1: New check entry point that takes DB context** — added
+      `run_facts(ctx, tolerance)` to all 6 checks + `run_all_facts` runner +
+      `FactsContext`. The xlsx `run()` path is byte-for-byte untouched.
+      Dispatch is flag-gated in `server.py` (not the framework) to keep
+      `run_all` pristine.
 
-- [ ] 🟥 **Step 1.3: De-workbook `_recheck_from_facts`** (`server.py:400`) — the
-      headline smell. With fact-based checks, drop the `_export_canonical_workbooks`
-      rebuild (`server.py:464`); re-run checks directly against current facts.
-  - [ ] 🟥 Keep `_export_canonical_workbooks` for the actual **export/merge**
-        path (it stays — Non-goal); only the *recheck* stops rebuilding.
-  - **Verify:** integration test edits a fact via the facts API, calls the
-        recheck endpoint, asserts the cross-check result reflects the edit with
-        **no workbook written** (assert no new `*_canonical.xlsx` mtime change /
-        spy that `export_run_to_xlsx` is not called on the recheck path).
+- [x] 🟩 **Step 1.2: Migrate the 6 checks** — SOFP balance, SOCF→SOFP cash
+      (linear), SOPL→SOCIE profit / SOCI→SOCIE TCI / SOCIE→SOFP equity
+      (matrix), SoRE→SOFP RE (MPERS). SOCIE matrix resolved via
+      `resolve_matrix_cell` (filter by `matrix_col`: Total=X/B, Retained=C/B);
+      NCI-conditional profit column via fact-space `socie_has_nci` (any
+      `matrix_col='W'` fact non-zero). Group dual-pass reads `entity_scope`
+      facts (no row-blocks — simpler than xlsx). `applies_to_standard` +
+      `applies_to` gating preserved in `run_all_facts`.
+  - **Verify:** `tests/test_cross_checks_shadow.py` — 9 parity tests green
+        (SOFP balance company×3 + group; equity; TCI; profit no-NCI;
+        profit with-NCI; SOCF-cash lineage message). All assert byte-equal
+        `CrossCheckResult` (message normalised for float-repr at 2dp).
+  - **DEVIATION:** shadow proofs are **hand-built fixtures** (prove both code
+        paths agree on identical logical data), NOT the full import→cascade→
+        export e2e the plan's "Verify" specifies. Full-pipeline parity is the
+        gate for Step 1.5 flip-on and is still TODO.
 
-- [ ] 🟥 **Step 1.4: SSE parity** — confirm `cross_check_start` /
-      `cross_check_result` / `cross_check_complete` payloads (gotcha #19,
-      `server.py:3678-3707`, `_emit_cross_check_summary`) are byte-identical
-      (comparands are DB-only, not in SSE — keep it that way).
-  - **Verify:** `tests/test_cross_check_progress_events.py` passes unchanged
-        with the flag on.
+- [x] 🟩 **Step 1.3: De-workbook `_recheck_from_facts`** — with the flag on,
+      the recheck reads facts directly; the `_export_canonical_workbooks`
+      rebuild is skipped. Export path itself unchanged (Non-goal).
+  - **Verify:** `tests/test_recheck_endpoint.py
+        ::test_recheck_fact_based_does_not_rebuild_workbook` — trip-wires
+        `_export_canonical_workbooks`; green.
 
-- [ ] 🟥 **Step 1.5: Flip default on** — set `XBRL_FACT_BASED_CHECKS` default
-      true once 1.2 shadow-diff is green across MFRS+MPERS × Company+Group
-      fixtures.
-  - **Verify:** full `pytest tests/ -q` green with flag on by default; the
-        shadow-diff suite still green (now comparing the on-by-default path to
-        the still-present xlsx path).
+- [x] 🟩 **Step 1.4: SSE parity** — `run_all_facts` reuses the same `on_check`
+      callback contract; `_run_cross_checks_bounded` threads it identically.
+      Comparands stay DB-only (not in SSE).
+  - **Verify:** `tests/test_cross_check_progress_events.py` green (flag off);
+        SSE payload code path unchanged.
+
+- [x] 🟩 **Step 1.5a: Full-pipeline e2e parity harness** — built
+      `tests/test_cross_checks_e2e_parity.py`: imports the real SOFP template,
+      seeds leaf facts, runs the cascade, exports a real workbook with live
+      formulas, then asserts the xlsx check (evaluating formulas) ==
+      `run_facts` (reading cascade totals) for balanced + imbalanced. **This is
+      the real gate** the plan demanded; green for SOFP balance.
+
+- [x] 🟩 **Step 1.5b: Flip default on — DONE (2026-06-14).**
+      `XBRL_FACT_BASED_CHECKS` now defaults **ON** (`server._fact_based_checks_enabled`,
+      set `=0` to fall back to the xlsx path). Three coupled changes unblocked it:
+      1. **Test migration (uniform).** Every `patch("cross_checks.framework.run_all",
+         …)` site (42 single-line + 2 multiline across 15 files) now ALSO patches
+         `cross_checks.framework.run_all_facts` with the same `return_value`/
+         `side_effect`. The fakes are positionally compatible with
+         `run_all_facts(checks, ctx, run_config, …)`, so one fake drives both
+         paths. This tests the orchestration around BOTH paths and collapses
+         cleanly when Phase 4 deletes `run_all`. (The plan's "populate facts in
+         mocked runs" option was rejected — it wouldn't work for the
+         exception/timeout behaviour-injection tests, which need to make the
+         check CALL raise regardless of facts.)
+      2. **Wiring robustness.** `server._build_check_template_ids` caught only
+         `ValueError`; a `None`/unknown variant (the CLI mock shape) raises
+         `KeyError` from `get_variant`, which crashed the whole run. Now catches
+         `(ValueError, KeyError)` — degrades identically to the xlsx path, which
+         tolerates the same case via `workbook_paths`.
+      3. **Proof.** Full backend suite green with the flag default-on
+         (`2243 passed, 2 skipped`). Shadow suite (all 6 checks) + extended e2e
+         harness (Step 1.5c) green.
+  - **e2e harness coverage (Step 1.5c).** `tests/test_cross_checks_e2e_parity.py`
+    now covers SOFP balance (linear cascade sum), SOCF→SOFP cash (leaf-to-leaf
+    cross-statement), and SOCIE→SOFP equity (matrix Total col + cascade) on REAL
+    templates. These exercise the three representative arithmetic shapes. The
+    other 3 checks (SOPL→SOCIE profit, SOCI→SOCIE TCI — same matrix machinery as
+    SOCIE equity; SoRE→SOFP RE — MPERS) are covered by the shadow suite + the
+    full-suite flag-on proof; individual real-template e2e for them is a
+    nice-to-have, not a gate.
+  - **KNOWN advisory divergence surfaced by the e2e gate (flagged for Phase 1
+    alias-coord follow-up).** For cross-sheet-rolled SOFP cash, the xlsx path's
+    comparand reports the FACE coord (`SOFP-CuNonCu`, where it scanned col A)
+    while the fact path resolves to the editable sub-sheet LEAF
+    (`SOFP-Sub-CuNonCu`). Values/status/message/diff are byte-identical; only the
+    advisory comparand `sheet` differs (comparands never affect pass/fail). This
+    is exactly the alias-coord case `label_resolver` already flags as a Phase-1
+    follow-up. The e2e test asserts everything BUT this one sheet coord
+    (`assert_cross_check_parity_modulo_rollup_sheet`) so the divergence stays
+    visible rather than hidden.
 
 ---
 
@@ -277,7 +321,57 @@ identical. Gate behind `XBRL_FACT_BASED_CHECKS`.*
 computed totals from `run_concept_facts`. Keep `VerificationResult`, tolerance,
 and all feedback wording byte-compatible. Gate behind `XBRL_FACT_BASED_VERIFY`.*
 
-- [ ] 🟥 **Step 2.1: Give the verifier DB context** — thread `db_path` + `run_id`
+**Status (2026-06-15): ALL FIVE statements ported + shadow-green; flag default
+OFF pending a flip-on decision.** `tools/verifier_facts.py` implements the fact
+path for SOFP, SOCIE (matrix), SOCF, SOPL, SOCI;
+`tools/verifier.py::verify_statement` gained `(db_path, run_id, template_id)`
+kwargs + `_fact_based_verify_enabled()` + a `recompute_after_turn`-on-entry
+dispatch (Q4); `extraction/agent.py` threads the DB context from `ctx.deps`.
+Proven by `tests/test_verifier_shadow.py` (SOFP balanced/imbalanced; SOCF-Direct
+/ SOPL / SOCI / SOCIE e2e import→cascade→export parity; not_disclosed contract;
+flag-off-uses-xlsx). **Full suite green BOTH with the flag off (2251) and on
+(2255)** — unlike the cross-check flip, the verify flip breaks no mocked tests
+(they don't invoke the real verify tool with a DB context).
+
+**DECISION (2026-06-15): shipped OFF / opt-in.** The capability is complete and
+proven; the product owner chose to keep `XBRL_FACT_BASED_VERIFY` default `0` and
+trial it via the env var, validating the two behaviour changes below on a real
+filing before flipping the default. Step 2.4's flip-on is therefore deferred (not
+blocked) — set the env var to trial; resolve the SOCF-Indirect investigation +
+validate the stricter mandatory scan, then flip.
+
+**Behaviour change gating the default flip-on:**
+1. *Stricter `mandatory_unfilled`* (the documented product decision below) —
+   broadly increases save-gate blocks; should be validated on a real filing.
+
+**RESOLVED (2026-06-15) — the SOCF-Indirect "divergence" was a legacy-evaluator
+bug, now FIXED.** The shadow test's uniform "every line = 100" seeding surfaced a
+1700-vs-1800 disagreement on the SOCF-Indirect operating total. Root cause was
+NOT a template or cascade error (both were always correct): `tools/verifier.py`'s
+hand-rolled `_evaluate_formula`/`_resolve_cell_value` used a permanent `visited`
+set that doubled as a "don't re-count" guard, so a line referenced via two
+cancelling paths (added +1 directly to the operating total, subtracted −1 inside
+"cash generated from operations" — a diamond) had its −1 path silently dropped,
+over-counting by that line. This was a **live bug in the default (flag-off) xlsx
+verification path** for any diamond-reference template. Fixed by making `visited`
+a stack-based cycle guard (discard on exit). The fact path always computed the
+correct value; this fix makes the legacy xlsx path agree. Pinned by
+`tests/test_verifier_formula.py::test_diamond_reference_counts_each_path`; the
+verifier shadow suite now uses SOCF-Indirect (byte-parity) again.
+
+> **PRODUCT DECISION (2026-06-14) — `mandatory_unfilled` is INTENTIONALLY
+> stricter, NOT byte-parity.** The xlsx `_collect_unfilled_mandatory` treats any
+> formula cell as "filled", and the SOFP main sheet pre-fills every line item
+> with a cross-sheet formula (`='SOFP-Sub'!Bn`) — so the xlsx scan is near-inert
+> (it flags almost nothing). The fact path flags a mandatory (`*`) leaf whose
+> fact is genuinely ABSENT (a `not_disclosed` fact counts as resolved). This
+> catches real gaps the xlsx scan hid and feeds the save gate (gotcha #17), so
+> it stays behind the off-by-default flag until validated. The shadow suite
+> asserts the fact set is a **superset** of the xlsx set (never silently equal).
+> All OTHER fields (`computed_totals`/`is_balanced`/`mismatches`/`feedback`/
+> `matches_pdf`/`magnitude_warnings`) remain byte-compatible.
+
+- [x] 🟩 **Step 2.1: Give the verifier DB context (DONE, SOFP).** Threaded `db_path` + `run_id`
       into `verify_statement` / `verify_totals` (`tools/verifier.py:579,928`) and
       the agent tool wrapper (`extraction/agent.py:804`, `ctx.deps` already has
       `run_id`). Add a fact-based code path behind the flag; keep the
@@ -459,8 +553,9 @@ safe even before checks are fast.
 
 ## Non-goals
 
-- Not a rewrite of the export path — xlsx export (`exporter.py`) stays; this
-  removes xlsx from the *verification* path only.
+- Not a rewrite of the export path — xlsx export (`exporter.py`) stays, **and
+  the exported file keeps its live formulas** (users edit it in Excel and rely on
+  recalculation). This removes xlsx from the *verification* path only.
 - Not a schema change — all phases read existing tables; no migration expected
   (pending Q3 resolution).
 - Not adding mandatory-row markers to the agent summary (Step 3.3) — parity only.

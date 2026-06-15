@@ -817,6 +817,12 @@ def create_extraction_agent(
             ctx.deps.variant,
             filing_level=ctx.deps.filing_level,
             filing_standard=ctx.deps.filing_standard,
+            # Item 32 (32b): thread the canonical DB context so verification can
+            # read run_concept_facts when XBRL_FACT_BASED_VERIFY is on. No-op
+            # when the flag is off or any of these is None (xlsx path runs).
+            db_path=ctx.deps.db_path,
+            run_id=ctx.deps.run_id,
+            template_id=ctx.deps.template_id,
         )
         # Phase 1.3: remember the last verification so save_result can
         # refuse to finalise if the agent skipped or failed verification.

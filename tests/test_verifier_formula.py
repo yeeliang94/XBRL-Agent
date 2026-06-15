@@ -218,3 +218,34 @@ def test_resolves_double_prefix_coefficients(wb):
     # --1 * B139 = +10 (two negatives cancel)
     assert _evaluate_formula(wb, "Main", "=--1*B139", warnings=warnings_mm) == 10.0
     assert warnings_mm == []
+
+
+def test_diamond_reference_counts_each_path(tmp_path):
+    """A cell referenced via two SEPARATE paths must contribute on each path.
+
+    Regression (2026-06-15): the recursion's ``visited`` set was never cleared,
+    so it doubled as an all-time "don't re-count" set and silently dropped the
+    second path of a diamond. Concretely on SOCF-Indirect, a reconciliation line
+    added directly to the operating total (+1) and subtracted inside "cash
+    generated from operations" (-1) had its cancelling -1 path skipped, so the
+    total over-counted by that line. Here ``B3 = B1 + B2`` with ``B2 = -B1``
+    must net to 0, not 100.
+    """
+    p = tmp_path / "diamond.xlsx"
+    b = openpyxl.Workbook()
+    ws = b.active
+    ws.title = "Main"
+    ws["B1"] = 100
+    ws["B2"] = "=-1*B1"
+    ws["B3"] = "=1*B1+1*B2"
+    # Genuine 2-cycle — must still break to 0 (guard intact), no recursion error.
+    ws["B4"] = "=1*B5"
+    ws["B5"] = "=1*B4"
+    b.save(p)
+    b.close()
+    wb = openpyxl.load_workbook(p)
+    try:
+        assert _evaluate_formula(wb, "Main", "=1*B1+1*B2") == 0.0
+        assert _evaluate_formula(wb, "Main", "=1*B4") == 0.0
+    finally:
+        wb.close()

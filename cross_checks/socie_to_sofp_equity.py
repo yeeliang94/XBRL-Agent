@@ -120,3 +120,77 @@ class SOCIEToSOFPEquityCheck:
             message="; ".join(parts),
             comparands=comparands,
         )
+
+    def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
+        """Fact-based twin of :meth:`run` (item 32). SOCIE equity-at-end is the
+        matrix Total column (MFRS X / MPERS B); SOFP total equity is linear."""
+        from cross_checks.facts_util import (
+            primary_scope, read_labelled_value, read_matrix_value, socie_total_col,
+        )
+        from cross_checks.util import filing_level_prefix
+
+        scope = primary_scope(ctx.filing_level)
+        col = socie_total_col(ctx.filing_standard)
+        socie = read_matrix_value(
+            ctx, StatementType.SOCIE, "equity at end of period", col, "CY", scope)
+        sofp = read_labelled_value(ctx, StatementType.SOFP, "total equity", "CY", scope)
+        socie_equity, sofp_equity = socie.value, sofp.value
+        socie_sheet = socie.sheet or "SOCIE"
+        sofp_sheet = sofp.sheet or "SOFP"
+
+        if socie_equity is None or sofp_equity is None:
+            return CrossCheckResult(
+                name=self.name, status="failed",
+                message=f"Could not find equity values: SOCIE={socie_equity}, SOFP={sofp_equity}",
+            )
+
+        diff = abs(socie_equity - sofp_equity)
+        group_passed = diff <= tolerance
+        primary_label = filing_level_prefix(ctx.filing_level, with_period=False)
+        parts = [f"{primary_label}: SOCIE ({socie_equity}) vs SOFP ({sofp_equity}), diff={diff:.2f}"]
+
+        co_socie_equity = None
+        co_sofp_equity = None
+        co_passed = True
+        if ctx.filing_level == "group":
+            co_socie_equity = read_matrix_value(
+                ctx, StatementType.SOCIE, "equity at end of period", col,
+                "CY", "Company").value
+            co_sofp_equity = read_labelled_value(
+                ctx, StatementType.SOFP, "total equity", "CY", "Company").value
+            if co_socie_equity is None or co_sofp_equity is None:
+                co_passed = False
+                parts.append(
+                    f"Company: missing equity values (SOCIE={co_socie_equity}, SOFP={co_sofp_equity})"
+                )
+            else:
+                co_diff = abs(co_socie_equity - co_sofp_equity)
+                co_passed = co_diff <= tolerance
+                parts.append(
+                    f"Company: SOCIE ({co_socie_equity}) vs SOFP ({co_sofp_equity}), diff={co_diff:.2f}"
+                )
+
+        comparands = [
+            Comparand(label="Equity at end of period", sheet=socie_sheet,
+                      value=socie_equity, role="lhs",
+                      statement=StatementType.SOCIE.value),
+            Comparand(label="Total equity", sheet=sofp_sheet, value=sofp_equity,
+                      role="rhs", statement=StatementType.SOFP.value),
+        ]
+        if ctx.filing_level == "group":
+            comparands += [
+                Comparand(label="Equity at end of period [company]",
+                          sheet=socie_sheet, value=co_socie_equity, role="lhs",
+                          statement=StatementType.SOCIE.value),
+                Comparand(label="Total equity [company]", sheet=sofp_sheet,
+                          value=co_sofp_equity, role="rhs",
+                          statement=StatementType.SOFP.value),
+            ]
+
+        return CrossCheckResult(
+            name=self.name,
+            status="passed" if group_passed and co_passed else "failed",
+            expected=socie_equity, actual=sofp_equity, diff=diff, tolerance=tolerance,
+            message="; ".join(parts),
+            comparands=comparands,
+        )

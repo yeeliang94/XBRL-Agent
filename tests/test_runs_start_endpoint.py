@@ -84,7 +84,7 @@ def test_start_flips_status_and_streams(draft_with_config):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=quiet_coordinator), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(output_dir / session_id / "filled.xlsx"), sheets_copied=0)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/runs/{run_id}/start")
 
     assert resp.status_code == 200
@@ -198,7 +198,7 @@ def test_infopack_survives_patch_and_reaches_coordinator(draft_with_config):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=capturing_coord), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(output_dir / session_id / "filled.xlsx"), sheets_copied=0)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/runs/{run_id}/start")
 
     assert resp.status_code == 200
@@ -241,7 +241,7 @@ def test_start_persists_orchestration_to_canonical_column(draft_with_config):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=quiet_coordinator), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(output_dir / session_id / "filled.xlsx"), sheets_copied=0)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/runs/{run_id}/start")
 
     assert resp.status_code == 200
@@ -305,7 +305,7 @@ def test_start_does_not_create_a_second_row_on_race(draft_with_config):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=quiet_coord), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(output_dir / session_id / "filled.xlsx"), sheets_copied=0)), \
-         patch("cross_checks.framework.run_all", return_value=[]), \
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]), \
          patch.object(repo, "fetch_run", side_effect=lying_fetch):
         resp = client.post(f"/api/runs/{run_id}/start")
 

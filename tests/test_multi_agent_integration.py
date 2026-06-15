@@ -115,7 +115,7 @@ class TestMultiAgentIntegration:
         with patch("server._create_proxy_model", return_value="fake-model"), \
              patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
              patch("workbook_merger.merge", return_value=fake_merge), \
-             patch("cross_checks.framework.run_all", return_value=fake_checks):
+             patch("cross_checks.framework.run_all", return_value=fake_checks), patch("cross_checks.framework.run_all_facts", return_value=fake_checks):
 
             resp = client.post(f"/api/run/{session_id}", json=run_config)
 
@@ -213,7 +213,7 @@ class TestMultiAgentIntegration:
         with patch("server._create_proxy_model", return_value="fake-model"), \
              patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
              patch("workbook_merger.merge", return_value=fake_merge), \
-             patch("cross_checks.framework.run_all", return_value=[]):
+             patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
 
             resp = client.post(f"/api/run/{session_id}", json=run_config)
 
@@ -319,7 +319,7 @@ class TestMultiAgentIntegration:
         with patch("server._create_proxy_model", return_value="fake-model"), \
              patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
              patch("workbook_merger.merge", return_value=fake_merge), \
-             patch("cross_checks.framework.run_all", return_value=[]):
+             patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
             resp = client.post(f"/api/run/{session_id}", json=run_config)
 
         assert resp.status_code == 200

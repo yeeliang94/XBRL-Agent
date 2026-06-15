@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -414,6 +414,63 @@ def clear_facts_for_template(db_path, run_id: int, template_id: str) -> int:
         raise
     finally:
         conn.close()
+
+
+def read_run_facts(
+    conn: sqlite3.Connection,
+    run_id: int,
+    template_ids: Sequence[str],
+    *,
+    kinds: Optional[Sequence[str]] = None,
+) -> dict[tuple[str, str, str], dict]:
+    """Load a run's facts keyed by ``(concept_uuid, period, entity_scope)``.
+
+    Item 32 (Excel-free verification) foundation. This is the read primitive
+    the fact-based cross-checks and ``verify_totals`` share — the same
+    uuid-join idiom as ``eval/grader._gradeable_facts`` but with three
+    deliberate differences:
+
+    * It **includes COMPUTED concepts by default** (``kinds=None``). The
+      grader excludes them so formula-derived totals can't inflate a score;
+      verification is the opposite case — it READS the cascade-written
+      totals (``concept_model/cascade.py`` persists every COMPUTED parent
+      into ``run_concept_facts`` with ``source='cascade'``), so those rows
+      are exactly what a balance/tie-out check needs.
+    * It returns the richer fact row (``value_status`` / ``children_status``
+      / ``source``), not just ``(value, value_status)`` — the save-gate and
+      magnitude checks need the status, and the source distinguishes a
+      cascade-owned total from an agent-observed one.
+    * It is scoped to a ``template_ids`` set (gotcha #21 — uuids differ per
+      variant), so a multi-statement run returns only the requested
+      statement's facts.
+
+    Pure read, no writes; the caller owns the connection. ``kinds`` (when
+    given) restricts to those ``concept_nodes.kind`` values.
+    """
+    if not template_ids:
+        return {}
+    placeholders = ",".join("?" for _ in template_ids)
+    sql = (
+        "SELECT f.concept_uuid, f.period, f.entity_scope, f.value, "
+        "       f.value_status, f.children_status, f.source "
+        "FROM run_concept_facts f "
+        "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
+        "WHERE f.run_id = ? AND n.template_id IN (" + placeholders + ")"
+    )
+    params: list = [run_id, *template_ids]
+    if kinds:
+        kind_ph = ",".join("?" for _ in kinds)
+        sql += " AND n.kind IN (" + kind_ph + ")"
+        params.extend(kinds)
+    out: dict[tuple[str, str, str], dict] = {}
+    for r in conn.execute(sql, params).fetchall():
+        out[(r[0], r[1], r[2])] = {
+            "value": r[3],
+            "value_status": r[4],
+            "children_status": r[5],
+            "source": r[6],
+        }
+    return out
 
 
 def write_fact(db_path, run_id: int, body: "FactWrite") -> dict:

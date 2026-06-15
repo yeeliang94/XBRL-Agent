@@ -118,3 +118,80 @@ class SOCIToSOCIETCICheck:
             message="; ".join(parts),
             comparands=comparands,
         )
+
+    def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
+        """Fact-based twin of :meth:`run` (item 32). SOCI TCI is linear; SOCIE
+        TCI is the matrix Total column (MFRS X / MPERS B)."""
+        from cross_checks.facts_util import (
+            primary_scope, read_labelled_value, read_matrix_value, socie_total_col,
+        )
+        from cross_checks.util import filing_level_prefix
+
+        scope = primary_scope(ctx.filing_level)
+        col = socie_total_col(ctx.filing_standard)
+        soci = read_labelled_value(
+            ctx, StatementType.SOCI, "total comprehensive income", "CY", scope)
+        socie = read_matrix_value(
+            ctx, StatementType.SOCIE, "total comprehensive income", col, "CY", scope)
+        soci_tci, socie_tci = soci.value, socie.value
+        soci_sheet = soci.sheet or "SOCI"
+        socie_sheet = socie.sheet or "SOCIE"
+
+        if soci_tci is None or socie_tci is None:
+            return CrossCheckResult(
+                name=self.name, status="failed",
+                message=f"Could not find TCI values: SOCI={soci_tci}, SOCIE={socie_tci}",
+            )
+
+        diff = abs(soci_tci - socie_tci)
+        group_passed = diff <= tolerance
+        primary_label = filing_level_prefix(ctx.filing_level, with_period=False)
+        parts = [f"{primary_label}: SOCI ({soci_tci}) vs SOCIE ({socie_tci}), diff={diff:.2f}"]
+
+        co_soci_tci = None
+        co_socie_tci = None
+        co_passed = True
+        if ctx.filing_level == "group":
+            co_soci_tci = read_labelled_value(
+                ctx, StatementType.SOCI, "total comprehensive income",
+                "CY", "Company").value
+            co_socie_tci = read_matrix_value(
+                ctx, StatementType.SOCIE, "total comprehensive income", col,
+                "CY", "Company").value
+            if co_soci_tci is None or co_socie_tci is None:
+                co_passed = False
+                parts.append(
+                    f"Company: missing TCI values (SOCI={co_soci_tci}, SOCIE={co_socie_tci})"
+                )
+            else:
+                co_diff = abs(co_soci_tci - co_socie_tci)
+                co_passed = co_diff <= tolerance
+                parts.append(
+                    f"Company: SOCI ({co_soci_tci}) vs SOCIE ({co_socie_tci}), diff={co_diff:.2f}"
+                )
+
+        comparands = [
+            Comparand(label="Total comprehensive income", sheet=soci_sheet,
+                      value=soci_tci, role="lhs",
+                      statement=StatementType.SOCI.value),
+            Comparand(label="Total comprehensive income", sheet=socie_sheet,
+                      value=socie_tci, role="rhs",
+                      statement=StatementType.SOCIE.value),
+        ]
+        if ctx.filing_level == "group":
+            comparands += [
+                Comparand(label="Total comprehensive income [company]",
+                          sheet=soci_sheet, value=co_soci_tci, role="lhs",
+                          statement=StatementType.SOCI.value),
+                Comparand(label="Total comprehensive income [company]",
+                          sheet=socie_sheet, value=co_socie_tci, role="rhs",
+                          statement=StatementType.SOCIE.value),
+            ]
+
+        return CrossCheckResult(
+            name=self.name,
+            status="passed" if group_passed and co_passed else "failed",
+            expected=soci_tci, actual=socie_tci, diff=diff, tolerance=tolerance,
+            message="; ".join(parts),
+            comparands=comparands,
+        )
