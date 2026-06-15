@@ -75,7 +75,7 @@ def test_legacy_post_run_session_creates_and_starts(legacy_session):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=quiet_coord), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=0)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=body)
 
     assert resp.status_code == 200

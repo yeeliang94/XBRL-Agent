@@ -397,6 +397,67 @@ def _reexport_and_remerge_from_facts(run_id: int) -> Optional[Path]:
         return None
 
 
+def _fact_based_checks_enabled() -> bool:
+    """Item 32 (32a) transition flag. When on, cross-checks read
+    ``run_concept_facts`` by uuid (``run_all_facts``) instead of opening
+    workbooks. Default ON as of plan Step 1.5b (2026-06-14): the fact path is
+    proven equal to the xlsx path by the shadow suite (all 6 checks) and the
+    full-pipeline e2e parity harness, and the mocked orchestration tests were
+    migrated to patch both paths. Set ``XBRL_FACT_BASED_CHECKS=0`` to fall back
+    to the xlsx path. Read at call time so tests can toggle it via the
+    environment."""
+    return os.environ.get("XBRL_FACT_BASED_CHECKS", "1").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _build_check_template_ids(
+    agent_results, filing_level: str, filing_standard: str
+) -> "Dict":
+    """Map each succeeded statement to its ``template_id`` (the fact-based
+    checks' analogue of ``all_workbook_paths``). Mirrors how
+    ``_export_canonical_workbooks`` derives the id from the master template,
+    so the scoping stays variant-precise (gotcha #21)."""
+    from statement_types import template_path as _tpl_path
+    from concept_model.parser import _derive_template_id
+
+    out: Dict = {}
+    for ar in agent_results:
+        if ar.status != "succeeded":
+            continue
+        try:
+            master = _tpl_path(
+                ar.statement_type, ar.variant,
+                level=filing_level, standard=filing_standard,
+            )
+        except (ValueError, KeyError):
+            # No template to scope this statement's facts: NotPrepared /
+            # standard-variant mismatch (ValueError), or an unresolved/None
+            # variant (KeyError from get_variant). Skip it — the xlsx path
+            # tolerates the same case via workbook_paths, so the fact path must
+            # degrade identically rather than crash the whole run.
+            continue
+        out[ar.statement_type] = _derive_template_id(Path(master))
+    return out
+
+
+def _fact_ctx_for_run(agent_results, run_config, run_id: int) -> Optional[dict]:
+    """Build the in-pipeline fact-check context, or ``None`` when the fact
+    path is disabled — in which case ``_run_cross_checks_bounded`` runs the
+    xlsx path unchanged. Cheap no-op when the flag is off (no template lookups
+    happen)."""
+    if not _fact_based_checks_enabled():
+        return None
+    return {
+        "run_id": run_id,
+        "template_ids": _build_check_template_ids(
+            agent_results, run_config.filing_level, run_config.filing_standard,
+        ),
+        "filing_level": run_config.filing_level,
+        "filing_standard": run_config.filing_standard,
+    }
+
+
 def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
     """Phase 4.3 — re-run the cross-checks against the current DB facts.
 
@@ -453,24 +514,6 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
         if not agent_results:
             return None
 
-        all_workbook_paths: Dict[StatementType, str] = {}
-        for stmt in StatementType:
-            wb = session_dir / f"{stmt.value}_filled.xlsx"
-            if wb.exists():
-                all_workbook_paths[stmt] = str(wb)
-
-        # Repoint each succeeded statement at a fresh DB-exported workbook so
-        # the checks see the edited figures, not the agent's scratch values.
-        _export_canonical_workbooks(
-            run_id=run_id,
-            agent_results=agent_results,
-            all_workbook_paths=all_workbook_paths,
-            session_dir=session_dir,
-            filing_level=filing_level,
-            filing_standard=filing_standard,
-            db_path=AUDIT_DB_PATH,
-        )
-
         check_config = {
             "statements_to_run": statements_to_run,
             "variants": variants,
@@ -483,11 +526,56 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
         # On expiry the worker is abandoned (see _CROSS_CHECK_EXECUTOR note)
         # and the TimeoutError rides the existing best-effort except → None.
         timeout = float(CROSS_CHECK_TIMEOUT)
-        future = _CROSS_CHECK_EXECUTOR.submit(
-            run_cross_checks,
-            build_default_cross_checks(), all_workbook_paths, check_config,
-            tolerance=tolerance,
-        )
+
+        if _fact_based_checks_enabled():
+            # Item 32 (32a): read the edited facts directly — NO workbook
+            # rebuild. This is the headline smell the plan targets (a workbook
+            # was rebuilt from DB facts just to run xlsx checks on it). The
+            # sqlite connection must be opened inside the worker thread.
+            template_ids = _build_check_template_ids(
+                agent_results, filing_level, filing_standard)
+
+            def _work_facts():
+                from cross_checks.framework import FactsContext, run_all_facts
+                conn2 = _open_audit_conn()
+                try:
+                    ctx = FactsContext(
+                        conn=conn2, run_id=run_id, template_ids=template_ids,
+                        filing_level=filing_level, filing_standard=filing_standard,
+                    )
+                    return run_all_facts(
+                        build_default_cross_checks(), ctx, check_config,
+                        tolerance=tolerance,
+                    )
+                finally:
+                    conn2.close()
+
+            future = _CROSS_CHECK_EXECUTOR.submit(_work_facts)
+        else:
+            all_workbook_paths: Dict[StatementType, str] = {}
+            for stmt in StatementType:
+                wb = session_dir / f"{stmt.value}_filled.xlsx"
+                if wb.exists():
+                    all_workbook_paths[stmt] = str(wb)
+
+            # Repoint each succeeded statement at a fresh DB-exported workbook
+            # so the checks see the edited figures, not the agent's scratch
+            # values.
+            _export_canonical_workbooks(
+                run_id=run_id,
+                agent_results=agent_results,
+                all_workbook_paths=all_workbook_paths,
+                session_dir=session_dir,
+                filing_level=filing_level,
+                filing_standard=filing_standard,
+                db_path=AUDIT_DB_PATH,
+            )
+            future = _CROSS_CHECK_EXECUTOR.submit(
+                run_cross_checks,
+                build_default_cross_checks(), all_workbook_paths, check_config,
+                tolerance=tolerance,
+            )
+
         try:
             results = future.result(
                 timeout=None if timeout == float("inf") else timeout,
@@ -1010,6 +1098,7 @@ async def _run_cross_checks_bounded(
     *,
     tolerance: float,
     on_check=None,
+    fact_ctx: Optional[dict] = None,
 ) -> list:
     """Run ``cross_checks.framework.run_all`` off the event loop, bounded.
 
@@ -1047,13 +1136,38 @@ async def _run_cross_checks_bounded(
             if _cb_state["active"]:
                 loop.call_soon_threadsafe(_forward, idx, total, result)
 
-    future = loop.run_in_executor(
-        _CROSS_CHECK_EXECUTOR,
-        lambda: _run_all(
-            checks, workbook_paths, check_config,
-            tolerance=tolerance, on_check=cb,
-        ),
-    )
+    # Item 32 (32a): when the transition flag is on and the caller supplied a
+    # fact context, read run_concept_facts by uuid instead of opening
+    # workbooks. The sqlite connection MUST be created inside the worker
+    # thread (sqlite connections aren't shareable across threads).
+    if fact_ctx is not None and _fact_based_checks_enabled():
+        from cross_checks.framework import FactsContext, run_all_facts
+
+        def _call_facts():
+            conn2 = _open_audit_conn()
+            try:
+                ctx = FactsContext(
+                    conn=conn2,
+                    run_id=fact_ctx["run_id"],
+                    template_ids=fact_ctx["template_ids"],
+                    filing_level=fact_ctx["filing_level"],
+                    filing_standard=fact_ctx["filing_standard"],
+                )
+                return run_all_facts(
+                    checks, ctx, check_config, tolerance=tolerance, on_check=cb,
+                )
+            finally:
+                conn2.close()
+
+        future = loop.run_in_executor(_CROSS_CHECK_EXECUTOR, _call_facts)
+    else:
+        future = loop.run_in_executor(
+            _CROSS_CHECK_EXECUTOR,
+            lambda: _run_all(
+                checks, workbook_paths, check_config,
+                tolerance=tolerance, on_check=cb,
+            ),
+        )
     try:
         return await asyncio.wait_for(
             future, timeout=None if timeout == float("inf") else timeout,
@@ -3715,6 +3829,10 @@ async def run_multi_agent_stream(
                 all_checks, all_workbook_paths, check_config,
                 tolerance=tolerance,
                 on_check=_on_initial_check,
+                fact_ctx=_fact_ctx_for_run(
+                    coordinator_result.agent_results,
+                    run_config, run_id,
+                ),
             )
         except Exception as _cc_exc:  # noqa: BLE001
             logger.exception(
@@ -4044,6 +4162,10 @@ async def run_multi_agent_stream(
                             all_checks, merged_paths_by_stmt, check_config,
                             tolerance=tolerance,
                             on_check=_on_post_check,
+                            fact_ctx=_fact_ctx_for_run(
+                                coordinator_result.agent_results,
+                                run_config, run_id,
+                            ),
                         )
                     except Exception as _cc_exc2:  # noqa: BLE001
                         logger.exception(

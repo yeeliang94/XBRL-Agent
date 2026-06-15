@@ -165,7 +165,7 @@ def test_existing_run_id_update_failure_still_writes_terminal_status(
                  sheets_copied=0,
              ),
          ), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/runs/{run_id}/start")
 
     assert resp.status_code == 200

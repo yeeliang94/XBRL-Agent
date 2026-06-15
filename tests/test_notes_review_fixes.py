@@ -166,7 +166,7 @@ async def test_notes_agents_persisted_to_run_agents_and_events(
     with patch("server._create_proxy_model", return_value="fake"), \
          patch("coordinator.run_extraction", side_effect=mock_face), \
          patch("notes.coordinator.run_notes_extraction", side_effect=mock_notes), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
             "notes_to_run": ["CORP_INFO"],
@@ -226,7 +226,7 @@ async def test_notes_coordinator_exception_fails_overall_run(
     with patch("server._create_proxy_model", return_value="fake"), \
          patch("coordinator.run_extraction", side_effect=mock_face), \
          patch("notes.coordinator.run_notes_extraction", side_effect=exploding_notes), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
             "notes_to_run": ["CORP_INFO"],

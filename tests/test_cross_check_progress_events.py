@@ -148,7 +148,7 @@ def test_initial_cross_check_run_emits_progress_events(session_env):
                  sheets_copied=2,
              ),
          ), \
-         patch("cross_checks.framework.run_all", side_effect=_fake_run_all), \
+         patch("cross_checks.framework.run_all", side_effect=_fake_run_all), patch("cross_checks.framework.run_all_facts", side_effect=_fake_run_all), \
          patch("server._run_reviewer_pass", side_effect=_fake_correction), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
@@ -245,7 +245,7 @@ def test_cross_check_progress_is_actually_live(session_env):
                  sheets_copied=1,
              ),
          ), \
-         patch("cross_checks.framework.run_all", side_effect=_fake_run_all), \
+         patch("cross_checks.framework.run_all", side_effect=_fake_run_all), patch("cross_checks.framework.run_all_facts", side_effect=_fake_run_all), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
@@ -302,7 +302,7 @@ def test_cross_check_progress_carries_phase_label(session_env):
                  sheets_copied=1,
              ),
          ), \
-         patch("cross_checks.framework.run_all", return_value=fake_results), \
+         patch("cross_checks.framework.run_all", return_value=fake_results), patch("cross_checks.framework.run_all_facts", return_value=fake_results), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 

@@ -121,7 +121,7 @@ def test_run_row_created_before_coordinator_runs(session_env):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=paused_coordinator), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=0)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -164,7 +164,7 @@ def test_run_row_marked_failed_when_coordinator_raises(session_env):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=boom_coordinator), \
          patch("workbook_merger.merge", return_value=MergeResult(success=False, errors=["unreachable"])), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200  # SSE stream returns 200 regardless
@@ -203,7 +203,7 @@ def test_run_row_marked_aborted_on_cancel(session_env):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=cancelled_coordinator), \
          patch("workbook_merger.merge", return_value=MergeResult(success=False, errors=[])), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -253,7 +253,7 @@ def test_client_disconnect_still_finalizes_row(session_env):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=runaway_coordinator), \
          patch("workbook_merger.merge", return_value=MergeResult(success=False, errors=[])), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -317,7 +317,7 @@ def test_notes_consistency_warnings_flow_through_sse_and_db(session_env):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=merged_path, sheets_copied=1)), \
-         patch("cross_checks.framework.run_all", return_value=[]), \
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]), \
          patch("cross_checks.notes_consistency.check_notes_consistency",
                return_value=[fake_warning]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
@@ -385,7 +385,7 @@ def test_merged_workbook_path_persisted_on_success_path(session_env):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=merged_path, sheets_copied=1)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -434,7 +434,7 @@ def test_effective_model_stored_per_agent_not_only_overrides(session_env):
     with patch("server._create_proxy_model", side_effect=lambda name, *a, **k: f"model:{name}"), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=2)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -512,7 +512,7 @@ def test_persisted_model_uses_model_name_attr_not_class_repr(session_env):
     with patch("server._create_proxy_model", side_effect=lambda name, *a, **k: _FakeModel(name)), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=2)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -659,7 +659,7 @@ def test_run_config_json_round_trips_request_body(session_env):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=2)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -726,7 +726,7 @@ def test_original_pdf_filename_persisted_to_runs_row(tmp_path, monkeypatch):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator([])), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=0)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -802,7 +802,7 @@ def test_notes_coordinator_crash_synthesizes_failed_result(session_env):
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
          patch("notes.coordinator.run_notes_extraction", side_effect=exploding_notes_coordinator), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=1)), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
     assert resp.status_code == 200
@@ -876,7 +876,7 @@ def test_face_rerun_preserves_prior_successful_notes(session_env):
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
          patch("workbook_merger.merge", side_effect=spy_merge), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         # Use the regular /api/run path since TestClient doesn't easily
         # differentiate rerun from run — they share the same stream handler
         # and the contract we're pinning (session_dir scan picks up prior

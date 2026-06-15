@@ -122,7 +122,7 @@ def test_merge_failure_emits_sse_error(session_env):
                  errors=["SOFP: failed to open: corrupted xlsx"],
              ),
          ), \
-         patch("cross_checks.framework.run_all", return_value=[]), \
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
@@ -187,6 +187,10 @@ def test_cross_check_exception_emits_sse_error_and_finalizes(session_env):
          ), \
          patch(
              "cross_checks.framework.run_all",
+             side_effect=ValueError("Sheet 'SOFP-CuNonCu' not found"),
+         ), \
+         patch(
+             "cross_checks.framework.run_all_facts",
              side_effect=ValueError("Sheet 'SOFP-CuNonCu' not found"),
          ), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
@@ -305,6 +309,10 @@ def test_post_correction_cross_check_exception_finalizes_with_errors(session_env
              "cross_checks.framework.run_all",
              side_effect=_run_all_side_effect,
          ), \
+         patch(
+             "cross_checks.framework.run_all_facts",
+             side_effect=_run_all_side_effect,
+         ), \
          patch("server._run_reviewer_pass", side_effect=_fake_correction), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
@@ -382,7 +390,7 @@ def test_hanging_cross_check_times_out_and_finalizes(session_env, monkeypatch):
                  sheets_copied=1,
              ),
          ), \
-         patch("cross_checks.framework.run_all", side_effect=_wedged_run_all), \
+         patch("cross_checks.framework.run_all", side_effect=_wedged_run_all), patch("cross_checks.framework.run_all_facts", side_effect=_wedged_run_all), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
@@ -441,7 +449,7 @@ async def test_event_loop_stays_live_during_slow_cross_check():
 
     hb = asyncio.ensure_future(_heartbeat())
     try:
-        with patch("cross_checks.framework.run_all", side_effect=_slow_run_all):
+        with patch("cross_checks.framework.run_all", side_effect=_slow_run_all), patch("cross_checks.framework.run_all_facts", side_effect=_slow_run_all):
             results = await server._run_cross_checks_bounded(
                 [], {}, {}, tolerance=1.0, on_check=_on_check,
             )
@@ -485,7 +493,7 @@ async def test_no_late_progress_frames_after_cross_check_timeout(monkeypatch):
                 on_check(i, 3, None)
         return []
 
-    with patch("cross_checks.framework.run_all", side_effect=_slow_run_all):
+    with patch("cross_checks.framework.run_all", side_effect=_slow_run_all), patch("cross_checks.framework.run_all_facts", side_effect=_slow_run_all):
         with pytest.raises(TimeoutError):
             await server._run_cross_checks_bounded(
                 [], {}, {}, tolerance=1.0, on_check=_on_check,

@@ -102,7 +102,7 @@ def test_run_emits_pipeline_stage_at_each_boundary(session_env):
                  sheets_copied=1,
              ),
          ), \
-         patch("cross_checks.framework.run_all", return_value=fake_results), \
+         patch("cross_checks.framework.run_all", return_value=fake_results), patch("cross_checks.framework.run_all_facts", return_value=fake_results), \
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 

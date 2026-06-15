@@ -149,7 +149,7 @@ def test_full_extraction_mocked(full_pipeline_env):
 
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
-         patch("cross_checks.framework.run_all", return_value=fake_checks):
+         patch("cross_checks.framework.run_all", return_value=fake_checks), patch("cross_checks.framework.run_all_facts", return_value=fake_checks):
 
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 
@@ -307,7 +307,7 @@ def test_group_filing_e2e_mocked(full_pipeline_env):
 
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
-         patch("cross_checks.framework.run_all", return_value=fake_checks):
+         patch("cross_checks.framework.run_all", return_value=fake_checks), patch("cross_checks.framework.run_all_facts", return_value=fake_checks):
 
         resp = client.post(f"/api/run/{session_id}", json=run_config)
 

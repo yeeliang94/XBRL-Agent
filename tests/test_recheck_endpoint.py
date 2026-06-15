@@ -93,6 +93,29 @@ def test_recheck_returns_results(client: TestClient):
         assert {"name", "status", "message"} <= set(res.keys())
 
 
+def test_recheck_fact_based_does_not_rebuild_workbook(client: TestClient, monkeypatch):
+    """Item 32 (32a/Step 1.3): with XBRL_FACT_BASED_CHECKS on, the recheck
+    reads facts directly and must NOT rebuild a workbook. We trip-wire
+    ``_export_canonical_workbooks`` — if it runs, the recheck swallows the
+    error and 404s, so asserting 200 + results proves the de-workbooked path
+    ran."""
+    import server as srv
+
+    def _boom(*a, **k):
+        raise AssertionError(
+            "_export_canonical_workbooks must not run in fact-based recheck")
+
+    monkeypatch.setenv("XBRL_FACT_BASED_CHECKS", "1")
+    monkeypatch.setattr(srv, "_export_canonical_workbooks", _boom)
+
+    r = client.get(f"/api/runs/{client.run_id}/recheck")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert isinstance(body["results"], list) and body["results"]
+    for res in body["results"]:
+        assert {"name", "status", "message"} <= set(res.keys())
+
+
 def test_recheck_unknown_run_404(client: TestClient):
     assert client.get("/api/runs/9999/recheck").status_code == 404
 

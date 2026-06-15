@@ -81,7 +81,7 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env):
          patch("concept_model.bootstrap.import_all_face_templates",
                return_value=[1, 2]), \
          patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
-         patch("cross_checks.framework.run_all", return_value=fake_checks):
+         patch("cross_checks.framework.run_all", return_value=fake_checks), patch("cross_checks.framework.run_all_facts", return_value=fake_checks):
         result = run.run_agent(
             pdf_path=pdf, model="test-model", output_dir=str(out),
             statements=stmts,

@@ -62,7 +62,7 @@ def test_sse_streams_events(tmp_path, monkeypatch):
 
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
-         patch("cross_checks.framework.run_all", return_value=[]):
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
 
         resp = client.post("/api/run/test-session", json=run_config)
 
