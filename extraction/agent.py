@@ -9,6 +9,7 @@ hints from scout.
 
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional, Union, List, Tuple, Set, Dict
@@ -519,6 +520,61 @@ def _summarize_template(fields: list[TemplateField]) -> str:
     return "\n".join(lines)
 
 
+# Item 32 (32c): process-global cache of the rendered read_template summary,
+# keyed by template_id. The summary string is fully determined by the template
+# file, and template_id identifies that file 1:1 (it encodes standard+level+
+# variant). So we build the summary once and memoise it — every later run of the
+# same template family reuses it without re-parsing the xlsx. Cleared on process
+# restart (the only time a regenerated template needs to invalidate the cache).
+_TEMPLATE_SUMMARY_CACHE: dict[str, str] = {}
+
+
+def _db_read_template_enabled() -> bool:
+    """Item 32 (32c) transition flag. When on, ``read_template`` serves a
+    process-cached rendered summary keyed by ``template_id`` instead of parsing
+    the workbook on every call. Default **ON** (plan Step 3.4); set
+    ``XBRL_DB_READ_TEMPLATE=0`` to force the legacy per-call xlsx parse. Read at
+    call time so tests can toggle it via the environment.
+    """
+    return os.environ.get("XBRL_DB_READ_TEMPLATE", "1").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _render_template_summary(deps: "ExtractionDeps") -> str:
+    """Return the template-structure summary the agent's ``read_template`` tool
+    serves.
+
+    With ``XBRL_DB_READ_TEMPLATE`` on and a ``template_id`` available, the
+    rendered string is memoised process-globally by ``template_id`` (Q3: cache
+    the rendered string — incl. literal formula text — rather than reconstruct
+    it from ``concept_nodes``, which lacks the formula text). The output is
+    byte-identical to the legacy per-call path, so the downstream compaction
+    pass (``history_processors._is_template_summary``, which keys on the
+    ``"=== Sheet:"`` banner) and the abstract/formula labelling are unaffected.
+
+    Falls through to the legacy per-``deps`` parse-and-cache when the flag is off
+    or no ``template_id`` is available (e.g. some CLI paths) — graceful
+    degradation, never a hard failure.
+    """
+    template_id = deps.template_id
+    if _db_read_template_enabled() and template_id:
+        cached = _TEMPLATE_SUMMARY_CACHE.get(template_id)
+        if cached is not None:
+            return cached
+        # First request for this template_id in this process: build once (the
+        # only xlsx parse for this family), memoise, reuse for every later call.
+        if not deps.template_fields:
+            deps.template_fields = _read_template_impl(deps.template_path)
+        summary = _summarize_template(deps.template_fields)
+        _TEMPLATE_SUMMARY_CACHE[template_id] = summary
+        return summary
+    # Flag off, or no template_id: legacy per-deps parse + cache.
+    if not deps.template_fields:
+        deps.template_fields = _read_template_impl(deps.template_path)
+    return _summarize_template(deps.template_fields)
+
+
 def create_extraction_agent(
     statement_type: StatementType,
     variant: str,
@@ -665,9 +721,7 @@ def create_extraction_agent(
     def read_template(ctx: RunContext[ExtractionDeps]) -> str:
         """Read the template structure. Returns the full template summary
         (cached after the first call so repeated calls are free)."""
-        if not ctx.deps.template_fields:
-            ctx.deps.template_fields = _read_template_impl(ctx.deps.template_path)
-        return _summarize_template(ctx.deps.template_fields)
+        return _render_template_summary(ctx.deps)
 
     @agent.tool
     def view_pdf_pages(ctx: RunContext[ExtractionDeps], pages: List[int]) -> List[Union[str, BinaryContent]]:
