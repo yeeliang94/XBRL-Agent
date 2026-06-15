@@ -291,12 +291,26 @@ def fill_workbook(
                 section_hint=mapping.section,
             )
             if target_row is None:
-                errors.append(
+                msg = (
                     f"No matching label for '{mapping.field_label}'"
                     f"{f' (section: {mapping.section})' if mapping.section else ''}"
                     f" in sheet '{mapping.sheet}'."
-                    f" Check the exact label text from read_template()."
                 )
+                redirect = _writable_label_in_other_sheets(
+                    wb, label_index, mapping.sheet,
+                    mapping.field_label, mapping.col,
+                )
+                if redirect is not None:
+                    other_sheet, other_row = redirect
+                    msg += (
+                        f" It IS a writable cell at '{other_sheet}'!row"
+                        f" {other_row} — write it there instead. This row"
+                        f" has no equivalent on '{mapping.sheet}' (some face"
+                        f" rows are direct data-entry with no sub-sheet line)."
+                    )
+                else:
+                    msg += " Check the exact label text from read_template()."
+                errors.append(msg)
                 continue
         elif mapping.row is not None:
             target_row = mapping.row
@@ -513,6 +527,40 @@ def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
 def _normalize_label(label: str) -> str:
     """Strip leading *, whitespace, and lowercase for matching."""
     return label.strip().lstrip("*").strip().lower()
+
+
+def _writable_label_in_other_sheets(
+    wb: openpyxl.Workbook,
+    label_index: dict[str, list[_LabelEntry]],
+    current_sheet: str,
+    field_label: str,
+    col: int,
+) -> Optional[tuple[str, int]]:
+    """Find `field_label` as a writable leaf on a sheet other than `current_sheet`.
+
+    Returns ``(sheet, row)`` for the first non-header occurrence whose cell at
+    `col` is empty or non-formula (i.e. a real data-entry target), else None.
+
+    Motivated by the 2026-06-15 SOFP OrderOfLiquidity incident: the agent
+    tried to write a non-derivative FVTPL unit-trust value to the SUB-sheet,
+    where "Investments other than investments accounted for using equity
+    method" does not exist — the row is a direct DATA_ENTRY leaf on the FACE
+    sheet (row 16, no sub-sheet equivalent). The bare "check the label text"
+    error sent the agent in circles until it gave up with a flagged imbalance
+    equal to exactly the FVTPL amount. Exact-match only — a fuzzy redirect
+    could send the agent to the wrong sheet, which is worse than no hint.
+    """
+    normalized = _normalize_label(field_label)
+    for sheet_name, entries in label_index.items():
+        if sheet_name == current_sheet or sheet_name not in wb.sheetnames:
+            continue
+        for entry in entries:
+            if entry.normalized_label != normalized or entry.is_header:
+                continue
+            cell = wb[sheet_name].cell(row=entry.row, column=col)
+            if cell.value is None or not str(cell.value).startswith("="):
+                return (sheet_name, entry.row)
+    return None
 
 
 def _find_row_by_label(
