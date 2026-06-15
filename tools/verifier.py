@@ -944,11 +944,15 @@ def _fact_based_verify_enabled() -> bool:
     """Item 32 (32b) transition flag. When on AND the caller threads
     ``db_path``/``run_id``/``template_id``, ``verify_statement`` reads the
     cascade-persisted totals from ``run_concept_facts`` (``verifier_facts``)
-    instead of opening the workbook and evaluating formulas. Default OFF until
-    every statement's fact path is ported + shadow-proven and flipped on (plan
-    Step 2.4). Read at call time so tests can toggle it via the environment.
+    instead of opening the workbook and evaluating formulas.
+
+    Default **ON** (plan Step 2.4, flipped 2026-06-15): every statement's fact
+    path is ported + shadow-proven and the full suite is green both ways. Set
+    ``XBRL_FACT_BASED_VERIFY=0`` to fall back to the xlsx formula-eval path,
+    which is still present and authoritative until Phase 4 retires it. Read at
+    call time so tests can toggle it via the environment.
     """
-    return os.environ.get("XBRL_FACT_BASED_VERIFY", "0").strip().lower() in (
+    return os.environ.get("XBRL_FACT_BASED_VERIFY", "1").strip().lower() in (
         "1", "true", "yes", "on",
     )
 

@@ -1,9 +1,9 @@
 # Implementation Plan: Excel-free verification pipeline (item 32)
 
-**Overall Progress:** `~55%` (Phase 0 ✅; Phase 1 ✅ COMPLETE — fact checks now DEFAULT ON; Phase 2 in progress; Phases 3–4 not started)
-**Status:** design / charter → **implementation plan** (expanded 2026-06-13) → **in progress** (Phase 1 landed 2026-06-14)
+**Overall Progress:** `~90%` (Phase 0 ✅; Phase 1 ✅ fact checks DEFAULT ON; Phase 2 ✅ verify DEFAULT ON (flipped 2026-06-15); Phase 3 ✅ read_template cache DEFAULT ON; Phase 4 — xlsx retirement NOT started, deliberately deferred)
+**Status:** design / charter → **implementation plan** (expanded 2026-06-13) → **in progress** (Phases 1–3 landed; Phase 4 deferred 2026-06-15)
 **PRD / context:** orchestration-hardening item 32; this file is the spec.
-**Last Updated:** 2026-06-14
+**Last Updated:** 2026-06-15
 
 > This expands the original charter into an ordered, shadow-gated implementation
 > plan. The charter's framing (Problem / End state / Invariants) is preserved
@@ -321,8 +321,8 @@ Step 1.5b below for the landing details. New/changed files:
 computed totals from `run_concept_facts`. Keep `VerificationResult`, tolerance,
 and all feedback wording byte-compatible. Gate behind `XBRL_FACT_BASED_VERIFY`.*
 
-**Status (2026-06-15): ALL FIVE statements ported + shadow-green; flag default
-OFF pending a flip-on decision.** `tools/verifier_facts.py` implements the fact
+**Status (2026-06-15): ✅ COMPLETE — ALL FIVE statements ported + shadow-green;
+flag default ON (Step 2.4 flipped 2026-06-15).** `tools/verifier_facts.py` implements the fact
 path for SOFP, SOCIE (matrix), SOCF, SOPL, SOCI;
 `tools/verifier.py::verify_statement` gained `(db_path, run_id, template_id)`
 kwargs + `_fact_based_verify_enabled()` + a `recompute_after_turn`-on-entry
@@ -333,16 +333,17 @@ flag-off-uses-xlsx). **Full suite green BOTH with the flag off (2251) and on
 (2255)** — unlike the cross-check flip, the verify flip breaks no mocked tests
 (they don't invoke the real verify tool with a DB context).
 
-**DECISION (2026-06-15): shipped OFF / opt-in.** The capability is complete and
-proven; the product owner chose to keep `XBRL_FACT_BASED_VERIFY` default `0` and
-trial it via the env var, validating the two behaviour changes below on a real
-filing before flipping the default. Step 2.4's flip-on is therefore deferred (not
-blocked) — set the env var to trial; resolve the SOCF-Indirect investigation +
-validate the stricter mandatory scan, then flip.
+**DECISION (2026-06-15): FLIPPED ON.** Originally shipped OFF / opt-in; on a
+follow-up product call the owner chose to flip `XBRL_FACT_BASED_VERIFY` default
+**ON** (set `=0` to fall back to the still-present xlsx path). The SOCF-Indirect
+investigation is resolved (see below) and the full backend suite is green with
+the flag default-on (`2257 passed, 2 skipped`). The stricter `mandatory_unfilled`
+behaviour (below) now ships live; it remains overridable via the env var if a
+real filing surfaces over-blocking.
 
-**Behaviour change gating the default flip-on:**
+**Behaviour change shipped by the default flip-on:**
 1. *Stricter `mandatory_unfilled`* (the documented product decision below) —
-   broadly increases save-gate blocks; should be validated on a real filing.
+   broadly increases save-gate blocks; overridable via `XBRL_FACT_BASED_VERIFY=0`.
 
 **RESOLVED (2026-06-15) — the SOCF-Indirect "divergence" was a legacy-evaluator
 bug, now FIXED.** The shadow test's uniform "every line = 100" seeding surfaced a
@@ -376,12 +377,12 @@ verifier shadow suite now uses SOCF-Indirect (byte-parity) again.
       the agent tool wrapper (`extraction/agent.py:804`, `ctx.deps` already has
       `run_id`). Add a fact-based code path behind the flag; keep the
       formula-eval path intact.
-  - [ ] 🟥 On entry, trigger `recompute_after_turn(db_path, run_id)` so totals
+  - [x] 🟩 On entry, trigger `recompute_after_turn(db_path, run_id)` so totals
         are fresh (Q4, recommended option b — idempotent).
   - **Verify:** with flag off, all `tools/verifier.py` behaviour and
         `tests/test_verifier.py` pass unchanged.
 
-- [ ] 🟥 **Step 2.2: Read totals from facts, not formulas** — populate
+- [x] 🟩 **Step 2.2: Read totals from facts, not formulas** — populate
       `computed_totals` (e.g. `total_assets_cy`, `total_equity_liabilities_cy`,
       and per-statement totals) by uuid lookup (Step 0.1/0.2) instead of
       `_evaluate_formula` / `_get_cell_value`.
@@ -396,7 +397,7 @@ verifier shadow suite now uses SOCF-Indirect (byte-parity) again.
         `tests/test_verifier_feedback_wording.py` (all 4 branches, sign-error
         diagnostics) passes with the flag **on**. This is the gotcha #17 guard.
 
-- [ ] 🟥 **Step 2.3: Save-gate parity** — `_verify_is_clean` /
+- [x] 🟩 **Step 2.3: Save-gate parity** — `_verify_is_clean` /
       `_check_save_gate` (`coordinator.py:125`, `extraction/agent.py:849`) read
       `is_balanced` / `mandatory_unfilled` / `mismatches` off `VerificationResult`.
       Ensure the fact-based result populates these identically (incl.
@@ -406,55 +407,69 @@ verifier shadow suite now uses SOCF-Indirect (byte-parity) again.
         completion path (memory: `save_gate_acknowledge_unresolved`) still
         finalises a flagged imbalance.
 
-- [ ] 🟥 **Step 2.4: Shadow-diff + flip on** — new
+- [x] 🟩 **Step 2.4: Shadow-diff + flip on (DONE 2026-06-15)** —
       `tests/test_verifier_shadow.py` runs `verify_statement` both ways on the
       e2e fixtures for SOFP/SOCIE/SOCF/SOPL/SOCI × MFRS/MPERS × Company/Group;
       asserts identical `VerificationResult.feedback` + `computed_totals` (at
-      2dp) + `is_balanced`. Flip `XBRL_FACT_BASED_VERIFY` default on once green.
-  - **Verify:** shadow suite green; `pytest tests/ -q` green with flag default on.
+      2dp) + `is_balanced`. `XBRL_FACT_BASED_VERIFY` default flipped to **ON**.
+  - **Verify:** shadow suite green; `pytest tests/ -q` green with flag default
+        on (`2257 passed, 2 skipped`).
 
 ---
 
 ### Phase 3: 32c — DB-rendered `read_template`
 
 *Serve the agent's template summary without parsing xlsx per agent. Cache the
-rendered summary at import (Q3, recommended: in-process cache keyed by
-`template_id`). Gate behind `XBRL_DB_READ_TEMPLATE`.*
+rendered summary in-process (Q3: in-process cache keyed by `template_id`). Gate
+behind `XBRL_DB_READ_TEMPLATE`.*
 
-- [ ] 🟥 **Step 3.1: Build the summary cache** — produce the exact
-      `_summarize_template` string (`extraction/agent.py:474`) once per
-      `template_id` and cache it. Source the string from the existing
+**Status (2026-06-15): ✅ COMPLETE — flag default ON.** Implemented as an
+in-process memo cache (`extraction/agent.py::_TEMPLATE_SUMMARY_CACHE` +
+`_render_template_summary`), NOT a DB read (Q3: `concept_nodes` lacks the literal
+formula text). The first `read_template` for a given `template_id` parses the
+xlsx once and memoises the rendered string; every later call (any agent, any
+run, same process) is served from cache with zero openpyxl load. Falls through
+to the legacy per-`deps` parse when the flag is off or no `template_id` is
+available (some CLI paths) — graceful degradation. New file:
+`tests/test_read_template_cache.py` (6 tests). Full suite green with both Phase 2
+and Phase 3 flags default-on (`2263 passed, 2 skipped`).
+
+- [x] 🟩 **Step 3.1: Build the summary cache** — `_render_template_summary`
+      produces the exact `_summarize_template` string once per `template_id` and
+      memoises it in `_TEMPLATE_SUMMARY_CACHE`. Sourced from the existing
       `tools/template_reader.read_template` + `_summarize_template` at first
-      request (or at import-time bootstrap), then memoise.
-  - [ ] 🟥 Confirm the summary is fully determined by `template_id` (it is — the
-        template file already encodes standard+level+variant); abstract flags
-        come from `section_headers.discover_section_headers` (fill colour) which
-        is deterministic per template.
-  - **Verify:** cache returns a string **byte-identical** to the live
-        `_summarize_template` output for every template family (assert in a test
-        iterating all template files).
+      request (lazy), then reused.
+  - [x] 🟩 Summary is fully determined by `template_id` (the template file
+        encodes standard+level+variant 1:1); abstract flags come from
+        `section_headers.discover_section_headers` (fill colour), deterministic
+        per template.
+  - **Verify:** `tests/test_read_template_cache.py::test_cached_summary_is_byte_
+        identical_for_every_template` — iterates all 58 Company/Group templates
+        across both standards; cached string == live `_summarize_template`
+        output, byte-for-byte. Green.
 
-- [ ] 🟥 **Step 3.2: Route `read_template` tool through the cache** — the agent
-      tool (`extraction/agent.py:665`) fetches the cached string when
-      `XBRL_DB_READ_TEMPLATE` is on; no openpyxl load in the agent loop.
-  - [ ] 🟥 `strip_duplicate_template` (`extraction/history_processors.py:365`)
-        and item 30 compaction operate on the rendered string regardless of
-        source — confirm `_is_template_summary` still matches the cached string.
-  - **Verify:** `tests/test_template_reader.py` (abstract-row marking,
-        MPERS header-fill parity, `[ABSTRACT …]`/`[DATA_ENTRY]`/`[FORMULA: …]`
-        labelling) passes with the flag on. Mocked-agent e2e
-        (`tests/test_e2e.py`) shows the agent receives the identical summary.
+- [x] 🟩 **Step 3.2: Route `read_template` tool through the cache** — the agent
+      tool (`extraction/agent.py`) now calls `_render_template_summary(ctx.deps)`;
+      no openpyxl load in the agent loop on a cache hit.
+  - [x] 🟩 `strip_duplicate_template` / item-30 compaction operate on the
+        `"=== Sheet:"` banner, which the byte-identical cached string still
+        carries — `_is_template_summary` matches it
+        (`…::test_cached_summary_still_matches_compaction_marker`).
+  - **Verify:** `tests/test_template_reader.py` + `tests/test_e2e.py` +
+        `tests/test_history_processors.py` green with the flag on (29 passed).
 
-- [ ] 🟥 **Step 3.3: Resolve the "mandatory markers" gap** — the charter lists
-      "mandatory markers" but the current summary does **not** emit them (no such
-      field in `TemplateField`). Keep parity: do **not** add markers in this
-      phase (out of scope; would change what the agent sees). Note the gap in the
-      plan + CLAUDE.md if a future item wants them.
-  - **Verify:** diff confirms no new tokens appear in the summary vs today.
+- [x] 🟩 **Step 3.3: "mandatory markers" gap — kept parity, NOT emitted.** The
+      charter listed "mandatory markers" but the summary has no such field in
+      `TemplateField`; adding them would change what the agent sees. Out of
+      scope — `…::test_no_new_marker_tokens_vs_legacy` pins that the cached
+      summary introduces no new tokens. A future item wanting mandatory markers
+      in the agent summary must add them to both paths deliberately.
+  - **Verify:** byte-equality test confirms no new tokens vs today.
 
-- [ ] 🟥 **Step 3.4: Flip default on** — `XBRL_DB_READ_TEMPLATE` default true
-      once 3.1/3.2 are green.
-  - **Verify:** `pytest tests/ -q` green with flag default on.
+- [x] 🟩 **Step 3.4: Flip default on** — `XBRL_DB_READ_TEMPLATE` defaults `1`
+      (`_db_read_template_enabled`); set `=0` for the legacy per-call parse.
+  - **Verify:** `pytest tests/ -q` green with flag default on
+        (`2263 passed, 2 skipped`).
 
 ---
 
@@ -462,6 +477,17 @@ rendered summary at import (Q3, recommended: in-process cache keyed by
 
 *Only after Phases 1–3 are green on the default-on flags. Delete the dead xlsx
 read paths, drop the transition flags, update docs, and add the end-state guard.*
+
+**Status (2026-06-15): PREREQUISITES MET, DELIBERATELY DEFERRED.** Phases 1–3
+are all default-on and green, so Phase 4 is now *unblocked*. It is being held
+back on purpose: it is irreversible (it deletes the xlsx fallback that today
+still answers when any `XBRL_*` flag is set `=0`), and the product owner wants
+the fact-based verify (Phase 2) to soak on real filings — particularly the
+stricter `mandatory_unfilled` save-gate behaviour — before the escape hatch is
+removed. Keep the three flags and the xlsx code in place until that soak passes,
+then execute Steps 4.1–4.4. The dual-path tests (every mocked check site patches
+both `run_all` and `run_all_facts`) already collapse cleanly when `run_all` is
+deleted.
 
 - [ ] 🟥 **Step 4.1: Delete dead xlsx read code** — remove the
       `run(workbook_paths,…)` check methods + `cross_checks/util.py` openpyxl
