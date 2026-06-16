@@ -224,6 +224,10 @@ ERROR_TYPE_SAVE_GATE_REFUSED = "save_gate_refused"
 ERROR_TYPE_TOOL_EXCEPTION = "tool_exception"
 ERROR_TYPE_CANCELLED = "cancelled"
 ERROR_TYPE_NO_WRITE = "no_write"
+# A transient error (429 / connection-class) that exhausted its retry budget —
+# distinct from tool_exception so post-mortems can tell "flaky provider, out of
+# retries" apart from "a tool threw".
+ERROR_TYPE_TRANSIENT_EXHAUSTED = "transient_exhausted"
 
 
 @dataclass
@@ -768,7 +772,15 @@ async def _run_single_agent(
                         agent_role, e,
                     )
                     continue
-            # Budget exhausted — terminal structured failure.
+            # Budget exhausted — terminal structured failure. A transient error
+            # that ran out of retries is classified distinctly from a genuine
+            # tool exception (only transient errors are re-raised to this block,
+            # so this is transient_exhausted in practice; the fallback guards a
+            # future non-transient re-raise).
+            terminal_error_type = (
+                ERROR_TYPE_TRANSIENT_EXHAUSTED if _is_transient_error(e)
+                else ERROR_TYPE_TOOL_EXCEPTION
+            )
             logger.exception(
                 "Face agent %s failed after %d attempt(s)",
                 agent_role, total_attempts,
@@ -780,7 +792,7 @@ async def _run_single_agent(
                 variant=variant,
                 status="failed",
                 error=last_error,
-                error_type=ERROR_TYPE_TOOL_EXCEPTION,
+                error_type=terminal_error_type,
             ))
 
 

@@ -5,6 +5,7 @@ import {
   cleanup,
   waitFor,
   fireEvent,
+  within,
 } from "@testing-library/react";
 import { NotesReviewTab } from "../components/NotesReviewTab";
 import type { NotesCellsResponse } from "../lib/notesCells";
@@ -117,10 +118,17 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
   test("renders one section per sheet", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
+    // Scope to the section HEADING — the sheet display name also appears
+    // in the navigator chip bar now, so a bare getByText would match twice.
     await waitFor(() => {
-      expect(screen.getByText("Corporate Information")).toBeInTheDocument();
       expect(
-        screen.getByText("Summary of Accounting Policies"),
+        screen.getByRole("heading", { level: 4, name: "Corporate Information" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", {
+          level: 4,
+          name: "Summary of Accounting Policies",
+        }),
       ).toBeInTheDocument();
     });
   });
@@ -184,7 +192,10 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     // most reliable signal that render has happened.
     await waitFor(() => {
       expect(
-        screen.getByText("Related Party Transactions"),
+        screen.getByRole("heading", {
+          level: 4,
+          name: "Related Party Transactions",
+        }),
       ).toBeInTheDocument();
     });
     // Read the sheet-title spans rather than raw h4 textContent so the
@@ -215,6 +226,76 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     );
     // A non-focused section stays collapsed (its row content is not mounted).
     expect(screen.queryByText("Corporate info")).toBeNull();
+  });
+
+  test("nav chip jumps to and expands its sheet", async () => {
+    mockFetchOnce(SAMPLE);
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    // Default: every section collapsed, no row content mounted.
+    expect(screen.queryByText("Revenue")).toBeNull();
+    // Clicking the navigator chip opens the matching section so its rows
+    // mount. The chip's accessible name is the sheet display name (the
+    // row-count badge is aria-hidden).
+    const nav = screen.getByRole("navigation", {
+      name: /jump to notes sheet/i,
+    });
+    fireEvent.click(
+      within(nav).getByRole("button", {
+        name: /summary of accounting policies/i,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Revenue")).toBeInTheDocument(),
+    );
+    // A non-picked sheet stays collapsed.
+    expect(screen.queryByText("Corporate info")).toBeNull();
+  });
+});
+
+describe("NotesReviewTab — numeric table alignment (Part A)", () => {
+  const TABLE_SAMPLE: NotesCellsResponse = {
+    sheets: [
+      {
+        sheet: "Notes-Listofnotes",
+        rows: [
+          {
+            row: 5,
+            label: "Capital commitments",
+            html:
+              "<table><tr><th>Item</th><th>2024</th></tr>" +
+              "<tr><td>Approved</td><td>1,595</td></tr></table>",
+            evidence: "Page 9",
+            source_pages: [9],
+            updated_at: "2026-04-24T10:00:00Z",
+          },
+        ],
+      },
+    ],
+  };
+
+  test("numeric value cells get the is-numeric class, label column does not", async () => {
+    mockFetchOnce(TABLE_SAMPLE);
+    const { container } = render(<NotesReviewTab runId={7} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    await waitFor(() => {
+      const tds = container.querySelectorAll(
+        '[data-testid="notes-review-editor"] td',
+      );
+      expect(tds.length).toBe(2);
+    });
+    const tds = container.querySelectorAll(
+      '[data-testid="notes-review-editor"] td',
+    );
+    // Label column (first cell of a multi-column row) stays left; the
+    // numeric value cell is tagged for right-alignment.
+    expect(tds[0].classList.contains("is-numeric")).toBe(false);
+    expect(tds[1].classList.contains("is-numeric")).toBe(true);
   });
 });
 
@@ -565,6 +646,83 @@ describe("NotesReviewTab — cross-run isolation (peer-review fix)", () => {
     expect(container.textContent).toContain("run-77 content");
     // The old run's content must NOT linger after the refetch lands.
     expect(container.textContent).not.toContain("run-42 content");
+  });
+
+  test("a nav-chip focus from run A does not auto-expand the same sheet in run B", async () => {
+    // Two sheets so the navigator chip bar renders (it's gated on >1 sheet).
+    // Both runs share the sheet NAMES so a leaked active.sheet would resolve
+    // to a real section in run B.
+    const mk = (tag: string): NotesCellsResponse => ({
+      sheets: [
+        {
+          sheet: "Notes-CI",
+          rows: [
+            {
+              row: 4,
+              label: "Corporate info",
+              html: `<p>${tag}-ci</p>`,
+              evidence: null,
+              source_pages: [],
+              updated_at: "2026-04-24T10:00:00Z",
+            },
+          ],
+        },
+        {
+          sheet: "Notes-SummaryofAccPol",
+          rows: [
+            {
+              row: 7,
+              label: "Revenue",
+              html: `<p>${tag}-policy</p>`,
+              evidence: null,
+              source_pages: [],
+              updated_at: "2026-04-24T10:00:00Z",
+            },
+          ],
+        },
+      ],
+    });
+    let nextResponse: NotesCellsResponse = mk("run-42");
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify(nextResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+
+    const { rerender, container } = render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    // Focus the policy sheet in run A via its nav chip — its row mounts.
+    const nav = screen.getByRole("navigation", { name: /jump to notes sheet/i });
+    fireEvent.click(
+      within(nav).getByRole("button", {
+        name: /summary of accounting policies/i,
+      }),
+    );
+    await waitFor(() =>
+      expect(container.textContent).toContain("run-42-policy"),
+    );
+
+    // Switch to run B. The previously-focused sheet must NOT carry over and
+    // auto-expand — the new run opens in the default all-collapsed state.
+    nextResponse = mk("run-77");
+    rerender(<NotesReviewTab runId={77} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    // Run B's chip bar is present (sheets loaded), but no section is expanded:
+    // neither row's content is mounted.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("navigation", { name: /jump to notes sheet/i }),
+      ).toBeInTheDocument(),
+    );
+    expect(container.textContent).not.toContain("run-77-policy");
+    expect(container.textContent).not.toContain("run-77-ci");
+    // And no stale run-A content lingers.
+    expect(container.textContent).not.toContain("run-42-policy");
   });
 });
 

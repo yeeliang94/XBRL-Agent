@@ -786,7 +786,10 @@ def _collect_unfilled_mandatory_facts(
         label = str(n["label"]).strip()
         if not label.startswith("*"):
             continue
-        if n["kind"] == "COMPUTED":
+        # COMPUTED totals are cascade-derived; ABSTRACT section headers are
+        # never writable (gotcha #17). Flagging either as an unfilled mandatory
+        # leaf would feed the save gate an impossible-to-satisfy requirement.
+        if n["kind"] in ("COMPUTED", "ABSTRACT"):
             continue
         if any(facts.get((n["uuid"], "CY", scope)) is None for scope in scopes):
             unfilled.append(label)

@@ -388,7 +388,8 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   PLAN-orchestration-hardening item 9). Vocabulary constants live next to
   `AgentResult` in `coordinator.py` (`turn_timeout · iteration_capped ·
   wallclock · token_budget_exceeded · projection_failed · save_gate_refused
-  · tool_exception · cancelled · no_write`); no CHECK constraint on purpose
+  · tool_exception · cancelled · no_write · transient_exhausted`); no CHECK
+  constraint on purpose
   (same rationale as `runs.status`). Server persistence guarantees every
   failed/cancelled agent row carries a non-null value
   (`server._agent_row_error_type` derives one when the coordinator didn't

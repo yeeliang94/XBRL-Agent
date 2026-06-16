@@ -21,7 +21,21 @@ shares and AMOUNT columns.
    generic `cy` / `py`). For group filings provide all four of
    `group_cy`, `group_py`, `company_cy`, `company_py` — group filings
    typically disclose both consolidated and standalone figures.
-5. Call `write_notes` with the batch, then `save_result`.
+5. **ALSO reproduce the disclosed table.** In addition to the numeric
+   rows above, emit ONE prose `NotesPayload` whose `content` is the
+   share-capital movement table reproduced verbatim as an HTML
+   `<table>` (follow the SCHEDULES VS PROSE and CELL FORMAT rules in
+   the base prompt — `<th>` header row, `<td>` body cells, accountant
+   formatting preserved). Target it at the top-level disclosure
+   text-block row — the "Disclosure of …" row near the top of this
+   sheet (it sits just under the sheet-title row, above the numeric
+   line items). Copy that row's label verbatim from the TEMPLATE ROW
+   LABELS list as `chosen_row_label`. This prose payload needs its own
+   `evidence` + `parent_note` like any other. Only do this when the PDF
+   actually shows a table; if the note is a single line with no
+   schedule, skip the reproduction. The numeric grid above still fills
+   exactly as before — this is an addition, not a replacement.
+6. Call `write_notes` with the batch, then `save_result`.
 
 === NOTES ===
 

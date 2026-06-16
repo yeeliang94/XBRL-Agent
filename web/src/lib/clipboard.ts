@@ -50,6 +50,8 @@
 // at the clipboard boundary — keeps the DB / sanitiser style-free while making
 // the paste land in the expected font. Use `10pt` (NOT `10px`): paste targets
 // like M-Tool / Word interpret a bare font size in points.
+import { shouldRightAlignCell } from "./tableAlign";
+
 const _CLIPBOARD_FONT = "font-family: Arial, sans-serif; font-size: 10pt;";
 // Width constraint: a faithful transcription of a wide movement table sizes
 // to its content and, on paste into M-Tool's fixed A4 page, overflows and
@@ -76,14 +78,12 @@ const _CLIPBOARD_PARAGRAPH_STYLE = _CLIPBOARD_FONT + " margin: 0 0 8px 0;";
 const _CLIPBOARD_HEADING_STYLE =
   _CLIPBOARD_FONT + " margin: 12px 0 6px 0; font-weight: 600;";
 
-// Numeric-cell heuristic: matches accountant-style numbers including
-// thousands-separated values (`1,595`), parenthesised negatives
-// (`(95)`), bare dashes used for "—" in empty year columns, decimals,
-// and a leading minus. Cells that match get `text-align: right` so the
-// paste lines up the way the human-filled reference (top of the
-// 2026-04-27 image) does. Non-matching cells default to left-align.
-const _NUMERIC_CELL_RE =
-  /^\(?\s*-?\s*[\d,]+(?:\.\d+)?\s*\)?$|^[-—–]+$/;
+// Numeric-cell heuristic + row-label-column rule live in the shared
+// tableAlign module so the clipboard paste and the in-app editor preview
+// stay in lock-step on which cells right-align. Cells that match get
+// `text-align: right` so the paste lines up the way the human-filled
+// reference (top of the 2026-04-27 image) does; the first column of a
+// multi-column row stays left (the row-label column).
 
 /** Add inline styles to table / th / td so a paste into M-Tool
  *  (or Word / Outlook / Gmail) renders with visible borders,
@@ -126,16 +126,31 @@ export function decorateHtmlForClipboard(html: string): string {
       table.setAttribute("cellspacing", "0");
   }
 
-  for (const th of Array.from(tmp.querySelectorAll("th"))) {
-    const text = (th.textContent ?? "").trim();
-    const align = _NUMERIC_CELL_RE.test(text) ? " text-align: right;" : " text-align: left;";
-    _mergeStyle(th, _CLIPBOARD_CELL_STYLE_BASE + _CLIPBOARD_HEADER_EXTRA + align);
-  }
-
-  for (const td of Array.from(tmp.querySelectorAll("td"))) {
-    const text = (td.textContent ?? "").trim();
-    const align = _NUMERIC_CELL_RE.test(text) ? " text-align: right;" : " text-align: left;";
-    _mergeStyle(td, _CLIPBOARD_CELL_STYLE_BASE + align);
+  // Walk row by row so the row-label column (first cell of a multi-column
+  // row) can stay left-aligned while numeric value columns go right —
+  // see shouldRightAlignCell. A bare single-cell numeric row still
+  // right-aligns.
+  for (const row of Array.from(tmp.querySelectorAll("tr"))) {
+    const cells = Array.from(row.children).filter(
+      (c) => c.tagName === "TD" || c.tagName === "TH",
+    );
+    cells.forEach((cell, idx) => {
+      const align = shouldRightAlignCell(
+        cell.textContent ?? "",
+        idx,
+        cells.length,
+      )
+        ? " text-align: right;"
+        : " text-align: left;";
+      if (cell.tagName === "TH") {
+        _mergeStyle(
+          cell,
+          _CLIPBOARD_CELL_STYLE_BASE + _CLIPBOARD_HEADER_EXTRA + align,
+        );
+      } else {
+        _mergeStyle(cell, _CLIPBOARD_CELL_STYLE_BASE + align);
+      }
+    });
   }
 
   // Prose: Arial 10pt + a bottom margin so non-table cells paste with a

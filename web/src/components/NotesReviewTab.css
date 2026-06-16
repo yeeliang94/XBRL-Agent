@@ -74,3 +74,12 @@
   background: #F4F4F4; /* grey100 */
   font-weight: 600;
 }
+
+/* Numeric value cells right-align so the review preview matches the
+ * clipboard / M-Tool paste. The `.is-numeric` class is toggled on by
+ * tagNumericCells (web/src/lib/tableAlign.ts) after every editor update;
+ * the row-label first column is exempted there, so it stays left. */
+.notes-review-tab .tiptap th.is-numeric,
+.notes-review-tab .tiptap td.is-numeric {
+  text-align: right;
+}

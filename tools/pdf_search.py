@@ -21,6 +21,9 @@ scope (owner decision).
 from __future__ import annotations
 
 import json
+import os
+import threading
+from collections import OrderedDict
 from typing import Optional
 
 import fitz  # PyMuPDF
@@ -37,6 +40,47 @@ _MAX_QUERY_LEN = 200
 _CLIPPED_NOTE = (
     "clipped — re-search this phrase alone or with a more specific phrase"
 )
+
+# Extracting + lowercasing the whole text layer is the dominant cost of a
+# search, and 3 agent types call this many times per run over the SAME
+# 100-300 page PDF. Memoise (page_texts, page_lowers) per (path, mtime) so the
+# layer is parsed once. Keyed on mtime so a reused path self-invalidates;
+# bounded so concurrent runs over distinct PDFs can't grow it without limit.
+# Mirrors the tools/page_cache.py design (bounded LRU, module singleton).
+_TEXT_CACHE_MAX = 8
+_text_cache: "OrderedDict[tuple[str, float], tuple[list[str], list[str]]]" = (
+    OrderedDict()
+)
+_text_cache_lock = threading.Lock()
+
+
+def _load_page_texts(pdf_path: str) -> tuple[list[str], list[str]]:
+    """Return ``(page_texts, page_lowers)`` for the PDF, memoised per
+    ``(path, mtime)``. Sync tools dispatch onto worker threads, so the cache is
+    guarded by a lock (the critical section is O(1))."""
+    try:
+        key: Optional[tuple[str, float]] = (pdf_path, os.path.getmtime(pdf_path))
+    except OSError:
+        key = None  # let fitz.open raise the real, agent-readable error
+    if key is not None:
+        with _text_cache_lock:
+            cached = _text_cache.get(key)
+            if cached is not None:
+                _text_cache.move_to_end(key)
+                return cached
+    doc = fitz.open(pdf_path)
+    try:
+        page_texts = [p.get_text("text") for p in doc]
+    finally:
+        doc.close()
+    page_lowers = [t.lower() for t in page_texts]
+    if key is not None:
+        with _text_cache_lock:
+            _text_cache[key] = (page_texts, page_lowers)
+            _text_cache.move_to_end(key)
+            while len(_text_cache) > _TEXT_CACHE_MAX:
+                _text_cache.popitem(last=False)
+    return page_texts, page_lowers
 
 
 def _snippet_around(text: str, lo: int, hi: int) -> str:
@@ -100,79 +144,74 @@ def search_pdf_text(
         )
         queries = queries[:_MAX_QUERIES]
 
-    doc = fitz.open(pdf_path)
-    try:
-        # Cache each page's text + lowercase form once — multiple queries reuse
-        # it. "Scanned" is derived from the WHOLE document, not a front-matter
-        # sample: a hybrid PDF (image-only cover/TOC, text-layer notes) must
-        # still search its searchable pages rather than be written off as
-        # scanned (peer-review MEDIUM).
-        page_texts: list[str] = [p.get_text("text") for p in doc]
-        page_lowers: list[str] = [t.lower() for t in page_texts]
+    # Extract each page's text + lowercase form once (memoised per file).
+    # "Scanned" is derived from the WHOLE document, not a front-matter sample:
+    # a hybrid PDF (image-only cover/TOC, text-layer notes) must still search
+    # its searchable pages rather than be written off as scanned (peer-review
+    # MEDIUM).
+    page_texts, page_lowers = _load_page_texts(pdf_path)
 
-        if not any(t.strip() for t in page_texts):
-            return {
-                "scanned": True,
-                "message": (
-                    "This document appears to be scanned (no text layer); text "
-                    "search is unavailable. Navigate with the page images and "
-                    "the scout's page hints instead."
-                ),
-                "max_hits": max_hits,
-                "note": list_note,
-                "results": [],
-            }
-
-        results: list[dict] = []
-        # Per-query allocation — every query in the batch gets its own slot
-        # budget, so an early common term ("the", "total") cannot consume the
-        # whole cap and starve later, more specific queries.
-        per_query = max(1, max(0, int(max_hits)) // max(1, len(queries)))
-        for raw_q in queries:
-            q = (raw_q or "").strip()
-            entry: dict = {
-                "query": raw_q, "total_matches": 0, "hits": [], "note": None,
-            }
-            query_notes: list[str] = []
-            if len(q) > _MAX_QUERY_LEN:
-                query_notes.append(
-                    f"query truncated to its first {_MAX_QUERY_LEN} chars — "
-                    f"search shorter, more specific phrases"
-                )
-                q = q[:_MAX_QUERY_LEN].strip()
-            if not q:
-                results.append(entry)
-                continue
-            needle = q.lower()
-            total = 0
-            remaining = per_query
-            for page_idx, low in enumerate(page_lowers):
-                start = 0
-                while True:
-                    pos = low.find(needle, start)
-                    if pos == -1:
-                        break
-                    total += 1
-                    if remaining > 0:
-                        entry["hits"].append({
-                            "page": page_idx + 1,
-                            "snippet": _snippet_around(
-                                page_texts[page_idx], pos, pos + len(needle)),
-                        })
-                        remaining -= 1
-                    start = pos + len(needle)
-            entry["total_matches"] = total
-            if total > len(entry["hits"]):
-                query_notes.append(_CLIPPED_NOTE)
-            if query_notes:
-                entry["note"] = "; ".join(query_notes)
-            results.append(entry)
+    if not any(t.strip() for t in page_texts):
         return {
-            "scanned": False, "message": None,
-            "max_hits": max_hits, "note": list_note, "results": results,
+            "scanned": True,
+            "message": (
+                "This document appears to be scanned (no text layer); text "
+                "search is unavailable. Navigate with the page images and "
+                "the scout's page hints instead."
+            ),
+            "max_hits": max_hits,
+            "note": list_note,
+            "results": [],
         }
-    finally:
-        doc.close()
+
+    results: list[dict] = []
+    # Per-query allocation — every query in the batch gets its own slot
+    # budget, so an early common term ("the", "total") cannot consume the
+    # whole cap and starve later, more specific queries.
+    per_query = max(1, max(0, int(max_hits)) // max(1, len(queries)))
+    for raw_q in queries:
+        q = (raw_q or "").strip()
+        entry: dict = {
+            "query": raw_q, "total_matches": 0, "hits": [], "note": None,
+        }
+        query_notes: list[str] = []
+        if len(q) > _MAX_QUERY_LEN:
+            query_notes.append(
+                f"query truncated to its first {_MAX_QUERY_LEN} chars — "
+                f"search shorter, more specific phrases"
+            )
+            q = q[:_MAX_QUERY_LEN].strip()
+        if not q:
+            results.append(entry)
+            continue
+        needle = q.lower()
+        total = 0
+        remaining = per_query
+        for page_idx, low in enumerate(page_lowers):
+            start = 0
+            while True:
+                pos = low.find(needle, start)
+                if pos == -1:
+                    break
+                total += 1
+                if remaining > 0:
+                    entry["hits"].append({
+                        "page": page_idx + 1,
+                        "snippet": _snippet_around(
+                            page_texts[page_idx], pos, pos + len(needle)),
+                    })
+                    remaining -= 1
+                start = pos + len(needle)
+        entry["total_matches"] = total
+        if total > len(entry["hits"]):
+            query_notes.append(_CLIPPED_NOTE)
+        if query_notes:
+            entry["note"] = "; ".join(query_notes)
+        results.append(entry)
+    return {
+        "scanned": False, "message": None,
+        "max_hits": max_hits, "note": list_note, "results": results,
+    }
 
 
 def search_pdf_text_json(

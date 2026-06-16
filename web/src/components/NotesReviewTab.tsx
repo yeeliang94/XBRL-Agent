@@ -37,6 +37,7 @@ import {
   type NotesSheet,
 } from "../lib/notesCells";
 import { copyHtmlAsRichText } from "../lib/clipboard";
+import { tagNumericCells } from "../lib/tableAlign";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
 import "./NotesReviewTab.css";
 
@@ -107,6 +108,32 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
   // by the edited_count fetch; a truthy value opens the dialog and
   // stores the message "This will overwrite N edited cells".
   const [pendingCount, setPendingCount] = useState<number | null>(null);
+
+  // Which sheet the navigator has focused. Clicking a nav chip expands +
+  // scrolls that sheet (via SheetSection's focus effect). `key` bumps on
+  // every click so re-clicking an already-focused-but-manually-collapsed
+  // sheet re-opens it. Initialised from the `focusSheet` prop so a deep
+  // link / Notes sub-tab pick still auto-opens its section.
+  const [active, setActive] = useState<{ sheet: string | null; key: number }>(
+    () => ({ sheet: focusSheet ?? null, key: 0 }),
+  );
+  // Reset the navigator focus when the run changes. `active`'s lazy
+  // initializer only runs at mount, so without this a sheet the reviewer
+  // focused in run A (via a nav chip) would survive the runId change and
+  // auto-expand + scroll a same-named section in run B — mirroring the
+  // sheets/loadError reset in the fetch effect below. Seed from focusSheet
+  // so a deep-linked / sub-tab-focused run still opens its section.
+  useEffect(() => {
+    setActive({ sheet: focusSheet ?? null, key: 0 });
+    // focusSheet intentionally omitted: a later focusSheet change is handled
+    // by the sync effect below; including it here would re-run on every nav
+    // chip pick (which routes through setActive, not focusSheet).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId]);
+  // Keep in sync if the parent changes focusSheet after mount.
+  useEffect(() => {
+    if (focusSheet) setActive((a) => ({ sheet: focusSheet, key: a.key + 1 }));
+  }, [focusSheet]);
 
   useEffect(() => {
     // Clear prior-run state synchronously so the user never sees run
@@ -204,6 +231,34 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
         </p>
       )}
 
+      {/* Sheet navigator — jump straight to a sheet instead of scrolling
+          the whole stack. Only shown when there's more than one sheet to
+          move between. Chips double as an at-a-glance index of which
+          sheets the run produced and how many rows each holds. */}
+      {sheets && sheets.length > 1 && (
+        <nav style={styles.sheetNav} aria-label="Jump to notes sheet">
+          {sheets.map((sh) => {
+            const isActive = active.sheet === sh.sheet;
+            return (
+              <button
+                key={sh.sheet}
+                type="button"
+                style={isActive ? styles.sheetNavChipActive : styles.sheetNavChip}
+                aria-current={isActive ? "true" : undefined}
+                onClick={() =>
+                  setActive((a) => ({ sheet: sh.sheet, key: a.key + 1 }))
+                }
+              >
+                {notesSheetDisplayName(sh.sheet)}
+                <span style={styles.sheetNavChipCount} aria-hidden="true">
+                  {sh.rows.length}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+      )}
+
       {sheets && sheets.length > 0 && (
         <div style={styles.sheetStack}>
           {sheets.map((sh) => (
@@ -217,7 +272,8 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
               key={`${runId}:${sh.sheet}`}
               runId={runId}
               sheet={sh}
-              focus={focusSheet === sh.sheet}
+              focus={active.sheet === sh.sheet}
+              focusKey={active.key}
             />
           ))}
         </div>
@@ -245,12 +301,16 @@ function SheetSection({
   runId,
   sheet,
   focus = false,
+  focusKey = 0,
 }: {
   runId: number;
   sheet: NotesSheet;
-  /** When true (the reviewer picked this notes sub-tab), the section opens
-   *  and scrolls into view. */
+  /** When true (the reviewer picked this notes sub-tab / nav chip), the
+   *  section opens and scrolls into view. */
   focus?: boolean;
+  /** Bumps on every nav-chip click so re-selecting an already-focused but
+   *  manually-collapsed section re-opens it (focus alone wouldn't change). */
+  focusKey?: number;
 }) {
   // Collapsed by default so a run with 3-5 sheets doesn't mount every
   // TipTap editor on first paint. Matches the agent-card pattern above
@@ -267,10 +327,18 @@ function SheetSection({
     if (!focus) return;
     setExpanded(true);
     sectionRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
-  }, [focus]);
+  }, [focus, focusKey]);
 
   return (
-    <section ref={sectionRef} style={styles.sheetSection}>
+    <section
+      ref={sectionRef}
+      style={{
+        ...styles.sheetSection,
+        // Orange left accent when open draws the eye to the active section
+        // and visually separates an expanded sheet from its collapsed peers.
+        borderLeftColor: expanded ? pwc.orange500 : pwc.grey300,
+      }}
+    >
       {/* Button-inside-h4 keeps the heading role so
           getByRole("heading", { level: 4, name }) still works while
           letting the whole header act as the toggle. */}
@@ -467,6 +535,24 @@ function CellRow({
     editor.commands.setContent(cell.html, { emitUpdate: false });
     liveHtmlRef.current = cell.html;
     savedHtmlRef.current = cell.html;
+  }, [editor, cell.html]);
+
+  // Right-align numeric table cells in the rendered editor so the review
+  // preview matches the clipboard / M-Tool paste. tagNumericCells toggles
+  // the `.is-numeric` class on numeric <td>/<th> (CSS does the alignment).
+  // Runs once after mount/content-set and re-runs on every edit — a
+  // ProseMirror transaction can recreate cell DOM and drop the class, so
+  // we re-tag on `update`. Display-only: classList changes never reach
+  // getHTML(), so copy / PATCH are unaffected (gotcha #16 — store stays
+  // style-free).
+  useEffect(() => {
+    if (!editor) return;
+    const apply = () => tagNumericCells(editor.view.dom);
+    apply();
+    editor.on("update", apply);
+    return () => {
+      editor.off("update", apply);
+    };
   }, [editor, cell.html]);
 
   const scheduleSave = useCallback(() => {
@@ -793,18 +879,63 @@ const styles = {
     color: pwc.grey700,
     fontSize: 13,
   } as React.CSSProperties,
+  // Navigator chip bar — one chip per sheet, jumps to + opens that
+  // section. Wraps on narrow widths. Sits above the stack.
+  sheetNav: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 6,
+  } as React.CSSProperties,
+  sheetNavChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "4px 10px",
+    fontFamily: pwc.fontMono,
+    fontSize: 11.5,
+    fontWeight: 600,
+    letterSpacing: 0.2,
+    color: pwc.grey700,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.pill,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  sheetNavChipActive: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "4px 10px",
+    fontFamily: pwc.fontMono,
+    fontSize: 11.5,
+    fontWeight: 600,
+    letterSpacing: 0.2,
+    color: pwc.orange700,
+    background: pwc.orange50,
+    border: `1px solid ${pwc.orange500}`,
+    borderRadius: pwc.radius.pill,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  sheetNavChipCount: {
+    fontFamily: pwc.fontMono,
+    fontSize: 10.5,
+    fontWeight: 400,
+    color: pwc.grey500,
+  } as React.CSSProperties,
   sheetStack: {
     display: "flex",
     flexDirection: "column" as const,
     gap: 10,
   } as React.CSSProperties,
-  // Card chrome matching the agent cards in RunDetailView — white
-  // background, grey border, rounded corners. Gives each sheet a clear
-  // visual boundary the way face-statement agent cards do.
+  // Each sheet is a white card with a clear header band + an orange left
+  // accent when open (set inline in SheetSection). The dominant header
+  // and flat row list (below) make sheet boundaries obvious instead of
+  // every container reading as an identical card.
   sheetSection: {
     display: "flex",
     flexDirection: "column" as const,
     border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.grey300}`,
     borderRadius: 6,
     background: pwc.white,
     overflow: "hidden",
@@ -815,13 +946,15 @@ const styles = {
     margin: 0,
   } as React.CSSProperties,
   // Full-width button so the whole row is clickable, not just the text.
+  // Grey header band makes the sheet boundary read as a section divider
+  // distinct from the flat white rows below it.
   sheetHeadingButton: {
     display: "flex",
     alignItems: "center",
     gap: 10,
     width: "100%",
-    padding: "10px 14px",
-    background: "transparent",
+    padding: "11px 14px",
+    background: pwc.grey100,
     border: "none",
     cursor: "pointer",
     fontFamily: "inherit",
@@ -831,7 +964,7 @@ const styles = {
   } as React.CSSProperties,
   sheetHeadingText: {
     fontFamily: pwc.fontMono,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: 600,
     color: pwc.grey900,
     textTransform: "uppercase" as const,
@@ -852,17 +985,19 @@ const styles = {
   rowStack: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: 10,
-    padding: 14,
-    borderTop: `1px solid ${pwc.grey100}`,
+    gap: 0,
+    padding: "0 14px",
+    borderTop: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
+  // Flat list rows separated by hairlines — not bordered cards. With the
+  // sheet header carrying the visual weight, rows read as content nested
+  // under the sheet rather than as peer containers.
   cellRow: {
     display: "grid",
     gridTemplateColumns: "220px 1fr",
     gap: 16,
-    padding: 12,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 6,
+    padding: "14px 4px",
+    borderBottom: `1px solid ${pwc.grey100}`,
     background: pwc.white,
   } as React.CSSProperties,
   cellLeft: {

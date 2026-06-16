@@ -14,6 +14,32 @@ from pathlib import Path
 from typing import Union
 
 
+def validate_session_id(session_id: str) -> str:
+    """Return ``session_id`` unchanged if it is a single safe path segment, else
+    raise ``ValueError``.
+
+    Defence-in-depth for URL-controlled session ids that are joined to
+    ``OUTPUT_DIR`` (``OUTPUT_DIR / session_id``). We don't require the exact
+    UUID4 shape the server mints — some callers use other opaque ids — only that
+    the value is ONE path component with no traversal: rejecting ``..``, ``.``,
+    empty strings, and anything containing ``/`` or ``\\`` (or a drive/root
+    prefix) is enough to keep the join inside the output tree. Route handlers map
+    the ``ValueError`` onto an HTTP 400.
+    """
+    # Reject both separators explicitly (``Path.name`` only treats the
+    # native one as a separator, so a backslash slips through on POSIX even
+    # though it IS a separator on the Windows deployment target — gotcha #1).
+    if (
+        not isinstance(session_id, str)
+        or session_id in ("", ".", "..")
+        or "/" in session_id
+        or "\\" in session_id
+        or session_id != Path(session_id).name
+    ):
+        raise ValueError(f"invalid session_id: {session_id!r}")
+    return session_id
+
+
 # Project root is two levels up from this file: utils/paths.py → repo/.
 # Anything under it is a legal write target.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

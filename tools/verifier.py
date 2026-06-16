@@ -1000,6 +1000,10 @@ def verify_statement(
         # Q4 (recompute on entry) — totals fresh regardless of tool ordering.
         recompute_after_turn(db_path, run_id)
         conn = sqlite3.connect(db_path)
+        # Shared run DB: concurrent agents may be committing project_writes
+        # while this read runs — give it the same 5000ms retry window the
+        # writers use instead of failing on an immediate lock (see cascade).
+        conn.execute("PRAGMA busy_timeout = 5000")
         try:
             fact_result = verify_statement_facts(
                 conn, run_id, template_id, statement_type,

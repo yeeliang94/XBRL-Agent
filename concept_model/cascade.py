@@ -72,6 +72,11 @@ def recompute_after_turn(db_path: str | Path, run_id: int) -> None:
     """
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
+    # recompute_after_turn now runs on the per-tool verify path (item 32), so
+    # it races concurrent agents' project_writes commits on the shared run DB.
+    # Match the writer's retry window (cell_resolver / facts_api both set 5000)
+    # so a collision waits rather than raising an immediate "database is locked".
+    conn.execute("PRAGMA busy_timeout = 5000")
     try:
         # Collect every (period, entity_scope) tuple that has any fact
         # for this run — we recompute per tuple independently so a
