@@ -15,6 +15,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 import server
+from utils.paths import validate_session_id
 
 logger = logging.getLogger("server")
 
@@ -137,6 +138,10 @@ async def scout_pdf(session_id: str, request: Request):
     and runs the vision pass directly. Use this when the operator knows
     the uploaded PDF is image-only.
     """
+    try:
+        validate_session_id(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session id.")
     session_dir = server.OUTPUT_DIR / session_id
     pdf_path = session_dir / "uploaded.pdf"
 

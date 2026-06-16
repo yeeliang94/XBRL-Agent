@@ -142,7 +142,9 @@ async def test_429_budget_exhaustion_fails_structured(tmp_path):
 
     r = result.agent_results[0]
     assert r.status == "failed"
-    assert r.error_type == "tool_exception"
+    # A 429 that exhausts the retry budget is classified as transient_exhausted,
+    # distinct from a genuine tool_exception.
+    assert r.error_type == "transient_exhausted"
     assert calls["n"] == RATE_LIMIT_MAX_RETRIES + 1
 
 

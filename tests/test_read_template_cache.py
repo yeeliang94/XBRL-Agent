@@ -87,7 +87,8 @@ def test_second_call_does_not_reparse_the_workbook(_flag_on, monkeypatch):
     monkeypatch.setattr(agent_mod, "_read_template_impl", _boom)
     second = _render_template_summary(_deps(path, "mfrs-company-sofp"))
     assert second == first
-    assert "mfrs-company-sofp" in _TEMPLATE_SUMMARY_CACHE
+    # Cache is keyed by (template_id, mtime) so a regenerated file self-invalidates.
+    assert any(k[0] == "mfrs-company-sofp" for k in _TEMPLATE_SUMMARY_CACHE)
 
 
 def test_flag_off_uses_legacy_per_deps_parse(_flag_off):

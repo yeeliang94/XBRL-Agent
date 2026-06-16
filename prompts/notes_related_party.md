@@ -21,7 +21,20 @@ rental expense, etc.) plus outstanding balances at period end.
    `group_py`, `company_cy`, `company_py`.
 4. Transactions that don't map to any listed row (rare) are skipped.
    Do NOT invent values for rows that aren't in the PDF.
-5. Call `write_notes` with the batch, then `save_result`.
+5. **ALSO reproduce the disclosed table.** In addition to the numeric
+   rows above, emit ONE prose `NotesPayload` whose `content` is the
+   related-party transactions table reproduced verbatim as an HTML
+   `<table>` (follow the SCHEDULES VS PROSE and CELL FORMAT rules in
+   the base prompt — `<th>` header row, `<td>` body cells, accountant
+   formatting preserved). Target it at the `Disclosure of transactions
+   between related parties` text-block row — copy that label verbatim
+   from the TEMPLATE ROW LABELS list as `chosen_row_label`. This prose
+   payload needs its own `evidence`
+   + `parent_note` like any other. Only do this when the PDF actually
+   shows a table; if the note is plain prose with no schedule, skip the
+   reproduction. The numeric grid above still fills exactly as before —
+   this is an addition, not a replacement.
+6. Call `write_notes` with the batch, then `save_result`.
 
 === NOTES ===
 

@@ -521,12 +521,26 @@ def _summarize_template(fields: list[TemplateField]) -> str:
 
 
 # Item 32 (32c): process-global cache of the rendered read_template summary,
-# keyed by template_id. The summary string is fully determined by the template
-# file, and template_id identifies that file 1:1 (it encodes standard+level+
-# variant). So we build the summary once and memoise it — every later run of the
-# same template family reuses it without re-parsing the xlsx. Cleared on process
-# restart (the only time a regenerated template needs to invalidate the cache).
-_TEMPLATE_SUMMARY_CACHE: dict[str, str] = {}
+# keyed by (template_id, mtime). The summary string is fully determined by the
+# template file, and template_id identifies that file 1:1 (it encodes
+# standard+level+variant). So we build the summary once and memoise it — every
+# later run of the same template family reuses it without re-parsing the xlsx.
+# The mtime in the key means an in-process template regeneration (the MPERS
+# generator, a dev hot-reload) self-invalidates the entry instead of serving a
+# stale summary; a normal process restart clears it outright.
+_TEMPLATE_SUMMARY_CACHE: dict[tuple[str, float], str] = {}
+
+
+def _template_summary_cache_key(deps: "ExtractionDeps") -> tuple[str, float]:
+    """Cache key for ``deps``'s rendered template summary: ``template_id`` plus
+    the template file's mtime so an on-disk regeneration self-invalidates.
+    An unreadable mtime falls back to ``-1.0`` — still keyed by template_id, just
+    without the self-invalidation guarantee."""
+    try:
+        mtime = os.path.getmtime(deps.template_path)
+    except OSError:
+        mtime = -1.0
+    return (deps.template_id, mtime)
 
 
 def _db_read_template_enabled() -> bool:
@@ -559,15 +573,16 @@ def _render_template_summary(deps: "ExtractionDeps") -> str:
     """
     template_id = deps.template_id
     if _db_read_template_enabled() and template_id:
-        cached = _TEMPLATE_SUMMARY_CACHE.get(template_id)
+        cache_key = _template_summary_cache_key(deps)
+        cached = _TEMPLATE_SUMMARY_CACHE.get(cache_key)
         if cached is not None:
             return cached
-        # First request for this template_id in this process: build once (the
+        # First request for this template in this process: build once (the
         # only xlsx parse for this family), memoise, reuse for every later call.
         if not deps.template_fields:
             deps.template_fields = _read_template_impl(deps.template_path)
         summary = _summarize_template(deps.template_fields)
-        _TEMPLATE_SUMMARY_CACHE[template_id] = summary
+        _TEMPLATE_SUMMARY_CACHE[cache_key] = summary
         return summary
     # Flag off, or no template_id: legacy per-deps parse + cache.
     if not deps.template_fields:

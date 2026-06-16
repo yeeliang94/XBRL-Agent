@@ -57,9 +57,9 @@ def _facts_for(ctx, template_id: str) -> dict:
 def _fact_value(ctx, template_id, uuid, period, entity_scope) -> Optional[float]:
     """Read one fact's numeric value, treating not_disclosed/blank as None."""
     fact = _facts_for(ctx, template_id).get((uuid, period, entity_scope))
-    if fact is None or fact["value_status"] == "not_disclosed":
+    if fact is None or fact.get("value_status") == "not_disclosed":
         return None
-    raw = fact["value"]
+    raw = fact.get("value")
     # Facts store REAL; coerce to float so message reprs match the xlsx path
     # (which always float()-casts the cell value).
     return float(raw) if raw is not None else None

@@ -23,6 +23,7 @@ from pydantic import ValidationError
 
 import server
 from server import RunConfigRequest
+from utils.paths import validate_session_id
 
 logger = logging.getLogger("server")
 
@@ -37,6 +38,10 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest):
     their variants, optional model overrides, and optional infopack
     from a prior scout run.
     """
+    try:
+        validate_session_id(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session id.")
     session_dir = server.OUTPUT_DIR / session_id
     pdf_path = session_dir / "uploaded.pdf"
 
@@ -429,6 +434,11 @@ async def rerun_agent(session_id: str, body: RunConfigRequest):
     one. After the agent finishes, merge + cross-checks run against all
     workbooks in the session (both old successful ones and the new one).
     """
+    try:
+        validate_session_id(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session id.")
+
     n_stmts = len(body.statements)
     n_notes = len(body.notes_to_run)
     if n_stmts + n_notes != 1:
