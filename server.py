@@ -2038,10 +2038,21 @@ async def _lifespan(app: FastAPI):
     if _canonical_mode_enabled():
         global _CANONICAL_BOOTSTRAP_OK
         try:
-            from concept_model.bootstrap import import_all_face_templates
+            from concept_model.bootstrap import (
+                import_all_face_templates,
+                import_all_notes_templates,
+            )
             ids = import_all_face_templates(AUDIT_DB_PATH)
+            # Notes templates (PLAN-notes-template-registry): prose → notes_nodes,
+            # numeric → concept_nodes. Shares the same fail-fast guard so a notes
+            # bootstrap failure is as loud as a face one.
+            notes_ids = import_all_notes_templates(AUDIT_DB_PATH)
             _CANONICAL_BOOTSTRAP_OK = True
-            logger.info("canonical mode: imported %d face templates", len(ids))
+            logger.info(
+                "canonical mode: imported %d face + %d notes templates",
+                len(ids),
+                len(notes_ids),
+            )
         except Exception:
             # Don't hard-crash the server — the legacy UI / History share this
             # process. But mark canonical mode unhealthy and log at ERROR so a
@@ -5112,12 +5123,40 @@ def _reexport_remerge_durable(run_id: int) -> bool:
     tmp = _reexport_and_remerge_from_facts(run_id)
     if tmp is None:
         return False
+    # Apply the SAME notes overlays the download endpoint applies, so the
+    # durable on-disk file reflects post-run prose (notes_cells) + numeric
+    # (run_concept_facts) edits for non-download consumers — not just the
+    # download stream. Each overlay returns either the input path unchanged or
+    # a fresh temp; track every temp for cleanup. Best-effort: an overlay
+    # failure keeps the last good path rather than aborting the durable copy.
+    overlay_temps: list[Path] = []
+    final = tmp
     try:
+        from notes.persistence import (
+            overlay_notes_cells_into_workbook,
+            overlay_numeric_facts_into_workbook,
+        )
+        for _overlay in (
+            overlay_notes_cells_into_workbook,
+            overlay_numeric_facts_into_workbook,
+        ):
+            try:
+                nxt = _overlay(
+                    xlsx_path=final, run_id=run_id, db_path=str(AUDIT_DB_PATH)
+                )
+                if nxt != final:
+                    overlay_temps.append(nxt)
+                    final = nxt
+            except Exception:  # noqa: BLE001 — overlay is best-effort
+                logger.exception(
+                    "durable re-export overlay %s failed for run %s",
+                    getattr(_overlay, "__name__", _overlay), run_id,
+                )
         conn = _open_audit_conn()
         try:
             run = repo.fetch_run(conn, run_id)
             if run is not None and run.merged_workbook_path:
-                shutil.copyfile(tmp, run.merged_workbook_path)
+                shutil.copyfile(final, run.merged_workbook_path)
                 repo.mark_run_merged(conn, run_id, run.merged_workbook_path)
                 conn.commit()
                 return True
@@ -5126,10 +5165,11 @@ def _reexport_remerge_durable(run_id: int) -> bool:
     except Exception:  # noqa: BLE001
         logger.exception("durable re-export copy failed for run %s", run_id)
     finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
+        for _p in [tmp, *overlay_temps]:
+            try:
+                _p.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
     return False
 
 

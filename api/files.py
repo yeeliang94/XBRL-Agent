@@ -250,6 +250,28 @@ async def download_filled_endpoint(run_id: int):
     # never delete the authoritative `merged_workbook_path` on disk.
     if served_path != base_path:
         temp_paths.append(Path(served_path))
+
+    # Numeric notes (sheets 13/14) live in run_concept_facts, not notes_cells,
+    # so the HTML overlay above doesn't carry their post-run edits. Overlay the
+    # numeric facts onto whatever workbook we're about to serve so a PATCH
+    # /facts edit on a numeric note reaches the download (peer-review HIGH).
+    try:
+        from notes.persistence import overlay_numeric_facts_into_workbook
+        numeric_path = await asyncio.to_thread(
+            overlay_numeric_facts_into_workbook,
+            xlsx_path=served_path,
+            run_id=run_id,
+            db_path=str(server.AUDIT_DB_PATH),
+        )
+    except Exception:  # noqa: BLE001 — fall back to the pre-numeric workbook
+        logger.exception(
+            "numeric notes overlay failed for run_id=%s; serving without it",
+            run_id,
+        )
+        numeric_path = served_path
+    if numeric_path != served_path:
+        temp_paths.append(Path(numeric_path))
+        served_path = numeric_path
     cleanup: Optional[BackgroundTask] = None
     if temp_paths:
         cleanup = BackgroundTask(_remove_overlay_tempfiles,

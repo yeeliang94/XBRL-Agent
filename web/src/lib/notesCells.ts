@@ -17,19 +17,49 @@
 export interface NotesCell {
   row: number;
   label: string;
+  // `kind` distinguishes the two row shapes the projection returns
+  // (PLAN-notes-template-registry). Optional so older callers/tests that
+  // omit it default to prose.
+  kind?: "prose" | "numeric";
   html: string;
   evidence: string | null;
   source_pages: number[];
   updated_at: string;
   sanitizer_warnings?: string[];
+  // Prose registry identity (full-template projection) — present on rows that
+  // came from notes_nodes; null on off-template/legacy filled rows.
+  node_uuid?: string | null;
+  xbrl_concept_id?: string | null;
+  // Numeric rows: the canonical concept + its per-column values. `values`
+  // keys are cy/py (Company filings) or group_cy/group_py/company_cy/
+  // company_py (Group filings); a null value means the cell is unfilled.
+  concept_uuid?: string | null;
+  values?: Record<string, number | null>;
 }
 
 /** One sheet section — what the editor renders as a heading + stack of
- *  cells. Cells come pre-ordered by `row` so the UI does not re-sort. */
+ *  cells. Cells come pre-ordered by `row` so the UI does not re-sort.
+ *  `kind` mirrors the row kind so the section can pick the right editor. */
 export interface NotesSheet {
   sheet: string;
+  kind?: "prose" | "numeric";
   rows: NotesCell[];
 }
+
+/** Maps a numeric `values` key to the (period, entity_scope) the facts API
+ *  expects. Shared by the numeric editor so column → fact routing is in one
+ *  place. */
+export const NUMERIC_VALUE_COLUMNS: Record<
+  string,
+  { label: string; period: "CY" | "PY"; entity_scope: "Company" | "Group" }
+> = {
+  cy: { label: "Current year", period: "CY", entity_scope: "Company" },
+  py: { label: "Prior year", period: "PY", entity_scope: "Company" },
+  group_cy: { label: "Group CY", period: "CY", entity_scope: "Group" },
+  group_py: { label: "Group PY", period: "PY", entity_scope: "Group" },
+  company_cy: { label: "Company CY", period: "CY", entity_scope: "Company" },
+  company_py: { label: "Company PY", period: "PY", entity_scope: "Company" },
+};
 
 export interface NotesCellsResponse {
   sheets: NotesSheet[];
@@ -113,4 +143,54 @@ export async function patchNotesCell(
       body: JSON.stringify({ html }),
     },
   );
+}
+
+/** Sentinel returned by {@link parseNumericInput} when the text isn't a valid
+ *  number. Distinct from `null` (empty → clear the cell) and from any finite
+ *  number. */
+export const INVALID_NUMBER = Symbol("invalid-number");
+
+/** Parse an accountant-formatted number from a numeric-note input.
+ *
+ *  Reviewers paste straight from financial statements, where numbers carry
+ *  thousands separators and parenthesised negatives. We strip commas and
+ *  whitespace and read `(95)` as `-95` so those paste cleanly instead of
+ *  silently failing as `NaN` (PLAN-notes-template-registry code-review fix).
+ *
+ *  Returns:
+ *   * `null`           — empty input (the caller clears the cell);
+ *   * a finite number  — parsed value;
+ *   * {@link INVALID_NUMBER} — text that isn't a number, so the caller can
+ *     surface an explicit error instead of writing NaN.
+ */
+export function parseNumericInput(
+  raw: string,
+): number | null | typeof INVALID_NUMBER {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  // Accountant negative: "(1,234)" → -1234.
+  const paren = /^\((.*)\)$/.exec(trimmed);
+  const body = (paren ? paren[1] : trimmed).replace(/[\s,]/g, "");
+  if (body === "") return INVALID_NUMBER;
+  const n = Number(body);
+  if (!Number.isFinite(n)) return INVALID_NUMBER;
+  return paren ? -n : n;
+}
+
+/** PATCH one numeric-note value into run_concept_facts. Numeric notes live in
+ *  the canonical fact store (PLAN-notes-template-registry Track B), so they
+ *  reuse the same per-concept facts endpoint the Values tab uses — not the
+ *  prose notes_cells PATCH. `value` of null clears the cell. */
+export async function patchNotesFact(
+  runId: number,
+  conceptUuid: string,
+  value: number | null,
+  period: "CY" | "PY",
+  entityScope: "Company" | "Group",
+): Promise<unknown> {
+  return apiFetch<unknown>(`/api/runs/${runId}/facts/${conceptUuid}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value, period, entity_scope: entityScope }),
+  });
 }

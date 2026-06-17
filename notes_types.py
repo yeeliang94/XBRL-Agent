@@ -108,3 +108,37 @@ def notes_template_path(
         (template_type, standard), entry.template_filename,
     )
     return _TEMPLATE_DIRS_BY_STANDARD[standard] / level.capitalize() / filename
+
+
+def notes_template_ids(*, numeric_only: bool = False) -> frozenset[str]:
+    """Deterministic set of canonical ``template_id``s for the notes templates.
+
+    Used to scope DB queries precisely instead of a brittle ``'%-notes-%'``
+    LIKE pattern — a future face slug that happened to contain "notes" would
+    otherwise be mis-classified as a notes template (PLAN-notes-template-registry
+    code-review hardening). Mints the SAME ids :func:`_derive_template_id`
+    produces at import time, across ``{mfrs,mpers} × {company,group}``, so the
+    set always matches what the bootstrap actually imported.
+
+    ``numeric_only=True`` restricts to the numeric notes (Issued Capital,
+    Related Party) — the only notes that live in ``concept_nodes`` /
+    ``run_concept_facts``.
+    """
+    # Lazy import keeps notes_types free of a concept_model dependency at module
+    # load (concept_model imports notes_types, not the other way round).
+    from concept_model.parser import _derive_template_id
+
+    out: set[str] = set()
+    for template_type, entry in NOTES_REGISTRY.items():
+        if numeric_only and not entry.is_numeric:
+            continue
+        for standard in _TEMPLATE_DIRS_BY_STANDARD:
+            for level in _VALID_LEVELS:
+                try:
+                    path = notes_template_path(
+                        template_type, level=level, standard=standard
+                    )
+                except ValueError:
+                    continue
+                out.add(_derive_template_id(path))
+    return frozenset(out)

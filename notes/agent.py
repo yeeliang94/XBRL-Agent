@@ -658,6 +658,12 @@ class NotesDeps:
     # coordinator reads this off the deps at the end of the run and
     # hands it to `notes.persistence.persist_notes_cells`.
     cells_written: list[dict] = field(default_factory=list)
+    # Per-cell NUMERIC manifest accumulated across every successful
+    # `write_notes` call (PLAN-notes-template-registry Step 9). The
+    # coordinator reads this off the deps and projects it into
+    # run_concept_facts via cell_resolver — the numeric counterpart of
+    # `cells_written`. Empty on prose-only sheets.
+    numeric_cells: list[dict] = field(default_factory=list)
     # Lazily built on first sub-agent write — the label index is only
     # needed in sub-agent mode (pre-validation before sink append) and
     # opening the workbook every tool call would be wasteful. `Any` here
@@ -1410,6 +1416,16 @@ def create_notes_agent(
             for cell in result.cells_written:
                 by_key[(cell["sheet"], cell["row"])] = cell
             ctx.deps.cells_written = list(by_key.values())
+        if result.numeric_cells:
+            # Same supersede-on-rewrite semantics as cells_written, but keyed
+            # by (sheet, row, col) — a numeric row has up to four value cells.
+            by_cell = {
+                (c["sheet"], c["row"], c["col"]): c
+                for c in ctx.deps.numeric_cells
+            }
+            for cell in result.numeric_cells:
+                by_cell[(cell["sheet"], cell["row"], cell["col"])] = cell
+            ctx.deps.numeric_cells = list(by_cell.values())
 
         msg = (
             f"Wrote {result.rows_written} row(s) to "

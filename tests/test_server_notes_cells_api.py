@@ -30,6 +30,11 @@ def client_and_run(tmp_path: Path, monkeypatch) -> tuple[TestClient, int]:
     server_module.OUTPUT_DIR = tmp_path
     server_module.AUDIT_DB_PATH = tmp_path / "audit.sqlite"
     init_db(server_module.AUDIT_DB_PATH)
+    # The bare TestClient below doesn't run the app lifespan, so populate the
+    # notes registry the way startup would — otherwise the projection degrades
+    # to the legacy filled-only fallback.
+    from concept_model.bootstrap import import_all_notes_templates
+    import_all_notes_templates(server_module.AUDIT_DB_PATH)
 
     # Seed a run with a few notes cells across two sheets.
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
@@ -56,27 +61,39 @@ def client_and_run(tmp_path: Path, monkeypatch) -> tuple[TestClient, int]:
     return TestClient(server_module.app), run_id
 
 
-def test_get_notes_cells_returns_grouped_by_sheet(client_and_run) -> None:
+def test_get_notes_cells_returns_full_template_with_blanks(client_and_run) -> None:
+    """The projection returns the FULL prose template per targeted sheet,
+    with the seeded cells filled and the remaining template rows blank
+    (PLAN-notes-template-registry Phase 3)."""
     client, run_id = client_and_run
 
     resp = client.get(f"/api/runs/{run_id}/notes_cells")
     assert resp.status_code == 200
     body = resp.json()
 
-    # One section per sheet, ordered by sheet name.
+    # Only the two sheets that carry data are projected (targeted-only), in
+    # MBRS slot order.
     assert [s["sheet"] for s in body["sheets"]] == [
         "Notes-CI", "Notes-SummaryofAccPol",
     ]
 
     ci = body["sheets"][0]
-    # Rows within a sheet stay in row-number order so the editor can
-    # render top-to-bottom without re-sorting.
-    assert [r["row"] for r in ci["rows"]] == [4, 12]
-    assert ci["rows"][0]["label"] == "Corporate info"
-    assert ci["rows"][0]["html"] == "<p>CI 4</p>"
-    assert ci["rows"][0]["evidence"] == "Page 3"
-    assert ci["rows"][0]["source_pages"] == [3]
-    assert ci["rows"][0]["updated_at"]
+    assert ci["kind"] == "prose"
+    # Full template → more than just the 2 seeded rows, in ascending order.
+    assert len(ci["rows"]) > 2
+    assert [r["row"] for r in ci["rows"]] == sorted(r["row"] for r in ci["rows"])
+
+    rows_by_num = {r["row"]: r for r in ci["rows"]}
+    # The seeded cells are present and filled.
+    assert rows_by_num[4]["html"] == "<p>CI 4</p>"
+    assert rows_by_num[4]["evidence"] == "Page 3"
+    assert rows_by_num[4]["source_pages"] == [3]
+    assert rows_by_num[4]["updated_at"]
+    assert rows_by_num[4]["kind"] == "prose"
+    # At least one unfilled template row is surfaced as a blank.
+    blanks = [r for r in ci["rows"] if r["html"] == ""]
+    assert blanks
+    assert blanks[0]["node_uuid"]  # blank rows carry the registry identity
 
 
 def test_get_notes_cells_returns_404_for_unknown_run(tmp_path: Path) -> None:
@@ -180,14 +197,83 @@ def test_patch_notes_cell_returns_empty_warnings_on_clean_input(
     assert body.get("sanitizer_warnings") == []
 
 
-def test_patch_notes_cell_404_for_unknown_cell(client_and_run) -> None:
+def test_patch_notes_cell_400_for_unknown_row(client_and_run) -> None:
+    """A row that is neither an existing cell nor a fillable registry row is
+    rejected (400) — the editor can't invent rows (PLAN Step 8)."""
     client, run_id = client_and_run
 
     resp = client.patch(
         f"/api/runs/{run_id}/notes_cells/Notes-CI/9999",
         json={"html": "<p>x</p>"},
     )
-    assert resp.status_code == 404
+    assert resp.status_code == 400
+
+
+def test_patch_notes_cell_inserts_blank_registry_row(client_and_run) -> None:
+    """Editing a previously-blank template row inserts a notes_cells row,
+    using the registry label + template-scoped concept_uuid (PLAN Step 8)."""
+    client, run_id = client_and_run
+
+    # Find a fillable prose row that the projection surfaced as blank.
+    body = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    ci = next(s for s in body["sheets"] if s["sheet"] == "Notes-CI")
+    blank = next(r for r in ci["rows"] if r["html"] == "" and r["node_uuid"])
+
+    resp = client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/{blank['row']}",
+        json={"html": "<p>freshly typed</p>"},
+    )
+    assert resp.status_code == 200
+    out = resp.json()
+    assert "<p>freshly typed</p>" in out["html"]
+    # The inserted row keeps the registry's label, not a client-supplied one.
+    assert out["label"] == blank["label"]
+
+    # And it now reads back as a filled row on the next GET.
+    body2 = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    ci2 = next(s for s in body2["sheets"] if s["sheet"] == "Notes-CI")
+    again = next(r for r in ci2["rows"] if r["row"] == blank["row"])
+    assert "<p>freshly typed</p>" in again["html"]
+
+
+def test_patch_blank_row_preserves_template_scoped_uuid(client_and_run, tmp_path) -> None:
+    """Re-editing an inserted blank row keeps its template-scoped concept_uuid —
+    the second PATCH must not downgrade it to the legacy mint (peer-review
+    MEDIUM)."""
+    import sqlite3
+    import server as server_module
+
+    client, run_id = client_and_run
+
+    body = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    ci = next(s for s in body["sheets"] if s["sheet"] == "Notes-CI")
+    blank = next(r for r in ci["rows"] if r["html"] == "" and r["node_uuid"])
+    node_uuid = blank["node_uuid"]
+
+    def stored_uuid() -> str:
+        conn = sqlite3.connect(str(server_module.AUDIT_DB_PATH))
+        try:
+            return conn.execute(
+                "SELECT concept_uuid FROM notes_cells "
+                "WHERE run_id = ? AND sheet = 'Notes-CI' AND row = ?",
+                (run_id, blank["row"]),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+    # First edit (insert) stamps the template-scoped node_uuid.
+    client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/{blank['row']}",
+        json={"html": "<p>first</p>"},
+    )
+    assert stored_uuid() == node_uuid
+
+    # Second edit (update) must preserve it, not re-mint the legacy uuid.
+    client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/{blank['row']}",
+        json={"html": "<p>second</p>"},
+    )
+    assert stored_uuid() == node_uuid
 
 
 def test_patch_notes_cell_413_when_rendered_text_over_30k(client_and_run) -> None:

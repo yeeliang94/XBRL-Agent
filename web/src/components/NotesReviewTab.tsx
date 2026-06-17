@@ -32,7 +32,11 @@ import { ui, uiClass } from "../lib/uiStyles";
 import {
   fetchNotesCells,
   patchNotesCell,
+  patchNotesFact,
+  parseNumericInput,
   sortSheetsBySlot,
+  INVALID_NUMBER,
+  NUMERIC_VALUE_COLUMNS,
   type NotesCell,
   type NotesSheet,
 } from "../lib/notesCells";
@@ -370,17 +374,28 @@ function SheetSection({
       </h4>
       {expanded && (
         <div style={styles.rowStack}>
-          {sheet.rows.map((cell) => (
-            // Include `runId` in the CellRow key as well — belt-and-
-            // braces after the parent sheet remount. Ensures TipTap
-            // editor instances never carry state across a runId change.
-            <CellRow
-              key={`${runId}:${sheet.sheet}:${cell.row}`}
-              runId={runId}
-              sheet={sheet.sheet}
-              cell={cell}
-            />
-          ))}
+          {sheet.rows.map((cell) =>
+            // Numeric notes (sheets 13/14) carry multi-column values, not
+            // HTML prose — they get value inputs wired to the facts API
+            // instead of a TipTap editor (PLAN-notes-template-registry).
+            cell.kind === "numeric" ? (
+              <NumericCellRow
+                key={`${runId}:${sheet.sheet}:${cell.row}`}
+                runId={runId}
+                cell={cell}
+              />
+            ) : (
+              // Include `runId` in the CellRow key as well — belt-and-
+              // braces after the parent sheet remount. Ensures TipTap
+              // editor instances never carry state across a runId change.
+              <CellRow
+                key={`${runId}:${sheet.sheet}:${cell.row}`}
+                runId={runId}
+                sheet={sheet.sheet}
+                cell={cell}
+              />
+            ),
+          )}
         </div>
       )}
     </section>
@@ -715,6 +730,107 @@ function CellRow({
             </ul>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Numeric cell row — label on the left, one value input per column on the
+// right (Company: CY/PY; Group: Group CY/PY + Company CY/PY). Numeric notes
+// live in the canonical fact store, so edits PATCH the facts API
+// (PLAN-notes-template-registry Track B) rather than the prose notes_cells.
+// ---------------------------------------------------------------------------
+
+function NumericCellRow({ runId, cell }: { runId: number; cell: NotesCell }) {
+  const values = cell.values ?? {};
+  // Only render the columns this filing level actually uses, in a stable
+  // canonical order (NUMERIC_VALUE_COLUMNS insertion order).
+  const columns = Object.keys(NUMERIC_VALUE_COLUMNS).filter(
+    (k) => k in values,
+  );
+
+  // Local draft strings keyed by column so typing doesn't fight the number
+  // round-trip; seeded from the server values.
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    for (const k of columns) {
+      const v = values[k];
+      init[k] = v === null || v === undefined ? "" : String(v);
+    }
+    return init;
+  });
+  const [status, setStatus] = useState<SaveStatus>("idle");
+
+  const saveColumn = useCallback(
+    async (key: string) => {
+      if (!cell.concept_uuid) return; // unmappable row — nothing to write
+      const original = values[key];
+      // Accountant-aware parse: "1,234" / "(95)" resolve instead of failing.
+      const parsed = parseNumericInput(drafts[key] ?? "");
+      if (parsed === INVALID_NUMBER) {
+        setStatus("failed");
+        return;
+      }
+      // Skip the network round-trip when the value is unchanged.
+      if ((original ?? null) === (parsed ?? null)) return;
+      const { period, entity_scope } = NUMERIC_VALUE_COLUMNS[key];
+      setStatus("saving");
+      try {
+        await patchNotesFact(
+          runId,
+          cell.concept_uuid,
+          parsed,
+          period,
+          entity_scope,
+        );
+        // Reflect the saved value locally so a re-blur doesn't re-send, and
+        // normalise the draft to the canonical form ("(95)" → "-95") so the
+        // user sees exactly what was stored.
+        values[key] = parsed;
+        setDrafts((d) => ({
+          ...d,
+          [key]: parsed === null ? "" : String(parsed),
+        }));
+        setStatus("saved");
+      } catch {
+        setStatus("failed");
+      }
+    },
+    [cell.concept_uuid, drafts, runId, values],
+  );
+
+  return (
+    <div data-testid="notes-numeric-row" style={styles.cellRow}>
+      <aside style={styles.cellLeft}>
+        <div style={styles.cellLabel}>{cell.label}</div>
+        <div style={styles.cellRowNum}>Row {cell.row}</div>
+      </aside>
+      <div style={styles.cellRight}>
+        <div style={styles.cellToolbar}>
+          <div style={styles.cellToolbarSpacer} />
+          <SaveStatusBadge status={status} />
+        </div>
+        <div style={styles.numericGrid}>
+          {columns.map((key) => (
+            <label key={key} style={styles.numericField}>
+              <span style={styles.numericFieldLabel}>
+                {NUMERIC_VALUE_COLUMNS[key].label}
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                data-testid={`numeric-input-${cell.row}-${key}`}
+                style={styles.numericInput}
+                value={drafts[key] ?? ""}
+                onChange={(e) =>
+                  setDrafts((d) => ({ ...d, [key]: e.target.value }))
+                }
+                onBlur={() => saveColumn(key)}
+              />
+            </label>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1106,6 +1222,33 @@ const styles = {
     borderRadius: 3,
     color: pwc.grey900,
     cursor: "pointer",
+  } as React.CSSProperties,
+  // Numeric notes: a small grid of value inputs (1-4 columns by filing level).
+  numericGrid: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 12,
+    padding: "4px 0",
+  } as React.CSSProperties,
+  numericField: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 3,
+    minWidth: 110,
+  } as React.CSSProperties,
+  numericFieldLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: pwc.grey700,
+  } as React.CSSProperties,
+  numericInput: {
+    padding: "4px 8px",
+    fontSize: 13,
+    fontFamily: pwc.fontBody,
+    textAlign: "right" as const,
+    border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
+    borderRadius: 3,
+    color: pwc.grey900,
   } as React.CSSProperties,
   statusBadge: {
     fontSize: 11,

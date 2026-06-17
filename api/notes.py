@@ -12,6 +12,7 @@ wire contract is asserted in tests/test_server_notes_cells_api.py — every endp
 goes through ``server._open_audit_conn`` so the same DB/WAL pragmas apply.
 """
 import logging
+import sqlite3
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -23,53 +24,233 @@ logger = logging.getLogger("server")
 router = APIRouter()
 
 
-@router.get("/api/runs/{run_id}/notes_cells")
-async def list_notes_cells_endpoint(run_id: int):
-    """Return every notes cell for ``run_id`` grouped by sheet.
+def _notes_template_index(standard: str, level: str) -> list[dict]:
+    """Resolve the run's (standard, level) to its notes templates, in MBRS
+    slot order. Each entry: template_type, sheet, is_numeric, template_id.
 
-    Shape:
-        {
-            "sheets": [
-                {"sheet": "Notes-CI", "rows": [
-                    {"row": 4, "label": ..., "html": ..., "evidence": ...,
-                     "source_pages": [...], "updated_at": "..."},
-                ]},
-                ...
-            ]
+    Skips templates that don't resolve for the (standard, level) pair.
+    """
+    from notes_types import NOTES_REGISTRY, notes_template_path
+    from concept_model.parser import _derive_template_id
+
+    out: list[dict] = []
+    for ttype, entry in NOTES_REGISTRY.items():
+        try:
+            path = notes_template_path(ttype, level=level, standard=standard)
+        except ValueError:
+            continue
+        out.append({
+            "template_type": ttype,
+            "sheet": entry.sheet_name,
+            "is_numeric": entry.is_numeric,
+            "template_id": _derive_template_id(path),
+        })
+    return out
+
+
+def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[dict]:
+    """Full prose template for one sheet: every LEAF row in template order,
+    with the run's filled `notes_cells` overlaid (blank where unfilled).
+
+    A filled cell whose row isn't a registry LEAF (off-template / legacy) is
+    still surfaced — appended by row — so no authored content is ever hidden.
+    If the registry is empty (template not imported), this degrades to the
+    legacy "filled rows only" view.
+    """
+    from db.repository import decode_source_pages
+
+    by_row: dict[int, dict] = {}
+    for n in conn.execute(
+        "SELECT row, label, node_uuid, xbrl_concept_id FROM notes_nodes "
+        "WHERE template_id = ? AND kind = 'LEAF' ORDER BY row",
+        (template_id,),
+    ).fetchall():
+        by_row[n["row"]] = {
+            "row": n["row"],
+            "label": n["label"],
+            "kind": "prose",
+            "node_uuid": n["node_uuid"],
+            "xbrl_concept_id": n["xbrl_concept_id"],
+            "html": "",
+            "evidence": None,
+            "source_pages": [],
+            "updated_at": "",
         }
 
-    404 if the run does not exist (distinguishable from "run exists but
-    has no notes yet" — the latter returns an empty sheets array).
+    for c in conn.execute(
+        "SELECT row, label, html, evidence, source_pages, updated_at "
+        "FROM notes_cells WHERE run_id = ? AND sheet = ?",
+        (run_id, sheet),
+    ).fetchall():
+        base = by_row.get(c["row"])
+        if base is None:
+            base = {
+                "row": c["row"],
+                "label": c["label"],
+                "kind": "prose",
+                "node_uuid": None,
+                "xbrl_concept_id": None,
+                "html": "",
+                "evidence": None,
+                "source_pages": [],
+                "updated_at": "",
+            }
+            by_row[c["row"]] = base
+        base["html"] = c["html"]
+        base["evidence"] = c["evidence"]
+        base["source_pages"] = decode_source_pages(c["source_pages"])
+        base["updated_at"] = c["updated_at"] or ""
+
+    return [by_row[r] for r in sorted(by_row)]
+
+
+def _numeric_sheet_rows(
+    conn, run_id: int, template_id: str, sheet: str, level: str
+) -> list[dict]:
+    """Full numeric template for one sheet: every LEAF concept row in template
+    order, with the run's `run_concept_facts` values shaped per filing level
+    (Company → cy/py; Group → group_cy/py + company_cy/py). Blank where the
+    run has no fact for that cell.
+    """
+    nodes = conn.execute(
+        "SELECT render_row AS row, canonical_label, display_label, concept_uuid "
+        "FROM concept_nodes "
+        "WHERE template_id = ? AND render_sheet = ? AND kind = 'LEAF' "
+        "ORDER BY render_row",
+        (template_id, sheet),
+    ).fetchall()
+    if not nodes:
+        return []
+
+    facts: dict[str, dict] = {}
+    for f in conn.execute(
+        "SELECT concept_uuid, period, entity_scope, value "
+        "FROM run_concept_facts WHERE run_id = ?",
+        (run_id,),
+    ).fetchall():
+        facts.setdefault(f["concept_uuid"], {}).setdefault(
+            f["entity_scope"], {}
+        )[f["period"]] = f["value"]
+
+    rows: list[dict] = []
+    for n in nodes:
+        scope = facts.get(n["concept_uuid"], {})
+        if level == "group":
+            values = {
+                "group_cy": scope.get("Group", {}).get("CY"),
+                "group_py": scope.get("Group", {}).get("PY"),
+                "company_cy": scope.get("Company", {}).get("CY"),
+                "company_py": scope.get("Company", {}).get("PY"),
+            }
+        else:
+            values = {
+                "cy": scope.get("Company", {}).get("CY"),
+                "py": scope.get("Company", {}).get("PY"),
+            }
+        rows.append({
+            "row": n["row"],
+            "label": n["display_label"] or n["canonical_label"],
+            "kind": "numeric",
+            "concept_uuid": n["concept_uuid"],
+            "values": values,
+            "updated_at": "",
+        })
+    return rows
+
+
+@router.get("/api/runs/{run_id}/notes_cells")
+async def list_notes_cells_endpoint(run_id: int):
+    """Return the FULL notes template for ``run_id`` grouped by sheet.
+
+    Each targeted notes sheet is projected in template (M-tool) order with
+    every fillable row present — blanks included — so a reviewer can locate an
+    extracted note relative to the whole template and copy it into the M-tool.
+    Two row shapes (PLAN-notes-template-registry):
+
+      * prose   — {row, label, kind:"prose", node_uuid, xbrl_concept_id,
+                   html, evidence, source_pages, updated_at}
+      * numeric — {row, label, kind:"numeric", concept_uuid, values, updated_at}
+
+    A sheet is "targeted" when it's in the run's ``notes_to_run`` OR already
+    carries data (prose cells / numeric facts) — so a run shows exactly the
+    notes it asked for (or produced), never the whole catalogue.
+
+    404 if the run does not exist; an empty ``sheets`` array means the run
+    targeted no notes.
     """
     from db import repository as repo
+
     conn = server._open_audit_conn()
     try:
         run = repo.fetch_run(conn, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        cells = repo.list_notes_cells_for_run(conn, run_id)
+
+        # Row access by column name for the raw projection queries below.
+        conn.row_factory = sqlite3.Row
+
+        config = run.config or {}
+        standard = config.get("filing_standard", "mfrs")
+        level = config.get("filing_level", "company")
+
+        # What the run explicitly asked for.
+        from notes_types import NotesTemplateType
+        requested: set = set()
+        for v in (config.get("notes_to_run") or []):
+            try:
+                requested.add(NotesTemplateType(v))
+            except ValueError:
+                # Unknown value in a legacy/hand-rolled config — ignore.
+                continue
+
+        # Sheets that already carry prose data (covers legacy runs whose
+        # config has no notes_to_run, and seeded test fixtures).
+        prose_data_sheets = {
+            r["sheet"]
+            for r in conn.execute(
+                "SELECT DISTINCT sheet FROM notes_cells WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+        }
+        # Template_ids that already carry facts (covers numeric notes).
+        fact_template_ids = {
+            r["template_id"]
+            for r in conn.execute(
+                "SELECT DISTINCT n.template_id FROM run_concept_facts f "
+                "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
+                "WHERE f.run_id = ?",
+                (run_id,),
+            ).fetchall()
+        }
+
+        sheets_out: list[dict] = []
+        for entry in _notes_template_index(standard, level):
+            ttype = entry["template_type"]
+            targeted = ttype in requested
+            if entry["is_numeric"]:
+                targeted = targeted or entry["template_id"] in fact_template_ids
+                if not targeted:
+                    continue
+                rows = _numeric_sheet_rows(
+                    conn, run_id, entry["template_id"], entry["sheet"], level,
+                )
+            else:
+                targeted = targeted or entry["sheet"] in prose_data_sheets
+                if not targeted:
+                    continue
+                rows = _prose_sheet_rows(
+                    conn, run_id, entry["template_id"], entry["sheet"],
+                )
+            if not rows:
+                continue
+            sheets_out.append({
+                "sheet": entry["sheet"],
+                "kind": "numeric" if entry["is_numeric"] else "prose",
+                "rows": rows,
+            })
+        return {"sheets": sheets_out}
     finally:
         conn.close()
-
-    # Group by sheet while preserving the (sheet, row) order from
-    # list_notes_cells_for_run. A small dict-ordered walk is cheaper than
-    # itertools.groupby for the expected payload size (< ~200 cells/run).
-    sheets: dict[str, list[dict]] = {}
-    for cell in cells:
-        sheets.setdefault(cell.sheet, []).append({
-            "row": cell.row,
-            "label": cell.label,
-            "html": cell.html,
-            "evidence": cell.evidence,
-            "source_pages": cell.source_pages,
-            "updated_at": cell.updated_at,
-        })
-    return {
-        "sheets": [
-            {"sheet": sheet, "rows": rows}
-            for sheet, rows in sheets.items()
-        ],
-    }
 
 
 class _NotesCellPatch(BaseModel):
@@ -163,34 +344,84 @@ async def patch_notes_cell_endpoint(
         # gotcha #16.
         conn.execute("BEGIN IMMEDIATE")
         try:
-            # Locate the existing row first so a PATCH against a non-existent
-            # cell is a 404, not a silent insert. The editor only ever edits
-            # cells it already listed via GET — phantom inserts would orphan
-            # content from the template walk.
+            # An edit can target either a row already in notes_cells (update)
+            # or a blank registry row the GET projection surfaced (insert).
+            # The editor only ever offers cells that came from the projection,
+            # so an insert is restricted to rows that exist in notes_nodes —
+            # a PATCH to an unknown row is a 400, never a phantom insert.
             existing = conn.execute(
                 "SELECT id, label, evidence, source_pages FROM notes_cells "
                 "WHERE run_id = ? AND sheet = ? AND row = ?",
                 (run_id, sheet, row),
             ).fetchone()
-            if existing is None:
-                conn.rollback()
-                raise HTTPException(status_code=404, detail="Notes cell not found")
 
-            # Round-trip source_pages so the upsert preserves them unchanged.
-            # The column is JSON; list_notes_cells_for_run decodes it on read
-            # but the upsert helper re-encodes from a Python list.
             from db.repository import decode_source_pages as _decode_pages
-            pages = _decode_pages(existing["source_pages"])
+
+            if existing is not None:
+                # Update path — preserve the existing label/evidence/pages and
+                # only swap the HTML (evidence stays read-only, gotcha #16).
+                upsert_label = existing["label"]
+                upsert_evidence = existing["evidence"]
+                upsert_pages = _decode_pages(existing["source_pages"])
+                upsert_concept_uuid = None  # keep current identity (decision §9.5)
+            else:
+                # Insert path — the row must be a fillable prose registry node.
+                config = run.config or {}
+                standard = config.get("filing_standard", "mfrs")
+                level = config.get("filing_level", "company")
+                template = next(
+                    (
+                        e for e in _notes_template_index(standard, level)
+                        if e["sheet"] == sheet
+                    ),
+                    None,
+                )
+                if template is None:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unknown notes sheet {sheet!r} for this run.",
+                    )
+                if template["is_numeric"]:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Numeric notes are edited through the facts API, "
+                            "not this endpoint."
+                        ),
+                    )
+                node = conn.execute(
+                    "SELECT label, node_uuid FROM notes_nodes "
+                    "WHERE template_id = ? AND row = ? AND kind = 'LEAF'",
+                    (template["template_id"], row),
+                ).fetchone()
+                if node is None:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Row {row} is not a fillable row of sheet "
+                            f"{sheet!r}."
+                        ),
+                    )
+                # New write: stamp the template-scoped node_uuid as the cell's
+                # concept_uuid so it links to the registry (decision §9.2).
+                upsert_label = node["label"]
+                upsert_evidence = None
+                upsert_pages = []
+                upsert_concept_uuid = node["node_uuid"]
 
             repo.upsert_notes_cell(
                 conn,
                 run_id=run_id,
                 sheet=sheet,
                 row=row,
-                label=existing["label"],
+                label=upsert_label,
                 html=cleaned_html,
-                evidence=existing["evidence"],
-                source_pages=pages,
+                evidence=upsert_evidence,
+                source_pages=upsert_pages,
+                concept_uuid=upsert_concept_uuid,
             )
             conn.commit()
         except HTTPException:

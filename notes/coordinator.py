@@ -163,6 +163,12 @@ class NotesAgentResult:
     # editor plan). Empty when the agent didn't write any prose cells
     # (numeric-only sheets or total failures).
     cells_written: List[dict] = field(default_factory=list)
+    # Per-cell NUMERIC manifest from the writer (PLAN-notes-template-registry
+    # Step 9). Each entry: sheet, row, col (numeric column B/C/D/E), value,
+    # evidence. The coordinator projects these into run_concept_facts via
+    # cell_resolver so numeric notes (sheets 13/14) are captured like face
+    # statements. Empty on prose sheets / total failures.
+    numeric_cells: List[dict] = field(default_factory=list)
     # End-of-run usage so server.py can backfill run_agents.total_tokens
     # / total_cost. Mirrors the face-coordinator AgentResult addition.
     total_tokens: int = 0
@@ -195,6 +201,63 @@ class NotesCoordinatorResult:
             for r in self.agent_results
             if r.workbook_path
         }
+
+
+async def _project_numeric_notes_facts(
+    config: "NotesRunConfig", result: "NotesAgentResult"
+) -> Optional[Any]:
+    """Project one numeric notes agent's value cells into run_concept_facts.
+
+    The live-capture counterpart of ``persist_notes_cells`` for the numeric
+    notes (sheets 13/14): resolves each ``(sheet, row, col)`` write to a
+    ``concept_uuid`` and upserts a fact via the same Phase-B machinery face
+    statements use, so the multi-column numeric tables the prose
+    ``notes_cells`` store can't represent are captured identically
+    (PLAN-notes-template-registry Step 9).
+
+    Returns the :class:`ProjectionResult`, or ``None`` when there's nothing to
+    project (no numeric cells) or the projection failed. Never raises — this is
+    best-effort, mirroring ``persist_notes_cells``: the xlsx is already on disk
+    so a capture failure must not fail the run. Extracted from the persistence
+    loop so the wiring (writer manifest → ``project_writes``) is unit-testable
+    in isolation.
+    """
+    if not result.numeric_cells:
+        return None
+    from notes_types import notes_template_path
+    from concept_model.parser import _derive_template_id
+    from concept_model.cell_resolver import project_writes
+    try:
+        numeric_template_id = _derive_template_id(
+            notes_template_path(
+                result.template_type,
+                level=config.filing_level,
+                standard=config.filing_standard,
+            )
+        )
+        projection = await asyncio.to_thread(
+            project_writes,
+            config.audit_db_path,
+            config.run_id,
+            numeric_template_id,
+            result.numeric_cells,
+            filing_level=config.filing_level,
+        )
+        if projection.has_gaps:
+            logger.warning(
+                "Numeric notes projection for %s had gaps: "
+                "%d skipped, %d rejected",
+                result.template_type.value,
+                len(projection.skipped),
+                len(projection.rejected),
+            )
+        return projection
+    except Exception:  # noqa: BLE001 — best-effort projection
+        logger.warning(
+            "Failed to project numeric notes facts for %s (run_id=%s)",
+            result.template_type.value, config.run_id, exc_info=True,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +441,14 @@ async def run_notes_extraction(
         for r in results:
             if r.status != "succeeded":
                 continue
+            # NUMERIC notes (sheets 13/14): project the value cells into
+            # run_concept_facts via the same Phase-B machinery face statements
+            # use. This is the LIVE capture (per-template, during the run) of
+            # the multi-column numeric tables the prose `notes_cells` store
+            # can't represent (PLAN-notes-template-registry Step 9). Best-effort
+            # — a projection failure must not fail the run (the xlsx is already
+            # on disk), mirroring the persist_notes_cells contract below.
+            await _project_numeric_notes_facts(config, r)
             # Source the sheet name from the registry (not from the
             # cells_written list) so a succeeded-but-empty agent still
             # clobbers prior rows. Otherwise a second run that writes
@@ -459,6 +530,9 @@ class _SingleAgentOutcome:
     # Per-cell HTML manifest produced by the writer. See
     # `NotesAgentResult.cells_written` for the entry shape.
     cells_written: list[dict] = field(default_factory=list)
+    # Per-cell NUMERIC manifest (PLAN-notes-template-registry Step 9). See
+    # `NotesAgentResult.numeric_cells` for the entry shape.
+    numeric_cells: list[dict] = field(default_factory=list)
     # End-of-run usage; bubbles up through the retry loop into
     # NotesAgentResult.total_tokens / total_cost. Zero when the agent
     # short-circuited via the post-write timeout path (no usage object
@@ -615,6 +689,7 @@ async def _run_single_notes_agent(
                 workbook_path=outcome.filled_path,
                 warnings=warnings,
                 cells_written=list(outcome.cells_written),
+                numeric_cells=list(outcome.numeric_cells),
                 total_tokens=outcome.total_tokens,
                 total_cost=outcome.total_cost,
                 # v8 per-turn telemetry (peer-review [2]).
@@ -801,6 +876,7 @@ async def _invoke_single_notes_agent_once(
                     fuzzy_matches=list(deps.write_fuzzy_matches),
                     sanitizer_warnings=list(deps.write_sanitizer_warnings),
                     cells_written=list(deps.cells_written),
+                    numeric_cells=list(deps.numeric_cells),
                 )
             raise RuntimeError(
                 f"{template_type.value}: LLM stalled past {NOTES_TURN_TIMEOUT}s "
@@ -844,6 +920,7 @@ async def _invoke_single_notes_agent_once(
         fuzzy_matches=list(deps.write_fuzzy_matches),
         sanitizer_warnings=list(deps.write_sanitizer_warnings),
         cells_written=list(deps.cells_written),
+        numeric_cells=list(deps.numeric_cells),
         total_tokens=_agent_tokens,
         total_cost=_agent_cost,
         turns=list(_turn_records),

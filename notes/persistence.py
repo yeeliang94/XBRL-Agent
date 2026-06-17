@@ -170,3 +170,97 @@ def overlay_notes_cells_into_workbook(
     finally:
         wb.close()
     return tmp_path
+
+
+def overlay_numeric_facts_into_workbook(
+    *,
+    xlsx_path: Path | str,
+    run_id: int,
+    db_path: str,
+) -> Path:
+    """Return an xlsx whose NUMERIC notes cells reflect ``run_concept_facts``.
+
+    Numeric notes (sheets 13/14) live in the canonical fact store — not
+    ``notes_cells`` — so their post-run edits (``PATCH /facts``) never touch the
+    agent-written workbook the merge sources from disk. This is the numeric
+    counterpart of :func:`overlay_notes_cells_into_workbook`: it writes each
+    numeric-note fact onto its target cell (resolved via ``concept_targets``,
+    which carries the per-(scope, period) column) at download time.
+
+    Returns ``xlsx_path`` unchanged when the run has no numeric-note facts.
+    Formula cells are never overwritten — face/total formulas stay live so
+    Excel recomputes them (export-keeps-live-formulas). Numeric notes carry no
+    prose, so this never collides with the HTML overlay above (different
+    sheets / different cells).
+    """
+    import sqlite3
+
+    from notes_types import notes_template_ids
+
+    xlsx_path = Path(xlsx_path)
+
+    # Scope by the exact numeric-notes template_id set rather than a
+    # '%-notes-%' LIKE, so a face slug containing "notes" can never be picked
+    # up by this overlay (PLAN-notes-template-registry code-review hardening).
+    notes_ids = sorted(notes_template_ids(numeric_only=True))
+    if not notes_ids:
+        return xlsx_path
+    placeholders = ",".join("?" * len(notes_ids))
+
+    with repo.db_session(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        facts = conn.execute(
+            f"""
+            SELECT t.target_sheet AS sheet, t.target_row AS row,
+                   t.target_col AS col, f.value AS value
+            FROM run_concept_facts f
+            JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid
+            JOIN concept_targets t
+              ON t.concept_uuid = f.concept_uuid
+             AND t.entity_scope = f.entity_scope
+             AND t.period = f.period
+            WHERE f.run_id = ?
+              AND n.kind = 'LEAF'
+              AND n.template_id IN ({placeholders})
+            """,
+            (run_id, *notes_ids),
+        ).fetchall()
+
+    if not facts:
+        return xlsx_path
+
+    import openpyxl
+    from openpyxl.utils import column_index_from_string
+
+    tmp = tempfile.NamedTemporaryFile(
+        suffix=".xlsx", delete=False, prefix="numeric_overlay_",
+    )
+    tmp.close()
+    tmp_path = Path(tmp.name)
+    shutil.copy(str(xlsx_path), str(tmp_path))
+
+    wb = openpyxl.load_workbook(str(tmp_path))
+    changed = False
+    try:
+        for fr in facts:
+            if fr["sheet"] not in wb.sheetnames:
+                continue
+            ws = wb[fr["sheet"]]
+            cell = ws.cell(
+                row=int(fr["row"]),
+                column=column_index_from_string(fr["col"]),
+            )
+            if isinstance(cell.value, str) and cell.value.startswith("="):
+                # Never clobber a live total formula.
+                continue
+            cell.value = fr["value"]
+            changed = True
+        if changed:
+            wb.save(str(tmp_path))
+    finally:
+        wb.close()
+
+    if not changed:
+        tmp_path.unlink(missing_ok=True)
+        return xlsx_path
+    return tmp_path

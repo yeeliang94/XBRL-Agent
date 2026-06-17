@@ -122,3 +122,89 @@ def test_run_without_facts_skips_reexport(tmp_path):
 
     assert server._run_has_facts(db_path, run_id) is False
     assert server._reexport_and_remerge_from_facts(run_id) is None
+
+
+def test_durable_reexport_includes_numeric_note_edit(tmp_path):
+    """`_reexport_remerge_durable` overlays numeric-note facts onto the durable
+    on-disk merged workbook — so non-download consumers see the edit too
+    (peer-review follow-up)."""
+    import server
+    from db.schema import init_db
+    from concept_model.parser import parse_template, _derive_template_id
+    from concept_model.importer import import_template, import_company_targets
+    from concept_model.bootstrap import import_all_notes_templates
+    from notes_types import NotesTemplateType, notes_template_path
+
+    db_path = tmp_path / "xbrl.db"
+    init_db(db_path)
+    server.AUDIT_DB_PATH = db_path
+
+    # Face statement (so re-export isn't gated to None) + numeric notes registry.
+    tree = parse_template(str(CO_SOFP))
+    jp = tmp_path / "tree.json"
+    jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
+    sofp_tid = import_template(db_path, jp)
+    import_company_targets(db_path, sofp_tid)
+    import_all_notes_templates(db_path)
+
+    cap_tid = "mfrs-company-notes-issuedcapital-v1"
+    cap_tpl = notes_template_path(
+        NotesTemplateType.ISSUED_CAPITAL, level="company", standard="mfrs"
+    )
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    (session_dir / "SOFP_filled.xlsx").write_bytes(CO_SOFP.read_bytes())
+    merged = session_dir / "filled.xlsx"
+    merged.write_bytes(CO_SOFP.read_bytes())
+    # The agent's numeric-notes workbook on disk (un-edited template values).
+    (session_dir / "NOTES_ISSUED_CAPITAL_filled.xlsx").write_bytes(
+        cap_tpl.read_bytes()
+    )
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        run_id = conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, started_at, "
+            "session_id, merged_workbook_path, run_config_json) "
+            "VALUES (?,?,?,?,?,?,?)",
+            ("2026-06-17T00:00:00Z", "x.pdf", "completed",
+             "2026-06-17T00:00:00Z", "session", str(merged),
+             json.dumps({"filing_level": "company", "filing_standard": "mfrs",
+                         "notes_to_run": ["ISSUED_CAPITAL"]})),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO run_agents(run_id, statement_type, variant, model, "
+            "status, started_at) VALUES (?,?,?,?,?,?)",
+            (run_id, "SOFP", "CuNonCu", "test", "succeeded",
+             "2026-06-17T00:00:00Z"),
+        )
+        tgt = conn.execute(
+            "SELECT t.concept_uuid, t.target_sheet, t.target_row, t.target_col "
+            "FROM concept_targets t JOIN concept_nodes n "
+            "ON n.concept_uuid = t.concept_uuid "
+            "WHERE n.template_id = ? AND n.kind = 'LEAF' "
+            "AND t.entity_scope = 'Company' AND t.period = 'CY' LIMIT 1",
+            (cap_tid,),
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
+            "entity_scope, value, value_status, updated_at) VALUES "
+            "(?, ?, 'CY', 'Company', 55555.0, 'user_override', '2026-06-17T01:00:00Z')",
+            (run_id, tgt["concept_uuid"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert server._reexport_remerge_durable(run_id) is True
+
+    from openpyxl.utils import column_index_from_string
+    wb = openpyxl.load_workbook(str(merged), data_only=False)
+    ws = wb[tgt["target_sheet"]]
+    cell = ws.cell(
+        row=int(tgt["target_row"]),
+        column=column_index_from_string(tgt["target_col"]),
+    )
+    assert cell.value == 55555.0
