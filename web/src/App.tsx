@@ -4,6 +4,9 @@ import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES } from "./lib/types";
 import { pwc } from "./lib/theme";
 import { appReducer, bootState, parseRouteFromPath } from "./lib/appReducer";
 import { uploadPdf, getSettings, updateSettings, testConnection, abortAll, abortAgent } from "./lib/api";
+import { getAuthMe, logout as apiLogout, refreshAuth } from "./lib/api";
+import type { AuthMe } from "./lib/api";
+import { LoginPage } from "./pages/LoginPage";
 import { createMultiAgentSSE, createMultiAgentSSEByRunId, patchRunConfig } from "./lib/sse";
 import { SettingsModal } from "./components/SettingsModal";
 import { TopNav } from "./components/TopNav";
@@ -55,6 +58,27 @@ const styles = {
     border: "none",
     borderRadius: pwc.radius.md,
     cursor: "pointer",
+  } as const,
+  headerRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.md,
+  } as const,
+  userEmail: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey500,
+  } as const,
+  logoutButton: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 13,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey700,
+    background: "none",
+    border: "none",
+    borderRadius: pwc.radius.md,
+    cursor: "pointer",
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
   } as const,
   main: {
     maxWidth: 1120,
@@ -113,6 +137,73 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // --- Auth gate (PLAN auth Phase 1.4) ---------------------------------------
+  // Optimistic: render the app shell immediately and flip to the login page
+  // only once /api/auth/me (or any 401) reports we're anonymous. No
+  // confidential data renders before auth resolves — every data call is itself
+  // server-gated, and a 401 flips us to login. (Deliberate deviation from the
+  // plan's "blank until resolved": avoids a blank first paint and keeps the
+  // existing synchronous App tests valid; same security outcome.) In
+  // AUTH_MODE=dev the backend returns a dev user so the app just renders.
+  const [authStatus, setAuthStatus] = useState<"authed" | "anon">("authed");
+  const [user, setUser] = useState<AuthMe | null>(null);
+
+  const checkAuth = useCallback(() => {
+    return getAuthMe()
+      .then((me) => {
+        setUser(me);
+        setAuthStatus(me ? "authed" : "anon");
+      })
+      .catch(() => {
+        // A transient error (not a clean 401) shouldn't trap the user on a
+        // blank screen — fall back to the login page.
+        setUser(null);
+        setAuthStatus("anon");
+      });
+  }, []);
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  // Any 401 mid-use (broadcast by apiFetch) means the session expired ⇒ show
+  // the login page.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setUser(null);
+      setAuthStatus("anon");
+    };
+    window.addEventListener("auth:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("auth:unauthorized", onUnauthorized);
+  }, []);
+
+  // Idle tracker: throttled refresh ping (≤ 1/min) on real user input so
+  // "watching a long run while moving the mouse" stays logged in, while a
+  // genuinely idle tab still times out. Only active while authenticated.
+  const lastPingRef = useRef(0);
+  useEffect(() => {
+    if (authStatus !== "authed") return;
+    const onActivity = () => {
+      const now = Date.now();
+      if (now - lastPingRef.current < 60_000) return;
+      lastPingRef.current = now;
+      refreshAuth();
+    };
+    window.addEventListener("mousemove", onActivity);
+    window.addEventListener("keydown", onActivity);
+    return () => {
+      window.removeEventListener("mousemove", onActivity);
+      window.removeEventListener("keydown", onActivity);
+    };
+  }, [authStatus]);
+
+  const handleLogout = useCallback(() => {
+    apiLogout().finally(() => {
+      setUser(null);
+      setAuthStatus("anon");
+    });
   }, []);
 
   // Hold the SSE controller so we can abort it on reset/unmount.
@@ -440,6 +531,11 @@ export default function App() {
     sseControllerRef.current = startSSERun(s.sessionId, config, `/api/rerun/${s.sessionId}`);
   }, [startSSERun]);
 
+  // Auth gate: once /api/auth/me (or any 401) reports anonymous, show login.
+  if (authStatus === "anon") {
+    return <LoginPage onAuthenticated={checkAuth} />;
+  }
+
   return (
     <div style={styles.page}>
       {/* Header */}
@@ -484,13 +580,21 @@ export default function App() {
             }}
           />
         </div>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          style={styles.settingsButton}
-          aria-label="Settings"
-        >
-          <SettingsIcon />
-        </button>
+        <div style={styles.headerRight}>
+          {user && <span style={styles.userEmail}>{user.email}</span>}
+          {user && user.provider !== "dev" && (
+            <button onClick={handleLogout} style={styles.logoutButton}>
+              Log out
+            </button>
+          )}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            style={styles.settingsButton}
+            aria-label="Settings"
+          >
+            <SettingsIcon />
+          </button>
+        </div>
       </header>
 
       <main

@@ -112,7 +112,15 @@ from pathlib import Path
 # nullable additive ALTER; no CHECK constraint on purpose (same rationale as
 # runs.status — a new value must not require a migration). Pinned by
 # tests/test_db_schema_v17.py.
-CURRENT_SCHEMA_VERSION = 17
+#
+# v18 (PLAN-azure-auth-deployment Phase 1.1) adds the two auth tables —
+# auth_users (the account list = the allowlist; argon2id password hash) and
+# auth_sessions (server-side session store for the sliding 15-minute idle
+# timeout). Both are pure CREATE TABLE IF NOT EXISTS walk-forward steps (new
+# tables, no ALTER), so the migration block only bumps the version marker —
+# the tables themselves are created above in _CREATE_STATEMENTS. Pinned by
+# tests/test_db_schema_v18.py.
+CURRENT_SCHEMA_VERSION = 18
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -609,6 +617,35 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         scale_mismatch   INTEGER NOT NULL,          -- subset of mismatch that match after 10^k scaling (flag)
         created_at       TEXT NOT NULL DEFAULT '',
         UNIQUE(run_id, benchmark_id)
+    )
+    """,
+    # --- v18: authentication layer (PLAN-azure-auth-deployment Phase 1) ---
+    # auth_users IS the allowlist: a non-disabled row = an authorised account.
+    # email is the primary key, stored lowercased so lookups are case-folded.
+    # password_hash is nullable so a future SSO-only user can exist with no
+    # password (the deferred Microsoft phase); the password path always sets it.
+    """
+    CREATE TABLE IF NOT EXISTS auth_users (
+        email           TEXT PRIMARY KEY,          -- lowercased; the login identity + allowlist key
+        display_name    TEXT NOT NULL DEFAULT '',
+        password_hash   TEXT,                      -- argon2id; NULL = SSO-only account (no password login)
+        disabled        INTEGER NOT NULL DEFAULT 0, -- 1 blocks login without deleting the row (audit trail)
+        created_at      TEXT NOT NULL DEFAULT '',
+        password_set_at TEXT                       -- ISO 8601 UTC of the last password set/rotate
+    )
+    """,
+    # auth_sessions is the server-side session store (not stateless JWT) so
+    # logout + the sliding 15-minute idle timeout are enforceable/revocable.
+    # session_id is a random opaque 256-bit token; last_seen_at drives expiry.
+    # Deleting a user sweeps their live sessions (ON DELETE CASCADE).
+    """
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+        session_id    TEXT PRIMARY KEY,            -- random 256-bit opaque token (hex)
+        email         TEXT NOT NULL REFERENCES auth_users(email) ON DELETE CASCADE,
+        display_name  TEXT NOT NULL DEFAULT '',
+        provider      TEXT NOT NULL DEFAULT 'password',  -- 'password' now; 'microsoft' when SSO lands
+        created_at    TEXT NOT NULL DEFAULT '',
+        last_seen_at  TEXT NOT NULL DEFAULT ''     -- bumped on real activity; sliding-window expiry compares against now
     )
     """,
 )
@@ -1364,6 +1401,28 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (17,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v17 → v18: add the auth_users + auth_sessions tables. Both are pure
+        # CREATE TABLE IF NOT EXISTS (already run above from _CREATE_STATEMENTS),
+        # so — like the v12→v13 table-only step — this block only advances the
+        # version marker. Same BEGIN IMMEDIATE + re-check discipline as the
+        # column steps so two concurrent starters serialize cleanly.
+        if current_version is not None and current_version < 18:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 18:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (18,),
                     )
                 conn.commit()
             except Exception:

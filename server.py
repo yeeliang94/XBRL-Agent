@@ -67,7 +67,6 @@ logger = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).parent
-OUTPUT_DIR = BASE_DIR / "output"
 ENV_FILE = BASE_DIR / ".env"
 # Load .env into the process environment at import time so startup-time reads
 # — the lifespan handler's canonical bootstrap, `/api/config`, and settings
@@ -75,7 +74,15 @@ ENV_FILE = BASE_DIR / ".env"
 # Without this, those were only loaded inside individual request handlers
 # (override=True), so the Concepts UI never lit up from .env alone.
 # override=False keeps an explicitly exported shell var winning over .env.
+# Loaded BEFORE OUTPUT_DIR below so XBRL_OUTPUT_DIR can be set via .env too,
+# not only as a real env var / Azure App Setting.
 load_dotenv(ENV_FILE, override=False)
+# Where runs, uploads, filled workbooks and the audit DB live. Defaults to
+# ./output next to the code (CLAUDE.md gotcha #9). On Azure App Service only
+# /home survives restarts, so XBRL_OUTPUT_DIR=/home/data points all durable
+# state at persistent storage (PLAN auth/deploy Phase 3). An explicit override
+# wins; otherwise the historical default is unchanged.
+OUTPUT_DIR = Path(os.environ.get("XBRL_OUTPUT_DIR") or (BASE_DIR / "output"))
 CONFIG_DIR = BASE_DIR / "config"
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 # Shared SQLite audit store (one file per installation, grows over time).
@@ -1917,6 +1924,51 @@ def _strip_binary(obj):
 # FastAPI application
 # ---------------------------------------------------------------------------
 
+def _check_auth_startup_config() -> None:
+    """Refuse to start a misconfigured production auth layer (PLAN auth 1.2).
+
+    Three production-only guards (no effect locally):
+      1. AUTH_MODE=dev must never reach Azure — the dev auto-session bypass
+         would serve confidential data with no login at all.
+      2. SESSION_SECRET must be set — otherwise cookies are signed with the
+         insecure dev fallback and are forgeable.
+      3. At least one ENABLED account must exist — an empty (or all-disabled)
+         account table on Azure is either a lockout or, with SSO not yet wired,
+         a wide-open misconfiguration.
+
+    Raises RuntimeError (which aborts FastAPI startup) with an actionable
+    message rather than degrading.
+    """
+    from auth import config as auth_config
+
+    if not auth_config.is_production():
+        return  # local dev: nothing to enforce
+
+    if auth_config.dev_mode_enabled():
+        raise RuntimeError(
+            "AUTH_MODE=dev is set on Azure (WEBSITE_SITE_NAME present). The dev "
+            "auto-session bypass must never run in production — remove the "
+            "AUTH_MODE App Setting."
+        )
+    if not os.environ.get("SESSION_SECRET"):
+        raise RuntimeError(
+            "SESSION_SECRET is not set in production. Set it (e.g. 64 random hex "
+            "chars) as an App Setting before starting the server."
+        )
+    conn = _open_audit_conn()
+    try:
+        from db import repository as repo
+        enabled = repo.count_auth_users(conn, enabled_only=True)
+    finally:
+        conn.close()
+    if enabled == 0:
+        raise RuntimeError(
+            "No enabled login accounts exist. Seed at least one with "
+            "`python -m auth.manage add-user EMAIL --name \"...\"` before "
+            "starting the server in production."
+        )
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Create / migrate the audit DB once at startup (peer-review #9).
@@ -1929,6 +1981,14 @@ async def _lifespan(app: FastAPI):
     """
     from db.schema import init_db
     init_db(AUDIT_DB_PATH)
+
+    # Fail-closed auth config check (PLAN auth Phase 1.2). Mirrors the
+    # canonical-bootstrap fail-fast philosophy: a misconfigured production auth
+    # layer must NOT boot into a wide-open or self-locked-out state. These
+    # checks only bite in production (WEBSITE_SITE_NAME present) — local dev is
+    # unaffected.
+    _check_auth_startup_config()
+
     # Retire any manual re-review pass left `running` by a previous process
     # (Phase 5.3). The pass runs on a daemon thread that dies with the
     # process, so a surviving `running` row can never complete: a poll would
@@ -1948,6 +2008,29 @@ async def _lifespan(app: FastAPI):
     except Exception:
         logger.warning("re-review task reconciliation failed at startup",
                        exc_info=True)
+
+    # Sweep auth sessions that idled out and were never accessed again (the user
+    # closed the tab). resolve_session deletes expired rows lazily on access, so
+    # this only reaps the never-touched-again ones; without it the table grows
+    # unboundedly. Best-effort — a sweep failure must not block startup.
+    try:
+        from datetime import datetime, timedelta, timezone
+        from auth import config as auth_config
+        from db import repository as repo
+        cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=auth_config.idle_timeout_seconds())
+        ).isoformat(timespec="seconds").replace("+00:00", "Z")
+        conn = _open_audit_conn()
+        try:
+            swept = repo.sweep_expired_auth_sessions(conn, cutoff)
+            conn.commit()
+        finally:
+            conn.close()
+        if swept:
+            logger.info("swept %d expired auth session(s) at startup", swept)
+    except Exception:
+        logger.warning("auth session sweep failed at startup", exc_info=True)
     # Canonical mode: import every face template's concept tree so the
     # Concepts UI has a tree to render and the facts API can resolve
     # concept_uuids. Idempotent (deterministic UUID5), so it's safe on
@@ -2847,6 +2930,197 @@ def _validate_and_build_run(
         model=model,
         config=config,
     ), [], None
+
+
+# --- SSE keepalive + mid-stream session expiry (PLAN auth/deploy Phase 3) ---
+#
+# Azure App Service's front end drops a response that has been silent for
+# ~230 s, and a run has long quiet stretches (gotcha #19). We inject a
+# `: keepalive` SSE comment during those gaps so the connection survives. The
+# same loop also re-checks the auth session on each tick and closes the stream
+# with a `session-expired` event once it idles out — the confidentiality fix
+# that the request-level middleware can't do (an open stream only hits the
+# middleware once, at connect). Done at the HTTP layer here so the core
+# run_multi_agent_stream drain loop (and its GeneratorExit contract) is
+# untouched. Override the cadence with XBRL_SSE_KEEPALIVE_S.
+
+# Strong references to in-flight background drain tasks. asyncio only holds a
+# WEAK reference to a bare ensure_future() result, so a fire-and-forget drain
+# can be garbage-collected mid-await — which would strand the run `running`
+# forever (gotcha #10's terminal-status guarantee depends on the drain finishing
+# run_multi_agent_stream). Keeping the task here until it completes prevents that.
+_DRAIN_TASKS: set = set()
+
+
+def _spawn_drain(agen, pending) -> "asyncio.Task":
+    """Schedule a background drain and pin a strong reference until it finishes."""
+    task = asyncio.ensure_future(_drain_generator_to_completion(agen, pending))
+    _DRAIN_TASKS.add(task)
+    task.add_done_callback(_DRAIN_TASKS.discard)
+    return task
+
+
+def _sse_keepalive_interval() -> float:
+    try:
+        return float(os.environ.get("XBRL_SSE_KEEPALIVE_S", "25") or "25")
+    except ValueError:
+        return 25.0
+
+
+_PROXY_HEADER_DIAG_DONE = False
+
+
+def _maybe_log_proxy_header_diag(request) -> None:
+    """Log the observed client IP vs X-Forwarded-For ONCE, in production only.
+
+    Lets an operator confirm uvicorn --proxy-headers is active so the login
+    lockout buckets on the real client IP rather than the App Service front end
+    (see auth/routes.py::_client_ip). No-op locally and after the first call.
+    """
+    global _PROXY_HEADER_DIAG_DONE
+    if _PROXY_HEADER_DIAG_DONE:
+        return
+    from auth import config as auth_config
+    if not auth_config.is_production():
+        return
+    _PROXY_HEADER_DIAG_DONE = True
+    peer = request.client.host if request.client else "(none)"
+    xff = request.headers.get("x-forwarded-for", "(absent)")
+    if xff == "(absent)":
+        logger.warning(
+            "auth lockout diagnostic: no X-Forwarded-For header on the first "
+            "guarded request (peer=%s). If this app is behind the App Service "
+            "front end, start uvicorn with --proxy-headers so per-IP login "
+            "lockout buckets on the real client, not the shared front end.",
+            peer,
+        )
+    else:
+        logger.info(
+            "auth lockout diagnostic: peer=%s X-Forwarded-For=%s "
+            "(per-IP login lockout buckets on peer).", peer, xff,
+        )
+
+
+def _auth_session_id_from_request(request) -> Optional[str]:
+    """Verified auth session id from the request cookie, or None when there is
+    no session to watch (dev-mode bypass, or an unsigned/absent cookie)."""
+    from auth import config as auth_config
+    from auth import sessions as auth_sessions
+
+    if auth_config.dev_bypass_active():
+        return None
+    return auth_sessions.parse_cookie(request.cookies.get(auth_config.cookie_name()))
+
+
+def _auth_session_expired(auth_session_id: Optional[str]) -> bool:
+    """True if the auth session has idled out (and delete the stale row). False
+    when there is nothing to watch — never closes a dev-mode/unauthenticated
+    stream."""
+    if not auth_session_id:
+        return False
+    from auth import sessions as auth_sessions
+    from db import repository as repo
+
+    conn = _open_audit_conn()
+    try:
+        sess = repo.fetch_auth_session(conn, auth_session_id)
+        if sess is None:
+            return True
+        if auth_sessions.is_expired(sess):
+            repo.delete_auth_session(conn, auth_session_id)
+            conn.commit()
+            return True
+        # Also close the stream if the account was disabled/deleted mid-run.
+        user = repo.fetch_auth_user(conn, sess.email)
+        if user is None or user.disabled:
+            repo.delete_auth_session(conn, auth_session_id)
+            conn.commit()
+            return True
+        return False
+    finally:
+        conn.close()
+
+
+async def _drain_generator_to_completion(agen, pending) -> None:
+    """Drive a run generator to its natural end with no client listening, so
+    the run still merges + finalizes + lands in History ("runs outlive
+    sessions"). Events are persisted inside the generator before each yield, so
+    discarding them here loses nothing. Used when the client disconnects or the
+    session expires mid-stream.
+
+    Crucially it does NOT cancel the generator — it keeps calling __anext__ so
+    the generator's own post-pipeline (merge, cross-checks, terminal-status
+    finalize — gotcha #10) runs to completion exactly as if a client were still
+    attached but silent.
+    """
+    try:
+        try:
+            await pending  # resolve the already-in-flight pull first
+        except (StopAsyncIteration, Exception):
+            return
+        while True:
+            try:
+                await agen.__anext__()
+            except (StopAsyncIteration, Exception):
+                return
+    finally:
+        try:
+            await agen.aclose()
+        except Exception:
+            pass
+
+
+async def sse_stream_with_keepalive(agen, *, auth_session_id: Optional[str] = None):
+    """Format run_multi_agent_stream's dict events as SSE frames, inject
+    `: keepalive` comments during silent stretches, and close with a
+    `session-expired` event once the auth session times out mid-stream.
+
+    Uses a persistent in-flight __anext__ task (NOT asyncio.wait_for, which
+    would cancel the pull on every keepalive tick and corrupt the generator —
+    the next pull would StopAsyncIteration early and end a healthy run). The
+    pending task is left untouched across keepalive ticks. On any early exit
+    (expiry / client disconnect) the run is handed to a background drain so it
+    finishes server-side.
+    """
+    interval = _sse_keepalive_interval()
+    last_check = time.monotonic()
+    pending = asyncio.ensure_future(agen.__anext__())
+    # True until the generator finishes on its own; left True on an early exit
+    # so the finally hands the still-running run to the background drain.
+    detach = True
+    try:
+        while True:
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                # Silent stretch — `pending` is untouched (no cancellation).
+                if _auth_session_expired(auth_session_id):
+                    yield "event: session-expired\ndata: {}\n\n"
+                    return
+                yield ": keepalive\n\n"
+                continue
+            try:
+                evt = pending.result()
+            except StopAsyncIteration:
+                detach = False  # generator already done — nothing to drain
+                return
+            # Start the next pull before yielding so the run keeps progressing
+            # while the client consumes this frame.
+            pending = asyncio.ensure_future(agen.__anext__())
+            # Re-check expiry at most once per interval even on an active stream
+            # so a run streaming to a walked-away user still closes on timeout.
+            now = time.monotonic()
+            if now - last_check >= interval:
+                last_check = now
+                if _auth_session_expired(auth_session_id):
+                    yield "event: session-expired\ndata: {}\n\n"
+                    return
+            yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+    finally:
+        if detach:
+            # Client stopped listening but the run isn't done — finish it in the
+            # background so it lands in History. _spawn_drain pins a strong
+            # reference so the task can't be GC'd mid-run (gotcha #10).
+            _spawn_drain(agen, pending)
 
 
 async def run_multi_agent_stream(
@@ -5038,6 +5312,62 @@ async def _history_date_range_alias(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def _auth_guard(request: Request, call_next):
+    """Gate every /api/* route on a valid session (PLAN auth Phase 1.2).
+
+    Exempt: /api/auth/* (so login works) and /api/health. Static SPA assets are
+    public — they carry no data and the SPA redirects to login when
+    /api/auth/me returns 401. AUTH_MODE=dev (local only) bypasses the gate with
+    an auto-session.
+
+    A valid request bumps the sliding-window timer UNLESS the path is a
+    background poll (e.g. re-review status) — that keeps an idle-but-polling tab
+    from staying logged in forever, while genuine API use refreshes the session.
+    """
+    from auth import config as auth_config
+    from auth import middleware as auth_mw
+    from auth import sessions as auth_sessions
+    from db import repository as repo
+
+    path = request.url.path
+    if auth_config.dev_bypass_active() or not auth_mw.is_guarded(path):
+        return await call_next(request)
+
+    # One-time production diagnostic: the per-(email, IP) login lockout buckets
+    # on request.client.host, which only reflects the real peer when uvicorn is
+    # started with --proxy-headers (Azure terminates at its front end). Log the
+    # observed peer vs X-Forwarded-For once so an operator can confirm headers
+    # are flowing — if peer is the front end and XFF differs, --proxy-headers is
+    # missing and lockout would bucket every user together.
+    _maybe_log_proxy_header_diag(request)
+
+    cookie_value = request.cookies.get(auth_config.cookie_name())
+    conn = _open_audit_conn()
+    try:
+        session, _status = auth_mw.resolve_session(conn, cookie_value)
+        if session is None:
+            # Both "missing" and "expired" surface as 401 — the frontend treats
+            # any 401 as "show the login page".
+            conn.commit()  # persist the expired-row delete, if any
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Not authenticated.", "reason": _status},
+            )
+        # Bump the sliding window only on real activity, and only when the
+        # stored timestamp is actually stale (auth_sessions.should_bump_activity)
+        # — skipping the write on back-to-back requests avoids one UPDATE per
+        # API call on the busy run page.
+        if auth_mw.counts_as_activity(path) and auth_sessions.should_bump_activity(session):
+            repo.touch_auth_session(conn, session.session_id)
+        conn.commit()
+    finally:
+        conn.close()
+    # Make the identity available to downstream handlers (audit/attribution).
+    request.state.auth_email = session.email
+    return await call_next(request)
+
+
 # --- Serve built frontend (Vite output in dist/) ---
 #
 # Two-layer wiring:
@@ -5127,6 +5457,7 @@ from api.runs import router as _runs_router
 from api.notes import router as _notes_router
 from api.files import router as _files_router
 from api.eval import router as _eval_router
+from auth.routes import router as _auth_router
 
 app.include_router(_config_router)
 app.include_router(_uploads_router)
@@ -5136,6 +5467,7 @@ app.include_router(_runs_router)
 app.include_router(_notes_router)
 app.include_router(_files_router)
 app.include_router(_eval_router)
+app.include_router(_auth_router)
 
 # Re-export the moved handler functions as ``server.<name>`` so existing tests
 # that import a handler off this module (e.g. ``server.download_result(...)``)
@@ -5181,12 +5513,13 @@ _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 def resolve_bind_host(env: Optional[dict] = None) -> tuple[str, bool]:
     """Resolve the uvicorn bind host and whether it exposes beyond this machine.
 
-    Loopback by default: the app has NO authentication / CORS / CSRF, yet
-    exposes destructive + paid-LLM endpoints (e.g. POST
-    /api/runs/{id}/revert-to-original wipes a run's facts; POST /re-review
-    spends API tokens). On 0.0.0.0 those are reachable by any host on the
-    network with no credentials, so the safe default is 127.0.0.1. Set
-    HOST=0.0.0.0 to deliberately expose on a trusted LAN.
+    Loopback by default. The app now has an auth layer gating every /api/*
+    route, but binding to 0.0.0.0 still puts the login surface + paid/
+    destructive endpoints (e.g. POST /api/runs/{id}/revert-to-original wipes a
+    run's facts; POST /re-review spends API tokens) on the network — and under
+    AUTH_MODE=dev the gate is bypassed entirely (auto-session), so there is no
+    real login at all. The safe default stays 127.0.0.1; set HOST=0.0.0.0 only
+    to deliberately expose on a trusted LAN (and never with AUTH_MODE=dev).
 
     Returns ``(host, is_exposed)`` where ``is_exposed`` is True for any
     non-loopback bind, so the caller can warn. Pure (reads the passed env, or
@@ -5204,11 +5537,15 @@ if __name__ == "__main__":
     host, exposed = resolve_bind_host()
     port = int(os.environ.get("PORT", "8002"))
     if exposed:
+        dev_auth = os.environ.get("AUTH_MODE", "").strip().lower() == "dev"
         logger.warning(
-            "XBRL Agent is binding to %s — reachable beyond this machine with "
-            "NO authentication. The app exposes destructive + paid-LLM "
-            "endpoints; only expose it on a trusted network. Set HOST=127.0.0.1 "
-            "to restrict to this machine.", host,
+            "XBRL Agent is binding to %s — reachable beyond this machine. "
+            "%sThe login surface + destructive/paid-LLM endpoints are exposed; "
+            "only do this on a trusted network. Set HOST=127.0.0.1 to restrict "
+            "to this machine.",
+            host,
+            "AUTH_MODE=dev is set, so the auth gate is BYPASSED (no login). "
+            if dev_auth else "",
         )
     logger.info(f"Starting SOFP Agent Web UI on http://{host}:{port}")
     uvicorn.run(app, host=host, port=port)

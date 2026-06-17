@@ -17,7 +17,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
@@ -31,7 +31,7 @@ router = APIRouter()
 
 
 @router.post("/api/run/{session_id}")
-async def run_multi_extraction(session_id: str, body: RunConfigRequest):
+async def run_multi_extraction(session_id: str, body: RunConfigRequest, request: Request):
     """Multi-agent SSE endpoint — runs extraction for multiple statements.
 
     Accepts a RunConfig body specifying which statements to extract,
@@ -72,17 +72,24 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest):
                 detail="GEMINI_API_KEY (Mac) or GOOGLE_API_KEY (Windows proxy) must be set. Check Settings.",
             )
 
+        # Watch this user's auth session so the stream closes if it idles out
+        # mid-run (PLAN auth §1.1). None under AUTH_MODE=dev → never closes.
+        auth_session_id = server._auth_session_id_from_request(request)
+
         async def event_stream():
+            agen = server.run_multi_agent_stream(
+                session_id=session_id,
+                session_dir=session_dir,
+                run_config=body,
+                api_key=api_key,
+                proxy_url=proxy_url,
+                model_name=model_name,
+            )
             try:
-                async for evt in server.run_multi_agent_stream(
-                    session_id=session_id,
-                    session_dir=session_dir,
-                    run_config=body,
-                    api_key=api_key,
-                    proxy_url=proxy_url,
-                    model_name=model_name,
+                async for frame in server.sse_stream_with_keepalive(
+                    agen, auth_session_id=auth_session_id
                 ):
-                    yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+                    yield frame
             finally:
                 server.active_runs.discard(session_id)
 
@@ -104,7 +111,7 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest):
 
 
 @router.post("/api/runs/{run_id}/start")
-async def start_run_endpoint(run_id: int):
+async def start_run_endpoint(run_id: int, request: Request):
     """Start an extraction for a draft run created via the upload endpoint.
 
     Persistent-draft contract (PLAN-persistent-draft-uploads.md, Phase B):
@@ -219,18 +226,23 @@ async def start_run_endpoint(run_id: int):
                 ),
             )
 
+        auth_session_id = server._auth_session_id_from_request(request)
+
         async def event_stream():
+            agen = server.run_multi_agent_stream(
+                session_id=session_id,
+                session_dir=session_dir,
+                run_config=run_config,
+                api_key=api_key,
+                proxy_url=proxy_url,
+                model_name=model_name,
+                existing_run_id=run_id,
+            )
             try:
-                async for evt in server.run_multi_agent_stream(
-                    session_id=session_id,
-                    session_dir=session_dir,
-                    run_config=run_config,
-                    api_key=api_key,
-                    proxy_url=proxy_url,
-                    model_name=model_name,
-                    existing_run_id=run_id,
+                async for frame in server.sse_stream_with_keepalive(
+                    agen, auth_session_id=auth_session_id
                 ):
-                    yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+                    yield frame
             finally:
                 server.active_runs.discard(session_id)
 
@@ -298,7 +310,7 @@ async def abort_agent(session_id: str, agent_id: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/api/runs/{run_id}/rerun-notes")
-async def rerun_notes(run_id: int):
+async def rerun_notes(run_id: int, request: Request):
     """Regenerate the notes sheets for a completed run.
 
     Peer-review [HIGH] #1: before this endpoint existed, the
@@ -398,18 +410,22 @@ async def rerun_notes(run_id: int):
         )
 
     server.active_runs.add(session_id)
+    auth_session_id = server._auth_session_id_from_request(request)
 
     async def event_stream():
+        agen = server.run_multi_agent_stream(
+            session_id=session_id,
+            session_dir=session_dir,
+            run_config=regen_config,
+            api_key=api_key,
+            proxy_url=proxy_url,
+            model_name=model_name,
+        )
         try:
-            async for evt in server.run_multi_agent_stream(
-                session_id=session_id,
-                session_dir=session_dir,
-                run_config=regen_config,
-                api_key=api_key,
-                proxy_url=proxy_url,
-                model_name=model_name,
+            async for frame in server.sse_stream_with_keepalive(
+                agen, auth_session_id=auth_session_id
             ):
-                yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+                yield frame
         finally:
             server.active_runs.discard(session_id)
 
@@ -425,7 +441,7 @@ async def rerun_notes(run_id: int):
 
 
 @router.post("/api/rerun/{session_id}")
-async def rerun_agent(session_id: str, body: RunConfigRequest):
+async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request):
     """Re-run extraction for a single agent within an existing session.
 
     Accepts either exactly one face statement OR exactly one notes template,
@@ -466,18 +482,22 @@ async def rerun_agent(session_id: str, body: RunConfigRequest):
         raise HTTPException(status_code=400, detail="API key not set. Check Settings.")
 
     server.active_runs.add(session_id)
+    auth_session_id = server._auth_session_id_from_request(request)
 
     async def event_stream():
+        agen = server.run_multi_agent_stream(
+            session_id=session_id,
+            session_dir=session_dir,
+            run_config=body,
+            api_key=api_key,
+            proxy_url=proxy_url,
+            model_name=model_name,
+        )
         try:
-            async for evt in server.run_multi_agent_stream(
-                session_id=session_id,
-                session_dir=session_dir,
-                run_config=body,
-                api_key=api_key,
-                proxy_url=proxy_url,
-                model_name=model_name,
+            async for frame in server.sse_stream_with_keepalive(
+                agen, auth_session_id=auth_session_id
             ):
-                yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+                yield frame
         finally:
             server.active_runs.discard(session_id)
 

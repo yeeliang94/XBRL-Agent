@@ -177,6 +177,12 @@ export function createMultiAgentSSE(
       }
 
       for await (const evt of parseSSEStream(reader)) {
+        if (evt.event === "session-expired") {
+          // The auth session idled out mid-stream — drop to the login page.
+          window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+          onError("Your session expired. Please sign in again.");
+          return;
+        }
         if (!MULTI_EVENT_TYPES.includes(evt.event as SSEEventType)) continue;
         const typedEvent = evt as SSEEvent;
         onEvent(typedEvent);
@@ -238,6 +244,12 @@ export function createMultiAgentSSEByRunId(
       }
 
       for await (const evt of parseSSEStream(reader)) {
+        if (evt.event === "session-expired") {
+          // The auth session idled out mid-stream — drop to the login page.
+          window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+          onError("Your session expired. Please sign in again.");
+          return;
+        }
         if (!MULTI_EVENT_TYPES.includes(evt.event as SSEEventType)) continue;
         const typedEvent = evt as SSEEvent;
         onEvent(typedEvent);

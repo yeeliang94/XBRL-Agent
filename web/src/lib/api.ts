@@ -11,10 +11,15 @@ import type {
   AgentTraceJson,
 } from "./types";
 
-// Shared fetch helper — parses JSON error bodies for useful messages
+// Shared fetch helper — parses JSON error bodies for useful messages.
+// A 401 anywhere means the session expired mid-use: broadcast it so the app
+// shell can drop back to the login page (the "any 401 ⇒ show login" rule).
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   if (!res.ok) {
+    if (res.status === 401) {
+      window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+    }
     let detail = `Request failed (${res.status})`;
     try {
       const body = await res.json();
@@ -23,6 +28,58 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
     throw new Error(detail);
   }
   return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Auth (PLAN auth Phase 1.4). Session cookies are same-origin (the SPA is
+// served by the same FastAPI app), so the browser attaches them automatically
+// — no `credentials` override needed.
+// ---------------------------------------------------------------------------
+
+export interface AuthMe {
+  email: string;
+  display_name: string;
+  provider: string;
+}
+
+export type LoginResult =
+  | { ok: true }
+  | { ok: false; status: number; detail: string };
+
+/** Current user, or null when not authenticated (401). In AUTH_MODE=dev the
+ *  backend returns a synthetic dev user so the login page never shows. */
+export async function getAuthMe(): Promise<AuthMe | null> {
+  const res = await fetch("/api/auth/me");
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(`auth check failed (${res.status})`);
+  return res.json();
+}
+
+export async function loginPassword(email: string, password: string): Promise<LoginResult> {
+  const res = await fetch("/api/auth/login/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (res.ok) return { ok: true };
+  let detail = "Login failed.";
+  try {
+    const body = await res.json();
+    detail = body.detail || detail;
+  } catch { /* no JSON body */ }
+  return { ok: false, status: res.status, detail };
+}
+
+export async function logout(): Promise<void> {
+  await fetch("/api/auth/logout", { method: "POST" });
+}
+
+/** Throttled activity ping — bumps the sliding-window idle timer. Best-effort;
+ *  a failure is swallowed (the next real API call surfaces a true expiry). */
+export async function refreshAuth(): Promise<void> {
+  try {
+    await fetch("/api/auth/refresh", { method: "POST" });
+  } catch { /* offline / transient — ignore */ }
 }
 
 export async function uploadPdf(file: File): Promise<UploadResponse> {

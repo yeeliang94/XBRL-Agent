@@ -146,6 +146,66 @@ def test_rerun_notes_delegates_to_stream_with_notes_only_config(session_env):
     assert run_config.notes_models == {"CORP_INFO": "openai.gpt-5.4-mini"}
 
 
+def test_rerun_notes_routes_through_keepalive_wrapper(session_env):
+    """Peer-review HIGH: the rerun streams must use sse_stream_with_keepalive
+    (Azure keepalive + mid-stream session expiry), not the old manual loop.
+    Spy on the wrapper so a future refactor can't silently drop it."""
+    import server
+
+    session_id, out = session_env
+    run_id = _seed_completed_run(out, session_id, {
+        "statements": [], "variants": {}, "models": {}, "infopack": None,
+        "use_scout": False, "filing_level": "company", "filing_standard": "mfrs",
+        "notes_to_run": ["CORP_INFO"], "notes_models": {},
+    })
+
+    calls = {"n": 0}
+    real = server.sse_stream_with_keepalive
+
+    def spy(agen, **kwargs):
+        calls["n"] += 1
+        return real(agen, **kwargs)
+
+    async def fake_stream(**kwargs):
+        yield {"event": "run_complete", "data": {"status": "completed"}}
+
+    with patch("server.run_multi_agent_stream", side_effect=fake_stream), \
+            patch("server.sse_stream_with_keepalive", side_effect=spy):
+        client = TestClient(server.app)
+        resp = client.post(f"/api/runs/{run_id}/rerun-notes")
+
+    assert resp.status_code == 200
+    assert "run_complete" in resp.text
+    assert calls["n"] == 1, "rerun-notes must stream through sse_stream_with_keepalive"
+
+
+def test_rerun_agent_routes_through_keepalive_wrapper(session_env):
+    """Same guard for the per-agent rerun (POST /api/rerun/{session_id})."""
+    import server
+
+    session_id, out = session_env
+    calls = {"n": 0}
+    real = server.sse_stream_with_keepalive
+
+    def spy(agen, **kwargs):
+        calls["n"] += 1
+        return real(agen, **kwargs)
+
+    async def fake_stream(**kwargs):
+        yield {"event": "run_complete", "data": {"status": "completed"}}
+
+    with patch("server.run_multi_agent_stream", side_effect=fake_stream), \
+            patch("server.sse_stream_with_keepalive", side_effect=spy):
+        client = TestClient(server.app)
+        resp = client.post(
+            f"/api/rerun/{session_id}",
+            json={"statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"}},
+        )
+
+    assert resp.status_code == 200
+    assert calls["n"] == 1, "rerun must stream through sse_stream_with_keepalive"
+
+
 def test_rerun_notes_rejects_when_session_already_running(session_env):
     """The existing per-agent rerun returns 409 when a run is active
     for the same session. The notes-regenerate endpoint must do the

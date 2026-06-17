@@ -23,8 +23,10 @@ def _schema_version(conn: sqlite3.Connection) -> int:
     return int(row[0]) if row else 0
 
 
-def test_current_schema_version_is_17():
-    assert CURRENT_SCHEMA_VERSION == 17
+def test_current_schema_version_is_at_least_v17():
+    # >= rather than == so a later version bump (v18 auth tables, …) doesn't
+    # break this pin — mirrors the resilient v16-test convention.
+    assert CURRENT_SCHEMA_VERSION >= 17
 
 
 def test_fresh_init_has_error_type_column(tmp_path):
@@ -33,7 +35,7 @@ def test_fresh_init_has_error_type_column(tmp_path):
     conn = sqlite3.connect(str(db))
     try:
         assert "error_type" in _table_columns(conn, "run_agents")
-        assert _schema_version(conn) == 17
+        assert _schema_version(conn) == CURRENT_SCHEMA_VERSION
     finally:
         conn.close()
 
@@ -57,7 +59,7 @@ def test_v16_db_walks_forward_to_v17(tmp_path):
     conn = sqlite3.connect(str(db))
     try:
         assert "error_type" in _table_columns(conn, "run_agents")
-        assert _schema_version(conn) == 17
+        assert _schema_version(conn) == CURRENT_SCHEMA_VERSION
         # Legacy rows read NULL — nullable column, no backfill.
     finally:
         conn.close()
@@ -69,7 +71,7 @@ def test_reinit_is_idempotent(tmp_path):
     init_db(db)
     conn = sqlite3.connect(str(db))
     try:
-        assert _schema_version(conn) == 17
+        assert _schema_version(conn) == CURRENT_SCHEMA_VERSION
     finally:
         conn.close()
 

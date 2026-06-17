@@ -20,3 +20,7 @@ beautifulsoup4>=4.12.0
 # / openai / anthropic clients trust the corporate root automatically.
 # No-op on Mac (LiteLLM proxy is plain HTTP localhost). Requires Py 3.10+.
 truststore>=0.9.0
+# Auth layer (PLAN-azure-auth-deployment Phase 1): argon2id password hashing.
+# argon2id is the modern memory-hard KDF — never store a fast/plain hash for
+# the email+password login. Cookie signing uses stdlib hmac (no extra dep).
+argon2-cffi>=23.1.0
