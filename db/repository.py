@@ -1477,3 +1477,224 @@ def fetch_eval_score_for_run(
     if row is None:
         return None
     return fetch_eval_score(conn, run_id, int(row["benchmark_id"]))
+
+
+# ---------------------------------------------------------------------------
+# Auth (v18) — accounts + server-side sessions
+# ---------------------------------------------------------------------------
+# These helpers are the ONLY place that touches the auth_users / auth_sessions
+# tables. The password hash is opaque here — hashing/verification lives in
+# auth/passwords.py; this module just stores and reads the hash string.
+
+@dataclass
+class AuthUser:
+    email: str
+    display_name: str = ""
+    password_hash: Optional[str] = None
+    disabled: bool = False
+    created_at: str = ""
+    password_set_at: Optional[str] = None
+
+
+@dataclass
+class AuthSession:
+    session_id: str
+    email: str
+    display_name: str = ""
+    provider: str = "password"
+    created_at: str = ""
+    last_seen_at: str = ""
+
+
+def _normalize_email(email: str) -> str:
+    """Lower-case + strip so lookups are case-insensitive (the PK is lowercased).
+
+    A small fixed team typing "You@Firm.com" must match the seeded
+    "you@firm.com" row, so every read and write funnels through this.
+    """
+    return (email or "").strip().lower()
+
+
+def upsert_auth_user(
+    conn: sqlite3.Connection,
+    email: str,
+    display_name: str,
+    password_hash: Optional[str],
+) -> None:
+    """Create or update an account. Used by the provisioning CLI.
+
+    On a re-run for an existing email it refreshes the display name + hash
+    (the "set-password" / rotate path) and stamps password_set_at whenever a
+    hash is supplied, leaving `disabled` untouched.
+    """
+    norm = _normalize_email(email)
+    now = _now()
+    conn.execute(
+        """
+        INSERT INTO auth_users(email, display_name, password_hash, disabled,
+                               created_at, password_set_at)
+        VALUES (?, ?, ?, 0, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET
+            display_name    = excluded.display_name,
+            password_hash   = excluded.password_hash,
+            password_set_at = excluded.password_set_at
+        """,
+        (norm, display_name or "", password_hash, now,
+         now if password_hash is not None else None),
+    )
+
+
+def set_auth_user_disabled(
+    conn: sqlite3.Connection, email: str, disabled: bool
+) -> bool:
+    """Block (or re-enable) an account without deleting it (keeps the audit
+    trail). Returns False if no such account exists.
+
+    Disabling also REVOKES the account's live sessions immediately — a flipped
+    `disabled` flag must lock the user out now, not whenever their session
+    happens to idle out. (resolve_session also fails closed on a disabled user
+    as defence in depth, but deleting the rows is the clean primary revocation.)
+    """
+    norm = _normalize_email(email)
+    cur = conn.execute(
+        "UPDATE auth_users SET disabled = ? WHERE email = ?",
+        (1 if disabled else 0, norm),
+    )
+    if disabled and cur.rowcount > 0:
+        conn.execute("DELETE FROM auth_sessions WHERE email = ?", (norm,))
+    return cur.rowcount > 0
+
+
+def fetch_auth_user(
+    conn: sqlite3.Connection, email: str
+) -> Optional[AuthUser]:
+    """Look up one account by (case-folded) email, or None."""
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM auth_users WHERE email = ?",
+            (_normalize_email(email),),
+        ).fetchone()
+    finally:
+        conn.row_factory = prior_factory
+    if row is None:
+        return None
+    return AuthUser(
+        email=row["email"],
+        display_name=row["display_name"] or "",
+        password_hash=row["password_hash"],
+        disabled=bool(row["disabled"]),
+        created_at=row["created_at"] or "",
+        password_set_at=row["password_set_at"],
+    )
+
+
+def list_auth_users(conn: sqlite3.Connection) -> list[AuthUser]:
+    """All accounts, ordered by email. Never exposes the hash to callers that
+    print (the CLI list view selects fields explicitly)."""
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT * FROM auth_users ORDER BY email"
+        ).fetchall()
+    finally:
+        conn.row_factory = prior_factory
+    return [
+        AuthUser(
+            email=r["email"],
+            display_name=r["display_name"] or "",
+            password_hash=r["password_hash"],
+            disabled=bool(r["disabled"]),
+            created_at=r["created_at"] or "",
+            password_set_at=r["password_set_at"],
+        )
+        for r in rows
+    ]
+
+
+def count_auth_users(conn: sqlite3.Connection, *, enabled_only: bool = False) -> int:
+    """How many accounts exist. The production fail-closed startup check uses
+    `enabled_only=True` — an all-disabled table is as much a lockout as an
+    empty one."""
+    sql = "SELECT COUNT(*) FROM auth_users"
+    if enabled_only:
+        sql += " WHERE disabled = 0"
+    return int(conn.execute(sql).fetchone()[0])
+
+
+def create_auth_session(
+    conn: sqlite3.Connection,
+    session_id: str,
+    email: str,
+    display_name: str,
+    provider: str = "password",
+) -> None:
+    """Persist a new server-side session. last_seen_at starts at creation time
+    so the very first idle-timeout comparison is meaningful."""
+    now = _now()
+    conn.execute(
+        "INSERT INTO auth_sessions(session_id, email, display_name, provider, "
+        "created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (session_id, _normalize_email(email), display_name or "", provider, now, now),
+    )
+
+
+def fetch_auth_session(
+    conn: sqlite3.Connection, session_id: str
+) -> Optional[AuthSession]:
+    """Look up a live session by its opaque id, or None if revoked/never existed."""
+    if not session_id:
+        return None
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM auth_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    finally:
+        conn.row_factory = prior_factory
+    if row is None:
+        return None
+    return AuthSession(
+        session_id=row["session_id"],
+        email=row["email"],
+        display_name=row["display_name"] or "",
+        provider=row["provider"] or "password",
+        created_at=row["created_at"] or "",
+        last_seen_at=row["last_seen_at"] or "",
+    )
+
+
+def touch_auth_session(conn: sqlite3.Connection, session_id: str) -> None:
+    """Bump last_seen_at to now — the sliding-window 'activity' write. Called
+    only for real user activity, never for background polls/SSE (so an idle tab
+    still times out)."""
+    conn.execute(
+        "UPDATE auth_sessions SET last_seen_at = ? WHERE session_id = ?",
+        (_now(), session_id),
+    )
+
+
+def delete_auth_session(conn: sqlite3.Connection, session_id: str) -> None:
+    """Revoke a single session (logout, or expiry cleanup)."""
+    conn.execute(
+        "DELETE FROM auth_sessions WHERE session_id = ?", (session_id,)
+    )
+
+
+def sweep_expired_auth_sessions(conn: sqlite3.Connection, cutoff_iso: str) -> int:
+    """Delete sessions whose last_seen_at is at or before `cutoff_iso` and return
+    how many were removed.
+
+    resolve_session already deletes a session lazily the next time it's touched,
+    so this only matters for sessions that are never accessed again (the user
+    closed the tab) — without a sweep they'd accumulate forever. Called at
+    startup; `cutoff_iso` is `now - idle_timeout` formatted like last_seen_at.
+    """
+    cur = conn.execute(
+        "DELETE FROM auth_sessions WHERE last_seen_at <= ?", (cutoff_iso,)
+    )
+    return cur.rowcount

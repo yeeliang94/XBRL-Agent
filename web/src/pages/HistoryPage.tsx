@@ -287,6 +287,12 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
             const match = buffer.match(/"run_id"\s*:\s*(\d+)/);
             if (match) newRunId = parseInt(match[1], 10);
           }
+          if (buffer.includes("event: session-expired")) {
+            // Session idled out mid-regenerate — drop to the login page.
+            window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+            setRegenStatus("failed");
+            return;
+          }
           if (buffer.includes("event: run_complete")) {
             completed = true;
           }

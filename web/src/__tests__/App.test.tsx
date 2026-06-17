@@ -18,6 +18,13 @@ vi.mock("../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
   return {
     ...actual,
+    // Auth gate: resolve as a signed-in dev user so the app shell renders
+    // (otherwise the boot /api/auth/me check would show the login page).
+    getAuthMe: vi.fn(async () => ({
+      email: "dev@localhost",
+      display_name: "Dev",
+      provider: "dev",
+    })),
     getSettings: vi.fn(async () => ({
       model: "x",
       proxy_url: "",
@@ -159,6 +166,9 @@ describe("App — AgentTimeline integration", () => {
       );
       return {
         ...actual,
+        getAuthMe: vi.fn(async () => ({
+          email: "dev@localhost", display_name: "Dev", provider: "dev",
+        })),
         getSettings: vi.fn(async () => ({
           model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
         })),

@@ -110,6 +110,18 @@ GOOGLE_API_KEY=                # real Google key; also the proxy auth key on Win
 TEST_MODEL=openai.gpt-5.4
 SCOUT_MODEL=openai.gpt-5.4     # falls back to TEST_MODEL when blank
 
+# Auth (gotcha #24). AUTH_MODE unset = real email+password login; AUTH_MODE=dev
+# auto-sessions as dev@localhost (CI / offline only; refuses to boot on Azure).
+AUTH_MODE=                     # leave blank for prod login; set "dev" for tests/CI
+SESSION_SECRET=                # REQUIRED in prod (startup fails without it); dev falls back
+# AUTH_IDLE_TIMEOUT_S=900      # sliding idle logout (default 15 min)
+# AUTH_LOGIN_MAX_ATTEMPTS=5    # (email, IP) lockout threshold
+# AUTH_LOGIN_LOCKOUT_S=900     # lockout window seconds
+
+# Item-32 fact-based verification (gotcha #25) — both DEFAULT ON.
+# XBRL_FACT_BASED_CHECKS=1     # cross-checks read run_concept_facts; 0 = xlsx path
+# XBRL_FACT_BASED_VERIFY=1     # verifier reads facts; 0 = xlsx formula-eval path
+
 # Canonical concept model is now MANDATORY (rewrite Phase 1.1): the legacy
 # direct-xlsx pipeline and the XBRL_CANONICAL_MODE opt-out were removed.
 # The flag is no longer read (see gotcha #21).
@@ -322,7 +334,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **17**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **18**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -394,6 +406,15 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   failed/cancelled agent row carries a non-null value
   (`server._agent_row_error_type` derives one when the coordinator didn't
   set it explicitly). Pinned by `tests/test_db_schema_v17.py`.
+- **v17 → v18:** adds the two auth tables (PLAN-azure-auth-deployment Phase 1) —
+  `auth_users` (the account list = the email allowlist; argon2id
+  `password_hash`, nullable for future SSO-only users; `disabled` flag) and
+  `auth_sessions` (server-side session store for the sliding 15-min idle
+  timeout; `ON DELETE CASCADE` from `auth_users`). Both are pure
+  `CREATE TABLE IF NOT EXISTS` walk-forward steps (new tables, no ALTER), so
+  the migration block only bumps the version marker. The `auth/` package owns
+  all access; accounts are provisioned with `python -m auth.manage`. Pinned by
+  `tests/test_db_schema_v18.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -1055,6 +1076,55 @@ Pinned by `tests/test_db_schema_v16.py`, `test_eval_grader.py`,
 `test_eval_ingest.py`, `test_eval_routes.py`, `test_eval_wiring.py`, and the
 `BenchmarksPage` / `EvalTab` / `ConceptsPage` / `HistoryList` / `PreRunPanel`
 frontend tests. Full plan: docs/PLAN-eval-benchmark.md.
+
+### 24. Auth layer gates every `/api/*` route (schema v18)
+
+The `auth/` package (`config`, `middleware`, `sessions`, `lockout`,
+`passwords`, `routes`, `manage`) + `web/src/pages/LoginPage.tsx` add
+email+password login (PLAN-azure-auth-deployment Phase 1). The DB side is
+gotcha #11 (v18 `auth_users` / `auth_sessions`); the operational invariants:
+
+- **`AUTH_MODE=dev` is required to run the test suite.** The middleware guards
+  **every** `/api/*` route (exempt: prefix `/api/auth/*`, exact `/api/health`).
+  `tests/conftest.py` defaults the whole suite into `AUTH_MODE=dev` (auto-session
+  as `dev@localhost`, no login form) so pre-auth tests don't 401; auth-specific
+  tests opt OUT with `monkeypatch.delenv("AUTH_MODE")`. **Running pytest with
+  `AUTH_MODE` unset makes API-hitting tests 401.**
+- **Production fails fast on misconfig.** `SESSION_SECRET` is mandatory in prod
+  (startup refuses to boot without it; dev falls back to an insecure constant).
+  A startup guard also **refuses to boot in `AUTH_MODE=dev` under production**
+  (`WEBSITE_SITE_NAME` present) so dev-mode can never ship to Azure.
+- **Sessions are server-side + revocable** (`auth_sessions` row, not a stateless
+  JWT) with a **15-min sliding idle timeout** (`AUTH_IDLE_TIMEOUT_S`); the SPA
+  keeps it alive via `/api/auth/refresh`. Brute-force lockout is per `(email, IP)`
+  — 5 attempts → 15-min lock (`AUTH_LOGIN_MAX_ATTEMPTS` / `AUTH_LOGIN_LOCKOUT_S`).
+- **Accounts = the email allowlist.** Provision with
+  `python -m auth.manage add-user you@firm.com --name "Your Name"`. There is no
+  self-signup. Azure provisioning is still TODO.
+
+Pinned by `tests/test_auth_middleware.py`, `test_auth_password.py`,
+`test_auth_sessions.py`, `test_auth_lockout.py`,
+`test_auth_prod_requires_users.py`, `test_manage_users.py`,
+`test_db_schema_v18.py`.
+
+### 25. Fact-based verification (item 32) — both flags DEFAULT ON
+
+The Excel-free verification path reads `run_concept_facts` (by `concept_uuid`)
+instead of opening workbooks. Two independent flags, **both default ON**, read
+at call time so tests can toggle them:
+
+- **`XBRL_FACT_BASED_CHECKS`** (default on; `server._fact_based_checks_enabled`):
+  cross-checks read facts via `run_all_facts` instead of `all_workbook_paths`.
+  Scoping stays variant-precise via `_build_check_template_ids` (gotcha #21).
+  Set `=0` to fall back to the xlsx path.
+- **`XBRL_FACT_BASED_VERIFY`** (default on; `tools/verifier._fact_based_verify_enabled`,
+  with `tools/verifier_facts.py`): the verifier reads facts instead of xlsx
+  formula-eval. Set `=0` to fall back.
+
+The xlsx formula-eval path **remains present and authoritative** as the fallback
+until Phase 4 (xlsx retirement) lands — it is NOT removed yet. Export still
+keeps live formulas (downloads recompute in Excel); item 32 is verification-only,
+no static-value export. Plan: docs/PLAN-orchestration-hardening (item 32).
 
 ## Testing
 
