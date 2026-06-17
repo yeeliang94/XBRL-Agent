@@ -678,19 +678,30 @@ def upsert_notes_cell(
 
     now = _now()
     pages_json = json.dumps(list(source_pages)) if source_pages else None
-    cuid = concept_uuid or mint_notes_concept_uuid(sheet, row, label)
     existing = conn.execute(
-        "SELECT id FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
+        "SELECT id, concept_uuid FROM notes_cells "
+        "WHERE run_id = ? AND sheet = ? AND row = ?",
         (run_id, sheet, row),
     ).fetchone()
     if existing is not None:
         cell_id = int(existing[0])
+        # Preserve a previously-stamped concept_uuid on update: a caller that
+        # omits concept_uuid (e.g. the prose PATCH update path) must NOT
+        # silently downgrade a template-scoped node_uuid back to the legacy
+        # (sheet, row, label) mint. Only mint when neither the caller nor the
+        # existing row supplies one (a legacy row that never had one).
+        cuid = (
+            concept_uuid
+            or existing[1]
+            or mint_notes_concept_uuid(sheet, row, label)
+        )
         conn.execute(
             "UPDATE notes_cells SET label = ?, html = ?, evidence = ?, "
             "source_pages = ?, updated_at = ?, concept_uuid = ? WHERE id = ?",
             (label, html, evidence, pages_json, now, cuid, cell_id),
         )
         return cell_id
+    cuid = concept_uuid or mint_notes_concept_uuid(sheet, row, label)
     cur = conn.execute(
         "INSERT INTO notes_cells(run_id, sheet, row, label, html, "
         "evidence, source_pages, updated_at, concept_uuid) "

@@ -1,5 +1,10 @@
 import { describe, test, expect } from "vitest";
-import { sortSheetsBySlot, type NotesSheet } from "../lib/notesCells";
+import {
+  sortSheetsBySlot,
+  parseNumericInput,
+  INVALID_NUMBER,
+  type NotesSheet,
+} from "../lib/notesCells";
 
 // ---------------------------------------------------------------------------
 // sortSheetsBySlot — orders sheets by MBRS slot index (Corp Info → Acc
@@ -56,5 +61,43 @@ describe("sortSheetsBySlot", () => {
     const snapshot = input.map((s) => s.sheet);
     sortSheetsBySlot(input);
     expect(input.map((s) => s.sheet)).toEqual(snapshot);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseNumericInput — accountant-formatted number entry for numeric notes.
+// Reviewers paste straight from financial statements (thousands separators,
+// parenthesised negatives), so those must parse instead of failing as NaN.
+// ---------------------------------------------------------------------------
+
+describe("parseNumericInput", () => {
+  test("empty / whitespace-only is null (clears the cell)", () => {
+    expect(parseNumericInput("")).toBeNull();
+    expect(parseNumericInput("   ")).toBeNull();
+  });
+
+  test("plain numbers parse, including a typed zero", () => {
+    expect(parseNumericInput("1234")).toBe(1234);
+    expect(parseNumericInput("1234.5")).toBe(1234.5);
+    expect(parseNumericInput("0")).toBe(0);
+    expect(parseNumericInput("-95")).toBe(-95);
+  });
+
+  test("strips thousands separators and surrounding whitespace", () => {
+    expect(parseNumericInput(" 1,234,567 ")).toBe(1234567);
+    expect(parseNumericInput("1,000.50")).toBe(1000.5);
+  });
+
+  test("reads parenthesised values as negatives", () => {
+    expect(parseNumericInput("(95)")).toBe(-95);
+    expect(parseNumericInput("(1,234.5)")).toBe(-1234.5);
+  });
+
+  test("non-numeric text returns the INVALID_NUMBER sentinel", () => {
+    expect(parseNumericInput("abc")).toBe(INVALID_NUMBER);
+    expect(parseNumericInput("(")).toBe(INVALID_NUMBER);
+    expect(parseNumericInput("1.2.3")).toBe(INVALID_NUMBER);
+    // A lone dash isn't a number — caller surfaces an error rather than 0.
+    expect(parseNumericInput("-")).toBe(INVALID_NUMBER);
   });
 });

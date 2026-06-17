@@ -111,6 +111,7 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
         write_fuzzy_matches: list = []
         write_sanitizer_warnings: list = []
         cells_written: list = []
+        numeric_cells: list = []
         token_report = _FakeTokenReport()
     class _FakeAgentRun:
         def __aiter__(self): return _SlowIterable()

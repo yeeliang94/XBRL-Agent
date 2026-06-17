@@ -1141,3 +1141,124 @@ describe("NotesReviewTab sanitizer_warnings surface", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Full-template projection — blank prose rows + numeric rows
+// (PLAN-notes-template-registry Phase 5).
+// ---------------------------------------------------------------------------
+
+const FULL_TEMPLATE: NotesCellsResponse = {
+  sheets: [
+    {
+      sheet: "Notes-CI",
+      kind: "prose",
+      rows: [
+        {
+          row: 5,
+          label: "Disclosure of corporate information",
+          kind: "prose",
+          node_uuid: "uuid-ci-5",
+          html: "<p>filled</p>",
+          evidence: "Page 3",
+          source_pages: [3],
+          updated_at: "2026-06-17T00:00:00Z",
+        },
+        {
+          // A blank template row — surfaced so the user can locate + fill it.
+          row: 7,
+          label: "Explanation of reasons for the restatement",
+          kind: "prose",
+          node_uuid: "uuid-ci-7",
+          html: "",
+          evidence: null,
+          source_pages: [],
+          updated_at: "",
+        },
+      ],
+    },
+    {
+      sheet: "Notes-Issuedcapital",
+      kind: "numeric",
+      rows: [
+        {
+          row: 6,
+          label: "Issued and fully paid",
+          kind: "numeric",
+          concept_uuid: "uuid-cap-6",
+          html: "",
+          evidence: null,
+          source_pages: [],
+          updated_at: "",
+          values: { cy: 4242, py: null },
+        },
+      ],
+    },
+  ],
+};
+
+describe("NotesReviewTab — full-template projection (Phase 5)", () => {
+  test("renders blank prose rows as editable cells", async () => {
+    mockFetchOnce(FULL_TEMPLATE);
+    render(<NotesReviewTab runId={7} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    // Both the filled (row 5) and the blank (row 7) prose rows render.
+    const proseRows = screen.getAllByTestId("notes-review-row");
+    expect(proseRows.length).toBe(2);
+    // The blank row's label is visible so the user can locate it.
+    expect(
+      screen.getByText(/Explanation of reasons for the restatement/),
+    ).toBeInTheDocument();
+  });
+
+  test("renders numeric rows as value inputs seeded from facts", async () => {
+    mockFetchOnce(FULL_TEMPLATE);
+    render(<NotesReviewTab runId={7} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+
+    const numericRow = screen.getByTestId("notes-numeric-row");
+    expect(numericRow).toBeInTheDocument();
+    const cy = screen.getByTestId("numeric-input-6-cy") as HTMLInputElement;
+    const py = screen.getByTestId("numeric-input-6-py") as HTMLInputElement;
+    expect(cy.value).toBe("4242"); // seeded from run_concept_facts
+    expect(py.value).toBe(""); // unfilled → blank
+  });
+
+  test("editing a numeric cell PATCHes the facts endpoint", async () => {
+    // First fetch = GET projection; subsequent = the PATCH save.
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    let first = true;
+    globalThis.fetch = vi.fn(async (url: any, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      const body = first ? JSON.stringify(FULL_TEMPLATE) : JSON.stringify({ recomputed: [] });
+      first = false;
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    render(<NotesReviewTab runId={7} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+
+    const py = screen.getByTestId("numeric-input-6-py") as HTMLInputElement;
+    fireEvent.change(py, { target: { value: "1000" } });
+    fireEvent.blur(py);
+
+    await waitFor(() => {
+      const patch = calls.find((c) => c.init?.method === "PATCH");
+      expect(patch).toBeTruthy();
+      expect(patch!.url).toContain("/api/runs/7/facts/uuid-cap-6");
+      const sent = JSON.parse(String(patch!.init!.body));
+      expect(sent).toMatchObject({ value: 1000, period: "PY", entity_scope: "Company" });
+    });
+  });
+});

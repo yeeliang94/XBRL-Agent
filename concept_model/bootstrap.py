@@ -25,11 +25,14 @@ import tempfile
 from pathlib import Path
 
 from statement_types import VARIANTS, template_path
+from notes_types import NOTES_REGISTRY, notes_template_path
 from concept_model.importer import (
     import_company_targets,
     import_group_targets,
     import_template,
 )
+from concept_model.notes_importer import import_notes_template
+from concept_model.notes_parser import parse_notes_template
 from concept_model.parser import parse_template
 
 logger = logging.getLogger(__name__)
@@ -58,6 +61,46 @@ def import_all_face_templates(db_path: str | Path) -> list[str]:
                     logger.warning("bootstrap: template missing on disk: %s", path)
                     continue
                 template_id = _import_one(db_path, path, level)
+                template_ids.append(template_id)
+    return template_ids
+
+
+def import_all_notes_templates(db_path: str | Path) -> list[str]:
+    """Import every notes template into ``db_path``. Returns the template_ids.
+
+    Two tracks (PLAN-notes-template-registry):
+      * PROSE notes (Corporate Info, Accounting Policies, List of Notes) →
+        the ``notes_nodes`` registry (HTML cells live in ``notes_cells``).
+      * NUMERIC notes (Issued Capital, Related Party) → the existing
+        ``concept_model`` pipeline via :func:`_import_one`, exactly like a face
+        statement — they are multi-column numeric tables, not prose.
+
+    Slot numbering differs by standard (MFRS 10..14, MPERS 11..15); that's
+    handled inside :func:`notes_template_path`. Idempotent like the face
+    bootstrap — re-imports are no-ops thanks to deterministic ids.
+    """
+    template_ids: list[str] = []
+    for template_type, entry in NOTES_REGISTRY.items():
+        for standard in _STANDARDS:
+            for level in _LEVELS:
+                try:
+                    path = notes_template_path(template_type, level, standard)
+                except ValueError:
+                    continue
+                if not path.exists():
+                    logger.warning(
+                        "bootstrap: notes template missing on disk: %s", path
+                    )
+                    continue
+                if entry.is_numeric:
+                    # Track B: numeric notes reuse the concept_model pipeline.
+                    template_id = _import_one(db_path, path, level)
+                else:
+                    # Track A: prose notes → the notes_nodes registry.
+                    template_id, nodes = parse_notes_template(
+                        str(path), entry.sheet_name
+                    )
+                    import_notes_template(db_path, template_id, nodes)
                 template_ids.append(template_id)
     return template_ids
 

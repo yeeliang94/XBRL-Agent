@@ -120,7 +120,18 @@ from pathlib import Path
 # tables, no ALTER), so the migration block only bumps the version marker —
 # the tables themselves are created above in _CREATE_STATEMENTS. Pinned by
 # tests/test_db_schema_v18.py.
-CURRENT_SCHEMA_VERSION = 18
+#
+# v19 (PLAN-notes-template-registry, Track A) adds the `notes_nodes` table — a
+# persistent registry of every PROSE notes-template row (sheets 10/11/12),
+# parallel to concept_nodes but kept separate because notes are HTML text-blocks,
+# not numeric facts (numeric notes 13/14 reuse concept_nodes instead). It lets
+# the Notes Review tab project the FULL template (blanks included), and reserves
+# a nullable `xbrl_concept_id` to anchor future full-XBRL-filing generation.
+# node_uuid is template-scoped (uuid5 of template_id::sheet::row::label) so the
+# same row under MFRS/MPERS × Company/Group does not collide. Pure CREATE TABLE
+# IF NOT EXISTS walk-forward (new table, no ALTER) — the step only bumps the
+# marker. Pinned by tests/test_db_schema_v19.py.
+CURRENT_SCHEMA_VERSION = 19
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -458,6 +469,33 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         updated_at    TEXT NOT NULL,
         concept_uuid  TEXT,                    -- P7: link to canonical concept store; NULL = legacy notes write
         UNIQUE(run_id, sheet, row)
+    )
+    """,
+
+    # v19: persistent registry of PROSE notes-template rows (Track A of
+    # PLAN-notes-template-registry). One row per (template_id, sheet, row) of
+    # the prose notes templates (10/11/12) — the run-independent description of
+    # the template, so the Notes Review tab can project the FULL template with
+    # blanks and overlay per-run `notes_cells`. Deliberately NOT in concept_nodes
+    # (those drive the numeric cascade/cross-checks/exporter, which prose has no
+    # part in) and with NO FK to concept_templates (prose notes are not in the
+    # concept pipeline). `node_uuid` is template-scoped — uuid5 of
+    # template_id::sheet::row::label — so the same prose row under MFRS/MPERS ×
+    # Company/Group gets DISTINCT ids and the PK never collides. `xbrl_concept_id`
+    # is reserved (NULL until the XBRL-generation follow-up populates the real
+    # SSM element id). `kind` is 'ABSTRACT' (section header — not projected) or
+    # 'LEAF' (fillable). UNIQUE(template_id, sheet, row) is the upsert key and
+    # serves template_id-prefixed lookups (no separate index needed).
+    """
+    CREATE TABLE IF NOT EXISTS notes_nodes (
+        node_uuid        TEXT PRIMARY KEY,
+        template_id      TEXT NOT NULL,           -- e.g. 'mfrs-company-notes-corporateinfo-v1'
+        sheet            TEXT NOT NULL,
+        row              INTEGER NOT NULL,
+        label            TEXT NOT NULL,
+        kind             TEXT NOT NULL,           -- 'ABSTRACT' (header) | 'LEAF' (fillable)
+        xbrl_concept_id  TEXT,                    -- reserved; NULL until XBRL-gen follow-up populates the SSM element id
+        UNIQUE(template_id, sheet, row)
     )
     """,
 
@@ -1423,6 +1461,33 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (18,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v18→v19 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v18 → v19: add the notes_nodes table (prose notes registry, Track A of
+        # PLAN-notes-template-registry). Created above via the idempotent
+        # CREATE TABLE IF NOT EXISTS, so older DBs that walk through this block
+        # just confirm the table exists and bump the marker — no ALTER columns
+        # needed. Same BEGIN IMMEDIATE discipline as the earlier additive-table
+        # steps (v2→v3, v10→v11, v11→v12, v12→v13, v17→v18).
+        if current_version is not None and current_version < 19:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 19:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (19,),
                     )
                 conn.commit()
             except Exception:

@@ -88,6 +88,12 @@ class NotesWriteResult:
     # evidence, source_pages. Numeric-only rows are omitted — the
     # editor focuses on prose.
     cells_written: list[dict] = field(default_factory=list)
+    # Per-cell NUMERIC manifest (PLAN-notes-template-registry Step 9). One
+    # entry per numeric value the writer landed: sheet, row, col (B/C/D/E as a
+    # column number), value, evidence. The coordinator projects these into
+    # run_concept_facts via cell_resolver so numeric notes are captured the
+    # same way face statements are. Empty on prose-only sheets.
+    numeric_cells: list[dict] = field(default_factory=list)
 
 
 # Scores below this threshold are logged at WARNING as "borderline". The
@@ -179,6 +185,7 @@ def write_notes_workbook(
     rows_written = 0
     sidecar_entries: list[dict] = []
     cells_written: list[dict] = []
+    numeric_cells: list[dict] = []
     # Reverse map row→template label so cells_written can carry the
     # template's verbatim col-A text (what the editor shows as the row
     # header) rather than the agent's possibly-fuzzy request.
@@ -211,6 +218,23 @@ def write_notes_workbook(
                     "evidence": combined.evidence or None,
                     "source_pages": aggregated_pages,
                 })
+            else:
+                # Numeric rows: record each value cell (col B/C/D/E) so the
+                # coordinator can project them into run_concept_facts (Step 9).
+                # Same column mapping as the xlsx write, and the same
+                # skip-empty rule, so the facts and the workbook agree.
+                for col, val in _numeric_write_cols(
+                    combined.numeric_values, filing_level
+                ):
+                    if val is None or val == "":
+                        continue
+                    numeric_cells.append({
+                        "sheet": sheet_name,
+                        "row": row,
+                        "col": col,
+                        "value": val,
+                        "evidence": combined.evidence or None,
+                    })
             # Phase 4.3: collect per-cell provenance for the post-validator.
             # One entry per written row — combining all note-refs from the
             # contributing payloads so row-112 catch-alls retain the full
@@ -271,6 +295,7 @@ def write_notes_workbook(
         fuzzy_matches=fuzzy_matches,
         sanitizer_warnings=sanitizer_warnings,
         cells_written=cells_written,
+        numeric_cells=numeric_cells,
     )
 
 
@@ -673,6 +698,32 @@ def _evidence_col(filing_level: str) -> int:
     return evidence_col_for(filing_level)
 
 
+def _numeric_write_cols(
+    numeric_values: dict, filing_level: str
+) -> list[tuple[int, object]]:
+    """Column-number → value mapping for one numeric notes row.
+
+    Single source of truth shared by the xlsx writer (:func:`_write_row`) and
+    the run_concept_facts live-capture (numeric notes, PLAN Step 9) so the two
+    can never disagree on which value belongs in which column. Group filings
+    fill B/C/D/E (Group-CY/PY, Company-CY/PY); Company filings fill B/C
+    (CY/PY), tolerating both the explicit ``company_*`` keys and the bare
+    ``cy``/``py`` shorthand.
+    """
+    nv = numeric_values
+    if filing_level == "group":
+        return [
+            (2, nv.get("group_cy")),
+            (3, nv.get("group_py")),
+            (4, nv.get("company_cy")),
+            (5, nv.get("company_py")),
+        ]
+    return [
+        (2, nv.get("company_cy", nv.get("cy"))),
+        (3, nv.get("company_py", nv.get("py"))),
+    ]
+
+
 def _write_row(
     ws,
     row: int,
@@ -684,20 +735,11 @@ def _write_row(
     # Refuse to overwrite formula cells in any write target.
     write_cols: list[tuple[int, object]] = []
     if payload.numeric_values:
-        # Structured numeric — fill all four value cols for group, B+C for company.
-        nv = payload.numeric_values
-        if filing_level == "group":
-            write_cols.extend([
-                (2, nv.get("group_cy")),
-                (3, nv.get("group_py")),
-                (4, nv.get("company_cy")),
-                (5, nv.get("company_py")),
-            ])
-        else:
-            write_cols.extend([
-                (2, nv.get("company_cy", nv.get("cy"))),
-                (3, nv.get("company_py", nv.get("py"))),
-            ])
+        # Structured numeric — fill all four value cols for group, B+C for
+        # company (shared mapping with the facts live-capture).
+        write_cols.extend(
+            _numeric_write_cols(payload.numeric_values, filing_level)
+        )
     else:
         # Truncate first (HTML-aware when appropriate), then flatten to
         # Excel-plaintext before writing. The canonical HTML payload is

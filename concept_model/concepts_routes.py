@@ -67,15 +67,31 @@ def register_concept_routes(app, audit_db_getter) -> None:
             # run's response.  We infer the template set from the
             # concepts that carry facts for this run — the canonical
             # signal of "what did this run extract".
+            # Numeric notes (sheets 13/14) also live in concept_nodes +
+            # run_concept_facts (PLAN-notes-template-registry Track B), but
+            # they are reviewed in the Notes tab, not here — exclude their
+            # template_ids so they don't duplicate into the Values tree
+            # (decision §9.3). Scope by the exact notes template_id set (not a
+            # '%-notes-%' LIKE) so a face slug containing "notes" can't be
+            # mis-excluded.
+            from notes_types import notes_template_ids
+
+            notes_ids = sorted(notes_template_ids())
+            not_in = (
+                f"AND n.template_id NOT IN ({','.join('?' * len(notes_ids))})"
+                if notes_ids
+                else ""
+            )
             template_ids = [
                 r[0] for r in conn.execute(
-                    """
+                    f"""
                     SELECT DISTINCT n.template_id
                     FROM run_concept_facts f
                     JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid
                     WHERE f.run_id = ?
+                      {not_in}
                     """,
-                    (run_id,),
+                    (run_id, *notes_ids),
                 ).fetchall()
             ]
             if not template_ids:
