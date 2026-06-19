@@ -1969,6 +1969,51 @@ def _check_auth_startup_config() -> None:
         )
 
 
+def _bootstrap_admin_from_env(conn) -> Optional[str]:
+    """Idempotently seed a REAL admin account from the environment.
+
+    Local-dev convenience: with BOOTSTRAP_ADMIN_EMAIL + BOOTSTRAP_ADMIN_PASSWORD
+    set (e.g. in .env), a `start.bat` / `start.sh` dev gets a working
+    email+password admin login WITHOUT the `python -m auth.manage` CLI step.
+    Opt-in — does nothing unless BOTH vars are set.
+
+    Non-destructive + idempotent: on an email that already exists it only
+    ensures the admin role; it never resets the password or re-enables a
+    disabled account, so a dev who later rotates their password (or an admin who
+    disabled the row) isn't undone on every reboot. Returns a short status
+    string for logging, or None when the feature is off / inert.
+    """
+    email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "").strip()
+    password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "")
+    if not email or not password:
+        return None  # feature off — neither var set
+
+    from auth import passwords
+    from db import repository as repo
+
+    if len(password) < passwords.MIN_PASSWORD_LEN:
+        logger.warning(
+            "BOOTSTRAP_ADMIN_PASSWORD is shorter than %d chars — skipping "
+            "admin bootstrap for %r", passwords.MIN_PASSWORD_LEN, email,
+        )
+        return "skipped-short-password"
+
+    existing = repo.fetch_auth_user(conn, email)
+    if existing is not None:
+        # Account already provisioned: only ever PROMOTE (mirrors the CLI's
+        # add-user --admin "set, never demote" rule). Leave password + disabled
+        # untouched.
+        if not existing.is_admin:
+            repo.set_auth_user_admin(conn, email, True)
+            return "promoted-existing"
+        return "already-present"
+
+    name = os.environ.get("BOOTSTRAP_ADMIN_NAME", "").strip() or "Local Admin"
+    repo.upsert_auth_user(conn, email, name, passwords.hash_password(password))
+    repo.set_auth_user_admin(conn, email, True)
+    return "created"
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Create / migrate the audit DB once at startup (peer-review #9).
@@ -1981,6 +2026,29 @@ async def _lifespan(app: FastAPI):
     """
     from db.schema import init_db
     init_db(AUDIT_DB_PATH)
+
+    # Optional env-driven admin bootstrap (local-dev convenience): seed a REAL
+    # auth_users admin from BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD so
+    # start.bat / start.sh devs get a working login without the
+    # `python -m auth.manage` CLI step. Opt-in + idempotent. Runs BEFORE the
+    # prod auth-config check below so a freshly-seeded box also satisfies the
+    # "at least one enabled account" guard. Best-effort — a bootstrap failure
+    # must not block startup (the config check still fails closed in prod).
+    try:
+        conn = _open_audit_conn()
+        try:
+            _status = _bootstrap_admin_from_env(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        if _status in ("created", "promoted-existing"):
+            logger.info(
+                "bootstrap admin %r from env (%s)",
+                os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "").strip(), _status,
+            )
+    except Exception:
+        logger.warning("admin bootstrap from env failed at startup",
+                       exc_info=True)
 
     # Fail-closed auth config check (PLAN auth Phase 1.2). Mirrors the
     # canonical-bootstrap fail-fast philosophy: a misconfigured production auth
