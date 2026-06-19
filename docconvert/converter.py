@@ -36,6 +36,67 @@ class DocConvertError(Exception):
     """
 
 
+# OCR engines the converter can drive. RapidOCR is the default — it ties
+# EasyOCR on accuracy for scanned financial tables but is ~2x faster and lighter
+# (2026-06-19 bake-off). EasyOCR is a selectable fallback for documents where
+# RapidOCR mis-reads. Selectable from Settings (XBRL_DOCLING_OCR_ENGINE).
+SUPPORTED_OCR_ENGINES = ("rapidocr", "easyocr")
+DEFAULT_OCR_ENGINE = "rapidocr"
+_OCR_ENGINE_ENV = "XBRL_DOCLING_OCR_ENGINE"
+
+
+def resolve_ocr_engine(ocr_engine: Optional[str]) -> str:
+    """Normalise + validate the OCR engine choice.
+
+    Precedence: explicit arg > XBRL_DOCLING_OCR_ENGINE env > default (rapidocr).
+    """
+    engine = (ocr_engine or os.environ.get(_OCR_ENGINE_ENV) or DEFAULT_OCR_ENGINE)
+    engine = engine.strip().lower()
+    if engine not in SUPPORTED_OCR_ENGINES:
+        raise DocConvertError(
+            f"Unknown OCR engine '{engine}'. Choose one of: "
+            f"{', '.join(SUPPORTED_OCR_ENGINES)}."
+        )
+    return engine
+
+
+def models_bundle_dir() -> Path:
+    """The model bundle directory (env DOCLING_MODELS_DIR or repo default).
+
+    Unlike _resolve_models_dir this does NOT require the dir to exist — callers
+    that report "is this engine bundled?" need to probe a possibly-absent dir.
+    """
+    return Path(os.environ.get("DOCLING_MODELS_DIR", str(_DEFAULT_MODELS_DIR)))
+
+
+def engine_is_bundled(models_dir: Path, engine: str) -> bool:
+    """True only if the engine's COMPLETE required weight set is present.
+
+    Checking for "any file" would report a half-finished download as bundled
+    (the UI stops polling, /fetch says already_bundled) even though conversion
+    still lacks weights. We require every model the converter actually loads:
+      - rapidocr: detection + classification + (English) recognition ONNX
+      - easyocr:  the CRAFT detector + a recognition model
+    """
+    if engine == "rapidocr":
+        root = models_dir / "RapidOcr"
+        if not root.exists():
+            return False
+        return (
+            any(root.rglob("*det*.onnx"))
+            and any(root.rglob("*cls*.onnx"))
+            and any(root.rglob("en_*rec*.onnx"))
+        )
+    if engine == "easyocr":
+        root = models_dir / "EasyOcr"
+        if not root.exists():
+            return False
+        has_detector = (root / "craft_mlt_25k.pth").exists()
+        has_recognizer = any(root.glob("*_g2.pth"))  # english_g2 / latin_g2
+        return has_detector and has_recognizer
+    return False
+
+
 def _resolve_models_dir(model_dir: Optional[str | Path]) -> Path:
     """Pick the model bundle directory and fail loudly if it's not there.
 
@@ -68,7 +129,7 @@ def _find_one(root: Path, pattern: str, label: str) -> str:
     return str(hits[0])
 
 
-def _build_converter(models_dir: Path):
+def _build_converter(models_dir: Path, ocr_engine: str = DEFAULT_OCR_ENGINE):
     """Construct a Docling converter wired for OFFLINE, ONNX-OCR operation.
 
     Imports are local so a missing dependency surfaces here as a clear
@@ -91,16 +152,45 @@ def _build_converter(models_dir: Path):
             f"({exc})"
         )
 
-    rapid_root = models_dir / "RapidOcr"
     opts = PdfPipelineOptions(artifacts_path=str(models_dir))
     opts.do_ocr = True
-    # Point OCR at the bundled ONNX detection / classification / recognition
-    # models. English recognition model — Malaysian FS are in English (PRD).
-    opts.ocr_options = RapidOcrOptions(
-        det_model_path=_find_one(rapid_root, "*det*.onnx", "text-detection"),
-        cls_model_path=_find_one(rapid_root, "*cls*.onnx", "orientation"),
-        rec_model_path=_find_one(rapid_root, "en_*rec*.onnx", "text-recognition"),
-    )
+
+    if ocr_engine == "easyocr":
+        # EasyOCR is an optional Docling extra — fail with a clear, actionable
+        # message if the `easyocr` package isn't installed (it's declared in
+        # requirements.txt, but a stale env may lack it). Without this the
+        # ImportError surfaces deep inside docling at convert time as a generic
+        # crash.
+        try:
+            import easyocr  # noqa: F401
+        except ImportError:
+            raise DocConvertError(
+                "EasyOCR is selected but the 'easyocr' package isn't installed. "
+                "Run `pip install -r requirements.txt`, or switch the OCR engine "
+                "back to RapidOCR in Settings."
+            )
+        from docling.datamodel.pipeline_options import EasyOcrOptions
+
+        # EasyOCR loads its weights from <bundle>/EasyOcr (docling derives the
+        # path from artifacts_path). Fail clearly if the full set isn't bundled.
+        if not engine_is_bundled(models_dir, "easyocr"):
+            raise DocConvertError(
+                "EasyOCR is selected but its models aren't fully in the bundle. "
+                "Run `python scripts/fetch_docling_models.py --easyocr`, or switch "
+                "the OCR engine back to RapidOCR in Settings."
+            )
+        opts.ocr_options = EasyOcrOptions(lang=["en"])
+    else:
+        # RapidOCR (default): point at the bundled ONNX detection /
+        # classification / recognition models. English recognition model —
+        # Malaysian FS are in English (PRD).
+        rapid_root = models_dir / "RapidOcr"
+        opts.ocr_options = RapidOcrOptions(
+            det_model_path=_find_one(rapid_root, "*det*.onnx", "text-detection"),
+            cls_model_path=_find_one(rapid_root, "*cls*.onnx", "orientation"),
+            rec_model_path=_find_one(rapid_root, "en_*rec*.onnx", "text-recognition"),
+        )
+
     return DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
     )
@@ -182,6 +272,7 @@ def convert_pdf_to_html(
     pdf_path: str | Path,
     *,
     model_dir: Optional[str | Path] = None,
+    ocr_engine: Optional[str] = None,
     progress_cb: Optional[ProgressCallback] = None,
 ) -> str:
     """Convert a (possibly scanned) PDF into a single readable HTML document.
@@ -189,6 +280,7 @@ def convert_pdf_to_html(
     Args:
         pdf_path: the PDF to convert.
         model_dir: override for the model bundle dir (else env / repo default).
+        ocr_engine: 'rapidocr' (default) or 'easyocr' (else env / default).
         progress_cb: called ``(pages_done, total_pages)`` after each page.
 
     Returns:
@@ -199,6 +291,8 @@ def convert_pdf_to_html(
             models). The message is safe to show to the user.
     """
     import tempfile
+
+    engine = resolve_ocr_engine(ocr_engine)
 
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
@@ -215,7 +309,7 @@ def convert_pdf_to_html(
 
         # Now resolve + build the (heavy) converter once and reuse per page.
         models_dir = _resolve_models_dir(model_dir)
-        converter = _build_converter(models_dir)
+        converter = _build_converter(models_dir, engine)
 
         page_html_parts: list[str] = []
         converted_ok = 0

@@ -2388,6 +2388,9 @@ def _load_extended_settings() -> dict:
         "auto_review": _auto_review_enabled(),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": _entity_memory_enabled(),
+        # Scanned-PDF → readable-doc OCR engine (docs/PLAN-scanned-pdf-to-doc.md).
+        # 'rapidocr' (default, faster) | 'easyocr' (selectable fallback).
+        "docling_ocr_engine": os.environ.get("XBRL_DOCLING_OCR_ENGINE", "rapidocr"),
     }
 
 

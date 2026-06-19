@@ -34,11 +34,12 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODELS_DIR = _REPO_ROOT / "models" / "docling"
 
 
-def fetch(models_dir: Path) -> Path:
+def fetch(models_dir: Path, *, with_easyocr: bool = False) -> Path:
     """Download the layout + TableFormer + RapidOCR weights into ``models_dir``.
 
-    Returns the directory the weights landed in. Raises on failure so a broken
-    setup is loud, not silently half-populated.
+    Pass ``with_easyocr=True`` to also fetch EasyOCR's weights (the selectable
+    fallback OCR engine). Returns the directory the weights landed in. Raises on
+    failure so a broken setup is loud, not silently half-populated.
     """
     # Imported lazily so a missing dependency produces a clear message here
     # rather than an import error at the top of an unrelated tool.
@@ -52,18 +53,23 @@ def fetch(models_dir: Path) -> Path:
 
     models_dir.mkdir(parents=True, exist_ok=True)
     print(f"Downloading Docling models into: {models_dir}")
-    print("(layout + table-structure + RapidOCR; ~599MB — one time)")
+    print(
+        "(layout + table-structure + RapidOCR"
+        + (" + EasyOCR" if with_easyocr else "")
+        + "; ~599MB+ — one time)"
+    )
 
     # Only the families the conversion pipeline actually uses. We deliberately
     # skip code_formula / picture_classifier / the large VLM models to keep the
     # bundle lean — the financial-table use case needs layout + TableFormer for
-    # structure and RapidOCR for reading the scanned text.
+    # structure and RapidOCR (or EasyOCR) for reading the scanned text.
     download_models(
         output_dir=models_dir,
         progress=True,
         with_layout=True,
         with_tableformer=True,
         with_rapidocr=True,
+        with_easyocr=with_easyocr,
         with_code_formula=False,
         with_picture_classifier=False,
     )
@@ -73,9 +79,10 @@ def fetch(models_dir: Path) -> Path:
 def main() -> int:
     # Honour the same env var the converter reads, so setup and runtime agree
     # on where the bundle lives.
+    want_easyocr = "--easyocr" in sys.argv
     target = Path(os.environ.get("DOCLING_MODELS_DIR", str(DEFAULT_MODELS_DIR)))
     try:
-        out = fetch(target)
+        out = fetch(target, with_easyocr=want_easyocr)
     except Exception as exc:  # noqa: BLE001 - surface any failure clearly
         print(f"ERROR: failed to download Docling models: {exc}", file=sys.stderr)
         return 1

@@ -27,6 +27,7 @@ import os
 import re
 from typing import List
 
+from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -484,15 +485,23 @@ def strip_duplicate_template(messages: List[ModelMessage]) -> List[ModelMessage]
 # soft watermark is crossed. They are what `extraction/agent.py` registers;
 # the pure cores above stay `(messages)`-callable so scout/notes and the unit
 # tests keep using them unchanged.
+#
+# The first parameter MUST be annotated `RunContext` — pydantic-ai 1.77's
+# `takes_run_context` detects the ctx variant purely from that type hint
+# (`_utils.get_first_param_type`). A bare/un-annotated `ctx` is treated as a
+# no-ctx `(messages)` processor and called with a single positional arg, raising
+# `strip_stale_images_ctx() missing 1 required positional argument: 'messages'`.
 
 
-def strip_stale_images_ctx(ctx, messages: List[ModelMessage]) -> List[ModelMessage]:
+def strip_stale_images_ctx(
+    ctx: RunContext, messages: List[ModelMessage]
+) -> List[ModelMessage]:
     """Token-aware `strip_stale_images`: pre-write trimming once over budget."""
     return strip_stale_images(messages, aggressive=_over_soft_watermark(ctx))
 
 
 def compact_old_text_results_ctx(
-    ctx, messages: List[ModelMessage]
+    ctx: RunContext, messages: List[ModelMessage]
 ) -> List[ModelMessage]:
     """Token-aware `compact_old_text_results`: tighter thresholds over budget."""
     if _over_soft_watermark(ctx):

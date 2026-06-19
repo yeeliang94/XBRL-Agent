@@ -2,6 +2,11 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import type { SettingsResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import {
+  getDocConvertModels,
+  fetchDocConvertModels,
+  type DocConvertModelsStatus,
+} from "../lib/api";
 
 // ---------------------------------------------------------------------------
 // GeneralSettingsForm — the model / proxy / API-key + run-defaults form.
@@ -14,8 +19,8 @@ import { ui, uiClass } from "../lib/uiStyles";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; entity_memory?: boolean }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; entity_memory: boolean }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; entity_memory?: boolean; docling_ocr_engine?: string }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; entity_memory: boolean; docling_ocr_engine: string }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -165,6 +170,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [apiKeyPreview, setApiKeyPreview] = useState("");
   // Reviewer auto-trigger toggle (docs/Archive/PLAN-reviewer-agent.md). Default on.
   const [autoReview, setAutoReview] = useState(true);
+  // Scanned-PDF → readable-doc OCR engine + model-bundle status.
+  const [oclEngine, setOclEngine] = useState("rapidocr");
+  const [oclModels, setOclModels] = useState<DocConvertModelsStatus | null>(null);
+  const [oclFetchMsg, setOclFetchMsg] = useState<string | null>(null);
   // Per-entity advisory memory toggle (item 28). Default on.
   const [entityMemory, setEntityMemory] = useState(true);
 
@@ -207,12 +216,56 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         // Default to on when the field is absent (older backend).
         setAutoReview(s.auto_review !== false);
         setEntityMemory(s.entity_memory !== false);
+        if (s.docling_ocr_engine) setOclEngine(s.docling_ocr_engine);
       })
       .catch((e) => {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load settings");
       });
+    // Load the model-bundle status (best-effort; the selector still works
+    // without it — it just won't show the "bundled / download" hint).
+    getDocConvertModels()
+      .then((m) => { if (!cancelled) setOclModels(m); })
+      .catch(() => { /* doc-convert may be unavailable; ignore */ });
     return () => { cancelled = true; };
   }, [getSettings]);
+
+  // --- Download an OCR engine's models (online-only convenience) ---
+  const refreshOclModels = useCallback(async () => {
+    try { setOclModels(await getDocConvertModels()); } catch { /* ignore */ }
+  }, []);
+
+  const handleDownloadModels = useCallback(async () => {
+    setOclFetchMsg("Downloading models… (needs internet)");
+    try {
+      const r = await fetchDocConvertModels(oclEngine);
+      if (r.status === "already_bundled") {
+        setOclFetchMsg("Already downloaded.");
+        await refreshOclModels();
+        return;
+      }
+      // Poll until the engine reports bundled (or give up after ~2 min).
+      for (let i = 0; i < 60; i++) {
+        await new Promise((res) => setTimeout(res, 2000));
+        const m = await getDocConvertModels();
+        setOclModels(m);
+        const e = m.engines.find((x) => x.id === oclEngine);
+        if (e?.bundled) { setOclFetchMsg("Download complete."); return; }
+        if (!e?.fetching) {
+          // Surface the concrete server-side failure (e.g. no internet) when
+          // present, instead of a generic message.
+          setOclFetchMsg(
+            e?.error
+              ? `Download failed: ${e.error}`
+              : "Download stopped — check the server has internet access.",
+          );
+          return;
+        }
+      }
+      setOclFetchMsg("Still downloading — check back shortly.");
+    } catch (e) {
+      setOclFetchMsg(e instanceof Error ? e.message : "Download failed.");
+    }
+  }, [oclEngine, refreshOclModels]);
 
   // --- Blur validation (updates displayed errors) ---
   const validateField = useCallback(
@@ -240,6 +293,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         proxy_url: proxyUrl,
         auto_review: autoReview,
         entity_memory: entityMemory,
+        docling_ocr_engine: oclEngine,
         ...(apiKey ? { api_key: apiKey } : {}),
       });
       setSaved(true);
@@ -255,7 +309,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [model, proxyUrl, apiKey, autoReview, entityMemory, saveSettings]);
+  }, [model, proxyUrl, apiKey, autoReview, entityMemory, oclEngine, saveSettings]);
 
   // --- Test connection ---
   const handleTestConnection = useCallback(async () => {
@@ -404,6 +458,45 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           unit, and page offset are shown to the agents as advisory hints to
           verify against the current PDF. Turn off if entity names collide.
         </p>
+      </div>
+
+      {/* Scanned-PDF → readable-doc OCR engine (docs/PLAN-scanned-pdf-to-doc.md) */}
+      <div style={styles.fieldGroup}>
+        <label style={styles.label} htmlFor="docling-ocr-engine">
+          Readable-Doc OCR engine
+        </label>
+        <select
+          id="docling-ocr-engine"
+          value={oclEngine}
+          onChange={(e) => { setOclEngine(e.target.value); setOclFetchMsg(null); }}
+          style={styles.input}
+          aria-label="Readable-Doc OCR engine"
+        >
+          <option value="rapidocr">RapidOCR (default — faster)</option>
+          <option value="easyocr">EasyOCR (alternative)</option>
+        </select>
+        <p style={styles.helperText}>
+          Which engine reads scanned PDFs in the Readable Doc tool. RapidOCR is
+          the recommended default; EasyOCR is a fallback if a document reads
+          poorly. {(() => {
+            const e = oclModels?.engines.find((x) => x.id === oclEngine);
+            if (!oclModels) return null;
+            return e?.bundled
+              ? "This engine's models are installed."
+              : "This engine's models are not installed yet.";
+          })()}
+        </p>
+        {oclModels && !oclModels.engines.find((x) => x.id === oclEngine)?.bundled && (
+          <button
+            type="button"
+            onClick={handleDownloadModels}
+            className={uiClass.btnSecondary}
+            style={{ marginTop: pwc.space.sm }}
+          >
+            Download {oclEngine} models
+          </button>
+        )}
+        {oclFetchMsg && <p style={styles.helperText}>{oclFetchMsg}</p>}
       </div>
 
       {/* Test Connection */}

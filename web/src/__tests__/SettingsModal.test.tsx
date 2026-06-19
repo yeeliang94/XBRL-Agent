@@ -96,6 +96,21 @@ describe("SettingsModal — P3 enhancements", () => {
     });
   });
 
+  test("Readable-Doc OCR engine selector loads + saves docling_ocr_engine", async () => {
+    const { saveSettings } = renderModal({ docling_ocr_engine: "rapidocr" });
+    const select = await screen.findByLabelText("Readable-Doc OCR engine");
+    expect((select as HTMLSelectElement).value).toBe("rapidocr");
+
+    fireEvent.change(select, { target: { value: "easyocr" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() =>
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ docling_ocr_engine: "easyocr" }),
+      ),
+    );
+  });
+
   test("'Test Connection' button calls testConnection API", async () => {
     const { testConnection } = renderModal();
     await waitFor(() => expect(screen.getByRole("button", { name: /test connection/i })).toBeInTheDocument());
