@@ -24,3 +24,28 @@ truststore>=0.9.0
 # argon2id is the modern memory-hard KDF — never store a fast/plain hash for
 # the email+password login. Cookie signing uses stdlib hmac (no extra dep).
 argon2-cffi>=23.1.0
+
+# --- Scanned PDF → Readable Document feature (docs/PLAN-scanned-pdf-to-doc.md) ---
+# Docling converts a scanned PDF into structured HTML/Word using a dedicated
+# table-structure model (TableFormer) on top of OCR — the only engine that
+# reconstructs scanned financial tables correctly (see the 2026-06-19 bake-off
+# in docs/PRD-scanned-pdf-to-doc.md). Runs fully OFFLINE from a pre-bundled
+# model folder produced by scripts/fetch_docling_models.py (no runtime fetch).
+docling>=2.103.0
+# RapidOCR (Docling's OCR stage) ships ONNX models, so onnxruntime is REQUIRED
+# to run them offline — without it Docling raises "onnxruntime is not installed".
+onnxruntime>=1.20.0
+rapidocr>=3.8.0
+# NOTE (Azure deploy): Docling pulls `torch` transitively. On Linux install the
+# CPU-only wheel (~430MB), NOT the default CUDA build (~2GB) — there is no GPU on
+# App Service:  pip install torch --index-url https://download.pytorch.org/whl/cpu
+# See the "Deferred — Azure deployment caveats" section of the PRD.
+# "Download as Word": Docling has NO docx exporter (HTML/MD/JSON only), so the
+# converted HTML is turned into a .docx with pandoc via pypandoc. We use the
+# *_binary distribution so the pandoc executable ships INSIDE the pip wheel —
+# no `apt install pandoc` on the host, which keeps the offline-deploy story
+# intact. pandoc gives higher-fidelity HTML→docx tables than the alternatives.
+pypandoc_binary>=1.13
+# python-docx is used by the doc-convert tests to read back the generated .docx
+# (the runtime write path goes through pandoc, not python-docx).
+python-docx>=1.1.0

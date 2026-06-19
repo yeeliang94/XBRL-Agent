@@ -23,6 +23,7 @@ Every changed part is rebuilt with `dataclasses.replace(...)` on copied lists.
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
 from typing import List
 
@@ -156,7 +157,9 @@ def _last_write_message_index(messages: List[ModelMessage]) -> int | None:
     return last
 
 
-def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
+def strip_stale_images(
+    messages: List[ModelMessage], *, aggressive: bool = False
+) -> List[ModelMessage]:
     """Trim re-billed page images that the agent no longer needs to *see*.
 
     The rule is stage-aware, not a fixed window — this is the fix for the
@@ -171,6 +174,15 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
       from batches that *precede* the most recent write. The most recent image
       batch is always kept so the agent is never fully blinded, and any images
       viewed since the last write (the current fix cycle) are kept too.
+
+    ``aggressive`` (Plan 2 — token-utilization escalation): when the agent has
+    blown past the soft token watermark, even the pre-write discovery phase
+    strips down to the single newest image batch. This deliberately accepts the
+    run_id=126 thrash risk because at that point unbounded image accumulation is
+    the bigger problem — the watermark is set high enough that only a genuinely
+    runaway agent reaches it. Default ``False`` keeps today's stage-aware
+    behaviour exactly, so scout/notes (which register the plain processor) are
+    unaffected.
 
     Stripped `BinaryContent` blobs become a one-line placeholder that preserves
     the `=== Page N ===` markers and actively discourages re-fetching.
@@ -189,7 +201,7 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
         return messages
 
     last_write_idx = _last_write_message_index(messages)
-    if last_write_idx is None:
+    if last_write_idx is None and not aggressive:
         # Discovery/extraction phase — no data committed yet. Keep all images
         # so the agent can hold multiple pages in view (run_id=126 fix).
         return messages
@@ -197,11 +209,17 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
     # Protect the single most recent image batch regardless of where it sits.
     newest_image_idx = image_parts[-1][0]
 
+    # The boundary at/after which images are kept. Post-write that's the write
+    # message; in aggressive pre-write mode there is no write, so only the
+    # newest batch survives.
+    pre_write = last_write_idx is None
+    keep_from = last_write_idx if last_write_idx is not None else newest_image_idx
+
     out = messages
     for mi, pi, part in image_parts:
-        # Keep: the newest batch, and anything viewed at/after the last write
-        # (the current fix cycle). Strip only images that predate the write.
-        if mi >= last_write_idx or mi == newest_image_idx:
+        # Keep: the newest batch, and anything viewed at/after the boundary
+        # (the current fix cycle). Strip only images that predate it.
+        if mi >= keep_from or mi == newest_image_idx:
             continue
         content = part.content
         if not isinstance(content, list):
@@ -210,11 +228,20 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
         for idx, item in enumerate(content):
             if isinstance(item, BinaryContent):
                 page = _nearest_page_number(content, idx)
-                new_content.append(
-                    f"Page {page} was viewed earlier and its data is already "
-                    f"captured in the workbook; do not re-open it just to "
-                    f"refresh context."
-                )
+                if pre_write:
+                    # Honest wording: nothing is in the workbook yet — we are
+                    # trimming purely to stay under the context budget.
+                    new_content.append(
+                        f"Page {page} was viewed earlier; older page images are "
+                        f"being trimmed to stay under the context budget. "
+                        f"Re-open it only if you still need its values."
+                    )
+                else:
+                    new_content.append(
+                        f"Page {page} was viewed earlier and its data is already "
+                        f"captured in the workbook; do not re-open it just to "
+                        f"refresh context."
+                    )
             else:
                 new_content.append(item)
         new_part = dataclasses.replace(part, content=new_content)
@@ -245,6 +272,57 @@ COMPACT_AFTER_TURNS = 6
 # Only compact payloads at least this large; small results aren't worth the
 # fidelity loss and a one-line summary wouldn't save meaningful tokens.
 COMPACT_MIN_CHARS = 1500
+
+# Plan 2 — aggressive thresholds applied once the agent crosses the soft token
+# watermark: compact sooner (2 turns vs 6) and smaller (500 chars vs 1500) so a
+# runaway agent stops re-billing old payloads every turn. Deterministic
+# placeholder substitution (no LLM call), so this can run under token pressure
+# without the "summariser degrades under pressure" risk.
+COMPACT_AGGRESSIVE_AFTER_TURNS = 2
+COMPACT_AGGRESSIVE_MIN_CHARS = 500
+
+# Soft watermark default (cumulative tokens). Chosen high enough that only a
+# genuinely runaway agent reaches it — normal runs never escalate. 0 / invalid
+# disables escalation entirely (the processors behave exactly as before).
+_DEFAULT_SOFT_COMPACT_TOKENS = 60000
+
+
+def resolve_soft_compact_tokens() -> int:
+    """``XBRL_SOFT_COMPACT_TOKENS``: cumulative-token watermark for escalation.
+
+    Read at call time so tests/operators can toggle it. Unset → the default;
+    explicit ``0`` or a non-numeric value → disabled (returns 0).
+    """
+    raw = os.environ.get("XBRL_SOFT_COMPACT_TOKENS")
+    if raw is None:
+        return _DEFAULT_SOFT_COMPACT_TOKENS
+    try:
+        v = int(raw)
+    except ValueError:
+        return 0
+    return v if v > 0 else 0
+
+
+def _cumulative_tokens(ctx) -> int:
+    """Cumulative total tokens from a pydantic-ai RunContext, defensively.
+
+    ``ctx.usage`` is a ``RunUsage`` whose ``total_tokens`` is the running sum
+    across the agent's turns. Any shape surprise (missing usage, None) reads as
+    0 so escalation simply never triggers rather than crashing the request.
+    """
+    usage = getattr(ctx, "usage", None)
+    if usage is None:
+        return 0
+    try:
+        return int(getattr(usage, "total_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _over_soft_watermark(ctx) -> bool:
+    """True when cumulative usage has crossed the (enabled) soft watermark."""
+    limit = resolve_soft_compact_tokens()
+    return limit > 0 and _cumulative_tokens(ctx) >= limit
 
 
 def _model_responses_after(
@@ -282,8 +360,15 @@ def _summarize_text_result(tool_name: str, text: str, turns_ago: int) -> str:
 
 def compact_old_text_results(
     messages: List[ModelMessage],
+    *,
+    after_turns: int = COMPACT_AFTER_TURNS,
+    min_chars: int = COMPACT_MIN_CHARS,
 ) -> List[ModelMessage]:
     """Replace stale, oversized text tool-results with a one-line summary.
+
+    ``after_turns`` / ``min_chars`` default to the conservative module
+    constants; the token-aware wrapper passes the aggressive thresholds once
+    the agent crosses the soft watermark (Plan 2).
 
     Companion to `strip_stale_images` (which owns image blobs) — this targets
     bulky *text* payloads (verbose `verify_totals` dumps, long error lists).
@@ -336,10 +421,10 @@ def compact_old_text_results(
         if last_idx_per_tool.get(part.tool_name) == mi:
             continue
         turns_ago = _model_responses_after(messages, mi)
-        if turns_ago < COMPACT_AFTER_TURNS:
+        if turns_ago < after_turns:
             continue
         text = _part_text(part)
-        if len(text) < COMPACT_MIN_CHARS:
+        if len(text) < min_chars:
             continue
         new_part = dataclasses.replace(
             part, content=_summarize_text_result(part.tool_name, text, turns_ago)
@@ -388,3 +473,32 @@ def strip_duplicate_template(messages: List[ModelMessage]) -> List[ModelMessage]
         out = _replace_part(out, mi, pi, new_part)
 
     return out
+
+
+# --- Token-aware wrappers (Plan 2) ----------------------------------------
+#
+# pydantic-ai inspects each history processor's signature: a `(ctx, messages)`
+# processor receives the RunContext (and thus cumulative `ctx.usage`), while a
+# bare `(messages)` one does not. These thin wrappers read the running token
+# total and switch the two compacting processors into aggressive mode once the
+# soft watermark is crossed. They are what `extraction/agent.py` registers;
+# the pure cores above stay `(messages)`-callable so scout/notes and the unit
+# tests keep using them unchanged.
+
+
+def strip_stale_images_ctx(ctx, messages: List[ModelMessage]) -> List[ModelMessage]:
+    """Token-aware `strip_stale_images`: pre-write trimming once over budget."""
+    return strip_stale_images(messages, aggressive=_over_soft_watermark(ctx))
+
+
+def compact_old_text_results_ctx(
+    ctx, messages: List[ModelMessage]
+) -> List[ModelMessage]:
+    """Token-aware `compact_old_text_results`: tighter thresholds over budget."""
+    if _over_soft_watermark(ctx):
+        return compact_old_text_results(
+            messages,
+            after_turns=COMPACT_AGGRESSIVE_AFTER_TURNS,
+            min_chars=COMPACT_AGGRESSIVE_MIN_CHARS,
+        )
+    return compact_old_text_results(messages)

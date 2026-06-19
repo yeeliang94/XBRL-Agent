@@ -1,0 +1,461 @@
+import { useEffect, useRef, useState, useCallback } from "react";
+import type { SettingsResponse } from "../lib/types";
+import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
+
+// ---------------------------------------------------------------------------
+// GeneralSettingsForm — the model / proxy / API-key + run-defaults form.
+//
+// This is the body that used to live inside SettingsModal. It was lifted out so
+// the same form can render BOTH inside the (legacy) modal overlay AND as the
+// "General" tab of the consolidated Settings page (gotcha #7: inline styles).
+// The form owns its own load + save + test-connection logic; the host only
+// supplies the API helpers and an optional Cancel handler.
+// ---------------------------------------------------------------------------
+
+interface Props {
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; entity_memory?: boolean }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; entity_memory: boolean }>) => Promise<{ status: string }>;
+  testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
+  // When provided, a Cancel button is shown (used by the modal wrapper). The
+  // page host omits it — there's nothing to cancel out of.
+  onCancel?: () => void;
+}
+
+interface FieldErrors {
+  proxyUrl: string | null;
+  apiKey: string | null;
+  model: string | null;
+}
+
+// Pure validators — called both on blur (for immediate feedback) and again
+// inside save/test handlers so a user can't bypass validation by pressing
+// Enter/clicking before onBlur fires.
+export function validate(fields: { proxyUrl: string; apiKey: string; model: string }): FieldErrors {
+  return {
+    proxyUrl:
+      fields.proxyUrl && !fields.proxyUrl.startsWith("https://")
+        ? "Proxy URL must start with https://"
+        : null,
+    apiKey:
+      fields.apiKey && fields.apiKey.length < 8 ? "API key too short" : null,
+    model: !fields.model.trim() ? "Model name is required" : null,
+  };
+}
+
+export function hasAnyError(errors: FieldErrors): boolean {
+  return !!(errors.proxyUrl || errors.apiKey || errors.model);
+}
+
+interface ConnectionResult {
+  status: "ok" | "error";
+  message: string;
+}
+
+const styles = {
+  fieldGroup: {
+    marginBottom: pwc.space.lg,
+  } as React.CSSProperties,
+  label: {
+    fontFamily: pwc.fontHeading,
+    fontWeight: 500,
+    fontSize: 14,
+    color: pwc.grey700,
+    display: "block",
+    marginBottom: pwc.space.xs,
+  } as React.CSSProperties,
+  labelExtra: {
+    fontFamily: pwc.fontBody,
+    fontWeight: 400,
+    color: pwc.grey500,
+    marginLeft: pwc.space.sm,
+  } as React.CSSProperties,
+  input: {
+    width: "100%",
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    color: pwc.grey900,
+    outline: "none",
+    boxSizing: "border-box" as const,
+  } as React.CSSProperties,
+  inputMono: {
+    width: "100%",
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    fontFamily: pwc.fontMono,
+    fontSize: 13,
+    color: pwc.grey900,
+    outline: "none",
+    boxSizing: "border-box" as const,
+  } as React.CSSProperties,
+  inputError: {
+    borderColor: pwc.error,
+  },
+  helperText: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey500,
+    marginTop: pwc.space.xs,
+  } as React.CSSProperties,
+  errorText: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.error,
+    marginTop: pwc.space.xs,
+  } as React.CSSProperties,
+  actions: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: pwc.space.md,
+    marginTop: pwc.space.xl,
+    paddingTop: pwc.space.lg,
+    borderTop: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  cancelButton: {
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
+  } as React.CSSProperties,
+  saveButton: {
+    ...ui.buttonPrimary,
+    ...ui.buttonSm,
+  } as React.CSSProperties,
+  testButton: {
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
+  } as React.CSSProperties,
+  testResult: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    marginTop: pwc.space.sm,
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.xs,
+  } as React.CSSProperties,
+  testSpinner: {
+    width: 14,
+    height: 14,
+    border: `2px solid ${pwc.grey200}`,
+    borderTop: `2px solid ${pwc.orange500}`,
+    borderRadius: "50%",
+    animation: "spin 0.8s linear infinite",
+    display: "inline-block",
+  } as React.CSSProperties,
+  savedBadge: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.success,
+  } as React.CSSProperties,
+  loadError: {
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    color: pwc.error,
+    marginBottom: pwc.space.lg,
+  } as React.CSSProperties,
+};
+
+export function GeneralSettingsForm({ getSettings, saveSettings, testConnection, onCancel }: Props) {
+  const [model, setModel] = useState("");
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyPreview, setApiKeyPreview] = useState("");
+  // Reviewer auto-trigger toggle (docs/Archive/PLAN-reviewer-agent.md). Default on.
+  const [autoReview, setAutoReview] = useState(true);
+  // Per-entity advisory memory toggle (item 28). Default on.
+  const [entityMemory, setEntityMemory] = useState(true);
+
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Displayed errors: only populated after blur to avoid nagging the user
+  // mid-type. Submission handlers compute their own live errors separately.
+  const [errors, setErrors] = useState<FieldErrors>({ proxyUrl: null, apiKey: null, model: null });
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ConnectionResult | null>(null);
+
+  const hasErrors = hasAnyError(errors);
+
+  // Track the "Saved!" toast timer so we can clear it on unmount or on a
+  // subsequent save, preventing a stale setState call against an unmounted
+  // component and overlapping timers racing each other (#28).
+  const savedToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (savedToastTimerRef.current !== null) {
+        clearTimeout(savedToastTimerRef.current);
+        savedToastTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Load current settings once on mount (the host decides when to mount us —
+  // the modal mounts on open, the page mounts when the General tab activates).
+  useEffect(() => {
+    let cancelled = false;
+    getSettings()
+      .then((s) => {
+        if (cancelled) return;
+        setModel(s.model);
+        setProxyUrl(s.proxy_url);
+        setApiKeyPreview(s.api_key_preview);
+        setApiKey("");
+        // Default to on when the field is absent (older backend).
+        setAutoReview(s.auto_review !== false);
+        setEntityMemory(s.entity_memory !== false);
+      })
+      .catch((e) => {
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load settings");
+      });
+    return () => { cancelled = true; };
+  }, [getSettings]);
+
+  // --- Blur validation (updates displayed errors) ---
+  const validateField = useCallback(
+    (field: keyof FieldErrors) => {
+      const live = validate({ proxyUrl, apiKey, model });
+      setErrors((prev) => ({ ...prev, [field]: live[field] }));
+    },
+    [proxyUrl, apiKey, model],
+  );
+
+  // --- Save ---
+  const handleSave = useCallback(async () => {
+    // Re-run validation against current values (user may have pressed Enter
+    // before blur fired, leaving `errors` stale).
+    const live = validate({ proxyUrl, apiKey, model });
+    if (hasAnyError(live)) {
+      setErrors(live);
+      return;
+    }
+    setSaving(true);
+    setLoadError(null);
+    try {
+      await saveSettings({
+        model,
+        proxy_url: proxyUrl,
+        auto_review: autoReview,
+        entity_memory: entityMemory,
+        ...(apiKey ? { api_key: apiKey } : {}),
+      });
+      setSaved(true);
+      if (savedToastTimerRef.current !== null) {
+        clearTimeout(savedToastTimerRef.current);
+      }
+      savedToastTimerRef.current = setTimeout(() => {
+        setSaved(false);
+        savedToastTimerRef.current = null;
+      }, 2000);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Failed to save settings");
+    } finally {
+      setSaving(false);
+    }
+  }, [model, proxyUrl, apiKey, autoReview, entityMemory, saveSettings]);
+
+  // --- Test connection ---
+  const handleTestConnection = useCallback(async () => {
+    // Same live revalidation as save — don't test with invalid fields.
+    const live = validate({ proxyUrl, apiKey, model });
+    if (hasAnyError(live)) {
+      setErrors(live);
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testConnection({
+        model,
+        proxy_url: proxyUrl,
+        ...(apiKey ? { api_key: apiKey } : {}),
+      });
+      setTestResult({
+        status: "ok",
+        message: `${result.model} responded in ${result.latency_ms}ms`,
+      });
+    } catch (e) {
+      setTestResult({
+        status: "error",
+        message: e instanceof Error ? e.message : "Connection failed",
+      });
+    } finally {
+      setTesting(false);
+    }
+  }, [model, proxyUrl, apiKey, testConnection]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      // handleSave does its own validation, so it's safe to call even
+      // if the displayed `errors` state is stale.
+      handleSave();
+    }
+  }, [handleSave]);
+
+  return (
+    <div onKeyDown={handleKeyDown}>
+      {loadError && <p style={styles.loadError}>{loadError}</p>}
+
+      {/* Proxy URL */}
+      <div style={styles.fieldGroup}>
+        <label style={styles.label}>Proxy URL</label>
+        <input
+          type="text"
+          value={proxyUrl}
+          onChange={(e) => setProxyUrl(e.target.value)}
+          onBlur={() => validateField("proxyUrl")}
+          placeholder="https://genai-sharedservice-emea.pwc.com"
+          // Focus the first field on mount so keyboard users land inside the
+          // form, not on whatever was behind it.
+          autoFocus
+          style={{
+            ...styles.input,
+            ...(errors.proxyUrl ? styles.inputError : {}),
+          }}
+        />
+        {errors.proxyUrl ? (
+          <p style={styles.errorText}>{errors.proxyUrl}</p>
+        ) : (
+          <p style={styles.helperText}>Enterprise LiteLLM proxy endpoint (must be HTTPS)</p>
+        )}
+      </div>
+
+      {/* API Key */}
+      <div style={styles.fieldGroup}>
+        <label style={styles.label}>
+          API Key
+          {apiKeyPreview && (
+            <span style={styles.labelExtra}>(current: {apiKeyPreview})</span>
+          )}
+        </label>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          onBlur={() => validateField("apiKey")}
+          placeholder="Enter new API key"
+          style={{
+            ...styles.input,
+            ...(errors.apiKey ? styles.inputError : {}),
+          }}
+        />
+        {errors.apiKey ? (
+          <p style={styles.errorText}>{errors.apiKey}</p>
+        ) : (
+          <p style={styles.helperText}>From Bruno → Collection → Auth tab</p>
+        )}
+      </div>
+
+      {/* Model */}
+      <div style={styles.fieldGroup}>
+        <label style={styles.label}>Model Name</label>
+        <input
+          type="text"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          onBlur={() => validateField("model")}
+          placeholder="openai.gpt-5.4"
+          style={{
+            ...styles.inputMono,
+            ...(errors.model ? styles.inputError : {}),
+          }}
+        />
+        {errors.model ? (
+          <p style={styles.errorText}>{errors.model}</p>
+        ) : (
+          <p style={styles.helperText}>e.g., openai.gpt-5.4</p>
+        )}
+      </div>
+
+      {/* Reviewer auto-trigger toggle */}
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={autoReview}
+            onChange={(e) => setAutoReview(e.target.checked)}
+            aria-label="Automatically run the reviewer after extraction"
+          />
+          <span style={styles.label}>Automatically run the reviewer after extraction</span>
+        </label>
+        <p style={styles.helperText}>
+          When off, runs with failed cross-checks finish without the reviewer;
+          you can still trigger it manually from a run's Review tab.
+        </p>
+      </div>
+
+      {/* Per-entity advisory memory toggle (item 28) */}
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={entityMemory}
+            onChange={(e) => setEntityMemory(e.target.checked)}
+            aria-label="Reuse prior-year hints for repeat entities"
+          />
+          <span style={styles.label}>Reuse prior-year hints for repeat entities</span>
+        </label>
+        <p style={styles.helperText}>
+          When a run's entity was processed before, last year's variant, scale
+          unit, and page offset are shown to the agents as advisory hints to
+          verify against the current PDF. Turn off if entity names collide.
+        </p>
+      </div>
+
+      {/* Test Connection */}
+      <div style={{ marginBottom: pwc.space.lg }}>
+        <button
+          onClick={handleTestConnection}
+          disabled={testing}
+          className={uiClass.btnSecondary}
+          style={styles.testButton}
+        >
+          {testing ? (
+            <>
+              <span style={styles.testSpinner} /> Testing...
+            </>
+          ) : (
+            "Test Connection"
+          )}
+        </button>
+        {testResult && (
+          <div style={styles.testResult}>
+            {testResult.status === "ok" ? (
+              <>
+                <span style={{ color: pwc.success, fontSize: 16 }}>✓</span>
+                <span style={{ color: pwc.success }}>{testResult.message}</span>
+              </>
+            ) : (
+              <>
+                <span style={{ color: pwc.error, fontSize: 16 }}>✗</span>
+                <span style={{ color: pwc.error }}>{testResult.message}</span>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div style={styles.actions}>
+        {saved && <span style={styles.savedBadge}>Saved!</span>}
+        {onCancel && (
+          <button onClick={onCancel} className={uiClass.btnSecondary} style={styles.cancelButton}>
+            Cancel
+          </button>
+        )}
+        <button
+          onClick={handleSave}
+          disabled={saving || hasErrors}
+          className={uiClass.btnPrimary}
+          style={styles.saveButton}
+        >
+          {saving ? "Saving..." : "Save"}
+        </button>
+      </div>
+    </div>
+  );
+}

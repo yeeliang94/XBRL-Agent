@@ -28,8 +28,8 @@ from tools.pdf_viewer import render_pages_to_png_bytes, count_pdf_pages
 from tools.fill_workbook import fill_workbook as _fill_workbook_impl, FactWrite
 from tools.verifier import verify_statement as _verify_statement_impl
 from extraction.history_processors import (
-    compact_old_text_results,
-    strip_stale_images,
+    compact_old_text_results_ctx,
+    strip_stale_images_ctx,
     strip_duplicate_template,
 )
 from prompts import render_prompt
@@ -690,12 +690,13 @@ def create_extraction_agent(
         # Token-cost reduction: strip re-billed payloads from the outbound
         # request each turn — stale page images, the repeated template summary,
         # and (item 30) stale oversized text results superseded by fresher ones.
-        # Pure functions over the message list; see
+        # The `_ctx` variants are token-aware (Plan 2): once cumulative usage
+        # crosses the soft watermark they escalate to aggressive trimming. See
         # extraction/history_processors.py and docs/Archive/PLAN-token-cost-reduction.md.
         history_processors=[
-            strip_stale_images,
+            strip_stale_images_ctx,
             strip_duplicate_template,
-            compact_old_text_results,
+            compact_old_text_results_ctx,
         ],
     )
 

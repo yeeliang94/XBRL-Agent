@@ -131,7 +131,17 @@ from pathlib import Path
 # same row under MFRS/MPERS × Company/Group does not collide. Pure CREATE TABLE
 # IF NOT EXISTS walk-forward (new table, no ALTER) — the step only bumps the
 # marker. Pinned by tests/test_db_schema_v19.py.
-CURRENT_SCHEMA_VERSION = 19
+#
+# v20 (Settings page + admin user management) adds the `auth_users.is_admin`
+# column — the privilege boundary for web-based user management. One additive
+# nullable-or-defaulted ALTER (NOT NULL DEFAULT 0). Pinned by
+# tests/test_db_schema_v20.py.
+#
+# v21 (scanned-PDF → readable-document feature, docs/PLAN-scanned-pdf-to-doc.md)
+# adds the `doc_conversions` table — durable conversion-job state, independent
+# of the extraction pipeline. Pure CREATE TABLE IF NOT EXISTS walk-forward (new
+# table, no ALTER). Pinned by tests/test_db_schema_v21.py.
+CURRENT_SCHEMA_VERSION = 21
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -669,7 +679,8 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         password_hash   TEXT,                      -- argon2id; NULL = SSO-only account (no password login)
         disabled        INTEGER NOT NULL DEFAULT 0, -- 1 blocks login without deleting the row (audit trail)
         created_at      TEXT NOT NULL DEFAULT '',
-        password_set_at TEXT                       -- ISO 8601 UTC of the last password set/rotate
+        password_set_at TEXT,                      -- ISO 8601 UTC of the last password set/rotate
+        is_admin        INTEGER NOT NULL DEFAULT 0  -- 1 = may manage other accounts (v20); 0 = ordinary user
     )
     """,
     # auth_sessions is the server-side session store (not stateless JWT) so
@@ -684,6 +695,31 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         provider      TEXT NOT NULL DEFAULT 'password',  -- 'password' now; 'microsoft' when SSO lands
         created_at    TEXT NOT NULL DEFAULT '',
         last_seen_at  TEXT NOT NULL DEFAULT ''     -- bumped on real activity; sliding-window expiry compares against now
+    )
+    """,
+
+    # -----------------------------------------------------------------
+    # v21: scanned-PDF → readable-document conversion jobs
+    # (docs/PLAN-scanned-pdf-to-doc.md). One row per conversion. The feature
+    # is standalone (no FK to runs / extraction tables). Durable like
+    # run_review_tasks so a finished conversion survives a server restart and
+    # a stale 'running' row left by a crash is reconciled at startup. The
+    # converted HTML is heavy, so it lives on disk (result_html_path) and the
+    # row only points at it — same hybrid-storage rule as the agent traces
+    # (gotcha #6). No CHECK on `status` (same rationale as runs.status).
+    # -----------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS doc_conversions (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_pdf_path   TEXT NOT NULL,            -- absolute path to the uploaded PDF
+        original_filename TEXT NOT NULL DEFAULT '', -- display name (used for the .docx download)
+        status            TEXT NOT NULL,            -- 'queued' | 'running' | 'done' | 'failed'
+        total_pages       INTEGER NOT NULL DEFAULT 0,
+        current_page      INTEGER NOT NULL DEFAULT 0,
+        result_html_path  TEXT,                     -- on-disk converted HTML; NULL until done
+        error             TEXT,                     -- failure message; NULL unless failed
+        created_at        TEXT NOT NULL DEFAULT '',
+        updated_at        TEXT NOT NULL DEFAULT ''
     )
     """,
 )
@@ -823,6 +859,16 @@ _V16_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # row and every succeeded agent reads NULL.
 _V17_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("run_agents", "error_type", "TEXT"),
+)
+
+
+# v20 column: the admin role that gates web user-management (Settings → Users
+# tab + /api/admin/* routes). NOT NULL with a 0 default so every legacy account
+# walks forward as an ordinary (non-admin) user — admin #1 is minted explicitly
+# via `python -m auth.manage make-admin`. SQLite permits ADD COLUMN NOT NULL
+# only because a constant default is supplied (see the constraint note below).
+_V20_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("auth_users", "is_admin", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -1488,6 +1534,71 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (19,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v19→v20 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v19 → v20: add auth_users.is_admin (web user-management role gate).
+        # One additive ALTER with a constant default — same BEGIN IMMEDIATE +
+        # duplicate-column tolerance as the earlier column steps (v15/v16/v17).
+        if current_version is not None and current_version < 20:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 20:
+                    for table, col_name, col_ddl in _V20_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (20,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v20→v21 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v20 → v21: add the doc_conversions table (scanned-PDF → readable-doc
+        # feature). Created above via the idempotent CREATE TABLE IF NOT EXISTS,
+        # so this is a pure walk-forward that only confirms the table and bumps
+        # the marker — no ALTER columns. Same BEGIN IMMEDIATE discipline as the
+        # earlier additive-table steps (v18→v19 etc.).
+        if current_version is not None and current_version < 21:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 21:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (21,),
                     )
                 conn.commit()
             except Exception:

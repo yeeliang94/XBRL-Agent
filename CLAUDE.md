@@ -334,7 +334,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **18**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **21**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -415,6 +415,20 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   the migration block only bumps the version marker. The `auth/` package owns
   all access; accounts are provisioned with `python -m auth.manage`. Pinned by
   `tests/test_db_schema_v18.py`.
+- **v18 → v19:** adds the `notes_nodes` table (prose notes registry, Track A of
+  PLAN-notes-template-registry) — pure `CREATE TABLE IF NOT EXISTS` walk-forward.
+  Pinned by `tests/test_db_schema_v19.py`.
+- **v19 → v20:** adds `auth_users.is_admin` (`_V20_MIGRATION_COLUMNS`,
+  `INTEGER NOT NULL DEFAULT 0`) — the admin role gating web user management
+  (gotcha #24, Settings → Users tab + `/api/admin/*`). One additive ALTER;
+  existing accounts walk forward as non-admins. Pinned by
+  `tests/test_db_schema_v20.py`.
+- **v20 → v21:** adds the `doc_conversions` table (scanned-PDF → readable-document
+  feature, gotcha #26) — durable conversion-job state, independent of the
+  extraction pipeline. Pure `CREATE TABLE IF NOT EXISTS` walk-forward (new table,
+  no ALTER). Startup (`server._lifespan`) calls
+  `repo.reconcile_stale_doc_conversions` to fail any job left `running`/`queued`
+  by a crash. Pinned by `tests/test_db_schema_v21.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -1099,8 +1113,23 @@ gotcha #11 (v18 `auth_users` / `auth_sessions`); the operational invariants:
   keeps it alive via `/api/auth/refresh`. Brute-force lockout is per `(email, IP)`
   — 5 attempts → 15-min lock (`AUTH_LOGIN_MAX_ATTEMPTS` / `AUTH_LOGIN_LOCKOUT_S`).
 - **Accounts = the email allowlist.** Provision with
-  `python -m auth.manage add-user you@firm.com --name "Your Name"`. There is no
-  self-signup. Azure provisioning is still TODO.
+  `python -m auth.manage add-user you@firm.com --name "Your Name"` (add `--admin`
+  to mint an admin). There is no self-signup. Azure provisioning is still TODO.
+- **Admin role + web user management (schema v20).** `auth_users.is_admin` is the
+  privilege boundary. The CLI gained `--admin` / `make-admin` / `revoke-admin`
+  (with a **last-admin guard** — refuses to demote/disable the only enabled
+  admin); admin #1 is minted there since the admin UI is admin-gated. Web side:
+  `/api/auth/me` reports `is_admin`; `/api/admin/users` (list/add/disable/enable/
+  reset-password/promote) each independently enforce `is_admin` server-side via
+  `_require_admin` (the hidden UI tab is NOT the boundary) and carry the same
+  409 last-admin guard; `/api/auth/change-password` is self-service (re-auths
+  with the current password). Frontend: the gear opens a consolidated **`/settings`
+  page** (`SettingsPage.tsx`, `AppView "settings"`) with three tabs — **General**
+  (the old model/proxy/run-defaults form, extracted into `GeneralSettingsForm`;
+  `SettingsModal` is now a thin wrapper around it), **Account** (change password),
+  **Users** (admin-only). Pinned by `tests/test_admin_routes.py`,
+  `test_change_password.py`, `test_auth_me_reports_admin.py`,
+  `test_db_schema_v20.py`, and `web` `SettingsPage`/`AccountTab`/`UsersTab` tests.
 
 Pinned by `tests/test_auth_middleware.py`, `test_auth_password.py`,
 `test_auth_sessions.py`, `test_auth_lockout.py`,
@@ -1125,6 +1154,44 @@ The xlsx formula-eval path **remains present and authoritative** as the fallback
 until Phase 4 (xlsx retirement) lands — it is NOT removed yet. Export still
 keeps live formulas (downloads recompute in Excel); item 32 is verification-only,
 no static-value export. Plan: docs/PLAN-orchestration-hardening (item 32).
+
+### 26. Scanned-PDF → readable-document — standalone, offline, separate from extraction
+
+The `docconvert/` package + the "Readable Doc" frontend page convert a scanned
+PDF into readable HTML (+ a Word download). It is **deliberately independent of
+the extraction pipeline** — no coordinator, no concept model, no templates — and
+must run **fully offline / no API calls** (docs/PLAN-scanned-pdf-to-doc.md,
+docs/PRD-scanned-pdf-to-doc.md). Load-bearing details:
+
+- **Engine = Docling, never LiteParse.** Only Docling reconstructs scanned
+  financial tables (it runs a TableFormer model on top of OCR). LiteParse
+  collapses columns on scans at any DPI — proven in the 2026-06-19 bake-off.
+- **Offline by bundle.** `scripts/fetch_docling_models.py` pre-downloads ~599MB
+  of weights into `models/docling/` (gitignored). `docconvert/converter.py`
+  loads them via `PdfPipelineOptions(artifacts_path=...)` + `RapidOcrOptions`
+  pointed at the bundled **.onnx** files + `HF_HUB_OFFLINE=1`. **`onnxruntime`
+  is required** — RapidOCR's bundled models are ONNX (the gotcha from the spike).
+  Conversion is verified with all network blocked at the socket level
+  (`tests/test_docconvert.py`).
+- **Page-by-page** (no cross-page table stitching in v1) — gives real per-page
+  progress and matches the product decision.
+- **Word export = pandoc, not Docling.** Docling has **no** docx exporter
+  (HTML/MD/JSON only), so `_html_to_docx_bytes` renders the HTML via
+  `pypandoc_binary` (the pandoc executable ships in the pip wheel — no host
+  install, preserves the offline-deploy story).
+- **Durable background job** (schema v21 `doc_conversions`, gotcha #11):
+  serialised to **one conversion at a time** (`is_doc_conversion_running` →
+  409); daemon-thread worker (`docconvert/worker.py`) with a wall-clock cap
+  (`XBRL_DOC_CONVERT_TIMEOUT_S`) and a try/except landing **every** exit in a
+  terminal status (gotcha #10); stale `running` rows reconciled at startup
+  (gotcha #21 pattern). Routes (`docconvert/routes.py`,
+  `register_doc_convert_routes`, mirrors `reviewer_routes`) are under `/api/*`
+  so the auth middleware gates them (gotcha #24). Converted HTML is heavy → kept
+  on disk with a DB pointer (hybrid storage, gotcha #6). Pinned by
+  `tests/test_doc_convert_*.py` + `web/src/__tests__/ReadableDocPage.test.tsx`.
+- **Deploy caveat (deferred):** Docling adds ~630MB libs (force **CPU-only**
+  torch) + 599MB weights ≈ 1.2GB → fights Oryx zip-deploy; container + a memory
+  bump are recommended but undecided. See the PRD "Deferred" section.
 
 ## Testing
 
@@ -1185,6 +1252,7 @@ Some tests auto-skip when sample data is absent (e.g. `test_pdf_viewer.py`).
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full module map + data flow |
 | [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md) | Notes subsystem deep-dive |
 | [docs/MPERS.md](docs/MPERS.md) | MPERS filing-standard deep-dive |
+| [docs/PLAN-scanned-pdf-to-doc.md](docs/PLAN-scanned-pdf-to-doc.md) | Scanned-PDF → readable-doc feature (gotcha #26) |
 | [docs/SYNC-MATRIX.md](docs/SYNC-MATRIX.md) | Cross-file impact for a given change |
 | [docs/PORTING-WINDOWS.md](docs/PORTING-WINDOWS.md) | Mac → Windows porting checklist |
 | [docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md](docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md) | SOFP formula-offset incident audit trail |

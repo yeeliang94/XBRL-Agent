@@ -12,6 +12,12 @@ from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 _ph = PasswordHasher()
 
+# Minimum password length, shared by the provisioning CLI (auth.manage) and the
+# web routes (admin reset + self-service change). Deliberately modest — this
+# gates a small fixed team, not the public; the real defences are argon2id +
+# lockout, not a length policy.
+MIN_PASSWORD_LEN = 8
+
 # A throwaway hash verified on the user-miss path so a request for an unknown
 # email costs the same ~argon2 time as a request for a real one — otherwise
 # response timing would reveal which emails have accounts (enumeration).

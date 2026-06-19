@@ -2009,6 +2009,23 @@ async def _lifespan(app: FastAPI):
         logger.warning("re-review task reconciliation failed at startup",
                        exc_info=True)
 
+    # Retire scanned-PDF → readable-doc conversions orphaned by a restart
+    # (the worker thread dies with the process). Same best-effort discipline as
+    # the re-review reconcile above. See docs/PLAN-scanned-pdf-to-doc.md.
+    try:
+        from db import repository as repo
+        conn = _open_audit_conn()
+        try:
+            n = repo.reconcile_stale_doc_conversions(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        if n:
+            logger.info("reconciled %d stale doc-conversion(s) at startup", n)
+    except Exception:
+        logger.warning("doc-conversion reconciliation failed at startup",
+                       exc_info=True)
+
     # Sweep auth sessions that idled out and were never accessed again (the user
     # closed the tab). resolve_session deletes expired rows lazily on access, so
     # this only reaps the never-touched-again ones; without it the table grows
@@ -2086,6 +2103,12 @@ _register_concept_routes(app, lambda: AUDIT_DB_PATH)
 # need server orchestration are defined further down in this module.
 from concept_model.reviewer_routes import register_reviewer_routes as _register_reviewer_routes
 _register_reviewer_routes(app, lambda: AUDIT_DB_PATH)
+# Scanned-PDF → readable-document feature (docs/PLAN-scanned-pdf-to-doc.md):
+# a standalone utility, independent of extraction. Registers its own /api/doc-convert
+# routes + background worker. Getters mirror the pattern above so tests can swap
+# the module attributes at runtime.
+from docconvert.routes import register_doc_convert_routes as _register_doc_convert_routes
+_register_doc_convert_routes(app, lambda: AUDIT_DB_PATH, lambda: OUTPUT_DIR)
 
 
 # ---------------------------------------------------------------------------
@@ -2792,6 +2815,11 @@ def _validate_and_build_run(
         events, new_status = _fail_run(db_conn, run_id, f"Model override failed: {e}")
         return None, events, new_status
 
+    # Non-fatal pre-flight events surfaced to the client even on the success
+    # path (e.g. scout completeness warnings). Failures still route through
+    # `_fail_run`; these are advisory and never block the run.
+    pre_events: list[dict] = []
+
     # Resolve infopack
     infopack = None
     if run_config.infopack:
@@ -2802,6 +2830,23 @@ def _validate_and_build_run(
         except Exception as e:
             events, new_status = _fail_run(db_conn, run_id, f"Invalid infopack: {e}")
             return None, events, new_status
+
+        # Completeness probe (Plan 3): a degraded scout pack fans its loss out
+        # to every downstream agent, so flag it BEFORE fan-out. Advisory only —
+        # warnings are logged + emitted, the run still proceeds (gotcha #13).
+        try:
+            scout_warnings = infopack.completeness_warnings()
+        except Exception:
+            # The probe must never break the run — a bug here should not turn
+            # an advisory check into a hard failure.
+            logger.exception("infopack completeness probe failed; skipping")
+            scout_warnings = []
+        if scout_warnings:
+            for w in scout_warnings:
+                logger.warning("scout completeness warning (run %s): %s", run_id, w)
+            pre_events.append(
+                {"event": "scout_warnings", "data": {"warnings": scout_warnings}}
+            )
 
     # Create the model object for the coordinator. May raise if the
     # proxy is unreachable or the API key is invalid — treat it as an
@@ -2940,7 +2985,7 @@ def _validate_and_build_run(
         infopack=infopack,
         model=model,
         config=config,
-    ), [], None
+    ), pre_events, None
 
 
 # --- SSE keepalive + mid-stream session expiry (PLAN auth/deploy Phase 3) ---
@@ -3369,7 +3414,7 @@ async def run_multi_agent_stream(
         # failure it carries the SSE error events to yield + the terminal
         # status to record (rewrite Phase 5.2). The yield/return stays in the
         # generator shell so the lifecycle contract (gotcha #10) is untouched.
-        validated, fail_events, fail_status = _validate_and_build_run(
+        validated, pre_events, fail_status = _validate_and_build_run(
             run_config=run_config,
             api_key=api_key,
             proxy_url=proxy_url,
@@ -3381,10 +3426,15 @@ async def run_multi_agent_stream(
             db_conn=db_conn,
         )
         if validated is None:
-            for ev in fail_events:
+            # On failure `pre_events` carries the `_fail_run` error events.
+            for ev in pre_events:
                 yield ev
             terminal_status = fail_status or terminal_status
             return
+        # On success `pre_events` carries any non-fatal pre-flight warnings
+        # (e.g. scout completeness) — surface them before extraction starts.
+        for ev in pre_events:
+            yield ev
         statements_to_run = validated.statements_to_run
         variants = validated.variants
         models = validated.models

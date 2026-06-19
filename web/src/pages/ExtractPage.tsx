@@ -329,6 +329,26 @@ export function ExtractPage({
         />
       )}
 
+      {/* Scout-quality warnings banner. Surfaces the pre-flight completeness
+          probe (scout_warnings) and scale-unit reconciliation (scale_conflict)
+          findings so a degraded scout pack is visible to the operator before /
+          during extraction. Advisory only — the run proceeds (gotcha #13).
+          Reuses the warning palette; these are run-level (no agent tab). */}
+      {state.scoutWarnings.length > 0 && (
+        <div role="status" data-testid="scout-warnings-banner" style={styles.partialMergeBox}>
+          <h3 style={styles.partialMergeTitle}>Scout warnings</h3>
+          <p style={styles.partialMergeMessage}>
+            The document scout flagged the following before extraction. These are
+            advisory — verify against the PDF; the run still proceeds.
+          </p>
+          <ul style={{ margin: `${pwc.space.xs}px 0 0`, paddingLeft: pwc.space.lg }}>
+            {state.scoutWarnings.map((w, i) => (
+              <li key={i} style={styles.partialMergeMessage}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* PLAN-stop-and-validation-visibility Phase 2.3: partial-merge banner.
           Surfaces immediately above the cancel error so the operator
           knows their work was preserved. Distinct (warning) palette
