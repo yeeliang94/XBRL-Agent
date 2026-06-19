@@ -36,6 +36,11 @@ docling>=2.103.0
 # to run them offline — without it Docling raises "onnxruntime is not installed".
 onnxruntime>=1.20.0
 rapidocr>=3.8.0
+# EasyOCR is the selectable fallback OCR engine (Settings → "Readable-Doc OCR
+# engine"). Docling does NOT pull it transitively (it's an optional extra), so
+# it must be declared here — otherwise selecting EasyOCR fails with ImportError
+# at conversion time on a clean deploy.
+easyocr>=1.7.0
 # NOTE (Azure deploy): Docling pulls `torch` transitively. On Linux install the
 # CPU-only wheel (~430MB), NOT the default CUDA build (~2GB) — there is no GPU on
 # App Service:  pip install torch --index-url https://download.pytorch.org/whl/cpu

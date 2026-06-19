@@ -159,3 +159,20 @@ def test_over_watermark_compacts_with_aggressive_thresholds(monkeypatch):
     out = compact_old_text_results_ctx(_Ctx(70000), _old_large_text_history())
     # 3 turns >= 2 and 800 chars >= 500 → aggressive thresholds compact it.
     assert _is_compacted(out)
+
+
+# --- pydantic-ai ctx-detection contract -----------------------------------
+#
+# pydantic-ai 1.77 decides whether a history processor takes a RunContext purely
+# from the FIRST PARAMETER'S TYPE ANNOTATION (`_utils.takes_run_context` →
+# `get_first_param_type`). An un-annotated `ctx` makes it treat the 2-arg wrapper
+# as a 1-arg `(messages)` processor and call it with a single positional, raising
+# `strip_stale_images_ctx() missing 1 required positional argument: 'messages'`
+# inside the live agent — a failure the positional unit tests above can't catch.
+
+
+def test_ctx_wrappers_detected_as_run_context_taking():
+    from pydantic_ai._utils import takes_run_context
+
+    assert takes_run_context(strip_stale_images_ctx)
+    assert takes_run_context(compact_old_text_results_ctx)

@@ -27,12 +27,51 @@ from fastapi import File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from db import repository as repo
+from .converter import (
+    SUPPORTED_OCR_ENGINES,
+    engine_is_bundled,
+    models_bundle_dir,
+    resolve_ocr_engine,
+)
 from .worker import run_conversion_job
 
 logger = logging.getLogger(__name__)
 
 # Cap matches the existing upload guard in server.py (MAX_UPLOAD_SIZE = 50 MB).
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+# In-flight model downloads, by engine. A dev-only "seed from Settings"
+# convenience — disk presence (engine_is_bundled) is the source of truth for
+# "bundled"; this set just suppresses the spinner double-launch. Resets on
+# restart, which is fine (a half-download re-checks disk on the next probe).
+_model_fetch_lock = threading.Lock()
+_model_fetching: set[str] = set()
+# Last concrete failure message per engine, so the UI can show *why* a download
+# failed (e.g. "no internet") instead of a generic message. Cleared on relaunch.
+_model_fetch_errors: dict[str, str] = {}
+
+
+def _run_model_fetch(engine: str) -> None:
+    """Download one OCR engine's weights in the background (needs internet).
+
+    Used by the Settings "Download models" button. On the firewalled production
+    box this will fail (no network) — there models ship in the deploy artifact;
+    this is a dev / online-setup convenience only.
+    """
+    try:
+        from scripts.fetch_docling_models import fetch as _fetch
+
+        _fetch(models_bundle_dir(), with_easyocr=(engine == "easyocr"))
+        logger.info("doc-convert model fetch complete for engine=%s", engine)
+        with _model_fetch_lock:
+            _model_fetch_errors.pop(engine, None)
+    except Exception as exc:  # noqa: BLE001 - log + persist a concrete error
+        logger.warning("doc-convert model fetch failed for %s: %s", engine, exc)
+        with _model_fetch_lock:
+            _model_fetch_errors[engine] = str(exc) or exc.__class__.__name__
+    finally:
+        with _model_fetch_lock:
+            _model_fetching.discard(engine)
 
 
 def _safe_download_filename(original_filename: str) -> str:
@@ -175,6 +214,78 @@ def register_doc_convert_routes(
         ).start()
 
         return {"job_id": job_id, "status": "queued"}
+
+    # NOTE: the static /models routes MUST be registered before the
+    # /{job_id} route below — otherwise FastAPI matches "models" against the
+    # int path param and 422s. Keep them here.
+    @app.get("/api/doc-convert/models")
+    def doc_convert_models():
+        """Report which OCR engines are bundled + the current selection.
+
+        Powers the Settings OCR-engine selector + "Download models" button.
+        """
+        md = models_bundle_dir()
+        # Read the raw env for "current" so a stale/invalid persisted value
+        # can't 500 the status endpoint; fall back to the default.
+        try:
+            current = resolve_ocr_engine(None)
+        except Exception:  # noqa: BLE001
+            current = SUPPORTED_OCR_ENGINES[0]
+        return {
+            "current": current,
+            "engines": [
+                {
+                    "id": e,
+                    "bundled": engine_is_bundled(md, e),
+                    "fetching": e in _model_fetching,
+                    "error": _model_fetch_errors.get(e),
+                }
+                for e in SUPPORTED_OCR_ENGINES
+            ],
+        }
+
+    @app.post("/api/doc-convert/models/fetch")
+    def doc_convert_fetch_models(body: dict, request: Request):
+        """Launch a background download of an OCR engine's weights.
+
+        ADMIN-ONLY: a model download is a large, networked, global side effect,
+        so it's gated to admins (the dev bypass keeps it open in AUTH_MODE=dev).
+        Online-only convenience (the firewalled production box ships models in
+        the deploy artifact). Returns immediately; poll GET /models for state.
+        """
+        from .converter import DocConvertError
+
+        # Admin gate — reuses the same server-side check as /api/admin/*.
+        import sqlite3
+        from auth.routes import _require_admin
+
+        conn = sqlite3.connect(str(_db_path()))
+        conn.row_factory = sqlite3.Row
+        try:
+            denied = _require_admin(conn, request)
+        finally:
+            conn.close()
+        if denied is not None:
+            return denied
+
+        try:
+            engine = resolve_ocr_engine(body.get("engine"))  # validates choice
+        except DocConvertError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if engine_is_bundled(models_bundle_dir(), engine):
+            return {"status": "already_bundled", "engine": engine}
+        with _model_fetch_lock:
+            # In-flight check BEFORE launching: a partial download on disk must
+            # not be mistaken for "bundled" (Finding 2).
+            if engine in _model_fetching:
+                return {"status": "fetching", "engine": engine}
+            _model_fetch_errors.pop(engine, None)  # clear stale error on relaunch
+            _model_fetching.add(engine)
+        threading.Thread(
+            target=_run_model_fetch, args=(engine,),
+            name=f"docling-fetch-{engine}", daemon=True,
+        ).start()
+        return {"status": "fetching", "engine": engine}
 
     @app.get("/api/doc-convert/{job_id}")
     def get_doc_convert(job_id: int):

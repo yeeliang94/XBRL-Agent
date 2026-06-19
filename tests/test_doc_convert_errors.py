@@ -69,7 +69,7 @@ def test_all_pages_failing_raises_not_silently_done(tmp_path, monkeypatch):
             raise RuntimeError("OCR engine exploded")
 
     monkeypatch.setattr(conv, "_resolve_models_dir", lambda _m: tmp_path)
-    monkeypatch.setattr(conv, "_build_converter", lambda _m: _AlwaysFails())
+    monkeypatch.setattr(conv, "_build_converter", lambda _m, _e=conv.DEFAULT_OCR_ENGINE: _AlwaysFails())
 
     with pytest.raises(DocConvertError) as exc:
         conv.convert_pdf_to_html(pdf)

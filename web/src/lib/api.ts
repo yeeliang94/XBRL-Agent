@@ -179,6 +179,8 @@ export async function updateSettings(
     tolerance_rm: number;
     auto_review: boolean;
     entity_memory: boolean;
+    // Scanned-PDF → readable-doc OCR engine: 'rapidocr' | 'easyocr'.
+    docling_ocr_engine: string;
   }>,
 ): Promise<{ status: string }> {
   return apiFetch<{ status: string }>("/api/settings", {
@@ -509,4 +511,25 @@ export function docConvertViewUrl(jobId: number): string {
 /** Same-origin URL for the Word download (an <a download> target). */
 export function docConvertDocxUrl(jobId: number): string {
   return `/api/doc-convert/${jobId}/download/docx`;
+}
+
+export interface DocConvertModelsStatus {
+  current: string;
+  engines: { id: string; bundled: boolean; fetching: boolean; error?: string | null }[];
+}
+
+/** Which OCR engines are bundled + the current selection (Settings). */
+export async function getDocConvertModels(): Promise<DocConvertModelsStatus> {
+  return apiFetch("/api/doc-convert/models");
+}
+
+/** Launch a background download of an OCR engine's models (online-only). */
+export async function fetchDocConvertModels(
+  engine: string,
+): Promise<{ status: string; engine: string }> {
+  return apiFetch("/api/doc-convert/models/fetch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ engine }),
+  });
 }
