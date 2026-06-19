@@ -496,3 +496,75 @@ class Infopack:
                         f"PDF length {pdf_length}"
                     )
         return errors
+
+    # -- Completeness probe ----------------------------------------------------
+
+    def completeness_warnings(self) -> list[str]:
+        """Surface signs the scout produced a DEGRADED pack before fan-out.
+
+        Distinct from ``validate_page_range`` (which bounds-checks pages):
+        this probe looks at *content completeness*. The infopack is a
+        compression artifact every downstream face + notes agent consumes
+        identically, so a silently dropped note or a mis-stated unit fans the
+        loss out to the whole run (the "error-propagation cascade" failure
+        mode). These are WARNINGS, never fatal — scout output is advisory
+        (gotcha #13); the point is observability so a bad scout is visible at
+        the pre-flight boundary instead of only showing up as wrong numbers.
+
+        Returns a list of human-readable warning strings (empty = clean).
+        """
+        warnings: list[str] = []
+
+        # 1. Unknown scale is the highest-cost ambiguity — a wrong unit is a
+        #    silent 1000x error on every value (gotcha #17's sibling). The
+        #    prompt already renders a loud VERIFY block in this case, but
+        #    surfacing it here lets the operator see the risk up front.
+        if self.scale_unit == "unknown":
+            warnings.append(
+                "scale_unit is 'unknown' — every extracted value depends on "
+                "the agent reading the header correctly; verify the filing's "
+                "presentation unit (units / thousands / millions)."
+            )
+
+        # 2. An empty inventory after a pass actually ran ('text'/'vision')
+        #    means discovery found nothing — on a scanned PDF this is the
+        #    vision-fallback failing, which leaves notes agents scanning blind.
+        if not self.notes_inventory and self.inventory_source in {"text", "vision"}:
+            warnings.append(
+                f"notes_inventory is empty although the '{self.inventory_source}' "
+                "discovery pass ran — notes agents will have no page hints and "
+                "must scan the whole PDF."
+            )
+
+        # 3. Gaps in the observed note numbering (e.g. 1,2,3,7 -> missing 4-6)
+        #    are a cheap, deterministic signal that scout dropped notes between
+        #    the lowest and highest it did find.
+        note_nums = sorted(
+            {e.note_num for e in self.notes_inventory if e.note_num is not None}
+        )
+        if note_nums:
+            expected = set(range(note_nums[0], note_nums[-1] + 1))
+            missing = sorted(expected - set(note_nums))
+            if missing:
+                preview = ", ".join(str(n) for n in missing[:10])
+                more = "…" if len(missing) > 10 else ""
+                warnings.append(
+                    f"notes_inventory has gaps: note number(s) {preview}{more} "
+                    f"were not found between Note {note_nums[0]} and "
+                    f"Note {note_nums[-1]} — scout may have dropped them."
+                )
+
+        # 4. Missing entity / reporting period weakens the scout-context block
+        #    every agent reads for cross-referencing.
+        if not self.entity_name:
+            warnings.append(
+                "entity_name was not captured — the scout-context block will "
+                "omit the entity name."
+            )
+        if not self.reporting_period_cy:
+            warnings.append(
+                "reporting_period_cy was not captured — agents cannot "
+                "cross-check the current-year column against a known period."
+            )
+
+        return warnings

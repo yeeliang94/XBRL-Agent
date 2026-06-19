@@ -215,6 +215,69 @@ describe("appReducer", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Scout-quality warnings banner (scout_warnings + scale_conflict).
+  // ---------------------------------------------------------------------------
+
+  test("scout_warnings event appends to scoutWarnings without creating a tab", () => {
+    const running = runningState();
+    const state = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "scout_warnings",
+        data: { warnings: ["scale_unit is 'unknown'", "notes_inventory has gaps"] },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.scoutWarnings).toEqual([
+      "scale_unit is 'unknown'",
+      "notes_inventory has gaps",
+    ]);
+    // Critical (Codex review P2): a run-level warning must NOT spawn an agent
+    // tab. No agent_id ⇒ no agent slot, no tab order entry, no active tab.
+    expect(Object.keys(state.agents)).toHaveLength(0);
+    expect(state.agentTabOrder).toHaveLength(0);
+    expect(state.activeTab).toBeFalsy();
+    expect(state.isRunning).toBe(true);
+  });
+
+  test("scale_conflict event appends its message and creates no tab", () => {
+    const running = runningState();
+    const state = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "scale_conflict",
+        data: {
+          severity: "coerced",
+          scout_scale_unit: "millions",
+          resolved_scale_unit: "unknown",
+          message: "scout reported 'millions' but prior run filed in 'thousands'.",
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.scoutWarnings).toEqual([
+      "scout reported 'millions' but prior run filed in 'thousands'.",
+    ]);
+    expect(Object.keys(state.agents)).toHaveLength(0);
+    expect(state.activeTab).toBeFalsy();
+  });
+
+  test("RUN_STARTED clears any prior scout warnings", () => {
+    const running = runningState();
+    const withWarnings = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "scout_warnings",
+        data: { warnings: ["stale warning"] },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(withWarnings.scoutWarnings).toHaveLength(1);
+    const restarted = appReducer(withWarnings, { type: "RUN_STARTED" });
+    expect(restarted.scoutWarnings).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------------------
   // PLAN-stop-and-validation-visibility Phase 5 — cross-check progress.
   // ---------------------------------------------------------------------------
 

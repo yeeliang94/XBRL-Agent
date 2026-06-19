@@ -40,6 +40,20 @@ export interface AuthMe {
   email: string;
   display_name: string;
   provider: string;
+  // Admin role (schema v20) — gates the Settings → Users tab. Optional so an
+  // older backend that omits it reads as non-admin.
+  is_admin?: boolean;
+}
+
+/** One account as returned by the admin user-management API (never the hash). */
+export interface AdminUser {
+  email: string;
+  display_name: string;
+  disabled: boolean;
+  is_admin: boolean;
+  has_password: boolean;
+  created_at: string;
+  password_set_at: string | null;
 }
 
 export type LoginResult =
@@ -72,6 +86,65 @@ export async function loginPassword(email: string, password: string): Promise<Lo
 
 export async function logout(): Promise<void> {
   await fetch("/api/auth/logout", { method: "POST" });
+}
+
+/** Change my own password (re-auth with the current one). Throws (via apiFetch)
+ *  with the server's detail message on 403 (wrong current) / 422 (too short).
+ *  Wrong-current is deliberately 403 not 401 so it surfaces inline instead of
+ *  tripping apiFetch's global "session expired" logout (Codex review P2). */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch("/api/auth/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Admin: user management (gated server-side on is_admin). Each helper throws
+// with the server's detail message on failure (incl. the 409 last-admin guard).
+// ---------------------------------------------------------------------------
+
+export async function adminListUsers(): Promise<AdminUser[]> {
+  const res = await apiFetch<{ users: AdminUser[] }>("/api/admin/users");
+  return res.users;
+}
+
+export async function adminAddUser(body: {
+  email: string;
+  display_name?: string;
+  password: string;
+  is_admin?: boolean;
+}): Promise<{ ok: boolean; user: AdminUser }> {
+  return apiFetch("/api/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function adminSetDisabled(email: string, disabled: boolean): Promise<{ ok: boolean }> {
+  const action = disabled ? "disable" : "enable";
+  return apiFetch(`/api/admin/users/${encodeURIComponent(email)}/${action}`, { method: "POST" });
+}
+
+export async function adminResetPassword(email: string, password: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/admin/users/${encodeURIComponent(email)}/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+}
+
+export async function adminSetAdmin(email: string, isAdmin: boolean): Promise<{ ok: boolean; user: AdminUser }> {
+  return apiFetch(`/api/admin/users/${encodeURIComponent(email)}/admin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_admin: isAdmin }),
+  });
 }
 
 /** Throttled activity ping — bumps the sliding-window idle timer. Best-effort;
@@ -398,4 +471,42 @@ export async function fetchRunEval(runId: number): Promise<EvalScoreJson | null>
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Scanned-PDF → readable-document feature (docs/PLAN-scanned-pdf-to-doc.md).
+// Standalone utility, independent of extraction.
+// ---------------------------------------------------------------------------
+
+export interface DocConvertStatus {
+  job_id: number;
+  status: "queued" | "running" | "done" | "failed";
+  current_page: number;
+  total_pages: number;
+  original_filename: string;
+  error: string | null;
+}
+
+/** Upload a PDF and launch a conversion. Returns the new job id. */
+export async function startDocConvert(
+  file: File,
+): Promise<{ job_id: number; status: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  return apiFetch("/api/doc-convert", { method: "POST", body: form });
+}
+
+/** Poll the current status/progress of a conversion job. */
+export async function getDocConvertStatus(jobId: number): Promise<DocConvertStatus> {
+  return apiFetch(`/api/doc-convert/${jobId}`);
+}
+
+/** Same-origin URL for the converted HTML (rendered in an iframe). */
+export function docConvertViewUrl(jobId: number): string {
+  return `/api/doc-convert/${jobId}/view`;
+}
+
+/** Same-origin URL for the Word download (an <a download> target). */
+export function docConvertDocxUrl(jobId: number): string {
+  return `/api/doc-convert/${jobId}/download/docx`;
 }

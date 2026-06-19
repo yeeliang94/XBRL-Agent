@@ -346,6 +346,48 @@ async def run_extraction(
     # behaviour) left these statements invisible downstream.
     skipped_results: list[AgentResult] = []
 
+    # Scale-unit reconciliation (Plan 1) — run ONCE before the per-statement
+    # loop because infopack.scale_unit + the prior-year advisory are the same
+    # across every statement. A confidently-wrong unit silently 1000x's every
+    # value, so we cross-check scout against the matched prior-year run (and the
+    # declared denomination) before any agent sees it. On an authoritative
+    # conflict the value is coerced to "unknown", re-arming the loud VERIFY
+    # prompt. Advisory-only otherwise; see scout/scale_reconcile.py.
+    resolved_scale_unit: Optional[str] = None
+    if infopack is not None:
+        from scout.scale_reconcile import reconcile_scale_unit
+
+        prior_adv = getattr(config, "prior_year_advisory", None)
+        prior_scale = getattr(prior_adv, "scale_unit", None) if prior_adv else None
+        reconciled = reconcile_scale_unit(
+            infopack.scale_unit,
+            prior_scale,
+            getattr(config, "denomination", None),
+        )
+        resolved_scale_unit = reconciled.resolved_unit
+        if reconciled.conflict_note is not None:
+            logger.warning(
+                "scale_unit conflict (%s): %s",
+                reconciled.severity,
+                reconciled.conflict_note,
+            )
+            if event_queue is not None:
+                # Deliberately NOT via _build_event: this is a run-level scout
+                # warning, not a per-agent event. _build_event injects
+                # agent_id/agent_role, and the frontend creates a tab for ANY
+                # event carrying agent identity — a "scout" tab would appear
+                # next to the statement tabs (Codex review P2). Emitting a bare
+                # event routes it to the run-level warnings banner instead.
+                await event_queue.put({
+                    "event": "scale_conflict",
+                    "data": {
+                        "severity": reconciled.severity,
+                        "scout_scale_unit": infopack.scale_unit,
+                        "resolved_scale_unit": resolved_scale_unit,
+                        "message": reconciled.conflict_note,
+                    },
+                })
+
     # Sort by canonical enum order (SOFP → SOPL → SOCI → SOCF → SOCIE)
     # so agent_ids and tab order are stable across runs.
     ordered_statements = sorted(config.statements_to_run, key=lambda s: list(StatementType).index(s))
@@ -421,7 +463,11 @@ async def run_extraction(
                 "reporting_period_cy": infopack.reporting_period_cy,
                 "reporting_period_py": infopack.reporting_period_py,
                 "currency": infopack.currency,
-                "scale_unit": infopack.scale_unit,
+                # Plan 1: the reconciled unit (coerced to "unknown" on an
+                # authoritative prior-year conflict), not scout's raw claim.
+                "scale_unit": resolved_scale_unit
+                if resolved_scale_unit is not None
+                else infopack.scale_unit,
                 "consolidation_level": infopack.consolidation_level,
             }
 

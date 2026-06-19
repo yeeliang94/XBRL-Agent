@@ -30,6 +30,9 @@ const MULTI_EVENT_TYPES: SSEEventType[] = [
   // correction…" instead of letting the spinner sit on the last
   // per-agent event during the post-extraction silent zones.
   "pipeline_stage",
+  // Scout-quality warnings (run-level, no agent_id) → warnings banner.
+  "scout_warnings",
+  "scale_conflict",
 ];
 
 // Generic parse result. Stays loose on `data` because not every consumer

@@ -56,7 +56,13 @@ export type SSEEventType =
   // stage boundaries so the UI can label the current activity
   // (extracting / merging / cross_checking / correcting /
   // re_checking / validating_notes / done).
-  | "pipeline_stage";
+  | "pipeline_stage"
+  // Scout-quality warnings surfaced before / during fan-out. Both are
+  // run-level (no agent_id) and feed the same warnings banner:
+  //  - scout_warnings: completeness probe findings (server, pre-flight).
+  //  - scale_conflict: scale-unit reconciliation conflict (coordinator).
+  | "scout_warnings"
+  | "scale_conflict";
 
 // Every multi-agent event carries these routing fields inside `data` (the
 // backend stamps them in coordinator._build_event). We keep them in `data`
@@ -95,6 +101,9 @@ interface SSEEventDataMap {
   cross_check_complete: CrossCheckCompleteData & AgentRouting;
   // PLAN-stop-and-validation-visibility Phase 6 — pipeline stage label.
   pipeline_stage: PipelineStageData & AgentRouting;
+  // Scout-quality warnings (run-level; no agent_id — see SSEEventType).
+  scout_warnings: ScoutWarningsData & AgentRouting;
+  scale_conflict: ScaleConflictData & AgentRouting;
 }
 
 export type SSEEvent = {
@@ -257,6 +266,23 @@ export interface PartialMergeData {
   notes_missing: string[];
   /** Set when the merge attempt itself raised; null on a clean run. */
   error: string | null;
+}
+
+/** Payload of the ``scout_warnings`` SSE event — the pre-flight completeness
+ *  probe's findings (unknown scale, empty/gappy inventory, missing entity). */
+export interface ScoutWarningsData {
+  warnings: string[];
+}
+
+/** Payload of the ``scale_conflict`` SSE event — emitted when scale-unit
+ *  reconciliation finds scout's unit disagrees with the prior-year run or the
+ *  declared denomination. ``severity`` is "coerced" (value reset to unknown)
+ *  or "flag" (value kept, verify). */
+export interface ScaleConflictData {
+  severity: string;
+  scout_scale_unit: string;
+  resolved_scale_unit: string;
+  message: string;
 }
 
 export interface CompleteData {

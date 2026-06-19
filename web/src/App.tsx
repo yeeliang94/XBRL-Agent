@@ -3,12 +3,12 @@ import type { RunConfigPayload, NotesTemplateType } from "./lib/types";
 import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES } from "./lib/types";
 import { pwc } from "./lib/theme";
 import { appReducer, bootState, parseRouteFromPath } from "./lib/appReducer";
-import { uploadPdf, getSettings, updateSettings, testConnection, abortAll, abortAgent } from "./lib/api";
+import { uploadPdf, abortAll, abortAgent } from "./lib/api";
 import { getAuthMe, logout as apiLogout, refreshAuth } from "./lib/api";
 import type { AuthMe } from "./lib/api";
 import { LoginPage } from "./pages/LoginPage";
 import { createMultiAgentSSE, createMultiAgentSSEByRunId, patchRunConfig } from "./lib/sse";
-import { SettingsModal } from "./components/SettingsModal";
+import { SettingsPage } from "./pages/SettingsPage";
 import { TopNav } from "./components/TopNav";
 import { SuccessToast } from "./components/SuccessToast";
 import { SettingsIcon } from "./components/icons";
@@ -16,6 +16,7 @@ import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
+import { ReadableDocPage } from "./pages/ReadableDocPage";
 import "./index.css";
 
 // ---------------------------------------------------------------------------
@@ -121,7 +122,6 @@ const styles = {
 
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, undefined, bootState);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   // Canonical-mode feature flag from the backend (peer-review finding 5).
   // Defaults to false so the Concepts tab stays hidden until /api/config
   // confirms canonical mode is on; a failed fetch leaves it hidden.
@@ -257,6 +257,12 @@ export default function App() {
       expected = state.selectedRunId != null
         ? `/benchmarks/${state.selectedRunId}`
         : "/benchmarks";
+    } else if (state.view === "doc-convert") {
+      // Standalone scanned-PDF → readable-document utility — singleton surface.
+      expected = "/readable-doc";
+    } else if (state.view === "settings") {
+      // Singleton settings surface — no entity id rides along.
+      expected = "/settings";
     } else if (state.view === "history") {
       expected = state.selectedRunId != null
         ? `/history/${state.selectedRunId}`
@@ -588,7 +594,10 @@ export default function App() {
             </button>
           )}
           <button
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => {
+              dispatch({ type: "SET_VIEW", payload: "settings" });
+              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
+            }}
             style={styles.settingsButton}
             aria-label="Settings"
           >
@@ -606,7 +615,16 @@ export default function App() {
             : styles.main
         }
       >
-        {state.view === "benchmarks" ? (
+        {state.view === "doc-convert" ? (
+          // Standalone scanned-PDF → readable-document utility, independent of
+          // the extraction pipeline (docs/PLAN-scanned-pdf-to-doc.md).
+          <ReadableDocPage />
+        ) : state.view === "settings" ? (
+          // Consolidated settings page (replaces the gear's settings modal):
+          // General · Account · Users. The Users tab is admin-gated (and the
+          // server enforces it independently).
+          <SettingsPage isAdmin={Boolean(user?.is_admin)} />
+        ) : state.view === "benchmarks" ? (
           // Gold-standard eval (v16): the benchmark library + gold editor.
           // selectedRunId carries the selected benchmark id (the generic
           // selected-entity slot).
@@ -694,15 +712,6 @@ export default function App() {
           />
         )}
       </main>
-
-      {/* Settings modal */}
-      <SettingsModal
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        getSettings={getSettings}
-        saveSettings={updateSettings}
-        testConnection={testConnection}
-      />
 
       {/* Phase 9: Run-complete success toast — top-right, auto-dismiss 4 s */}
       <SuccessToast

@@ -96,3 +96,67 @@ def test_list_users_never_prints_hash(db, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "you@firm.com" in out
     assert "$argon2id$" not in out
+
+
+def test_add_user_with_admin_flag_mints_admin(db, monkeypatch):
+    monkeypatch.setattr(manage.getpass, "getpass", lambda *_: "first-password")
+    manage.main(["--db", str(db), "add-user", "boss@firm.com", "--name", "Boss", "--admin"])
+    assert _fetch(db, "boss@firm.com").is_admin is True
+
+
+def test_add_user_without_admin_does_not_demote_existing_admin(db, monkeypatch):
+    """Re-running add-user without --admin must not silently demote an admin —
+    same 'never clear a flag the command didn't name' rule as `disabled`."""
+    monkeypatch.setattr(manage.getpass, "getpass", lambda *_: "first-password")
+    manage.main(["--db", str(db), "add-user", "boss@firm.com", "--admin"])
+    manage.main(["--db", str(db), "add-user", "boss@firm.com", "--name", "Boss"])
+    assert _fetch(db, "boss@firm.com").is_admin is True
+
+
+def test_make_and_revoke_admin_round_trip(db, monkeypatch):
+    monkeypatch.setattr(manage.getpass, "getpass", lambda *_: "first-password")
+    # Two accounts so revoke isn't blocked by the last-admin guard.
+    manage.main(["--db", str(db), "add-user", "a@firm.com", "--admin"])
+    manage.main(["--db", str(db), "add-user", "b@firm.com"])
+    manage.main(["--db", str(db), "make-admin", "b@firm.com"])
+    assert _fetch(db, "b@firm.com").is_admin is True
+    manage.main(["--db", str(db), "revoke-admin", "b@firm.com"])
+    assert _fetch(db, "b@firm.com").is_admin is False
+
+
+def test_revoke_last_admin_is_refused(db, monkeypatch):
+    monkeypatch.setattr(manage.getpass, "getpass", lambda *_: "first-password")
+    manage.main(["--db", str(db), "add-user", "only@firm.com", "--admin"])
+    with pytest.raises(SystemExit):
+        manage.main(["--db", str(db), "revoke-admin", "only@firm.com"])
+    # Still an admin after the refused demotion.
+    assert _fetch(db, "only@firm.com").is_admin is True
+
+
+def test_revoke_admin_on_disabled_admin_is_allowed(db, monkeypatch):
+    # One ENABLED admin + one DISABLED admin. Demoting the disabled one can't
+    # reduce the count of admins who can actually act, so it must be allowed —
+    # the last-admin guard only protects the last ENABLED admin (Codex review
+    # P3). Without the `not user.disabled` qualifier this would wrongly refuse.
+    monkeypatch.setattr(manage.getpass, "getpass", lambda *_: "first-password")
+    manage.main(["--db", str(db), "add-user", "enabled@firm.com", "--admin"])
+    manage.main(["--db", str(db), "add-user", "stale@firm.com", "--admin"])
+    manage.main(["--db", str(db), "disable-user", "stale@firm.com"])
+    # Should NOT raise — the enabled admin still remains afterwards.
+    manage.main(["--db", str(db), "revoke-admin", "stale@firm.com"])
+    assert _fetch(db, "stale@firm.com").is_admin is False
+    assert _fetch(db, "enabled@firm.com").is_admin is True
+
+
+def test_make_admin_unknown_user_errors(db):
+    with pytest.raises(SystemExit):
+        manage.main(["--db", str(db), "make-admin", "ghost@firm.com"])
+
+
+def test_list_users_shows_role_column(db, monkeypatch, capsys):
+    monkeypatch.setattr(manage.getpass, "getpass", lambda *_: "first-password")
+    manage.main(["--db", str(db), "add-user", "boss@firm.com", "--admin"])
+    manage.main(["--db", str(db), "list-users"])
+    out = capsys.readouterr().out
+    assert "ROLE" in out
+    assert "admin" in out

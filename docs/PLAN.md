@@ -1,144 +1,143 @@
-# Implementation Plan: Full-Template Notes Review + Notes Node Registry
+# Implementation Plan: Settings Page + Admin User Management
 
-**Overall Progress:** `100%` (Steps 1–12 done — Phases 1–5 complete; Phase 6 deferred by design)
-**Design Reference:** [docs/PLAN-notes-template-registry.md](PLAN-notes-template-registry.md) (the "why + how" design doc)
-**Last Updated:** 2026-06-17
+**Overall Progress:** `100%` (Steps 1–9 done — all phases complete)
+**Design Reference:** _None — shaped directly in the 2026-06-19 brainstorm (no separate PRD)._
+**Last Updated:** 2026-06-19
 
-> Replaces the previous (completed) PLAN.md for prompt-caching/effectiveness — that
-> work is at 100% and preserved in git history.
+> Replaces the previous (completed) PLAN.md for Full-Template Notes Review +
+> Notes Node Registry — that work is at 100% and preserved in git history.
 
 ## Summary
-Make the Notes Review tab show the *complete* notes template — every fillable row
-in M-tool order, blanks included and editable — instead of only the rows the agent
-filled. Two tracks: **prose** notes (10/11/12) get a new parallel `notes_nodes`
-registry projected over `notes_cells`; **numeric** notes (13/14), which are
-structurally face statements, reuse the existing `concept_model` pipeline
-(`concept_nodes` + `run_concept_facts`). Both render in one Notes tab.
+
+Add a real two-tier auth role (`is_admin`) and a consolidated `/settings` page
+that replaces today's settings modal. The page has four tabs — **Account**
+(change my own password), **Models & Providers** (the existing API-key/model/proxy
+settings, moved out of the modal), **Run defaults** (auto-review, default models,
+entity-memory — already wired to `/api/settings`), and **Users** (admin-only:
+list / add / disable / reset-password / promote). All user-management operations
+already exist in `db/repository.py` + `auth/manage.py`; the work is exposing them
+over admin-gated HTTP routes and building the UI on top, plus one schema migration.
 
 ## Key Decisions
-- **Two-track design** — prose → `notes_nodes`/`notes_cells` (HTML); numeric →
-  reuse `concept_model`. *Why:* prose are HTML text-blocks; numeric are multi-column
-  numeric tables identical to face statements, so reuse the machinery built for them.
-- **`notes_nodes` identity is template-scoped** (`uuid5(template_id::sheet::row::label)`)
-  — *why:* the same prose row exists under MFRS/MPERS × Company/Group; a global PK
-  would collide. Projection joins `notes_cells` on `(sheet,row)` within run scope.
-- **Numeric capture = LIVE write** into `run_concept_facts` (thread `run_id`/`db_path`
-  into the notes numeric write path, like face extraction) — *why:* user chose live
-  over ingest-at-merge for consistency with face statements.
-- **Filter numeric notes out of the Values tab** — *why:* keep all notes review in
-  one place; avoid a confusing split across tabs.
-- **Reserve nullable `xbrl_concept_id` on `notes_nodes` only** — *why:* anchor future
-  full-XBRL generation without a later migration; defer the same column on
-  `concept_nodes` until that work lands.
-- **Fillable rows only, targeted sheets only** — exclude abstract/header rows;
-  project only the notes sheets the run actually targeted.
+
+- **Admin model: a real `is_admin` role (schema v20), not "everyone-is-admin."**
+  An admin portal without a privilege boundary is "every user can disable every
+  other user" — unacceptable for a finance tool. Chosen in brainstorm.
+- **Migration is v20, not v19.** `CURRENT_SCHEMA_VERSION` is already `19` (notes
+  template registry, last commit). The auth-role step is `v19 → v20`.
+- **One settings page, four tabs — not a separate "admin portal" surface.** The
+  Users tab is admin-gated; everything else is visible to all logged-in users.
+- **Server-side enforcement is the boundary; the hidden tab is only UX.** Every
+  `/api/admin/*` route independently checks `is_admin` and 403s otherwise.
+- **First admin is minted via the CLI.** You cannot create admin #1 through an
+  admin-only UI from a cold start — `auth.manage` gets a `--admin` flag and a
+  `make-admin`/`revoke-admin` subcommand as the bootstrap escape hatch.
+- **Reuse, don't reinvent.** Operations exist (`repo.upsert_auth_user`,
+  `set_auth_user_disabled`, `list_auth_users`, `count_auth_users`,
+  `passwords.hash_password/verify_password/dummy_verify`). The only genuinely new
+  logic is change-my-own-password (verify current → set new).
+- **Inline styles only (gotcha #7).** Reuse `theme.ts` tokens + `uiStyles.ts`
+  primitives. No Tailwind. Many frontend tests assert exact RGB from `theme.ts`.
+- **Tests run via `./venv/bin/python` (memory: venv_interpreter_for_tests).**
+  Bare `python3` is a stale 3.9 and gives phantom import errors.
+
+## Out of Scope (deferred, do NOT build)
+
+Teams/orgs, granular permissions, who-changed-what audit logs, invite emails,
+SSO wiring, password-reset-by-email. None block the core ask.
 
 ## Pre-Implementation Checklist
-- [x] 🟩 All exploration questions resolved (six decisions locked, design doc §9)
-- [x] 🟩 Design doc up to date ([PLAN-notes-template-registry.md](PLAN-notes-template-registry.md))
-- [x] 🟩 Landed on its own branch `notes-template-registry`
-- [ ] 🟥 Run backend tests via `./venv/bin/python -m pytest` (bare `python3` is stale — see memory); frontend via `cd web && npx vitest run`
+- [x] 🟩 No in-flight schema work claims v20 (committed schema was v19; v20 is free).
+- [x] 🟩 `AUTH_MODE=dev` default applies to the new routes (admin-route tests opt out with `delenv`).
+- [x] 🟩 `resolve_session` does NOT carry the user role → `me()`/`_require_admin` do a follow-up `fetch_auth_user` (its signature left unchanged).
 
 ---
 
 ## Tasks
 
-### Phase 1: Schema foundation
+### Phase 1: Schema + role foundation (backend, no UI)
 
-- [x] 🟩 **Step 1: Add `notes_nodes` table (schema v19)** — persistent registry for prose notes rows; numeric notes need no new table (they use `concept_nodes`). **DONE.**
-  - [x] 🟩 Added `CREATE TABLE IF NOT EXISTS notes_nodes (...)` to the fresh-init schema in [db/schema.py](../db/schema.py) (cols: `node_uuid` PK, `template_id`, `sheet`, `row`, `label`, `kind`, nullable `xbrl_concept_id`, `UNIQUE(template_id,sheet,row)`). No FK to `concept_templates` (prose is isolated from the concept pipeline).
-  - [x] 🟩 Added the v18→v19 migration block (pure `CREATE TABLE IF NOT EXISTS` walk-forward) + a re-read after the v17→v18 block so the new block's outer guard is accurate.
-  - [x] 🟩 Bumped `CURRENT_SCHEMA_VERSION` 18 → 19 with a version note.
-  - [x] 🟩 Wrote `tests/test_db_schema_v19.py`: fresh init has `notes_nodes` (exact column set), v18→v19 walk-forward, idempotent re-init, and key-constraint behaviour (template-scoped PK; cross-family `(sheet,row,label)` allowed).
-  - **Verify:** `./venv/bin/python -m pytest tests/test_db_schema_v19.py tests/test_db_schema_v18.py -v` → **10 passed**; `test_db.py`/`v4`/`v16` still green.
-  - *Note:* no separate index added — `UNIQUE(template_id, sheet, row)` already indexes the `template_id`-prefixed lookups (kept minimum).
+- [x] 🟩 **Step 1: Add `is_admin` column — schema v20** — the privilege boundary the whole feature rests on.
+  - [x] 🟩 Bump `CURRENT_SCHEMA_VERSION` 19 → 20 in `db/schema.py`.
+  - [x] 🟩 Add `is_admin INTEGER NOT NULL DEFAULT 0` to the `auth_users` CREATE TABLE block (fresh-init path).
+  - [x] 🟩 Add the `v19 → v20` migration block (`_V20_MIGRATION_COLUMNS` + ALTER, idempotent; same BEGIN IMMEDIATE discipline as v15/16/17).
+  - [x] 🟩 Add `is_admin: bool = False` to `AuthUser` + a shared `_row_to_auth_user` helper used by both `fetch_auth_user`/`list_auth_users`.
+  - [x] 🟩 Add `set_auth_user_admin(...)` **and** `count_admins(...)` (the latter feeds the last-admin guard) to `db/repository.py`.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_db_schema_v20.py -v` → 5 passed. ✅
+  - _Note:_ added `count_admins` (not in the original step) because the last-admin guard in Step 4/CLI needs it; the row-mapping helper reads `is_admin` defensively so a pre-migration read degrades to non-admin.
 
-### Phase 2: Registries + bootstrap
+- [x] 🟩 **Step 2: CLI can mint an admin (bootstrap escape hatch)** — so admin #1 exists before any UI.
+  - [x] 🟩 Added `--admin` flag to `auth.manage add-user` (SET-only — never demotes on re-run, mirroring the `disabled` rule).
+  - [x] 🟩 Added `make-admin <email>` / `revoke-admin <email>` subcommands; `revoke-admin` carries the last-admin guard.
+  - [x] 🟩 Added `ROLE` column to `list-users`.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_manage_users.py -q` → 13 passed. ✅
 
-- [x] 🟩 **Step 2: Prose notes parser** — `concept_model/notes_parser.py::parse_notes_template(path, sheet)` walks col-A via `read_template`, classifies `ABSTRACT`/`LEAF` from `is_abstract`, mints template-scoped `node_uuid`, returns `(template_id, nodes)`. **DONE.**
-  - *Note:* covered by `tests/test_notes_registry_import.py` (no separate `test_notes_parser.py` — the parser is exercised end-to-end through the importer tests, kept minimum).
+### Phase 2: Backend routes
 
-- [x] 🟩 **Step 3: Prose notes importer + bootstrap function** — **DONE.**
-  - [x] 🟩 `concept_model/notes_importer.py::import_notes_template` — DELETE-then-INSERT per `template_id` (sweeps stale rows; idempotent; mirrors `import_company_targets`).
-  - [x] 🟩 `import_all_notes_templates(db_path)` in `bootstrap.py` — iterates `NOTES_REGISTRY` × `{mfrs,mpers}` × `{company,group}`, routing prose→`notes_nodes`, numeric→`concept_model`.
-  - **Verify:** `./venv/bin/python -m pytest tests/test_notes_registry_import.py -v` → **5 passed** (20 templates: 12 prose, 8 numeric; template-scoped ids; idempotent).
+- [x] 🟩 **Step 3: Surface `is_admin` in `/api/auth/me`** — the frontend needs to know whether to render the Users tab.
+  - [x] 🟩 `me()` now does a follow-up `fetch_auth_user` for the role (left `resolve_session`'s widely-used signature unchanged). Fail-closed to non-admin on a missing row.
+  - [x] 🟩 `_DEV_USER` carries `is_admin: True`.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_auth_me_reports_admin.py -q` → 3 passed. ✅
 
-- [x] 🟩 **Step 4: Numeric notes into `concept_model`** — **DONE** (landed in the same `import_all_notes_templates`; numeric entries reuse `_import_one` → `parse_template` + `import_template` + `import_*_targets`).
-  - *Found:* numeric notes parse cleanly with no `UnknownFormulaShape`; 8 templates, 666 `concept_targets`. No special-casing needed.
-  - **Verify:** `tests/test_notes_registry_import.py::test_numeric_lands_in_concept_model` green.
+- [x] 🟩 **Step 4: Admin-gated user-management routes** — the operations, enforced server-side.
+  - [x] 🟩 `_require_admin(conn, request)` returns the deny-response or None; dev-bypass counts as admin.
+  - [x] 🟩 `GET /api/admin/users` (no hash; `_user_public` exposes `has_password` instead), `POST /api/admin/users`, `/disable`, `/enable`, `/reset-password`, `/admin` (promote/demote).
+  - [x] 🟩 **Last-admin guard** (`_is_last_enabled_admin`) on disable + demote → **409** with a clear message.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_admin_routes.py -q` → 13 passed. ✅
+  - _Note:_ shared `MIN_PASSWORD_LEN` moved to `auth/passwords.py` (canonical home; CLI now aliases it). 422 uses the numeric code to match the codebase convention (reviewer_routes) and avoid Starlette's deprecated `HTTP_422_*` alias.
 
-- [x] 🟩 **Step 5: Wire both imports into startup** — `server._lifespan` now calls `import_all_notes_templates` right after `import_all_face_templates`, inside the same `_CANONICAL_BOOTSTRAP_OK` try/except. **DONE.**
-  - **Verify:** TestClient boot against a temp DB → `notes_nodes`=688 rows, numeric-notes concept templates=8, `_CANONICAL_BOOTSTRAP_OK=True`; `tests/test_server_run_lifecycle.py` → 16 passed.
+- [x] 🟩 **Step 5: Self-service change-my-own-password** — the only genuinely new logic.
+  - [x] 🟩 `POST /api/auth/change-password` — re-auths with `verify_password(current)` (+ `dummy_verify` on miss for flat timing), rotates on success. 401 bad-current, 422 short-new, 400 in dev-mode (no real account).
+  - **Verify:** `./venv/bin/python -m pytest tests/test_change_password.py -q` → 4 passed. ✅
 
-### Phase 3: Endpoint projection (merge both tracks)
+### Phase 3: Frontend — consolidated settings page
 
-- [x] 🟩 **Step 6: Prose projection** — `GET /notes_cells` ([api/notes.py](../api/notes.py)) now returns `notes_nodes` (LEAF) overlaid with `notes_cells` on `(sheet,row)`, blanks included, `kind:"prose"`, `node_uuid` + `xbrl_concept_id`. **DONE.**
-  - *Deviation (safe):* the overlay is a **union** — a filled cell whose row isn't a registry LEAF (off-template/legacy) is still surfaced, and if `notes_nodes` is unpopulated the endpoint degrades to the legacy filled-only view. No data is ever hidden.
+**Scope decision (2026-06-19):** user chose the lowest-risk option — Models &
+Providers + Run defaults stay together as ONE **General** tab (they share a single
+Save + one `/api/settings` POST; splitting them would rewrite tested code for no
+user gain). Tabs are therefore **General · Account · Users**. The existing
+`SettingsModal` body is extracted into a reusable `GeneralSettingsForm` and the
+modal becomes a thin wrapper so its pinning tests (incl. exact-RGB) stay green.
 
-- [x] 🟩 **Step 7: Numeric projection** — numeric sheets return `concept_nodes` (LEAF) for the run's notes template_ids overlaid with `run_concept_facts`, shaped per level (Company cy/py; Group group_cy/py + company_cy/py), `kind:"numeric"`. **DONE.**
-  - **Verify (6+7):** `tests/test_server_notes_cells_api.py` (13) + `tests/test_notes_projection.py` (4) green — blank prose + numeric rows in template order; targeted-sheets only.
+- [x] 🟩 **Step 6: Extract `GeneralSettingsForm` + keep `SettingsModal` as a thin wrapper** — reuse the tested form, un-modal-ized.
+  - [x] 🟩 New `web/src/components/GeneralSettingsForm.tsx` = the modal's body, no overlay, loads on mount.
+  - [x] 🟩 `SettingsModal.tsx` is now a thin overlay wrapper around it.
+  - **Verify:** `SettingsModal.test.tsx` → 17 passed unchanged. ✅
 
-### Phase 4: Capture + editable blanks
+- [x] 🟩 **Step 7: `SettingsPage` shell + routing + gear** — the destination.
+  - [x] 🟩 `web/src/pages/SettingsPage.tsx` with a WAI-ARIA tablist (roving tabindex): General · Account · Users.
+  - [x] 🟩 `"settings"` added to `AppView` + `parseRouteFromPath('/settings')` + URL-sync; gear dispatches `SET_VIEW settings`; render branch added.
+  - [x] 🟩 Users tab gated on `user?.is_admin`; tab content mounts only when active.
+  - **Verify:** `SettingsPage.test.tsx` → 5 passed; `App.test.tsx` + `AppRouting.test.tsx` → 30 passed. ✅
 
-- [x] 🟩 **Step 8: Prose PATCH → upsert** — `PATCH /notes_cells/{sheet}/{row}` inserts when absent using the `notes_nodes` label + template-scoped `node_uuid`; evidence stays read-only; cap/forbid preserved. **DONE.**
-  - *Deviation:* unknown row now returns **400** (was 404) — "can't invent rows"; numeric sheets 400 with "use the facts API". Pinned in `test_server_notes_cells_api.py`.
+- [x] 🟩 **Step 8: Account tab + Users tab UI + api helpers** — the new surfaces.
+  - [x] 🟩 `AccountTab.tsx` (change-password) + `UsersTab.tsx` (table + actions + add form + inline reset).
+  - [x] 🟩 `api.ts`: `changePassword` + 5 admin helpers; `AuthMe.is_admin` + `AdminUser` types.
+  - **Verify:** `AccountTab.test.tsx` (4) + `UsersTab.test.tsx` (6) pass. Full suite: **717 passed**, `tsc --noEmit` clean. ✅
+  - _Note (deviation):_ per the 2026-06-19 scope decision, Models & Providers + Run defaults stayed as one **General** tab (3 tabs, not 4). The `SettingsModal` file was kept (as a thin wrapper) rather than deleted, so its pinning tests stay green with zero changes — lower risk than the plan's "delete + migrate tests".
 
-- [x] 🟩 **Step 9: Numeric LIVE capture** — numeric note values project into `run_concept_facts`. **DONE.**
-  - *Deviation (cleaner realization of the decision):* the writer ([notes/writer.py](../notes/writer.py)) now returns a `numeric_cells` manifest (shared `_numeric_write_cols` map), the `write_notes` tool accumulates it on `NotesDeps`, and the **coordinator** projects it via `cell_resolver.project_writes` in the same persist block that handles prose — keeping `run_id`/`db_path` in the coordinator (which already has them) instead of threading the DB into the writer. Same per-template, during-run ("live") timing; same Phase-B machinery (gotcha #21). Evidence flows through `project_writes` → `apply_fact` `source`/`evidence` (decision §9.6). Atomic save unchanged (gotcha #22).
-  - **Verify:** `tests/test_notes_projection.py::test_writer_emits_numeric_cells` + projection tests green.
+### Phase 4: Polish + cross-file sync
 
-- [x] 🟩 **Step 10: Filter numeric notes from Values tab** — `/concepts` template scoping now excludes `template_id LIKE '%-notes-%'` (decision §9.3). **DONE.**
-  - **Verify:** `tests/test_notes_projection.py::test_values_tab_excludes_numeric_notes` green; full cross-check/eval suites unaffected (2351 passed).
-
-### Phase 5: Frontend — one tab, two editors
-
-- [x] 🟩 **Step 11: Data layer + types** — `web/src/lib/notesCells.ts` extended with `kind`, `node_uuid`, `xbrl_concept_id`, `concept_uuid`, `values`; `NUMERIC_VALUE_COLUMNS` map + `patchNotesFact` helper. **DONE.** `npx tsc --noEmit` clean.
-
-- [x] 🟩 **Step 12: Render all rows, two editor types** — `NotesReviewTab` branches by `cell.kind`: **prose** → existing TipTap `CellRow` (blank rows render an empty editable editor, upsert-PATCH); **numeric** → new `NumericCellRow` with per-column value inputs saving via `patchNotesFact` (facts API). Inline styles + theme tokens only (gotcha #7). **DONE.**
-  - *Verification note:* validated via vitest (component tests), not the browser preview — driving a run's Notes tab with seeded numeric facts isn't practical to stand up in a preview, and the new tests exercise both editors + the save endpoints directly.
-  - **Verify:** `cd web && npx vitest run` → **697 passed** (incl. 3 new NotesReviewTab cases: blank prose renders, numeric inputs seed from facts, numeric edit PATCHes the facts endpoint).
-
-### Phase 6: (Deferred — out of scope) Real XBRL concept-ID + filing hook
-- [ ] 🟥 Generator emits SSM concept id per row → importers populate `xbrl_concept_id`. Tracked in design doc §8; the reserved column makes it additive. **Do not implement in this plan.**
+- [x] 🟩 **Step 9: Docs + invariants sync** — keep the context pack honest.
+  - [x] 🟩 Updated CLAUDE.md gotcha #11 (version → 20; v18→v19 + v19→v20 steps) and gotcha #24 (admin role + `/api/admin/*` + change-password + `/settings` page).
+  - [x] 🟩 Updated the `auth_layer_status` memory file.
+  - [x] 🟩 `docs/SYNC-MATRIX.md` does **not exist** in the repo (the CLAUDE.md pointer is stale) — nothing to update.
+  - **Verify:** backend `-k "auth or admin or schema or password or manage or middleware"` → 189 passed; `cd web && npx vitest run` → 717 passed; `tsc --noEmit` clean; browser-verified the `/settings` page end-to-end (General + Users tabs against the live dev backend, no console errors). ✅
 
 ---
 
-## Peer-review fixes (2026-06-17)
-
-Two valid findings from a second-team-lead review, both fixed:
-
-- 🟩 **HIGH — numeric-note edits omitted from the download.** `PATCH /facts`
-  stored numeric-note edits in `run_concept_facts`, but the download rebuilt
-  numeric notes from the stale on-disk `NOTES_*_filled.xlsx` (only prose
-  `notes_cells` were overlaid). **Fix:** new
-  `notes.persistence.overlay_numeric_facts_into_workbook` — the numeric
-  counterpart of the prose overlay — runs in the download endpoint
-  ([api/files.py](../api/files.py)), writing each numeric-note fact onto its
-  `concept_targets` cell (formula cells left live). Chosen over the reviewer's
-  re-export suggestion because it also covers notes-only runs (the re-export is
-  gated on a succeeded face statement) and preserves agent values where a
-  projection gap exists. Pinned by `tests/test_notes_projection.py`
-  (`test_numeric_facts_overlay_writes_edited_value`, `…_noop_without_facts`).
-- 🟩 **MEDIUM — prose re-edit downgraded `concept_uuid`.** The PATCH update path
-  passes `concept_uuid=None`, and `upsert_notes_cell` re-minted the legacy
-  `(sheet,row,label)` uuid on every update — so a blank registry row's second
-  edit silently replaced its template-scoped `node_uuid`. **Fix:**
-  `upsert_notes_cell` ([db/repository.py](../db/repository.py)) now preserves the
-  existing row's `concept_uuid` on update (mints only when neither caller nor row
-  has one). Pinned by
-  `test_server_notes_cells_api.py::test_patch_blank_row_preserves_template_scoped_uuid`.
-
 ## Rollback Plan
+
 If something goes badly wrong:
-- **Schema:** the v19 step only *adds* `notes_nodes` (no data migration of existing
-  tables). To revert code, `git revert` the change; the orphan table is inert and
-  harmless. Do **not** hand-edit `CURRENT_SCHEMA_VERSION` downward on a live DB.
-- **Backend (Phases 2–4):** registries are inert until the endpoint reads them, so
-  revert the endpoint change (Phase 3) first — the UI falls back to the prior
-  filled-only response. Numeric live-capture (Step 9) is additive to extraction;
-  reverting it stops new facts being written but leaves the xlsx write intact.
-- **Frontend (Phase 5):** revert to the prior `NotesReviewTab`; it tolerates the
-  old response shape. If response shape already changed, ship Phase 3 + Phase 5
-  together or guard the component to accept both.
-- **State to check on rollback:** `notes_nodes` row counts, `run_concept_facts`
-  rows on sheets 13/14, and that `/api/runs/{id}/concepts` no longer 500s.
+
+- **Schema:** the v20 migration is purely additive (one defaulted column) — it
+  never drops or rewrites data. To revert code, restore `CURRENT_SCHEMA_VERSION = 19`
+  and remove the migration block; an already-migrated DB keeps the unused
+  `is_admin` column harmlessly (older code never reads it). No data migration to undo.
+- **Routes/UI:** all new routes are additive; revert the `app.include_router`
+  additions and the `/settings` route to fall back to the existing settings modal.
+  The CLI (`auth.manage`) remains a working fallback for all user management
+  throughout — nothing about it is removed.
+- **State to check on rollback:** verify at least one enabled admin still exists
+  via `./venv/bin/python -m auth.manage list-users`, so no one is locked out. If
+  the last-admin guard ever misfired, re-mint with `make-admin <email>`.

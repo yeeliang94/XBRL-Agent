@@ -89,6 +89,11 @@ export interface AppState {
   // to render a "Saved partial workbook" banner alongside the cancel
   // error so the user knows their work was preserved.
   partialMerge: PartialMergeData | null;
+  // Run-level scout-quality warnings accumulated from the ``scout_warnings``
+  // (pre-flight completeness probe) and ``scale_conflict`` (scale-unit
+  // reconciliation) SSE events. Both are advisory and carry no agent_id, so
+  // they feed a single banner rather than any agent tab. Empty on a clean run.
+  scoutWarnings: string[];
   // PLAN-stop-and-validation-visibility Phase 5: live cross-check
   // progress per pass. The Validator tab uses this to render rows as
   // they arrive (with a spinner for not-yet-reported rows) instead of
@@ -112,7 +117,13 @@ export interface ToastState {
   tone: "success" | "error";
 }
 
-export type AppView = "extract" | "history" | "concepts" | "benchmarks";
+export type AppView =
+  | "extract"
+  | "history"
+  | "concepts"
+  | "benchmarks"
+  | "settings"
+  | "doc-convert";
 
 export type AppAction =
   | { type: "UPLOADED"; payload: { sessionId: string; filename: string; runId?: number | null } }
@@ -154,6 +165,7 @@ export const initialState: AppState = {
   sessionRunId: null,
   toast: null,
   partialMerge: null,
+  scoutWarnings: [],
   crossCheckProgress: {
     phase: null,
     total: 0,
@@ -211,6 +223,16 @@ export function parseRouteFromPath(
       selectedRunId: m ? Number(m[1]) : null,
       currentRunId: null,
     };
+  }
+  if (pathname.startsWith("/settings")) {
+    // The consolidated settings page (model/proxy + account + admin users).
+    // No entity id — it's a singleton surface.
+    return { view: "settings", selectedRunId: null, currentRunId: null };
+  }
+  if (pathname.startsWith("/readable-doc")) {
+    // Scanned-PDF → readable-document utility — a singleton surface,
+    // independent of extraction (docs/PLAN-scanned-pdf-to-doc.md).
+    return { view: "doc-convert", selectedRunId: null, currentRunId: null };
   }
   if (pathname.startsWith("/run")) {
     const m = RUN_RE.exec(pathname);
@@ -747,6 +769,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         // user doesn't see "Saved partial workbook" lingering across
         // unrelated runs.
         partialMerge: null,
+        // Scout warnings are per-run; clear them so a clean run doesn't
+        // inherit the previous run's warnings.
+        scoutWarnings: [],
         // Cross-check progress is per-run; start fresh.
         crossCheckProgress: {
           phase: null,
@@ -890,6 +915,27 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           // one and that's what owns the running→idle transition.
           updates.partialMerge = event.data as PartialMergeData;
           break;
+
+        case "scout_warnings": {
+          // Pre-flight completeness probe (run-level, no agent_id — so
+          // handlePerAgentEvent above already skipped it, no tab created).
+          // Append to the run's warnings banner list.
+          const w = event.data as { warnings?: string[] };
+          if (Array.isArray(w.warnings) && w.warnings.length > 0) {
+            updates.scoutWarnings = [...state.scoutWarnings, ...w.warnings];
+          }
+          break;
+        }
+
+        case "scale_conflict": {
+          // Scale-unit reconciliation conflict (run-level, no agent_id).
+          // Surfaces a single message into the same warnings banner.
+          const c = event.data as { message?: string };
+          if (typeof c.message === "string" && c.message.length > 0) {
+            updates.scoutWarnings = [...state.scoutWarnings, c.message];
+          }
+          break;
+        }
 
         case "cross_check_start":
           // Phase 5: a new cross-check pass starts. Reset the working
