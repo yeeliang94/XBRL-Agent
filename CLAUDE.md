@@ -589,7 +589,12 @@ Key invariants:
   matrix-shaped `socie.md`. Use this tier (rather than an overlay
   suffix) whenever an entire statement prompt needs to differ by
   filing standard; the overlay mechanism remains for level-level
-  differences (e.g. `_group_overlay.md`).
+  differences (e.g. `_group_overlay.md`). A small MPERS-only *addendum*
+  (not a full statement rewrite) may instead be code-injected in
+  `render_prompt` gated on `std_key == "mpers"` — e.g. the MPERS SOPL
+  revenue-bucket note (`_MPERS_SOPL_REVENUE_NOTE`) appended only on MPERS
+  SOPL so `sopl.md` stays coarse and its pinning test is unaffected. Pinned
+  by `tests/test_extraction_hardening_prompts.py`.
 - **SOCIE / SoRE dividend sign (2026-04-25):** entered as POSITIVE
   magnitudes because every SOCIE/SoRE template's `*Total increase
   (decrease) in equity` formula subtracts the row. Pinned to live

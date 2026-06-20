@@ -26,6 +26,13 @@ sub-notes can be grouped with their parent (Note 5 with its 5.1, 5.2 in one
 cell). What is forbidden is the same note's content appearing on two
 different sheets — not the same note feeding multiple rows on one sheet.
 
+**The single exception — share capital.** The share-capital /
+issued-and-paid-up-capital disclosure is intentionally reproduced on BOTH
+the Issued Capital sheet AND the List of Notes sheet, with the SAME prose.
+This is the ONLY note allowed to appear on two sheets — do not suppress
+either copy and do not treat it as a duplicate to be removed. Every other
+note still obeys the exactly-one-sheet rule above.
+
 === NOTE HIERARCHY AND GRANULARITY ===
 
 Use the PDF's note hierarchy like an accountant, not like a text splitter:
@@ -54,6 +61,11 @@ Use the PDF's note hierarchy like an accountant, not like a text splitter:
   impaired, aged, reconciled, or analysed is support for that parent note.
   Keep it with the parent disclosure unless the PDF gives it its own
   numbered heading and the template has a specific row for that heading.
+  For example, a "Depreciation" or "Useful lives" sub-heading sitting under
+  a "Property, plant and equipment" policy describes HOW PPE is measured —
+  keep it INSIDE the PPE policy cell; do NOT move it to a separate
+  depreciation row even if one exists. Break such a sub-aspect out only when
+  the PDF itself presents it as a distinct, separately-numbered policy.
 - If one note genuinely contains unrelated peer topics, emit separate
   payloads and give each payload only the lines that belong to that row.
 
@@ -150,6 +162,12 @@ download flattens the HTML back to plain text automatically.
 - **Tables:** `<table>` with one `<tr>` per row. Use `<th>` for header
   cells and `<td>` for body cells. Tables are allowed and encouraged
   for movement schedules, maturity analyses, and reconciliations.
+  **Reproduce the source table's row structure faithfully — one source row
+  is one `<tr>`.** When the AFS prints the currency caption (e.g. "RM'000"
+  or "RM") on its OWN line above the year columns, render it as its own
+  header `<tr>`, separate from the `<tr>` that carries the year numbers. Do
+  NOT collapse the currency label and the year into a single cell or merge
+  them into one row.
 - **Headings:** `<h3>` only (no `<h1>`/`<h2>` — the row label is the
   section heading; `<h3>` is for sub-sections inside a long cell).
 - Keep the total *rendered* text under 30,000 characters per cell
@@ -171,6 +189,11 @@ Short examples:
 - Bullet list: `<ul><li>Class A</li><li>Class B</li></ul>`
 - Table:
   `<table><tr><th>Item</th><th>2024</th><th>2023</th></tr>`
+  `<tr><td>Revenue</td><td>10,000</td><td>9,500</td></tr></table>`
+- Table where the AFS prints a separate currency-caption row above the
+  years (reproduce it as its own `<tr>`, do not merge currency and year):
+  `<table><tr><th></th><th>RM'000</th><th>RM'000</th></tr>`
+  `<tr><th>Item</th><th>2024</th><th>2023</th></tr>`
   `<tr><td>Revenue</td><td>10,000</td><td>9,500</td></tr></table>`
 
 Worked-example payloads showing the heading fields:
@@ -245,4 +268,10 @@ content clearly continues.
   necessary for readability.
 - Do NOT fabricate content. If a template row has no matching PDF
   disclosure, omit the payload for that row.
+- **Reproduce the AFS wording exactly — invent nothing.** Use the labels,
+  captions, and row headings exactly as they appear in the PDF. Do NOT add
+  a "Total", "Subtotal", "Sub-total", or summary row to a reproduced table
+  when the AFS does not show one, and do NOT rename, expand, or "tidy" a
+  caption into wording the AFS never used. If the source table has no total
+  line, your reproduced table has no total line.
 - Do NOT cross-statement: only disclosures in the PDF notes section count.
