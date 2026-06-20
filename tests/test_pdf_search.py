@@ -170,6 +170,48 @@ def test_json_wrapper_never_raises_on_bad_path(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Fix B (2026-06-20): scanned-PDF advisory steers agents off search_pdf_text
+# --------------------------------------------------------------------------
+
+def test_pdf_has_text_layer_true_for_text_pdf(tmp_path):
+    from tools.pdf_search import pdf_has_text_layer
+    assert pdf_has_text_layer(_text_pdf(tmp_path, ["Revenue 100"])) is True
+
+
+def test_pdf_has_text_layer_false_for_scanned_pdf(tmp_path):
+    from tools.pdf_search import pdf_has_text_layer
+    assert pdf_has_text_layer(_scanned_pdf(tmp_path)) is False
+
+
+def test_pdf_has_text_layer_true_for_hybrid_pdf(tmp_path):
+    # Hybrid (image cover + text notes) must NOT be treated as scanned —
+    # search_pdf_text is still useful on the searchable pages.
+    from tools.pdf_search import pdf_has_text_layer
+    doc = fitz.open()
+    doc.new_page()  # image-only front matter
+    p2 = doc.new_page()
+    p2.insert_text((72, 100), "Employee benefits 1,234", fontsize=11)
+    path = tmp_path / "hybrid.pdf"
+    doc.save(str(path))
+    doc.close()
+    assert pdf_has_text_layer(str(path)) is True
+
+
+def test_pdf_has_text_layer_true_on_unreadable_pdf(tmp_path):
+    # A probe failure must assume text (don't wrongly suppress the search tool).
+    from tools.pdf_search import pdf_has_text_layer
+    assert pdf_has_text_layer(str(tmp_path / "nope.pdf")) is True
+
+
+def test_scanned_advisory_only_for_scanned_pdf(tmp_path):
+    from tools.pdf_search import scanned_pdf_advisory
+    assert scanned_pdf_advisory(None) == ""
+    assert scanned_pdf_advisory(_text_pdf(tmp_path, ["Revenue 100"])) == ""
+    adv = scanned_pdf_advisory(_scanned_pdf(tmp_path))
+    assert "do NOT call it" in adv and "search_pdf_text" in adv
+
+
+# --------------------------------------------------------------------------
 # Tool registration on all three agents
 # --------------------------------------------------------------------------
 
@@ -206,6 +248,56 @@ def test_notes_agent_exposes_search_pdf_text(tmp_path):
         output_dir=str(tmp_path),
     )
     assert "search_pdf_text" in _tool_names(agent)
+
+
+def _system_prompt_text(agent) -> str:
+    return "\n".join(getattr(agent, "_system_prompts", ()) or ())
+
+
+def test_notes_agent_gets_scanned_advisory_on_scanned_pdf(tmp_path):
+    # Notes agents expose search_pdf_text and fan out to many sub-agents, so
+    # the scanned advisory must reach them too (peer-review Finding 2).
+    from pydantic_ai.models.test import TestModel
+    from notes_types import NotesTemplateType
+    from notes.agent import create_notes_agent
+
+    agent, _ = create_notes_agent(
+        template_type=NotesTemplateType.CORP_INFO,
+        pdf_path=_scanned_pdf(tmp_path),
+        inventory=[], filing_level="company", model=TestModel(),
+        output_dir=str(tmp_path),
+    )
+    assert "SCANNED DOCUMENT — TEXT SEARCH UNAVAILABLE" in _system_prompt_text(agent)
+
+
+def test_notes_agent_no_advisory_on_text_pdf(tmp_path):
+    from pydantic_ai.models.test import TestModel
+    from notes_types import NotesTemplateType
+    from notes.agent import create_notes_agent
+
+    agent, _ = create_notes_agent(
+        template_type=NotesTemplateType.CORP_INFO,
+        pdf_path=_text_pdf(tmp_path, ["Note 1 Corporate information"]),
+        inventory=[], filing_level="company", model=TestModel(),
+        output_dir=str(tmp_path),
+    )
+    assert "SCANNED DOCUMENT" not in _system_prompt_text(agent)
+
+
+def test_extraction_agent_gets_scanned_advisory_on_scanned_pdf(tmp_path):
+    from pydantic_ai.models.test import TestModel
+    from statement_types import StatementType
+    from extraction.agent import create_extraction_agent
+
+    tmpl = str(tmp_path / "t.xlsx")
+    import openpyxl
+    openpyxl.Workbook().save(tmpl)
+    agent, _ = create_extraction_agent(
+        statement_type=StatementType.SOFP, variant="CuNonCu",
+        pdf_path=_scanned_pdf(tmp_path), template_path=tmpl,
+        model=TestModel(), output_dir=str(tmp_path),
+    )
+    assert "SCANNED DOCUMENT — TEXT SEARCH UNAVAILABLE" in _system_prompt_text(agent)
 
 
 def test_reviewer_agent_exposes_search_pdf_text(tmp_path):

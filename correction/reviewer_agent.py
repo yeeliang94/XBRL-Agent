@@ -1116,6 +1116,12 @@ def create_reviewer_agent(
         conflicts=conflicts, guidance=guidance,
         filing_level=filing_level, filing_standard=filing_standard,
     )
+    # Fix B (2026-06-20): steer the reviewer off search_pdf_text on a fully
+    # scanned PDF (no text layer) — it can only return a 'scanned' signal.
+    # No-op on text / hybrid PDFs; the tool stays registered (reviewer.md
+    # names it).
+    from tools.pdf_search import scanned_pdf_advisory
+    system_prompt += scanned_pdf_advisory(deps.pdf_path)
     # Temperature pinned to 1.0 — Gemini 3 through the enterprise proxy
     # requires it (mirrors extraction + notes agents). Phase 2: provider-correct
     # prompt caching of the static reviewer.md body + tool defs.

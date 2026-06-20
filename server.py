@@ -3752,6 +3752,22 @@ async def run_multi_agent_stream(
         # start streaming.
         _emit_stage("extracting")
 
+        # Warm the PDF text-layer cache OFF-THREAD before any agent factory
+        # runs. create_extraction_agent / create_notes_agent / the reviewer
+        # factory each probe `pdf_has_text_layer` (the Fix-B scanned advisory)
+        # synchronously on construction, which parses the whole text layer the
+        # first time. Doing that parse here via to_thread populates the shared
+        # memoised cache (tools.pdf_search._load_page_texts), so every in-factory
+        # probe is an O(1) cache hit and never blocks the event loop / SSE
+        # delivery on a large scanned PDF. Best-effort — a probe failure here
+        # must never block the run (the factory probe degrades to "assume text").
+        try:
+            from tools.pdf_search import pdf_has_text_layer as _warm_text_layer
+            await asyncio.to_thread(
+                _warm_text_layer, str(session_dir / "uploaded.pdf"))
+        except Exception:  # noqa: BLE001 — cache warm is an optimization only
+            logger.debug("PDF text-layer cache warm skipped", exc_info=True)
+
         # Launch coordinator as a background task so we can drain events while agents run.
         # push_sentinel=False: we're multiplexing face + notes into one queue;
         # the orchestrator below pushes a single sentinel after BOTH complete.
@@ -4423,14 +4439,59 @@ async def run_multi_agent_stream(
                         run_id=run_id,
                         pdf_path=str(session_dir / "uploaded.pdf"),
                     ))
-                async for event in _drain_while_running(correction_task):
-                    persist_event(event)
-                    if client_connected:
+                # Register the reviewer task so Stop-All (POST /api/abort →
+                # task_registry.cancel_all) can actually cancel it. The reviewer
+                # is the LONGEST post-extraction stage (root-cause investigation
+                # down the face→sub→PDF chain) and the one users most often need
+                # to stop — but only the extraction/notes COORDINATORS registered
+                # their tasks, so cancel_all found nothing here, 404'd, and the
+                # reviewer ran to completion regardless (the "Stop All doesn't
+                # stop the reviewer" bug). Unregistered on every exit below.
+                import task_registry
+                task_registry.register(
+                    session_id, CORRECTION_AGENT_ID, correction_task)
+                try:
+                    async for event in _drain_while_running(correction_task):
+                        persist_event(event)
+                        if client_connected:
+                            try:
+                                yield event
+                            except (asyncio.CancelledError, GeneratorExit):
+                                client_connected = False
+                    correction_outcome = await correction_task
+                except asyncio.CancelledError:
+                    # User hit Stop All during the reviewer. Mirror the proven
+                    # coordinator-cancel path (return cleanly, never re-raise):
+                    # the merged workbook is already durable (mark_run_merged ran
+                    # at merge time) and the reviewer snapshotted facts before
+                    # any write (revert-to-original stays available), so the
+                    # run's output survives. Finalize as 'aborted' and stop.
+                    logger.info(
+                        "Reviewer cancelled by user",
+                        extra={"session_id": session_id})
+                    # Finalize the CORRECTION pseudo-agent audit row too — this
+                    # early return skips the normal finish_run_agent block, so
+                    # without this the row stays 'running' under an 'aborted'
+                    # run. Commit explicitly (finish_run_agent doesn't).
+                    if correction_run_agent_id is not None and db_conn is not None:
                         try:
-                            yield event
-                        except (asyncio.CancelledError, GeneratorExit):
-                            client_connected = False
-                correction_outcome = await correction_task
+                            repo.finish_run_agent(
+                                db_conn, correction_run_agent_id,
+                                status="cancelled", error_type="cancelled")
+                            db_conn.commit()
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "Failed to finalize CORRECTION row on cancel",
+                                exc_info=True)
+                    if _safe_mark_finished(db_conn, run_id, "aborted"):
+                        terminal_status = "aborted"
+                    if client_connected:
+                        yield {"event": "error", "data": {
+                            "message": "Run cancelled during review",
+                            "bucket": ERROR_BUCKET_FATAL}}
+                    return
+                finally:
+                    task_registry.unregister(session_id, CORRECTION_AGENT_ID)
                 if correction_outcome.get("writes_performed", 0) > 0:
                     # Canonical mode: the agent edited FACTS, not the xlsx.
                     # Re-export each statement from the corrected facts and
@@ -4712,14 +4773,50 @@ async def run_multi_agent_stream(
                     event_queue=event_queue,
                     inventory_note_nums=_inv_nums,
                 ))
-                async for event in _drain_while_running(validator_task):
-                    persist_event(event)
-                    if client_connected:
+                # Register so Stop-All reaches the notes-validator too (same
+                # gap the reviewer had — see the reviewer block above).
+                import task_registry
+                task_registry.register(
+                    session_id, NOTES_VALIDATOR_AGENT_ID, validator_task)
+                try:
+                    async for event in _drain_while_running(validator_task):
+                        persist_event(event)
+                        if client_connected:
+                            try:
+                                yield event
+                            except (asyncio.CancelledError, GeneratorExit):
+                                client_connected = False
+                    validator_outcome = await validator_task
+                except asyncio.CancelledError:
+                    # User hit Stop All during the notes validator. The merged
+                    # workbook is already durable; finalize as 'aborted' and
+                    # stop (mirrors the reviewer-cancel path above).
+                    logger.info(
+                        "Notes validator cancelled by user",
+                        extra={"session_id": session_id})
+                    # Finalize the NOTES_VALIDATOR pseudo-agent row too (same
+                    # reason as the reviewer handler above — early return skips
+                    # the normal finish_run_agent block).
+                    if validator_run_agent_id is not None and db_conn is not None:
                         try:
-                            yield event
-                        except (asyncio.CancelledError, GeneratorExit):
-                            client_connected = False
-                validator_outcome = await validator_task
+                            repo.finish_run_agent(
+                                db_conn, validator_run_agent_id,
+                                status="cancelled", error_type="cancelled")
+                            db_conn.commit()
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "Failed to finalize NOTES_VALIDATOR row on cancel",
+                                exc_info=True)
+                    if _safe_mark_finished(db_conn, run_id, "aborted"):
+                        terminal_status = "aborted"
+                    if client_connected:
+                        yield {"event": "error", "data": {
+                            "message": "Run cancelled during notes validation",
+                            "bucket": ERROR_BUCKET_FATAL}}
+                    return
+                finally:
+                    task_registry.unregister(
+                        session_id, NOTES_VALIDATOR_AGENT_ID)
 
         # RUN-REVIEW peer-review #1 (HIGH): recalc happens HERE — after
         # correction (if any) has had its chance to edit the merged

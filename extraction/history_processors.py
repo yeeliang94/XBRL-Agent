@@ -158,9 +158,7 @@ def _last_write_message_index(messages: List[ModelMessage]) -> int | None:
     return last
 
 
-def strip_stale_images(
-    messages: List[ModelMessage], *, aggressive: bool = False
-) -> List[ModelMessage]:
+def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
     """Trim re-billed page images that the agent no longer needs to *see*.
 
     The rule is stage-aware, not a fixed window — this is the fix for the
@@ -170,20 +168,27 @@ def strip_stale_images(
     - **Before the first successful write** (`fill_workbook` / `write_notes`),
       keep *every* image. This is the discovery/extraction phase where the
       agent legitimately needs several pages visible at once to cross-reference
-      them; stripping here is what caused the loop.
+      them; stripping here is what caused the loop. This holds
+      **unconditionally — including under token pressure** (see the
+      scanned-thrash note below).
     - **After a write**, the workbook is the source of truth, so strip images
       from batches that *precede* the most recent write. The most recent image
       batch is always kept so the agent is never fully blinded, and any images
       viewed since the last write (the current fix cycle) are kept too.
 
-    ``aggressive`` (Plan 2 — token-utilization escalation): when the agent has
-    blown past the soft token watermark, even the pre-write discovery phase
-    strips down to the single newest image batch. This deliberately accepts the
-    run_id=126 thrash risk because at that point unbounded image accumulation is
-    the bigger problem — the watermark is set high enough that only a genuinely
-    runaway agent reaches it. Default ``False`` keeps today's stage-aware
-    behaviour exactly, so scout/notes (which register the plain processor) are
-    unaffected.
+    **Why pre-write stripping is never done (scanned-thrash fix, 2026-06-20):**
+    an earlier "Plan 2" escalation stripped pre-write images down to the newest
+    batch once the agent crossed a soft token watermark. On *scanned* PDFs each
+    page image is ~1–2 MB, so a normal extraction crosses the watermark within a
+    handful of `view_pdf_pages` calls — long before it has read enough of the
+    (hard-to-OCR) table to write anything. Stripping there made the agent forget
+    the pages it had just viewed, re-fetch them, cross the watermark again, and
+    loop forever without ever calling `write_facts` (observed: SOFP re-fetched
+    page 10 nine times and produced no output). Carrying the images is strictly
+    better than that thrash-lock; the tokens are reclaimed by post-write
+    trimming the moment the agent commits a fact. Token pressure is still
+    relieved pre-write — but by `compact_old_text_results` (bulky *text*
+    payloads), never by blinding the agent to its own pages.
 
     Stripped `BinaryContent` blobs become a one-line placeholder that preserves
     the `=== Page N ===` markers and actively discourages re-fetching.
@@ -202,24 +207,24 @@ def strip_stale_images(
         return messages
 
     last_write_idx = _last_write_message_index(messages)
-    if last_write_idx is None and not aggressive:
-        # Discovery/extraction phase — no data committed yet. Keep all images
-        # so the agent can hold multiple pages in view (run_id=126 fix).
+    if last_write_idx is None:
+        # Discovery/extraction phase — no data committed yet. Keep ALL images
+        # so the agent can hold multiple pages in view to cross-reference them.
+        # Unconditional, including under token pressure: stripping here is the
+        # run_id=126 / scanned-PDF thrash-lock (see the function docstring).
         return messages
 
     # Protect the single most recent image batch regardless of where it sits.
     newest_image_idx = image_parts[-1][0]
 
-    # The boundary at/after which images are kept. Post-write that's the write
-    # message; in aggressive pre-write mode there is no write, so only the
-    # newest batch survives.
-    pre_write = last_write_idx is None
-    keep_from = last_write_idx if last_write_idx is not None else newest_image_idx
+    # Post-write: the workbook is the source of truth, so strip images from
+    # batches that precede the most recent successful write.
+    keep_from = last_write_idx
 
     out = messages
     for mi, pi, part in image_parts:
-        # Keep: the newest batch, and anything viewed at/after the boundary
-        # (the current fix cycle). Strip only images that predate it.
+        # Keep: the newest batch, and anything viewed at/after the write
+        # boundary (the current fix cycle). Strip only images that predate it.
         if mi >= keep_from or mi == newest_image_idx:
             continue
         content = part.content
@@ -229,20 +234,11 @@ def strip_stale_images(
         for idx, item in enumerate(content):
             if isinstance(item, BinaryContent):
                 page = _nearest_page_number(content, idx)
-                if pre_write:
-                    # Honest wording: nothing is in the workbook yet — we are
-                    # trimming purely to stay under the context budget.
-                    new_content.append(
-                        f"Page {page} was viewed earlier; older page images are "
-                        f"being trimmed to stay under the context budget. "
-                        f"Re-open it only if you still need its values."
-                    )
-                else:
-                    new_content.append(
-                        f"Page {page} was viewed earlier and its data is already "
-                        f"captured in the workbook; do not re-open it just to "
-                        f"refresh context."
-                    )
+                new_content.append(
+                    f"Page {page} was viewed earlier and its data is already "
+                    f"captured in the workbook; do not re-open it just to "
+                    f"refresh context."
+                )
             else:
                 new_content.append(item)
         new_part = dataclasses.replace(part, content=new_content)
@@ -496,8 +492,19 @@ def strip_duplicate_template(messages: List[ModelMessage]) -> List[ModelMessage]
 def strip_stale_images_ctx(
     ctx: RunContext, messages: List[ModelMessage]
 ) -> List[ModelMessage]:
-    """Token-aware `strip_stale_images`: pre-write trimming once over budget."""
-    return strip_stale_images(messages, aggressive=_over_soft_watermark(ctx))
+    """`strip_stale_images` registered with the ctx signature.
+
+    Image trimming no longer escalates with token usage — pre-write images are
+    kept unconditionally (scanned-thrash fix, 2026-06-20) and post-write
+    trimming already runs at every turn — so `ctx` is intentionally unused
+    here. The wrapper is retained (rather than registering the bare
+    `strip_stale_images`) only so pydantic-ai's ctx-detection contract stays
+    symmetric with `compact_old_text_results_ctx`, which DOES still read the
+    watermark. The `RunContext` annotation on the first parameter is load-bearing
+    for that detection (see the module note above and
+    `test_history_processor_escalation.py::test_ctx_wrappers_detected_as_run_context_taking`).
+    """
+    return strip_stale_images(messages)
 
 
 def compact_old_text_results_ctx(
