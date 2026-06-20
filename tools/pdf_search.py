@@ -83,6 +83,50 @@ def _load_page_texts(pdf_path: str) -> tuple[list[str], list[str]]:
     return page_texts, page_lowers
 
 
+def pdf_has_text_layer(pdf_path: str) -> bool:
+    """True if ANY page carries extractable text; False → the PDF is fully
+    scanned (image-only).
+
+    Mirrors :func:`search_pdf_text`'s own scanned determination (``not
+    any(t.strip() ...)``) so the two never disagree, and treats a HYBRID PDF
+    (image cover/TOC + text-layer notes) as text-bearing — the search tool is
+    still useful on its searchable pages there. Memoised through
+    ``_load_page_texts``, so probing this at agent-creation costs at most one
+    text-layer parse per run. An unreadable PDF returns ``True`` (assume text)
+    so a probe failure never wrongly suppresses the search tool.
+    """
+    try:
+        page_texts, _ = _load_page_texts(pdf_path)
+    except Exception:  # noqa: BLE001 — never let a probe failure mislabel the doc
+        return True
+    return any(t.strip() for t in page_texts)
+
+
+_SCANNED_ADVISORY = (
+    "\n\n=== SCANNED DOCUMENT — TEXT SEARCH UNAVAILABLE ===\n"
+    "This PDF has NO text layer (it is scanned). `search_pdf_text` will return "
+    "a 'scanned' signal with zero hits on EVERY call — do NOT call it. Read the "
+    "pages directly with `view_pdf_pages` (page images) and use the scout's "
+    "page hints to navigate."
+)
+
+
+def scanned_pdf_advisory(pdf_path: Optional[str]) -> str:
+    """System-prompt suffix that steers an agent off ``search_pdf_text`` when
+    the source PDF is fully scanned.
+
+    Returns the advisory block when the PDF has no text layer, else ``""`` so
+    text / hybrid PDFs render exactly as before. Self-contained (no scout /
+    infopack plumbing) so the extraction and reviewer factories can append it
+    directly. The search tool stays REGISTERED either way — the prompts
+    reference it by name — this just tells a scanned-doc agent not to waste a
+    turn on it (the tool already returns a graceful 'scanned' signal if called).
+    """
+    if not pdf_path:
+        return ""
+    return "" if pdf_has_text_layer(pdf_path) else _SCANNED_ADVISORY
+
+
 def _snippet_around(text: str, lo: int, hi: int) -> str:
     """A ≤``_SNIPPET_LEN`` snippet centred on ``[lo, hi)``, trimmed to word
     boundaries and collapsed to single spaces so it reads cleanly in the tool

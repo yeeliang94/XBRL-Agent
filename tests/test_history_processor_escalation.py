@@ -90,12 +90,18 @@ def test_below_watermark_keeps_all_prewrite_images(monkeypatch):
     assert _count_images(out) == 3
 
 
-def test_over_watermark_strips_prewrite_to_newest(monkeypatch):
+def test_over_watermark_keeps_all_prewrite_images(monkeypatch):
     monkeypatch.setenv("XBRL_SOFT_COMPACT_TOKENS", "60000")
     msgs = _three_prewrite_batches()
     out = strip_stale_images_ctx(_Ctx(70000), msgs)
-    # Aggressive: only the newest batch survives.
-    assert _count_images(out) == 1
+    # scanned-thrash fix (2026-06-20): pre-write images are NEVER stripped,
+    # even over the watermark. Stripping pages the agent hasn't yet committed
+    # to the workbook makes it re-fetch them and never write (run_id=126 /
+    # scanned-PDF thrash) — a worse failure than the token cost. Aggressive
+    # trimming applies only AFTER the first successful write. Token pressure is
+    # still relieved pre-write via text compaction (see the text-compaction
+    # tests below), never by blinding the agent to its own pages.
+    assert _count_images(out) == 3
 
 
 def test_disabled_watermark_never_escalates(monkeypatch):

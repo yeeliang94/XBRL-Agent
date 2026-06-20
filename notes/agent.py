@@ -1173,6 +1173,13 @@ def create_notes_agent(
         label_catalog=label_catalog,
         scout_context=scout_context,
     )
+    # Fix B (2026-06-20): notes agents expose the same search_pdf_text tool, so
+    # on a fully-scanned PDF they'd waste a turn on a guaranteed-empty search —
+    # and notes fan out to many agents (incl. the Sheet-12 sub-agents), so the
+    # waste compounds. Steer them off it the same way the face/reviewer agents
+    # are. No-op on text / hybrid PDFs; the tool stays registered.
+    from tools.pdf_search import scanned_pdf_advisory
+    system_prompt += scanned_pdf_advisory(pdf_path)
 
     # Pin temperature=1.0 ("Temperature Constraint" in CLAUDE.md). Phase 2:
     # provider-correct prompt caching of the static system prompt + tool defs.

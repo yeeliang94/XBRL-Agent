@@ -671,6 +671,14 @@ def create_extraction_agent(
         scout_context=scout_context,
     )
 
+    # Fix B (2026-06-20): on a fully-scanned PDF, search_pdf_text can only ever
+    # return a 'scanned' signal — calling it burns a turn for nothing (which
+    # matters most on the thrash-prone scanned path). Tell the agent up-front so
+    # it skips the call. Appends only when the PDF has no text layer; text /
+    # hybrid PDFs are unchanged. The tool stays registered (prompts name it).
+    from tools.pdf_search import scanned_pdf_advisory
+    system_prompt += scanned_pdf_advisory(pdf_path)
+
     # Temperature is provider-aware (Phase 9, resolved inside
     # build_model_settings): Gemini stays 1.0 (CLAUDE.md gotcha #5 — Gemini 3
     # through the enterprise proxy requires T=1.0; lower values cause failures
