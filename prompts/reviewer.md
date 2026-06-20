@@ -37,12 +37,15 @@ Don't tunnel on the one cell a check names — the real error is often a *leaf* 
 2. **Cross-statement mismatch** (`[lhs]` ≠ `[rhs]`, e.g. SOPL profit vs SOCIE profit). → Trace both sides, read the PDF, and `apply_fix` the side that disagrees with the disclosure. If the PDF genuinely supports neither cleanly, flag it.
 3. **Misclassification** (the right value is on the wrong row — e.g. an FVTPL asset dumped into "Other assets" when a dedicated row exists). → `mark_not_disclosed` the wrong row + `apply_fix` the right row, both grounded to the same page.
 4. **Missing / wrong leaf** (a total is short or off because a child is blank or misread). → `apply_fix` the leaf with the value you read off the PDF.
+5. **Under-aggregation** (a broad template row should sum several finer PDF components but only one was mapped, so its total is short by a disclosed-but-omitted line — e.g. the PDF splits a category into two columns and only one landed). → Read the note, confirm EACH component on the page, and `apply_fix` the leaf with their SUM. This is a grounded aggregation, not a plug: every addend is independently disclosed. Cite each component in `evidence`, e.g. `"page 30 Note 11: office equipment 807 + office furniture 41,666 = 42,473"`.
 
 A fix is rejected by a deterministic guard (not a suggestion) when:
 
 - **It is ungrounded** — `evidence` is empty. The reviewer never writes a number it can't ground.
 - **It targets an ABSTRACT section header** — never writable (invariant #17); write a leaf inside the section instead.
 - **It plugs a residual into a catch-all row** — `Other …`, `Miscellaneous`, `Administrative expenses` — with an arithmetic-only value. **NEVER plug a balancing residual into a catch-all row to force a balance** (invariant #17). NEVER write a residual you derived only to make a total tick over. Fix the real leaf, or leave the imbalance and flag it. (A genuine PDF-disclosed figure on an "Other …" line is fine — cite the page in `evidence` rather than an `arithmetic:` expression.)
+
+This guard targets PLUGS, not aggregation — do not over-apply it. Summing two or more line items the PDF explicitly discloses into one broader, descriptively-named row that covers them (pattern 5 above) is grounded extraction, NOT a plug: every addend is independently on the page. The plug it forbids is a single number you derived by subtraction (`total − what's already entered`) with no independent source, especially into a vague catch-all. A disclosed component left out of a broad row that semantically includes it is an error to FIX, not a residual to flag — if you can cite every addend's page, `apply_fix` the sum; don't raise `stuck`.
 - **It overrides a COMPUTED total** with a value its children don't sum to and without `children_status="aggregate_only"` (gotcha #21). Fix the leaf below it, or pass `aggregate_only` for a genuinely un-itemised total — see the write-path rule above.
 
 Read every `rejected: …` message and re-investigate — never work around it.

@@ -201,3 +201,55 @@ def test_project_writes_reports_unmapped_cells(db):
     assert proj.projected == 0
     assert proj.has_gaps
     assert len(proj.skipped) == 1
+
+
+def test_non_numeric_value_rejects_one_cell_without_aborting_batch(db):
+    """Run-49 SOCI regression: a text/title row the agent wrote resolves to a
+    concept (it has a render_row), so it's NOT skipped — and facts_api.FactWrite
+    .value is Optional[float], so constructing it raises pydantic ValidationError.
+
+    That error must be isolated to the offending cell: the numeric facts in the
+    same batch still land, and the projection CALL does not raise (which would
+    flip projection_failed -> FATAL and roll back the whole statement, losing the
+    valid profit rows — the exact run-49 failure).
+    """
+    db_path, run_id, co_id, _gr = db
+    from concept_model.cell_resolver import project_writes
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        leaves = conn.execute(
+            "SELECT render_row FROM concept_nodes "
+            "WHERE template_id=? AND render_sheet='SOFP-CuNonCu' AND kind='LEAF' "
+            "ORDER BY render_row LIMIT 2",
+            (co_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    numeric_row, text_row = int(leaves[0][0]), int(leaves[1][0])
+
+    writes = [
+        # A genuine numeric fact (the SOCI profit row equivalent).
+        {"sheet": "SOFP-CuNonCu", "row": numeric_row, "col": 2, "value": 9_078_749.0,
+         "evidence": "p12"},
+        # A text/title row that resolves to a concept but carries prose.
+        {"sheet": "SOFP-CuNonCu", "row": text_row, "col": 2,
+         "value": "Statement of comprehensive income", "evidence": "p12"},
+    ]
+    # Must NOT raise — the whole point of the fix.
+    proj = project_writes(db_path, run_id, co_id, writes, filing_level="company")
+
+    assert proj.projected == 1, "the numeric fact must still land"
+    assert len(proj.rejected) == 1, "the text cell is rejected per-cell"
+    assert "non-numeric" in proj.rejected[0].lower()
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute(
+            "SELECT value FROM run_concept_facts WHERE run_id=? AND period='CY' "
+            "AND entity_scope='Company'",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [r[0] for r in rows] == [9_078_749.0]

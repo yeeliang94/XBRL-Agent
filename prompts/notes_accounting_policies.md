@@ -99,3 +99,15 @@ later turns.)
 - If a policy explicitly says "These policies have been applied
   consistently to all periods…" it belongs at the top of the section,
   not in a specific topic row — skip it.
+- A policy sub-heading that describes how an asset is depreciated,
+  amortised, or impaired (e.g. "Depreciation" under "Property, plant and
+  equipment") stays INSIDE that asset's policy cell — do not split it onto
+  a separate row even if a matching row exists. See the measured/depreciated
+  rule in the base prompt's "NOTE HIERARCHY AND GRANULARITY" section.
+- **Mandatory rows (label begins with `*`).** Some rows on this sheet are
+  marked mandatory with a leading `*` in the label — these disclosures are
+  required. Make a genuine effort to fill every `*` row. If, after reading
+  the policies section, you genuinely cannot find the disclosure for a `*`
+  row, do NOT silently leave it blank: name the `*` row(s) you could not
+  fill and the reason in your final `save_result` summary so the gap is
+  visible for review.

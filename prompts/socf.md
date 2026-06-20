@@ -82,6 +82,19 @@ For **Direct** method (82 rows, 71 data-entry):
 - Net change = Operating + Investing + Financing.
 - Opening + Net change = Closing.
 
+- **Prefer the most specific template row; use the notes to disambiguate.**
+  The SOCF face often prints a coarse line ("Interest paid", "Impairment
+  loss", "Loss on disposal") while a footnote beneath the statement, or the
+  note it cross-references, reveals what the line actually is. When that
+  detail matches a MORE SPECIFIC template row than the generic one, write to
+  the specific row. For example, interest the notes identify as the interest
+  portion of lease liabilities belongs in the lease-interest row, not the
+  generic "Interest paid"; an impairment the notes attribute to a specific
+  asset class belongs in that class's impairment row. If the template has NO
+  specific row for the item, keep it on the generic line — never invent a
+  row or force a wrong one (this is the common case on the leaner templates,
+  where the granular rows simply do not exist).
+
 - Lease payments under MFRS 16: principal → Financing activities, interest → Operating
   or Financing (entity's choice). Check the entity's classification policy.
 

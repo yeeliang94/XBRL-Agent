@@ -74,6 +74,16 @@ def render_prompt(
     # Substitute variant name into the statement prompt
     statement_prompt = statement_prompt.replace("{{VARIANT}}", variant)
 
+    # MPERS-only advisory: the MPERS SOPL Analysis sub-sheet exposes THREE
+    # distinct "other revenue" leaves; the coarse-recording default ("pick the
+    # section's most generic Other leaf") sends every entity to the generic
+    # "Other revenue" row, which is rarely correct. Append a note (MPERS SOPL
+    # only) steering the bucket choice by principal activity. Injected here —
+    # not in sopl.md — so it never renders on MFRS and the "sopl.md is coarse"
+    # pinning test is unaffected.
+    if statement_type == StatementType.SOPL and std_key == "mpers":
+        statement_prompt = statement_prompt + "\n\n" + _MPERS_SOPL_REVENUE_NOTE
+
     # Build navigation section based on page hints
     if page_hints:
         nav = _build_scoped_navigation(page_hints)
@@ -141,6 +151,39 @@ def render_prompt(
             pass
 
     return "\n\n".join(parts)
+
+
+# MPERS SOPL revenue-bucket advisory (injected by render_prompt for SOPL on
+# MPERS filings only). The MPERS SOPL Analysis sub-sheet has three "other
+# revenue" leaves that all roll up into *Total revenue; the generic one is a
+# last resort, and the "*Total ..." rows + fee/commission rows are wrong
+# targets for ordinary trading/service revenue.
+_MPERS_SOPL_REVENUE_NOTE = """=== MPERS REVENUE BUCKET — choosing the 'Other revenue' leaf ===
+
+The Analysis sub-sheet has THREE separate "other revenue" leaves, and they
+all roll up into *Total revenue:
+  - "Other revenue from sale of goods"
+  - "Other revenue from rendering of services"
+  - "Other revenue" (the generic leaf — last resort only)
+
+When you record the coarse Revenue figure into a catch-all leaf, do NOT
+default to the generic "Other revenue" row. It is unlikely to be the right
+bucket. Do NOT use the "Other fee and commission income" rows and never
+write to a "*Total ..." formula row. Instead choose the leaf that matches
+the entity's PRINCIPAL ACTIVITY:
+  - a business that sells goods (trading, manufacturing, property
+    development, food & beverage, oil & gas, etc.) -> "Other revenue from
+    sale of goods"
+  - a business that renders services (consulting, IT, education,
+    healthcare, transport, telecommunications, etc.) -> "Other revenue from
+    rendering of services"
+
+The principal activity is stated in the Corporate Information note (usually
+Note 1) and/or the Directors' Report. If you are unsure which bucket fits,
+run search_pdf_text(["principal activity"]) and read that note before
+writing. Reserve the generic "Other revenue" leaf only for revenue that is
+genuinely neither goods nor services (e.g. a pure investment-holding
+entity)."""
 
 
 def _load_prompt(filename: str) -> str:

@@ -161,6 +161,13 @@ on the face statement, not here — skip the row.
   payload containing all those lines. Do NOT move the lease-interest
   sub-section to a separate lease row unless it is a distinct numbered
   note or a peer disclosure with its own materially different topic.
+- A "Profit/(loss) before tax" note that lists the items charged or
+  credited in arriving at the result (depreciation, auditors' remuneration,
+  directors' emoluments, staff costs, etc.) is ONE disclosure — reproduce
+  the whole table under the single profit-before-tax disclosure row in your
+  catalog (copy its label verbatim). Do NOT scatter its individual line
+  items across separate notes rows; the table stays intact under that one
+  row.
 - A PDF note that genuinely lists multiple unrelated peer topics should
   produce multiple payloads, one per row, with ONLY the relevant lines in
   each. For example, a combined operating-expenses note breaking out

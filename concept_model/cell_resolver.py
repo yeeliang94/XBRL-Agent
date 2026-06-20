@@ -21,6 +21,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 from openpyxl.utils import get_column_letter
+from pydantic import ValidationError
 
 from concept_model.facts_api import FactWrite, apply_fact
 
@@ -172,6 +173,27 @@ def project_writes(
                 logger.info(
                     "project_writes: facts API rejected %s — %s",
                     cell_desc, exc.detail,
+                )
+            except ValidationError as exc:
+                # The agent-controlled `value` is the only free field, and the
+                # tool layer accepts Union[int, float, str] (for row-1 date
+                # cells). A non-numeric value on a *resolvable* concept — e.g. a
+                # text-disclosure/title row — makes FactWrite(value=...) raise
+                # here because facts_api.FactWrite.value is Optional[float].
+                # Before this catch it escaped to the outer rollback and aborted
+                # the ENTIRE batch (run 49: one SOCI text row nuked both numeric
+                # profit facts -> projection_failed). Reject this one cell and
+                # keep projecting the numeric facts — restoring the docstring's
+                # "a single bad cell never aborts a run" contract.
+                # Truncate the raw value: a text/title row can carry a long
+                # sentence and `rejected` surfaces into the run/review summary.
+                raw = repr(w.get("value"))
+                if len(raw) > 80:
+                    raw = raw[:77] + "..."
+                result.rejected.append(f"{cell_desc} (non-numeric value {raw})")
+                logger.info(
+                    "project_writes: non-numeric/invalid value for %s — %s",
+                    cell_desc, exc,
                 )
         conn.commit()
     except Exception:

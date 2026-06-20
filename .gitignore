@@ -37,6 +37,7 @@ data/
 
 # Excel lock files
 .~lock.*#
+~$*
 XBRL-Agent/
 
 # Phase 4.2 A/B harness scratch (live-run DBs, rendered xlsx, copied PDFs)
