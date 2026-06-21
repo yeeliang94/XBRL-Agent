@@ -123,9 +123,12 @@ const styles = {
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, undefined, bootState);
   // Canonical-mode feature flag from the backend (peer-review finding 5).
-  // Defaults to false so the Concepts tab stays hidden until /api/config
-  // confirms canonical mode is on; a failed fetch leaves it hidden.
-  const [canonicalEnabled, setCanonicalEnabled] = useState(false);
+  // Canonical mode is now MANDATORY (gotcha #21 — `_canonical_mode_enabled()`
+  // is hardcoded True), so the flag's real value is always `true`; the
+  // one-shot /api/config fetch can only ever confirm it. Default to `true`
+  // so a raced/failed/401'd mount fetch can't strand the user by hiding
+  // mandatory canonical UI (the Concepts tab + the post-run review link).
+  const [canonicalEnabled, setCanonicalEnabled] = useState(true);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/config")
@@ -692,7 +695,6 @@ export default function App() {
             handleRerunAgent={handleRerunAgent}
             handleReset={handleReset}
             handleConfigChange={handleDraftConfigChange}
-            canonicalEnabled={canonicalEnabled}
             // Homepage home-base navigation. Drafts resume at /run/{id}
             // (same as History's draft click); finished runs open in
             // History's detail; "View all" jumps to the History list.

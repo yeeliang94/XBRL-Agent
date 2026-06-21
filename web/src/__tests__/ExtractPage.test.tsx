@@ -22,6 +22,8 @@ function makeProps(overrides?: { state?: Partial<AppState>; handleAbortAll?: () 
     handleAbortAgent: vi.fn(async () => {}) as (id: string) => Promise<void>,
     handleRerunAgent: vi.fn(),
     handleReset: vi.fn(),
+    // Forwarded to ResultsView as onOpenRunDetail (the full-run-report door).
+    onOpenRun: vi.fn(),
   };
 }
 
@@ -61,6 +63,44 @@ describe("ExtractPage — render-gate regression guards", () => {
     render(<ExtractPage {...props} />);
 
     expect(screen.getByRole("button", { name: /stop all/i })).toBeInTheDocument();
+  });
+
+  // De-gating regression guard (review-access bug, 2026-06-21). After a run
+  // completes, the ONLY in-screen bridge back to the review page is the
+  // "Review extracted values" link in ResultsView. It used to be gated on a
+  // `canonicalEnabled` flag hydrated by a one-shot /api/config fetch — a
+  // raced/failed fetch left the flag false and silently hid the link, leaving
+  // the user stranded with only the download button. Canonical mode is
+  // mandatory now (gotcha #21), so the gate was removed: the link must appear
+  // whenever the completed run's id is known, independent of any flag. This
+  // fails if anyone re-introduces a feature-flag gate on the review link.
+  test("review link is offered after completion whenever the run id is known", () => {
+    const props = makeProps({
+      state: {
+        sessionId: "test-session",
+        filename: "test.pdf",
+        isComplete: true,
+        complete: {
+          success: true,
+          output_path: "",
+          excel_path: "/output/x/filled.xlsx",
+          trace_path: "",
+          total_tokens: 0,
+          cost: 0,
+          runId: 7,
+        },
+      },
+    });
+    render(<ExtractPage {...props} />);
+
+    expect(
+      screen.getByRole("button", { name: /review extracted values/i }),
+    ).toBeInTheDocument();
+    // B + C: the results screen also leads into the full run report
+    // (flag-independent door to the tabbed run detail).
+    expect(
+      screen.getByRole("button", { name: /open full run report/i }),
+    ).toBeInTheDocument();
   });
 
   test("activity shell stays hidden before a run is started", () => {
