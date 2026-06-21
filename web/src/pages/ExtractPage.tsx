@@ -53,9 +53,6 @@ export interface ExtractPageProps {
    *  keep working (the no-PATCH path is still valid for ad-hoc
    *  legacy `/` uploads where there's no run id to update). */
   handleConfigChange?: (config: RunConfigPayload) => void;
-  /** Canonical-mode gate (peer-review finding 5): only show the post-run
-   *  "View Concepts" link when the backend is in canonical mode. */
-  canonicalEnabled?: boolean;
   /** Homepage split hero (PLAN-homepage-redesign.md): navigation callbacks
    *  for the home-base column. Optional so legacy/test callers that don't
    *  wire them still mount — the column simply won't navigate. App supplies
@@ -75,7 +72,6 @@ export function ExtractPage({
   handleRerunAgent,
   handleReset,
   handleConfigChange,
-  canonicalEnabled = false,
   onResumeDraft,
   onOpenRun,
   onViewAllRuns,
@@ -411,11 +407,21 @@ export function ExtractPage({
           sessionId={state.sessionId!}
           runStartTime={state.runStartTime}
           getResultJson={getResultJson}
-          runId={canonicalEnabled ? state.complete.runId ?? state.currentRunId : null}
+          // De-gated (was conditioned on canonicalEnabled): canonical mode is
+          // mandatory now (gotcha #21), so the flag could only ever hide the
+          // single bridge back to the review page after a run finished. Offer
+          // the review link whenever we know the run id — access to your own
+          // just-completed run must not depend on a global feature flag.
+          runId={state.complete.runId ?? state.currentRunId}
           onViewConcepts={(id) => {
             dispatch({ type: "SET_VIEW", payload: "concepts" });
             dispatch({ type: "SET_SELECTED_RUN_ID", payload: id });
           }}
+          // Flag-independent safety net: open the run's full tabbed detail
+          // (/history/{id} — cross-checks, agents, telemetry, download) so the
+          // results screen always leads into the complete review surface, not
+          // just the Values tab. Reuses App's existing onOpenRun wiring.
+          onOpenRunDetail={onOpenRun}
         />
       )}
 

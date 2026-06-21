@@ -14,6 +14,13 @@ interface Props {
   // Null runId (legacy non-draft flow) hides the link.
   runId?: number | null;
   onViewConcepts?: (runId: number) => void;
+  // Flag-independent door to this run's full tabbed detail page
+  // (/history/{runId}: Overview, Cross-checks, Agents, Telemetry, Review,
+  // Values, plus the workbook download). Wired to App's onOpenRun. Shown
+  // whenever the run id is known so the completion screen leads into the full
+  // review surface instead of dead-ending at a download button — independent
+  // of canonical mode (review-access fix, 2026-06-21).
+  onOpenRunDetail?: (runId: number) => void;
 }
 
 type Tab = "summary" | "preview" | "downloads";
@@ -218,6 +225,16 @@ const styles = {
     ...ui.buttonPrimary,
     ...ui.buttonSm,
   } as React.CSSProperties,
+  reviewActionGroup: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    flexWrap: "wrap" as const,
+  } as React.CSSProperties,
+  reviewActionSecondary: {
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
+  } as React.CSSProperties,
   downloadSectionLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 11,
@@ -229,7 +246,7 @@ const styles = {
   } as React.CSSProperties,
 };
 
-export function ResultsView({ complete, sessionId, runStartTime, getResultJson, runId, onViewConcepts }: Props) {
+export function ResultsView({ complete, sessionId, runStartTime, getResultJson, runId, onViewConcepts, onOpenRunDetail }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>("summary");
   const [resultData, setResultData] = useState<Record<string, unknown> | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -281,18 +298,32 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
         ))}
       </div>
 
-      {runId != null && onViewConcepts && (
+      {runId != null && (onViewConcepts || onOpenRunDetail) && (
         <div style={styles.reviewActionBar}>
           <span style={styles.reviewActionCopy}>
             Review the extracted facts, source evidence, overrides, and reconciliation items before downloading the final workbook.
           </span>
-          <button
-            onClick={() => onViewConcepts(runId)}
-            className={uiClass.btnPrimary}
-            style={styles.reviewActionButton}
-          >
-            Review extracted values
-          </button>
+          <div style={styles.reviewActionGroup}>
+            {onOpenRunDetail && (
+              <button
+                onClick={() => onOpenRunDetail(runId)}
+                className={uiClass.btnSecondary}
+                style={styles.reviewActionSecondary}
+                title="Overview, cross-checks, agents, and telemetry for this run"
+              >
+                Open full run report
+              </button>
+            )}
+            {onViewConcepts && (
+              <button
+                onClick={() => onViewConcepts(runId)}
+                className={uiClass.btnPrimary}
+                style={styles.reviewActionButton}
+              >
+                Review extracted values
+              </button>
+            )}
+          </div>
         </div>
       )}
 

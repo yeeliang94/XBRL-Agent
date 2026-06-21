@@ -67,6 +67,43 @@ describe("ResultsView — P4", () => {
     expect(screen.queryByRole("button", { name: /review extracted values/i })).toBeNull();
   });
 
+  // B + C (2026-06-21): the results screen must lead into the FULL run report
+  // (cross-checks/agents/telemetry/download), not just the Values tab — via a
+  // flag-independent door wired to App's onOpenRun. Pins that the secondary
+  // "Open full run report" action renders and routes with the run id.
+  test("shows a full-run-report button when runId + onOpenRunDetail provided", () => {
+    const onOpenRunDetail = vi.fn();
+    const getResultJson = vi.fn().mockResolvedValue(sampleResultJson);
+    render(
+      <ResultsView
+        complete={completeData}
+        sessionId="abc"
+        runStartTime={Date.now()}
+        getResultJson={getResultJson}
+        runId={42}
+        onOpenRunDetail={onOpenRunDetail}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /open full run report/i });
+    fireEvent.click(btn);
+    expect(onOpenRunDetail).toHaveBeenCalledWith(42);
+  });
+
+  test("no full-run-report button when runId is null", () => {
+    const getResultJson = vi.fn().mockResolvedValue(sampleResultJson);
+    render(
+      <ResultsView
+        complete={completeData}
+        sessionId="abc"
+        runStartTime={Date.now()}
+        getResultJson={getResultJson}
+        runId={null}
+        onOpenRunDetail={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /open full run report/i })).toBeNull();
+  });
+
   test("shows a reconciliation prompt when openConflicts > 0", () => {
     const getResultJson = vi.fn().mockResolvedValue(sampleResultJson);
     render(
