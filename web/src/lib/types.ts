@@ -462,6 +462,10 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   tolerance_rm: number;
   /** Whether the reviewer pass auto-runs after extraction (Settings toggle). */
   auto_review: boolean;
+  /** Whether a clean run (no failed checks) still gets a spot-check (issue 1). */
+  spot_check?: boolean;
+  /** Spot-check depth: 'light' (default) | 'full'. */
+  spot_check_mode?: string;
   /** Whether per-entity advisory memory injects prior-year prompt hints (item 28). */
   entity_memory?: boolean;
   /** OCR engine for the scanned-PDF → readable-doc feature: 'rapidocr' | 'easyocr'. */

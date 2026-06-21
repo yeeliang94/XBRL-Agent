@@ -7,8 +7,27 @@ import {
   fireEvent,
   within,
 } from "@testing-library/react";
-import { NotesReviewTab } from "../components/NotesReviewTab";
+import { NotesReviewTab, isBlankHtml } from "../components/NotesReviewTab";
 import type { NotesCellsResponse } from "../lib/notesCells";
+
+// Issue 3 (2026-06-21): empty notes cells were flipping to "Saved" without
+// the user typing — TipTap normalises an empty cell ("") to "<p></p>" on
+// mount, which the onUpdate guard then treated as a real edit. isBlankHtml
+// is the blank-equivalence the guard now uses to suppress that phantom save.
+describe("isBlankHtml (phantom-save guard)", () => {
+  test("treats empty and TipTap-normalised-empty forms as blank", () => {
+    expect(isBlankHtml("")).toBe(true);
+    expect(isBlankHtml(null)).toBe(true);
+    expect(isBlankHtml("   ")).toBe(true);
+    expect(isBlankHtml("<p></p>")).toBe(true);
+    expect(isBlankHtml("<p><br></p>")).toBe(true);
+    expect(isBlankHtml("<p>&nbsp;</p>")).toBe(true);
+  });
+  test("real content is not blank", () => {
+    expect(isBlankHtml("<p>Revenue</p>")).toBe(false);
+    expect(isBlankHtml("<h3>5 Revenue</h3>")).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // NotesReviewTab — Step 9 (read-only) + Step 10 (edit + debounced save) tests.

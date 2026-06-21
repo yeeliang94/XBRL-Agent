@@ -247,7 +247,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
   );
 }
 
-export function AgentTimeline({ events, toolTimeline, isRunning: _isRunning }: Props) {
+export function AgentTimeline({ events, toolTimeline, isRunning }: Props) {
   // Auto-scroll — stick to bottom unless the user has scrolled up. Same
   // pattern ChatFeed used, so users get a consistent feel after the swap.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -282,7 +282,11 @@ export function AgentTimeline({ events, toolTimeline, isRunning: _isRunning }: P
         style={styles.scrollArea}
         onScroll={handleScroll}
       >
-        <p style={styles.empty}>Waiting for the agent to start…</p>
+        <p style={styles.empty}>
+          {isRunning
+            ? "Waiting for the agent to start…"
+            : "No timeline activity was recorded for this agent. Open its conversation trace for the full detail."}
+        </p>
       </div>
     );
   }

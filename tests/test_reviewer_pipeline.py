@@ -212,6 +212,42 @@ async def test_reviewer_pass_noop_when_nothing_to_review(tmp_path):
     assert cnt == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["light", "full"])
+async def test_spot_check_runs_on_clean_run(tmp_path, mode):
+    """Issue 1: with NO failing checks and NO conflicts, a spot_check pass is
+    still invoked (it does NOT short-circuit like the failure-driven pass) and
+    snapshots-then-applies the same grounded fix, so the result stays
+    revertible. Pins both light and full depths."""
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+    outcome = await _run_reviewer_pass(
+        failed_checks=[], conflicts=[], model=FunctionModel(_fix_cash_scripted),
+        filing_level="company", event_queue=queue, db_path=db, run_id=run_id,
+        spot_check=mode)
+
+    assert outcome["invoked"] is True, "spot-check must run on a clean run"
+    # The outcome is tagged as a spot-check so the run-status logic can treat
+    # its exhaustion as advisory rather than `correction_exhausted`.
+    assert outcome["spot_check"] == mode
+    assert outcome["writes_performed"] == 1
+    conn = sqlite3.connect(str(db))
+    try:
+        # Snapshot taken before the write → revert-to-original still works.
+        snap = conn.execute(
+            "SELECT value FROM run_fact_snapshots WHERE run_id=? AND concept_uuid=?",
+            (run_id, LEAF1)).fetchone()
+        assert snap is not None and snap[0] == 100.0
+        live = conn.execute(
+            "SELECT value FROM run_concept_facts WHERE run_id=? AND concept_uuid=?",
+            (run_id, LEAF1)).fetchone()[0]
+        assert live == 120.0
+    finally:
+        conn.close()
+
+
 def _always_fix(messages, info: AgentInfo) -> ModelResponse:
     """Never finishes — always calls apply_fix, to drive the turn cap."""
     return ModelResponse(parts=[ToolCallPart(
@@ -307,6 +343,31 @@ async def test_exhausted_reviewer_still_cascades(tmp_path, monkeypatch):
     finally:
         conn.close()
     assert parent == 170.0
+
+
+@pytest.mark.asyncio
+async def test_exhausted_spot_check_is_tagged_not_a_hard_failure(tmp_path, monkeypatch):
+    """Peer-review HIGH (2026-06-21): a spot-check that merely runs out of its
+    tight turn budget carries `exhausted=True` AND the `spot_check` tag, while
+    its error stays the soft `reviewer_exhausted`. The run-status logic relies
+    on exactly this shape to NOT flag a clean run as `correction_exhausted`
+    (spot_check excluded) and to NOT treat reviewer_exhausted as a hard
+    `reviewer_failed`."""
+    import correction.reviewer_agent as ra
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    # Spot-check uses its OWN cap function — force exhaustion after one write.
+    monkeypatch.setattr(ra, "compute_spot_check_turn_cap", lambda **k: 1)
+
+    outcome = await _run_reviewer_pass(
+        failed_checks=[], conflicts=[], model=FunctionModel(_always_fix),
+        filing_level="company", event_queue=asyncio.Queue(), db_path=db,
+        run_id=run_id, spot_check="light")
+
+    assert outcome["exhausted"] is True
+    assert outcome["error"] == "reviewer_exhausted"  # soft, not a hard failure
+    assert outcome["spot_check"] == "light"           # excluded from correction_exhausted
 
 
 @pytest.mark.asyncio

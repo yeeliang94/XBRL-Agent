@@ -66,6 +66,24 @@ export interface NotesReviewTabProps {
 /** Editor lifecycle status chip per cell. */
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "failed";
 
+/** Whether an HTML string carries no real content. An empty notes cell comes
+ *  back from the backend as "" (or whitespace), but TipTap normalises empty
+ *  content to "<p></p>" on mount — so the mount-time `onUpdate` sees
+ *  next="<p></p>" vs saved="" and would schedule a spurious PATCH, flipping
+ *  an UNEDITED empty cell to "Saved" (issue 3, 2026-06-21). Treating both
+ *  sides as blank-equivalent suppresses that phantom save. */
+export function isBlankHtml(html: string | null | undefined): boolean {
+  if (!html) return true;
+  return (
+    html
+      .replace(/<p>\s*<\/p>/gi, "")
+      .replace(/<br\s*\/?>/gi, "")
+      .replace(/&nbsp;/gi, "")
+      .replace(/<[^>]+>/g, "")
+      .trim() === ""
+  );
+}
+
 /** Sentinel for `pendingCount` when the edited_count endpoint failed or
  *  was unreachable — we can't determine the overwrite count so the modal
  *  shows a generic "couldn't verify your edits" warning instead of a
@@ -525,6 +543,11 @@ function CellRow({
       // schedule a save when the content actually diverged from the
       // last persisted HTML.
       if (nextHtml === savedHtmlRef.current) return;
+      // Suppress the phantom save when both the new and last-persisted HTML
+      // are blank — TipTap normalises an empty cell ("") to "<p></p>" on
+      // mount, which would otherwise mark an untouched empty cell dirty and
+      // flip it to "Saved" (issue 3). Real typing produces non-blank HTML.
+      if (isBlankHtml(nextHtml) && isBlankHtml(savedHtmlRef.current)) return;
       setStatus("dirty");
       scheduleSave();
     },

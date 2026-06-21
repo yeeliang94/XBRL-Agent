@@ -55,6 +55,14 @@ def test_notes_base_currency_and_year_are_separate_rows():
     assert "do not collapse the currency label and the year" in flat
     # The two-header-row worked example is present.
     assert "rm'000</th><th>rm'000</th>" in flat
+    # Reinforced 2026-06-21 (user report: agent still merges year+currency):
+    # a NEGATIVE example showing the jammed-into-one-cell form as WRONG, and
+    # the year-row-on-top / currency-row-below ordering.
+    assert "2024 rm'000" in flat, (
+        "_notes_base.md must show the year+currency-in-one-cell form as a "
+        "WRONG counter-example"
+    )
+    assert "year row sits on top" in flat or "year row on top" in flat
 
 
 # --- Concern #3: MPERS SOPL revenue bucket (MPERS-only, code-injected) -------

@@ -493,8 +493,10 @@ describe("RunDetailView", () => {
       ?.querySelector("button");
     if (toggle) fireEvent.click(toggle);
     // AgentTimeline's own empty-state copy — proves the timeline is
-    // mounted even when the event list is empty.
-    expect(screen.getByText(/Waiting for the agent to start/i)).toBeInTheDocument();
+    // mounted even when the event list is empty. History runs aren't
+    // "running", so the copy reflects no recorded activity rather than the
+    // misleading "waiting for the agent to start" placeholder (issue 5).
+    expect(screen.getByText(/No timeline activity was recorded/i)).toBeInTheDocument();
   });
 
   // Phase 9.3: legacy runs have no config AND (often) no agents. The

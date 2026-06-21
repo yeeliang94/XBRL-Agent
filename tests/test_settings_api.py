@@ -101,6 +101,42 @@ def test_auto_review_toggle_round_trips(tmp_path, monkeypatch):
     assert server._auto_review_enabled() is False
 
 
+def test_spot_check_toggle_and_mode_round_trip(tmp_path, monkeypatch):
+    """Issue 1: the clean-run spot-check toggle + depth persist to
+    XBRL_SPOT_CHECK / XBRL_SPOT_CHECK_MODE and are reflected by GET
+    /api/settings + /api/config."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.delenv("XBRL_SPOT_CHECK", raising=False)
+    monkeypatch.delenv("XBRL_SPOT_CHECK_MODE", raising=False)
+
+    # Defaults: on / light.
+    s = client.get("/api/settings").json()
+    assert s["spot_check"] is True
+    assert s["spot_check_mode"] == "light"
+    cfg = client.get("/api/config").json()
+    assert cfg["spot_check"] is True and cfg["spot_check_mode"] == "light"
+
+    # Switch to full + off, persisted + re-read fresh.
+    resp = client.post("/api/settings", json={"spot_check": False, "spot_check_mode": "full"})
+    assert resp.status_code == 200
+    from dotenv import load_dotenv
+    load_dotenv(env_file, override=True)
+    s2 = client.get("/api/settings").json()
+    assert s2["spot_check"] is False
+    assert s2["spot_check_mode"] == "full"
+    assert server._spot_check_enabled() is False
+    assert server._spot_check_mode() == "full"
+
+
+def test_spot_check_mode_rejects_invalid_value(tmp_path, monkeypatch):
+    """An unknown spot_check_mode is a 400, not silently coerced server-side."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    resp = client.post("/api/settings", json={"spot_check_mode": "deep"})
+    assert resp.status_code == 400
+
+
 def test_reviewer_model_name_reads_default_models(tmp_path, monkeypatch):
     monkeypatch.delenv("XBRL_DEFAULT_MODELS", raising=False)
     assert server._reviewer_model_name() is None  # unset → inherit run model

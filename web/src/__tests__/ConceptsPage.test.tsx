@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { ConceptsPage } from "../pages/ConceptsPage";
+import { ConceptsPage, formatGroupedInput } from "../pages/ConceptsPage";
 
 // Vitest setup stubs `fetch`; each test reassigns the implementation.
 const originalFetch = globalThis.fetch;
@@ -339,6 +339,46 @@ describe("ConceptsPage", () => {
     // Click "Group" → row shows 200.
     fireEvent.click(screen.getByTestId("scope-btn-Group"));
     expect(input()).toBe("200");
+  });
+
+  // -- Issue 4 (2026-06-21): thousands separators in the editable input ----
+
+  test("formatGroupedInput adds separators and leaves edits/blanks intact", () => {
+    expect(formatGroupedInput("1234567")).toBe("1,234,567");
+    expect(formatGroupedInput("1234.5")).toBe("1,234.5");
+    expect(formatGroupedInput("-2500")).toBe("-2,500");
+    expect(formatGroupedInput("999")).toBe("999");
+    expect(formatGroupedInput("")).toBe("");
+    // Already-grouped or partially-typed input round-trips without mangling.
+    expect(formatGroupedInput("1,234,567")).toBe("1,234,567");
+    expect(formatGroupedInput("-")).toBe("-"); // half-typed negative left alone
+  });
+
+  test("editable value cell shows grouped value at rest, raw while focused", async () => {
+    const bigConcepts = {
+      run_id: 99,
+      concepts: [
+        { ...sampleConcepts.concepts[0] }, // ABSTRACT parent
+        { ...sampleConcepts.concepts[1], value: 1234567 }, // leaf-1 large value
+      ],
+    };
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return bigConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={99} />);
+    const input = (await waitFor(() =>
+      screen.getByTestId("value-input-leaf-1"),
+    )) as HTMLInputElement;
+    // At rest: grouped with commas.
+    expect(input.value).toBe("1,234,567");
+    // Focus → raw digits so typing isn't fought.
+    fireEvent.focus(input);
+    expect(input.value).toBe("1234567");
+    // Blur → grouped again.
+    fireEvent.blur(input);
+    expect(input.value).toBe("1,234,567");
   });
 
   // -- Phase 5 step 5.6: matrix grid view for SOCIE -------------------

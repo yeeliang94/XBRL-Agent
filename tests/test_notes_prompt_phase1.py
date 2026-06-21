@@ -265,6 +265,49 @@ def test_notes_base_prompt_shows_subsection_worked_example():
     assert '"number": "2.14"' in body
 
 
+def test_notes_base_prompt_forbids_parent_number_prefix_on_subsection_labels():
+    """User report 2026-06-21: agents wrote sub-section headings as
+    "3a. Property" under parent Note 3, gluing the parent note number onto
+    a letter sub-label. The correct form is "(a) Property" / "a. Property" —
+    the parent number labels the cell once via the parent_note heading and
+    must not be repeated on the sub-label. The prompt must forbid the
+    composite explicitly, for BOTH the sub_note.number field and in-prose
+    (a)/(b) labels."""
+    body = (_PROMPT_DIR / "_notes_base.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    # Must name the failure mode (gluing the parent number onto a sub-label)
+    # and show the wrong "3a" composite as a counter-example.
+    assert "never a copy of the parent note number" in flat, (
+        "_notes_base.md must state sub-section labels carry only their own "
+        "letter/number, never a copy of the parent note number"
+    )
+    assert '"3a"' in flat or "3a. property" in flat, (
+        "_notes_base.md must show the wrong '3a' composite as a "
+        "counter-example so the agent recognises it"
+    )
+    # Must scope the rule to BOTH the sub_note field and in-prose labels.
+    assert "sub_note.number" in body, (
+        "_notes_base.md must apply the no-parent-prefix rule to the "
+        "sub_note.number field"
+    )
+
+
+def test_notes_base_prompt_requires_exact_number_punctuation():
+    """User report 2026-06-21: agents drop the period after the note number,
+    writing "3 Property, plant and equipment" instead of "3. Property, plant
+    and equipment". The heading must follow the statement's punctuation
+    exactly — the prompt must require copying the number's punctuation as
+    printed (keep the trailing period if the PDF shows one)."""
+    body = (_PROMPT_DIR / "_notes_base.md").read_text(encoding="utf-8")
+    flat = _flatten(body)
+    assert "copy the number's punctuation exactly" in flat, (
+        "_notes_base.md must require copying the note number's punctuation "
+        "exactly as printed (the dropped-period bug)"
+    )
+    # Concrete: keep the period example present.
+    assert '"3."' in flat or "3. property, plant and equipment" in flat
+
+
 def test_notes_accounting_policies_prompt_calls_out_subsection_preservation():
     """The accounting-policies per-template prompt is the most common
     landing spot for (a)/(b) sub-policy splits (Note 2.x), so it must

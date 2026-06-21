@@ -41,6 +41,20 @@ export function formatAccounting(n: number | null | undefined): string {
   return n < 0 ? `(${s})` : s;
 }
 
+// Display formatter for the editable LEAF input: adds thousands separators
+// (e.g. "1234567" → "1,234,567") for the AT-REST view, while the input shows
+// the raw digits WHILE focused so typing isn't fought (issue 4, 2026-06-21).
+// Leaves blank/invalid strings untouched so a half-typed entry isn't mangled.
+// Negatives stay as "-1,234" (not accounting parens) because the value must
+// round-trip back through Number() on save.
+export function formatGroupedInput(raw: string): string {
+  const t = raw.trim();
+  if (t === "") return "";
+  const n = Number(t.replace(/,/g, ""));
+  if (!Number.isFinite(n)) return raw;
+  return n.toLocaleString("en-US", { maximumFractionDigits: 20 });
+}
+
 export interface ConceptRow {
   concept_uuid: string;
   parent_uuid: string | null;
@@ -2055,7 +2069,9 @@ function EditableValueCell({
   // Parse the field: empty → clear (null); a finite number → that number;
   // anything else is rejected (don't save garbage — Phase 4.1 hardens this).
   function parse(raw: string): number | null | undefined {
-    const t = raw.trim();
+    // Strip thousands separators so a formatted at-rest value ("1,234,567")
+    // round-trips cleanly even if it reaches parse without being re-typed.
+    const t = raw.replace(/,/g, "").trim();
     if (t === "") return null;
     const n = Number(t);
     return Number.isFinite(n) ? n : undefined;
@@ -2099,6 +2115,9 @@ function EditableValueCell({
     ? `value-status-${uuid}-${period}`
     : `value-status-${uuid}`;
   const highlightEmpty = highlight && draft.trim() === "";
+  // Grouped (1,234,567) when at rest; raw digits while focused so typing,
+  // cursor position, and the Number() round-trip aren't disturbed (issue 4).
+  const displayValue = focused ? draft : formatGroupedInput(draft);
 
   return (
     <span
@@ -2126,10 +2145,14 @@ function EditableValueCell({
         data-testid={inputTestId}
         inputMode="decimal"
         title={status === "saved" ? "Saved" : undefined}
-        value={draft}
+        value={displayValue}
         onChange={(e) => {
-          setDraft(e.target.value);
-          schedule(e.target.value);
+          // Keep the raw (comma-free) form in `draft`; the display adds the
+          // separators when blurred. Strip any commas the user/browser
+          // inserted so parse/save see a clean number.
+          const raw = e.target.value.replace(/,/g, "");
+          setDraft(raw);
+          schedule(raw);
         }}
         onFocus={() => setFocused(true)}
         onBlur={(e) => {

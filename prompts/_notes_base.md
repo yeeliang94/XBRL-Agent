@@ -103,11 +103,28 @@ of payload objects. Each payload has these fields:
   `{"number": "5", "title": "Material Accounting Policies"}`. The
   writer uses this to prepend a `<h3>{number} {title}</h3>` line to
   the cell so every note in the workbook is labelled consistently.
+  **Copy the number's punctuation EXACTLY as the statement prints it.**
+  If the PDF prints "3." write `"number": "3."` (keep the period); if it
+  prints "3" write `"number": "3"`; if it prints "NOTE 3" keep that.
+  Do NOT strip the trailing period or add one the statement doesn't show
+  — the heading must read like the financial statement, character for
+  character (e.g. "3. Property, plant and equipment", not "3 Property,
+  plant and equipment").
 - `sub_note` (object, optional): the sub-note's number and title when
   the payload covers a specific sub-note (e.g. 5.4). Shape:
   `{"number": "5.4", "title": "Property, Plant and Equipment"}`.
   Omit for top-level notes. When present, the writer prepends a
   second `<h3>` line AFTER the parent heading and BEFORE the body.
+  Put in `number` **exactly what the PDF prints** for that sub-note,
+  INCLUDING its punctuation — if the AFS prints "5.4", use `"5.4"`; if it
+  prints "(a)", use `"(a)"`; if it prints "a.", use `"a."`. Keep the
+  parentheses / period exactly as shown; the writer emits the value
+  verbatim, so stripping them loses the source punctuation. The ONLY thing
+  you remove is a parent-number prefix the sub-label doesn't actually
+  carry: under parent Note 3, a sub-section printed "(a)" is
+  `{"number": "(a)", …}`, never `{"number": "3a", …}` or
+  `{"number": "3(a)", …}`. The parent number already appears once, in the
+  parent heading — don't glue it onto the sub-label.
 
 ### Heading markup is writer-owned (parent + sub_note headings only)
 
@@ -121,6 +138,19 @@ This rule is scoped strictly to the parent_note and sub_note `<h3>`
 lines the writer auto-injects. In-prose sub-section labels ("(a)", "(b)",
 "(i)/(ii)") are body content, not headings — preserve them per "NOTE
 HIERARCHY AND GRANULARITY" above.
+
+**Sub-section labels carry ONLY their own letter/roman/number, never a
+copy of the parent note number.** A sub-section printed "(a)" under Note 3
+"Property, plant and equipment" is written "(a)" (or "a.") — exactly as
+the PDF prints it. Writing "3a" / "3(a)" by prefixing the parent number
+is wrong: the parent number "3" already labels the cell via the
+`parent_note` heading, so the body must read
+
+  3. Property, plant and equipment   ← parent heading (writer-owned)
+  (a) Property                        ← sub-section label, as printed
+
+NOT "3a. Property". This applies to in-prose `<p><strong>…</strong></p>`
+labels AND to the `sub_note.number` field.
 
 Every non-empty payload MUST cite at least one source page AND include
 `parent_note`. Both are mandatory provenance — the number/title pair
@@ -164,10 +194,22 @@ download flattens the HTML back to plain text automatically.
   for movement schedules, maturity analyses, and reconciliations.
   **Reproduce the source table's row structure faithfully — one source row
   is one `<tr>`.** When the AFS prints the currency caption (e.g. "RM'000"
-  or "RM") on its OWN line above the year columns, render it as its own
-  header `<tr>`, separate from the `<tr>` that carries the year numbers. Do
-  NOT collapse the currency label and the year into a single cell or merge
-  them into one row.
+  or "RM") on its OWN line, render it as its own header `<tr>`, separate
+  from the `<tr>` that carries the year numbers. In Malaysian financial
+  statements the **year row sits on top and the currency-caption row sits
+  directly below it** (then the value rows follow) — reproduce that order.
+  Do NOT collapse the currency label and the year into a single cell or
+  merge them into one row. This is the single most common table mistake:
+    - RIGHT — two header rows:
+      `<tr><th></th><th>2024</th><th>2023</th></tr>`
+      `<tr><th></th><th>RM'000</th><th>RM'000</th></tr>`
+    - WRONG — year and currency jammed into one cell:
+      `<tr><th></th><th>2024 RM'000</th><th>2023 RM'000</th></tr>`
+    - WRONG — currency and year in one row, two columns:
+      `<tr><th>RM'000</th><th>2024</th></tr>`
+  A single `<td>`/`<th>` cell never contains BOTH a year and a currency
+  unit. If you see "2024" and "RM'000" stacked in the source, that is two
+  separate `<tr>` rows, not one.
 - **Headings:** `<h3>` only (no `<h1>`/`<h2>` — the row label is the
   section heading; `<h3>` is for sub-sections inside a long cell).
 - Keep the total *rendered* text under 30,000 characters per cell
@@ -190,10 +232,11 @@ Short examples:
 - Table:
   `<table><tr><th>Item</th><th>2024</th><th>2023</th></tr>`
   `<tr><td>Revenue</td><td>10,000</td><td>9,500</td></tr></table>`
-- Table where the AFS prints a separate currency-caption row above the
-  years (reproduce it as its own `<tr>`, do not merge currency and year):
-  `<table><tr><th></th><th>RM'000</th><th>RM'000</th></tr>`
-  `<tr><th>Item</th><th>2024</th><th>2023</th></tr>`
+- Table where the AFS prints a separate currency-caption row (the year row
+  on top, the "RM'000" caption directly below it, then the values) —
+  reproduce each as its own `<tr>`, do not merge currency and year:
+  `<table><tr><th></th><th>2024</th><th>2023</th></tr>`
+  `<tr><th></th><th>RM'000</th><th>RM'000</th></tr>`
   `<tr><td>Revenue</td><td>10,000</td><td>9,500</td></tr></table>`
 
 Worked-example payloads showing the heading fields:

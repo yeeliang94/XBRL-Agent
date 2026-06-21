@@ -484,6 +484,45 @@ def create_run_agent(
     return int(cur.lastrowid)
 
 
+def reset_or_create_scout_agent_row(
+    conn: sqlite3.Connection,
+    run_id: int,
+    model: str | None = None,
+) -> int:
+    """Idempotent SCOUT `run_agents` row — exactly one per run.
+
+    The scout endpoint can fire more than once against the same run (the
+    common case: the user cancels Auto-detect midway, then re-runs it).
+    `create_run_agent` would INSERT a second SCOUT row each time, leaving
+    History showing two SCOUT cards that both resolve to the single
+    `SCOUT_conversation_trace.json` on disk (the second scout overwrites
+    the first) — the "two scout traces" bug.
+
+    Instead, REUSE the latest SCOUT row for the run when one exists: reset
+    it to `running`, restamp `started_at`, refresh the model, and clear the
+    prior terminal fields so the re-run reads as a fresh attempt (matching
+    the single trace file it will overwrite). Only INSERT when no SCOUT row
+    exists yet. Returns the row id either way.
+    """
+    row = conn.execute(
+        "SELECT id FROM run_agents "
+        "WHERE run_id = ? AND statement_type = 'SCOUT' "
+        "ORDER BY id DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    if row is not None:
+        agent_row_id = int(row[0])
+        conn.execute(
+            "UPDATE run_agents SET status = 'running', started_at = ?, "
+            "ended_at = NULL, model = ?, error_type = NULL, "
+            "total_tokens = 0, total_cost = 0 "
+            "WHERE id = ?",
+            (_now(), model, agent_row_id),
+        )
+        return agent_row_id
+    return create_run_agent(conn, run_id, "SCOUT", variant=None, model=model)
+
+
 def finish_run_agent(
     conn: sqlite3.Connection,
     run_agent_id: int,
