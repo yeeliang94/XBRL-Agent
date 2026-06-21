@@ -439,3 +439,33 @@ def _parse_sse(text: str) -> list[dict]:
             current_event = None
             current_data = None
     return events
+
+
+# --- Scout attempt generation (peer-review HIGH, 2026-06-21) ------------------
+
+def test_scout_attempt_generation_supersedes_and_gates_ownership():
+    """A re-scout claims a newer generation, so the OLD attempt's finally sees
+    it's no longer current and skips finalize/unregister — preventing it from
+    clobbering the reused SCOUT row or unregistering the new attempt's task."""
+    import api.uploads as up
+
+    sid = "race-session"
+    # Isolate the module-level counter for this session.
+    up._scout_attempt_gen.pop(sid, None)
+
+    a1 = up._claim_scout_attempt(sid)
+    assert up._scout_attempt_is_current(sid, a1) is True
+
+    # A second scout takes over.
+    a2 = up._claim_scout_attempt(sid)
+    assert a2 != a1
+    # The OLD attempt is no longer current → its finally will skip cleanup.
+    assert up._scout_attempt_is_current(sid, a1) is False
+    # The NEW attempt owns the row + "scout" task slot.
+    assert up._scout_attempt_is_current(sid, a2) is True
+
+    # A lone attempt (no successor) stays current and cleans up normally.
+    sid2 = "solo-session"
+    up._scout_attempt_gen.pop(sid2, None)
+    solo = up._claim_scout_attempt(sid2)
+    assert up._scout_attempt_is_current(sid2, solo) is True

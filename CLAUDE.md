@@ -852,6 +852,32 @@ code path is fully wired:
     `XBRL_AUTO_REVIEW` (default on; Settings checkbox, surfaced via
     `/api/settings` + `/api/config`). When off, a run with failures/conflicts
     finishes without the reviewer and the user triggers it manually.
+  - **Clean-run spot-check (issue 1, 2026-06-21):** a run with NO failing
+    checks and NO open conflicts still gets a grounded sanity pass when
+    `XBRL_SPOT_CHECK` is on (default on; **independent** of `XBRL_AUTO_REVIEW`,
+    which only gates the failure path). It REUSES `_run_reviewer_pass` via a new
+    `spot_check` arg (`"light"`/`"full"`) — so snapshot → fix → re-export →
+    revert are unchanged — bypassing the `n_items == 0` early return.
+    `XBRL_SPOT_CHECK_MODE` picks depth: `light` (default) swaps to the tight
+    `prompts/spot_check.md` body + a 6/8-turn cap
+    (`compute_spot_check_turn_cap`); `full` reuses the holistic `reviewer.md`
+    body + the reviewer's base cap. Both render a SPOT-CHECK packet (no failing
+    checks to inline) via `render_reviewer_prompt(spot_check_mode=…)`. Both
+    settings round-trip through `/api/settings` + `/api/config` and the General
+    settings tab. **Run-status semantics (peer-review HIGH):** the spot-check
+    outcome carries a `spot_check` tag so a spot-check that merely EXHAUSTS its
+    tight cap does NOT flag a clean run `correction_exhausted` (it's advisory),
+    while a spot-check that genuinely FAILS to run (`reviewer_failed` — snapshot
+    / model-build / no-facts / tool error, excluding the soft
+    `reviewer_exhausted`) tips the run to `completed_with_errors` rather than
+    hiding a failed CORRECTION row under a green badge. The suite defaults the
+    toggle OFF (`tests/conftest.py`) so deterministic pipeline-count tests
+    aren't perturbed; opt in with `monkeypatch.setenv`. Pinned by
+    `tests/test_reviewer_pipeline.py`
+    (`test_spot_check_runs_on_clean_run`),
+    `tests/test_e2e.py::test_clean_run_fires_spot_check_when_enabled`,
+    `tests/test_reviewer_agent.py` (turn cap + body/packet swap), and
+    `tests/test_settings_api.py` (round-trip).
   - **Reviewer model:** user-selectable. `XBRL_DEFAULT_MODELS["reviewer"]`
     (Settings) sets the default for the automatic pass; the Review tab's model
     dropdown sends a per-request `model` override to `/re-review`. Both fall

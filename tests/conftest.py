@@ -29,3 +29,27 @@ def _auth_dev_mode_by_default():
             os.environ.pop("AUTH_MODE", None)
         else:
             os.environ["AUTH_MODE"] = prior
+
+
+@pytest.fixture(autouse=True)
+def _spot_check_off_by_default():
+    """Default the clean-run spot-check (issue 1) OFF for the suite.
+
+    The spot-check fires a reviewer pass on a run with NO failing checks —
+    which is exactly the shape of the deterministic full-pipeline tests, so
+    leaving it on (the production default) would add an extra CORRECTION
+    agent/event to every clean mocked run and break their exact counts. Tests
+    that exercise the spot-check opt IN with `monkeypatch.setenv` (the trigger
+    test) or call `_run_reviewer_pass(spot_check=...)` directly; the settings
+    round-trip test `delenv`s this to verify the true default is ON. Set via
+    os.environ for the same monkeypatch.undo() resilience as AUTH_MODE above.
+    """
+    prior = os.environ.get("XBRL_SPOT_CHECK")
+    os.environ["XBRL_SPOT_CHECK"] = "false"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop("XBRL_SPOT_CHECK", None)
+        else:
+            os.environ["XBRL_SPOT_CHECK"] = prior

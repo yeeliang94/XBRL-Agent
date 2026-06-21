@@ -19,8 +19,8 @@ import {
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; entity_memory?: boolean; docling_ocr_engine?: string }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; entity_memory: boolean; docling_ocr_engine: string }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; docling_ocr_engine?: string }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; docling_ocr_engine: string }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -170,6 +170,9 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [apiKeyPreview, setApiKeyPreview] = useState("");
   // Reviewer auto-trigger toggle (docs/Archive/PLAN-reviewer-agent.md). Default on.
   const [autoReview, setAutoReview] = useState(true);
+  // Clean-run spot-check (issue 1): toggle + depth. Default on / light.
+  const [spotCheck, setSpotCheck] = useState(true);
+  const [spotCheckMode, setSpotCheckMode] = useState<"light" | "full">("light");
   // Scanned-PDF → readable-doc OCR engine + model-bundle status.
   const [oclEngine, setOclEngine] = useState("rapidocr");
   const [oclModels, setOclModels] = useState<DocConvertModelsStatus | null>(null);
@@ -215,6 +218,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setApiKey("");
         // Default to on when the field is absent (older backend).
         setAutoReview(s.auto_review !== false);
+        setSpotCheck(s.spot_check !== false);
+        setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
         setEntityMemory(s.entity_memory !== false);
         if (s.docling_ocr_engine) setOclEngine(s.docling_ocr_engine);
       })
@@ -292,6 +297,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         model,
         proxy_url: proxyUrl,
         auto_review: autoReview,
+        spot_check: spotCheck,
+        spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
         docling_ocr_engine: oclEngine,
         ...(apiKey ? { api_key: apiKey } : {}),
@@ -309,7 +316,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [model, proxyUrl, apiKey, autoReview, entityMemory, oclEngine, saveSettings]);
+  }, [model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, oclEngine, saveSettings]);
 
   // --- Test connection ---
   const handleTestConnection = useCallback(async () => {
@@ -439,6 +446,38 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <p style={styles.helperText}>
           When off, runs with failed cross-checks finish without the reviewer;
           you can still trigger it manually from a run's Review tab.
+        </p>
+      </div>
+
+      {/* Clean-run spot-check toggle + depth (issue 1) */}
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={spotCheck}
+            onChange={(e) => setSpotCheck(e.target.checked)}
+            aria-label="Spot-check runs even when all cross-checks pass"
+          />
+          <span style={styles.label}>Spot-check runs even when all cross-checks pass</span>
+        </label>
+        <p style={styles.helperText}>
+          A grounded sanity pass over the high-value figures (face totals, units,
+          signs) for runs that pass every cross-check — catching errors the
+          checks can&apos;t (wrong value vs the PDF, scale slip, double-count).
+        </p>
+        <select
+          value={spotCheckMode}
+          onChange={(e) => setSpotCheckMode(e.target.value === "full" ? "full" : "light")}
+          disabled={!spotCheck}
+          style={{ ...styles.input, opacity: spotCheck ? 1 : 0.5, maxWidth: 320 }}
+          aria-label="Spot-check depth"
+        >
+          <option value="light">Light — fast sanity pass (default)</option>
+          <option value="full">Full — holistic reviewer audit</option>
+        </select>
+        <p style={styles.helperText}>
+          Light samples the highest-value figures in a few turns. Full runs the
+          same deep reviewer used for failed runs (slower, more thorough).
         </p>
       </div>
 

@@ -400,3 +400,51 @@ def test_insert_agent_turns_empty_is_noop(db_path: Path) -> None:
             (agent_id,),
         ).fetchone()
     assert count == 0
+
+
+def test_reset_or_create_scout_agent_row_is_idempotent(db_path: Path) -> None:
+    """A re-scout reuses the single SCOUT row instead of inserting a second.
+
+    User report 2026-06-21: cancelling Auto-detect midway then re-running it
+    left TWO SCOUT rows on one run, both resolving to the single overwritten
+    SCOUT_conversation_trace.json. The idempotent helper guarantees exactly
+    one SCOUT row per run.
+    """
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "finco.pdf")
+
+        first = repo.reset_or_create_scout_agent_row(conn, run_id, model="m1")
+        # Simulate a cancelled first scout, then a re-run.
+        repo.finish_run_agent(conn, first, "cancelled", error_type="cancelled")
+        second = repo.reset_or_create_scout_agent_row(conn, run_id, model="m2")
+
+    # Same row reused — not a second insert.
+    assert first == second
+
+    with repo.db_session(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, status, model FROM run_agents "
+            "WHERE run_id = ? AND statement_type = 'SCOUT'",
+            (run_id,),
+        ).fetchall()
+    assert len(rows) == 1, "exactly one SCOUT row per run"
+    assert rows[0][1] == "running", "re-scout resets the row to running"
+    assert rows[0][2] == "m2", "re-scout refreshes the model"
+
+
+def test_reset_or_create_scout_agent_row_inserts_when_absent(db_path: Path) -> None:
+    """First scout on a run with no SCOUT row INSERTs a fresh one."""
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf")
+        # An unrelated extraction agent must not be mistaken for a SCOUT row.
+        repo.create_run_agent(conn, run_id, "SOFP", "CuNonCu", "gemini")
+        scout_id = repo.reset_or_create_scout_agent_row(conn, run_id, model="m1")
+
+    with repo.db_session(db_path) as conn:
+        rows = conn.execute(
+            "SELECT statement_type FROM run_agents WHERE run_id = ?",
+            (run_id,),
+        ).fetchall()
+    types = sorted(r[0] for r in rows)
+    assert types == ["SCOUT", "SOFP"]
+    assert scout_id >= 1

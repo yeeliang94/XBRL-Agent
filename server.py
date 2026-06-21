@@ -1203,9 +1203,17 @@ async def _run_reviewer_pass(
     pdf_path: Optional[str] = None,
     guidance: Optional[str] = None,
     agent_id: str = CORRECTION_AGENT_ID,
+    spot_check: Optional[str] = None,
 ) -> dict:
     """Reviewer pass (docs/Archive/PLAN-reviewer-agent.md) — replaces the autonomous
     canonical correction pass.
+
+    ``spot_check`` (``"light"`` / ``"full"`` / ``None``) drives the clean-run
+    spot-check (issue 1, 2026-06-21): when set, the run had NO failing checks
+    and NO open conflicts, but we still run a grounded sanity pass over the
+    high-value figures. ``light`` is a tight pass (small turn cap + the
+    ``spot_check.md`` body); ``full`` reuses the holistic reviewer. Everything
+    downstream — snapshot, re-export, revert — is reused unchanged.
 
     The reviewer investigates the root cause of each failing cross-check /
     open conflict down the face → sub-sheet → PDF chain, applies grounded
@@ -1269,7 +1277,18 @@ async def _run_reviewer_pass(
         for c in (failed_checks or [])
     ]
     n_items = len(failed_payload) + len(conflicts or [])
-    if n_items == 0:
+    spot_mode = (spot_check or "").lower() or None
+    if spot_mode not in (None, "light", "full"):
+        spot_mode = "light"
+    # Tag the outcome so the run-status logic can treat a SPOT-CHECK outcome
+    # (clean run) differently from a failure-driven reviewer outcome — e.g. a
+    # spot-check that merely exhausts its tight turn budget must NOT mark the
+    # whole clean run `correction_exhausted` (peer-review HIGH).
+    outcome["spot_check"] = spot_mode
+    # The failure-driven pass returns immediately when there's nothing to
+    # investigate. The spot-check, by definition, fires on a CLEAN run
+    # (n_items == 0) — so it must NOT short-circuit here.
+    if n_items == 0 and spot_mode is None:
         return outcome
     outcome["invoked"] = True
 
@@ -1348,9 +1367,15 @@ async def _run_reviewer_pass(
         _stamp_elapsed()
         return outcome
 
-    max_turns = compute_reviewer_turn_cap(
-        filing_level=filing_level, n_items=n_items,
-    )
+    if spot_mode is not None:
+        from correction.reviewer_agent import compute_spot_check_turn_cap
+        max_turns = compute_spot_check_turn_cap(
+            filing_level=filing_level, mode=spot_mode,
+        )
+    else:
+        max_turns = compute_reviewer_turn_cap(
+            filing_level=filing_level, n_items=n_items,
+        )
     outcome["max_turns"] = max_turns
 
     # Phase 4 (reviewer holistic audit): resolve the run's output dir so we can
@@ -1380,6 +1405,7 @@ async def _run_reviewer_pass(
             filing_level=filing_level, filing_standard=filing_standard,
             pdf_path=pdf_path,
             failed_checks=failed_payload, conflicts=conflicts, guidance=guidance,
+            spot_check_mode=spot_mode,
         )
     except Exception:  # noqa: BLE001
         logger.exception("Reviewer agent construction failed")
@@ -1390,20 +1416,38 @@ async def _run_reviewer_pass(
         _stamp_elapsed()
         return outcome
 
-    prompt = (
-        "Investigate every failing cross-check and open conflict in your "
-        "REVIEW PACKET. Trace each failure DOWN to the leaf that's wrong "
-        "(trace_cascade_source_tool), ground the fix in the PDF, then "
-        "apply_fix. Flag only what you're stuck on or dispute. You have at "
-        f"most {max_turns} turns. Never plug a residual to force a balance."
-    )
-    await _emit("status", {
-        "phase": "started",
-        "message": (
-            f"Reviewer started for {len(failed_payload)} failing check(s) + "
-            f"{len(conflicts or [])} conflict(s); turn budget {max_turns}."
-        ),
-    })
+    if spot_mode is not None:
+        prompt = (
+            "All cross-checks passed and there are no open conflicts. Run a "
+            f"{'FULL holistic' if spot_mode == 'full' else 'LIGHT'} spot-check: "
+            "start with list_facts, then verify the highest-value figures "
+            "(face totals, largest line items, units, signs) against the PDF. "
+            "apply_fix ONLY what you can ground in the PDF; raise_flag anything "
+            f"suspicious you can't resolve. You have at most {max_turns} turns. "
+            "If everything ties out, make no writes. Never plug a residual."
+        )
+        await _emit("status", {
+            "phase": "started",
+            "message": (
+                f"Spot-check ({spot_mode}) started — all cross-checks passed; "
+                f"sanity-checking high-value figures; turn budget {max_turns}."
+            ),
+        })
+    else:
+        prompt = (
+            "Investigate every failing cross-check and open conflict in your "
+            "REVIEW PACKET. Trace each failure DOWN to the leaf that's wrong "
+            "(trace_cascade_source_tool), ground the fix in the PDF, then "
+            "apply_fix. Flag only what you're stuck on or dispute. You have at "
+            f"most {max_turns} turns. Never plug a residual to force a balance."
+        )
+        await _emit("status", {
+            "phase": "started",
+            "message": (
+                f"Reviewer started for {len(failed_payload)} failing check(s) + "
+                f"{len(conflicts or [])} conflict(s); turn budget {max_turns}."
+            ),
+        })
 
     turn_count = 0
     _wallclock_cap = float(getattr(
@@ -2310,6 +2354,29 @@ def _auto_review_enabled() -> bool:
     return os.environ.get("XBRL_AUTO_REVIEW", "true").lower() == "true"
 
 
+def _spot_check_enabled() -> bool:
+    """Whether a CLEAN run (all cross-checks passed, no open conflicts) still
+    gets a grounded spot-check (issue 1, 2026-06-21).
+
+    Controlled by ``XBRL_SPOT_CHECK`` (default ON). Independent of
+    ``XBRL_AUTO_REVIEW`` — that gates the FAILURE-driven reviewer; this gates
+    the clean-run sanity pass. Read fresh each call so a Settings toggle takes
+    effect without a restart.
+    """
+    return os.environ.get("XBRL_SPOT_CHECK", "true").lower() == "true"
+
+
+def _spot_check_mode() -> str:
+    """Spot-check depth: ``"light"`` (default) or ``"full"``.
+
+    ``XBRL_SPOT_CHECK_MODE`` — ``light`` is a tight sanity pass over the
+    high-value figures; ``full`` reuses the holistic reviewer even on a clean
+    run. Any unrecognised value falls back to ``light``.
+    """
+    mode = os.environ.get("XBRL_SPOT_CHECK_MODE", "light").lower()
+    return mode if mode in ("light", "full") else "light"
+
+
 def _entity_memory_enabled() -> bool:
     """Whether per-entity advisory memory injects prior-year prompt hints (item 28).
 
@@ -2386,6 +2453,9 @@ def _load_extended_settings() -> dict:
         "tolerance_rm": tolerance,
         # Reviewer pass auto-trigger (docs/Archive/PLAN-reviewer-agent.md). Default on.
         "auto_review": _auto_review_enabled(),
+        # Issue 1 (2026-06-21): clean-run spot-check toggle + depth. Default on/light.
+        "spot_check": _spot_check_enabled(),
+        "spot_check_mode": _spot_check_mode(),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": _entity_memory_enabled(),
         # Scanned-PDF → readable-doc OCR engine (docs/PLAN-scanned-pdf-to-doc.md).
@@ -4370,7 +4440,8 @@ async def run_multi_agent_stream(
                 c for c in load_open_conflicts(AUDIT_DB_PATH, run_id)
                 if c.get("kind") != "correction_exhausted"
             ]
-            should_correct = bool(hard_failures) or bool(canonical_conflicts)
+            has_issues = bool(hard_failures) or bool(canonical_conflicts)
+            should_correct = has_issues
             # Reviewer auto-trigger toggle (Settings → XBRL_AUTO_REVIEW). When
             # off, a run with failures/conflicts simply finishes and the user
             # triggers the reviewer manually from the Review tab.
@@ -4380,6 +4451,20 @@ async def run_multi_agent_stream(
                     "reviewer for run %s; manual re-review still available", run_id,
                 )
                 should_correct = False
+            # Issue 1 (2026-06-21): when the run is CLEAN (no failing checks,
+            # no open conflicts), still run a grounded spot-check if enabled.
+            # This reuses the whole reviewer pass (snapshot → fix → re-export →
+            # revert) with a spot_check framing; `spot_check_mode` picks the
+            # depth (light/full). Gated by its OWN toggle, independent of
+            # XBRL_AUTO_REVIEW (that gates the failure-driven pass).
+            spot_check_mode: Optional[str] = None
+            if not has_issues and _spot_check_enabled():
+                spot_check_mode = _spot_check_mode()
+                should_correct = True
+                logger.info(
+                    "run %s clean — launching %s spot-check", run_id,
+                    spot_check_mode,
+                )
             if should_correct:
                 # Create + register the CORRECTION run_agent row lazily —
                 # only when we actually launch the agent — so runs without
@@ -4437,6 +4522,7 @@ async def run_multi_agent_stream(
                         event_queue=event_queue,
                         db_path=AUDIT_DB_PATH,
                         run_id=run_id,
+                        spot_check=spot_check_mode,
                         pdf_path=str(session_dir / "uploaded.pdf"),
                     ))
                 # Register the reviewer task so Stop-All (POST /api/abort →
@@ -5106,8 +5192,14 @@ async def run_multi_agent_stream(
         # — a corrector that landed enough writes before its budget
         # ran out to coincidentally clear all checks would silently
         # report "completed" with no human-review signal.
+        # A SPOT-CHECK (clean-run sanity pass) that merely runs out of its
+        # tight turn budget is NOT a convergence failure — there were no
+        # failing checks to converge on. Exclude it from `correction_exhausted`
+        # so a thorough light spot-check hitting its 6-turn cap doesn't falsely
+        # flag an otherwise-clean run as "needs review" (peer-review HIGH).
         correction_exhausted = bool(
             correction_outcome and correction_outcome.get("exhausted")
+            and not correction_outcome.get("spot_check")
         )
         # Phase E (folds peer-review finding 4): in canonical mode the DB is
         # the authoritative store, so unresolved reconciliation conflicts mean
@@ -5138,6 +5230,21 @@ async def run_multi_agent_stream(
         validator_failed = bool(
             validator_outcome and validator_outcome.get("error")
         )
+        # Peer-review HIGH (2026-06-21): a reviewer / spot-check pass that
+        # FAILED to run (model build, snapshot, no-facts, tool exception) must
+        # not hide under a green run badge while its CORRECTION row shows
+        # "failed" — that's the same internal inconsistency the validator_failed
+        # / open_conflicts treatment already guards. Exclude `reviewer_exhausted`
+        # (a budget exhaustion, not a hard failure): it's handled by
+        # `correction_exhausted` on the failure path and is advisory-only for a
+        # spot-check (above). A genuine error tips an otherwise-clean run to
+        # completed_with_errors. Most relevant to the clean-run spot-check,
+        # which is the only path where the reviewer runs WITHOUT failing checks
+        # already forcing the run to completed_with_errors.
+        reviewer_failed = bool(
+            correction_outcome and correction_outcome.get("error")
+            and correction_outcome.get("error") != "reviewer_exhausted"
+        )
         if all_agents_ok and merge_result.success and correction_exhausted:
             overall_status = "correction_exhausted"
         elif canonical_reexport_failed:
@@ -5147,7 +5254,8 @@ async def run_multi_agent_stream(
             overall_status = "completed_with_errors"
         elif (all_agents_ok and merge_result.success and not any_check_failed
               and not cross_check_crashed and open_conflicts == 0
-              and not any_agent_flagged and not validator_failed):
+              and not any_agent_flagged and not validator_failed
+              and not reviewer_failed):
             # Peer-review fix (2026-04-27): a cross-check pass that
             # crashed produced an empty results list, so
             # ``any_check_failed`` is misleadingly False. Without the
@@ -5167,6 +5275,11 @@ async def run_multi_agent_stream(
         elif all_agents_ok and merge_result.success and validator_failed:
             # Extraction/merge/cross-checks are clean, but the notes-validator
             # pass failed (peer-review HIGH) → needs review, not a clean badge.
+            overall_status = "completed_with_errors"
+        elif all_agents_ok and merge_result.success and reviewer_failed:
+            # Extraction/merge/cross-checks are clean, but the reviewer /
+            # spot-check pass failed to run (peer-review HIGH, 2026-06-21) →
+            # needs review, not a clean badge.
             overall_status = "completed_with_errors"
         elif all_agents_ok and (any_check_failed or cross_check_crashed):
             overall_status = "completed_with_errors"

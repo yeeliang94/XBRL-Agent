@@ -274,3 +274,52 @@ def test_turn_cap_below_pydantic_50(seeded):
     assert MAX_AGENT_ITERATIONS < 50
     worst = compute_reviewer_turn_cap(filing_level="group", n_items=999)
     assert worst < MAX_AGENT_ITERATIONS
+
+
+@pytest.mark.parametrize("level, mode, expected", [
+    ("company", "light", 6),
+    ("group", "light", 8),
+    ("company", "full", 12),   # reuses reviewer base cap (n_items=0)
+    ("group", "full", 16),     # base 12 + group 4
+])
+def test_spot_check_turn_cap(level, mode, expected):
+    """Issue 1: the clean-run spot-check cap. Light is a tight sanity pass;
+    full reuses the holistic reviewer budget."""
+    from correction.reviewer_agent import compute_spot_check_turn_cap
+    assert compute_spot_check_turn_cap(filing_level=level, mode=mode) == expected
+
+
+def test_spot_check_turn_cap_below_pydantic_50():
+    """Both spot-check depths stay under MAX_AGENT_ITERATIONS (gotcha #18)."""
+    from agent_tracing import MAX_AGENT_ITERATIONS
+    from correction.reviewer_agent import compute_spot_check_turn_cap
+    for level in ("company", "group"):
+        for mode in ("light", "full"):
+            assert compute_spot_check_turn_cap(
+                filing_level=level, mode=mode
+            ) < MAX_AGENT_ITERATIONS
+
+
+def test_spot_check_prompt_swaps_body_and_packet(seeded):
+    """Issue 1: spot_check_mode='light' swaps to the tight spot_check.md body;
+    'full' keeps the reviewer.md body; both replace the failing-check packet
+    with a spot-check packet (no failing checks/conflicts to inline). The
+    normal path (no spot_check_mode) is unchanged."""
+    from correction.reviewer_agent import render_reviewer_prompt
+    db_path, run_id = seeded
+    light = render_reviewer_prompt(
+        db_path=db_path, run_id=run_id, filing_level="company",
+        filing_standard="mfrs", spot_check_mode="light",
+    )
+    full = render_reviewer_prompt(
+        db_path=db_path, run_id=run_id, filing_level="company",
+        filing_standard="mfrs", spot_check_mode="full",
+    )
+    normal = render_reviewer_prompt(
+        db_path=db_path, run_id=run_id, filing_level="company",
+        filing_standard="mfrs",
+    )
+    assert "fast spot-check" in light          # spot_check.md body
+    assert "fast spot-check" not in full       # reviewer.md body retained
+    assert "SPOT-CHECK PACKET" in light and "SPOT-CHECK PACKET" in full
+    assert "SPOT-CHECK PACKET" not in normal   # failing-check packet path intact

@@ -21,6 +21,32 @@ logger = logging.getLogger("server")
 
 router = APIRouter()
 
+# Per-session scout attempt generation (peer-review HIGH, 2026-06-21). The
+# scout endpoint can fire again while a cancelled scout is still unwinding (the
+# common "cancel Auto-detect, re-run" flow). Because the SCOUT run_agents row is
+# now reused per run (one row, not a duplicate per click), the OLD stream's
+# finally must not (a) finalize the row the NEW attempt just reset to running,
+# nor (b) unregister the new attempt's task under the shared "scout" key — both
+# would corrupt the live attempt. Each attempt claims a monotonically-rising
+# generation here (all on the single asyncio loop, so no lock is needed); the
+# finally only finalizes / unregisters when it still owns the current
+# generation. A superseded attempt leaves the row + registry slot to its owner.
+_scout_attempt_gen: dict[str, int] = {}
+
+
+def _claim_scout_attempt(session_id: str) -> int:
+    """Mark a new scout attempt as the current one for this session, returning
+    its generation token."""
+    gen = _scout_attempt_gen.get(session_id, 0) + 1
+    _scout_attempt_gen[session_id] = gen
+    return gen
+
+
+def _scout_attempt_is_current(session_id: str, gen: int) -> bool:
+    """True if `gen` is still the latest scout attempt for the session — i.e. no
+    newer attempt has taken over the shared SCOUT row / "scout" task slot."""
+    return _scout_attempt_gen.get(session_id) == gen
+
 
 # --- Upload endpoint ---
 
@@ -209,8 +235,13 @@ async def scout_pdf(session_id: str, request: Request):
             from db import repository as repo
             conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
             try:
-                agent_row_id = repo.create_run_agent(
-                    conn, run_id, "SCOUT", model=scout_model_name,
+                # Idempotent per run: a re-scout (e.g. cancel Auto-detect
+                # midway, then re-run) reuses the existing SCOUT row instead
+                # of inserting a second one — otherwise History shows two
+                # SCOUT cards that both resolve to the single overwritten
+                # SCOUT_conversation_trace.json (the "two scout traces" bug).
+                agent_row_id = repo.reset_or_create_scout_agent_row(
+                    conn, run_id, model=scout_model_name,
                 )
                 conn.commit()
                 return agent_row_id
@@ -261,10 +292,14 @@ async def scout_pdf(session_id: str, request: Request):
 
         scout_task: Optional[asyncio.Task] = None
         scout_run_id = _resolve_scout_run_id()
+        # Claim this attempt's generation IMMEDIATELY after (re)setting the
+        # shared SCOUT row, before the first await — so a still-unwinding older
+        # attempt sees it's been superseded and skips its finalize/unregister.
         scout_agent_row_id = (
             _record_scout_agent_row(scout_run_id)
             if scout_run_id is not None else None
         )
+        scout_attempt = _claim_scout_attempt(session_id)
         scout_row_status = "failed"
         scout_error_detail = "scout failed"
         try:
@@ -341,21 +376,27 @@ async def scout_pdf(session_id: str, request: Request):
             yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
 
         finally:
-            # Cancel the scout task if still running (e.g. client disconnected)
+            # Cancel THIS attempt's task if still running (e.g. client
+            # disconnected). Always safe — we only ever cancel our own task.
             if scout_task is not None and not scout_task.done():
                 scout_task.cancel()
                 try:
                     await scout_task
                 except (asyncio.CancelledError, Exception):
                     pass
-            # Clean up the task registry entry to avoid stale references
-            task_registry.unregister(session_id, "scout")
-            # Item 2: finalize the SCOUT audit row so the trace route's
-            # whitelist gate stays open and History/Telemetry can list it.
-            if scout_agent_row_id is not None:
-                _finish_scout_agent_row(
-                    scout_agent_row_id, scout_row_status, scout_error_detail,
-                )
+            # Only finalize the row + release the registry slot if we still own
+            # the current attempt. If a newer scout took over while we were
+            # unwinding, it now owns the (reused) row and the "scout" task slot
+            # — touching them here would mark the live attempt cancelled and
+            # unregister its task, breaking Stop (peer-review HIGH).
+            if _scout_attempt_is_current(session_id, scout_attempt):
+                task_registry.unregister(session_id, "scout")
+                # Item 2: finalize the SCOUT audit row so the trace route's
+                # whitelist gate stays open and History/Telemetry can list it.
+                if scout_agent_row_id is not None:
+                    _finish_scout_agent_row(
+                        scout_agent_row_id, scout_row_status, scout_error_detail,
+                    )
 
     return StreamingResponse(
         scout_stream(),

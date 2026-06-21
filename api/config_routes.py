@@ -34,6 +34,10 @@ async def get_config():
         # Whether the reviewer pass auto-runs after extraction (Settings
         # toggle). Surfaced here so the SPA can label the run accordingly.
         "auto_review": server._auto_review_enabled(),
+        # Clean-run spot-check (issue 1): whether a run with no failing checks
+        # still gets a grounded sanity pass, and at what depth (light/full).
+        "spot_check": server._spot_check_enabled(),
+        "spot_check_mode": server._spot_check_mode(),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": server._entity_memory_enabled(),
     }
@@ -129,6 +133,18 @@ async def update_settings(body: dict):
     if "auto_review" in body:
         set_key(str(ENV_FILE), "XBRL_AUTO_REVIEW",
                 "true" if body["auto_review"] else "false")
+    # Clean-run spot-check (issue 1): enable toggle + depth (light/full).
+    if "spot_check" in body:
+        set_key(str(ENV_FILE), "XBRL_SPOT_CHECK",
+                "true" if body["spot_check"] else "false")
+    if "spot_check_mode" in body:
+        mode = str(body["spot_check_mode"]).strip().lower()
+        if mode not in ("light", "full"):
+            raise HTTPException(
+                status_code=400,
+                detail="spot_check_mode must be 'light' or 'full'.",
+            )
+        set_key(str(ENV_FILE), "XBRL_SPOT_CHECK_MODE", mode)
     # Item 28 — per-entity advisory memory toggle (prior-year prompt hints).
     if "entity_memory" in body:
         set_key(str(ENV_FILE), "XBRL_ENTITY_MEMORY",

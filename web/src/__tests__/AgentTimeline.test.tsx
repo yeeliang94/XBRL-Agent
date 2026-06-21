@@ -20,9 +20,18 @@ function makeEntry(partial: Partial<ToolTimelineEntry>): ToolTimelineEntry {
 }
 
 describe("AgentTimeline", () => {
-  test("Step 3.1 — empty state renders 'Waiting for the agent to start'", () => {
-    render(<AgentTimeline events={[]} toolTimeline={[]} isRunning={false} />);
+  test("Step 3.1 — empty state while running renders 'Waiting for the agent to start'", () => {
+    render(<AgentTimeline events={[]} toolTimeline={[]} isRunning={true} />);
     expect(screen.getByText(/Waiting for the agent to start/)).toBeInTheDocument();
+  });
+
+  test("empty state when NOT running (history) reflects no recorded activity, not 'waiting'", () => {
+    // Issue 5 (2026-06-21): a completed agent with no persisted timeline
+    // events (e.g. scout in History) must NOT show the misleading
+    // "Waiting for the agent to start" placeholder.
+    render(<AgentTimeline events={[]} toolTimeline={[]} isRunning={false} />);
+    expect(screen.queryByText(/Waiting for the agent to start/)).not.toBeInTheDocument();
+    expect(screen.getByText(/No timeline activity was recorded/i)).toBeInTheDocument();
   });
 
   test("timeline container keeps inner padding without adding another border", () => {

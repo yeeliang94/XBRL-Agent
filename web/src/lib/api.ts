@@ -178,6 +178,9 @@ export async function updateSettings(
     scout_enabled_default: boolean;
     tolerance_rm: number;
     auto_review: boolean;
+    // Clean-run spot-check (issue 1): toggle + depth.
+    spot_check: boolean;
+    spot_check_mode: "light" | "full";
     entity_memory: boolean;
     // Scanned-PDF → readable-doc OCR engine: 'rapidocr' | 'easyocr'.
     docling_ocr_engine: string;

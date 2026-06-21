@@ -327,3 +327,87 @@ def test_group_filing_e2e_mocked(full_pipeline_env):
     stored = json.loads(row["run_config_json"])
     assert stored["filing_level"] == "group"
     conn.close()
+
+
+def test_clean_run_fires_spot_check_when_enabled(full_pipeline_env, monkeypatch):
+    """Issue 1 (2026-06-21): when XBRL_SPOT_CHECK is on, a run whose
+    cross-checks ALL pass still launches a spot-check (reviewer pass with
+    spot_check framing) — proving the clean-run trigger is wired in
+    run_multi_agent_stream. The suite defaults the toggle OFF (conftest), so
+    this opts back in. The mocked run carries no real facts, so the pass
+    no-ops with `no_extracted_facts_to_review` — but it still emits the
+    CORRECTION agent event, which is the trigger signal we pin here."""
+    client, session_id, out, session_dir = full_pipeline_env
+    monkeypatch.setenv("XBRL_SPOT_CHECK", "true")
+    monkeypatch.setenv("XBRL_SPOT_CHECK_MODE", "light")
+
+    all_statements = list(StatementType)
+    variants = {
+        StatementType.SOFP: "CuNonCu", StatementType.SOPL: "Function",
+        StatementType.SOCI: "BeforeTax", StatementType.SOCF: "Indirect",
+        StatementType.SOCIE: "Default",
+    }
+    fake_coordinator_result = CoordinatorResult(agent_results=[
+        AgentResult(statement_type=stmt, variant=variants[stmt],
+                    status="succeeded",
+                    workbook_path=str(session_dir / f"{stmt.value}_filled.xlsx"))
+        for stmt in all_statements
+    ])
+    # Every cross-check passes → the run is CLEAN → only the spot-check can
+    # add a CORRECTION event.
+    fake_checks = [CrossCheckResult(name="sofp_balance", status="passed",
+                                    expected=1.0, actual=1.0, diff=0.0,
+                                    tolerance=1.0, message="OK")]
+
+    run_config = {
+        "statements": [s.value for s in all_statements],
+        "variants": {s.value: v for s, v in variants.items()},
+        "models": {}, "infopack": None, "use_scout": False,
+    }
+
+    async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
+        if event_queue is not None:
+            for ar in fake_coordinator_result.agent_results:
+                await event_queue.put({"event": "complete", "data": {
+                    "success": True, "agent_id": ar.statement_type.value.lower(),
+                    "agent_role": ar.statement_type.value,
+                    "workbook_path": ar.workbook_path, "error": ar.error}})
+            await event_queue.put(None)
+        return fake_coordinator_result
+
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
+         patch("cross_checks.framework.run_all", return_value=fake_checks), \
+         patch("cross_checks.framework.run_all_facts", return_value=fake_checks):
+        resp = client.post(f"/api/run/{session_id}", json=run_config)
+
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    # The spot-check fired: a CORRECTION-role event is present (the trigger
+    # signal). Without the spot-check wiring a clean run emits none.
+    correction_events = [
+        e for e in events
+        if isinstance(e.get("data"), dict)
+        and e["data"].get("agent_role") == "CORRECTION"
+    ]
+    assert correction_events, "clean run with XBRL_SPOT_CHECK on must launch the spot-check"
+    # And the reviewing stage was emitted at the boundary.
+    stages = [e["data"].get("stage") for e in events
+              if e["event"] == "pipeline_stage" and isinstance(e.get("data"), dict)]
+    assert "reviewing" in stages
+
+    # Peer-review HIGH (2026-06-21): this mocked run has no real facts, so the
+    # spot-check fails with `no_extracted_facts_to_review` and its CORRECTION
+    # row is "failed". A failed spot-check must NOT hide under a green badge —
+    # the run is downgraded to completed_with_errors, not completed.
+    db_path = out / "xbrl_agent.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        status = conn.execute(
+            "SELECT status FROM runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert status == "completed_with_errors", (
+        f"failed spot-check must downgrade the run, got {status!r}"
+    )

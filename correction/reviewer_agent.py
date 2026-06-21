@@ -50,6 +50,11 @@ logger = logging.getLogger("server")
 _PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "reviewer.md"
 )
+# Light-mode spot-check (clean-run sanity pass) system prompt. The FULL spot
+# check reuses reviewer.md; only LIGHT swaps to this tighter body.
+_SPOT_CHECK_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "spot_check.md"
+)
 
 
 def _now() -> str:
@@ -842,6 +847,7 @@ def render_reviewer_prompt(
     guidance: Optional[str] = None,
     filing_level: str = "company",
     filing_standard: str = "mfrs",
+    spot_check_mode: Optional[str] = None,
 ) -> str:
     """Compose the reviewer system prompt.
 
@@ -850,8 +856,18 @@ def render_reviewer_prompt(
     should investigate, plus any free-text human guidance from a re-review.
     The packet leads with the filing context (standard + level) so the
     reviewer reads/writes the right ``entity_scope`` on Group filings.
+
+    ``spot_check_mode`` (``"light"`` / ``"full"`` / ``None``) drives the
+    clean-run spot-check: when set, there are NO failing checks/conflicts, so
+    the packet is replaced with a spot-check framing ("everything passed —
+    sanity-check the high-value figures"). ``light`` also swaps the body to the
+    tighter ``prompts/spot_check.md``; ``full`` keeps the holistic reviewer body.
     """
-    body = _PROMPT_PATH.read_text(encoding="utf-8").strip()
+    mode = (spot_check_mode or "").lower() or None
+    if mode == "light":
+        body = _SPOT_CHECK_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    else:
+        body = _PROMPT_PATH.read_text(encoding="utf-8").strip()
     # Holistic sight (Phase 1): start the reviewer with the whole filled
     # picture so it can spot duplicates/misclassifications across statements,
     # not just the cell a check named. Best-effort — a summary failure must
@@ -871,6 +887,16 @@ def render_reviewer_prompt(
     # server already knows (the children feeding a failing total + their signed
     # sum). Computing it once here lets the reviewer go straight to the PDF /
     # the fix. Best-effort and per-check guarded: a trace failure yields "".
+    if mode is not None:
+        # Clean-run spot-check: no failing checks / conflicts to inline. The
+        # packet just orients the reviewer with the filing context + the
+        # fact summary and tells it this is a sanity pass.
+        packet = _format_spot_check_packet(
+            guidance, filing_level=filing_level,
+            filing_standard=filing_standard, fact_summary=fact_summary,
+            mode=mode,
+        )
+        return f"{body}\n\n{packet}"
     prefix = _family_prefix(filing_standard, filing_level)
     check_traces: list[str] = []
     for c in (failed_checks or []):
@@ -884,6 +910,49 @@ def render_reviewer_prompt(
         fact_summary=fact_summary, check_traces=check_traces,
     )
     return f"{body}\n\n{packet}"
+
+
+def _format_spot_check_packet(
+    guidance: Optional[str],
+    *,
+    filing_level: str,
+    filing_standard: str,
+    fact_summary: str,
+    mode: str,
+) -> str:
+    """Render the clean-run spot-check packet (no failing checks/conflicts).
+
+    Mirrors the head of ``_format_review_packet`` — filing context first so the
+    reviewer reads/writes the right ``entity_scope`` on Group filings — then the
+    WHAT WAS FILLED summary and a short "everything passed; sanity-check the
+    high-value figures" instruction in place of the failing-check list.
+    """
+    std = (filing_standard or "mfrs").upper()
+    lvl = (filing_level or "company").capitalize()
+    lines = [
+        "=== SPOT-CHECK PACKET ===",
+        f"Filing: {std} · {lvl}.",
+        (
+            "All cross-checks PASSED and there are NO open conflicts. This is "
+            f"a {'FULL holistic' if mode == 'full' else 'LIGHT'} spot-check — "
+            "a sanity pass over the figures cross-checks can't catch (wrong "
+            "value against the PDF, flipped sign, 1000× scale slip, "
+            "misplacement, balancing double-count)."
+        ),
+    ]
+    if lvl.lower() == "group":
+        lines.append(
+            "GROUP filing: figures exist under BOTH Group and Company scopes — "
+            "name the entity_scope when you read/write."
+        )
+    lines.append("")
+    lines.append("WHAT WAS FILLED:")
+    lines.append(fact_summary or "(no facts filled yet)")
+    if guidance:
+        lines.append("")
+        lines.append("HUMAN GUIDANCE (focus your spot-check here):")
+        lines.append(guidance.strip())
+    return "\n".join(lines)
 
 
 def _trace_for_check(
@@ -1084,6 +1153,24 @@ def compute_reviewer_turn_cap(*, filing_level: str, n_items: int) -> int:
     return max(12, min(36, raw))
 
 
+def compute_spot_check_turn_cap(*, filing_level: str, mode: str) -> int:
+    """Turn cap for the clean-run spot-check (gotcha #18 — stays below 40/50).
+
+    The spot-check fires when NOTHING failed, so there's no failing-check list
+    to scale against. ``light`` is a deliberately tight sanity pass over the
+    highest-value figures; ``full`` reuses the holistic reviewer budget so the
+    deeper audit has the same read headroom it gets on the failure path.
+    """
+    is_group = (filing_level or "").lower() == "group"
+    if (mode or "light").lower() == "full":
+        # Same envelope as the reviewer's holistic audit (no failing items to
+        # add, so this is the base + group bump).
+        return compute_reviewer_turn_cap(filing_level=filing_level, n_items=0)
+    # Light: a handful of grounded checks. 6 company / 8 group — enough to
+    # sample the face totals + units + a suspected double-count, no more.
+    return 8 if is_group else 6
+
+
 def create_reviewer_agent(
     *,
     model,
@@ -1095,6 +1182,7 @@ def create_reviewer_agent(
     failed_checks: Optional[Sequence[dict[str, Any]]] = None,
     conflicts: Optional[Sequence[dict[str, Any]]] = None,
     guidance: Optional[str] = None,
+    spot_check_mode: Optional[str] = None,
 ):
     """Build the reviewer agent. Returns ``(agent, deps)``.
 
@@ -1102,6 +1190,10 @@ def create_reviewer_agent(
     ``calculator``. Write tools: ``apply_fix`` (guarded), ``raise_flag``.
     The system prompt carries the review packet from
     :func:`render_reviewer_prompt`.
+
+    ``spot_check_mode`` (``"light"`` / ``"full"`` / ``None``) selects the
+    clean-run spot-check framing — see :func:`render_reviewer_prompt`. The
+    registered toolset is identical either way; only the system prompt changes.
     """
     from model_settings import build_model_settings
     from concept_model.facts_api import FactWrite
@@ -1115,6 +1207,7 @@ def create_reviewer_agent(
         db_path=db_path, run_id=run_id, failed_checks=failed_checks,
         conflicts=conflicts, guidance=guidance,
         filing_level=filing_level, filing_standard=filing_standard,
+        spot_check_mode=spot_check_mode,
     )
     # Fix B (2026-06-20): steer the reviewer off search_pdf_text on a fully
     # scanned PDF (no text layer) — it can only return a 'scanned' signal.
