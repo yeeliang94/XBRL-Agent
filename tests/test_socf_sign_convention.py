@@ -91,6 +91,33 @@ def test_added_outflow_rows_get_negative_entry_guidance() -> None:
     assert "obey the per-row ADDED/SUBTRACTED label" in block
 
 
+def test_subtracted_branch_has_math_first_rule_and_worked_examples() -> None:
+    """run-50 / Amway SOCF defect: the SUBTRACTED branch previously gave only
+    a name-heuristic ('enter a positive magnitude matching the plain name')
+    with worked examples for outflows only. A SUBTRACTED gain row and a
+    SUBTRACTED non-cash add-back row both fell through it and were entered
+    backwards (RM 61,976 articulation gap). Pin the generalizable fix:
+
+    1. A math-first ``V = C / coefficient`` rule that works for every row.
+    2. A worked SUBTRACTED-gain example (cash effect -31,276 → enter +31,276).
+    3. A worked SUBTRACTED-add-back example (cash effect +62,264 → enter -62,264).
+    """
+    path = REPO / "XBRL-template-MFRS" / "Company" / "07-SOCF-Indirect.xlsx"
+    block = socf_sign_convention_block(path)
+    assert block is not None
+    # 1. The math-first rule is present and named.
+    assert "V = C / coefficient" in block
+    # 2. SUBTRACTED gain worked example (the r34 case).
+    assert "+31,276" in block
+    assert "double-negate" in block.lower()
+    # 3. SUBTRACTED non-cash add-back worked example (the r32 case).
+    assert "-62,264" in block
+    # The SUBTRACTED branch now carries an explicit gain/loss bullet (not only
+    # the ADDED branch), so a SUBTRACTED gain/loss row isn't left to the
+    # ADDED-branch directional reasoning.
+    assert "SUBTRACTED gain/loss adjustment" in block
+
+
 def test_socf_sign_block_for_mpers_group() -> None:
     """MPERS Group SOCF-Indirect carries fewer rows but the sign block
     must still come back populated. RUN-REVIEW MPERS coverage."""

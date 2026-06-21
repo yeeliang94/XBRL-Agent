@@ -483,6 +483,16 @@ async def run_extraction(
                 stmt_type.value
             )
 
+        # Citation hygiene: thread the scout-measured printed-folio↔PDF-page
+        # offset so the face prompt tells the agent to cite PDF page indices
+        # (notes agents already get this). Rides inside scout_context like
+        # _prior_year, so no signature changes down the agent-creation chain.
+        page_offset = getattr(infopack, "page_offset", 0) if infopack is not None else 0
+        if page_offset:
+            if scout_context is None:
+                scout_context = {}
+            scout_context["page_offset"] = page_offset
+
         # Resolve template path for this variant against the requested
         # standard so MPERS runs land on XBRL-template-MPERS/ and SoRE on
         # an MFRS run is rejected at the registry layer rather than silently

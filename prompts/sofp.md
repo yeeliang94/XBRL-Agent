@@ -131,7 +131,23 @@ Every PPE component must map to its own dedicated row when one exists:
 `Motor vehicles`, `Construction in progress / Asset work-in-progress`,
 `Office equipment, fixture and fittings`, `Computer software and
 hardware`, etc. Do not lump them into `Other property, plant and
-equipment` to match a face total.
+equipment` to match a face total. The SAME rule applies to the
+intangibles and investments sub-blocks — fill the dedicated class row
+before the residual `Other …` row.
+
+This dedicated-row rule applies PER PERIOD, independently for CY and PY.
+Read the note's CY column and PY column separately and fill the dedicated
+row for BOTH years. A class that is zero in one year can still be non-zero
+in the other — NEVER zero a dedicated class row in one year just because it
+is zero in the other, and NEVER let a class the note shows as non-zero in a
+given year flow into the residual `Other …` bucket for that year. Because
+the sub-sheet total ties regardless of how the classes are split, a
+misallocation here is INVISIBLE to `verify_totals` — only your careful
+per-year reading prevents it. (Failure to avoid: a PPE note shows `Motor
+vehicles` PY net carrying = 85,078 and CY = 0; the dedicated `Motor
+vehicles` row must carry PY 85,078 and CY 0 — do NOT put 0 in both years
+and add 85,078 to `Office equipment, fixture and fittings`, which ties the
+total but misclassifies the class.)
 
 === AFS NOTE → SSM ROW MAPPING (known confusing cases) ===
 
