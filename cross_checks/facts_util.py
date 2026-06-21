@@ -153,6 +153,85 @@ def socie_has_nci(ctx, stmt: StatementType, period: str, entity_scope: str) -> b
     return False
 
 
+def read_socf_net_change(ctx, period: str, entity_scope: str) -> LabelledValue:
+    """Read the SOCF FINAL net-change-in-cash row (after FX) from facts.
+
+    This is the COMPUTED subtotal closing cash must reconcile against
+    (opening + net change == closing). It is resolved STRUCTURALLY, not by an
+    exact label, because the layout differs by standard:
+
+    * MFRS labels the final row "... after effect of exchange rate changes";
+    * MPERS labels it plainly "Net increase (decrease) in cash and cash
+      equivalents" — no "after" — while an earlier subtotal carries the
+      "... before effect of exchange rate changes" wording.
+
+    So the final row is the bottom-most one whose label mentions a cash
+    "net increase"/"net change" and does NOT say "before". The "cash" guard
+    stops operating-section working-capital rows ("net increase in inventories
+    / receivables") from matching. (run-50 SOCF articulation gap.) The COMPUTED
+    total is present in facts because the cascade persists every COMPUTED
+    parent into ``run_concept_facts`` (see ``read_run_facts``).
+    """
+    template_id = ctx.template_ids.get(StatementType.SOCF)
+    if template_id is None:
+        return LabelledValue(None, None, None)
+    rows = ctx.conn.execute(
+        "SELECT concept_uuid, canonical_label, render_sheet, render_row "
+        "FROM concept_nodes WHERE template_id = ? ORDER BY render_row",
+        (template_id,),
+    ).fetchall()
+    matches: list[tuple[str, str, int]] = []
+    for cu, clabel, sheet, row in rows:
+        norm = str(clabel).strip().lstrip("*").strip().lower()
+        if (
+            ("net increase" in norm or "net change" in norm)
+            and "cash" in norm
+            and "before" not in norm
+        ):
+            matches.append((cu, sheet, row))
+    # Bottom-most match is the final (after-FX) net change: it sits below the
+    # before-FX subtotal and above the closing-cash block.
+    for cu, sheet, row in reversed(matches):
+        value = _fact_value(ctx, template_id, cu, period, entity_scope)
+        if value is not None:
+            return LabelledValue(value, sheet, row)
+    return LabelledValue(None, None, None)
+
+
+def read_labelled_value_last(
+    ctx, stmt: StatementType, label, period: str, entity_scope: str,
+) -> LabelledValue:
+    """Like :func:`read_labelled_value` but resolves the BOTTOM-MOST row whose
+    label matches ``label`` exactly, then reads its fact.
+
+    Needed where one template carries the SAME label on two rows computed from
+    DIFFERENT leaf sets — e.g. SOCI's "*Total comprehensive income" appears
+    twice: r44 (= profit + OCI, the income side) and r48 (= owners + NCI, the
+    attribution side). ``read_labelled_value`` returns the first; this returns
+    the last so the attribution-footing check can compare the two independent
+    computations. Returns ``LabelledValue(None, None, None)`` when fewer than
+    one row matches or the bottom row carries no fact (e.g. attribution not
+    disclosed — the cascade writes no row for an all-blank computed total).
+    """
+    template_id = ctx.template_ids.get(stmt)
+    if template_id is None:
+        return LabelledValue(None, None, None)
+    target = str(label).strip().lstrip("*").strip().lower()
+    rows = ctx.conn.execute(
+        "SELECT concept_uuid, canonical_label, render_sheet, render_row "
+        "FROM concept_nodes WHERE template_id = ? ORDER BY render_row",
+        (template_id,),
+    ).fetchall()
+    last = None
+    for cu, clabel, sheet, row in rows:
+        if str(clabel).strip().lstrip("*").strip().lower() == target:
+            last = (cu, sheet, row)
+    if last is None:
+        return LabelledValue(None, None, None)
+    cu, sheet, row = last
+    return LabelledValue(_fact_value(ctx, template_id, cu, period, entity_scope), sheet, row)
+
+
 def read_matrix_value(
     ctx,
     stmt: StatementType,

@@ -151,6 +151,13 @@ def _compose_feedback(
     deliberately kept OUT of the `mismatches` list so callers that assert
     on the raw arithmetic mismatches are unaffected."""
     if not mismatches:
+        # A balanced statement can still carry a fail-closed diagnostic (e.g.
+        # SOCF's articulation check could not bind its net-change row, so it
+        # went unverified). Surface it after the pass message instead of
+        # swallowing it — a silently dropped diagnostic is the very failure
+        # mode the SOCF articulation hardening exists to prevent (run-50).
+        if diagnostics:
+            return "\n".join([passed_message, *diagnostics])
         return passed_message
     lines = list(mismatches)
     if diagnostics:
@@ -1253,10 +1260,24 @@ def _verify_socf(
                 rows_by_label.setdefault("net_investing", row)
             elif "net cash flows" in norm and "financing" in norm:
                 rows_by_label.setdefault("net_financing", row)
-            elif "net increase" in norm and "after" in norm:
-                rows_by_label.setdefault("net_increase_after_fx", row)
-            elif "net increase" in norm and "before" in norm:
-                rows_by_label.setdefault("net_increase_before_fx", row)
+            elif "net increase" in norm and "cash" in norm:
+                # The two cash net-change subtotals. The before-FX one is the
+                # "... before effect of exchange rate changes" row; the FINAL
+                # (after-FX) net change is the OTHER one. Match the final row
+                # on "not before" rather than requiring the word "after",
+                # because the MPERS SOCF-Indirect template labels it plainly
+                # "*Net increase (decrease) in cash and cash equivalents" with
+                # no "after" — the old `and "after" in norm` test never bound
+                # it, so the closing-cash articulation check (below) was
+                # silently skipped and a non-articulating SOCF passed (run-50
+                # / Amway, RM 61,976). The "cash" guard keeps operating-section
+                # working-capital rows ("net increase in inventories /
+                # receivables") — which are about working capital, not cash —
+                # from ever matching here.
+                if "before" in norm:
+                    rows_by_label.setdefault("net_increase_before_fx", row)
+                else:
+                    rows_by_label.setdefault("net_increase_after_fx", row)
             elif "cash and cash equivalents at end" in norm:
                 rows_by_label.setdefault("cash_end", row)
             elif "cash and cash equivalents at beginning" in norm:
@@ -1337,6 +1358,21 @@ def _verify_socf(
                 })
                 if hint:
                     diagnostics.append(hint)
+        elif "cash_beginning" in col_totals and "cash_end" in col_totals:
+            # Fail closed, loudly. We have the opening- and closing-cash leaves
+            # but couldn't bind the net-change row, so the roll-forward identity
+            # (closing == opening + net change) went UNVERIFIED. A silently
+            # skipped articulation check is exactly how the run-50 SOCF sign
+            # defect shipped "completed". Surface it as a diagnostic so a
+            # skipped check is visible, not invisible. (Non-failing: a genuine
+            # template gap shouldn't fail an otherwise-balanced statement.)
+            diagnostics.append(
+                f"{pfx}SOCF articulation NOT verified: the closing-cash and "
+                f"opening-cash lines were found but the net-increase-after-FX "
+                f"row could not be located, so closing cash was not reconciled "
+                f"to opening cash + net change. Check the net-change row label "
+                f"on this template."
+            )
 
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")

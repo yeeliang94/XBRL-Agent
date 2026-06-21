@@ -158,6 +158,10 @@ def build_default_cross_checks() -> list:
     from cross_checks.soci_to_socie_tci import SOCIToSOCIETCICheck
     from cross_checks.socie_to_sofp_equity import SOCIEToSOFPEquityCheck
     from cross_checks.socf_to_sofp_cash import SOCFToSOFPCashCheck
+    from cross_checks.socf_articulation import SOCFArticulationCheck
+    from cross_checks.attribution_footing import (
+        SOPLAttributionFootingCheck, SOCIAttributionFootingCheck,
+    )
     from cross_checks.sore_to_sofp_retained_earnings import (
         SoREToSOFPRetainedEarningsCheck,
     )
@@ -167,6 +171,9 @@ def build_default_cross_checks() -> list:
         SOCIToSOCIETCICheck(),
         SOCIEToSOFPEquityCheck(),
         SOCFToSOFPCashCheck(),
+        SOCFArticulationCheck(),
+        SOPLAttributionFootingCheck(),
+        SOCIAttributionFootingCheck(),
         SoREToSOFPRetainedEarningsCheck(),
     ]
 

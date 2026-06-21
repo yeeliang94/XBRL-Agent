@@ -111,6 +111,13 @@ def render_prompt(
     prior_block = _render_prior_year_advisory_block((scout_context or {}).get("_prior_year") or {})
     if prior_block:
         parts.append(prior_block)
+    # Citation hygiene: render the printed-folio↔PDF-page offset so face agents
+    # cite PDF page indices like notes agents do (rides in scout_context, same
+    # threading as _prior_year). Without it, face evidence cites the printed
+    # folio and notes_consistency sees spurious disjoint-page warnings.
+    offset_block = _render_page_offset_block((scout_context or {}).get("page_offset"))
+    if offset_block:
+        parts.append(offset_block)
     parts.append(nav)
 
     # Group filing overlay — appended after navigation so the agent sees
@@ -459,6 +466,34 @@ def _sanitize_advisory_filename(raw: object) -> str:
     cleaned = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", raw)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned[:_ADVISORY_FILENAME_MAX_CHARS]
+
+
+def _render_page_offset_block(page_offset) -> str:
+    """Render the PDF↔printed-folio offset hint for FACE extraction agents.
+
+    Mirrors ``notes.agent._render_page_offset_block`` (notes agents already get
+    this). A positive offset means the printed folio at the bottom of a page
+    image is PDF page MINUS offset, so an agent that cites the folio it sees in
+    the footer will name a different page than the notes agents do — which makes
+    ``notes_consistency`` cross-checks fire spurious disjoint-page warnings.
+    Telling every agent to cite the PDF page index (the number it passed to
+    ``view_pdf_pages``) standardises citations on one scale. Returns "" when the
+    offset is absent/0 (the happy case) or nonsensical (negative).
+    """
+    try:
+        off = int(page_offset)
+    except (TypeError, ValueError):
+        return ""
+    if off <= 0:
+        return ""
+    return (
+        "=== PDF vs PRINTED PAGE OFFSET ===\n"
+        f"Scout detected a printed-folio offset of +{off}: the printed folio at "
+        f"the bottom of a page image is the PDF page MINUS {off}. ALWAYS cite "
+        f"the PDF page number you passed to `view_pdf_pages` in `evidence`, "
+        f"never the printed folio. Example: if you viewed PDF page {off + 10} "
+        f"and the footer reads '10', cite 'Page {off + 10}', not 'Page 10'."
+    )
 
 
 def _render_prior_year_advisory_block(prior: dict) -> str:

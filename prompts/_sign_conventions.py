@@ -148,6 +148,39 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
         )
     lines.append("")
     lines.append(
+        "THE ONE RULE THAT ALWAYS WORKS (apply it to every row, especially "
+        "when a row's name is ambiguous): first decide the line's actual "
+        "cash-flow contribution C — POSITIVE when it INCREASES cash (an "
+        "inflow, a non-cash add-back to profit, a gain being reversed out), "
+        "NEGATIVE when it DECREASES cash (an outflow, a deduction from profit, "
+        "a loss). Then enter V = C / coefficient. So for an ADDED row "
+        "(coefficient +1) enter V = C as-is; for a SUBTRACTED row (coefficient "
+        "-1) enter V = -C — flip the sign, because the formula flips it back. "
+        "This rule needs no judgement about the row's name and works for every "
+        "row, statement and standard. The name-based hints below are just this "
+        "rule spelled out for the common cases."
+    )
+    lines.append("")
+    lines.append(
+        "Worked examples of V = C / coefficient on SUBTRACTED rows (the case "
+        "most often entered backwards):"
+    )
+    lines.append(
+        "  - A SUBTRACTED gain on disposal of PPE has cash contribution "
+        "C = -31,276 (a gain is deducted from profit) → enter V = -C = "
+        "+31,276. Do NOT pre-negate the gain: the formula already subtracts "
+        "the row, so entering -31,276 would double-negate and wrongly ADD the "
+        "gain back to operating cash."
+    )
+    lines.append(
+        "  - A SUBTRACTED non-cash add-back — e.g. 'Adjustments for accrued "
+        "expenses (income) not yet paid (received)' — has C = +62,264 (a "
+        "non-cash accrual added back to profit) → enter V = -C = -62,264. The "
+        "blanket 'enter a positive magnitude' instinct is WRONG here: on a "
+        "SUBTRACTED row a positive entry produces a NEGATIVE contribution."
+    )
+    lines.append("")
+    lines.append(
         "If the formula ADDS a row, the total uses the cell's value AS-IS "
         "(no sign flip), so YOU must supply the correct sign:"
     )
@@ -172,14 +205,28 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
         "NEGATIVE."
     )
     lines.append(
-        "If the formula SUBTRACTS a row, enter a POSITIVE magnitude that "
-        "matches the row's plain name and let the formula apply the sign "
-        "flip — e.g. a 'Dividends paid' or 'Cash payments' row subtracted "
-        "by the total takes a POSITIVE magnitude (do NOT pre-negate it). "
-        "NOTE the contrast with the ADDED case above: the SAME 'Cash "
-        "payments' wording flips entry sign depending on whether THIS "
-        "template's formula adds or subtracts that specific row — always "
-        "obey the per-row ADDED/SUBTRACTED label listed above, not the "
-        "row's name alone."
+        "If the formula SUBTRACTS a row, the total flips the cell's sign, so "
+        "enter V = -C (the negative of the line's cash contribution):"
+    )
+    lines.append(
+        "  - A SUBTRACTED cash OUTFLOW — 'Dividends paid', 'Cash payments', "
+        "tax/interest paid — has C negative, so V = -C is a POSITIVE magnitude "
+        "(do NOT pre-negate it)."
+    )
+    lines.append(
+        "  - A SUBTRACTED gain/loss adjustment is the MIRROR of the ADDED "
+        "gain/loss rule: a GAIN (C negative, deducted from profit) → enter a "
+        "POSITIVE magnitude; a LOSS (C positive, added back) → enter NEGATIVE."
+    )
+    lines.append(
+        "  - A SUBTRACTED non-cash add-back (accruals/provisions not yet paid, "
+        "C positive) → enter NEGATIVE."
+    )
+    lines.append(
+        "NOTE the contrast between the two branches: the SAME 'Cash payments' "
+        "or 'gain on disposal' wording flips entry sign depending on whether "
+        "THIS template's formula adds or subtracts that specific row — always "
+        "obey the per-row ADDED/SUBTRACTED label listed above, not the row's "
+        "name alone."
     )
     return "\n".join(lines)
