@@ -53,22 +53,24 @@ from typing import Optional
 from bs4 import BeautifulSoup, Tag
 
 
-# The prompt's HTML tag whitelist. Keep these in lock-step with the
-# "ALLOWED HTML TAGS" section of `prompts/_notes_base.md`.
+# The HTML tag whitelist. The CORE block/inline tags an agent may emit are
+# kept in lock-step with the "ALLOWED HTML TAGS" section of
+# `prompts/_notes_base.md`. The notes-editor-v2 marks below (`u`, `s`, `sup`,
+# `sub`, `mark`, `span`) are HUMAN-applied formatting the editor produces — the
+# agent prompt still forbids styling, so this is a SUPERSET of the agent set,
+# not a divergence (see gotcha #16).
 ALLOWED_TAGS: frozenset[str] = frozenset({
     "p", "br", "strong", "em", "ul", "ol", "li",
     "table", "thead", "tbody", "tr", "th", "td",
     "h3",
+    # v2 inline marks (human-applied via the editor toolbar):
+    "u", "s", "sup", "sub", "mark", "span",
 })
 
-# Tags on which a *validated* inline `style=` is allowed to persist
-# (notes WYSIWYG formatting — docs/PRD-notes-wysiwyg-formatting.md). The
-# accountant sets cell fill / per-side borders / alignment in the editor and
-# those styles must survive to the DB so the review panel renders them. Every
-# OTHER tag still has `style=` stripped wholesale (gotcha #16 stays true off
-# the table). Scoping styles to table cells is deliberate: it's the only place
-# the feature needs them, and it keeps the attack surface tiny.
-_STYLE_ALLOWED_TAGS: frozenset[str] = frozenset({
+# The six table tags. On these, attributes are an explicit allowlist
+# (`_TABLE_STRUCTURE_ATTRS` + the validated `style=`) — see
+# `_strip_unsafe_attributes`.
+_TABLE_TAGS: frozenset[str] = frozenset({
     "table", "thead", "tbody", "tr", "th", "td",
 })
 
@@ -115,21 +117,32 @@ def _is_border_shorthand(value: str) -> bool:
     return True
 
 
+# Text-align keywords the editor's TextAlign / per-column control can produce.
+_TEXT_ALIGN_VALUES: frozenset[str] = frozenset({
+    "left", "center", "right", "justify",
+})
+
+
+def _is_color(value: str) -> bool:
+    """A safe colour value: hex / rgb() / `transparent`, plus `inherit` (the
+    TipTap highlight mark emits `color: inherit` alongside its background)."""
+    return bool(_COLOR_RE.match(value)) or value == "inherit"
+
+
 def _build_css_property_validators() -> dict[str, "callable"]:
     """Map each allowed CSS property to a value predicate. Properties absent
-    from this map are dropped regardless of value.
+    from this map are dropped regardless of value; *which* of these a given tag
+    may carry is gated separately by `_STYLE_PROPS_BY_TAG` (a `color` on a
+    `<td>` or a `border` on a `<span>` is rejected — each capability lands only
+    on the tag that produces it).
 
-    **The whitelist EXACTLY mirrors the editor's contract** (peer-review #3):
-    the notes Format bar (web/src/lib/cellFormatting.ts) only ever produces a
-    cell **fill** (`background-color`) and **per-side borders**
-    (`border-top|right|bottom|left`). Accepting properties the editor cannot
-    round-trip (`border` all-sides shorthand, `color`, `text-align`,
-    `font-weight`, border `-color/-width/-style` longhands) would let a
-    persisted style be SILENTLY DROPPED the next time the cell is edited and
-    re-saved. Keep the two sides in lock-step: widen here only when the editor
-    gains a matching control."""
+    Every value is shape-checked (peer-review #1): a property-name filter alone
+    would happily keep `font-weight: heavy`. Widen this map + `_STYLE_PROPS_BY_TAG`
+    together, only when the editor gains a matching control."""
     validators: dict[str, callable] = {
-        "background-color": lambda v: bool(_COLOR_RE.match(v)),
+        "background-color": _is_color,
+        "color": _is_color,
+        "text-align": lambda v: v in _TEXT_ALIGN_VALUES,
     }
     # Per-side border shorthands only (border-top/right/bottom/left) — the
     # exact set the Format bar emits. NOT the all-sides `border` shorthand
@@ -140,9 +153,29 @@ def _build_css_property_validators() -> dict[str, "callable"]:
     return validators
 
 
-# Property -> value-predicate. The complete CSS whitelist for notes cells.
+# Property -> value-predicate. The full CSS property vocabulary for notes HTML.
 _CSS_PROPERTY_VALIDATORS: dict[str, "callable"] = _build_css_property_validators()
 ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset(_CSS_PROPERTY_VALIDATORS)
+
+# Which validated properties each tag may carry. This is the tag-aware gate
+# that keeps each capability on exactly the tag that produces it:
+#   - table tags  : fill + per-side borders + cell alignment
+#   - <span>      : text colour (TipTap Color → <span style="color">)
+#   - <mark>      : highlight fill (+ the `color: inherit` it emits)
+#   - <p>/<h3>/<li>: paragraph alignment (TipTap TextAlign)
+_TABLE_STYLE_PROPS: frozenset[str] = frozenset({
+    "background-color",
+    "border-top", "border-right", "border-bottom", "border-left",
+    "text-align",
+})
+_STYLE_PROPS_BY_TAG: dict[str, frozenset[str]] = {
+    **{tag: _TABLE_STYLE_PROPS for tag in _TABLE_TAGS},
+    "span": frozenset({"color"}),
+    "mark": frozenset({"background-color", "color"}),
+    "p": frozenset({"text-align"}),
+    "h3": frozenset({"text-align"}),
+    "li": frozenset({"text-align"}),
+}
 
 # Structural attributes kept on the style-bearing table tags. On those tags
 # `_strip_unsafe_attributes` runs an explicit ALLOWLIST (keep only these +
@@ -221,14 +254,17 @@ def sanitize_notes_html(html: Optional[str]) -> tuple[str, list[str]]:
 
 
 def _sanitize_style_value(style_value: str, tag_name: str,
+                          allowed_props: frozenset[str],
                           warnings: list[str]) -> Optional[str]:
-    """Validate an inline `style=` value against the CSS whitelist.
+    """Validate an inline `style=` value against the CSS whitelist, gated by
+    the set of properties this tag is allowed to carry (`allowed_props`).
 
-    Returns the cleaned style string (only the whitelisted, value-valid
+    Returns the cleaned style string (only the allowed, value-valid
     declarations, in their original order) or ``None`` if nothing survives.
-    Each dropped declaration appends a warning so the editor can surface what
-    it refused. This is the WYSIWYG-formatting gate (peer-review #1): a
-    property-name check alone is not enough, so every value is shape-checked.
+    Each dropped declaration appends a warning (kept for logs even though the
+    UI no longer surfaces them in v2). The gate is two-layered (peer-review #1):
+    the property must be allowed ON THIS TAG, and its value must shape-check —
+    a property-name filter alone would keep `font-weight: heavy`.
     """
     kept: list[str] = []
     for raw_decl in style_value.split(";"):
@@ -244,7 +280,7 @@ def _sanitize_style_value(style_value: str, tag_name: str,
         prop = prop.strip().lower()
         value = value.strip().lower()
         validator = _CSS_PROPERTY_VALIDATORS.get(prop)
-        if validator is None:
+        if validator is None or prop not in allowed_props:
             warnings.append(
                 f"Removed disallowed style property '{prop}' on <{tag_name}>"
             )
@@ -282,14 +318,18 @@ def _strip_unsafe_attributes(node: Tag, warnings: list[str]) -> None:
             )
             continue
         if lower == "style":
-            # On table tags, a `style=` may carry whitelisted formatting that
-            # the accountant set in the editor — validate and keep the safe
-            # declarations rather than stripping wholesale (notes WYSIWYG,
-            # docs/PRD-notes-wysiwyg-formatting.md). Off the table, style is
-            # still dropped entirely (gotcha #16 holds for prose).
-            if tag_name in _STYLE_ALLOWED_TAGS:
+            # A `style=` may carry whitelisted, human-applied formatting that
+            # must survive to the DB so the review panel renders it (notes
+            # editor v2). WHICH properties are allowed depends on the tag
+            # (`_STYLE_PROPS_BY_TAG`): cells keep fill/borders/align, <span>
+            # keeps colour, <mark> keeps highlight, <p>/<h3>/<li> keep
+            # alignment. Any tag NOT in that map has `style=` stripped wholesale
+            # (gotcha #16 still holds for ordinary prose).
+            allowed_props = _STYLE_PROPS_BY_TAG.get(tag_name)
+            if allowed_props:
                 cleaned_style = _sanitize_style_value(
-                    str(node.attrs[attr_name]), tag_name, warnings
+                    str(node.attrs[attr_name]), tag_name, allowed_props,
+                    warnings,
                 )
                 if cleaned_style:
                     node.attrs[attr_name] = cleaned_style
@@ -311,20 +351,20 @@ def _strip_unsafe_attributes(node: Tag, warnings: list[str]) -> None:
                 f"Removed {attr_name}= attribute on <{node.name}>"
             )
             continue
-        # On the style-bearing table tags, attributes are an explicit
-        # ALLOWLIST: keep only known structural attributes (`style=` is
-        # handled above; colspan/rowspan/colwidth pass here). Anything else
-        # on a table tag is dropped, so the surviving surface is auditable
-        # rather than "whatever wasn't blacklisted" (peer-review #6).
-        if tag_name in _STYLE_ALLOWED_TAGS and lower not in _TABLE_STRUCTURE_ATTRS:
+        # On the table tags, attributes are an explicit ALLOWLIST: keep only
+        # known structural attributes (`style=` is handled above;
+        # colspan/rowspan/colwidth pass here). Anything else on a table tag is
+        # dropped, so the surviving surface is auditable rather than "whatever
+        # wasn't blacklisted" (peer-review #6).
+        if tag_name in _TABLE_TAGS and lower not in _TABLE_STRUCTURE_ATTRS:
             to_remove.append(attr_name)
             warnings.append(
                 f"Removed {attr_name}= attribute on <{node.name}>"
             )
             continue
-        # Off the table (e.g. `type` on <ol>) we keep by default — the tag
-        # whitelist is the gate there, and tightening further would strip
-        # legitimate list/structure attributes.
+        # Off the table (e.g. `type` on <ol>, `data-color` on <mark>) we keep
+        # by default — the tag whitelist is the gate there, and tightening
+        # further would strip legitimate list/mark/structure attributes.
     for attr in to_remove:
         del node.attrs[attr]
 

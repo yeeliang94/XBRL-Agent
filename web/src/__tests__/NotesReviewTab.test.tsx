@@ -1550,6 +1550,34 @@ describe("NotesReviewTab — table format bar", () => {
     expect(screen.queryByTestId("table-format-bar")).toBeNull();
   });
 
+  test("tier-1 controls (marks, colour, align) render in edit mode", async () => {
+    // The unified docked toolbar (notes editor v2) always shows the
+    // text/colour/paragraph row in edit mode, even for a prose-only cell.
+    mockFetchOnce(PROSE_CELL);
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-format-bar")).toBeInTheDocument(),
+    );
+    // A representative control from each tier-1 group.
+    for (const name of [
+      "Bold",
+      "Underline",
+      "Superscript",
+      "Align right",
+      "Text colour Blue",
+      "Highlight Yellow",
+    ]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    // The table-only tier stays hidden for prose.
+    expect(screen.queryByTestId("table-format-bar")).toBeNull();
+  });
+
   test("applying a fill preset persists a background-color via PATCH", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {

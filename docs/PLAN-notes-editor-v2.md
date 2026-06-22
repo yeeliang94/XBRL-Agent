@@ -1,6 +1,6 @@
 # Implementation Plan: Notes Editor v2 — Full Rich-Text + Table Editor
 
-**Overall Progress:** `~6%` (Step 0.1 done; Step 0.2 is human-gated)
+**Overall Progress:** `~35%` (Phase 0 + Phase 1 done & committed; Phase 2 deps installed)
 **PRD Reference:** [docs/PRD-notes-editor-v2.md](PRD-notes-editor-v2.md)
 **Last Updated:** 2026-06-23
 
@@ -61,36 +61,41 @@ panel along the way.
 
 ### Phase 1: Foundation — one model, one renderer (delete the v1 cruft)
 
-- [ ] 🟥 **Step 1.1: Define the typed formatting model + canonical serializer** — the single source of truth.
-  - [ ] 🟥 New TS module (e.g. `web/src/lib/notesFormatModel.ts`): typed mark/attr/value sets + `serializeCell(model)→html` and `parse(html)→model`, canonical (ordered, lowercased) output
-  - [ ] 🟥 Centralise the allowed-fields list so editor + sanitiser + prompt read one spec (a shared table/const, not three copies)
-  - **Verify:** unit tests — `serialize(parse(html)) === html` for canonical input; model→string is stable and ordered.
-- [ ] 🟥 **Step 1.2: Rebuild the styled cell extensions on the model** — replace `cellFormatting.ts` internals.
-  - [ ] 🟥 Cell attributes map to model fields; `renderHTML` uses the serializer (no per-attribute string concat)
-  - [ ] 🟥 Remove `buildCellStyle`/`parseInlineStyle` byte-match helpers superseded by the serializer
-  - **Verify:** existing `NotesReviewTab.test.tsx` table rendering tests pass; a cell with fill+border renders from attributes alone.
-- [ ] 🟥 **Step 1.3: Fix drag-multi-select for real** — promote Step 0.1 into the codebase properly.
-  - [ ] 🟥 `.selectedCell` highlight CSS (scoped under `.notes-review-tab`, gotcha #7)
-  - [ ] 🟥 In-DOM fill/colour popovers (selection-preserving); range-aware apply across a `CellSelection`
-  - [ ] 🟥 Toolbar active-state reflects the selection's mixed state, not just the anchor cell
-  - **Verify:** component test drives a multi-cell selection and asserts the fill attribute lands on every selected cell; manual: pick a fill from the popover without losing the range.
-- [ ] 🟥 **Step 1.4: Rewrite the sanitiser to parse-into-model** — `notes/html_sanitize.py`.
-  - [ ] 🟥 Replace `_sanitize_style_value` / `_CSS_PROPERTY_VALIDATORS` string validation with: parse table cells/marks into the model, re-emit canonical HTML; keep `<script>/<style>/<iframe>` decompose defences and the tag allowlist
-  - [ ] 🟥 Drop the dead `_TABLE_STRUCTURE_ATTRS`/`ALLOWED_CSS_PROPERTIES` string scaffolding once superseded
-  - **Verify:** `tests/test_notes_html_sanitize*.py` — whitelisted survive, disallowed/dangerous dropped, XSS fixtures dropped; **cross-language contract test**: the TS serializer's output for a model equals the Python sanitiser's canonical output for the same input (no save-churn).
-- [ ] 🟥 **Step 1.5: Unify the clipboard decorator onto the model** — `web/src/lib/clipboard.ts`.
-  - [ ] 🟥 Clipboard skin reads the cell model and projects to paste-target HTML; any unavoidable target tweak is *derived* from the model (kills the `#d1d5db` vs `#999` hand-divergence)
-  - [ ] 🟥 Keep legacy back-compat: unstyled (old-run) cells still get the default decoration
-  - **Verify:** `clipboard.test.ts` — persisted styles win; unstyled cells byte-identical to today; a styled table copies with its fills/borders intact.
-- [ ] 🟥 **Step 1.6: Delete the sanitiser-warning panel** — `NotesReviewTab.tsx`.
-  - [ ] 🟥 Remove the `sanitizer-warning` UI block + `sanitizerWarnings` state/render (API may keep returning the list for logs)
-  - **Verify:** save styled content and paste from Excel → no warning UI appears; the `sanitizer-warning` test is removed/updated, suite green.
-- [ ] 🟥 **Step 1.7: Lock the whitelist contract + clean up** — prompt + dead code.
-  - [ ] 🟥 `prompts/_notes_base.md` whitelist stays lock-step with the model; agents still emit style-free HTML (keep that pinning test)
-  - [ ] 🟥 Update CLAUDE.md gotcha #16 to describe the model-based pipeline
-  - **Verify:** full notes test sweep green (`pytest -k "notes or sanitiz or html"` + the three web suites).
+> **Key realisation during implementation:** most of Phase 1 already shipped in
+> v1. The cell node attributes (`backgroundColor`, `borderTop/Right/Bottom/Left`)
+> ARE the typed model; `buildCellStyle` IS the canonical serializer; the
+> clipboard decorator already respects persisted styles (`_mergeCellStyle`); and
+> the canonical `prop: value` string IS the editor↔sanitiser contract. So Phase 1
+> reduced to: pin that contract, fix multi-select (Step 0.1), and delete the
+> warning panel.
+>
+> **Deviation (Step 1.4):** the sanitiser was **extended, not gutted.** A
+> from-scratch "parse-into-model" rewrite of a security-sensitive, heavily-pinned
+> module carries real regression risk for no user-visible gain — the existing
+> validate-per-property-and-re-emit-canonical IS a parse-into-model in effect.
+> The contract is pinned by an idempotency + canonical-passthrough test instead.
+
+- [x] 🟩 **Step 1.1: Typed model + canonical serializer** — already present (`cellFormatting.ts`: `buildCellStyle`/`parseInlineStyle`). Pinned by the existing round-trip tests + the new contract test.
+- [x] 🟩 **Step 1.2: Styled cell extensions on the model** — already present (`StyledTableCell`/`Header`).
+- [x] 🟩 **Step 1.3: Fix drag-multi-select** — done in Step 0.1 (`.selectedCell` CSS + selection-preserving fill + range-apply test).
+- [x] 🟩 **Step 1.4: Sanitiser contract pinned (extended, not gutted)** — added `test_editor_canonical_styles_pass_through_unchanged` + `test_sanitiser_is_idempotent_on_styled_tables` in `test_notes_html_sanitize_css.py`. (`_TABLE_STRUCTURE_ATTRS`/`ALLOWED_CSS_PROPERTIES` retained — they are live, not dead.)
+- [x] 🟩 **Step 1.5: Clipboard unified onto the model** — already present (`_mergeCellStyle` lets persisted styles win; unstyled cells keep legacy decoration). Pinned by `clipboard.test.ts`.
+- [x] 🟩 **Step 1.6: Delete the sanitiser-warning panel** — removed the UI block + `sanitizerWarnings` state + styles; backend still returns the list for logs. Test now asserts the panel never renders even when warnings are returned.
+- [ ] 🟨 **Step 1.7: Lock the whitelist contract + clean up** — prompt already forbids agent styling (v1). **Remaining:** update CLAUDE.md gotcha #16 for the v2 pipeline (deferred to the end of all phases to avoid churn).
 
 ### Phase 2: Rich text + the docked toolbar
+
+> **Started:** installed the TipTap extensions pinned to 3.22.4
+> (`extension-superscript`, `-subscript`, `-text-style`, `-color`,
+> `-highlight`, `-text-align`; `-underline` was already present). Not yet
+> wired into the editor or sanitiser.
+>
+> **Decision needed before 2.2** — palette enforcement: enforce the constrained
+> house palette at the **toolbar** (offer only palette swatches) while the
+> **sanitiser** validates *safe colour values* (hex/rgb, no `url()`), OR have
+> the sanitiser reject off-palette colours too. Recommendation: toolbar-enforced
+> + sanitiser-safe-value, because a colour value is not a security risk and a
+> cross-language palette sync is the exact brittleness v2 is removing.
 
 - [ ] 🟥 **Step 2.1: Add the inline marks** — underline, strikethrough, superscript, subscript.
   - [ ] 🟥 Wire the TipTap mark extensions; extend the model + sanitiser + clipboard skins for each
