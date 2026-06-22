@@ -657,6 +657,44 @@ Key invariants:
   keep-what-isn't-blacklisted — anything else on a table tag is dropped +
   surfaced. Off the table the default-keep branch still applies (e.g. `type`
   on `<ol>`). Pinned by `tests/test_notes_html_sanitize_css.py`.
+- **Notes editor v2 (2026-06-23, docs/PRD-notes-editor-v2.md + PLAN-notes-editor-v2.md).**
+  The above table-cell mechanism was generalised into a **full rich-text +
+  table editor**. Key deltas to the v1 description above:
+  - **Tag-aware style gate.** The single "table tags only" gate became
+    `_STYLE_PROPS_BY_TAG`: each capability lands ONLY on the tag that produces
+    it — `background-color`/`border-*`/`text-align` on table tags, `color` on
+    `<span>` (TipTap Color), `background-color`+`color` on `<mark>` (Highlight),
+    `text-align` on `<p>`/`<h3>/`<li>` (TextAlign). `ALLOWED_CSS_PROPERTIES`
+    widened to add `color` + `text-align`; the value gate is unchanged (still
+    rejects `url()`/`expression()`/loose values). `ALLOWED_TAGS` gained the
+    human-only marks `u/s/sup/sub/mark/span` — a **superset** of the agent set
+    (agents still emit style-free HTML; the prompt lock-step is now
+    "agent-emittable ⊆ sanitiser-permitted", not equality).
+  - **Constrained colour palette is enforced at the TOOLBAR**
+    (`web/src/lib/notesPalette.ts`), NOT re-enforced in the sanitiser — the
+    sanitiser validates *safe colour values* only. This is deliberate: a colour
+    value isn't a security risk, and a cross-language palette list is the exact
+    brittleness v2 set out to remove.
+  - **The sanitiser-warning UI panel was REMOVED** (it was developer-facing
+    noise; a paste from Excel/Word produced a wall of it). The backend still
+    sanitises and still returns `sanitizer_warnings` for logs — the UI just no
+    longer surfaces them. Dangerous markup is dropped silently + safely.
+  - **One docked two-tier toolbar** (`EditorToolbar`) replaced v1's separate
+    `FormatToolbar` + `TableFormatBar`: Tier 1 (Text · Colour · Paragraph)
+    always in edit mode; Tier 2 (Table: fill/borders/structure + merge/split/
+    header) only when the selection is in a table. The `table-format-bar`
+    testid is retained on Tier 2.
+  - **Drag-multi-select fixed at the root:** the `.selectedCell` highlight CSS
+    was missing (ProseMirror selects on drag but ships no visible highlight),
+    and the native `<input type=color>` fill blurred the editor and collapsed
+    the selection — both fixed. Merge/split + `colspan` round-trip through the
+    sanitiser (`_TABLE_STRUCTURE_ATTRS`) and the `html_to_excel_text` overlay
+    (a merged cell flattens once, no duplication). **Deferred:** per-column cell
+    alignment + column width (would need `textAlign`/`colWidth` on the cell
+    attribute model; resizable is off), and native xlsx-download styling (the
+    download stays a text overlay). Pinned by `tests/test_notes_html_sanitize_css.py`,
+    `tests/test_notes_html_to_text.py`, `web` `cellFormatting`/`NotesReviewTab`
+    tests.
 - Evidence column is **read-only** in the editor — it's the audit
   trail. `PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}` ignores
   any `evidence` key in the body.

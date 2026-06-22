@@ -191,6 +191,36 @@ describe("styled cell extension round-trip (real editor)", () => {
     editor.destroy();
   });
 
+  it("merging a multi-cell selection produces one spanning cell (colspan)", () => {
+    // Phase 3.1: merge/split. Selecting two cells and merging collapses them
+    // into one cell with colspan=2 — the span the sanitiser round-trips via
+    // _TABLE_STRUCTURE_ATTRS and the overlay flattens once (Step 3.3).
+    const editor = makeEditor(
+      "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>",
+    );
+    const cellPositions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") cellPositions.push(pos);
+      return true;
+    });
+    const sel = CellSelection.create(
+      editor.state.doc,
+      cellPositions[0],
+      cellPositions[1],
+    );
+    editor.view.dispatch(editor.state.tr.setSelection(sel));
+    editor.chain().focus().mergeCells().run();
+
+    const cells: Record<string, unknown>[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "tableCell") cells.push(node.attrs);
+      return true;
+    });
+    expect(cells).toHaveLength(1);
+    expect(cells[0].colspan).toBe(2);
+    editor.destroy();
+  });
+
   it("no-border / no-fill persist explicit reset values, not absence", () => {
     const editor = makeEditor(
       "<table><tbody><tr><th>h</th></tr></tbody></table>",
