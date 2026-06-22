@@ -169,7 +169,15 @@ export function decorateHtmlForClipboard(
     // Word/Outlook honour the legacy `border` attribute even when CSS
     // is partially stripped on paste. Belt-and-braces — the inline
     // style above does the heavy lifting on web targets.
-    if (noBorder) {
+    //
+    // If ANY cell carries its OWN persisted border (notes WYSIWYG), the
+    // cells decide their grid — a table-level `border="1"` would redraw a
+    // grid over a cell that the user explicitly set borderless (peer-review
+    // #3). So suppress the legacy attribute whenever cells own their borders,
+    // exactly as we do for the global "no border" option.
+    const cellsOwnBorders =
+      table.querySelector('td[style*="border"], th[style*="border"]') !== null;
+    if (noBorder || cellsOwnBorders) {
       // "No border" must win regardless of what the input table already
       // carried, or a legacy paste target would still draw a grid from a
       // pre-existing attribute (peer-review [MEDIUM]).
@@ -208,9 +216,9 @@ export function decorateHtmlForClipboard(
         ? " text-align: right;"
         : " text-align: left;";
       if (cell.tagName === "TH") {
-        _mergeStyle(cell, cellBase + _CLIPBOARD_HEADER_EXTRA + align + underline);
+        _mergeCellStyle(cell, cellBase + _CLIPBOARD_HEADER_EXTRA + align + underline);
       } else {
-        _mergeStyle(cell, cellBase + align + underline);
+        _mergeCellStyle(cell, cellBase + align + underline);
       }
     });
   });
@@ -235,6 +243,60 @@ export function decorateHtmlForClipboard(
   // chosen face in the paste target rather than the host editor's default.
   _mergeStyle(tmp, fontCss);
   return tmp.outerHTML;
+}
+
+/** The CSS "family" a property belongs to, so a persisted longhand
+ *  (`border-bottom`) and the decorator's shorthand (`border`) are recognised
+ *  as the same concern. A shorthand silently resets all longhands of its
+ *  family, so we must never append the decorator's shorthand onto a cell that
+ *  already carries that family (peer-review #3). */
+function _styleFamily(prop: string): string {
+  if (prop === "border" || prop.startsWith("border-")) return "border";
+  if (prop === "background" || prop.startsWith("background-")) return "background";
+  return prop;
+}
+
+/** Property-aware merge for a table CELL: persisted (WYSIWYG) declarations win.
+ *  The decorator's defaults (border / padding / font / alignment) are appended
+ *  ONLY for properties — or property families (border, background) — the cell
+ *  does not already control.
+ *
+ *  Back-compat is exact: a cell with NO persisted style (every old run, and
+ *  every clipboard pinning-test fixture) takes the verbatim set-attribute path
+ *  below, byte-identical to the previous concat behaviour. */
+function _mergeCellStyle(cell: Element, addition: string): void {
+  const existing = cell.getAttribute("style");
+  if (!existing) {
+    // Legacy path — no persisted style, so the decorator owns the cell fully.
+    cell.setAttribute("style", addition);
+    return;
+  }
+  // Persisted declarations come first (they win) and stay verbatim.
+  const parts = existing
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const ownedFamilies = new Set(
+    parts
+      .map((d) => d.slice(0, d.indexOf(":")).trim().toLowerCase())
+      .map(_styleFamily),
+  );
+  for (const decl of addition.split(";")) {
+    const d = decl.trim();
+    if (!d) continue;
+    const prop = d.slice(0, d.indexOf(":")).trim().toLowerCase();
+    const fam = _styleFamily(prop);
+    // Skip a decorator default the cell already controls — for border /
+    // background that means ANY member of the family; for others, the exact
+    // property. (`text-align`, `padding`, `font-*` are independent.)
+    if (fam === "border" || fam === "background") {
+      if (ownedFamilies.has(fam)) continue;
+    } else if (ownedFamilies.has(prop)) {
+      continue;
+    }
+    parts.push(d);
+  }
+  cell.setAttribute("style", parts.join("; "));
 }
 
 /** Append an inline style fragment to a node's existing `style=` attr.

@@ -633,6 +633,30 @@ Key invariants:
 - HTML tag whitelist in `prompts/_notes_base.md` must match the
   backend sanitiser's `ALLOWED_TAGS` in `notes/html_sanitize.py`. A
   divergence silently strips legitimate markup the prompt invited.
+- **Styles are now a VALIDATED whitelist on table tags, not "always
+  stripped" (notes WYSIWYG, 2026-06-22, docs/PRD-notes-wysiwyg-formatting.md).**
+  `sanitize_notes_html` keeps a value-checked set of inline `style=`
+  declarations ONLY on `table/thead/tbody/tr/th/td`. The whitelist mirrors the
+  editor's controls EXACTLY — `background-color` + per-side
+  `border-top|right|bottom|left` — so no persisted style can be silently
+  dropped on a later re-save (the all-sides `border` shorthand, `color`,
+  `text-align`, `font-weight`, and border `-color/-width/-style` longhands are
+  intentionally NOT accepted; widen `_CSS_PROPERTY_VALIDATORS` only when the
+  editor gains a matching control). The map shape-checks every value (rejects
+  `url()`, `expression()`, malformed border values, disallowed props). Off the
+  table, `style=` is still stripped wholesale, so this gotcha's "DB stays
+  style-free" rule holds for prose. "No fill"/"no border" persist as explicit
+  reset values (`background-color: transparent`, `border: none`), NOT
+  attribute-absence (the editor CSS would otherwise repaint the default grid
+  + header fill). **Agents still emit style-free HTML** (the prompt forbids
+  it); styling is a human-only post-step in the editor. The decision to
+  hand-roll the CSS validator (no `bleach` dependency) is recorded in
+  docs/PLAN-notes-wysiwyg-formatting.md. On the style-bearing table tags,
+  *attributes* are also an explicit allowlist (`_TABLE_STRUCTURE_ATTRS` =
+  `colspan`/`rowspan`/`colwidth` + the validated `style=`), NOT the default
+  keep-what-isn't-blacklisted — anything else on a table tag is dropped +
+  surfaced. Off the table the default-keep branch still applies (e.g. `type`
+  on `<ol>`). Pinned by `tests/test_notes_html_sanitize_css.py`.
 - Evidence column is **read-only** in the editor — it's the audit
   trail. `PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}` ignores
   any `evidence` key in the body.

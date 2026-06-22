@@ -224,6 +224,9 @@ Allowed (the complete whitelist): `<p>`, `<br>`, `<strong>`, `<em>`,
 Everything else — `<script>`, `<style>`, `<img>`, event handlers like
 `onclick=`, inline `style=` attributes, class attributes — is stripped
 by the sanitiser before the payload is persisted. Do not rely on them.
+(The human reviewer can later add cell fill / borders in the editor and
+those validated styles DO persist — but YOU must still emit style-free
+HTML. Formatting is a human post-step, not part of your output.)
 
 Short examples:
 
