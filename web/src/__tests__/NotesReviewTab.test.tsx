@@ -1468,3 +1468,341 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Table format bar — WYSIWYG fill / borders / structure (Phase 3 of
+// docs/PLAN-notes-wysiwyg-formatting.md). The bar is selection-based: it
+// renders only when the editor selection is inside a table, and its actions
+// persist via the same debounced PATCH path as text edits.
+// ---------------------------------------------------------------------------
+describe("NotesReviewTab — table format bar", () => {
+  const TABLE_CELL: NotesCellsResponse = {
+    sheets: [
+      {
+        sheet: "Notes-Listofnotes",
+        rows: [
+          {
+            row: 5,
+            label: "Capital commitments",
+            html:
+              "<table><tr><th>Item</th><th>2024</th></tr>" +
+              "<tr><td>Approved</td><td>1,595</td></tr></table>",
+            evidence: "Page 9",
+            source_pages: [9],
+            updated_at: "2026-04-24T10:00:00Z",
+          },
+        ],
+      },
+    ],
+  };
+
+  const PROSE_CELL: NotesCellsResponse = {
+    sheets: [
+      {
+        sheet: "Notes-CI",
+        rows: [
+          {
+            row: 4,
+            label: "Corporate info",
+            html: "<p>Plain prose, no table</p>",
+            evidence: "Page 3",
+            source_pages: [3],
+            updated_at: "2026-04-24T10:00:00Z",
+          },
+        ],
+      },
+    ],
+  };
+
+  test("bar appears in edit mode when the cell contains a table", async () => {
+    mockFetchOnce(TABLE_CELL);
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    await waitFor(() =>
+      expect(screen.getByTestId("table-format-bar")).toBeInTheDocument(),
+    );
+  });
+
+  test("bar stays hidden for a prose-only cell", async () => {
+    mockFetchOnce(PROSE_CELL);
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    // Editor is now editable, but the selection is not in a table.
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll("[contenteditable='true']").length,
+      ).toBeGreaterThan(0),
+    );
+    expect(screen.queryByTestId("table-format-bar")).toBeNull();
+  });
+
+  test("applying a fill preset persists a background-color via PATCH", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({
+            row: 5,
+            sheet: "Notes-Listofnotes",
+            label: "Capital commitments",
+            html: body.html,
+            evidence: "Page 9",
+            source_pages: [9],
+            updated_at: "2026-04-24T10:05:00Z",
+            sanitizer_warnings: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify(TABLE_CELL), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+    expandAllSheets();
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    await vi.runAllTimersAsync();
+
+    // The bar is in a table by default (cursor lands in the first cell).
+    const grey = screen.getByRole("button", { name: "Fill Grey" });
+    fireEvent.click(grey);
+    await vi.advanceTimersByTimeAsync(1600);
+
+    const patches = fetchMock.mock.calls.filter(
+      (c) => (c[1] as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(patches.length).toBeGreaterThan(0);
+    const body = JSON.parse((patches[patches.length - 1][1] as RequestInit).body as string);
+    // jsdom serialises the colour as rgb(); production keeps the hex. Either
+    // form proves the fill persisted through the editor → PATCH path.
+    expect(body.html.toLowerCase()).toMatch(
+      /background-color:\s*(#f4f4f4|rgb\(244, 244, 244\))/,
+    );
+    vi.useRealTimers();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Save serialisation (peer-review #5). At most one PATCH per cell in flight;
+// an edit arriving mid-flight is coalesced and run after, so the newest HTML
+// always wins and an older write can't land last.
+// ---------------------------------------------------------------------------
+describe("NotesReviewTab — save serialisation", () => {
+  const ONE_CELL: NotesCellsResponse = {
+    sheets: [
+      {
+        sheet: "Notes-CI",
+        rows: [
+          {
+            row: 4,
+            label: "Corporate info",
+            html: "<p>v0</p>",
+            evidence: "Page 3",
+            source_pages: [3],
+            updated_at: "2026-04-24T10:00:00Z",
+          },
+        ],
+      },
+    ],
+  };
+
+  test("a mid-flight edit is coalesced; newest HTML is saved, never two at once", async () => {
+    vi.useFakeTimers();
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    let patchCount = 0;
+    const bodies: string[] = [];
+    let releaseFirst: () => void = () => {};
+
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        patchCount += 1;
+        inFlight += 1;
+        maxConcurrent = Math.max(maxConcurrent, inFlight);
+        const body = JSON.parse(String(init.body));
+        bodies.push(body.html);
+        // Hang the FIRST PATCH until we release it, so the second edit
+        // necessarily arrives while the first is in flight.
+        if (patchCount === 1) {
+          await new Promise<void>((r) => {
+            releaseFirst = r;
+          });
+        }
+        inFlight -= 1;
+        return new Response(
+          JSON.stringify({
+            row: 4,
+            sheet: "Notes-CI",
+            label: "Corporate info",
+            html: body.html,
+            evidence: "Page 3",
+            source_pages: [3],
+            updated_at: "2026-04-24T10:05:00Z",
+            sanitizer_warnings: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify(ONE_CELL), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+    expandAllSheets();
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    await vi.runAllTimersAsync();
+
+    const editor = document.querySelectorAll(
+      "[data-testid='notes-review-editor']",
+    )[0];
+
+    // Edit 1 → debounce → PATCH 1 starts and hangs.
+    editor.dispatchEvent(
+      new CustomEvent("notes-review-test-edit", {
+        detail: { html: "<p>v1</p>" },
+        bubbles: true,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(patchCount).toBe(1);
+
+    // Edit 2 arrives WHILE PATCH 1 is in flight → must be coalesced, no 2nd
+    // PATCH yet.
+    editor.dispatchEvent(
+      new CustomEvent("notes-review-test-edit", {
+        detail: { html: "<p>v2-newest</p>" },
+        bubbles: true,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(patchCount).toBe(1); // still only one — serialised
+
+    // Release PATCH 1; the coalesced save then re-debounces and fires PATCH 2.
+    releaseFirst();
+    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(1600);
+    await vi.runAllTimersAsync();
+
+    expect(maxConcurrent).toBe(1); // never two PATCHes at once
+    expect(patchCount).toBe(2);
+    expect(bodies[bodies.length - 1]).toBe("<p>v2-newest</p>"); // newest wins
+    vi.useRealTimers();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Clobber-during-debounce-window (peer-review #2). If PATCH 1 returns BEFORE
+// edit 2's debounce fires, the success handler must NOT reconcile its stale
+// HTML over the newer edit. The `savePendingRef` guard alone missed this
+// ordering; the `liveHtmlRef !== attempted` stale check covers it.
+// ---------------------------------------------------------------------------
+describe("NotesReviewTab — stale-response clobber guard", () => {
+  const ONE_CELL: NotesCellsResponse = {
+    sheets: [
+      {
+        sheet: "Notes-CI",
+        rows: [
+          {
+            row: 4,
+            label: "Corporate info",
+            html: "<p>v0</p>",
+            evidence: "Page 3",
+            source_pages: [3],
+            updated_at: "2026-04-24T10:00:00Z",
+          },
+        ],
+      },
+    ],
+  };
+
+  test("PATCH 1 returning mid-window does not clobber edit 2", async () => {
+    vi.useFakeTimers();
+    let patchCount = 0;
+    const bodies: string[] = [];
+    let releaseFirst: () => void = () => {};
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        patchCount += 1;
+        const body = JSON.parse(String(init.body));
+        bodies.push(body.html);
+        if (patchCount === 1) {
+          await new Promise<void>((r) => {
+            releaseFirst = r;
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            row: 4,
+            sheet: "Notes-CI",
+            label: "Corporate info",
+            html: body.html,
+            evidence: "Page 3",
+            source_pages: [3],
+            updated_at: "2026-04-24T10:05:00Z",
+            sanitizer_warnings: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify(ONE_CELL), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+    expandAllSheets();
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    await vi.runAllTimersAsync();
+    const editor = document.querySelectorAll(
+      "[data-testid='notes-review-editor']",
+    )[0];
+
+    // Edit 1 → debounce → PATCH 1 starts and hangs.
+    editor.dispatchEvent(
+      new CustomEvent("notes-review-test-edit", {
+        detail: { html: "<p>v1</p>" },
+        bubbles: true,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(patchCount).toBe(1);
+
+    // Edit 2 arrives; its debounce has NOT fired yet (savePendingRef still
+    // false) when we release PATCH 1.
+    editor.dispatchEvent(
+      new CustomEvent("notes-review-test-edit", {
+        detail: { html: "<p>v2-newest</p>" },
+        bubbles: true,
+      }),
+    );
+    // Release PATCH 1 WHILE edit 2's debounce timer is still pending.
+    releaseFirst();
+    await vi.runAllTimersAsync(); // PATCH 1 resolves; timer 2 then fires → PATCH 2
+    await vi.advanceTimersByTimeAsync(1600);
+    await vi.runAllTimersAsync();
+
+    // The final persisted body is edit 2, never the stale edit 1.
+    expect(bodies[bodies.length - 1]).toBe("<p>v2-newest</p>");
+    vi.useRealTimers();
+  });
+});

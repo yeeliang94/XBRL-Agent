@@ -26,8 +26,19 @@ import type { Editor } from "@tiptap/react";
 import { StarterKit } from "@tiptap/starter-kit";
 import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
-import { TableHeader } from "@tiptap/extension-table-header";
-import { TableCell } from "@tiptap/extension-table-cell";
+import {
+  StyledTableCell,
+  StyledTableHeader,
+  currentCellAttrs,
+  applyCellFill,
+  applyCellBorderSide,
+  applyCellBorderAll,
+  gridBorderValue,
+  DEFAULT_BORDER_COLOR,
+  BORDER_NONE,
+  FILL_NONE,
+  type BorderSide,
+} from "../lib/cellFormatting";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
@@ -122,8 +133,10 @@ const TIPTAP_EXTENSIONS = [
   }),
   Table.configure({ resizable: false }),
   TableRow,
-  TableHeader,
-  TableCell,
+  // Styled variants carry the WYSIWYG fill / per-side border attributes
+  // (web/src/lib/cellFormatting.ts) so the accountant's formatting persists.
+  StyledTableHeader,
+  StyledTableCell,
 ];
 
 export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewTabProps) {
@@ -488,6 +501,15 @@ function CellRow({
   // ref with stale content.
   const saveSeqRef = useRef<number>(0);
   const latestSaveSeqRef = useRef<number>(0);
+  // Per-cell save serialisation (peer-review #5). The seq counter above only
+  // drops stale RESPONSES — it does not stop two PATCHes being in flight at
+  // once, so the older one's DB WRITE can still land last and overwrite the
+  // newer HTML. WYSIWYG formatting clicks make rapid consecutive mutations
+  // likelier, so we keep at most ONE PATCH in flight per cell: if a save
+  // fires while one is running, we flag a pending save and run it when the
+  // in-flight one resolves. This also hardens plain typing.
+  const saveInFlightRef = useRef(false);
+  const savePendingRef = useRef(false);
   // Tracks whether this CellRow is still mounted so async PATCH
   // completions can bail out when the user has already navigated away
   // (peer-review [MEDIUM]). React 18 drops state updates on unmounted
@@ -567,6 +589,14 @@ function CellRow({
     // the render happens synchronously on mount so tests can assert
     // DOM contents on the next microtask.
     immediatelyRender: true,
+    // TipTap v3 flipped the default: useEditor no longer re-renders the
+    // component on every transaction (selection included). Without this the
+    // selection-based TableFormatBar — and the existing toolbar's active-
+    // state highlights — go stale when the cursor moves between prose and a
+    // table without a document edit (peer-review #1). Re-rendering on
+    // transaction only affects the FOCUSED cell's editor (others receive no
+    // transactions), so the cost is bounded.
+    shouldRerenderOnTransaction: true,
     onUpdate: ({ editor: ed }) => {
       const nextHtml = ed.getHTML();
       liveHtmlRef.current = nextHtml;
@@ -629,6 +659,16 @@ function CellRow({
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
+      // Serialise per cell: if a PATCH is already in flight, don't start a
+      // second one — flag a pending save that the in-flight one's `finally`
+      // will run once it resolves (peer-review #5). This keeps the DB write
+      // order monotonic so an older request can't land last and overwrite
+      // newer HTML.
+      if (saveInFlightRef.current) {
+        savePendingRef.current = true;
+        return;
+      }
+      saveInFlightRef.current = true;
       setStatus("saving");
       const attempted = liveHtmlRef.current;
       // Claim a fresh sequence number for this PATCH. `latestSaveSeqRef`
@@ -653,19 +693,30 @@ function CellRow({
         // Track the persisted form so a subsequent re-render of the
         // editor with the same HTML does not re-mark the cell dirty.
         savedHtmlRef.current = updated.html;
-        liveHtmlRef.current = updated.html;
         // Surface sanitiser warnings (peer-review [MEDIUM] #4). An
         // empty or missing list clears any prior warning — the row
         // only shows warnings for the most recent save, not forever.
         setSanitizerWarnings(updated.sanitizer_warnings ?? []);
+        // Has the user typed MORE since this PATCH was sent? Compare the
+        // current live HTML against what THIS request actually carried
+        // (`attempted`). If they differ, the editor already shows newer
+        // content and reconciling this older server form would clobber it
+        // (peer-review #2 — covers BOTH the "pending already set" case and
+        // the "PATCH returned during the next edit's debounce window" case
+        // that the savePendingRef guard alone missed).
+        const isStale = liveHtmlRef.current !== attempted;
+        if (!isStale) {
+          liveHtmlRef.current = updated.html;
+        }
         // Reconcile the server-sanitised form back into the editor
         // (peer-review [HIGH]). Without this, the Copy button would
         // continue to emit the user's raw markup (with style attrs,
         // disallowed tags, etc) even though the server has a cleaned
         // version. Skip when the editor already matches — that avoids
         // a spurious cursor reset on the common round-trip where the
-        // sanitiser was a no-op.
-        if (editor && editor.getHTML() !== updated.html) {
+        // sanitiser was a no-op — and skip entirely when the user has typed
+        // newer content (the editor already shows it; don't overwrite).
+        if (!isStale && editor && editor.getHTML() !== updated.html) {
           const sel = editor.state.selection;
           editor.commands.setContent(updated.html, { emitUpdate: false });
           // Best-effort selection restore. ProseMirror clamps out-of-
@@ -677,7 +728,10 @@ function CellRow({
             /* positions invalid after sanitisation — harmless */
           }
         }
-        setStatus("saved");
+        // Only show "Saved" when this response reflects the latest content.
+        // If the user has typed newer text (isStale), the coalesced save is
+        // still pending, so keep the cell marked dirty.
+        setStatus(isStale ? "dirty" : "saved");
       } catch {
         if (!isMountedRef.current) return;
         if (mySeq !== latestSaveSeqRef.current) {
@@ -690,6 +744,14 @@ function CellRow({
         // above keeps treating this content as unsaved — the next real
         // keystroke will reschedule.
         setStatus("failed");
+      } finally {
+        // Release the in-flight lock and, if an edit arrived mid-flight,
+        // run the coalesced save now (re-debounced) with the latest HTML.
+        saveInFlightRef.current = false;
+        if (savePendingRef.current) {
+          savePendingRef.current = false;
+          scheduleSave();
+        }
       }
     }, SAVE_DEBOUNCE_MS);
   }, [runId, sheet, cell.row]);
@@ -834,6 +896,7 @@ function CellRow({
             Copy
           </button>
         </div>
+        {editable && editor && <TableFormatBar editor={editor} />}
         {formatOpen && (
           <FormatPopover
             options={formatOpts}
@@ -1096,6 +1159,150 @@ function FormatToolbar({ editor }: { editor: Editor }) {
           .focus()
           .insertTable({ rows: 2, cols: 2, withHeaderRow: true })
           .run(),
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Table format bar — selection-based WYSIWYG controls (fill / per-side
+// borders / row+column structure). Only renders when the selection is inside
+// a table (peer-review #4: reactive via useEditor's transaction re-render).
+// All formatting persists in the cell HTML via the styled cell extensions
+// (web/src/lib/cellFormatting.ts) — docs/PRD-notes-wysiwyg-formatting.md.
+// ---------------------------------------------------------------------------
+
+// Quick fill presets (the convenience row; the colour input covers the rest):
+// white, the PwC header grey, and one light highlight.
+const FILL_PRESETS: ReadonlyArray<{ label: string; color: string }> = [
+  { label: "White", color: "#ffffff" },
+  { label: "Grey", color: "#f4f4f4" },
+  { label: "Highlight", color: "#fff6e5" },
+];
+
+const BORDER_SIDE_BTNS: ReadonlyArray<{ side: BorderSide; label: string }> = [
+  { side: "Top", label: "Top" },
+  { side: "Right", label: "Right" },
+  { side: "Bottom", label: "Bottom" },
+  { side: "Left", label: "Left" },
+];
+
+function TableFormatBar({ editor }: { editor: Editor }) {
+  // Border colour for newly-added grid lines. Local because it's a tool
+  // setting, not cell state — the chosen colour applies to subsequent
+  // border toggles / the "All" shortcut.
+  const [borderColor, setBorderColor] = useState<string>(DEFAULT_BORDER_COLOR);
+
+  // Only show inside a table. isActive is reactive because the parent CellRow
+  // re-renders on every editor transaction (useEditor), including selection.
+  if (!editor.isActive("table")) return null;
+
+  const cellAttrs = currentCellAttrs(editor);
+  const sideIsOn = (side: BorderSide): boolean => {
+    const v = cellAttrs?.[`border${side}`];
+    return typeof v === "string" && v !== "" && v !== BORDER_NONE;
+  };
+
+  const tBtn = (
+    label: string,
+    onClick: () => void,
+    opts?: { active?: boolean; ariaLabel?: string },
+  ) => (
+    <button
+      key={label}
+      type="button"
+      aria-label={opts?.ariaLabel ?? label}
+      // Run through onMouseDown-preventDefault so clicking the button doesn't
+      // blur the editor and collapse the cell selection before the command
+      // runs (the command helpers also re-focus defensively).
+      onMouseDown={(e) => e.preventDefault()}
+      style={opts?.active ? styles.toolbarButtonActive : styles.toolbarButton}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div
+      role="toolbar"
+      aria-label="Table formatting"
+      data-testid="table-format-bar"
+      style={styles.tableFormatBar}
+    >
+      {/* Fill */}
+      <span style={styles.tableFormatGroupLabel}>Fill</span>
+      {FILL_PRESETS.map((p) =>
+        tBtn(p.label, () => applyCellFill(editor, p.color), {
+          ariaLabel: `Fill ${p.label}`,
+        }),
+      )}
+      {tBtn("No fill", () => applyCellFill(editor, FILL_NONE))}
+      <label style={styles.colorInputLabel} title="Custom fill colour">
+        <span style={styles.visuallyHidden}>Custom fill colour</span>
+        <input
+          type="color"
+          aria-label="Custom fill colour"
+          style={styles.colorInput}
+          onChange={(e) => applyCellFill(editor, e.target.value)}
+        />
+      </label>
+
+      <span style={styles.tableFormatDivider} aria-hidden="true" />
+
+      {/* Borders */}
+      <span style={styles.tableFormatGroupLabel}>Border</span>
+      {BORDER_SIDE_BTNS.map(({ side, label }) =>
+        tBtn(
+          label,
+          () =>
+            applyCellBorderSide(
+              editor,
+              side,
+              sideIsOn(side) ? BORDER_NONE : gridBorderValue(borderColor),
+            ),
+          { active: sideIsOn(side), ariaLabel: `Border ${label}` },
+        ),
+      )}
+      {tBtn("All", () =>
+        applyCellBorderAll(editor, gridBorderValue(borderColor)),
+      )}
+      {tBtn("None", () => applyCellBorderAll(editor, BORDER_NONE))}
+      <label style={styles.colorInputLabel} title="Border colour">
+        <span style={styles.visuallyHidden}>Border colour</span>
+        <input
+          type="color"
+          aria-label="Border colour"
+          value={borderColor}
+          style={styles.colorInput}
+          onChange={(e) => setBorderColor(e.target.value)}
+        />
+      </label>
+
+      <span style={styles.tableFormatDivider} aria-hidden="true" />
+
+      {/* Structure — row above/below and column left/right (PRD Flow 3). */}
+      <span style={styles.tableFormatGroupLabel}>Table</span>
+      {tBtn("Row ↑", () => editor.chain().focus().addRowBefore().run(), {
+        ariaLabel: "Insert row above",
+      })}
+      {tBtn("Row ↓", () => editor.chain().focus().addRowAfter().run(), {
+        ariaLabel: "Insert row below",
+      })}
+      {tBtn("Col ←", () => editor.chain().focus().addColumnBefore().run(), {
+        ariaLabel: "Insert column left",
+      })}
+      {tBtn("Col →", () => editor.chain().focus().addColumnAfter().run(), {
+        ariaLabel: "Insert column right",
+      })}
+      {tBtn("− Row", () => editor.chain().focus().deleteRow().run(), {
+        ariaLabel: "Delete row",
+      })}
+      {tBtn("− Col", () => editor.chain().focus().deleteColumn().run(), {
+        ariaLabel: "Delete column",
+      })}
+      {tBtn("Delete table", () =>
+        editor.chain().focus().deleteTable().run(),
       )}
     </div>
   );
@@ -1454,6 +1661,53 @@ const styles = {
   smallButtonActive: {
     background: pwc.grey100,
     borderColor: pwc.grey700,
+  } as React.CSSProperties,
+  // Selection-based table formatting bar (fill / borders / structure).
+  tableFormatBar: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    alignItems: "center",
+    gap: 4,
+    padding: "6px 8px",
+    marginTop: 4,
+    background: pwc.grey100,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: 4,
+  } as React.CSSProperties,
+  tableFormatGroupLabel: {
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.4,
+    color: pwc.grey700,
+    marginRight: 2,
+  } as React.CSSProperties,
+  tableFormatDivider: {
+    width: 1,
+    alignSelf: "stretch",
+    background: pwc.grey300 ?? "#d1d5db",
+    margin: "0 4px",
+  } as React.CSSProperties,
+  colorInputLabel: {
+    display: "inline-flex",
+    alignItems: "center",
+  } as React.CSSProperties,
+  colorInput: {
+    width: 26,
+    height: 22,
+    padding: 0,
+    border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
+    borderRadius: 3,
+    background: pwc.white,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  visuallyHidden: {
+    position: "absolute" as const,
+    width: 1,
+    height: 1,
+    overflow: "hidden" as const,
+    clip: "rect(0 0 0 0)",
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   // Per-cell paste-format popover.
   formatPopover: {

@@ -376,3 +376,77 @@ describe("decorateHtmlForClipboard — configurable format options", () => {
     expect(out).toMatch(/<p[^>]*style="[^"]*margin: 0 0 14px 0/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Notes WYSIWYG: the decorator must RESPECT a cell's own persisted styles
+// (peer-review #3) — property-aware merge, persisted wins, no border="1" grid
+// redraw over a cell-level border decision. Old (unstyled) cells are
+// unchanged (the pinning tests above cover byte-identity).
+// ---------------------------------------------------------------------------
+describe("decorateHtmlForClipboard — persisted cell styles win", () => {
+  test("a persisted per-side border is NOT clobbered by the default shorthand", () => {
+    const html =
+      '<table><tbody><tr>' +
+      '<td style="border-bottom: 1px solid #000">x</td>' +
+      "</tr></tbody></table>";
+    const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
+    const probe = document.createElement("div");
+    probe.innerHTML = out;
+    const style = probe.querySelector("td")!.getAttribute("style") ?? "";
+    // The persisted longhand survives…
+    expect(style).toContain("border-bottom: 1px solid #000");
+    // …and the decorator's `border:` shorthand was NOT appended (it would
+    // reset all four sides).
+    expect(style).not.toMatch(/(^|;\s*)border:\s/);
+  });
+
+  test("a persisted fill is NOT overwritten by the header grey", () => {
+    const html =
+      '<table><thead><tr>' +
+      '<th style="background-color: transparent">h</th>' +
+      "</tr></thead></table>";
+    const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
+    const probe = document.createElement("div");
+    probe.innerHTML = out;
+    const style = probe.querySelector("th")!.getAttribute("style") ?? "";
+    expect(style).toContain("background-color: transparent");
+    // The default `background: #f3f4f6` header fill is suppressed.
+    expect(style).not.toContain("background: #f3f4f6");
+  });
+
+  test("non-conflicting defaults (padding, font) are still applied to a styled cell", () => {
+    const html =
+      '<table><tbody><tr>' +
+      '<td style="background-color: #eee">x</td>' +
+      "</tr></tbody></table>";
+    const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
+    const probe = document.createElement("div");
+    probe.innerHTML = out;
+    const style = probe.querySelector("td")!.getAttribute("style") ?? "";
+    expect(style).toContain("background-color: #eee"); // persisted kept
+    expect(style).toContain("padding:"); // default still added
+    expect(style).toContain("font-family: Arial"); // default still added
+  });
+
+  test("table border='1' is suppressed when any cell owns its border", () => {
+    const html =
+      '<table><tbody><tr>' +
+      '<td style="border-top: none">x</td><td>y</td>' +
+      "</tr></tbody></table>";
+    const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
+    const probe = document.createElement("div");
+    probe.innerHTML = out;
+    const table = probe.querySelector("table")!;
+    expect(table.hasAttribute("border")).toBe(false);
+  });
+
+  test("an unstyled cell still gets the full default decoration (back-compat)", () => {
+    const html = "<table><tbody><tr><td>x</td></tr></tbody></table>";
+    const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
+    const probe = document.createElement("div");
+    probe.innerHTML = out;
+    const style = probe.querySelector("td")!.getAttribute("style") ?? "";
+    expect(style).toContain("border: 1px solid #999"); // default border present
+    expect(style).toContain("padding:");
+  });
+});

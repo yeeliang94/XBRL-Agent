@@ -197,6 +197,57 @@ def test_patch_notes_cell_returns_empty_warnings_on_clean_input(
     assert body.get("sanitizer_warnings") == []
 
 
+def test_patch_notes_cell_persists_whitelisted_table_styles(client_and_run) -> None:
+    """Notes WYSIWYG (Phase 1): a styled table cell round-trips through PATCH
+    with the validated fill / per-side border intact, so the review panel can
+    re-render the formatting the accountant set. Disallowed declarations are
+    dropped + surfaced as warnings."""
+    client, run_id = client_and_run
+
+    styled = (
+        '<table><tr>'
+        '<td style="background-color: #f4f4f4; border-bottom: 1px solid #000; '
+        'position: fixed">RM</td>'
+        '</tr></table>'
+    )
+    resp = client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        json={"html": styled},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    html = body["html"].lower()
+    # Whitelisted declarations survive...
+    assert "background-color: #f4f4f4" in html
+    assert "border-bottom: 1px solid #000" in html
+    # ...the disallowed one is dropped and surfaced.
+    assert "position" not in html
+    assert any("position" in w.lower() for w in body["sanitizer_warnings"])
+
+
+def test_patch_notes_cell_reset_values_persist(client_and_run) -> None:
+    """"No fill" / "no border" persist as explicit reset values (peer-review
+    #2) — the panel needs them to override the default grid + header fill."""
+    client, run_id = client_and_run
+
+    resp = client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        json={
+            "html": (
+                '<table><tr>'
+                '<th style="background-color: transparent; border-top: none; '
+                'border-bottom: none">x</th>'
+                '</tr></table>'
+            )
+        },
+    )
+    assert resp.status_code == 200
+    html = resp.json()["html"].lower()
+    assert "background-color: transparent" in html
+    assert "border-top: none" in html
+    assert "border-bottom: none" in html
+
+
 def test_patch_notes_cell_400_for_unknown_row(client_and_run) -> None:
     """A row that is neither an existing cell nor a fillable registry row is
     rejected (400) — the editor can't invent rows (PLAN Step 8)."""
