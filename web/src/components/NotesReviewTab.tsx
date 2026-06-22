@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
   useCallback,
+  useMemo,
 } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
@@ -42,6 +43,12 @@ import {
 } from "../lib/notesCells";
 import { copyHtmlAsRichText } from "../lib/clipboard";
 import { tagNumericCells } from "../lib/tableAlign";
+import { formatGroupedInput } from "../lib/numberFormat";
+import {
+  loadGlobalFormat,
+  type ClipboardFormatOptions,
+} from "../lib/clipboardFormat";
+import { ClipboardFormatControls } from "./ClipboardFormatControls";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
 import "./NotesReviewTab.css";
 
@@ -424,6 +431,24 @@ function SheetSection({
 // Cell row — label + evidence on the left, editor + actions on the right.
 // ---------------------------------------------------------------------------
 
+// Build a short text preview per table row so the Format tool's underline
+// picker can list them. Enumerates <tr> across all tables in document order —
+// the SAME order decorateHtmlForClipboard walks — so a picked row's index maps
+// straight to `rowUnderlines`. Returns [] when the cell has no table.
+function extractTableRowPreviews(html: string): string[] {
+  if (!html) return [];
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  return Array.from(tmp.querySelectorAll("tr")).map((row) => {
+    const cells = Array.from(row.children)
+      .filter((c) => c.tagName === "TD" || c.tagName === "TH")
+      .map((c) => (c.textContent ?? "").trim());
+    const text = cells.join(" | ").trim();
+    // Cap the preview so a long policy row doesn't blow out the popover.
+    return text.length > 60 ? text.slice(0, 57) + "…" : text || "(empty row)";
+  });
+}
+
 function CellRow({
   runId,
   sheet,
@@ -436,6 +461,14 @@ function CellRow({
   const [editable, setEditable] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [copiedAt, setCopiedAt] = useState<number | null>(null);
+  // Per-cell paste-format tool. `formatOpen` shows/hides the popover (like the
+  // Edit toggle); `formatOpts` is the TRANSIENT override Copy uses for this
+  // cell. It is re-seeded from the saved global default every time the popover
+  // opens, so it never persists and never leaks between cells (gotcha #16 — the
+  // store stays style-free; this lives only at copy time).
+  const [formatOpen, setFormatOpen] = useState(false);
+  const [formatOpts, setFormatOpts] =
+    useState<ClipboardFormatOptions>(loadGlobalFormat);
   // Peer-review [MEDIUM] #4: the backend strips disallowed tags/attrs
   // from the HTML on save and returns the list of removals in
   // `sanitizer_warnings`. Surface them here so a user who pasted a
@@ -679,11 +712,61 @@ function CellRow({
     return () => node.removeEventListener("notes-review-test-edit", handler);
   }, [editor]);
 
+  // Toolbar Copy ALWAYS uses the saved global default, read at click time.
+  // The per-cell tweak is a one-off applied only via the popover's own copy
+  // button — so a tweak (or a closed popover) never silently changes what the
+  // plain Copy button does (peer-review [MEDIUM]).
   const handleCopy = useCallback(async () => {
     const html = editor?.getHTML() ?? cell.html;
-    const ok = await copyHtmlAsRichText(html);
+    const ok = await copyHtmlAsRichText(html, loadGlobalFormat());
     if (ok) setCopiedAt(Date.now());
   }, [editor, cell.html]);
+
+  // Popover "Copy with this format": the transient per-cell override, applied
+  // to this single copy. `formatOpts` is re-seeded from the global default each
+  // time the popover opens, so it is genuinely one-off.
+  const handleCopyWithFormat = useCallback(async () => {
+    const html = editor?.getHTML() ?? cell.html;
+    const ok = await copyHtmlAsRichText(html, formatOpts);
+    if (ok) setCopiedAt(Date.now());
+  }, [editor, cell.html, formatOpts]);
+
+  // Open the Format popover, re-seeding the transient options from the saved
+  // global default so each session of the tool starts from the user's default
+  // (and a previous tweak doesn't silently carry over). Editing and formatting
+  // are mutually exclusive: opening Format leaves edit mode so the table can't
+  // change underneath the row picker (peer-review [LOW] — stale row indices).
+  const toggleFormat = useCallback(() => {
+    setFormatOpen((open) => {
+      if (!open) {
+        setFormatOpts(loadGlobalFormat());
+        setEditable(false);
+      }
+      return !open;
+    });
+  }, []);
+
+  // Row previews for the underline picker — one entry per <tr> across the
+  // cell's table(s), in the same document order decorateHtmlForClipboard uses,
+  // so the 0-based index here lines up with `rowUnderlines` there.
+  const tableRows = useMemo(
+    () => extractTableRowPreviews(editor?.getHTML() ?? cell.html),
+    // Recompute when the popover opens (cheap; the editor HTML is stable while
+    // the popover is up since editing is a separate mode).
+    [editor, cell.html, formatOpen],
+  );
+
+  const toggleRowUnderline = useCallback((rowIdx: number) => {
+    setFormatOpts((prev) => {
+      const has = prev.rowUnderlines.includes(rowIdx);
+      return {
+        ...prev,
+        rowUnderlines: has
+          ? prev.rowUnderlines.filter((i) => i !== rowIdx)
+          : [...prev.rowUnderlines, rowIdx],
+      };
+    });
+  }, []);
 
   // Auto-dismiss the "Copied" pill after 2 seconds so the UI goes back
   // to a neutral state without the user clicking anywhere.
@@ -721,9 +804,27 @@ function CellRow({
           <button
             type="button"
             style={styles.smallButton}
-            onClick={() => setEditable((v) => !v)}
+            onClick={() =>
+              setEditable((v) => {
+                // Entering edit mode closes the Format popover (mutually
+                // exclusive — see toggleFormat).
+                if (!v) setFormatOpen(false);
+                return !v;
+              })
+            }
           >
             {editable ? "Done" : "Edit"}
+          </button>
+          <button
+            type="button"
+            style={{
+              ...styles.smallButton,
+              ...(formatOpen ? styles.smallButtonActive : null),
+            }}
+            aria-expanded={formatOpen}
+            onClick={toggleFormat}
+          >
+            Format
           </button>
           <button
             type="button"
@@ -733,6 +834,17 @@ function CellRow({
             Copy
           </button>
         </div>
+        {formatOpen && (
+          <FormatPopover
+            options={formatOpts}
+            onChange={setFormatOpts}
+            tableRows={tableRows}
+            onToggleRowUnderline={toggleRowUnderline}
+            onCopy={() => {
+              void handleCopyWithFormat();
+            }}
+          />
+        )}
         <div data-testid="notes-review-editor">
           <EditorContent editor={editor} />
         </div>
@@ -784,6 +896,11 @@ function NumericCellRow({ runId, cell }: { runId: number; cell: NotesCell }) {
     return init;
   });
   const [status, setStatus] = useState<SaveStatus>("idle");
+  // Which column input currently has focus. Drives the "grouped at rest, raw
+  // while focused" display below — the face-statement value inputs already do
+  // this (ConceptsPage, issue 4) and the numeric notes rows were missing it,
+  // so notes values showed `1595` where the face sheets showed `1,595`.
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
 
   const saveColumn = useCallback(
     async (key: string) => {
@@ -845,16 +962,103 @@ function NumericCellRow({ runId, cell }: { runId: number; cell: NotesCell }) {
                 inputMode="decimal"
                 data-testid={`numeric-input-${cell.row}-${key}`}
                 style={styles.numericInput}
-                value={drafts[key] ?? ""}
-                onChange={(e) =>
-                  setDrafts((d) => ({ ...d, [key]: e.target.value }))
+                // Grouped (1,234) at rest; raw digits while this field is
+                // focused so typing and the parse round-trip aren't disturbed.
+                value={
+                  focusedKey === key
+                    ? drafts[key] ?? ""
+                    : formatGroupedInput(drafts[key] ?? "")
                 }
-                onBlur={() => saveColumn(key)}
+                onChange={(e) =>
+                  // Keep the raw, comma-free form in the draft; the at-rest
+                  // display re-adds separators on blur. parseNumericInput also
+                  // accepts commas, so a stray separator wouldn't break a save.
+                  setDrafts((d) => ({
+                    ...d,
+                    [key]: e.target.value.replace(/,/g, ""),
+                  }))
+                }
+                onFocus={() => setFocusedKey(key)}
+                onBlur={() => {
+                  setFocusedKey(null);
+                  saveColumn(key);
+                }}
               />
             </label>
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-cell paste-format popover — table-wide knobs (shared controls) plus a
+// per-row double-underline picker. Everything here is transient: it tweaks the
+// options THIS cell's Copy uses, never the stored content (gotcha #16).
+// ---------------------------------------------------------------------------
+
+function FormatPopover({
+  options,
+  onChange,
+  tableRows,
+  onToggleRowUnderline,
+  onCopy,
+}: {
+  options: ClipboardFormatOptions;
+  onChange: (next: ClipboardFormatOptions) => void;
+  tableRows: string[];
+  onToggleRowUnderline: (rowIdx: number) => void;
+  onCopy: () => void;
+}) {
+  return (
+    <div style={styles.formatPopover} data-testid="notes-format-popover">
+      <p style={styles.formatPopoverHint}>
+        Format this copy only — starts from your default (Settings → Notes paste
+        format) and resets next time.
+      </p>
+
+      {/* Table-wide knobs, identical to the settings section. */}
+      <ClipboardFormatControls
+        value={options}
+        onChange={onChange}
+        idPrefix="cell-fmt"
+      />
+
+      {/* Per-row double-underline picker (e.g. mark the totals row). */}
+      {tableRows.length > 0 && (
+        <div style={styles.rowUnderlineBlock}>
+          <div style={styles.rowUnderlineHeading}>
+            Double underline rows (e.g. totals)
+          </div>
+          <div style={styles.rowUnderlineList}>
+            {tableRows.map((preview, idx) => (
+              <label
+                key={idx}
+                style={styles.rowUnderlineItem}
+                data-testid={`row-underline-${idx}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={options.rowUnderlines.includes(idx)}
+                  onChange={() => onToggleRowUnderline(idx)}
+                  aria-label={`Double underline row: ${preview}`}
+                />
+                <span style={styles.rowUnderlinePreview}>{preview}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        style={{ ...styles.smallButton, ...styles.formatCopyButton }}
+        onClick={onCopy}
+        data-testid="notes-format-copy"
+      >
+        Copy with this format
+      </button>
     </div>
   );
 }
@@ -1245,6 +1449,59 @@ const styles = {
     borderRadius: 3,
     color: pwc.grey900,
     cursor: "pointer",
+  } as React.CSSProperties,
+  // Active state for the Format toggle (popover open).
+  smallButtonActive: {
+    background: pwc.grey100,
+    borderColor: pwc.grey700,
+  } as React.CSSProperties,
+  // Per-cell paste-format popover.
+  formatPopover: {
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: 6,
+    background: pwc.white,
+    padding: 12,
+    marginBottom: 8,
+  } as React.CSSProperties,
+  formatPopoverHint: {
+    fontSize: 12,
+    color: pwc.grey700,
+    margin: "0 0 10px 0",
+  } as React.CSSProperties,
+  rowUnderlineBlock: {
+    marginTop: 12,
+    borderTop: `1px solid ${pwc.grey200}`,
+    paddingTop: 10,
+  } as React.CSSProperties,
+  rowUnderlineHeading: {
+    fontSize: 13,
+    fontWeight: 500,
+    color: pwc.grey700,
+    marginBottom: 6,
+  } as React.CSSProperties,
+  rowUnderlineList: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 4,
+    maxHeight: 160,
+    overflowY: "auto" as const,
+  } as React.CSSProperties,
+  rowUnderlineItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 13,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  rowUnderlinePreview: {
+    color: pwc.grey900,
+    whiteSpace: "nowrap" as const,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  } as React.CSSProperties,
+  formatCopyButton: {
+    marginTop: 12,
+    background: pwc.grey100,
   } as React.CSSProperties,
   // Numeric notes: a small grid of value inputs (1-4 columns by filing level).
   numericGrid: {

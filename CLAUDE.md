@@ -665,8 +665,45 @@ Key invariants:
   editor uses `#d1d5db` (modern soft grey on the app's white surface);
   clipboard uses `#999` because external editors render lighter
   borders against off-white surfaces and the grid disappears. Update
-  both sides + this note if you change either colour. Pinned by 5
+  both sides + this note if you change either colour. Pinned by
   tests in `web/src/__tests__/clipboard.test.ts`.
+- **Configurable paste format (2026-06-22):** `decorateHtmlForClipboard`
+  is now option-driven — it takes a `ClipboardFormatOptions`
+  (`web/src/lib/clipboardFormat.ts`: `borderStyle` none/single/double,
+  `fontSizePt`, `cellPaddingPx`, `paragraphSpacingPx`, `rowUnderlines`)
+  defaulting to `DEFAULT_FORMAT_OPTIONS`. **Calling with the defaults
+  reproduces the previous hard-coded output byte-for-byte** — the
+  pinning tests above depend on that equivalence, so keep the defaults
+  pinned when editing. Two layers feed it: a GLOBAL default persisted
+  per-browser in `localStorage` (key `xbrl.notesClipboardFormat`,
+  edited in the General settings "Notes paste format" section — this is
+  the codebase's only `localStorage`-backed preference, NOT a server
+  `.env`/`/api/settings` setting), and a TRANSIENT per-cell override set
+  in the Notes-tab Format popover (`CellRow` → `FormatPopover`, shared
+  controls in `ClipboardFormatControls.tsx`). The plain toolbar **Copy**
+  ALWAYS reads `loadGlobalFormat()` at click time; the override is
+  applied ONLY by the popover's own "Copy with this format" button, so a
+  tweak never silently changes the plain Copy. The override is re-seeded
+  from the global default each time the popover opens and is never
+  persisted (gotcha #16 — store stays style-free). Edit and Format modes
+  are mutually exclusive (so the table can't change under the row
+  picker's indices). `loadGlobalFormat` runtime-validates stored prefs
+  (enum membership + 2-number padding tuple + clamped numerics), not just
+  malformed-JSON. `rowUnderlines`
+  (the accountant double-underline on a user-picked totals row) is
+  per-cell/transient only and never written to the global default; its
+  0-based row index matches `decorateHtmlForClipboard`'s
+  `querySelectorAll("tr")` document order. Pinned by
+  `web/src/__tests__/clipboardFormat.test.ts`, the option tests in
+  `clipboard.test.ts`, and the Format-popover tests in
+  `NotesReviewTab.test.tsx`.
+- **Numeric notes '000 separator (2026-06-22):** the numeric Notes review
+  rows (`NumericCellRow`, sheets 13/14) display grouped (`1,595`) at rest
+  and raw while focused, mirroring the face-statement value inputs. The
+  formatter (`formatGroupedInput`) moved from `ConceptsPage` to the
+  shared `web/src/lib/numberFormat.ts` to avoid a circular import
+  (`ConceptsPage` imports `NotesReviewTab`); `ConceptsPage` re-exports it.
+  Display-only — stored values stay raw.
 
 Full walkthrough: [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md).
 

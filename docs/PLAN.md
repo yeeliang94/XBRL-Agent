@@ -1,143 +1,110 @@
-# Implementation Plan: Settings Page + Admin User Management
+# Implementation Plan: Configurable Notes-Table Clipboard Formatting (+ '000 separator fix)
 
-**Overall Progress:** `100%` (Steps 1–9 done — all phases complete)
-**Design Reference:** _None — shaped directly in the 2026-06-19 brainstorm (no separate PRD)._
-**Last Updated:** 2026-06-19
+**Overall Progress:** `100%` (all 6 phases done — frontend-only, 745 web tests green, `tsc -b` clean)
+**Design Reference:** _None — shaped directly in the 2026-06-22 `/explore` session (this file is the source of truth)._
+**Last Updated:** 2026-06-22
 
-> Replaces the previous (completed) PLAN.md for Full-Template Notes Review +
-> Notes Node Registry — that work is at 100% and preserved in git history.
+> Replaces the previous (completed, 100%) PLAN.md for "Settings Page + Admin
+> User Management" — that work is done and preserved in git history.
 
 ## Summary
-
-Add a real two-tier auth role (`is_admin`) and a consolidated `/settings` page
-that replaces today's settings modal. The page has four tabs — **Account**
-(change my own password), **Models & Providers** (the existing API-key/model/proxy
-settings, moved out of the modal), **Run defaults** (auto-review, default models,
-entity-memory — already wired to `/api/settings`), and **Users** (admin-only:
-list / add / disable / reset-password / promote). All user-management operations
-already exist in `db/repository.py` + `auth/manage.py`; the work is exposing them
-over admin-gated HTTP routes and building the UI on top, plus one schema migration.
+Give the Notes review tab manual control over how a notes cell's table/prose is
+formatted **before** it is copied into M-Tool. A global default (border style,
+font size, cell padding, paragraph spacing) is stored per-browser in
+`localStorage` and edited in a new General-settings section; a per-cell format
+tool (appears on click, hides on deselect) lets the user override those defaults
+for a single copy and additionally mark specific rows (e.g. a totals row) with a
+double underline. All styling is injected only at the clipboard boundary
+(gotcha #16 — DB/sanitiser stay style-free); per-cell tweaks are **transient**
+(never persisted). Separately and independently, fix a display gap so numeric
+notes sheets (13/14) show `1,595` at rest like the face statements already do.
 
 ## Key Decisions
-
-- **Admin model: a real `is_admin` role (schema v20), not "everyone-is-admin."**
-  An admin portal without a privilege boundary is "every user can disable every
-  other user" — unacceptable for a finance tool. Chosen in brainstorm.
-- **Migration is v20, not v19.** `CURRENT_SCHEMA_VERSION` is already `19` (notes
-  template registry, last commit). The auth-role step is `v19 → v20`.
-- **One settings page, four tabs — not a separate "admin portal" surface.** The
-  Users tab is admin-gated; everything else is visible to all logged-in users.
-- **Server-side enforcement is the boundary; the hidden tab is only UX.** Every
-  `/api/admin/*` route independently checks `is_admin` and 403s otherwise.
-- **First admin is minted via the CLI.** You cannot create admin #1 through an
-  admin-only UI from a cold start — `auth.manage` gets a `--admin` flag and a
-  `make-admin`/`revoke-admin` subcommand as the bootstrap escape hatch.
-- **Reuse, don't reinvent.** Operations exist (`repo.upsert_auth_user`,
-  `set_auth_user_disabled`, `list_auth_users`, `count_auth_users`,
-  `passwords.hash_password/verify_password/dummy_verify`). The only genuinely new
-  logic is change-my-own-password (verify current → set new).
-- **Inline styles only (gotcha #7).** Reuse `theme.ts` tokens + `uiStyles.ts`
-  primitives. No Tailwind. Many frontend tests assert exact RGB from `theme.ts`.
-- **Tests run via `./venv/bin/python` (memory: venv_interpreter_for_tests).**
-  Bare `python3` is a stale 3.9 and gives phantom import errors.
-
-## Out of Scope (deferred, do NOT build)
-
-Teams/orgs, granular permissions, who-changed-what audit logs, invite emails,
-SSO wiring, password-reset-by-email. None block the core ask.
+- **Storage = browser `localStorage`, not server `.env`** — this is a personal
+  paste preference, so it should be per-user/per-machine. The codebase has no
+  prior `localStorage` usage; this is a new (small, self-contained) pattern.
+- **Per-cell tweaks are transient** — they override the global default for one
+  copy only and reset; they are never written to `notes_cells` (preserves
+  gotcha #16's style-free store).
+- **No auto-detection of "total" rows** — the user manually clicks the row(s)
+  that should get a double underline. No heuristic, no agent involvement.
+- **Granularity = both** — table-wide uniform controls AND per-row double-underline targeting.
+- **Double line = `border-style: double`** applied to the row the user picks
+  (per-row) and/or all grid lines (table-wide border option).
+- **Separator fix is display-only and separable** — `NumericCellRow` mirrors
+  `ConceptsPage.formatGroupedInput` (grouped at rest, raw while focused). The
+  save path already parses commas, so storage is untouched. Ships first.
+- **Format injection stays in `decorateHtmlForClipboard`** — it becomes
+  option-driven; calling it with default options must reproduce today's exact
+  output so the existing 5 pinning tests keep their meaning.
 
 ## Pre-Implementation Checklist
-- [x] 🟩 No in-flight schema work claims v20 (committed schema was v19; v20 is free).
-- [x] 🟩 `AUTH_MODE=dev` default applies to the new routes (admin-route tests opt out with `delenv`).
-- [x] 🟩 `resolve_session` does NOT carry the user role → `me()`/`_require_admin` do a follow-up `fetch_auth_user` (its signature left unchanged).
-
----
+- [x] 🟩 All questions from /explore resolved
+- [ ] 🟥 No conflicting in-progress work (working tree clean per git status; confirm before starting)
+- [ ] 🟥 Re-read gotcha #16 (CLAUDE.md) before touching `clipboard.ts` / `tableAlign.ts`
 
 ## Tasks
 
-### Phase 1: Schema + role foundation (backend, no UI)
+### Phase 1: '000 separator display fix (independent, ships first) — 🟩 DONE
+- [x] 🟩 **Step 1: Group numeric notes inputs at rest** — make `NumericCellRow` display thousands separators like the face-statement inputs, without changing what's stored.
+  - [x] 🟩 Lifted `formatGroupedInput` + `formatAccounting` into new `web/src/lib/numberFormat.ts` (a shared lib was required, not optional — `ConceptsPage` imports `NotesReviewTab`, so importing the formatter back from `ConceptsPage` would be a circular import). `ConceptsPage` now re-exports them so existing imports/tests are unaffected.
+  - [x] 🟩 `NumericCellRow` shows grouped at rest, raw while focused (new `focusedKey` state), re-groups on blur.
+  - [x] 🟩 Save path untouched — `onChange` strips commas into the raw draft; `parseNumericInput`/`saveColumn` unchanged; stored value stays raw.
+  - **Verify:** `cd web && npx vitest run src/__tests__/ConceptsPage.test.tsx src/__tests__/NotesReviewTab.test.tsx` → 69 passed. Updated the "renders numeric rows" test to assert `4,242` at rest, `4242` on focus, `4,242` on blur.
 
-- [x] 🟩 **Step 1: Add `is_admin` column — schema v20** — the privilege boundary the whole feature rests on.
-  - [x] 🟩 Bump `CURRENT_SCHEMA_VERSION` 19 → 20 in `db/schema.py`.
-  - [x] 🟩 Add `is_admin INTEGER NOT NULL DEFAULT 0` to the `auth_users` CREATE TABLE block (fresh-init path).
-  - [x] 🟩 Add the `v19 → v20` migration block (`_V20_MIGRATION_COLUMNS` + ALTER, idempotent; same BEGIN IMMEDIATE discipline as v15/16/17).
-  - [x] 🟩 Add `is_admin: bool = False` to `AuthUser` + a shared `_row_to_auth_user` helper used by both `fetch_auth_user`/`list_auth_users`.
-  - [x] 🟩 Add `set_auth_user_admin(...)` **and** `count_admins(...)` (the latter feeds the last-admin guard) to `db/repository.py`.
-  - **Verify:** `./venv/bin/python -m pytest tests/test_db_schema_v20.py -v` → 5 passed. ✅
-  - _Note:_ added `count_admins` (not in the original step) because the last-admin guard in Step 4/CLI needs it; the row-mapping helper reads `is_admin` defensively so a pre-migration read degrades to non-admin.
+### Phase 2: Make the clipboard decorator option-driven (foundation) — 🟩 DONE
+- [x] 🟩 **Step 2: Define the format-options type + defaults** — `ClipboardFormatOptions` + `DEFAULT_FORMAT_OPTIONS` in new `web/src/lib/clipboardFormat.ts` (`borderStyle`, `fontSizePt`, `cellPaddingPx: [v,h]`, `paragraphSpacingPx`, `rowUnderlines`). Defaults = the old literals (single `#999`, 10pt, [4,8], 8px, []).
+  - **Verify:** `clipboardFormat.test.ts` asserts the defaults match the old literals. ✅
+- [x] 🟩 **Step 3: Thread options through `decorateHtmlForClipboard`** — signature now `(html, opts = DEFAULT_FORMAT_OPTIONS)`; styles built from `opts`. `none` drops cell border + legacy table attrs; `single`=`1px solid #999`; `double`=`3px double #999`; `rowUnderlines` adds `border-bottom: 3px double #000` per `<tr>` index. `copyHtmlAsRichText(html, opts?)` threads to both modern + legacy paths.
+  - **Verify:** Existing 5 `decorateHtmlForClipboard_*` tests pass **unchanged** (default == old output); new option tests cover none/double/rowUnderlines/font/padding/spacing. ✅
 
-- [x] 🟩 **Step 2: CLI can mint an admin (bootstrap escape hatch)** — so admin #1 exists before any UI.
-  - [x] 🟩 Added `--admin` flag to `auth.manage add-user` (SET-only — never demotes on re-run, mirroring the `disabled` rule).
-  - [x] 🟩 Added `make-admin <email>` / `revoke-admin <email>` subcommands; `revoke-admin` carries the last-admin guard.
-  - [x] 🟩 Added `ROLE` column to `list-users`.
-  - **Verify:** `./venv/bin/python -m pytest tests/test_manage_users.py -q` → 13 passed. ✅
+### Phase 3: Global default in localStorage + settings UI — 🟩 DONE
+- [x] 🟩 **Step 4: localStorage read/write helper** — `loadGlobalFormat()` / `saveGlobalFormat()` in `clipboardFormat.ts` (key `xbrl.notesClipboardFormat`). Tolerates missing/corrupt/partial JSON; `rowUnderlines` stripped on save, `[]` on load.
+  - **Verify:** `clipboardFormat.test.ts` — round-trip, corrupt JSON → defaults, partial object fills from defaults, rowUnderlines not persisted. ✅
+- [x] 🟩 **Step 5: "Notes paste format" section in General settings** — `NotesPasteFormatSection` in `GeneralSettingsForm.tsx`, localStorage-only (saves on change, not via `/api/settings`), using the shared `ClipboardFormatControls`. Inline styles (gotcha #7).
+  - **Verify:** `SettingsModal.test.tsx` — changing the border control writes `borderStyle:"none"` to localStorage. ✅
 
-### Phase 2: Backend routes
+### Phase 4: Per-cell format tool — table-wide controls (transient) — 🟩 DONE
+- [x] 🟩 **Step 6: Format popover** — `Format` toggle next to Copy in `CellRow`; opens `FormatPopover`, **re-seeds `formatOpts` from `loadGlobalFormat()` each open** so it never leaks. Renders the shared `ClipboardFormatControls`.
+  - **Verify:** `NotesReviewTab.test.tsx` — Format toggles the popover; border control present. ✅
+- [x] 🟩 **Step 7: Wire transient options into Copy** — `handleCopy` passes `formatOpts` to `copyHtmlAsRichText`; the popover also has its own "Copy with this format". Untouched cells copy with the global default.
+  - **Verify:** covered by the row-underline end-to-end test below. ✅
 
-- [x] 🟩 **Step 3: Surface `is_admin` in `/api/auth/me`** — the frontend needs to know whether to render the Users tab.
-  - [x] 🟩 `me()` now does a follow-up `fetch_auth_user` for the role (left `resolve_session`'s widely-used signature unchanged). Fail-closed to non-admin on a missing row.
-  - [x] 🟩 `_DEV_USER` carries `is_admin: True`.
-  - **Verify:** `./venv/bin/python -m pytest tests/test_auth_me_reports_admin.py -q` → 3 passed. ✅
+### Phase 5: Per-cell format tool — per-row double-underline targeting — 🟩 DONE
+- [x] 🟩 **Step 8: Row picker** — `extractTableRowPreviews` enumerates `<tr>` in the same document order as the decorator; the popover lists rows with checkboxes toggling `rowUnderlines`. On Copy the picked rows get the double underline.
+  - **Verify:** `NotesReviewTab.test.tsx` — marking the "Total" row (index 2) + Copy → only that row's cells carry `border-bottom: 3px double #000` (parsed from the captured clipboard blob); "Cash" row does not. ✅
 
-- [x] 🟩 **Step 4: Admin-gated user-management routes** — the operations, enforced server-side.
-  - [x] 🟩 `_require_admin(conn, request)` returns the deny-response or None; dev-bypass counts as admin.
-  - [x] 🟩 `GET /api/admin/users` (no hash; `_user_public` exposes `has_password` instead), `POST /api/admin/users`, `/disable`, `/enable`, `/reset-password`, `/admin` (promote/demote).
-  - [x] 🟩 **Last-admin guard** (`_is_last_enabled_admin`) on disable + demote → **409** with a clear message.
-  - **Verify:** `./venv/bin/python -m pytest tests/test_admin_routes.py -q` → 13 passed. ✅
-  - _Note:_ shared `MIN_PASSWORD_LEN` moved to `auth/passwords.py` (canonical home; CLI now aliases it). 422 uses the numeric code to match the codebase convention (reviewer_routes) and avoid Starlette's deprecated `HTTP_422_*` alias.
+### Phase 6: Sync, docs, regression — 🟩 DONE
+- [x] 🟩 **Step 9: Cross-file + docs sync** — alignment heuristic (`tableAlign.ts`) and `NotesReviewTab.css` untouched (only border/spacing/font/padding became configurable; default border colour unchanged). Updated CLAUDE.md gotcha #16 (configurable-paste-format + '000-separator notes) and the `clipboard.ts` header comment.
+  - **Verify:** default copy byte-identical to pre-change (the 5 pinning tests stayed green unchanged). ✅
+- [x] 🟩 **Step 10: Full regression** — `cd web && npx tsc -b` clean; `npx vitest run` → **745 passed (55 files)**. No backend (`.py`) files changed (frontend-only feature) — `git status` confirms, so the pytest spot-run is N/A.
+  - **Verify:** Full web suite + typecheck green. Browser smoke deferred — see Deviations.
 
-- [x] 🟩 **Step 5: Self-service change-my-own-password** — the only genuinely new logic.
-  - [x] 🟩 `POST /api/auth/change-password` — re-auths with `verify_password(current)` (+ `dummy_verify` on miss for flat timing), rotates on success. 401 bad-current, 422 short-new, 400 in dev-mode (no real account).
-  - **Verify:** `./venv/bin/python -m pytest tests/test_change_password.py -q` → 4 passed. ✅
-
-### Phase 3: Frontend — consolidated settings page
-
-**Scope decision (2026-06-19):** user chose the lowest-risk option — Models &
-Providers + Run defaults stay together as ONE **General** tab (they share a single
-Save + one `/api/settings` POST; splitting them would rewrite tested code for no
-user gain). Tabs are therefore **General · Account · Users**. The existing
-`SettingsModal` body is extracted into a reusable `GeneralSettingsForm` and the
-modal becomes a thin wrapper so its pinning tests (incl. exact-RGB) stay green.
-
-- [x] 🟩 **Step 6: Extract `GeneralSettingsForm` + keep `SettingsModal` as a thin wrapper** — reuse the tested form, un-modal-ized.
-  - [x] 🟩 New `web/src/components/GeneralSettingsForm.tsx` = the modal's body, no overlay, loads on mount.
-  - [x] 🟩 `SettingsModal.tsx` is now a thin overlay wrapper around it.
-  - **Verify:** `SettingsModal.test.tsx` → 17 passed unchanged. ✅
-
-- [x] 🟩 **Step 7: `SettingsPage` shell + routing + gear** — the destination.
-  - [x] 🟩 `web/src/pages/SettingsPage.tsx` with a WAI-ARIA tablist (roving tabindex): General · Account · Users.
-  - [x] 🟩 `"settings"` added to `AppView` + `parseRouteFromPath('/settings')` + URL-sync; gear dispatches `SET_VIEW settings`; render branch added.
-  - [x] 🟩 Users tab gated on `user?.is_admin`; tab content mounts only when active.
-  - **Verify:** `SettingsPage.test.tsx` → 5 passed; `App.test.tsx` + `AppRouting.test.tsx` → 30 passed. ✅
-
-- [x] 🟩 **Step 8: Account tab + Users tab UI + api helpers** — the new surfaces.
-  - [x] 🟩 `AccountTab.tsx` (change-password) + `UsersTab.tsx` (table + actions + add form + inline reset).
-  - [x] 🟩 `api.ts`: `changePassword` + 5 admin helpers; `AuthMe.is_admin` + `AdminUser` types.
-  - **Verify:** `AccountTab.test.tsx` (4) + `UsersTab.test.tsx` (6) pass. Full suite: **717 passed**, `tsc --noEmit` clean. ✅
-  - _Note (deviation):_ per the 2026-06-19 scope decision, Models & Providers + Run defaults stayed as one **General** tab (3 tabs, not 4). The `SettingsModal` file was kept (as a thin wrapper) rather than deleted, so its pinning tests stay green with zero changes — lower risk than the plan's "delete + migrate tests".
-
-### Phase 4: Polish + cross-file sync
-
-- [x] 🟩 **Step 9: Docs + invariants sync** — keep the context pack honest.
-  - [x] 🟩 Updated CLAUDE.md gotcha #11 (version → 20; v18→v19 + v19→v20 steps) and gotcha #24 (admin role + `/api/admin/*` + change-password + `/settings` page).
-  - [x] 🟩 Updated the `auth_layer_status` memory file.
-  - [x] 🟩 `docs/SYNC-MATRIX.md` does **not exist** in the repo (the CLAUDE.md pointer is stale) — nothing to update.
-  - **Verify:** backend `-k "auth or admin or schema or password or manage or middleware"` → 189 passed; `cd web && npx vitest run` → 717 passed; `tsc --noEmit` clean; browser-verified the `/settings` page end-to-end (General + Users tabs against the live dev backend, no console errors). ✅
-
----
+## Deviations from the plan (all minor, none change scope)
+- **`numberFormat.ts` shared lib was required, not optional.** `ConceptsPage`
+  imports `NotesReviewTab`, so importing the formatter back from `ConceptsPage`
+  would be a circular import. Lifted the two formatters into the shared lib;
+  `ConceptsPage` re-exports them (existing tests/imports unaffected).
+- **Added `ClipboardFormatControls.tsx`** — a shared component so the settings
+  section and the per-cell popover render identical table-wide controls (DRY).
+  The plan implied duplicating the controls; sharing them is cleaner and within
+  scope.
+- **Cell padding is two inputs (vertical + horizontal)** rather than one — the
+  underlying CSS needs both; this matches the `cellPaddingPx: [v, h]` shape.
+- **Two ways to copy with a custom format:** the toolbar **Copy** uses the
+  cell's current `formatOpts` (which is the global default until the popover is
+  opened and tweaked), and the popover has its own **"Copy with this format"**
+  button. Both honour the same transient options — this satisfies Step 7 and
+  adds an obvious in-popover action.
+- **Browser smoke not run.** A meaningful in-browser check of the Notes tab
+  needs a completed extraction run with notes data (backend + auth + an LLM
+  run), which isn't readily reproducible here. Verification rests on the 745
+  passing web tests (incl. end-to-end clipboard-blob assertions) + a clean
+  `tsc -b`. The settings section alone could be smoke-tested without a run if
+  desired.
 
 ## Rollback Plan
-
 If something goes badly wrong:
-
-- **Schema:** the v20 migration is purely additive (one defaulted column) — it
-  never drops or rewrites data. To revert code, restore `CURRENT_SCHEMA_VERSION = 19`
-  and remove the migration block; an already-migrated DB keeps the unused
-  `is_admin` column harmlessly (older code never reads it). No data migration to undo.
-- **Routes/UI:** all new routes are additive; revert the `app.include_router`
-  additions and the `/settings` route to fall back to the existing settings modal.
-  The CLI (`auth.manage`) remains a working fallback for all user management
-  throughout — nothing about it is removed.
-- **State to check on rollback:** verify at least one enabled admin still exists
-  via `./venv/bin/python -m auth.manage list-users`, so no one is locked out. If
-  the last-admin guard ever misfired, re-mint with `make-admin <email>`.
+- The feature is **frontend-only and additive**; no DB schema, no API, no backend changes. Revert the touched files: `web/src/lib/clipboard.ts`, `web/src/lib/clipboardFormat.ts` (new), `web/src/lib/tableAlign.ts` (if touched), `web/src/components/NotesReviewTab.tsx`, `web/src/components/GeneralSettingsForm.tsx`, and the CLAUDE.md note — restoring `decorateHtmlForClipboard` to its option-less form restores exactly today's behaviour.
+- The Phase 1 separator fix is independent — it can be reverted on its own (single function in `NumericCellRow`) without affecting the formatting feature, and vice-versa.
+- **State to check:** confirm no per-cell format data leaked into `notes_cells` (it must not — tweaks are transient). Clear the new `localStorage` key if a malformed value ever blocks the settings form (`loadGlobalFormat` already falls back to defaults, so this should be self-healing).
