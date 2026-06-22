@@ -25,16 +25,20 @@ def _clean(html: str) -> str:
 # --- the whitelist is the editor's contract (peer-review #3) ---------------
 
 def test_allowed_css_properties_is_exactly_the_editor_set() -> None:
-    """Pins the public CSS whitelist to the editor's Format-bar controls
-    (web/src/lib/cellFormatting.ts: fill + per-side borders). Widen this set
-    only when the editor gains a matching control, or a persisted style gets
-    silently dropped on the next re-save."""
+    """Pins the CSS property vocabulary to the editor's controls (notes editor
+    v2): cell fill + per-side borders, plus text colour (Color → span) and
+    paragraph/cell alignment (TextAlign). Widen this set only when the editor
+    gains a matching control, or a persisted style gets silently dropped on the
+    next re-save. Note this is the full *vocabulary* — which tag may carry each
+    is gated separately by `_STYLE_PROPS_BY_TAG`."""
     assert ALLOWED_CSS_PROPERTIES == frozenset({
         "background-color",
         "border-top",
         "border-right",
         "border-bottom",
         "border-left",
+        "color",
+        "text-align",
     })
 
 
@@ -63,13 +67,13 @@ def test_multiple_declarations_kept_in_order() -> None:
     assert "border-bottom: 1px solid #999" in low
 
 
-def test_contract_narrowed_to_editor_set() -> None:
-    """The whitelist mirrors the editor exactly (peer-review #3): properties the
-    Format bar can't produce/round-trip are rejected so they can't be silently
-    dropped on a later re-save. `text-align`, `color`, `font-weight`, and the
-    all-sides `border` shorthand are NOT accepted."""
+def test_table_cell_rejects_props_it_cannot_round_trip() -> None:
+    """On a `<td>`, the editor only produces fill, per-side borders, and
+    alignment. Properties it can't round-trip on a cell are rejected so they
+    can't be silently dropped on a later re-save: `color` (cells have no text-
+    colour control — that's a <span> concern), `font-weight`, and the all-sides
+    `border` shorthand (the UI sets four sides individually)."""
     for prop, value in [
-        ("text-align", "right"),
         ("color", "#123456"),
         ("font-weight", "bold"),
         ("border", "1px solid #000"),  # all-sides shorthand — UI uses per-side
@@ -77,8 +81,15 @@ def test_contract_narrowed_to_editor_set() -> None:
         cleaned, warnings = sanitize_notes_html(
             f'<table><tr><td style="{prop}: {value}">x</td></tr></table>'
         )
-        assert prop not in cleaned.lower(), f"{prop} should be rejected now"
+        assert prop not in cleaned.lower(), f"{prop} should be rejected on <td>"
         assert any(prop in w.lower() for w in warnings)
+
+
+def test_text_align_now_allowed_on_table_cell() -> None:
+    """v2 widening: cell alignment is a real control (per-column align), so
+    `text-align` survives on a `<td>` (it was rejected in v1)."""
+    out = _clean('<table><tr><td style="text-align: right">x</td></tr></table>')
+    assert "text-align: right" in out.lower()
 
 
 # --- reset values (no-fill / no-border) survive (peer-review #2) -----------
@@ -142,6 +153,61 @@ def test_invalid_hex_length_is_rejected() -> None:
     )
     assert "#12345" not in cleaned.lower()
     assert any("background-color" in w.lower() for w in warnings)
+
+
+# --- v2 inline marks: colour / highlight / alignment -----------------------
+
+def test_inline_mark_tags_survive() -> None:
+    """The human-applied marks the editor produces (underline, strikethrough,
+    super/subscript) round-trip through the sanitiser."""
+    out = _clean(
+        "<p>a<u>b</u><s>c</s>d<sup>1</sup>e<sub>2</sub></p>"
+    )
+    low = out.lower()
+    for tag in ("<u>", "<s>", "<sup>", "<sub>"):
+        assert tag in low, f"{tag} should survive"
+
+
+def test_text_colour_survives_on_span() -> None:
+    """TipTap Color emits `<span style="color: …">`; the colour survives."""
+    out = _clean('<p><span style="color: #185fa5">blue</span></p>')
+    assert "color: #185fa5" in out.lower()
+
+
+def test_highlight_survives_on_mark() -> None:
+    """TipTap Highlight emits `<mark style="background-color: …">` (+ an inert
+    `color: inherit`); the highlight fill survives."""
+    out = _clean(
+        '<p><mark style="background-color: #fac775; color: inherit">hi</mark></p>'
+    )
+    low = out.lower()
+    assert "background-color: #fac775" in low
+    assert "<mark" in low
+
+
+def test_paragraph_alignment_survives() -> None:
+    """TipTap TextAlign emits `text-align` on the paragraph/heading."""
+    out = _clean('<p style="text-align: center">centred</p>')
+    assert "text-align: center" in out.lower()
+
+
+def test_colour_is_rejected_off_its_tag() -> None:
+    """`color` is a <span> concern only — it must NOT survive on a paragraph
+    (the tag-aware gate, not just a global property whitelist)."""
+    cleaned, _ = sanitize_notes_html('<p style="color: #123456">x</p>')
+    assert "color" not in cleaned.lower()
+    assert "x" in cleaned
+
+
+def test_dangerous_value_still_rejected_on_span_colour() -> None:
+    """The value gate still applies to the new properties: a `url()` / script
+    payload in a span colour is dropped."""
+    cleaned, _ = sanitize_notes_html(
+        '<p><span style="color: url(javascript:alert(1))">x</span></p>'
+    )
+    low = cleaned.lower()
+    assert "url(" not in low
+    assert "javascript" not in low
 
 
 # --- style still stripped off the table (gotcha #16 for prose) -------------

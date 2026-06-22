@@ -26,6 +26,24 @@ import type { Editor } from "@tiptap/react";
 import { StarterKit } from "@tiptap/starter-kit";
 import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
+// Notes editor v2 marks. StarterKit already bundles bold/italic/strike/
+// underline, so only the extras are imported here. Color rides on TextStyle
+// (a <span style="color">); Highlight is multicolor (<mark style>); TextAlign
+// sets text-align on paragraphs/headings. All are pinned to the installed
+// TipTap version (3.22.4) to avoid the peer-version skew documented in the
+// plan. The backend sanitiser (notes/html_sanitize.py) is widened in lock-step
+// to accept exactly the tags/styles these produce.
+import { Superscript } from "@tiptap/extension-superscript";
+import { Subscript } from "@tiptap/extension-subscript";
+import { TextStyle } from "@tiptap/extension-text-style";
+import { Color } from "@tiptap/extension-color";
+import { Highlight } from "@tiptap/extension-highlight";
+import { TextAlign } from "@tiptap/extension-text-align";
+import {
+  TEXT_COLORS,
+  HIGHLIGHT_COLORS,
+  type PaletteSwatch,
+} from "../lib/notesPalette";
 import {
   StyledTableCell,
   StyledTableHeader,
@@ -118,11 +136,9 @@ const UNKNOWN_COUNT = -1;
  *  ALLOWED_TAGS whitelist does NOT include `<pre>`, `<code>`,
  *  `<blockquote>`, or `<hr>`. Users pressing Cmd+Shift+C (code block)
  *  or pasting fenced code would produce HTML the backend silently
- *  strips — the sanitiser-warning chip surfaces the removal, but the
- *  editor UI still suggested the format was supported. We disable the
- *  mismatched extensions here to keep the editor's affordances
- *  aligned with what the backend will accept. If we want to support
- *  these formats in the future, we extend ALLOWED_TAGS and re-enable
+ *  strips. We disable the mismatched extensions here to keep the editor's
+ *  affordances aligned with what the backend will accept. If we want to
+ *  support these formats in the future, we extend ALLOWED_TAGS and re-enable
  *  here — both sides in one review. */
 const TIPTAP_EXTENSIONS = [
   StarterKit.configure({
@@ -131,6 +147,19 @@ const TIPTAP_EXTENSIONS = [
     blockquote: false,
     horizontalRule: false,
   }),
+  // Inline marks (v2). Superscript/subscript are mutually exclusive by
+  // default (toggling one clears the other), which matches footnote-style use.
+  Superscript,
+  Subscript,
+  // Text colour rides on TextStyle; Color adds the setColor command. Highlight
+  // is multicolor so the toolbar can offer a small palette of highlight shades.
+  TextStyle,
+  Color,
+  Highlight.configure({ multicolor: true }),
+  // Paragraph/heading alignment. Table-cell alignment is handled separately
+  // (the numeric auto-right-align + Phase 3 per-column control), so cells are
+  // intentionally NOT in this type list.
+  TextAlign.configure({ types: ["heading", "paragraph"] }),
   Table.configure({ resizable: false }),
   TableRow,
   // Styled variants carry the WYSIWYG fill / per-side border attributes
@@ -853,7 +882,6 @@ function CellRow({
 
       <div style={styles.cellRight} ref={wrapperRef}>
         <div style={styles.cellToolbar}>
-          {editable && editor && <FormatToolbar editor={editor} />}
           <div style={styles.cellToolbarSpacer} />
           <SaveStatusBadge status={status} />
           {copiedAt !== null && (
@@ -892,7 +920,7 @@ function CellRow({
             Copy
           </button>
         </div>
-        {editable && editor && <TableFormatBar editor={editor} />}
+        {editable && editor && <EditorToolbar editor={editor} />}
         {formatOpen && (
           <FormatPopover
             options={formatOpts}
@@ -1109,50 +1137,21 @@ function FormatPopover({
 // Formatting toolbar — Bold / Italic / Lists / H3 / Table.
 // ---------------------------------------------------------------------------
 
-function FormatToolbar({ editor }: { editor: Editor }) {
-  const btn = (
-    label: string,
-    onClick: () => void,
-    isActive?: boolean,
-  ) => (
-    <button
-      key={label}
-      type="button"
-      aria-label={label}
-      style={isActive ? styles.toolbarButtonActive : styles.toolbarButton}
-      onClick={onClick}
-    >
-      {label}
-    </button>
-  );
-  return (
-    <div role="toolbar" aria-label="Format" style={styles.toolbar}>
-      {btn("Bold", () => editor.chain().focus().toggleBold().run(), editor.isActive("bold"))}
-      {btn("Italic", () => editor.chain().focus().toggleItalic().run(), editor.isActive("italic"))}
-      {btn("• List", () => editor.chain().focus().toggleBulletList().run(), editor.isActive("bulletList"))}
-      {btn("1. List", () => editor.chain().focus().toggleOrderedList().run(), editor.isActive("orderedList"))}
-      {btn("H3", () => editor.chain().focus().toggleHeading({ level: 3 }).run(), editor.isActive("heading", { level: 3 }))}
-      {btn("Table", () =>
-        editor
-          .chain()
-          .focus()
-          .insertTable({ rows: 2, cols: 2, withHeaderRow: true })
-          .run(),
-      )}
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// Table format bar — selection-based WYSIWYG controls (fill / per-side
-// borders / row+column structure). Only renders when the selection is inside
-// a table (peer-review #4: reactive via useEditor's transaction re-render).
-// All formatting persists in the cell HTML via the styled cell extensions
-// (web/src/lib/cellFormatting.ts) — docs/PRD-notes-wysiwyg-formatting.md.
+// Editor toolbar — the single docked two-tier formatting bar (notes editor v2,
+// docs/PRD-notes-editor-v2.md §7). Tier 1 (Text · Colour · Paragraph) always
+// shows in edit mode; Tier 2 (Table: fill / borders / structure) activates
+// only when the selection is inside a table. It replaces v1's separate
+// FormatToolbar + TableFormatBar. Reactive because the parent CellRow
+// re-renders on every editor transaction (`shouldRerenderOnTransaction`), so
+// active states + the in-table tier track the selection without a doc edit.
+// All cell formatting persists via the styled cell extensions
+// (web/src/lib/cellFormatting.ts); marks/colour/align persist as inline HTML
+// the backend sanitiser accepts in lock-step (notes/html_sanitize.py).
 // ---------------------------------------------------------------------------
 
-// Quick fill presets (the convenience row; the colour input covers the rest):
-// white, the PwC header grey, and one light highlight.
+// Quick cell-fill presets (the convenience row). "Fill Grey" is depended on by
+// the component tests — keep that label stable.
 const FILL_PRESETS: ReadonlyArray<{ label: string; color: string }> = [
   { label: "White", color: "#ffffff" },
   { label: "Grey", color: "#f4f4f4" },
@@ -1166,119 +1165,173 @@ const BORDER_SIDE_BTNS: ReadonlyArray<{ side: BorderSide; label: string }> = [
   { side: "Left", label: "Left" },
 ];
 
-function TableFormatBar({ editor }: { editor: Editor }) {
-  // Border colour for newly-added grid lines. Local because it's a tool
-  // setting, not cell state — the chosen colour applies to subsequent
-  // border toggles / the "All" shortcut.
+function EditorToolbar({ editor }: { editor: Editor }) {
+  // Border colour for newly-added grid lines — a tool setting, not cell state.
   const [borderColor, setBorderColor] = useState<string>(DEFAULT_BORDER_COLOR);
 
-  // Only show inside a table. isActive is reactive because the parent CellRow
-  // re-renders on every editor transaction (useEditor), including selection.
-  if (!editor.isActive("table")) return null;
+  const inTable = editor.isActive("table");
 
-  const cellAttrs = currentCellAttrs(editor);
-  const sideIsOn = (side: BorderSide): boolean => {
-    const v = cellAttrs?.[`border${side}`];
-    return typeof v === "string" && v !== "" && v !== BORDER_NONE;
-  };
-
-  const tBtn = (
-    label: string,
+  // All buttons preventDefault on mousedown so clicking them never blurs the
+  // editor / collapses a (multi-cell or text) selection before the command
+  // runs — the same fix that makes range fill work (Step 0.1).
+  const btn = (
+    label: React.ReactNode,
+    ariaLabel: string,
     onClick: () => void,
-    opts?: { active?: boolean; ariaLabel?: string },
+    active?: boolean,
   ) => (
     <button
-      key={label}
+      key={ariaLabel}
       type="button"
-      aria-label={opts?.ariaLabel ?? label}
-      // Run through onMouseDown-preventDefault so clicking the button doesn't
-      // blur the editor and collapse the cell selection before the command
-      // runs (the command helpers also re-focus defensively).
+      aria-label={ariaLabel}
       onMouseDown={(e) => e.preventDefault()}
-      style={opts?.active ? styles.toolbarButtonActive : styles.toolbarButton}
+      style={active ? styles.toolbarButtonActive : styles.toolbarButton}
       onClick={onClick}
     >
       {label}
     </button>
   );
 
+  // A constrained-palette colour swatch (text colour or highlight). `null`
+  // value is the reset (remove colour / no highlight).
+  const swatch = (s: PaletteSwatch, kind: "text" | "highlight") => {
+    const apply = () => {
+      const c = editor.chain().focus();
+      if (kind === "text") {
+        if (s.value === null) c.unsetColor().run();
+        else c.setColor(s.value).run();
+      } else {
+        if (s.value === null) c.unsetHighlight().run();
+        else c.toggleHighlight({ color: s.value }).run();
+      }
+    };
+    return (
+      <button
+        key={`${kind}-${s.label}`}
+        type="button"
+        title={s.label}
+        aria-label={`${kind === "text" ? "Text colour" : "Highlight"} ${s.label}`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={apply}
+        style={{
+          ...styles.swatchButton,
+          background: s.value ?? pwc.white,
+        }}
+      >
+        {s.value === null ? "✕" : ""}
+      </button>
+    );
+  };
+
+  const sideIsOn = (side: BorderSide): boolean => {
+    const v = currentCellAttrs(editor)?.[`border${side}`];
+    return typeof v === "string" && v !== "" && v !== BORDER_NONE;
+  };
+
   return (
-    <div
-      role="toolbar"
-      aria-label="Table formatting"
-      data-testid="table-format-bar"
-      style={styles.tableFormatBar}
-    >
-      {/* Fill */}
-      <span style={styles.tableFormatGroupLabel}>Fill</span>
-      {FILL_PRESETS.map((p) =>
-        tBtn(p.label, () => applyCellFill(editor, p.color), {
-          ariaLabel: `Fill ${p.label}`,
-        }),
-      )}
-      {tBtn("No fill", () => applyCellFill(editor, FILL_NONE))}
-      {/* A native `<input type="color">` was removed here on purpose: opening
-          the OS colour picker blurs the editor, which collapses a multi-cell
-          drag selection before the fill is applied (so the fill only hit one
-          cell). The preset swatch buttons above run through onMouseDown-
-          preventDefault, so they keep the selection and fill the whole range.
-          The full house palette lands with the Phase 2.4 toolbar redesign. */}
+    <div style={styles.editorToolbar} data-testid="editor-format-bar">
+      {/* Tier 1 — always available in edit mode. */}
+      <div role="toolbar" aria-label="Formatting" style={styles.toolbarRow}>
+        <span style={styles.tableFormatGroupLabel}>Text</span>
+        {btn(<span style={{ fontWeight: 700 }}>B</span>, "Bold",
+          () => editor.chain().focus().toggleBold().run(), editor.isActive("bold"))}
+        {btn(<span style={{ fontStyle: "italic" }}>I</span>, "Italic",
+          () => editor.chain().focus().toggleItalic().run(), editor.isActive("italic"))}
+        {btn(<span style={{ textDecoration: "underline" }}>U</span>, "Underline",
+          () => editor.chain().focus().toggleUnderline().run(), editor.isActive("underline"))}
+        {btn(<span style={{ textDecoration: "line-through" }}>S</span>, "Strikethrough",
+          () => editor.chain().focus().toggleStrike().run(), editor.isActive("strike"))}
+        {btn("x²", "Superscript",
+          () => editor.chain().focus().toggleSuperscript().run(), editor.isActive("superscript"))}
+        {btn("x₂", "Subscript",
+          () => editor.chain().focus().toggleSubscript().run(), editor.isActive("subscript"))}
 
-      <span style={styles.tableFormatDivider} aria-hidden="true" />
+        <span style={styles.tableFormatDivider} aria-hidden="true" />
 
-      {/* Borders */}
-      <span style={styles.tableFormatGroupLabel}>Border</span>
-      {BORDER_SIDE_BTNS.map(({ side, label }) =>
-        tBtn(
-          label,
-          () =>
-            applyCellBorderSide(
-              editor,
-              side,
-              sideIsOn(side) ? BORDER_NONE : gridBorderValue(borderColor),
+        <span style={styles.tableFormatGroupLabel}>Colour</span>
+        {TEXT_COLORS.map((s) => swatch(s, "text"))}
+        <span style={styles.tableFormatGroupLabel}>Highlight</span>
+        {HIGHLIGHT_COLORS.map((s) => swatch(s, "highlight"))}
+
+        <span style={styles.tableFormatDivider} aria-hidden="true" />
+
+        <span style={styles.tableFormatGroupLabel}>Paragraph</span>
+        {btn("L", "Align left",
+          () => editor.chain().focus().setTextAlign("left").run(), editor.isActive({ textAlign: "left" }))}
+        {btn("C", "Align centre",
+          () => editor.chain().focus().setTextAlign("center").run(), editor.isActive({ textAlign: "center" }))}
+        {btn("R", "Align right",
+          () => editor.chain().focus().setTextAlign("right").run(), editor.isActive({ textAlign: "right" }))}
+        {btn("• List", "Bullet list",
+          () => editor.chain().focus().toggleBulletList().run(), editor.isActive("bulletList"))}
+        {btn("1. List", "Numbered list",
+          () => editor.chain().focus().toggleOrderedList().run(), editor.isActive("orderedList"))}
+        {btn("H3", "Heading",
+          () => editor.chain().focus().toggleHeading({ level: 3 }).run(), editor.isActive("heading", { level: 3 }))}
+        {btn("Table", "Insert table",
+          () => editor.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run())}
+      </div>
+
+      {/* Tier 2 — table controls, only inside a table. The data-testid is kept
+          from v1's TableFormatBar so existing tests keep working. */}
+      {inTable && (
+        <div
+          role="toolbar"
+          aria-label="Table formatting"
+          data-testid="table-format-bar"
+          style={styles.tableFormatBar}
+        >
+          <span style={styles.tableFormatGroupLabel}>Fill</span>
+          {FILL_PRESETS.map((p) =>
+            btn(p.label, `Fill ${p.label}`, () => applyCellFill(editor, p.color)),
+          )}
+          {btn("No fill", "No fill", () => applyCellFill(editor, FILL_NONE))}
+
+          <span style={styles.tableFormatDivider} aria-hidden="true" />
+
+          <span style={styles.tableFormatGroupLabel}>Border</span>
+          {BORDER_SIDE_BTNS.map(({ side, label }) =>
+            btn(
+              label,
+              `Border ${label}`,
+              () =>
+                applyCellBorderSide(
+                  editor,
+                  side,
+                  sideIsOn(side) ? BORDER_NONE : gridBorderValue(borderColor),
+                ),
+              sideIsOn(side),
             ),
-          { active: sideIsOn(side), ariaLabel: `Border ${label}` },
-        ),
-      )}
-      {tBtn("All", () =>
-        applyCellBorderAll(editor, gridBorderValue(borderColor)),
-      )}
-      {tBtn("None", () => applyCellBorderAll(editor, BORDER_NONE))}
-      <label style={styles.colorInputLabel} title="Border colour">
-        <span style={styles.visuallyHidden}>Border colour</span>
-        <input
-          type="color"
-          aria-label="Border colour"
-          value={borderColor}
-          style={styles.colorInput}
-          onChange={(e) => setBorderColor(e.target.value)}
-        />
-      </label>
+          )}
+          {btn("All", "Border all", () =>
+            applyCellBorderAll(editor, gridBorderValue(borderColor)))}
+          {btn("None", "Border none", () =>
+            applyCellBorderAll(editor, BORDER_NONE))}
+          <label style={styles.colorInputLabel} title="Border colour">
+            <span style={styles.visuallyHidden}>Border colour</span>
+            <input
+              type="color"
+              aria-label="Border colour"
+              value={borderColor}
+              style={styles.colorInput}
+              onChange={(e) => setBorderColor(e.target.value)}
+            />
+          </label>
 
-      <span style={styles.tableFormatDivider} aria-hidden="true" />
+          <span style={styles.tableFormatDivider} aria-hidden="true" />
 
-      {/* Structure — row above/below and column left/right (PRD Flow 3). */}
-      <span style={styles.tableFormatGroupLabel}>Table</span>
-      {tBtn("Row ↑", () => editor.chain().focus().addRowBefore().run(), {
-        ariaLabel: "Insert row above",
-      })}
-      {tBtn("Row ↓", () => editor.chain().focus().addRowAfter().run(), {
-        ariaLabel: "Insert row below",
-      })}
-      {tBtn("Col ←", () => editor.chain().focus().addColumnBefore().run(), {
-        ariaLabel: "Insert column left",
-      })}
-      {tBtn("Col →", () => editor.chain().focus().addColumnAfter().run(), {
-        ariaLabel: "Insert column right",
-      })}
-      {tBtn("− Row", () => editor.chain().focus().deleteRow().run(), {
-        ariaLabel: "Delete row",
-      })}
-      {tBtn("− Col", () => editor.chain().focus().deleteColumn().run(), {
-        ariaLabel: "Delete column",
-      })}
-      {tBtn("Delete table", () =>
-        editor.chain().focus().deleteTable().run(),
+          <span style={styles.tableFormatGroupLabel}>Table</span>
+          {btn("Row ↑", "Insert row above", () => editor.chain().focus().addRowBefore().run())}
+          {btn("Row ↓", "Insert row below", () => editor.chain().focus().addRowAfter().run())}
+          {btn("Col ←", "Insert column left", () => editor.chain().focus().addColumnBefore().run())}
+          {btn("Col →", "Insert column right", () => editor.chain().focus().addColumnAfter().run())}
+          {btn("Merge", "Merge cells", () => editor.chain().focus().mergeCells().run())}
+          {btn("Split", "Split cell", () => editor.chain().focus().splitCell().run())}
+          {btn("Header", "Toggle header row", () => editor.chain().focus().toggleHeaderRow().run())}
+          {btn("− Row", "Delete row", () => editor.chain().focus().deleteRow().run())}
+          {btn("− Col", "Delete column", () => editor.chain().focus().deleteColumn().run())}
+          {btn("Delete table", "Delete table", () => editor.chain().focus().deleteTable().run())}
+        </div>
       )}
     </div>
   );
@@ -1575,10 +1628,38 @@ const styles = {
   cellToolbarSpacer: {
     flex: 1,
   } as React.CSSProperties,
-  toolbar: {
+  // The unified docked editor toolbar (notes editor v2): a column holding
+  // Tier 1 (text/colour/paragraph) and, when in a table, Tier 2 (table).
+  editorToolbar: {
     display: "flex",
-    gap: 2,
+    flexDirection: "column" as const,
+    gap: 4,
+    marginTop: 4,
+  } as React.CSSProperties,
+  toolbarRow: {
+    display: "flex",
     flexWrap: "wrap" as const,
+    alignItems: "center",
+    gap: 4,
+    padding: "6px 8px",
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: 4,
+  } as React.CSSProperties,
+  // A small constrained-palette colour/highlight swatch button.
+  swatchButton: {
+    width: 18,
+    height: 18,
+    padding: 0,
+    border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
+    borderRadius: 3,
+    cursor: "pointer",
+    fontSize: 10,
+    lineHeight: 1,
+    color: pwc.grey700,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
   } as React.CSSProperties,
   toolbarButton: {
     padding: "2px 8px",
