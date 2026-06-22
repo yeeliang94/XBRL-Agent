@@ -7,6 +7,7 @@ import { Editor } from "@tiptap/core";
 import { StarterKit } from "@tiptap/starter-kit";
 import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
+import { CellSelection } from "@tiptap/pm/tables";
 import {
   parseInlineStyle,
   buildCellStyle,
@@ -154,6 +155,39 @@ describe("styled cell extension round-trip (real editor)", () => {
     expect(attrs.backgroundColor).toBe("#f4f4f4"); // lowercased
     expect(attrs.borderTop).toBe("1px solid #000000");
     expect(attrs.borderLeft).toBe("1px solid #000000");
+    editor.destroy();
+  });
+
+  it("applyCellFill fills EVERY cell in a multi-cell selection (drag-select)", () => {
+    // The user's core complaint was that dragging across cells and applying a
+    // fill only ever touched one cell. The fix is two-fold: (1) the
+    // `.selectedCell` highlight CSS makes the range visible, and (2) the fill
+    // controls preserve the selection (no blur). This test pins the apply
+    // half — a CellSelection spanning both cells must fill BOTH.
+    const editor = makeEditor(
+      "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>",
+    );
+    const cellPositions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") cellPositions.push(pos);
+      return true;
+    });
+    expect(cellPositions).toHaveLength(2);
+    // Select the whole row (anchor cell → head cell) and apply a fill.
+    const sel = CellSelection.create(
+      editor.state.doc,
+      cellPositions[0],
+      cellPositions[1],
+    );
+    editor.view.dispatch(editor.state.tr.setSelection(sel));
+    applyCellFill(editor, "#F4F4F4");
+
+    const fills: unknown[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "tableCell") fills.push(node.attrs.backgroundColor);
+      return true;
+    });
+    expect(fills).toEqual(["#f4f4f4", "#f4f4f4"]);
     editor.destroy();
   });
 

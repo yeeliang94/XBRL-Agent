@@ -482,12 +482,12 @@ function CellRow({
   const [formatOpen, setFormatOpen] = useState(false);
   const [formatOpts, setFormatOpts] =
     useState<ClipboardFormatOptions>(loadGlobalFormat);
-  // Peer-review [MEDIUM] #4: the backend strips disallowed tags/attrs
-  // from the HTML on save and returns the list of removals in
-  // `sanitizer_warnings`. Surface them here so a user who pasted a
-  // `<script>` or `style=` knows their markup was altered, rather than
-  // silently seeing their content swap to the cleaned form.
-  const [sanitizerWarnings, setSanitizerWarnings] = useState<string[]>([]);
+  // (Notes editor v2) The sanitiser-warning panel was removed: it listed
+  // developer-phrased removals on every save and a paste from Excel/Word
+  // produced a wall of them, which read as "something broke" when nothing
+  // did. The backend still sanitises (and still returns the list for logs);
+  // we just no longer surface it in the UI. Dangerous markup is dropped
+  // silently and safely.
   // Keep a mutable ref to the current HTML so the debounced saver reads
   // the latest value without resubscribing every keystroke.
   const liveHtmlRef = useRef<string>(cell.html);
@@ -693,10 +693,6 @@ function CellRow({
         // Track the persisted form so a subsequent re-render of the
         // editor with the same HTML does not re-mark the cell dirty.
         savedHtmlRef.current = updated.html;
-        // Surface sanitiser warnings (peer-review [MEDIUM] #4). An
-        // empty or missing list clears any prior warning — the row
-        // only shows warnings for the most recent save, not forever.
-        setSanitizerWarnings(updated.sanitizer_warnings ?? []);
         // Has the user typed MORE since this PATCH was sent? Compare the
         // current live HTML against what THIS request actually carried
         // (`attempted`). If they differ, the editor already shows newer
@@ -911,23 +907,6 @@ function CellRow({
         <div data-testid="notes-review-editor">
           <EditorContent editor={editor} />
         </div>
-        {sanitizerWarnings.length > 0 && (
-          <div
-            data-testid="sanitizer-warning"
-            role="status"
-            aria-live="polite"
-            style={styles.sanitizerWarning}
-          >
-            <span style={styles.sanitizerWarningLabel}>
-              Sanitiser removed content:
-            </span>
-            <ul style={styles.sanitizerWarningList}>
-              {sanitizerWarnings.map((w, i) => (
-                <li key={i}>{w}</li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -1238,15 +1217,12 @@ function TableFormatBar({ editor }: { editor: Editor }) {
         }),
       )}
       {tBtn("No fill", () => applyCellFill(editor, FILL_NONE))}
-      <label style={styles.colorInputLabel} title="Custom fill colour">
-        <span style={styles.visuallyHidden}>Custom fill colour</span>
-        <input
-          type="color"
-          aria-label="Custom fill colour"
-          style={styles.colorInput}
-          onChange={(e) => applyCellFill(editor, e.target.value)}
-        />
-      </label>
+      {/* A native `<input type="color">` was removed here on purpose: opening
+          the OS colour picker blurs the editor, which collapses a multi-cell
+          drag selection before the fill is applied (so the fill only hit one
+          cell). The preset swatch buttons above run through onMouseDown-
+          preventDefault, so they keep the selection and fill the whole range.
+          The full house palette lands with the Phase 2.4 toolbar redesign. */}
 
       <span style={styles.tableFormatDivider} aria-hidden="true" />
 
@@ -1584,29 +1560,6 @@ const styles = {
   } as React.CSSProperties,
   evidenceText: {
     whiteSpace: "pre-wrap" as const,
-  } as React.CSSProperties,
-  sanitizerWarning: {
-    marginTop: 6,
-    padding: "6px 8px",
-    background: pwc.warningBg,
-    border: `1px solid ${pwc.warningBorder}`,
-    borderRadius: 3,
-    fontSize: 12,
-    color: pwc.warningText,
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 2,
-  } as React.CSSProperties,
-  sanitizerWarningLabel: {
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.3,
-    fontWeight: 600,
-    fontSize: 10,
-  } as React.CSSProperties,
-  sanitizerWarningList: {
-    margin: 0,
-    paddingLeft: 16,
-    fontSize: 12,
   } as React.CSSProperties,
   cellRight: {
     display: "flex",

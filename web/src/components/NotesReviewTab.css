@@ -68,6 +68,25 @@
   text-align: left;
   vertical-align: top;
   font-size: 13px;
+  /* The drag/multi-cell selection highlight below is drawn with an ::after
+   * overlay, which needs a positioned ancestor to anchor against. */
+  position: relative;
+}
+
+/* ProseMirror tags every cell in a drag (multi-cell) selection with the
+ * `selectedCell` class, but it does NOT ship a visible highlight — that is
+ * left to the app. Without this rule the user drags across cells, sees
+ * nothing change, and concludes multi-select is broken (the actual cause of
+ * the "couldn't multi-select to format" report). The soft orange tint matches
+ * the editor's focus accent; the overlay sits above the cell background but
+ * never intercepts clicks. */
+.notes-review-tab .tiptap .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(253, 81, 8, 0.18); /* orange500 @ low alpha */
+  pointer-events: none;
+  z-index: 2;
 }
 
 .notes-review-tab .tiptap th {
