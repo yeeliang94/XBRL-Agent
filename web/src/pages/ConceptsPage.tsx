@@ -8,6 +8,7 @@ import { PdfSourcePane } from "../components/PdfSourcePane";
 import { fetchNotesCells, sortSheetsBySlot } from "../lib/notesCells";
 import { templateDisplayName, notesSheetDisplayName } from "../lib/sheetLabels";
 import { parseEvidencePages } from "../lib/evidencePages";
+import { formatAccounting, formatGroupedInput } from "../lib/numberFormat";
 import { downloadFilledUrl } from "../lib/api";
 import type { CrossCheckResult } from "../lib/types";
 import { TemplateSettingsPage } from "./TemplateSettingsPage";
@@ -31,29 +32,11 @@ const NOTES_KEY = "__notes__";
 // Windows.
 // ---------------------------------------------------------------------------
 
-// Accountant-style display: thousands separators, parentheses for negatives,
-// blank for null. Used for read-only cells (COMPUTED totals, matrix cells);
-// the editable LEAF input keeps the raw number so typing isn't fought. Phase 3.1.
-export function formatAccounting(n: number | null | undefined): string {
-  if (n == null) return "";
-  const abs = Math.abs(n);
-  const s = abs.toLocaleString("en-US", { maximumFractionDigits: 2 });
-  return n < 0 ? `(${s})` : s;
-}
-
-// Display formatter for the editable LEAF input: adds thousands separators
-// (e.g. "1234567" → "1,234,567") for the AT-REST view, while the input shows
-// the raw digits WHILE focused so typing isn't fought (issue 4, 2026-06-21).
-// Leaves blank/invalid strings untouched so a half-typed entry isn't mangled.
-// Negatives stay as "-1,234" (not accounting parens) because the value must
-// round-trip back through Number() on save.
-export function formatGroupedInput(raw: string): string {
-  const t = raw.trim();
-  if (t === "") return "";
-  const n = Number(t.replace(/,/g, ""));
-  if (!Number.isFinite(n)) return raw;
-  return n.toLocaleString("en-US", { maximumFractionDigits: 20 });
-}
+// Accountant-style number formatters now live in lib/numberFormat so the
+// numeric Notes review rows can share them without a circular import (this
+// page imports NotesReviewTab). Re-exported here so existing imports/tests
+// that pull them from ConceptsPage keep working.
+export { formatAccounting, formatGroupedInput };
 
 export interface ConceptRow {
   concept_uuid: string;

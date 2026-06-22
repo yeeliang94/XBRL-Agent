@@ -796,6 +796,186 @@ describe("NotesReviewTab — copy button (Step 11)", () => {
   });
 });
 
+describe("NotesReviewTab — per-cell paste-format tool", () => {
+  // A cell whose HTML contains a table so the per-row underline picker shows.
+  const TABLE_SAMPLE: NotesCellsResponse = {
+    sheets: [
+      {
+        sheet: "Notes-CI",
+        rows: [
+          {
+            row: 4,
+            label: "Corporate info",
+            html:
+              "<table><tr><th>Item</th><th>2024</th></tr>" +
+              "<tr><td>Cash</td><td>1,200</td></tr>" +
+              "<tr><td>Total</td><td>2,000</td></tr></table>",
+            evidence: "Page 3",
+            source_pages: [3],
+            updated_at: "2026-04-24T10:00:00Z",
+          },
+        ],
+      },
+    ],
+  };
+
+  test("Format button toggles the popover", async () => {
+    mockFetchOnce(SAMPLE);
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    expect(screen.queryByTestId("notes-format-popover")).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
+    expect(screen.getAllByTestId("notes-format-popover").length).toBeGreaterThan(
+      0,
+    );
+    // Controls present (table-wide border knob).
+    expect(
+      screen.getAllByLabelText(/table border style/i).length,
+    ).toBeGreaterThan(0);
+    // Toggle off hides it again.
+    fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
+    expect(screen.queryByTestId("notes-format-popover")).toBeNull();
+  });
+
+  test("Edit and Format are mutually exclusive", async () => {
+    // Peer-review [LOW]: editing while the row picker is open could change the
+    // table under stale row indices. Opening one mode closes the other.
+    mockFetchOnce(SAMPLE);
+    const { container } = render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+
+    // Enter edit mode, then open Format → editor leaves edit mode.
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll("[contenteditable='true']").length,
+      ).toBeGreaterThan(0),
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll("[contenteditable='true']").length,
+      ).toBe(0),
+    );
+    expect(screen.getAllByTestId("notes-format-popover").length).toBeGreaterThan(
+      0,
+    );
+
+    // Now click Edit → the Format popover closes.
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    expect(screen.queryByTestId("notes-format-popover")).toBeNull();
+  });
+
+  test("toolbar Copy ignores a per-cell tweak and uses the global default", async () => {
+    // Peer-review [MEDIUM]: a per-cell override must NOT leak into the plain
+    // toolbar Copy. Mark a row in the popover, then click the toolbar Copy —
+    // the output must carry no double underline (global default has none).
+    localStorage.clear();
+    const blobCalls: { type: string; content: string }[] = [];
+    const RealBlob = globalThis.Blob;
+    (globalThis as any).Blob = class FakeBlob {
+      public type: string;
+      public content: string;
+      constructor(parts: BlobPart[], opts?: { type?: string }) {
+        this.type = opts?.type ?? "";
+        this.content = parts.map((p) => String(p)).join("");
+        blobCalls.push({ type: this.type, content: this.content });
+      }
+    };
+    const write = vi.fn(async () => undefined);
+    // @ts-expect-error — jsdom lacks navigator.clipboard
+    globalThis.navigator.clipboard = { write, writeText: vi.fn() };
+    // @ts-expect-error — ClipboardItem is not in jsdom
+    globalThis.ClipboardItem = class {
+      constructor(public items: Record<string, Blob>) {}
+    };
+
+    try {
+      mockFetchOnce(TABLE_SAMPLE);
+      render(<NotesReviewTab runId={42} />);
+      await waitFor(() =>
+        expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+      );
+      expandAllSheets();
+      fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
+      fireEvent.click(screen.getByTestId("row-underline-2")); // mark Total
+      // Click the TOOLBAR Copy (exact "Copy", not "Copy with this format").
+      fireEvent.click(screen.getAllByRole("button", { name: /^copy$/i })[0]);
+      await waitFor(() => expect(write).toHaveBeenCalled());
+
+      const htmlCall = blobCalls.find((c) => c.type === "text/html");
+      expect(htmlCall).toBeDefined();
+      // No double underline anywhere — the tweak didn't leak into toolbar Copy.
+      expect(htmlCall!.content).not.toContain("border-bottom: 3px double #000");
+    } finally {
+      (globalThis as any).Blob = RealBlob;
+    }
+  });
+
+  test("marking a row + copy emits a double underline on that row only", async () => {
+    localStorage.clear();
+    // Capture the decorated text/html blob handed to the clipboard.
+    const blobCalls: { type: string; content: string }[] = [];
+    const RealBlob = globalThis.Blob;
+    (globalThis as any).Blob = class FakeBlob {
+      public type: string;
+      public content: string;
+      constructor(parts: BlobPart[], opts?: { type?: string }) {
+        this.type = opts?.type ?? "";
+        this.content = parts.map((p) => String(p)).join("");
+        blobCalls.push({ type: this.type, content: this.content });
+      }
+    };
+    const write = vi.fn(async () => undefined);
+    // @ts-expect-error — jsdom lacks navigator.clipboard
+    globalThis.navigator.clipboard = { write, writeText: vi.fn() };
+    // @ts-expect-error — ClipboardItem is not in jsdom
+    globalThis.ClipboardItem = class {
+      constructor(public items: Record<string, Blob>) {}
+    };
+
+    try {
+      mockFetchOnce(TABLE_SAMPLE);
+      render(<NotesReviewTab runId={42} />);
+      await waitFor(() =>
+        expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+      );
+      expandAllSheets();
+      fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
+      // Row index 2 = the "Total" row (header=0, Cash=1, Total=2).
+      fireEvent.click(screen.getByTestId("row-underline-2"));
+      fireEvent.click(screen.getByTestId("notes-format-copy"));
+      await waitFor(() => expect(write).toHaveBeenCalled());
+
+      const htmlCall = blobCalls.find((c) => c.type === "text/html");
+      expect(htmlCall).toBeDefined();
+      // Parse the decorated HTML and inspect cells by text (TipTap wraps cell
+      // content in <p>, so a flat regex on ">Total<" wouldn't match).
+      const probe = document.createElement("div");
+      probe.innerHTML = htmlCall!.content;
+      const cells = Array.from(probe.querySelectorAll("td"));
+      const totalCell = cells.find((c) => c.textContent?.trim() === "Total");
+      const cashCell = cells.find((c) => c.textContent?.trim() === "Cash");
+      // The Total row carries the accountant double underline…
+      expect(totalCell?.getAttribute("style")).toContain(
+        "border-bottom: 3px double #000",
+      );
+      // …and the ordinary "Cash" row does not.
+      expect(cashCell?.getAttribute("style")).not.toContain(
+        "border-bottom: 3px double #000",
+      );
+    } finally {
+      (globalThis as any).Blob = RealBlob;
+    }
+  });
+});
+
 describe("NotesReviewTab — regenerate confirm (Step 12)", () => {
   test("regenerate button opens confirm dialog when edits exist", async () => {
     const fetchMock = vi.fn(async (url: string) => {
@@ -1244,8 +1424,15 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     expect(numericRow).toBeInTheDocument();
     const cy = screen.getByTestId("numeric-input-6-cy") as HTMLInputElement;
     const py = screen.getByTestId("numeric-input-6-py") as HTMLInputElement;
-    expect(cy.value).toBe("4242"); // seeded from run_concept_facts
+    // Grouped with a thousands separator at rest, mirroring the face-statement
+    // value inputs (the '000-separator display fix).
+    expect(cy.value).toBe("4,242"); // seeded from run_concept_facts
     expect(py.value).toBe(""); // unfilled → blank
+    // While focused, the field shows the raw digits so typing isn't fought.
+    fireEvent.focus(cy);
+    expect(cy.value).toBe("4242");
+    fireEvent.blur(cy);
+    expect(cy.value).toBe("4,242");
   });
 
   test("editing a numeric cell PATCHes the facts endpoint", async () => {

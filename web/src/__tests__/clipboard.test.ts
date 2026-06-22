@@ -4,6 +4,7 @@ import {
   decorateHtmlForClipboard,
   htmlToPlaintext,
 } from "../lib/clipboard";
+import { DEFAULT_FORMAT_OPTIONS } from "../lib/clipboardFormat";
 
 describe("copyHtmlAsRichText", () => {
   beforeEach(() => {
@@ -301,5 +302,77 @@ describe("copyHtmlAsRichText", () => {
     } finally {
       appendSpy.mockRestore();
     }
+  });
+});
+
+describe("decorateHtmlForClipboard — configurable format options", () => {
+  const TABLE =
+    "<table><tr><th>A</th><th>B</th></tr>" +
+    "<tr><td>x</td><td>1,000</td></tr>" +
+    "<tr><td>Total</td><td>2,000</td></tr></table>";
+
+  test("borderStyle 'none' drops cell borders and legacy table attrs", () => {
+    const out = decorateHtmlForClipboard(TABLE, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      borderStyle: "none",
+    });
+    // No `border:` declaration on any cell.
+    expect(out).not.toMatch(/<t[dh][^>]*style="[^"]*border: /);
+    // Legacy attribute that would re-draw a grid in Word/Outlook is gone.
+    expect(out).not.toMatch(/<table[^>]*border="1"/);
+    // Padding / font still applied so the table is still laid out.
+    expect(out).toMatch(/<td[^>]*style="[^"]*padding: 4px 8px/);
+  });
+
+  test("borderStyle 'none' strips PRE-EXISTING legacy border attrs", () => {
+    // An input table that already carries border / cellpadding / cellspacing
+    // must lose them under "No border", or a legacy paste target redraws a
+    // grid (peer-review [MEDIUM]).
+    const withAttrs =
+      '<table border="1" cellpadding="4" cellspacing="0">' +
+      "<tr><td>x</td></tr></table>";
+    const out = decorateHtmlForClipboard(withAttrs, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      borderStyle: "none",
+    });
+    expect(out).not.toMatch(/border="1"/);
+    expect(out).not.toMatch(/cellpadding=/);
+    expect(out).not.toMatch(/cellspacing=/);
+  });
+
+  test("borderStyle 'double' renders a double grid", () => {
+    const out = decorateHtmlForClipboard(TABLE, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      borderStyle: "double",
+    });
+    expect(out).toMatch(/<td[^>]*style="[^"]*border: 3px double #999/);
+  });
+
+  test("rowUnderlines marks only the targeted row with a double underline", () => {
+    // Row index 2 is the "Total" row (header=0, data=1, total=2).
+    const out = decorateHtmlForClipboard(TABLE, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      rowUnderlines: [2],
+    });
+    // The Total cell carries the bottom double border…
+    expect(out).toMatch(
+      /<td[^>]*style="[^"]*border-bottom: 3px double #000[^"]*">Total</,
+    );
+    // …while the ordinary data row above it does not.
+    expect(out).not.toMatch(
+      /<td[^>]*style="[^"]*border-bottom: 3px double #000[^"]*">x</,
+    );
+  });
+
+  test("fontSizePt / cellPaddingPx / paragraphSpacingPx flow through", () => {
+    const out = decorateHtmlForClipboard("<p>Hello</p>" + TABLE, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      fontSizePt: 12,
+      cellPaddingPx: [2, 6],
+      paragraphSpacingPx: 14,
+    });
+    expect(out).toMatch(/font-size: 12pt/);
+    expect(out).toMatch(/<td[^>]*style="[^"]*padding: 2px 6px/);
+    expect(out).toMatch(/<p[^>]*style="[^"]*margin: 0 0 14px 0/);
   });
 });

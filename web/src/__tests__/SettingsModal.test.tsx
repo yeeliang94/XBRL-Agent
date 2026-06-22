@@ -111,6 +111,23 @@ describe("SettingsModal — P3 enhancements", () => {
     );
   });
 
+  test("Notes paste format section persists the global default to localStorage", async () => {
+    localStorage.clear();
+    renderModal();
+    // The shared border control is rendered in the General settings body.
+    const border = await screen.findByLabelText("Table border style");
+    expect((border as HTMLSelectElement).value).toBe("single"); // default
+
+    fireEvent.change(border, { target: { value: "none" } });
+
+    await waitFor(() => {
+      const stored = JSON.parse(
+        localStorage.getItem("xbrl.notesClipboardFormat") ?? "{}",
+      );
+      expect(stored.borderStyle).toBe("none");
+    });
+  });
+
   test("'Test Connection' button calls testConnection API", async () => {
     const { testConnection } = renderModal();
     await waitFor(() => expect(screen.getByRole("button", { name: /test connection/i })).toBeInTheDocument());

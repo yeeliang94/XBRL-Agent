@@ -25,34 +25,63 @@
 // / `web/src/__tests__/clipboard.test.ts` to confirm the divergence
 // is still deliberate.
 
-// Inline-style snippets injected into table elements before the HTML is
-// handed to the clipboard. The DB version of the HTML carries no
-// `style=` attributes (the sanitiser strips them); the in-app TipTap
-// editor decorates rendering via scoped CSS that does NOT travel with
-// the clipboard payload. Without these inline styles, M-Tool / Word /
-// Outlook paste targets render bare `<table>`s with no borders, no
-// padding, and no right-alignment for numeric columns — which is the
-// formatting collapse reported on 2026-04-27.
+// Inline styles injected into table/prose elements before the HTML is handed
+// to the clipboard. The DB version of the HTML carries no `style=` attributes
+// (the sanitiser strips them); the in-app TipTap editor decorates rendering
+// via scoped CSS that does NOT travel with the clipboard payload. Without
+// these inline styles, M-Tool / Word / Outlook paste targets render bare
+// `<table>`s with no borders, no padding, and no right-alignment for numeric
+// columns — the formatting collapse reported on 2026-04-27.
 //
-// Spacing values match `web/src/components/NotesReviewTab.css` so the
-// M-Tool paste lays out the same way as the editor preview. The border
-// COLOUR intentionally diverges: editor uses `#d1d5db` (a soft modern
-// grey that reads well on a white app background); clipboard uses
-// `#999` because external paste targets often render against subtle
-// or off-white backgrounds where `#d1d5db` borders fade out almost
-// completely. Darker grid lines on paste keep the table visibly bound
-// regardless of the host editor's surface colour. If you change either
-// colour, update the other side AND update CLAUDE.md gotcha #16's
-// note on this divergence.
-// Uniform paste face. M-Tool (the SSM MBRS preparation tool) lays each
-// pasted cell out under a fixed A4 page and its default face does not match
-// the filing house style. Normalising every copied cell to Arial 10pt here —
-// at the clipboard boundary — keeps the DB / sanitiser style-free while making
-// the paste land in the expected font. Use `10pt` (NOT `10px`): paste targets
-// like M-Tool / Word interpret a bare font size in points.
+// The styles are now built from a `ClipboardFormatOptions` value (see
+// `clipboardFormat.ts`) so the user can configure border style / font size /
+// cell padding / paragraph spacing and mark specific rows for an accountant
+// double underline — a GLOBAL default in localStorage (General settings) plus
+// a TRANSIENT per-cell override set in the Notes-tab Format tool. Calling the
+// decorator with DEFAULT_FORMAT_OPTIONS reproduces the previous hard-coded
+// output exactly; the clipboard pinning tests depend on that equivalence.
+//
+// Default spacing values match `web/src/components/NotesReviewTab.css` so the
+// M-Tool paste lays out the same way as the editor preview. The DEFAULT border
+// COLOUR intentionally diverges: editor uses `#d1d5db` (a soft modern grey on
+// the app's white surface); clipboard uses `#999` because external paste
+// targets often render against subtle or off-white backgrounds where
+// `#d1d5db` fades out. If you change either colour, update the other side AND
+// CLAUDE.md gotcha #16's note on this divergence.
+//
+// Uniform paste face: M-Tool lays each pasted cell out under a fixed A4 page
+// and its default face does not match the filing house style. The default
+// Arial 10pt face (configurable) keeps the DB / sanitiser style-free while
+// landing the paste in the expected font.
 import { shouldRightAlignCell } from "./tableAlign";
+import {
+  DEFAULT_FORMAT_OPTIONS,
+  type BorderStyle,
+  type ClipboardFormatOptions,
+} from "./clipboardFormat";
 
-const _CLIPBOARD_FONT = "font-family: Arial, sans-serif; font-size: 10pt;";
+// The style strings below used to be module constants. They are now built from
+// a `ClipboardFormatOptions` value so the user can configure border / font /
+// padding / spacing (global default + per-cell override). Calling with the
+// DEFAULT options reproduces the previous hard-coded output exactly — the
+// clipboard pinning tests depend on that equivalence.
+
+function _fontCss(opts: ClipboardFormatOptions): string {
+  // `10pt` (NOT `10px`): paste targets like M-Tool / Word interpret a bare
+  // font size in points.
+  return `font-family: Arial, sans-serif; font-size: ${opts.fontSizePt}pt;`;
+}
+
+// Grid-line CSS for one cell. "none" emits no border declaration at all so the
+// cell pastes borderless; "double" is the accountant double rule; "single" is
+// the default 1px grey. Trailing space so it concatenates cleanly before the
+// padding declaration (and so "none" leaves the style starting at padding).
+function _borderCss(style: BorderStyle): string {
+  if (style === "none") return "";
+  if (style === "double") return "border: 3px double #999; ";
+  return "border: 1px solid #999; ";
+}
+
 // Width constraint: a faithful transcription of a wide movement table sizes
 // to its content and, on paste into M-Tool's fixed A4 page, overflows and
 // clips the right-hand columns. `width: 100%` + `table-layout: fixed` pins
@@ -60,23 +89,38 @@ const _CLIPBOARD_FONT = "font-family: Arial, sans-serif; font-size: 10pt;";
 // table WRAPS its cells to fit the page instead of spilling past it (no
 // column is lost; the rows just get taller). `max-width: 100%` is belt-and-
 // braces for paste targets that lay the table out in an auto-width box.
+// (Independent of the configurable knobs.)
 const _CLIPBOARD_TABLE_STYLE =
   "border-collapse: collapse; margin: 8px 0; " +
   "width: 100%; max-width: 100%; table-layout: fixed;";
-const _CLIPBOARD_CELL_STYLE_BASE =
-  "border: 1px solid #999; padding: 4px 8px; vertical-align: top; " +
-  "overflow-wrap: break-word; word-break: break-word; " +
-  _CLIPBOARD_FONT;
-const _CLIPBOARD_HEADER_EXTRA =
-  " background: #f3f4f6; font-weight: 600;";
-// Prose blocks: the same Arial 10pt face plus a bottom margin so consecutive
+
+function _cellStyleBase(opts: ClipboardFormatOptions): string {
+  const [padV, padH] = opts.cellPaddingPx;
+  return (
+    `${_borderCss(opts.borderStyle)}padding: ${padV}px ${padH}px; ` +
+    "vertical-align: top; overflow-wrap: break-word; word-break: break-word; " +
+    _fontCss(opts)
+  );
+}
+
+const _CLIPBOARD_HEADER_EXTRA = " background: #f3f4f6; font-weight: 600;";
+
+// Accountant "total" rule: a double bottom border on the cells of a row the
+// user marked in the Format tool. Black so it reads as a deliberate underline
+// regardless of the grid colour. Appended on top of the cell base style.
+const _CLIPBOARD_ROW_UNDERLINE = " border-bottom: 3px double #000;";
+
+// Prose blocks: the same Arial face plus a bottom margin so consecutive
 // paragraphs get breathing space on paste. Without the margin, `<p>` tags
 // reach M-Tool with no spacing and the paragraphs jam together (the reported
 // "no line break between paragraphs"). Margin mirrors the in-app editor
 // (`NotesReviewTab.css` `.tiptap p { margin: 0 0 8px 0 }`).
-const _CLIPBOARD_PARAGRAPH_STYLE = _CLIPBOARD_FONT + " margin: 0 0 8px 0;";
-const _CLIPBOARD_HEADING_STYLE =
-  _CLIPBOARD_FONT + " margin: 12px 0 6px 0; font-weight: 600;";
+function _paragraphStyle(opts: ClipboardFormatOptions): string {
+  return _fontCss(opts) + ` margin: 0 0 ${opts.paragraphSpacingPx}px 0;`;
+}
+function _headingStyle(opts: ClipboardFormatOptions): string {
+  return _fontCss(opts) + " margin: 12px 0 6px 0; font-weight: 600;";
+}
 
 // Numeric-cell heuristic + row-label-column rule live in the shared
 // tableAlign module so the clipboard paste and the in-app editor preview
@@ -109,31 +153,52 @@ const _CLIPBOARD_HEADING_STYLE =
  *      external CSS, so it's the only surface that needs the inline
  *      version.
  */
-export function decorateHtmlForClipboard(html: string): string {
+export function decorateHtmlForClipboard(
+  html: string,
+  opts: ClipboardFormatOptions = DEFAULT_FORMAT_OPTIONS,
+): string {
   if (!html) return html;
   const tmp = document.createElement("div");
   tmp.innerHTML = html;
+
+  const cellBase = _cellStyleBase(opts);
+  const noBorder = opts.borderStyle === "none";
 
   for (const table of Array.from(tmp.querySelectorAll("table"))) {
     _mergeStyle(table, _CLIPBOARD_TABLE_STYLE);
     // Word/Outlook honour the legacy `border` attribute even when CSS
     // is partially stripped on paste. Belt-and-braces — the inline
     // style above does the heavy lifting on web targets.
-    if (!table.hasAttribute("border")) table.setAttribute("border", "1");
-    if (!table.hasAttribute("cellpadding"))
-      table.setAttribute("cellpadding", "4");
-    if (!table.hasAttribute("cellspacing"))
-      table.setAttribute("cellspacing", "0");
+    if (noBorder) {
+      // "No border" must win regardless of what the input table already
+      // carried, or a legacy paste target would still draw a grid from a
+      // pre-existing attribute (peer-review [MEDIUM]).
+      table.removeAttribute("border");
+      table.removeAttribute("cellpadding");
+      table.removeAttribute("cellspacing");
+    } else {
+      if (!table.hasAttribute("border")) table.setAttribute("border", "1");
+      if (!table.hasAttribute("cellpadding"))
+        table.setAttribute("cellpadding", "4");
+      if (!table.hasAttribute("cellspacing"))
+        table.setAttribute("cellspacing", "0");
+    }
   }
 
   // Walk row by row so the row-label column (first cell of a multi-column
   // row) can stay left-aligned while numeric value columns go right —
   // see shouldRightAlignCell. A bare single-cell numeric row still
-  // right-aligns.
-  for (const row of Array.from(tmp.querySelectorAll("tr"))) {
+  // right-aligns. `rowIdx` is the 0-based <tr> position across the whole
+  // table (querySelectorAll document order) — the Format tool's row picker
+  // numbers rows the same way, so its `rowUnderlines` line up here.
+  Array.from(tmp.querySelectorAll("tr")).forEach((row, rowIdx) => {
     const cells = Array.from(row.children).filter(
       (c) => c.tagName === "TD" || c.tagName === "TH",
     );
+    // Optional accountant double-underline on this row's cells.
+    const underline = opts.rowUnderlines.includes(rowIdx)
+      ? _CLIPBOARD_ROW_UNDERLINE
+      : "";
     cells.forEach((cell, idx) => {
       const align = shouldRightAlignCell(
         cell.textContent ?? "",
@@ -143,32 +208,32 @@ export function decorateHtmlForClipboard(html: string): string {
         ? " text-align: right;"
         : " text-align: left;";
       if (cell.tagName === "TH") {
-        _mergeStyle(
-          cell,
-          _CLIPBOARD_CELL_STYLE_BASE + _CLIPBOARD_HEADER_EXTRA + align,
-        );
+        _mergeStyle(cell, cellBase + _CLIPBOARD_HEADER_EXTRA + align + underline);
       } else {
-        _mergeStyle(cell, _CLIPBOARD_CELL_STYLE_BASE + align);
+        _mergeStyle(cell, cellBase + align + underline);
       }
     });
-  }
+  });
 
-  // Prose: Arial 10pt + a bottom margin so non-table cells paste with a
+  // Prose: Arial + a bottom margin so non-table cells paste with a
   // consistent face and visible gaps between paragraphs.
+  const paragraphStyle = _paragraphStyle(opts);
+  const headingStyle = _headingStyle(opts);
+  const fontCss = _fontCss(opts);
   for (const p of Array.from(tmp.querySelectorAll("p"))) {
-    _mergeStyle(p, _CLIPBOARD_PARAGRAPH_STYLE);
+    _mergeStyle(p, paragraphStyle);
   }
   for (const h of Array.from(tmp.querySelectorAll("h3"))) {
-    _mergeStyle(h, _CLIPBOARD_HEADING_STYLE);
+    _mergeStyle(h, headingStyle);
   }
   for (const list of Array.from(tmp.querySelectorAll("ul, ol, li"))) {
-    _mergeStyle(list, _CLIPBOARD_FONT);
+    _mergeStyle(list, fontCss);
   }
 
   // Carry the font on the wrapping container too, so any element we did not
-  // explicitly style (bare <strong>, <em>, loose text) still inherits Arial
-  // 10pt in the paste target rather than the host editor's default face.
-  _mergeStyle(tmp, _CLIPBOARD_FONT);
+  // explicitly style (bare <strong>, <em>, loose text) still inherits the
+  // chosen face in the paste target rather than the host editor's default.
+  _mergeStyle(tmp, fontCss);
   return tmp.outerHTML;
 }
 
@@ -319,7 +384,10 @@ function walkChildren(node: Node, out: string[], ctx: PlaintextCtx): void {
  *  legacy execCommand pathway when not. Returns true on success so the
  *  caller can flip a "Copied" indicator only after a confirmed write.
  */
-export async function copyHtmlAsRichText(html: string): Promise<boolean> {
+export async function copyHtmlAsRichText(
+  html: string,
+  opts: ClipboardFormatOptions = DEFAULT_FORMAT_OPTIONS,
+): Promise<boolean> {
   // Prefer the async Clipboard API. It needs BOTH `navigator.clipboard`
   // and the `ClipboardItem` global — we feature-detect both.
   const hasClipboardItem =
@@ -333,7 +401,7 @@ export async function copyHtmlAsRichText(html: string): Promise<boolean> {
       // sees the original semantic HTML and produces the same
       // pipe-separated rows as before — the inline-style pass is a
       // visual decoration only and adds nothing to the plaintext form.
-      const decorated = decorateHtmlForClipboard(html);
+      const decorated = decorateHtmlForClipboard(html, opts);
       const ClipboardItemCtor = (
         globalThis as unknown as {
           ClipboardItem: new (items: Record<string, Blob>) => unknown;
@@ -360,7 +428,7 @@ export async function copyHtmlAsRichText(html: string): Promise<boolean> {
     holder.contentEditable = "true";
     // Same decoration pass as the modern path so legacy-fallback
     // pastes don't lose table styling.
-    holder.innerHTML = decorateHtmlForClipboard(html);
+    holder.innerHTML = decorateHtmlForClipboard(html, opts);
     // Pull off-screen rather than display:none — hidden elements cannot
     // carry a Selection in most browsers.
     holder.style.position = "fixed";
