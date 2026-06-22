@@ -1284,8 +1284,12 @@ describe("NotesReviewTab unmount flush", () => {
   });
 });
 
-describe("NotesReviewTab sanitizer_warnings surface", () => {
-  test("warnings returned on PATCH are rendered inline", async () => {
+describe("NotesReviewTab sanitizer warnings are NOT surfaced (v2)", () => {
+  test("a PATCH that returns sanitizer_warnings renders no warning panel", async () => {
+    // v2 removed the warning panel (it was developer-facing noise). The
+    // backend still sanitises + still returns the list (for logs), but the
+    // UI must not render it. We assert the panel never appears even when the
+    // server reports a removal.
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       if (init?.method === "PATCH") {
         return new Response(
@@ -1328,16 +1332,18 @@ describe("NotesReviewTab sanitizer_warnings surface", () => {
       }),
     );
 
-    // Real setTimeout fires after 1500ms. waitFor polls up to ~5s by
-    // default, which comfortably covers the debounce + save round trip.
+    // Give the debounce + PATCH ample time, then assert the panel is absent.
     await waitFor(
       () => {
-        expect(
-          screen.queryByText(/Removed disallowed tag/i),
-        ).toBeInTheDocument();
+        const patched = fetchMock.mock.calls.some(
+          (c) => (c[1] as RequestInit | undefined)?.method === "PATCH",
+        );
+        expect(patched).toBe(true);
       },
       { timeout: 4000 },
     );
+    expect(screen.queryByTestId("sanitizer-warning")).toBeNull();
+    expect(screen.queryByText(/Sanitiser removed content/i)).toBeNull();
   });
 });
 

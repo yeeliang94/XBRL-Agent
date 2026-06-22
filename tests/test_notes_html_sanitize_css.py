@@ -153,6 +153,42 @@ def test_style_on_paragraph_still_stripped() -> None:
     assert "x" in cleaned
 
 
+# --- editor <-> sanitiser contract (notes editor v2, Step 1.4) -------------
+
+def test_editor_canonical_styles_pass_through_unchanged() -> None:
+    """Contract with the editor's `buildCellStyle`
+    (web/src/lib/cellFormatting.ts): it emits cell styles in ONE canonical
+    shape — fixed order (fill, then top/right/bottom/left), lowercased,
+    `prop: value` joined by `; `, no trailing `;`. The sanitiser must return
+    that exact string untouched, or every save round-trips through the server,
+    comes back reshaped, and the editor re-`setContent`s — churning the cursor
+    on each keystroke. This is the single-contract that replaces v1's
+    three-layers-must-match narrative."""
+    canonical = (
+        "background-color: #f4f4f4; "
+        "border-top: 1px solid #000; "
+        "border-bottom: none"
+    )
+    html = f'<table><tr><td style="{canonical}">x</td></tr></table>'
+    cleaned, warnings = sanitize_notes_html(html)
+    assert canonical in cleaned
+    assert warnings == []
+
+
+def test_sanitiser_is_idempotent_on_styled_tables() -> None:
+    """Sanitising an already-sanitised cell is a no-op — a second save of
+    unchanged content must not mutate the stored HTML (otherwise the dirty
+    check would flap)."""
+    html = (
+        '<table><tr>'
+        '<td style="background-color: #eee; border-bottom: 1px solid #000">x</td>'
+        '</tr></table>'
+    )
+    once, _ = sanitize_notes_html(html)
+    twice, _ = sanitize_notes_html(once)
+    assert once == twice
+
+
 # --- table structure attributes survive (peer-review #6) -------------------
 
 def test_colspan_rowspan_round_trip() -> None:
