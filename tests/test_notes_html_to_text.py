@@ -56,6 +56,38 @@ def test_table_without_thead_still_flattens():
     assert html_to_excel_text(html) == "H1 | H2\nA | B"
 
 
+def test_merged_cell_table_flattens_without_duplication():
+    """Notes editor v2 lets the user merge/split cells (colspan/rowspan). The
+    text flattener does NOT preserve column geometry (it joins cells with
+    ` | `), so a merged cell must simply render its text ONCE — no duplication
+    across the columns it spans, and no crash. A spanning header row therefore
+    has fewer pipe-separated values than the body rows, which is the correct
+    plain-text shape for the download overlay (Step 3.3)."""
+    html = (
+        "<table>"
+        '<thead><tr><th colspan="2">Capital commitments</th></tr></thead>'
+        "<tbody><tr><td>Approved</td><td>1,595</td></tr></tbody>"
+        "</table>"
+    )
+    out = html_to_excel_text(html)
+    # The merged header text appears exactly once...
+    assert out.count("Capital commitments") == 1
+    # ...and the body row keeps its two columns.
+    assert "Approved | 1,595" in out
+
+
+def test_inline_marks_contribute_only_their_text():
+    """The v2 inline marks (underline / strike / sup / sub / colour span /
+    highlight mark) carry no block semantics in Excel — the flattener keeps
+    only their text content."""
+    html = (
+        "<p>net<sup>1</sup> profit <u>up</u> "
+        '<span style="color: #185fa5">blue</span> '
+        '<mark style="background-color: #fff3b0">hi</mark></p>'
+    )
+    assert html_to_excel_text(html) == "net1 profit up blue hi"
+
+
 def test_nested_tables_flatten_recursively():
     # Inner table becomes nested pipe lines inside the outer cell.
     html = (
