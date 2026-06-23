@@ -155,11 +155,7 @@ def _is_border_shorthand(value: str) -> bool:
     only inside complete rgb()/rgba() functions before tokenising; the strict
     colour parser still validates the function as a whole.
     """
-    token_value = re.sub(
-        r"rgba?\(([^)]*)\)",
-        lambda match: re.sub(r"\s+", "", match.group(0)),
-        value,
-    )
+    token_value = _collapse_rgb_whitespace(value)
     tokens = token_value.split()
     if not tokens:
         return False
@@ -172,6 +168,32 @@ def _is_border_shorthand(value: str) -> bool:
             continue
         return False
     return True
+
+
+def _collapse_rgb_whitespace(value: str) -> str:
+    """Collapse whitespace INSIDE complete rgb()/rgba() functions so the
+    comma-form colour (`rgb(255, 255, 255)`) survives whitespace tokenisation."""
+    return re.sub(
+        r"rgba?\(([^)]*)\)",
+        lambda match: re.sub(r"\s+", "", match.group(0)),
+        value,
+    )
+
+
+def _is_border_group(value: str, token_ok: "callable") -> bool:
+    """Validate a per-side-group border longhand — `border-width` /
+    `border-style` / `border-color` — which take 1-4 space-separated tokens
+    (T / R / B / L positional). Browsers serialise four equal per-side
+    `border-<side>` declarations into `border` (all parts uniform) or into
+    these grouped longhands (some parts uniform), so the editor's per-side
+    output reaches the sanitiser collapsed; rejecting these silently strips a
+    valid border on save and the cell snaps back to the default grid
+    (real-Chrome incident, 2026-06-23 — jsdom keeps the longhands so unit
+    tests didn't catch it)."""
+    tokens = _collapse_rgb_whitespace(value).split()
+    if not tokens or len(tokens) > 4:
+        return False
+    return all(token_ok(tok) for tok in tokens)
 
 
 # Text-align keywords the editor's TextAlign / per-column control can produce.
@@ -216,12 +238,25 @@ def _build_css_property_validators() -> dict[str, "callable"]:
         "min-width": lambda v: bool(_WIDTH_LENGTH_RE.match(v)),
         "margin-left": lambda v: bool(_INDENT_LENGTH_RE.match(v)),
     }
-    # Per-side border shorthands only (border-top/right/bottom/left) — the
-    # exact set the Format bar emits. NOT the all-sides `border` shorthand
-    # (the UI sets four sides individually) nor the -color/-width/-style
-    # longhands (folded into the side shorthand value).
+    # Per-side border shorthands (border-top/right/bottom/left) — the exact set
+    # the Format bar emits as it sets each side individually.
     for side in ("-top", "-right", "-bottom", "-left"):
         validators[f"border{side}"] = _is_border_shorthand
+    # AND the all-sides forms the BROWSER collapses them into on serialisation.
+    # When the four per-side declarations are uniform, Chrome's inline-style
+    # serialiser folds them into `border: 1px solid rgb(…)`; when only some
+    # parts are uniform it emits the `border-width`/`border-style`/`border-color`
+    # grouped longhands. The editor never authors these, but `editor.getHTML()`
+    # produces them, so the sanitiser MUST accept them or "Border all" is
+    # stripped on every save and the cell reverts to the default grid.
+    validators["border"] = _is_border_shorthand
+    validators["border-width"] = lambda v: _is_border_group(
+        v, lambda t: bool(_WIDTH_RE.match(t))
+    )
+    validators["border-style"] = lambda v: _is_border_group(
+        v, lambda t: t in _BORDER_STYLE_VALUES
+    )
+    validators["border-color"] = lambda v: _is_border_group(v, _is_css_color)
     return validators
 
 
@@ -240,6 +275,9 @@ ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset(_CSS_PROPERTY_VALIDATORS)
 _TABLE_STYLE_PROPS: frozenset[str] = frozenset({
     "background-color",
     "border-top", "border-right", "border-bottom", "border-left",
+    # The all-sides + grouped forms the browser collapses uniform per-side
+    # borders into on `getHTML()` (see `_build_css_property_validators`).
+    "border", "border-width", "border-style", "border-color",
     "text-align",
 })
 _BLOCK_STYLE_PROPS: frozenset[str] = frozenset({"text-align", "margin-left"})

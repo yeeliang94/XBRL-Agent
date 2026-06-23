@@ -37,6 +37,13 @@ def test_allowed_css_properties_is_exactly_the_editor_set() -> None:
         "border-right",
         "border-bottom",
         "border-left",
+        # The all-sides + grouped forms the browser collapses uniform per-side
+        # borders into on getHTML() — never authored by the editor, always
+        # produced by it (real-Chrome incident, 2026-06-23).
+        "border",
+        "border-width",
+        "border-style",
+        "border-color",
         "color",
         "text-align",
         "width",        # column width on <table>/<col> (resizable table)
@@ -69,6 +76,50 @@ def test_browser_serialised_rgb_border_survives_on_td() -> None:
         'border-left: 1px solid rgb(255, 255, 255)">x</td></tr></table>'
     )
     assert out.lower().count("rgb(255, 255, 255)") == 4
+
+
+def test_browser_collapsed_border_shorthand_survives_on_td() -> None:
+    """Real Chrome collapses four uniform per-side borders ("Border all") into
+    the `border:` shorthand on `editor.getHTML()`. The sanitiser must keep it,
+    or the all-border cell is stripped on save and reverts to the default grid
+    (the symptom jsdom unit tests missed — jsdom keeps the longhands)."""
+    out = _clean(
+        '<table><tr><td style="border: 1px solid rgb(24, 95, 165)">x</td>'
+        "</tr></table>"
+    )
+    assert "border: 1px solid rgb(24, 95, 165)" in out.lower()
+
+
+def test_border_collapse_longhand_groups_and_none_survive() -> None:
+    """The other forms the browser collapses uniform borders into: the
+    `border-width`/`border-style`/`border-color` grouped longhands, plus the
+    `border: none` / `border-style: none` resets."""
+    for decl in (
+        "border-width: 1px",
+        "border-style: solid",
+        "border-color: rgb(24, 95, 165)",
+        "border: none",
+        "border-style: none",
+        "border-color: rgb(0, 0, 0) rgb(0, 0, 0) rgb(24, 95, 165) rgb(0, 0, 0)",
+    ):
+        out = _clean(f'<table><tr><td style="{decl}">x</td></tr></table>')
+        prop = decl.split(":")[0]
+        assert prop in out.lower(), decl
+
+
+def test_malformed_border_shorthands_are_rejected() -> None:
+    for decl in (
+        "border: 1px solid url(x)",
+        "border: 99px solidx rgb(9, 9, 9)",
+        "border-color: rgb(999, 0, 0)",
+        "border-style: wiggly",
+        "border-width: 1px 2px 3px 4px 5px",  # > 4 tokens
+    ):
+        cleaned, warnings = sanitize_notes_html(
+            f'<table><tr><td style="{decl}">x</td></tr></table>'
+        )
+        prop = decl.split(":")[0]
+        assert prop not in cleaned.lower(), decl
 
 
 def test_valid_rgba_and_percentage_colours_survive() -> None:
@@ -109,15 +160,16 @@ def test_multiple_declarations_kept_in_order() -> None:
 
 
 def test_table_cell_rejects_props_it_cannot_round_trip() -> None:
-    """On a `<td>`, the editor only produces fill, per-side borders, and
-    alignment. Properties it can't round-trip on a cell are rejected so they
-    can't be silently dropped on a later re-save: `color` (cells have no text-
-    colour control — that's a <span> concern), `font-weight`, and the all-sides
-    `border` shorthand (the UI sets four sides individually)."""
+    """On a `<td>`, the editor produces fill, borders, and alignment. Properties
+    it can't round-trip on a cell are rejected so they can't be silently dropped
+    on a later re-save: `color` (cells have no text-colour control — that's a
+    <span> concern) and `font-weight`. NOTE: the all-sides `border` shorthand is
+    now ACCEPTED — the browser collapses the editor's four uniform per-side
+    borders into it on getHTML() (see
+    test_browser_collapsed_border_shorthand_survives_on_td)."""
     for prop, value in [
         ("color", "#123456"),
         ("font-weight", "bold"),
-        ("border", "1px solid #000"),  # all-sides shorthand — UI uses per-side
     ]:
         cleaned, warnings = sanitize_notes_html(
             f'<table><tr><td style="{prop}: {value}">x</td></tr></table>'
