@@ -689,12 +689,23 @@ Key invariants:
     and the native `<input type=color>` fill blurred the editor and collapsed
     the selection — both fixed. Merge/split + `colspan` round-trip through the
     sanitiser (`_TABLE_STRUCTURE_ATTRS`) and the `html_to_excel_text` overlay
-    (a merged cell flattens once, no duplication). **Deferred:** per-column cell
-    alignment + column width (would need `textAlign`/`colWidth` on the cell
-    attribute model; resizable is off), and native xlsx-download styling (the
-    download stays a text overlay). Pinned by `tests/test_notes_html_sanitize_css.py`,
-    `tests/test_notes_html_to_text.py`, `web` `cellFormatting`/`NotesReviewTab`
-    tests.
+    (a merged cell flattens once, no duplication).
+  - **Per-cell alignment, column width, indentation (2026-06-23 follow-up).**
+    Cell alignment is a `textAlign` field on the cell style model
+    (`cellFormatting.ts`), set across a `CellSelection` via `applyCellAlign` →
+    `text-align` on the `<td>` (distinct from the paragraph TextAlign mark and
+    the cosmetic `.is-numeric` runtime class). Column width = TipTap
+    `resizable: true`: widths serialise as a standard
+    `<colgroup><col style="width">` + `<table style="width">` + cell `colwidth`
+    attrs (paste-faithful), so the sanitiser now allows `<colgroup>`/`<col>`
+    and the `width` property on `<table>`/`<col>` (length-validated, no
+    `calc()`). Indentation is a custom extension (`web/src/lib/notesIndent.ts`:
+    `Indent` + `indentBlocks`/`outdentBlocks`) adding an integer level rendered
+    as `margin-left` (em) on `<p>/<h3>`; the sanitiser allows `margin-left`
+    (positive em/px) on `<p>/<h3>/<li>` only. **Still deferred:** native
+    xlsx-download styling (download stays a text overlay). Pinned by
+    `tests/test_notes_html_sanitize_css.py`, `tests/test_notes_html_to_text.py`,
+    `web` `cellFormatting`/`notesIndent`/`NotesReviewTab` tests.
 - Evidence column is **read-only** in the editor — it's the audit
   trail. `PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}` ignores
   any `evidence` key in the body.
