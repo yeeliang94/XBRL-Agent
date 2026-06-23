@@ -450,3 +450,45 @@ describe("decorateHtmlForClipboard — persisted cell styles win", () => {
     expect(style).toContain("padding:");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Resized-table widths (notes editor v2 follow-up, peer-review HIGH). A user-
+// resized table carries an explicit `width: …px`; the decorator must NOT
+// append its `width: 100%` overflow guard over it (CSS last-wins would discard
+// the user's sizing in Word/M-Tool). An un-sized table (TipTap emits only
+// `min-width`) still gets the 100% guard.
+// ---------------------------------------------------------------------------
+describe("decorateHtmlForClipboard — resized table widths", () => {
+  const resized =
+    '<table style="width: 320px">' +
+    '<colgroup><col style="width: 120px"><col style="width: 200px"></colgroup>' +
+    "<tbody><tr><td>a</td><td>b</td></tr></tbody></table>";
+
+  test("a persisted table width is preserved, not overridden by width: 100%", () => {
+    const out = decorateHtmlForClipboard(resized, DEFAULT_FORMAT_OPTIONS);
+    const probe = document.createElement("div");
+    probe.innerHTML = out;
+    const tableStyle = probe.querySelector("table")!.getAttribute("style") ?? "";
+    expect(tableStyle).toContain("width: 320px");
+    expect(tableStyle).not.toContain("width: 100%");
+    // table-layout: fixed is still applied so the <col> widths are authoritative.
+    expect(tableStyle).toContain("table-layout: fixed");
+    // The column widths survive untouched.
+    const cols = Array.from(probe.querySelectorAll("col")).map((c) =>
+      c.getAttribute("style"),
+    );
+    expect(cols).toEqual(["width: 120px", "width: 200px"]);
+  });
+
+  test("an un-sized table (min-width only) still gets the 100% overflow guard", () => {
+    const unsized =
+      '<table style="min-width: 50px">' +
+      '<colgroup><col style="min-width: 25px"></colgroup>' +
+      "<tbody><tr><td>a</td></tr></tbody></table>";
+    const out = decorateHtmlForClipboard(unsized, DEFAULT_FORMAT_OPTIONS);
+    const probe = document.createElement("div");
+    probe.innerHTML = out;
+    const tableStyle = probe.querySelector("table")!.getAttribute("style") ?? "";
+    expect(tableStyle).toContain("width: 100%");
+  });
+});

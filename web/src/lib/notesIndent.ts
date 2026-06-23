@@ -23,12 +23,21 @@ export const Indent = Extension.create({
           indent: {
             default: 0,
             // Parse the level back from the persisted margin-left so a reload
-            // restores the same indentation. Tolerates "4em" / "4" / missing.
+            // restores the same indentation. Convert units EXPLICITLY (a bare
+            // `parseFloat` would read `16px` as 16 em → level 8, and an
+            // oversized value would render off-screen), then CLAMP to the
+            // allowed range. `em` is our own output; `px` is converted
+            // (1em ≈ 16px); anything else is treated as un-indented.
             parseHTML: (el: HTMLElement) => {
-              const ml = parseFloat(el.style.marginLeft || "0");
-              return Number.isFinite(ml) && ml > 0
-                ? Math.round(ml / INDENT_STEP_EM)
-                : 0;
+              const raw = (el.style.marginLeft || "").trim().toLowerCase();
+              const num = parseFloat(raw);
+              if (!Number.isFinite(num) || num <= 0) return 0;
+              let em: number;
+              if (raw.endsWith("em")) em = num;
+              else if (raw.endsWith("px")) em = num / 16;
+              else return 0;
+              const level = Math.round(em / INDENT_STEP_EM);
+              return Math.min(MAX_INDENT_LEVEL, Math.max(0, level));
             },
             // Render only when indented, so an un-indented paragraph stays
             // style-free (and the no-churn contract isn't perturbed).

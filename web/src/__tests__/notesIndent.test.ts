@@ -77,4 +77,20 @@ describe("notesIndent", () => {
     expect(firstParaIndent(editor)).toBe(3);
     editor.destroy();
   });
+
+  it("converts a px margin-left rather than reading it as em", () => {
+    // 16px ≈ 1em → ~level 1, NOT level 8 (the bug: parseFloat('16px')/2 = 8).
+    const editor = makeEditor('<p style="margin-left: 16px">x</p>');
+    expect(firstParaIndent(editor)).toBeLessThanOrEqual(1);
+    editor.destroy();
+  });
+
+  it("clamps an oversized parsed indent to MAX_INDENT_LEVEL (em and px)", () => {
+    const big = makeEditor('<p style="margin-left: 100em">x</p>');
+    expect(firstParaIndent(big)).toBe(MAX_INDENT_LEVEL);
+    big.destroy();
+    const bigPx = makeEditor('<p style="margin-left: 1000px">x</p>');
+    expect(firstParaIndent(bigPx)).toBe(MAX_INDENT_LEVEL);
+    bigPx.destroy();
+  });
 });

@@ -94,6 +94,23 @@ const _CLIPBOARD_TABLE_STYLE =
   "border-collapse: collapse; margin: 8px 0; " +
   "width: 100%; max-width: 100%; table-layout: fixed;";
 
+// When the user has RESIZED the table (an explicit `width: …px`), forcing
+// `width: 100%` would override their sizing (CSS last-wins) and distort the
+// column widths on paste into Word/M-Tool. In that case we keep the table's
+// own width and only add the layout helpers — `table-layout: fixed` so the
+// `<col>` widths are authoritative. (notes editor v2 follow-up.)
+const _CLIPBOARD_TABLE_STYLE_KEEP_WIDTH =
+  "border-collapse: collapse; margin: 8px 0; table-layout: fixed;";
+
+/** True if the table carries its OWN explicit `width` declaration (a resized
+ *  table). Property-exact so `min-width` — which TipTap emits on every
+ *  un-sized table — does NOT count as a user width. */
+function _tableHasExplicitWidth(table: Element): boolean {
+  return (table.getAttribute("style") || "")
+    .split(";")
+    .some((d) => d.slice(0, d.indexOf(":")).trim().toLowerCase() === "width");
+}
+
 function _cellStyleBase(opts: ClipboardFormatOptions): string {
   const [padV, padH] = opts.cellPaddingPx;
   return (
@@ -165,7 +182,12 @@ export function decorateHtmlForClipboard(
   const noBorder = opts.borderStyle === "none";
 
   for (const table of Array.from(tmp.querySelectorAll("table"))) {
-    _mergeStyle(table, _CLIPBOARD_TABLE_STYLE);
+    _mergeStyle(
+      table,
+      _tableHasExplicitWidth(table)
+        ? _CLIPBOARD_TABLE_STYLE_KEEP_WIDTH
+        : _CLIPBOARD_TABLE_STYLE,
+    );
     // Word/Outlook honour the legacy `border` attribute even when CSS
     // is partially stripped on paste. Belt-and-braces — the inline
     // style above does the heavy lifting on web targets.

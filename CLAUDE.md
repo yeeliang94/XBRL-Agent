@@ -698,8 +698,13 @@ Key invariants:
     `resizable: true`: widths serialise as a standard
     `<colgroup><col style="width">` + `<table style="width">` + cell `colwidth`
     attrs (paste-faithful), so the sanitiser now allows `<colgroup>`/`<col>`
-    and the `width` property on `<table>`/`<col>` (length-validated, no
-    `calc()`). Indentation is a custom extension (`web/src/lib/notesIndent.ts`:
+    and `width` **+ `min-width`** on `<table>`/`<col>` (length-validated, no
+    `calc()`). `min-width` is load-bearing: TipTap's resizable table emits it on
+    EVERY un-sized table/col, so omitting it would strip the editor's own output
+    and churn `setContent()` on every table save. The clipboard decorator
+    PRESERVES an explicit table `width` (a resized table) instead of forcing its
+    `width: 100%` overflow guard over it. Indentation is a custom extension
+    (`web/src/lib/notesIndent.ts`:
     `Indent` + `indentBlocks`/`outdentBlocks`) adding an integer level rendered
     as `margin-left` (em) on `<p>/<h3>`; the sanitiser allows `margin-left`
     (positive em/px) on `<p>/<h3>/<li>` only. **Still deferred:** native

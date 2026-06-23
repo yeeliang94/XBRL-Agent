@@ -40,6 +40,7 @@ def test_allowed_css_properties_is_exactly_the_editor_set() -> None:
         "color",
         "text-align",
         "width",        # column width on <table>/<col> (resizable table)
+        "min-width",    # TipTap's always-emitted layout width on <table>/<col>
         "margin-left",  # paragraph indent
     })
 
@@ -230,6 +231,36 @@ def test_column_width_colgroup_survives() -> None:
     assert "width: 200px" in low
     assert "width: 320px" in low  # table overall width
     assert "colwidth=\"120\"" in low or "colwidth='120'" in low
+
+
+def test_resizable_table_min_width_round_trips() -> None:
+    """TipTap's resizable table emits `min-width` on EVERY un-sized table/col
+    (verified). The sanitiser must keep it, or it strips its own editor output
+    and re-triggers a setContent() reconcile on every table save. Mirrors a
+    real un-sized resizable table's serialisation."""
+    html = (
+        '<table style="min-width: 50px">'
+        '<colgroup><col style="min-width: 25px"><col style="min-width: 25px"></colgroup>'
+        '<tbody><tr><td colspan="1" rowspan="1">a</td>'
+        '<td colspan="1" rowspan="1">b</td></tr></tbody>'
+        "</table>"
+    )
+    cleaned, warnings = sanitize_notes_html(html)
+    low = cleaned.lower()
+    assert low.count("min-width: 50px") == 1
+    assert low.count("min-width: 25px") == 2
+    # No churn signal: nothing was stripped from the editor's own output.
+    assert warnings == []
+
+
+def test_min_width_rejected_off_table_and_col() -> None:
+    """`min-width` is a table-layout concern only — not on a paragraph/cell."""
+    para, _ = sanitize_notes_html('<p style="min-width: 50px">x</p>')
+    assert "min-width" not in para.lower()
+    cell, _ = sanitize_notes_html(
+        '<table><tr><td style="min-width: 50px">x</td></tr></table>'
+    )
+    assert "min-width" not in cell.lower()
 
 
 def test_invalid_width_value_rejected() -> None:
