@@ -32,6 +32,28 @@ def _auth_dev_mode_by_default():
 
 
 @pytest.fixture(autouse=True)
+def _notes_auto_review_off_by_default():
+    """Default the notes reviewer's auto-launch OFF for the suite.
+
+    The notes reviewer auto-fires on any prose-notes run; leaving it on (the
+    production default) would add an extra NOTES agent/pass + audit row to every
+    mocked notes run and break the exact pipeline counts. Tests that exercise it
+    opt IN with `monkeypatch.setenv("XBRL_NOTES_AUTO_REVIEW", "true")`; the
+    settings round-trip test `delenv`s to verify the true default is ON. Set via
+    os.environ for monkeypatch.undo() resilience (like XBRL_SPOT_CHECK above).
+    """
+    prior = os.environ.get("XBRL_NOTES_AUTO_REVIEW")
+    os.environ["XBRL_NOTES_AUTO_REVIEW"] = "false"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop("XBRL_NOTES_AUTO_REVIEW", None)
+        else:
+            os.environ["XBRL_NOTES_AUTO_REVIEW"] = prior
+
+
+@pytest.fixture(autouse=True)
 def _spot_check_off_by_default():
     """Default the clean-run spot-check (issue 1) OFF for the suite.
 

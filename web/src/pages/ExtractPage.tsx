@@ -266,6 +266,7 @@ export function ExtractPage({
           {state.pipelineStage === "correcting" && "Correction agent investigating failed cross-checks…"}
           {state.pipelineStage === "reviewing" && "Reviewer investigating the root cause of failed cross-checks…"}
           {state.pipelineStage === "re_checking" && "Re-running cross-checks against the corrected workbook…"}
+          {state.pipelineStage === "reviewing_notes" && "Notes reviewer fixing prose-notes findings…"}
           {state.pipelineStage === "validating_notes" && "Validating notes templates…"}
         </div>
       )}

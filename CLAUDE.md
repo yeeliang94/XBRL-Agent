@@ -334,7 +334,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **22**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **25**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -436,6 +436,21 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   editable on ANY run status via `PATCH /api/runs/{id}/notes_table_style`
   because notes review happens after extraction. Pinned by
   `tests/test_db_schema_v22.py`.
+- **v22 → v23:** adds the three notes-reviewer detector-input tables
+  (`notes_cell_provenance`, `run_notes_inventory`, `run_notes_cell_snapshots`)
+  plus the `run_notes_review_state` snapshot-taken marker (notes reviewer —
+  docs/PLAN.md). Pure `CREATE TABLE IF NOT EXISTS` walk-forward. Pinned by
+  `tests/test_db_schema_v23.py`.
+- **v23 → v24:** adds `notes_review_flags` (reviewer flags) + `notes_review_tasks`
+  (durable async re-review state, reconciled at startup). Pure
+  `CREATE TABLE IF NOT EXISTS` walk-forward. Pinned by
+  `tests/test_db_schema_v24.py`.
+- **v24 → v25:** adds `notes_cell_tombstones` — the durable "this notes cell was
+  emptied" record so the workbook overlay can BLANK a reviewer clear / move-out /
+  authored-then-reverted coordinate (the overlay is additive and cannot otherwise
+  represent a deletion). See gotcha #16 (overlay is authoritative for the notes
+  region). Pure `CREATE TABLE IF NOT EXISTS` walk-forward. Pinned by
+  `tests/test_db_schema_v25.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -628,6 +643,18 @@ Key invariants:
   a flattened snapshot; the download endpoint overlays the DB rows
   onto a temp workbook at stream time via
   `notes/persistence.overlay_notes_cells_into_workbook`.
+- **The overlay is AUTHORITATIVE for the notes prose region, not additive
+  (2026-06-24 fix).** It writes each surviving row's prose (col B) AND
+  evidence (`evidence_col_for(filing_level)`, D=Company / F=Group), then
+  BLANKS every coordinate the notes reviewer emptied — recorded in
+  `notes_cell_tombstones` (schema v25). Additive-only overlay could not
+  express a deletion, so a reviewer clear / move-out reintroduced the
+  merge-time prose on download (duplicate / stale) and reviewer evidence
+  never reached the export. `clear`/`move` add a tombstone, `author`/`edit`
+  remove it, and `revert` reconciles them (clears cleared-row tombstones,
+  re-tombstones authored rows). Callers MUST pass the run's `filing_level`
+  so evidence lands in the right column. Pinned by
+  `tests/test_notes_reviewer_overlay_deletions.py`.
 - Cap is 30,000 **rendered** characters (`notes.html_to_text
   .rendered_length`), not 30k of raw HTML. The sanitiser-and-writer
   both enforce this; the server's PATCH endpoint returns 413 when
@@ -914,11 +941,14 @@ Two new SSE event families surface the post-extraction silent dead
 zones (added 2026-04-27, Phases 5 & 6 of the same plan):
 
 - **`pipeline_stage`** — coordinator-level stage label, one of
-  `extracting | merging | cross_checking | correcting | re_checking |
-  validating_notes | done`. Emitted at every phase boundary in
+  `extracting | merging | cross_checking | reviewing | re_checking |
+  reviewing_notes | done`. Emitted at every phase boundary in
   `run_multi_agent_stream`. The frontend captures the latest stage
-  and labels the corresponding silent gap ("Validating notes…",
-  "Re-running cross-checks…"). Pinned by
+  and labels the corresponding silent gap ("Notes reviewer fixing…",
+  "Re-running cross-checks…"). The notes pass emits `reviewing_notes`
+  (the old `validating_notes` label is retained in the frontend
+  `PipelineStage` union for older in-flight streams). Both must stay in
+  sync — `web/src/lib/types.ts` + `web/src/pages/ExtractPage.tsx`. Pinned by
   `tests/test_pipeline_stage_events.py`.
 - **`cross_check_start` / `cross_check_result` / `cross_check_complete`**
   — per-pass progress for each cross-check run. ValidatorTab fills

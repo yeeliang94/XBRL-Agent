@@ -1622,6 +1622,228 @@ async def _run_reviewer_pass(
     return outcome
 
 
+async def _run_notes_reviewer_pass(
+    *,
+    run_id: int,
+    db_path: str,
+    pdf_path: str,
+    filing_level: str,
+    filing_standard: str,
+    model,
+    output_dir: str,
+    merged_workbook_path: Optional[str],
+    event_queue,
+    sidecar_paths: Optional[list] = None,
+    inventory_note_nums: Optional[list] = None,
+    inventory_subnotes: Optional[dict] = None,
+    agent_id: str = NOTES_VALIDATOR_AGENT_ID,
+) -> dict:
+    """Notes reviewer pass (docs/PLAN.md Step 9) — the acting successor to the
+    notes validator. Inspects the five prose-notes check families and FIXES
+    them through the guarded, snapshot-protected tools in
+    ``notes/reviewer_agent.py``. Writes land in ``notes_cells`` (canonical); the
+    download overlay reflects them, and we refresh the durable merged workbook
+    on disk too.
+
+    Reversibility is structural: ``ensure_notes_snapshot`` captures the original
+    prose ONCE before any write, so the Review tab's "Revert to original"
+    restores it. A pass failure is recoverable (the run still lands
+    ``completed_with_errors``).
+    """
+    import asyncio as _asyncio
+    import shutil as _shutil
+    import time as _wc_time
+    import server as _server_self
+    from agent_runner import AgentLoopSpec, WallclockExceeded, run_agent_loop
+    from notes.reviewer_agent import create_notes_reviewer_agent
+    from notes.versioning import ensure_notes_snapshot
+    from correction.reviewer_agent import compute_reviewer_turn_cap
+
+    outcome: dict = {
+        "invoked": False, "writes_performed": 0, "flags_raised": 0,
+        "error": None, "context": {}, "elapsed_seconds": 0.0,
+    }
+    _pass_start = _wc_time.monotonic()
+
+    def _stamp_elapsed() -> None:
+        outcome["elapsed_seconds"] = round(_wc_time.monotonic() - _pass_start, 1)
+
+    async def _emit(event_type: str, data: dict) -> None:
+        if event_queue is None:
+            return
+        if event_type == "error":
+            data = {"bucket": ERROR_BUCKET_RECOVERABLE, **data}
+        await event_queue.put({
+            "event": event_type,
+            "data": {**data, "agent_id": agent_id, "agent_role": agent_id},
+        })
+
+    try:
+        agent, deps, context = create_notes_reviewer_agent(
+            run_id=run_id, db_path=db_path, pdf_path=pdf_path,
+            filing_level=filing_level, filing_standard=filing_standard,
+            model=model, output_dir=output_dir,
+            inventory_note_nums=inventory_note_nums,
+            inventory_subnotes=inventory_subnotes,
+            sidecar_paths=sidecar_paths,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Notes reviewer construction failed")
+        outcome["error"] = f"agent construction failed: {e}"
+        await _emit("error", {"type": "notes_reviewer_exception",
+                              "message": outcome["error"]})
+        await _emit("complete", {"success": False, "error": outcome["error"]})
+        _stamp_elapsed()
+        return outcome
+
+    outcome["context"] = context
+    n_items = sum(len(context.get(k) or []) for k in (
+        "duplicates", "overlap_candidates", "coverage_gaps",
+        "row_collisions", "subnote_gaps", "title_issues",
+    ))
+
+    # Nothing flagged — skip the model entirely (latency + tokens). Emit a
+    # status + success so the tab flips terminal instead of stranding.
+    if n_items == 0:
+        await _emit("status", {"phase": "complete",
+                               "message": "No notes findings to review — skipped."})
+        await _emit("complete", {"success": True, "writes_performed": 0,
+                                 "skipped": True})
+        _stamp_elapsed()
+        return outcome
+
+    # Snapshot the ORIGINAL prose before any write (reversibility). Failure here
+    # means no safety net, so refuse to run (surface structurally, gotcha #20).
+    try:
+        ensure_notes_snapshot(db_path, run_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Notes reviewer snapshot failed for run %s", run_id)
+        outcome["error"] = "snapshot_failed"
+        await _emit("error", {"type": "notes_reviewer_exception",
+                              "message": "Notes reviewer snapshot failed."})
+        await _emit("complete", {"success": False, "error": outcome["error"]})
+        _stamp_elapsed()
+        return outcome
+
+    outcome["invoked"] = True
+    max_turns = compute_reviewer_turn_cap(filing_level=filing_level, n_items=n_items)
+    await _emit("status", {
+        "phase": "started",
+        "message": f"Notes reviewer started for {n_items} finding(s); turn budget {max_turns}.",
+    })
+
+    prompt = (
+        "Investigate every finding in your NOTES REVIEW PACKET. For each, view "
+        "the PDF page(s) FIRST, then fix what you can ground (clear a duplicate, "
+        "move a collision to an empty leaf, author/edit a missing sub-note) and "
+        f"raise_flag anything you're unsure of. You have at most {max_turns} "
+        "turns. Never fabricate prose; preserve valid content over a risky fix."
+    )
+
+    _wallclock_cap = float(getattr(
+        _server_self, "NOTES_VALIDATOR_WALLCLOCK_TIMEOUT",
+        NOTES_VALIDATOR_WALLCLOCK_TIMEOUT,
+    ))
+
+    async def _loop_emit(event_type: str, data: dict) -> None:
+        if event_type in ("tool_call", "tool_result"):
+            await _emit(event_type, data)
+
+    _turn_records: list = []
+    loop_spec = AgentLoopSpec(
+        agent_role=agent_id, model=model,
+        turn_timeout=(
+            _wallclock_cap if _wallclock_cap < NOTES_VALIDATOR_TURN_TIMEOUT
+            else NOTES_VALIDATOR_TURN_TIMEOUT
+        ),
+        phase_map={}, phase_message=lambda role, phase: "",
+        wallclock_timeout=_wallclock_cap,
+        stream_model_nodes=False,
+        bound_inner_streams=False,
+    )
+
+    def _persist_flags_and_refresh() -> None:
+        """Persist the reviewer's flags (replace prior) + refresh the durable
+        merged workbook from notes_cells. Best-effort — never fails the pass."""
+        try:
+            from db import repository as _repo
+            with _repo.db_session(db_path) as conn:
+                conn.execute(
+                    "DELETE FROM notes_review_flags WHERE run_id = ?", (run_id,)
+                )
+                for f in deps.flags:
+                    _repo.insert_notes_review_flag(
+                        conn, run_id=run_id, kind=f.get("kind", "needs_human"),
+                        reason=f.get("reason", ""), sheet=f.get("sheet"),
+                        row=f.get("row"),
+                    )
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to persist notes-review flags", exc_info=True)
+        # Refresh the on-disk merged workbook so non-download consumers see the
+        # reviewer's edits (the download overlay already reflects notes_cells).
+        if deps.writes_performed and merged_workbook_path:
+            try:
+                from notes.persistence import overlay_notes_cells_into_workbook
+                nxt = overlay_notes_cells_into_workbook(
+                    xlsx_path=merged_workbook_path, run_id=run_id, db_path=db_path,
+                    filing_level=filing_level,
+                )
+                if str(nxt) != str(merged_workbook_path):
+                    _shutil.copyfile(nxt, merged_workbook_path)
+                    try:
+                        Path(nxt).unlink(missing_ok=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to refresh merged workbook after notes review",
+                               exc_info=True)
+
+    try:
+        async with agent.iter(prompt, deps=deps) as agent_run:
+            await run_agent_loop(agent_run, deps, loop_spec, _loop_emit, _turn_records)
+        outcome["writes_performed"] = deps.writes_performed
+        outcome["flags_raised"] = len(deps.flags)
+        _persist_flags_and_refresh()
+        try:
+            log_path = Path(output_dir) / "notes_reviewer_log.json"
+            log_path.write_text(
+                json.dumps(deps.correction_log, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            logger.warning("Failed to write notes_reviewer_log.json", exc_info=True)
+        await _emit("complete", {
+            "success": True,
+            "writes_performed": deps.writes_performed,
+            "flags_raised": len(deps.flags),
+        })
+    except _asyncio.CancelledError:
+        await _emit("complete", {"success": False, "error": "Cancelled by user"})
+        outcome["error"] = "cancelled"
+        _persist_flags_and_refresh()
+        raise
+    except (WallclockExceeded, _asyncio.TimeoutError):
+        msg = (f"Notes reviewer exceeded wall-clock cap of {_wallclock_cap}s "
+               f"after {deps.writes_performed} write(s).")
+        logger.warning(msg)
+        outcome["error"] = "notes_reviewer_wallclock_exceeded"
+        outcome["writes_performed"] = deps.writes_performed
+        _persist_flags_and_refresh()
+        await _emit("error", {"type": "notes_reviewer_wallclock_exceeded", "message": msg})
+        await _emit("complete", {"success": False,
+                                 "error": "notes_reviewer_wallclock_exceeded",
+                                 "writes_performed": deps.writes_performed})
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Notes reviewer pass failed")
+        outcome["error"] = str(e)
+        _persist_flags_and_refresh()
+        await _emit("error", {"type": "notes_reviewer_exception", "message": str(e)})
+        await _emit("complete", {"success": False, "error": str(e)})
+
+    _stamp_elapsed()
+    return outcome
+
+
 async def _run_notes_validator_pass(
     merged_workbook_path: str,
     pdf_path: str,
@@ -1633,6 +1855,9 @@ async def _run_notes_validator_pass(
     event_queue,
     agent_id: str = NOTES_VALIDATOR_AGENT_ID,
     inventory_note_nums: Optional[list] = None,
+    inventory_subnotes: Optional[dict] = None,
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
 ) -> dict:
     """Run the notes post-validator once after the merge.
 
@@ -1710,6 +1935,9 @@ async def _run_notes_validator_pass(
             model=model,
             output_dir=output_dir,
             inventory_note_nums=inventory_note_nums,
+            inventory_subnotes=inventory_subnotes,
+            run_id=run_id,
+            db_path=db_path,
         )
     except Exception as e:  # noqa: BLE001
         logger.exception("Notes validator construction failed")
@@ -1741,18 +1969,48 @@ async def _run_notes_validator_pass(
     # this the agent would short-circuit and the gap investigation (the value
     # of N3 Stage 1) would never happen (peer-review HIGH).
     _coverage_gaps = context.get("coverage_gaps") or []
+    _row_collisions = context.get("row_collisions") or []
+    _subnote_gaps = context.get("subnote_gaps") or []
+
+    # Durable, agent-independent record of the structural findings. Written
+    # whenever the detectors flagged something so a human reviewer sees the
+    # candidates even if the validator agent ultimately rules `no_action` (or
+    # the model invocation is skipped below). The validator cannot reliably
+    # auto-fix a row collision — there is no alternative target row — so this
+    # side-log is the primary deliverable for those cases.
+    if _row_collisions or _subnote_gaps:
+        try:
+            findings_path = Path(output_dir) / "notes_structural_findings.json"
+            findings_path.write_text(
+                json.dumps(
+                    {
+                        "row_collisions": _row_collisions,
+                        "subnote_gaps": _subnote_gaps,
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            logger.warning(
+                "Failed to write notes_structural_findings.json", exc_info=True
+            )
+
     if (
         not context["duplicates"]
         and not context["overlap_candidates"]
         and not _coverage_gaps
+        and not _row_collisions
+        and not _subnote_gaps
     ):
         logger.info(
-            "Notes validator skipped — no cross-sheet duplicate candidates "
-            "and no coverage gaps."
+            "Notes validator skipped — no cross-sheet duplicate candidates, "
+            "no coverage gaps, no row collisions, no sub-note gaps."
         )
         await _emit("status", {
             "phase": "complete",
-            "message": "No cross-sheet duplicates or coverage gaps to review — skipped.",
+            "message": "No cross-sheet duplicates, coverage gaps, row collisions or sub-note gaps to review — skipped.",
         })
         await _emit("complete", {
             "success": True,
@@ -1768,7 +2026,9 @@ async def _run_notes_validator_pass(
         "message": (
             f"Notes validator scanning {len(context['duplicates'])} "
             f"ref-based + {len(context['overlap_candidates'])} overlap "
-            f"candidate(s) + {len(_coverage_gaps)} coverage gap(s)."
+            f"candidate(s) + {len(_coverage_gaps)} coverage gap(s) + "
+            f"{len(_row_collisions)} row collision(s) + "
+            f"{len(_subnote_gaps)} sub-note gap(s)."
         ),
     })
 
@@ -1778,7 +2038,11 @@ async def _run_notes_validator_pass(
         "Sheet 12' using the PDF as source of truth; log each via "
         "flag_duplication). If a COVERAGE GAPS block is present, also view the "
         "cited pages for each listed note and judge whether it is genuinely "
-        "absent or was missed — report missed disclosures, never fabricate."
+        "absent or was missed. If a SAME-SHEET ROW COLLISIONS or SUB-NOTE "
+        "COVERAGE GAPS block is present, investigate each per its instructions "
+        "— clear mis-placed content only when there is a clearly correct owner, "
+        "otherwise flag_duplication no_action. Report missed disclosures, never "
+        "fabricate."
     )
 
     # PLAN-stop-and-validation-visibility Phase 3 + peer-review fix
@@ -2121,6 +2385,21 @@ async def _lifespan(app: FastAPI):
         logger.warning("re-review task reconciliation failed at startup",
                        exc_info=True)
 
+    # Retire notes re-reviews orphaned by a restart (v24) — same discipline.
+    try:
+        from db import repository as repo
+        conn = _open_audit_conn()
+        try:
+            n = repo.reconcile_stale_notes_review_tasks(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        if n:
+            logger.info("reconciled %d stale notes re-review task(s) at startup", n)
+    except Exception:
+        logger.warning("notes re-review task reconciliation failed at startup",
+                       exc_info=True)
+
     # Retire scanned-PDF → readable-doc conversions orphaned by a restart
     # (the worker thread dies with the process). Same best-effort discipline as
     # the re-review reconcile above. See docs/PLAN-scanned-pdf-to-doc.md.
@@ -2340,7 +2619,7 @@ class RunConfigPatchRequest(BaseModel):
 # --- Settings helpers ---
 
 # Statement type keys used for per-agent model defaults
-_AGENT_ROLES = ("scout", "reviewer", "SOFP", "SOPL", "SOCI", "SOCF", "SOCIE")
+_AGENT_ROLES = ("scout", "reviewer", "notes_reviewer", "SOFP", "SOPL", "SOCI", "SOCF", "SOCIE")
 
 
 def _auto_review_enabled() -> bool:
@@ -2352,6 +2631,17 @@ def _auto_review_enabled() -> bool:
     environment each call so a Settings toggle takes effect without restart.
     """
     return os.environ.get("XBRL_AUTO_REVIEW", "true").lower() == "true"
+
+
+def _notes_auto_review_enabled() -> bool:
+    """Whether the notes reviewer pass auto-runs after the merge (default on).
+
+    Controlled by ``XBRL_NOTES_AUTO_REVIEW``. Independent of ``XBRL_AUTO_REVIEW``
+    (which gates the FACE reviewer). When off, a notes run finishes without the
+    reviewer and the user triggers it manually from the Notes tab. Read fresh
+    each call so a Settings toggle takes effect without restart.
+    """
+    return os.environ.get("XBRL_NOTES_AUTO_REVIEW", "true").lower() == "true"
 
 
 def _spot_check_enabled() -> bool:
@@ -2425,6 +2715,21 @@ def _reviewer_model_name() -> Optional[str]:
     return val if isinstance(val, str) and val else None
 
 
+def _notes_reviewer_model_name() -> Optional[str]:
+    """The configured notes-reviewer model id, or None to inherit the run's model.
+
+    Reads ``XBRL_DEFAULT_MODELS["notes_reviewer"]``; otherwise None so the caller
+    falls back to the run's extraction model (mirrors ``_reviewer_model_name``).
+    """
+    raw = os.environ.get("XBRL_DEFAULT_MODELS", "")
+    try:
+        models = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return None
+    val = models.get("notes_reviewer")
+    return val if isinstance(val, str) and val else None
+
+
 def _load_available_models() -> list[dict]:
     """Read the pinned model list from config/models.json.
 
@@ -2473,6 +2778,8 @@ def _load_extended_settings() -> dict:
         "tolerance_rm": tolerance,
         # Reviewer pass auto-trigger (docs/Archive/PLAN-reviewer-agent.md). Default on.
         "auto_review": _auto_review_enabled(),
+        # Notes reviewer auto-trigger (docs/PLAN.md — Notes Reviewer). Default on.
+        "notes_auto_review": _notes_auto_review_enabled(),
         # Issue 1 (2026-06-21): clean-run spot-check toggle + depth. Default on/light.
         "spot_check": _spot_check_enabled(),
         "spot_check_mode": _spot_check_mode(),
@@ -3363,7 +3670,7 @@ async def run_multi_agent_stream(
     phases — **Validate** → **Extract** → **Cascade** → **Merge/Render** →
     **Check** → **Review** → **Persist/Finalize**. Phase boundaries are marked
     by ``_emit_stage(...)`` events (extracting | merging | cross_checking |
-    reviewing | re_checking | validating_notes | done). The first phase is a
+    reviewing | re_checking | reviewing_notes | done). The first phase is a
     standalone unit (:func:`_validate_and_build_run`) returning one structured
     result; the remaining phases stay inline in this generator because each is
     interleaved with the GeneratorExit-tolerant ``event_queue`` drain (gotcha
@@ -4827,11 +5134,17 @@ async def run_multi_agent_stream(
                 for r in notes_result.agent_results
                 if r.workbook_path
             }
-            have_both_sheets = (
-                NotesTemplateType.ACC_POLICIES in notes_outputs
-                and NotesTemplateType.LIST_OF_NOTES in notes_outputs
-            )
-            if have_both_sheets:
+            # Peer-review #7: the reviewer runs whenever ANY prose notes sheet
+            # was targeted (10/11/12) — each check family fires only where its
+            # inputs exist (cross-sheet dup still needs both 11 & 12). Gated by
+            # the XBRL_NOTES_AUTO_REVIEW toggle (Step 11; default on, off in the
+            # test suite via conftest so pipeline counts stay deterministic).
+            from notes_types import NOTES_REGISTRY as _NOTES_REG
+            _prose_types = {
+                t for t, e in _NOTES_REG.items() if not getattr(e, "is_numeric", False)
+            }
+            have_prose_sheet = any(t in notes_outputs for t in _prose_types)
+            if have_prose_sheet and _notes_auto_review_enabled():
                 # Lazy pseudo-agent row — created only when the validator
                 # will actually run. Without this gate, short-circuit
                 # cases (no sheet 11/12) would still mint an audit row
@@ -4854,34 +5167,104 @@ async def run_multi_agent_stream(
                             "Failed to pre-create notes-validator row",
                             exc_info=True,
                         )
-                # Phase 6: stage boundary — about to run the notes
-                # post-validator (sheet-11/12 cross-sheet review). Only
-                # fires when both ACC_POLICIES and LIST_OF_NOTES landed,
-                # so the absence of this event isn't a bug — it just
-                # means the run didn't request the post-validator's
-                # required notes templates.
-                _emit_stage("validating_notes")
+                # Stage boundary — about to run the notes reviewer. Fires
+                # whenever a prose notes sheet was targeted and the auto-review
+                # toggle is on.
+                _emit_stage("reviewing_notes")
                 # N3 Stage 1: hand the scout's inventory note numbers to the
                 # validator so it can report coverage gaps (notes with no
                 # content on any sheet). Best-effort — degrades to no gaps.
                 _inv_nums = []
+                # Phase 1b sub-note structure, keyed by top-level note_num, so
+                # the validator's detect_subnote_coverage_gaps can spot a note
+                # that was only partly covered at sub-reference granularity
+                # (e.g. a leases policy citing 3.3 + (b) but dropping (a)).
+                _inv_subnotes: dict = {}
+                # Rich inventory records (note_num + title + sub-refs + page
+                # span) for the durable DB store the reviewer recomputes from.
+                _inv_records: list[dict] = []
                 try:
                     for _e in getattr(infopack, "notes_inventory", None) or []:
                         _n = getattr(_e, "note_num", None)
-                        if _n is not None:
-                            _inv_nums.append(int(_n))
+                        if _n is None:
+                            continue
+                        _inv_nums.append(int(_n))
+                        _subs = [
+                            str(getattr(_s, "subnote_ref", "")).strip()
+                            for _s in getattr(_e, "subnotes", None) or []
+                        ]
+                        _subs = [s for s in _subs if s]
+                        if _subs:
+                            _inv_subnotes[int(_n)] = _subs
+                        _pr = getattr(_e, "page_range", None) or (None, None)
+                        _inv_records.append({
+                            "note_num": int(_n),
+                            "title": str(getattr(_e, "title", "") or ""),
+                            "subnote_refs": _subs,
+                            "page_lo": _pr[0] if _pr else None,
+                            "page_hi": _pr[1] if len(_pr) > 1 else None,
+                        })
                 except Exception:  # noqa: BLE001
                     _inv_nums = []
-                validator_task = asyncio.create_task(_run_notes_validator_pass(
-                    merged_workbook_path=merged_path,
+                    _inv_subnotes = {}
+                    _inv_records = []
+                # Step 1: persist the reviewer's detector inputs (per-cell
+                # provenance + scout inventory) into the DB so a later manual
+                # re-review recomputes findings durably, not from run-dir files.
+                # Best-effort: a provenance-write failure must never fail the run
+                # (the factory falls back to the on-disk sidecars).
+                from notes.writer import payload_sidecar_path as _sidecar_path
+                _sidecar_paths = [
+                    str(_sidecar_path(p)) for p in notes_outputs.values() if p
+                ]
+                try:
+                    from notes.persistence import persist_notes_review_inputs
+                    from notes.validator_agent import load_sidecar_entries
+                    persist_notes_review_inputs(
+                        db_path=str(AUDIT_DB_PATH),
+                        run_id=run_id,
+                        sidecar_entries=load_sidecar_entries(_sidecar_paths),
+                        inventory=_inv_records,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to persist notes-review inputs for run %s",
+                        run_id, exc_info=True,
+                    )
+                # Register a durable 'running' notes-review task so a MANUAL
+                # re-review (or revert) can't race this auto pass — the manual
+                # re-entrancy guard + revert guard both read this row. The auto
+                # and manual passes hold independent in-process locks, so the DB
+                # task state is the only cross-launch interlock.
+                try:
+                    _ntc = _open_audit_conn()
+                    try:
+                        repo.upsert_notes_review_task(
+                            _ntc, run_id, "running",
+                            model=_model_id(config.model))
+                        _ntc.commit()
+                    finally:
+                        _ntc.close()
+                except Exception:  # noqa: BLE001 — guard is best-effort
+                    logger.warning(
+                        "Failed to register notes-review task for run %s",
+                        run_id, exc_info=True)
+                # Step 9: the notes REVIEWER (acting successor to the validator)
+                # — it FIXES findings in notes_cells, not just flags them.
+                validator_outcome = None
+                validator_task = asyncio.create_task(_run_notes_reviewer_pass(
+                    run_id=run_id,
+                    db_path=str(AUDIT_DB_PATH),
                     pdf_path=str(session_dir / "uploaded.pdf"),
-                    notes_template_outputs=notes_outputs,
                     filing_level=run_config.filing_level,
                     filing_standard=run_config.filing_standard,
                     model=model,
                     output_dir=output_dir,
+                    merged_workbook_path=merged_path,
                     event_queue=event_queue,
+                    sidecar_paths=_sidecar_paths,
                     inventory_note_nums=_inv_nums,
+                    inventory_subnotes=_inv_subnotes,
                 ))
                 # Register so Stop-All reaches the notes-validator too (same
                 # gap the reviewer had — see the reviewer block above).
@@ -4927,6 +5310,25 @@ async def run_multi_agent_stream(
                 finally:
                     task_registry.unregister(
                         session_id, NOTES_VALIDATOR_AGENT_ID)
+                    # Release the durable notes-review interlock on every exit
+                    # (success / cancel / exception) so a later manual re-review
+                    # or revert isn't blocked. Startup reconcile is the backstop
+                    # if the process dies before this runs.
+                    try:
+                        _ntc = _open_audit_conn()
+                        try:
+                            repo.upsert_notes_review_task(
+                                _ntc, run_id, "done",
+                                model=_model_id(config.model),
+                                outcome=validator_outcome
+                                if isinstance(validator_outcome, dict) else None)
+                            _ntc.commit()
+                        finally:
+                            _ntc.close()
+                    except Exception:  # noqa: BLE001 — best-effort release
+                        logger.warning(
+                            "Failed to release notes-review task for run %s",
+                            run_id, exc_info=True)
 
         # RUN-REVIEW peer-review #1 (HIGH): recalc happens HERE — after
         # correction (if any) has had its chance to edit the merged
@@ -5491,21 +5893,44 @@ def _reexport_remerge_durable(run_id: int) -> bool:
             overlay_notes_cells_into_workbook,
             overlay_numeric_facts_into_workbook,
         )
-        for _overlay in (
-            overlay_notes_cells_into_workbook,
-            overlay_numeric_facts_into_workbook,
+        # The prose overlay needs the filing level to target the right evidence
+        # column (D=Company / F=Group); the numeric overlay resolves columns
+        # from concept_targets and takes no filing_level.
+        _filing_level = "company"
+        try:
+            _rc = _open_audit_conn()
+            try:
+                _r = repo.fetch_run(_rc, run_id)
+                _filing_level = (_r.config or {}).get("filing_level", "company") if _r else "company"
+            finally:
+                _rc.close()
+        except Exception:  # noqa: BLE001 — default to company
+            _filing_level = "company"
+
+        def _apply_prose(p):
+            return overlay_notes_cells_into_workbook(
+                xlsx_path=p, run_id=run_id, db_path=str(AUDIT_DB_PATH),
+                filing_level=_filing_level,
+            )
+
+        def _apply_numeric(p):
+            return overlay_numeric_facts_into_workbook(
+                xlsx_path=p, run_id=run_id, db_path=str(AUDIT_DB_PATH),
+            )
+
+        for _name, _overlay in (
+            ("overlay_notes_cells_into_workbook", _apply_prose),
+            ("overlay_numeric_facts_into_workbook", _apply_numeric),
         ):
             try:
-                nxt = _overlay(
-                    xlsx_path=final, run_id=run_id, db_path=str(AUDIT_DB_PATH)
-                )
+                nxt = _overlay(final)
                 if nxt != final:
                     overlay_temps.append(nxt)
                     final = nxt
             except Exception:  # noqa: BLE001 — overlay is best-effort
                 logger.exception(
                     "durable re-export overlay %s failed for run %s",
-                    getattr(_overlay, "__name__", _overlay), run_id,
+                    _name, run_id,
                 )
         conn = _open_audit_conn()
         try:
@@ -5848,6 +6273,7 @@ from api.config_routes import router as _config_router
 from api.uploads import router as _uploads_router
 from api.run_control import router as _run_control_router
 from api.reviewer import router as _reviewer_router
+from api.notes_reviewer import router as _notes_reviewer_router
 from api.runs import router as _runs_router
 from api.notes import router as _notes_router
 from api.files import router as _files_router
@@ -5858,6 +6284,7 @@ app.include_router(_config_router)
 app.include_router(_uploads_router)
 app.include_router(_run_control_router)
 app.include_router(_reviewer_router)
+app.include_router(_notes_reviewer_router)
 app.include_router(_runs_router)
 app.include_router(_notes_router)
 app.include_router(_files_router)

@@ -15,6 +15,7 @@ import { ReviewTab } from "./ReviewTab";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 import { NotesReviewTab } from "./NotesReviewTab";
+import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import {
   buildToolTimeline,
   filterEventsBySubAgent,
@@ -561,6 +562,7 @@ export function RunDetailView({
 
       {activeTab === "notes" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-notes-review">
+          <NotesReviewerPanel runId={detail.id} />
           <NotesReviewTab runId={detail.id} onRegenerate={onRegenerateNotes} />
         </section>
       )}

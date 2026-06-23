@@ -159,6 +159,223 @@ class TestDetection:
         assert detect_cross_sheet_overlap_candidates(entries) == []
 
 
+class TestSameSheetRowCollisions:
+    """Detect a Sheet-12 row that received content from >1 top-level note.
+
+    Reproduces the run-53 failure: `Disclosure of fair value information`
+    (row 49) collected both Note 4.1 (investment property) and Note 20.7
+    (financial instruments) — two unrelated top-level notes piled onto one
+    XBRL concept. The catch-all row stays exempt; a single note split across
+    payloads stays unflagged.
+    """
+
+    def test_flags_fair_value_row_holding_two_top_level_notes(self):
+        from notes.validator_agent import detect_same_sheet_row_collisions
+
+        # Sidecar row 49 unions refs across both notes (as the writer does).
+        entries = [
+            {"sheet": "Notes-Listofnotes", "row": 49, "col": 2,
+             "row_label": "Disclosure of fair value information",
+             "source_note_refs": ["4.1", "20", "20.7"],
+             "content_preview": "fair value of investment property ... "
+                                "fair value of financial instruments"},
+        ]
+        collisions = detect_same_sheet_row_collisions(entries)
+        assert len(collisions) == 1
+        c = collisions[0]
+        assert c["row"] == 49
+        assert c["note_nums"] == [4, 20]
+        assert "Disclosure of fair value information" in c["row_label"]
+
+    def test_catch_all_row_is_exempt(self):
+        """`Disclosure of other notes to accounts` is the designed catch-all
+        — aggregating many notes there is intended, not a finding."""
+        from notes.validator_agent import detect_same_sheet_row_collisions
+
+        entries = [
+            {"sheet": "Notes-Listofnotes", "row": 112, "col": 2,
+             "row_label": "Disclosure of other notes to accounts",
+             "source_note_refs": ["6", "9", "21"],
+             "content_preview": "misc"},
+            # leading '*' + case must not bypass the exemption.
+            {"sheet": "Notes-Listofnotes", "row": 112, "col": 2,
+             "row_label": "*Disclosure of Other Notes to Accounts",
+             "source_note_refs": ["7", "8"],
+             "content_preview": "misc2"},
+        ]
+        assert detect_same_sheet_row_collisions(entries) == []
+
+    def test_single_note_split_across_payloads_not_flagged(self):
+        """Acceptance #4: Note 13 split into two payloads (both top-level 13)
+        is legitimate aggregation, not a collision."""
+        from notes.validator_agent import detect_same_sheet_row_collisions
+
+        entries = [
+            {"sheet": "Notes-Listofnotes", "row": 60, "col": 2,
+             "row_label": "Disclosure of credit risk",
+             "source_note_refs": ["13", "13.4"],
+             "content_preview": "credit risk"},
+        ]
+        assert detect_same_sheet_row_collisions(entries) == []
+
+    def test_sheet_11_entries_ignored(self):
+        from notes.validator_agent import detect_same_sheet_row_collisions
+
+        entries = [
+            {"sheet": "Notes-SummaryofAccPol", "row": 20, "col": 2,
+             "row_label": "Description of accounting policy for X",
+             "source_note_refs": ["2", "3"],
+             "content_preview": "policies"},
+        ]
+        assert detect_same_sheet_row_collisions(entries) == []
+
+
+class TestSubnoteCoverageGaps:
+    """Detect a note covered only PARTLY at sub-reference granularity.
+
+    Reproduces the run-53 leases failure: scout discovered 3.1/3.2/3.3/(a)/(b)
+    under Note 3; the leases policy cited 3.3 + (b) but dropped (a).
+    """
+
+    def test_flags_missing_lettered_subnote_when_sibling_cited(self):
+        from notes.validator_agent import detect_subnote_coverage_gaps
+
+        inventory_subnotes = {3: ["3.1", "3.2", "3.3", "(a)", "(b)"]}
+        # The leases policy row's sidecar provenance, exactly as observed.
+        entries = [
+            {"sheet": "Notes-SummaryofAccPol", "row": 42, "col": 2,
+             "row_label": "Description of accounting policy for leases",
+             "source_note_refs": ["3", "3.3", "(b)"],
+             "content_preview": "leases policy ... (b) Recognition exemption"},
+        ]
+        gaps = detect_subnote_coverage_gaps(inventory_subnotes, entries)
+        assert len(gaps) == 1
+        g = gaps[0]
+        assert g["note_num"] == 3
+        # (a) is the dropped lettered policy block; (b) was cited so it must
+        # NOT appear as missing.
+        assert "(a)" in g["missing_subnote_refs"]
+        assert "(b)" not in g["missing_subnote_refs"]
+        assert "(b)" in g["cited_subnote_refs"]
+
+    def test_fully_covered_note_not_flagged(self):
+        from notes.validator_agent import detect_subnote_coverage_gaps
+
+        inventory_subnotes = {3: ["3.3", "(a)", "(b)"]}
+        entries = [
+            {"sheet": "Notes-SummaryofAccPol", "row": 42, "col": 2,
+             "row_label": "Description of accounting policy for leases",
+             "source_note_refs": ["3", "3.3", "(a)", "(b)"],
+             "content_preview": "complete leases policy"},
+        ]
+        assert detect_subnote_coverage_gaps(inventory_subnotes, entries) == []
+
+    def test_note_with_no_subnote_cited_not_flagged(self):
+        """A note written as one combined cell citing only the bare number
+        shows no sub-level engagement — top-level coverage guards it instead,
+        so the proper-subset gate must keep it out of the sub-note report."""
+        from notes.validator_agent import detect_subnote_coverage_gaps
+
+        inventory_subnotes = {5: ["5.1", "5.2"]}
+        entries = [
+            {"sheet": "Notes-Listofnotes", "row": 70, "col": 2,
+             "row_label": "Disclosure of X",
+             "source_note_refs": ["5"],
+             "content_preview": "combined"},
+        ]
+        assert detect_subnote_coverage_gaps(inventory_subnotes, entries) == []
+
+    def test_lettered_ref_attributed_to_its_own_note(self):
+        """A bare lettered ref like (b) is bucketed under the top-level note it
+        was written alongside — not leaked to a different note that also has a
+        (b) sub-section."""
+        from notes.validator_agent import detect_subnote_coverage_gaps
+
+        inventory_subnotes = {3: ["(a)", "(b)"], 9: ["(a)", "(b)"]}
+        entries = [
+            # Note 3 cites (b) only.
+            {"sheet": "Notes-SummaryofAccPol", "row": 42, "col": 2,
+             "source_note_refs": ["3", "(b)"], "content_preview": "leases"},
+            # Note 9 is untouched at sub-level.
+        ]
+        gaps = detect_subnote_coverage_gaps(inventory_subnotes, entries)
+        # Only note 3 partially covered; note 9 cited nothing so it is NOT a
+        # sub-note gap (top-level coverage owns that).
+        assert [g["note_num"] for g in gaps] == [3]
+        assert gaps[0]["missing_subnote_refs"] == ["(a)"]
+
+
+class TestFactorySurfacesStructuralFindings:
+    """Both new candidate families must reach `context` (and thus the prompt)
+    through the factory, the same way coverage_gaps does."""
+
+    def test_factory_surfaces_collisions_and_subnote_gaps(self, tmp_path):
+        from notes.validator_agent import create_notes_validator_agent
+
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        wb.create_sheet("Notes-SummaryofAccPol")
+        wb.create_sheet("Notes-Listofnotes")
+        merged = tmp_path / "merged.xlsx"
+        wb.save(str(merged))
+
+        sidecar = tmp_path / "NOTES_LIST_OF_NOTES_filled_payloads.json"
+        sidecar.write_text(json.dumps([
+            {"sheet": "Notes-Listofnotes", "row": 49, "col": 2,
+             "row_label": "Disclosure of fair value information",
+             "source_note_refs": ["4.1", "20.7"],
+             "content_preview": "fv"},
+            {"sheet": "Notes-SummaryofAccPol", "row": 42, "col": 2,
+             "row_label": "Description of accounting policy for leases",
+             "source_note_refs": ["3", "3.3", "(b)"],
+             "content_preview": "leases"},
+        ]), encoding="utf-8")
+
+        _agent, _deps, ctx = create_notes_validator_agent(
+            merged_workbook_path=str(merged),
+            pdf_path=str(tmp_path / "x.pdf"),
+            sidecar_paths=[str(sidecar)],
+            filing_level="company", filing_standard="mfrs",
+            model=TestModel(), output_dir=str(tmp_path),
+            inventory_note_nums=[3, 4, 20],
+            inventory_subnotes={3: ["3.3", "(a)", "(b)"]},
+        )
+        assert len(ctx["row_collisions"]) == 1
+        assert ctx["row_collisions"][0]["note_nums"] == [4, 20]
+        assert len(ctx["subnote_gaps"]) == 1
+        assert ctx["subnote_gaps"][0]["note_num"] == 3
+        assert "(a)" in ctx["subnote_gaps"][0]["missing_subnote_refs"]
+
+    def test_prompt_block_renders_both_families(self):
+        """The candidates must render into the prompt the model sees — pinned
+        via the pure helper the factory delegates to (version-independent)."""
+        from notes.validator_agent import build_structural_findings_block
+
+        block = build_structural_findings_block(
+            row_collisions=[{
+                "sheet": "Notes-Listofnotes", "row": 49,
+                "row_label": "Disclosure of fair value information",
+                "note_nums": [4, 20],
+                "source_note_refs": ["4.1", "20.7"],
+                "content_preview": "fv",
+            }],
+            subnote_gaps=[{
+                "note_num": 3,
+                "missing_subnote_refs": ["(a)"],
+                "cited_subnote_refs": ["3.3", "(b)"],
+                "all_subnote_refs": ["3.3", "(a)", "(b)"],
+            }],
+        )
+        assert "SAME-SHEET ROW COLLISIONS" in block
+        assert "SUB-NOTE COVERAGE GAPS" in block
+        assert "Disclosure of fair value information" in block
+        assert "(a)" in block
+
+    def test_prompt_block_empty_when_no_findings(self):
+        from notes.validator_agent import build_structural_findings_block
+        assert build_structural_findings_block([], []) == ""
+
+
 class TestRewriteCellTool:
     """Step 5.2: `rewrite_cell` tool."""
 

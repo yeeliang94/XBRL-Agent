@@ -214,6 +214,9 @@ async def update_settings(body: dict):
     if "auto_review" in body:
         set_key(str(ENV_FILE), "XBRL_AUTO_REVIEW",
                 "true" if body["auto_review"] else "false")
+    if "notes_auto_review" in body:
+        set_key(str(ENV_FILE), "XBRL_NOTES_AUTO_REVIEW",
+                "true" if body["notes_auto_review"] else "false")
     # Clean-run spot-check (issue 1): enable toggle + depth (light/full).
     if "spot_check" in body:
         set_key(str(ENV_FILE), "XBRL_SPOT_CHECK",

@@ -410,6 +410,11 @@ def test_notes_writer_persists_source_note_refs_for_post_validator(tmp_path: Pat
     assert entry["sheet"] == CORP_INFO_SHEET
     assert set(entry["source_note_refs"]) == {"2", "2(a)"}
     assert "Going concern" in entry["content_preview"] or "going concern" in entry["content_preview"]
+    # The validator's same-sheet collision detector needs the template col-A
+    # label to tell a catch-all row from a specific disclosure row, so the
+    # writer must persist it in the sidecar.
+    assert "row_label" in entry
+    assert "Financial reporting status" in entry["row_label"]
 
 
 def test_notes_writer_sidecar_concatenates_refs_for_row_with_multiple_payloads(tmp_path: Path):

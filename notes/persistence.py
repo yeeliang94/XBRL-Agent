@@ -21,7 +21,7 @@ from typing import Iterable, Mapping
 
 from db import repository as repo
 from notes.html_to_text import html_to_excel_text
-from notes.writer import truncate_with_footer
+from notes.writer import evidence_col_for, truncate_with_footer
 
 logger = logging.getLogger(__name__)
 
@@ -81,26 +81,90 @@ def persist_notes_cells(
     return len(cells_list)
 
 
+def persist_notes_review_inputs(
+    *,
+    db_path: str,
+    run_id: int,
+    sidecar_entries: Iterable[Mapping[str, object]],
+    inventory: Iterable[Mapping[str, object]],
+) -> tuple[int, int]:
+    """Mirror the notes reviewer's detector inputs into the DB (Step 1).
+
+    The structural detectors need each written cell's source note refs and the
+    scout sub-note inventory. Both live only in on-disk run-dir files today
+    (``*_payloads.json`` sidecars, ``infopack.json``), which a manual re-review
+    on a fresh process can't rely on. We copy them into ``notes_cell_provenance``
+    + ``run_notes_inventory`` once at extraction completion so the reviewer
+    recomputes findings from the database (docs/PLAN.md Step 1/2).
+
+    Best-effort by contract — the caller wraps this so a provenance-write
+    failure never fails the run; the reviewer falls back to the sidecars when a
+    row is absent. Returns ``(provenance_rows, inventory_rows)`` written.
+    """
+    prov = list(sidecar_entries)
+    inv = list(inventory)
+    with repo.db_session(db_path) as conn:
+        for e in prov:
+            row = e.get("row")
+            sheet = e.get("sheet")
+            if row is None or not sheet:
+                continue
+            refs = e.get("source_note_refs") or []
+            repo.upsert_notes_provenance(
+                conn,
+                run_id=run_id,
+                sheet=str(sheet),
+                row=int(row),  # type: ignore[arg-type]
+                row_label=str(e.get("row_label") or ""),
+                source_note_refs=[str(r) for r in refs],  # type: ignore[union-attr]
+                content_preview=(
+                    str(e.get("content_preview"))
+                    if e.get("content_preview") is not None
+                    else None
+                ),
+            )
+        for item in inv:
+            note_num = item.get("note_num")
+            if note_num is None:
+                continue
+            subs = item.get("subnote_refs") or []
+            repo.upsert_notes_inventory(
+                conn,
+                run_id=run_id,
+                note_num=int(note_num),  # type: ignore[arg-type]
+                title=str(item.get("title") or ""),
+                subnote_refs=[str(s) for s in subs],  # type: ignore[union-attr]
+                page_lo=item.get("page_lo"),  # type: ignore[arg-type]
+                page_hi=item.get("page_hi"),  # type: ignore[arg-type]
+            )
+    return len(prov), len(inv)
+
+
 def overlay_notes_cells_into_workbook(
     *,
     xlsx_path: Path | str,
     run_id: int,
     db_path: str,
+    filing_level: str = "company",
 ) -> Path:
     """Return a path to an xlsx whose notes sheets reflect the DB payload.
 
-    If `notes_cells` has no rows for ``run_id``, returns ``xlsx_path``
-    unchanged — the on-disk workbook is already the authoritative copy.
+    The overlay is AUTHORITATIVE for the notes prose region, not merely
+    additive: it writes each surviving ``notes_cells`` row (prose to col B,
+    evidence to the filing-level evidence column) AND blanks every coordinate
+    the reviewer emptied (``notes_cell_tombstones``, v25). Without the blanking
+    pass a reviewer clear / move-out would leave the original prose written at
+    merge time in the workbook, so the download reintroduced it as a duplicate.
+    ``filing_level`` selects the evidence column (D=Company / F=Group) — the
+    reviewer can update grounded evidence, so it must round-trip to the export.
 
-    Otherwise copies the workbook into a temp file, applies one pass
-    per (sheet, row) cell from the DB (flattening HTML via
-    `html_to_excel_text`), and returns the temp-file path. The caller
-    is responsible for cleaning up the temp file after streaming.
-
-    The flattened form is intentional: Excel has no HTML rendering
-    layer, so tables become pipe-separated rows, lists gain `- ` or
-    `1. ` markers, and inline styling is dropped. The editor UI
-    surfaces the rich HTML from the DB directly.
+    Returns ``xlsx_path`` unchanged only when there is nothing to apply (no
+    notes_cells rows AND no tombstones). Otherwise copies the workbook into a
+    temp file and returns that path; the caller cleans the temp file up after
+    streaming. The flattened form is intentional: Excel has no HTML rendering
+    layer, so tables become pipe-separated rows, lists gain `- ` / `1. `
+    markers, and inline styling is dropped. The editor UI surfaces the rich
+    HTML from the DB directly.
     """
     xlsx_path = Path(xlsx_path)
 
@@ -108,9 +172,12 @@ def overlay_notes_cells_into_workbook(
     # but still benefits from the shared pragmas (WAL + busy_timeout).
     with repo.db_session(db_path) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
+        tombstones = repo.fetch_notes_tombstones(conn, run_id)
 
-    if not cells:
+    if not cells and not tombstones:
         return xlsx_path
+
+    ev_col = evidence_col_for(filing_level)
 
     # Lazy import so the FastAPI layer doesn't force openpyxl into
     # every test harness that only touches the helper.
@@ -127,6 +194,17 @@ def overlay_notes_cells_into_workbook(
     tmp.close()
     tmp_path = Path(tmp.name)
     shutil.copy(str(xlsx_path), str(tmp_path))
+
+    def _set_cell(ws, row: int, column: int, value) -> None:
+        """Write a cell unless it carries a formula (never clobber one)."""
+        ws_cell = ws.cell(row=row, column=column)
+        if isinstance(ws_cell.value, str) and ws_cell.value.startswith("="):
+            logger.warning(
+                "overlay skipping formula cell at %s!R%dC%d (run_id=%s)",
+                ws.title, row, column, run_id,
+            )
+            return
+        ws_cell.value = value
 
     wb = openpyxl.load_workbook(str(tmp_path))
     try:
@@ -148,16 +226,6 @@ def overlay_notes_cells_into_workbook(
                 )
                 continue
             ws = wb[cell.sheet]
-            ws_cell = ws.cell(row=cell.row, column=2)
-            # Refuse to overwrite a formula cell — mirrors the writer's
-            # safety guard. Formula cells on notes rows are extremely
-            # rare but we never want to clobber one silently.
-            if isinstance(ws_cell.value, str) and ws_cell.value.startswith("="):
-                logger.warning(
-                    "overlay skipping formula cell at %s!%d (run_id=%s)",
-                    cell.sheet, cell.row, run_id,
-                )
-                continue
             # Defence-in-depth: the writer already truncates HTML to
             # the 30k rendered cap before persisting, but a future
             # direct-PATCH path (plan Step 8) could write over-limit
@@ -165,7 +233,20 @@ def overlay_notes_cells_into_workbook(
             # flattening so Excel never silently clips a cell and
             # reviewers always see the truncation footer.
             truncated = truncate_with_footer(cell.html, cell.source_pages)
-            ws_cell.value = html_to_excel_text(truncated)
+            _set_cell(ws, cell.row, 2, html_to_excel_text(truncated))
+            # Evidence (audit trail) — reviewer writes update it, so refresh the
+            # filing-level evidence column rather than leaving it stale / blank.
+            _set_cell(ws, cell.row, ev_col, cell.evidence or None)
+
+        # Blank every coordinate the reviewer emptied (clear / move-out /
+        # authored-then-reverted) so a deletion actually reaches the export.
+        for sheet, row in tombstones:
+            if sheet not in wb.sheetnames:
+                continue
+            ws = wb[sheet]
+            _set_cell(ws, row, 2, None)
+            _set_cell(ws, row, ev_col, None)
+
         wb.save(str(tmp_path))
     finally:
         wb.close()

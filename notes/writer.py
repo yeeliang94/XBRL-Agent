@@ -256,6 +256,12 @@ def write_notes_workbook(
                 "sheet": sheet_name,
                 "row": row,
                 "col": 2,  # all prose + all numeric rows start writing at col B
+                # Template col-A label (verbatim, leading `*` and all) for the
+                # row this content landed on. The post-validator's same-sheet
+                # collision detector needs it to tell a catch-all row (allowed
+                # to aggregate many notes) apart from a specific disclosure row
+                # (a multi-note pile-up there is a force-match bug).
+                "row_label": row_to_label.get(row, combined.chosen_row_label),
                 "source_note_refs": refs,
                 "source_pages": aggregated_pages,
                 "content_preview": preview,

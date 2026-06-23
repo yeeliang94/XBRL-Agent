@@ -235,6 +235,10 @@ export type PipelineStage =
   // correction pass (docs/Archive/PLAN-reviewer-agent.md); it gets its own label.
   | "reviewing"
   | "re_checking"
+  // The notes reviewer pass (acting successor to the notes validator) — fixes
+  // prose-notes findings after the merge. Replaced the old `validating_notes`
+  // label; kept here too so older in-flight streams still render.
+  | "reviewing_notes"
   | "validating_notes"
   | "done";
 

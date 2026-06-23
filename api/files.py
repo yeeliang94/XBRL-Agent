@@ -237,6 +237,7 @@ async def download_filled_endpoint(run_id: int):
             xlsx_path=base_path,
             run_id=run_id,
             db_path=str(server.AUDIT_DB_PATH),
+            filing_level=(run.config or {}).get("filing_level", "company"),
         )
     except Exception:  # noqa: BLE001 — fall back to the base file
         logger.exception(
