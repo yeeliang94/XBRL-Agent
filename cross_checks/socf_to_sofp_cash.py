@@ -14,6 +14,39 @@ from cross_checks.util import (
 )
 
 
+def _read_sofp_cash_equivalents_fact(ctx, period: str, entity_scope: str):
+    """Read SOFP closing cash from facts, preferring the TOTAL concept.
+
+    The SOFP face "cash and cash equivalents" line is a cross-sheet rollup of
+    the sub-sheet "*Total cash and cash equivalents" row (gotcha #21): the face
+    coord is an *alias*, so the only concepts that resolve by label live on the
+    sub-sheet — where the partial component "Other cash and cash equivalents"
+    LEAF sits on the row immediately ABOVE the "*Total cash and cash
+    equivalents" COMPUTED row. ``read_labelled_value`` returns the first
+    POPULATED candidate by row order, so a bare "cash and cash equivalents"
+    search reads the partial "Other …" leaf instead of the total. (The
+    workbook ``run()`` path is immune: it scans the FACE sheet, whose single
+    line already carries the rolled-up total via formula.)
+
+    Putting the total-row labels first makes the read EXACT-match the
+    "*Total …" row across all four SOFP variants (MFRS/MPERS × CuNonCu /
+    OrderOfLiquidity); exact matches sort before substring matches, so the
+    total wins even though the partial leaf sits above it. The bare-label
+    fallback only fires on a future variant with no total row, and is no worse
+    than the pre-fix behaviour there.
+    """
+    from cross_checks.facts_util import read_labelled_value
+    return read_labelled_value(
+        ctx, StatementType.SOFP,
+        [
+            "total cash and cash equivalents",  # MFRS/MPERS CuNonCu + MPERS OrdOfLiq
+            "total cash and bank balances",     # MFRS OrderOfLiquidity
+            "cash and cash equivalents",        # last-resort fallback
+        ],
+        period, entity_scope,
+    )
+
+
 class SOCFToSOFPCashCheck:
     name = "socf_to_sofp_cash"
     required_statements = {StatementType.SOCF, StatementType.SOFP}
@@ -124,10 +157,7 @@ class SOCFToSOFPCashCheck:
         socf = read_labelled_value(
             ctx, StatementType.SOCF, "cash and cash equivalents at end of period",
             "CY", scope)
-        sofp = read_labelled_value(
-            ctx, StatementType.SOFP,
-            ["cash and cash equivalents", "total cash and bank balances"],
-            "CY", scope)
+        sofp = _read_sofp_cash_equivalents_fact(ctx, "CY", scope)
         socf_cash, sofp_cash = socf.value, sofp.value
         socf_sheet = socf.sheet or "SOCF"
         sofp_sheet = sofp.sheet or "SOFP"
@@ -156,10 +186,8 @@ class SOCFToSOFPCashCheck:
             co_socf_cash = read_labelled_value(
                 ctx, StatementType.SOCF,
                 "cash and cash equivalents at end of period", "CY", "Company").value
-            co_sofp_cash = read_labelled_value(
-                ctx, StatementType.SOFP,
-                ["cash and cash equivalents", "total cash and bank balances"],
-                "CY", "Company").value
+            co_sofp_cash = _read_sofp_cash_equivalents_fact(
+                ctx, "CY", "Company").value
             if co_socf_cash is None or co_sofp_cash is None:
                 co_passed = False
                 parts.append(

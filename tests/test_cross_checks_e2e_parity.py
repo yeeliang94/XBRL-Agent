@@ -266,6 +266,70 @@ def test_socf_to_sofp_cash_e2e_parity(tmp_path, balanced):
     assert_cross_check_parity_modulo_rollup_sheet(xlsx, facts)
 
 
+def test_socf_to_sofp_cash_fact_path_reads_sofp_total_not_other_leaf(tmp_path):
+    """Regression: the SOFP fact read must resolve the "*Total cash and cash
+    equivalents" row, NOT the partial "Other cash and cash equivalents" LEAF
+    that sits directly above it on the sub-sheet (gotcha #21 — the face line is
+    a cross-sheet alias, so only sub-sheet rows resolve by label).
+
+    The existing parity test seeds ONLY the "Other …" leaf, so Other == Total
+    and the wrong read coincidentally equals the right one. Here we seed a
+    DIFFERENT cash component ("cash in hand") plus a non-zero, distinct "Other
+    …" value, so the total (900) differs sharply from the partial leaf (-100),
+    exactly like the real run that surfaced the bug. Pre-fix, run_facts read
+    -100 and the check FAILED against the 900 workbook total; post-fix it reads
+    the 900 total and matches.
+    """
+    db = tmp_path / "xbrl.db"
+    init_db(db)
+    conn = sqlite3.connect(str(db))
+    conn.execute("PRAGMA foreign_keys = ON")
+    socf_tid = _import(db, SOCF_FIXTURE, tmp_path)
+    sofp_tid = _import(db, SOFP_FIXTURE, tmp_path)
+    run_id = _new_run(conn)
+
+    socf_cash = _leaf_by_label(
+        conn, socf_tid, "cash and cash equivalents at end of period")
+    # A cash component that feeds the total via a DIFFERENT sub-branch than the
+    # "Other …" residual, so total != other.
+    cash_in_hand = _leaf_by_label(conn, sofp_tid, "cash in hand")
+    other_cash = _leaf_by_label(conn, sofp_tid, "other cash and cash equivalents")
+    assert socf_cash and cash_in_hand and other_cash, "cash leaves not found"
+    assert cash_in_hand != other_cash
+
+    _seed(conn, run_id, socf_cash, 900.0)
+    _seed(conn, run_id, cash_in_hand, 1000.0)
+    _seed(conn, run_id, other_cash, -100.0)  # *Total = 1000 + 0 + (-100) = 900
+    conn.commit()
+    recompute_after_turn(str(db), run_id)
+
+    socf_wb = tmp_path / "SOCF_filled.xlsx"
+    shutil.copyfile(SOCF_FIXTURE, socf_wb)
+    sofp_wb = tmp_path / "SOFP_filled.xlsx"
+    shutil.copyfile(SOFP_FIXTURE, sofp_wb)
+    export_run_to_xlsx(str(db), run_id, str(socf_wb), template_id=socf_tid)
+    export_run_to_xlsx(str(db), run_id, str(sofp_wb), template_id=sofp_tid)
+
+    paths = {StatementType.SOCF: str(socf_wb), StatementType.SOFP: str(sofp_wb)}
+    xlsx = SOCFToSOFPCashCheck().run(paths, tolerance=1.0, filing_level="company")
+    ctx = FactsContext(
+        conn=conn, run_id=run_id,
+        template_ids={StatementType.SOCF: socf_tid, StatementType.SOFP: sofp_tid},
+        filing_level="company", filing_standard="mfrs",
+    )
+    facts = SOCFToSOFPCashCheck().run_facts(ctx, tolerance=1.0)
+    conn.close()
+
+    # The SOFP comparand must carry the TOTAL (900), not the "Other …" leaf (-100).
+    sofp_comparand = next(c for c in facts.comparands if c.role == "rhs")
+    assert nums_equal(sofp_comparand.value, 900.0), (
+        f"expected SOFP total 900, got {sofp_comparand.value} "
+        "(read the partial 'Other …' leaf instead of the total?)")
+    # Both paths now agree the run balances.
+    assert xlsx.status == "passed"
+    assert facts.status == "passed"
+
+
 @pytest.mark.parametrize("balanced", [True, False])
 def test_socie_to_sofp_equity_e2e_parity(tmp_path, balanced):
     db = tmp_path / "xbrl.db"
