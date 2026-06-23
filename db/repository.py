@@ -879,6 +879,387 @@ def delete_notes_cells_for_run_sheet(
 
 
 # ---------------------------------------------------------------------------
+# notes_cell_provenance + run_notes_inventory (v23) — durable detector inputs
+# ---------------------------------------------------------------------------
+#
+# The notes reviewer's structural detectors need each written cell's source
+# note refs (notes_cell_provenance) and the scout sub-note inventory
+# (run_notes_inventory). Both live only in on-disk run-dir files today
+# (`*_payloads.json`, `infopack.json`), which a manual re-review on a fresh
+# process can't rely on. We mirror them into the DB at extraction completion so
+# the reviewer recomputes findings from the database. See docs/PLAN.md Step 1.
+
+
+def upsert_notes_provenance(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    sheet: str,
+    row: int,
+    row_label: str = "",
+    source_note_refs: Optional[list[str]] = None,
+    content_preview: Optional[str] = None,
+) -> int:
+    """Insert/replace one provenance row (UNIQUE(run_id, sheet, row))."""
+    refs_json = json.dumps(list(source_note_refs)) if source_note_refs else None
+    existing = conn.execute(
+        "SELECT id FROM notes_cell_provenance "
+        "WHERE run_id = ? AND sheet = ? AND row = ?",
+        (run_id, sheet, row),
+    ).fetchone()
+    if existing is not None:
+        pid = int(existing[0])
+        conn.execute(
+            "UPDATE notes_cell_provenance SET row_label = ?, "
+            "source_note_refs = ?, content_preview = ? WHERE id = ?",
+            (row_label, refs_json, content_preview, pid),
+        )
+        return pid
+    cur = conn.execute(
+        "INSERT INTO notes_cell_provenance(run_id, sheet, row, row_label, "
+        "source_note_refs, content_preview) VALUES (?, ?, ?, ?, ?, ?)",
+        (run_id, sheet, row, row_label, refs_json, content_preview),
+    )
+    return int(cur.lastrowid)
+
+
+def fetch_notes_provenance(
+    conn: sqlite3.Connection, run_id: int,
+) -> list[dict]:
+    """Return provenance rows for a run in the shape the detectors consume:
+    ``[{"sheet", "row", "row_label", "source_note_refs", "content_preview"}]``.
+
+    ``source_note_refs`` is decoded back to ``list[str]`` (malformed JSON
+    degrades to ``[]`` rather than crashing the reviewer)."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT sheet, row, row_label, source_note_refs, content_preview "
+            "FROM notes_cell_provenance WHERE run_id = ? ORDER BY sheet, row",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    out: list[dict] = []
+    for r in rows:
+        try:
+            refs = json.loads(r["source_note_refs"]) if r["source_note_refs"] else []
+            if not isinstance(refs, list):
+                refs = []
+        except (TypeError, json.JSONDecodeError):
+            refs = []
+        out.append({
+            "sheet": r["sheet"],
+            "row": r["row"],
+            "row_label": r["row_label"] or "",
+            "source_note_refs": [str(x) for x in refs],
+            "content_preview": r["content_preview"] or "",
+        })
+    return out
+
+
+def fetch_notes_node(
+    conn: sqlite3.Connection,
+    *,
+    sheet: str,
+    row: int,
+    template_prefix: str,
+) -> Optional[dict]:
+    """Return ``{"row","label","kind"}`` for a notes_nodes registry row, or None.
+
+    Scoped by ``template_prefix`` (``"{standard}-{level}-"``) so the lookup
+    resolves the row in the RUN's template family — the same family-scoping the
+    face reviewer applies (gotcha #21). This is coordinate validation (by
+    sheet+row), NOT label matching, so it respects the notes-pipeline
+    all-LLM-judgement invariant: the reviewer's write tools use it to confirm a
+    target is a real LEAF row, never to pick a row by label similarity.
+    """
+    rows = conn.execute(
+        "SELECT row, label, kind, template_id FROM notes_nodes "
+        "WHERE sheet = ? AND row = ?",
+        (sheet, row),
+    ).fetchall()
+    for r in rows:
+        if str(r[3] or "").startswith(template_prefix):
+            return {"row": int(r[0]), "label": r[1], "kind": r[2]}
+    return None
+
+
+def list_notes_node_rows(
+    conn: sqlite3.Connection, *, sheet: str, template_prefix: str,
+) -> list[dict]:
+    """Return ``[{"row","label","kind"}]`` for a sheet in the run's family,
+    ordered by row. Feeds the reviewer's ``read_template_labels`` tool so it can
+    pick an explicit target coordinate."""
+    rows = conn.execute(
+        "SELECT row, label, kind, template_id FROM notes_nodes "
+        "WHERE sheet = ? ORDER BY row",
+        (sheet,),
+    ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        if str(r[3] or "").startswith(template_prefix):
+            out.append({"row": int(r[0]), "label": r[1], "kind": r[2]})
+    return out
+
+
+def upsert_notes_inventory(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    note_num: int,
+    title: str = "",
+    subnote_refs: Optional[list[str]] = None,
+    page_lo: Optional[int] = None,
+    page_hi: Optional[int] = None,
+) -> int:
+    """Insert/replace one scout-inventory note (UNIQUE(run_id, note_num))."""
+    subs_json = json.dumps(list(subnote_refs)) if subnote_refs else None
+    existing = conn.execute(
+        "SELECT id FROM run_notes_inventory WHERE run_id = ? AND note_num = ?",
+        (run_id, note_num),
+    ).fetchone()
+    if existing is not None:
+        iid = int(existing[0])
+        conn.execute(
+            "UPDATE run_notes_inventory SET title = ?, subnote_refs = ?, "
+            "page_lo = ?, page_hi = ? WHERE id = ?",
+            (title, subs_json, page_lo, page_hi, iid),
+        )
+        return iid
+    cur = conn.execute(
+        "INSERT INTO run_notes_inventory(run_id, note_num, title, "
+        "subnote_refs, page_lo, page_hi) VALUES (?, ?, ?, ?, ?, ?)",
+        (run_id, note_num, title, subs_json, page_lo, page_hi),
+    )
+    return int(cur.lastrowid)
+
+
+# ---------------------------------------------------------------------------
+# notes_review_flags + notes_review_tasks (v24) — reviewer flags + async state
+# ---------------------------------------------------------------------------
+
+
+def insert_notes_review_flag(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    kind: str,
+    reason: str = "",
+    sheet: Optional[str] = None,
+    row: Optional[int] = None,
+) -> int:
+    """Record one notes-reviewer flag (status defaults to 'open')."""
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO notes_review_flags(run_id, kind, reason, sheet, row, "
+        "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+        (run_id, kind, reason, sheet, row, now, now),
+    )
+    return int(cur.lastrowid)
+
+
+def fetch_notes_review_flags(
+    conn: sqlite3.Connection, run_id: int,
+) -> list[dict]:
+    """Return every notes-reviewer flag for a run (newest first)."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, kind, reason, sheet, row, status, answer, created_at "
+            "FROM notes_review_flags WHERE run_id = ? ORDER BY id DESC",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    return [
+        {"id": r["id"], "kind": r["kind"], "reason": r["reason"],
+         "sheet": r["sheet"], "row": r["row"], "status": r["status"],
+         "answer": r["answer"], "created_at": r["created_at"]}
+        for r in rows
+    ]
+
+
+def answer_notes_review_flag(
+    conn: sqlite3.Connection, *, flag_id: int, run_id: int, answer: str,
+) -> bool:
+    """Attach a human answer to a flag (open → answered). Returns True if a row
+    matched (scoped to run_id so a stray id can't touch another run)."""
+    cur = conn.execute(
+        "UPDATE notes_review_flags SET answer = ?, status = 'answered', "
+        "updated_at = ? WHERE id = ? AND run_id = ?",
+        (answer, _now(), flag_id, run_id),
+    )
+    return cur.rowcount > 0
+
+
+def upsert_notes_review_task(
+    conn: sqlite3.Connection,
+    run_id: int,
+    status: str,
+    *,
+    model: Optional[str] = None,
+    outcome: Optional[dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> None:
+    """Insert/update the durable async notes re-review task (run_id PK).
+
+    Mirrors :func:`upsert_review_task`: a fresh launch overwrites any prior
+    pass; ``created_at`` is preserved across running → done. ``outcome`` is
+    serialised to JSON (NULL while running)."""
+    now = _now()
+    outcome_json = json.dumps(outcome) if outcome is not None else None
+    existing = conn.execute(
+        "SELECT created_at FROM notes_review_tasks WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    if existing is not None and status != "running":
+        conn.execute(
+            "UPDATE notes_review_tasks SET status = ?, model = ?, "
+            "outcome = ?, error = ?, updated_at = ? WHERE run_id = ?",
+            (status, model, outcome_json, error, now, run_id),
+        )
+        return
+    conn.execute(
+        "INSERT INTO notes_review_tasks(run_id, status, model, outcome, error, "
+        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(run_id) DO UPDATE SET status = excluded.status, "
+        "model = excluded.model, outcome = excluded.outcome, "
+        "error = excluded.error, created_at = excluded.created_at, "
+        "updated_at = excluded.updated_at",
+        (run_id, status, model, outcome_json, error, now, now),
+    )
+
+
+def fetch_notes_review_task(
+    conn: sqlite3.Connection, run_id: int,
+) -> Optional[dict[str, Any]]:
+    """Return the durable notes re-review task for a run, or None."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT status, model, outcome, error FROM notes_review_tasks "
+            "WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    finally:
+        conn.row_factory = prior
+    if row is None:
+        return None
+    try:
+        outcome = json.loads(row["outcome"]) if row["outcome"] else None
+    except (TypeError, json.JSONDecodeError):
+        outcome = None
+    return {"status": row["status"], "model": row["model"],
+            "outcome": outcome, "error": row["error"]}
+
+
+def reconcile_stale_notes_review_tasks(conn: sqlite3.Connection) -> int:
+    """Retire notes re-reviews orphaned by a process restart (mirrors
+    :func:`reconcile_stale_review_tasks`). Returns rows reconciled."""
+    now = _now()
+    outcome_json = json.dumps({
+        "ok": False, "invoked": False,
+        "error": "Server restarted while the notes re-review was running. "
+                 "Relaunch it to retry.",
+    })
+    cur = conn.execute(
+        "UPDATE notes_review_tasks SET status = 'done', outcome = ?, "
+        "error = 'restarted', updated_at = ? WHERE status = 'running'",
+        (outcome_json, now),
+    )
+    return int(cur.rowcount)
+
+
+def fetch_notes_inventory(
+    conn: sqlite3.Connection, run_id: int,
+) -> list[dict]:
+    """Return inventory rows: ``[{"note_num", "title", "subnote_refs",
+    "page_lo", "page_hi"}]`` with ``subnote_refs`` decoded to ``list[str]``."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT note_num, title, subnote_refs, page_lo, page_hi "
+            "FROM run_notes_inventory WHERE run_id = ? ORDER BY note_num",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    out: list[dict] = []
+    for r in rows:
+        try:
+            subs = json.loads(r["subnote_refs"]) if r["subnote_refs"] else []
+            if not isinstance(subs, list):
+                subs = []
+        except (TypeError, json.JSONDecodeError):
+            subs = []
+        out.append({
+            "note_num": r["note_num"],
+            "title": r["title"] or "",
+            "subnote_refs": [str(x) for x in subs],
+            "page_lo": r["page_lo"],
+            "page_hi": r["page_hi"],
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# notes_cell_tombstones (v25) — durable "this cell was emptied"
+# ---------------------------------------------------------------------------
+#
+# The notes overlay is additive (writes only surviving notes_cells rows), so it
+# cannot represent a reviewer clear / move-out on its own — the original prose
+# written at merge time stays in the xlsx and is reintroduced on download. A
+# tombstone records each emptied coordinate so the overlay blanks it (prose +
+# evidence). See notes/persistence.overlay_notes_cells_into_workbook + the
+# revert path in notes/versioning.py.
+
+
+def add_notes_tombstone(
+    conn: sqlite3.Connection, *, run_id: int, sheet: str, row: int,
+) -> None:
+    """Record that a notes cell was emptied (idempotent on (run_id,sheet,row))."""
+    conn.execute(
+        "INSERT INTO notes_cell_tombstones(run_id, sheet, row, created_at) "
+        "VALUES (?, ?, ?, ?) ON CONFLICT(run_id, sheet, row) DO NOTHING",
+        (run_id, sheet, row, _now()),
+    )
+
+
+def remove_notes_tombstone(
+    conn: sqlite3.Connection, *, run_id: int, sheet: str, row: int,
+) -> None:
+    """Drop a tombstone — the cell was (re-)written, so it must not be blanked."""
+    conn.execute(
+        "DELETE FROM notes_cell_tombstones WHERE run_id = ? AND sheet = ? AND row = ?",
+        (run_id, sheet, row),
+    )
+
+
+def fetch_notes_tombstones(
+    conn: sqlite3.Connection, run_id: int,
+) -> list[tuple[str, int]]:
+    """Return the emptied (sheet, row) coordinates for a run."""
+    rows = conn.execute(
+        "SELECT sheet, row FROM notes_cell_tombstones WHERE run_id = ?",
+        (run_id,),
+    ).fetchall()
+    return [(r[0], int(r[1])) for r in rows]
+
+
+def clear_notes_tombstones(conn: sqlite3.Connection, run_id: int) -> int:
+    """Delete every tombstone for a run (used by revert). Returns rows deleted."""
+    cur = conn.execute(
+        "DELETE FROM notes_cell_tombstones WHERE run_id = ?", (run_id,)
+    )
+    return int(cur.rowcount)
+
+
+# ---------------------------------------------------------------------------
 # run_review_tasks (v13) — durable manual re-review task state
 # ---------------------------------------------------------------------------
 #

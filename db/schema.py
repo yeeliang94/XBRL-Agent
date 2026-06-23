@@ -141,7 +141,7 @@ from pathlib import Path
 # adds the `doc_conversions` table — durable conversion-job state, independent
 # of the extraction pipeline. Pure CREATE TABLE IF NOT EXISTS walk-forward (new
 # table, no ALTER). Pinned by tests/test_db_schema_v21.py.
-CURRENT_SCHEMA_VERSION = 22
+CURRENT_SCHEMA_VERSION = 25
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -727,6 +727,144 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         updated_at        TEXT NOT NULL DEFAULT ''
     )
     """,
+
+    # -----------------------------------------------------------------
+    # v23: notes-reviewer backing tables (docs/PLAN.md — Notes Reviewer).
+    # -----------------------------------------------------------------
+
+    # Durable detector provenance. The notes reviewer's structural detectors
+    # (sub-note gaps, same-sheet collisions, …) need each written cell's
+    # source note refs — which today live ONLY in the on-disk
+    # `*_payloads.json` sidecars (not durable for a manual re-review on a
+    # fresh process). We copy them into the DB at extraction completion so a
+    # re-review recomputes findings from the database, never from run-dir
+    # files. One row per written prose cell. `source_note_refs` is a JSON list.
+    """
+    CREATE TABLE IF NOT EXISTS notes_cell_provenance (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id           INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        sheet            TEXT NOT NULL,
+        row              INTEGER NOT NULL,
+        row_label        TEXT NOT NULL DEFAULT '',
+        source_note_refs TEXT,                    -- JSON list[str], e.g. ["3","3.3","(b)"]
+        content_preview  TEXT,                    -- short snippet, mirrors the sidecar
+        UNIQUE(run_id, sheet, row)
+    )
+    """,
+
+    # Durable scout notes inventory. The sub-note-coverage detector needs the
+    # scout-discovered sub-references per top-level note (e.g. 3 → 3.1/3.2/3.3/
+    # (a)/(b)); these live only in infopack.json today. One row per top-level
+    # note. `subnote_refs` is a JSON list[str].
+    """
+    CREATE TABLE IF NOT EXISTS run_notes_inventory (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        note_num      INTEGER NOT NULL,
+        title         TEXT NOT NULL DEFAULT '',
+        subnote_refs  TEXT,                       -- JSON list[str]
+        page_lo       INTEGER,
+        page_hi       INTEGER,
+        UNIQUE(run_id, note_num)
+    )
+    """,
+
+    # Original-prose backup for "Revert to original". Taken ONCE per run,
+    # immediately before the reviewer pass writes anything — the notes
+    # analogue of run_fact_snapshots. Revert deletes all live prose rows then
+    # restores this set, so a reviewer-AUTHORED (previously-blank) row is
+    # correctly removed on revert. Mirrors notes_cells columns.
+    """
+    CREATE TABLE IF NOT EXISTS run_notes_cell_snapshots (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        sheet         TEXT NOT NULL,
+        row           INTEGER NOT NULL,
+        label         TEXT NOT NULL,
+        html          TEXT NOT NULL,
+        evidence      TEXT,
+        source_pages  TEXT,                       -- JSON list[int]
+        concept_uuid  TEXT,
+        snapshot_at   TEXT NOT NULL,
+        UNIQUE(run_id, sheet, row)
+    )
+    """,
+
+    # Per-run "snapshot taken" marker. The snapshot ABOVE may legitimately
+    # capture ZERO rows — a run whose prose was empty when the reviewer first
+    # authored a cell. Row-count can't then signal "a snapshot exists", so the
+    # taken-fact lives here as one row per run. Revert keys off THIS marker
+    # (not row count), so it can correctly wipe reviewer-authored cells back to
+    # the empty original.
+    """
+    CREATE TABLE IF NOT EXISTS run_notes_review_state (
+        run_id        INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+        snapshot_at   TEXT NOT NULL
+    )
+    """,
+
+    # -----------------------------------------------------------------
+    # v24: notes-reviewer flags + durable manual re-review task state.
+    # -----------------------------------------------------------------
+
+    # Flags the notes reviewer raised for a human — the notes analogue of
+    # reviewer_flags. kind ∈ stuck | disputes_prior | needs_human. status ∈
+    # open | answered | dismissed (revert dismisses). Kept SEPARATE from
+    # reviewer_flags so the Notes-tab UI and the face reviewer don't entangle.
+    """
+    CREATE TABLE IF NOT EXISTS notes_review_flags (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL,
+        reason      TEXT NOT NULL DEFAULT '',
+        sheet       TEXT,
+        row         INTEGER,
+        status      TEXT NOT NULL DEFAULT 'open',
+        answer      TEXT,
+        created_at  TEXT NOT NULL DEFAULT '',
+        updated_at  TEXT NOT NULL DEFAULT ''
+    )
+    """,
+
+    # Durable per-run state for the async manual notes re-review (the notes
+    # analogue of run_review_tasks). One row per run; a relaunch overwrites it.
+    # A finished outcome survives a restart so a poll can still fetch it; a row
+    # left 'running' by a crash is reconciled to a terminal error at startup.
+    """
+    CREATE TABLE IF NOT EXISTS notes_review_tasks (
+        run_id      INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+        status      TEXT NOT NULL,              -- running | done
+        model       TEXT,
+        outcome     TEXT,                       -- JSON outcome dict; NULL while running
+        error       TEXT,
+        created_at  TEXT NOT NULL DEFAULT '',
+        updated_at  TEXT NOT NULL DEFAULT ''
+    )
+    """,
+
+    # -----------------------------------------------------------------
+    # v25: notes-reviewer tombstones — durable "this cell was emptied".
+    # -----------------------------------------------------------------
+
+    # The download/finalize path overlays `notes_cells` onto the merged
+    # workbook ADDITIVELY (one pass per surviving row), so it cannot, on its
+    # own, represent a DELETION: a reviewer clear / move-out removes the
+    # notes_cells row but the original prose written at merge time stays in the
+    # xlsx and is reintroduced on every download (duplicate / stale content).
+    # This table records each coordinate the reviewer emptied so the overlay
+    # can blank that workbook cell (prose + evidence). Revert clears the run's
+    # tombstones and re-tombstones any reviewer-AUTHORED row (absent from the
+    # snapshot) so the authored prose is blanked too. One row per emptied cell.
+    """
+    CREATE TABLE IF NOT EXISTS notes_cell_tombstones (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        sheet       TEXT NOT NULL,
+        row         INTEGER NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT '',
+        UNIQUE(run_id, sheet, row)
+    )
+    """,
 )
 
 
@@ -763,6 +901,14 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_eval_benchmark_templates_benchmark_id ON eval_benchmark_templates(benchmark_id)",
     "CREATE INDEX IF NOT EXISTS ix_gold_concept_facts_benchmark_id ON gold_concept_facts(benchmark_id)",
     "CREATE INDEX IF NOT EXISTS ix_eval_scores_run_id ON eval_scores(run_id)",
+    # v23: notes-reviewer tables are always queried per-run.
+    "CREATE INDEX IF NOT EXISTS ix_notes_cell_provenance_run_id ON notes_cell_provenance(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_run_notes_inventory_run_id ON run_notes_inventory(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_run_notes_cell_snapshots_run_id ON run_notes_cell_snapshots(run_id)",
+    # v24: notes-reviewer flags queried per-run.
+    "CREATE INDEX IF NOT EXISTS ix_notes_review_flags_run_id ON notes_review_flags(run_id)",
+    # v25: notes-reviewer tombstones queried per-run at overlay time.
+    "CREATE INDEX IF NOT EXISTS ix_notes_cell_tombstones_run_id ON notes_cell_tombstones(run_id)",
 )
 
 
@@ -1652,6 +1798,81 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (22,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v22→v23 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v22 → v23: add the three notes-reviewer tables (notes_cell_provenance,
+        # run_notes_inventory, run_notes_cell_snapshots). All pure CREATE TABLE
+        # IF NOT EXISTS (already run above from _CREATE_STATEMENTS), so — like the
+        # other additive-table steps (v17→v18, v18→v19) — this block only
+        # advances the version marker, no ALTER columns. Same BEGIN IMMEDIATE +
+        # re-check discipline so two concurrent starters serialize cleanly.
+        if current_version is not None and current_version < 23:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 23:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (23,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v23→v24 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v23 → v24: add notes_review_flags + notes_review_tasks. Pure CREATE
+        # TABLE IF NOT EXISTS (already run above), so this block only advances
+        # the marker. Same BEGIN IMMEDIATE + re-check discipline.
+        if current_version is not None and current_version < 24:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 24:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (24,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v24→v25 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v24 → v25: add notes_cell_tombstones. Pure CREATE TABLE IF NOT EXISTS
+        # (already run above), so this block only advances the marker. Same
+        # BEGIN IMMEDIATE + re-check discipline.
+        if current_version is not None and current_version < 25:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 25:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (25,),
                     )
                 conn.commit()
             except Exception:

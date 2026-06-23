@@ -82,6 +82,11 @@ class NotesValidatorAgentDeps:
         self.output_dir = output_dir
         self.model = model
         self.pdf_page_count = 0
+        # Pages the agent has actually rendered via view_pdf_pages this run.
+        # The notes-reviewer write guard requires every fix to cite a page in
+        # this set — so an authored/edited cell can never claim grounding on a
+        # page the agent never looked at (docs/PLAN.md Step 4 + Step 6).
+        self.viewed_pages: set[int] = set()
         # Agent-recorded corrections + rationales so operators can audit
         # what the validator chose to do. One file lands at
         # `notes_validator_log.json` next to the merged workbook.
@@ -125,6 +130,52 @@ def load_sidecar_entries(sidecar_paths: List[str]) -> list[dict]:
     return out
 
 
+def load_provenance_entries(run_id: int, db_path: str) -> list[dict]:
+    """Load detector inputs from the DB (``notes_cell_provenance``).
+
+    Returns the SAME ``entries`` shape the detectors consume from sidecars —
+    ``[{"sheet","row","row_label","source_note_refs","content_preview"}]`` — so
+    a manual re-review recomputes findings from the durable database instead of
+    the run-dir ``*_payloads.json`` files (docs/PLAN.md Step 2). Returns ``[]``
+    on any DB error so the factory can fall back to the sidecars.
+    """
+    try:
+        from db import repository as repo
+        with repo.db_session(db_path) as conn:
+            return repo.fetch_notes_provenance(conn, run_id)
+    except Exception:  # noqa: BLE001 — caller falls back to sidecars
+        logger.warning(
+            "load_provenance_entries failed for run %s; falling back to sidecars",
+            run_id, exc_info=True,
+        )
+        return []
+
+
+def load_inventory_from_db(
+    run_id: int, db_path: str,
+) -> tuple[list[int], dict[int, list[str]]]:
+    """Load scout note inventory from the DB (``run_notes_inventory``).
+
+    Returns ``(note_nums, subnotes_by_note)`` for the coverage + sub-note
+    detectors. Returns ``([], {})`` on any DB error."""
+    try:
+        from db import repository as repo
+        with repo.db_session(db_path) as conn:
+            rows = repo.fetch_notes_inventory(conn, run_id)
+        nums = [int(r["note_num"]) for r in rows]
+        subs = {
+            int(r["note_num"]): list(r["subnote_refs"])
+            for r in rows
+            if r["subnote_refs"]
+        }
+        return nums, subs
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "load_inventory_from_db failed for run %s", run_id, exc_info=True,
+        )
+        return [], {}
+
+
 def _top_note_num(ref) -> Optional[int]:
     """Top-level integer note number of a ref ('2.5(g)' → 2, 18 → 18).
 
@@ -165,6 +216,169 @@ def inventory_coverage_gaps(
             if num is not None:
                 written.add(num)
     return sorted(n for n in set(inventory_note_nums) if n not in written)
+
+
+def _subnote_key(ref) -> str:
+    """Normalise a sub-reference for set comparison.
+
+    Strips parentheses + whitespace and lowercases so the writer's cited
+    refs and scout's discovered sub-headings compare on the same footing:
+    ``"(a)"`` ↔ ``"a"``, ``"3.3"`` ↔ ``"3.3"``, ``"2.5(g)"`` ↔ ``"2.5g"``.
+    Deliberately NOT matching by content — this is a provenance comparison
+    of REFERENCE STRINGS, gotcha-#14-safe (we never match a note's body to
+    a row).
+    """
+    import re
+    return re.sub(r"[()\s]", "", str(ref).lower())
+
+
+def _top_note_nums(refs) -> set[int]:
+    """Distinct top-level integer note numbers across a list of refs."""
+    out: set[int] = set()
+    for r in refs or []:
+        n = _top_note_num(r)
+        if n is not None:
+            out.add(n)
+    return out
+
+
+# The Sheet-12 catch-all row is the ONE row a multi-note pile-up is expected
+# on — unmatched notes are funnelled there by design (see
+# notes.listofnotes_subcoordinator.ROW_112_LABEL). Compared after the writer's
+# label normalisation so a leading `*` / case can't bypass the exemption.
+from notes.labels import normalize_label as _normalize_label  # noqa: E402
+
+_CATCH_ALL_ROW_LABELS: frozenset[str] = frozenset({
+    _normalize_label("Disclosure of other notes to accounts"),
+})
+
+
+def detect_same_sheet_row_collisions(
+    entries: list[dict],
+    sheet_12: str = "Notes-Listofnotes",
+    catch_all_labels: frozenset[str] = _CATCH_ALL_ROW_LABELS,
+) -> list[dict]:
+    """Sheet-12 rows that received content from ≥2 distinct top-level notes.
+
+    The writer concatenates every payload that resolves to the same row
+    (``notes.writer._combine_payloads``). For the catch-all row that is
+    intended; for a SPECIFIC disclosure row it almost always means two
+    unrelated notes were force-matched to one concept — e.g. Note 4.1
+    (investment-property fair value) and Note 20.7 (financial-instruments
+    fair value) both landing on the single ``Disclosure of fair value
+    information`` row. One XBRL concept ⇒ one note, so that pile-up is a
+    finding.
+
+    Keyed on distinct TOP-LEVEL note numbers, not payload count, so a single
+    note legitimately split across several payloads (e.g. Note 13 Credit risk
+    in two halves) is NOT flagged — both halves carry top-level note 13.
+
+    Each result: ``{"sheet", "row", "row_label", "note_nums", "source_note_refs",
+    "content_preview"}``. gotcha-#14-safe: surfaces a candidate by provenance
+    (refs span multiple notes); the validator AGENT judges whether the
+    pile-up is real and which note owns the row.
+    """
+    collisions: list[dict] = []
+    for e in entries:
+        if e.get("sheet") != sheet_12:
+            continue
+        label = e.get("row_label") or ""
+        if _normalize_label(label) in catch_all_labels:
+            continue
+        refs = e.get("source_note_refs") or []
+        note_nums = sorted(_top_note_nums(refs))
+        if len(note_nums) >= 2:
+            collisions.append({
+                "sheet": sheet_12,
+                "row": e.get("row"),
+                "row_label": label,
+                "note_nums": note_nums,
+                "source_note_refs": list(refs),
+                "content_preview": e.get("content_preview", ""),
+            })
+    return collisions
+
+
+def detect_subnote_coverage_gaps(
+    inventory_subnotes: dict[int, list[str]],
+    entries: list[dict],
+) -> list[dict]:
+    """Notes whose sub-sections scout saw but the writer only PARTLY cited.
+
+    ``inventory_subnotes`` maps a top-level ``note_num`` → the list of
+    sub-reference strings scout discovered under it (``["3.1", "3.2", "3.3",
+    "(a)", "(b)"]``). A note is flagged only when it is *partially* covered at
+    sub-reference granularity — at least one of scout's sub-refs was cited and
+    at least one was NOT. That proper-subset condition is what separates the
+    real failure mode (leases policy cites ``3.3`` + ``(b)`` but drops ``(a)``)
+    from the benign cases: a note written as one combined cell cites no sub-ref
+    (top-level coverage already guards that), and a fully-covered note has
+    nothing missing.
+
+    Lettered refs like ``(a)`` carry no parent number, so each entry's refs are
+    attributed to the entry's own top-level note(s) — the leases entry citing
+    ``["3", "3.3", "(b)"]`` buckets ``(b)`` under note 3.
+
+    Each result: ``{"note_num", "missing_subnote_refs", "cited_subnote_refs",
+    "all_subnote_refs"}``. gotcha-#14-safe: reports gaps by REF only; the
+    validator agent judges whether each missing sub-section is a genuine
+    omission or a non-applicable / folded-in disclosure.
+    """
+    cited_by_note: dict[int, set[str]] = {}
+    for e in entries:
+        refs = e.get("source_note_refs") or []
+        keys = {_subnote_key(r) for r in refs}
+        for n in _top_note_nums(refs):
+            cited_by_note.setdefault(n, set()).update(keys)
+
+    gaps: list[dict] = []
+    for note_num, subrefs in (inventory_subnotes or {}).items():
+        if not subrefs:
+            continue
+        cited = cited_by_note.get(note_num, set())
+        cited_subs = [s for s in subrefs if _subnote_key(s) in cited]
+        missing = [s for s in subrefs if _subnote_key(s) not in cited]
+        # Proper-subset gate: some sub-refs cited, some missing.
+        if cited_subs and missing:
+            gaps.append({
+                "note_num": note_num,
+                "missing_subnote_refs": missing,
+                "cited_subnote_refs": cited_subs,
+                "all_subnote_refs": list(subrefs),
+            })
+    return sorted(gaps, key=lambda g: g["note_num"])
+
+
+def detect_title_format_issues(cells: list[dict]) -> list[dict]:
+    """Advisory: prose cells missing their leading ``<h3>`` heading.
+
+    The writer owns heading injection — every prose cell should open with an
+    ``<h3>`` note/sub-note heading (``notes.writer._inject_headings``). A cell
+    whose stored HTML does NOT start with one signals a malformed or
+    agent-overwritten cell where the heading was dropped. This is **advisory
+    only** (peer-review #6): the reviewer flags it for a human; it never
+    auto-rewrites headings, because the structured ``parent_note``/``sub_note``
+    needed to regenerate them isn't persisted.
+
+    ``cells`` are ``notes_cells`` rows as dicts (need ``sheet``, ``row``,
+    ``label``, ``html``). Numeric/empty cells are skipped — only prose carries a
+    heading. Detection looks at the first ~80 chars so leading whitespace or a
+    stray wrapper doesn't mask a genuinely-present heading.
+    """
+    issues: list[dict] = []
+    for c in cells:
+        html = (c.get("html") or "").strip()
+        if not html:
+            continue
+        if "<h3" not in html[:80].lower():
+            issues.append({
+                "sheet": c.get("sheet"),
+                "row": c.get("row"),
+                "row_label": c.get("label") or c.get("row_label") or "",
+                "issue": "missing_leading_heading",
+                "preview": html[:120],
+            })
+    return issues
 
 
 def detect_cross_sheet_duplicates_by_ref(
@@ -351,6 +565,58 @@ def build_validator_prompt_body(
     return "\n".join(lines)
 
 
+def build_structural_findings_block(
+    row_collisions: list[dict],
+    subnote_gaps: list[dict],
+) -> str:
+    """Render the SAME-SHEET ROW COLLISIONS + SUB-NOTE COVERAGE GAPS prompt
+    blocks. Returns "" when both are empty (nothing appended).
+
+    Kept as a pure helper (rather than inlined in the factory) so the prompt
+    contract is pinnable without standing up an Agent — the same reason the
+    duplicate/overlap rendering lives in :func:`build_validator_prompt_body`.
+    """
+    out = ""
+    if row_collisions:
+        out += (
+            "\n\n=== SAME-SHEET ROW COLLISIONS (one Sheet-12 row holds content "
+            "from >1 unrelated top-level note) ===\n"
+            "A specific disclosure row received prose from multiple top-level "
+            "notes. The writer concatenates payloads that land on the same row; "
+            "for the catch-all 'Disclosure of other notes to accounts' that is "
+            "intended, but on a SPECIFIC row it usually means two different "
+            "notes were force-matched to one XBRL concept. For each, view the "
+            "cited pages, decide which note legitimately owns the row, and clear "
+            "the mis-placed content (rewrite_cell content=\"\") ONLY if there is "
+            "a clearly correct owner. If both genuinely belong or you are "
+            "unsure, flag_duplication decision=\"no_action\" with your reasoning "
+            "— surfacing it for a human is better than deleting valid content.\n"
+        )
+        for c in row_collisions:
+            out += (
+                f"  • Sheet 12 row {c['row']} {c['row_label']!r}: notes "
+                f"{c['note_nums']} (refs {c['source_note_refs']}) — preview: "
+                f"{c['content_preview']!r}\n"
+            )
+    if subnote_gaps:
+        out += (
+            "\n\n=== SUB-NOTE COVERAGE GAPS (scout saw sub-sections a note only "
+            "PARTLY covered) ===\n"
+            "For each note, scout discovered these sub-sections but the written "
+            "content cited only some of them. View the note's pages and judge "
+            "whether each MISSING sub-section is a real omission (e.g. a "
+            "lettered (a)/(b) policy block dropped) or simply folded into the "
+            "prose / non-applicable. Report genuine omissions; never fabricate.\n"
+        )
+        for g in subnote_gaps:
+            out += (
+                f"  • Note {g['note_num']}: cited {g['cited_subnote_refs']}, "
+                f"MISSING {g['missing_subnote_refs']} (scout saw "
+                f"{g['all_subnote_refs']})\n"
+            )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Agent factory
 # ---------------------------------------------------------------------------
@@ -373,6 +639,9 @@ def create_notes_validator_agent(
     model: Union[str, Model],
     output_dir: str,
     inventory_note_nums: Optional[List[int]] = None,
+    inventory_subnotes: Optional[dict] = None,
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
 ) -> tuple[Agent[NotesValidatorAgentDeps, str], NotesValidatorAgentDeps, dict]:
     """Build the notes post-validator agent.
 
@@ -386,6 +655,16 @@ def create_notes_validator_agent(
     content on ANY sheet, surfaced in ``context['coverage_gaps']`` and the
     prompt so the validator agent investigates them (gotcha-#14-safe: code
     reports gaps by note_num, the AGENT judges content adequacy).
+
+    ``inventory_subnotes`` maps a top-level note_num → scout's discovered
+    sub-reference strings under it. When supplied,
+    :func:`detect_subnote_coverage_gaps` reports notes that were only PARTLY
+    covered at sub-reference granularity (e.g. a leases policy citing ``3.3``
+    + ``(b)`` but dropping ``(a)``), surfaced in ``context['subnote_gaps']``.
+    Independently, :func:`detect_same_sheet_row_collisions` reports Sheet-12
+    rows that received content from ≥2 distinct top-level notes (a non-catch-all
+    pile-up), surfaced in ``context['row_collisions']``. Both are advisory
+    candidates the validator agent investigates — gotcha-#14-safe.
     """
     deps = NotesValidatorAgentDeps(
         merged_workbook_path=merged_workbook_path,
@@ -397,11 +676,31 @@ def create_notes_validator_agent(
         model=model,
     )
 
-    entries = load_sidecar_entries(sidecar_paths)
+    # Prefer durable DB provenance (Step 2) so a manual re-review recomputes
+    # findings from the database; fall back to the on-disk sidecars for legacy
+    # runs (or when the provenance write was skipped).
+    entries: list[dict] = []
+    if run_id is not None and db_path:
+        entries = load_provenance_entries(run_id, db_path)
+    if not entries:
+        entries = load_sidecar_entries(sidecar_paths)
+    # Same DB-first preference for the scout inventory: when the caller didn't
+    # pass it explicitly, hydrate from run_notes_inventory.
+    if run_id is not None and db_path and (
+        inventory_note_nums is None or inventory_subnotes is None
+    ):
+        _db_nums, _db_subs = load_inventory_from_db(run_id, db_path)
+        if inventory_note_nums is None and _db_nums:
+            inventory_note_nums = _db_nums
+        if inventory_subnotes is None and _db_subs:
+            inventory_subnotes = _db_subs
     duplicates = detect_cross_sheet_duplicates_by_ref(entries)
     overlap = detect_cross_sheet_overlap_candidates(entries)
     # N3 Stage 1: which inventory notes never got written anywhere.
     coverage_gaps = inventory_coverage_gaps(inventory_note_nums or [], entries)
+    # Same-sheet pile-ups + partial sub-note coverage (advisory candidates).
+    row_collisions = detect_same_sheet_row_collisions(entries)
+    subnote_gaps = detect_subnote_coverage_gaps(inventory_subnotes or {}, entries)
 
     base_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
     dynamic_prompt = build_validator_prompt_body(
@@ -416,6 +715,7 @@ def create_notes_validator_agent(
             "genuinely absent from the filing (fine), or was it missed? Report "
             "missed disclosures — do NOT fabricate content."
         )
+    dynamic_prompt += build_structural_findings_block(row_collisions, subnote_gaps)
     system_prompt = f"{base_prompt}\n\n{dynamic_prompt}"
 
     agent = Agent(
@@ -461,6 +761,9 @@ def create_notes_validator_agent(
         for p in sorted(rendered):
             results.append(f"=== Page {p} ===")
             results.append(BinaryContent(data=rendered[p], media_type="image/png"))
+        # Record every successfully-rendered page so the write guard can verify
+        # an agent fix is grounded in a page it actually viewed (Step 4/6).
+        ctx.deps.viewed_pages.update(rendered.keys())
         return results
 
     @agent.tool
@@ -533,6 +836,10 @@ def create_notes_validator_agent(
         "entry_count": len(entries),
         # N3 Stage 1: inventory notes with no content anywhere (advisory).
         "coverage_gaps": coverage_gaps,
+        # Sheet-12 rows holding ≥2 distinct top-level notes (advisory).
+        "row_collisions": row_collisions,
+        # Notes only partly covered at sub-reference granularity (advisory).
+        "subnote_gaps": subnote_gaps,
     }
     return agent, deps, context
 
