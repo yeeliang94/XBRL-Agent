@@ -1815,3 +1815,55 @@ describe("NotesReviewTab — reconcile no-churn for colour/highlight/align", () 
     ).not.toBe(canonicalizeHtmlForCompare("<p>ab</p>"));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-run "Table style" picker (docs/PLAN-notes-table-theme.md) — re-themes
+// every table on the run at once, persisted as the run override (v22).
+// ---------------------------------------------------------------------------
+describe("NotesReviewTab — per-run table style picker", () => {
+  function mockThemeFetch() {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = vi.fn(async (url: any, init?: RequestInit) => {
+      const u = String(url);
+      calls.push({ url: u, init });
+      let body: unknown = {};
+      if (u.endsWith("/api/config")) body = { notes_table_style: {} };
+      else if (init?.method === "PATCH") body = { ok: true, notes_table_style: {} };
+      else if (/\/api\/runs\/\d+$/.test(u)) body = { notes_table_style: null };
+      else body = SAMPLE; // GET notes cells
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    return calls;
+  }
+
+  test("opening the panel and changing a knob PATCHes the run override", async () => {
+    const calls = mockThemeFetch();
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+
+    // Panel hidden until toggled.
+    expect(screen.queryByTestId("notes-table-style-panel")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^table style$/i }));
+    expect(screen.getByTestId("notes-table-style-panel")).toBeInTheDocument();
+
+    // Change the border style → PATCH /api/runs/42/notes_table_style.
+    fireEvent.change(screen.getByLabelText("Table border style"), {
+      target: { value: "double" },
+    });
+    await waitFor(() => {
+      const patch = calls.find(
+        (c) =>
+          c.init?.method === "PATCH" &&
+          c.url.includes("/api/runs/42/notes_table_style"),
+      );
+      expect(patch).toBeTruthy();
+      const sent = JSON.parse(String(patch!.init!.body));
+      expect(sent.notes_table_style.borderStyle).toBe("double");
+    });
+  });
+});

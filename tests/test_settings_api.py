@@ -142,3 +142,50 @@ def test_reviewer_model_name_reads_default_models(tmp_path, monkeypatch):
     assert server._reviewer_model_name() is None  # unset → inherit run model
     monkeypatch.setenv("XBRL_DEFAULT_MODELS", '{"reviewer": "google.gemini-3"}')
     assert server._reviewer_model_name() == "google.gemini-3"
+
+
+def test_notes_table_style_round_trips(tmp_path, monkeypatch):
+    """The firm notes-table theme persists to .env and reads back via both
+    /api/settings and /api/config (docs/PLAN-notes-table-theme.md)."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
+    from dotenv import load_dotenv
+
+    # Default: empty object (each surface keeps its historic look).
+    assert client.get("/api/settings").json()["notes_table_style"] == {}
+    assert client.get("/api/config").json()["notes_table_style"] == {}
+
+    resp = client.post("/api/settings", json={
+        "notes_table_style": {
+            "borderStyle": "single",
+            "borderColor": "#185FA5",
+            "headerFill": "transparent",
+            "fontSizePt": 11,
+            "cellPaddingPx": [4, 8],
+        },
+    })
+    assert resp.status_code == 200
+    load_dotenv(env_file, override=True)
+    style = client.get("/api/settings").json()["notes_table_style"]
+    assert style["borderColor"] == "#185fa5"   # lowercased by the validator
+    assert style["headerFill"] == "transparent"
+    assert style["fontSizePt"] == 11
+    # Same value visible on the lightweight /api/config surface.
+    assert client.get("/api/config").json()["notes_table_style"]["borderColor"] == "#185fa5"
+
+
+def test_notes_table_style_rejects_malformed(tmp_path, monkeypatch):
+    """Bad colour / enum / range fails loudly (400), never lands in .env."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    for bad in (
+        {"borderColor": "red"},            # keyword we don't accept
+        {"borderColor": "url(x)"},          # unsafe
+        {"borderStyle": "rainbow"},         # not an enum member
+        {"fontSizePt": 999},                # out of range
+        {"cellPaddingPx": [4]},             # malformed tuple
+        "not-an-object",                    # wrong type entirely
+    ):
+        resp = client.post("/api/settings", json={"notes_table_style": bad})
+        assert resp.status_code == 400, bad

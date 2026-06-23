@@ -170,6 +170,10 @@ async def get_run_detail_endpoint(run_id: int):
         # scorecard dict (None when not graded).
         "benchmark_id": getattr(run, "benchmark_id", None),
         "eval_score": eval_score,
+        # v22 per-run notes-table style override (docs/PLAN-notes-table-theme.md).
+        # None on a run with no override — the Notes tab then uses the firm
+        # default from /api/config.
+        "notes_table_style": getattr(run, "notes_table_style", None),
         "agents": [
             {
                 "id": a.id,
@@ -357,6 +361,43 @@ async def patch_run_config_endpoint(run_id: int, body: RunConfigPatchRequest):
         conn.close()
 
     return {"id": run_id, "config": merged}
+
+
+@router.patch("/api/runs/{run_id}/notes_table_style")
+async def patch_run_notes_table_style_endpoint(run_id: int, body: dict):
+    """Set (or clear) a run's notes-table style override.
+
+    Unlike PATCH /api/runs/{id} (draft-only config), this is editable on ANY
+    run status — notes review happens AFTER extraction, so the reviewer can
+    re-theme a completed run's tables (docs/PLAN-notes-table-theme.md). Body:
+    ``{"notes_table_style": <object> | null}``; a null or empty object clears
+    the override so the run falls back to the firm default. The object is
+    validated/cleaned with the same rules as the firm default (400 on a bad
+    colour / enum / range).
+    """
+    from db import repository as repo
+    from api.config_routes import _validate_notes_table_style
+
+    raw = body.get("notes_table_style")
+    # ONLY null or an empty object clears the override. A falsy-but-malformed
+    # payload (false / "" / []) must still hit validation and 400, not silently
+    # clear (peer-review LOW #6).
+    if raw is None or raw == {}:
+        style = None
+    else:
+        style = _validate_notes_table_style(raw)
+
+    conn = server._open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        repo.set_run_notes_table_style(conn, run_id, style)
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"id": run_id, "notes_table_style": style}
 
 
 @router.delete("/api/runs/{run_id}")

@@ -19,6 +19,7 @@ import {
   applyCellFill,
   applyCellBorderAll,
   applyCellDoubleUnderline,
+  resetCellToTheme,
   applyCellAlign,
 } from "../lib/cellFormatting";
 
@@ -175,6 +176,23 @@ describe("styled cell extension round-trip (real editor)", () => {
     const attrs = firstCellAttrs(editor);
     expect(attrs.colspan).toBe(2);
     expect(attrs.backgroundColor).toBe("transparent");
+    editor.destroy();
+  });
+
+  it("resetCellToTheme strips every per-cell style override (back to theme)", () => {
+    const editor = makeEditor(
+      '<table><tbody><tr>' +
+        '<td style="background-color: #fff6e5; border-bottom: 3px double #000000; text-align: right">x</td>' +
+        "</tr></tbody></table>",
+    );
+    // Default selection lands in the only cell.
+    resetCellToTheme(editor);
+    const attrs = firstCellAttrs(editor);
+    expect(attrs.backgroundColor).toBeNull();
+    expect(attrs.borderBottom).toBeNull();
+    expect(attrs.textAlign).toBeNull();
+    // No inline style at all → the themed CSS default shows through.
+    expect(buildCellStyle(attrs)).toBeNull();
     editor.destroy();
   });
 

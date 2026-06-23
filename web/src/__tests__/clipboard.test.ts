@@ -340,6 +340,44 @@ describe("decorateHtmlForClipboard — configurable format options", () => {
     expect(out).not.toMatch(/cellspacing=/);
   });
 
+  test("a theme borderColor drives the cell grid colour (not the #999 default)", () => {
+    // The notes-table theme unifies the editor + paste colour (PLAN-notes-table-theme).
+    const out = decorateHtmlForClipboard(TABLE, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      borderColor: "#185fa5",
+    });
+    expect(out).toMatch(/<td[^>]*style="[^"]*border: 1px solid #185fa5/);
+    expect(out).not.toMatch(/border: 1px solid #999/);
+  });
+
+  test("a theme headerFill drives the header background (not the #f3f4f6 default)", () => {
+    const out = decorateHtmlForClipboard(TABLE, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      headerFill: "transparent",
+    });
+    expect(out).toMatch(/<th[^>]*style="[^"]*background: transparent/);
+    expect(out).not.toMatch(/background: #f3f4f6/);
+  });
+
+  test("an un-themed default copy keeps the historic #999 grid + #f3f4f6 header", () => {
+    // Byte-compat guard: with no colour fields set, the paste is unchanged.
+    const out = decorateHtmlForClipboard(TABLE, DEFAULT_FORMAT_OPTIONS);
+    expect(out).toMatch(/<td[^>]*style="[^"]*border: 1px solid #999/);
+    expect(out).toMatch(/<th[^>]*style="[^"]*background: #f3f4f6/);
+    expect(out).toMatch(/<th[^>]*style="[^"]*font-weight: 600/); // default bold
+  });
+
+  test("headerBold:false emits an explicit font-weight:400 to beat the th default", () => {
+    // <th> renders bold by default in paste targets, so 'false' must override
+    // it explicitly, not just omit the declaration (peer-review MEDIUM #3).
+    const out = decorateHtmlForClipboard(TABLE, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      headerBold: false,
+    });
+    expect(out).toMatch(/<th[^>]*style="[^"]*font-weight: 400/);
+    expect(out).not.toMatch(/<th[^>]*style="[^"]*font-weight: 600/);
+  });
+
   test("borderStyle 'double' renders a double grid", () => {
     const out = decorateHtmlForClipboard(TABLE, {
       ...DEFAULT_FORMAT_OPTIONS,

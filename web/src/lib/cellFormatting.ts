@@ -198,6 +198,19 @@ export function applyCellDoubleUnderline(editor: Editor): boolean {
   return applyCellBorderSide(editor, "Bottom", DOUBLE_UNDERLINE);
 }
 
+/** Drop every per-cell style override on the selected cells so they fall back to
+ *  the notes-table THEME (docs/PLAN-notes-table-theme.md). Nulls each visual
+ *  attribute → `buildCellStyle` emits no inline `style=`, so the themed CSS
+ *  default (the `--nt-*` variables) shows through. Lets a user undo a manual
+ *  tweak and re-inherit the firm/run theme. */
+export function resetCellToTheme(editor: Editor): boolean {
+  let chain = editor.chain().focus();
+  for (const { attr } of STYLE_PROPS) {
+    chain = chain.setCellAttribute(attr, null);
+  }
+  return chain.run();
+}
+
 /** Horizontal alignment for every selected table cell (drag-select a column to
  *  right-align all its figures). Persists as `text-align` in the cell style —
  *  distinct from the paragraph-level TextAlign mark, and from the cosmetic

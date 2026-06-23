@@ -3,6 +3,9 @@ import {
   DEFAULT_FORMAT_OPTIONS,
   loadGlobalFormat,
   saveGlobalFormat,
+  parseThemeOptions,
+  resolveTheme,
+  themeToCssVars,
 } from "../lib/clipboardFormat";
 
 describe("clipboardFormat — global default round-trip", () => {
@@ -84,5 +87,88 @@ describe("clipboardFormat — global default round-trip", () => {
     expect(loadGlobalFormat().cellPaddingPx).toEqual(
       DEFAULT_FORMAT_OPTIONS.cellPaddingPx,
     );
+  });
+});
+
+describe("clipboardFormat — theme colour fields (notes table theme)", () => {
+  test("DEFAULT has no colour fields, so it stays byte-compatible", () => {
+    // The optional colour fields must be ABSENT in the default so an
+    // un-customised copy reproduces the historic clipboard output exactly.
+    expect("borderColor" in DEFAULT_FORMAT_OPTIONS).toBe(false);
+    expect("headerFill" in DEFAULT_FORMAT_OPTIONS).toBe(false);
+  });
+
+  test("valid hex / transparent colours are kept (lowercased)", () => {
+    const t = parseThemeOptions({ borderColor: "#1A2B3C", headerFill: "transparent" });
+    expect(t.borderColor).toBe("#1a2b3c");
+    expect(t.headerFill).toBe("transparent");
+  });
+
+  test("malformed colours are dropped, not passed through", () => {
+    const t = parseThemeOptions({
+      borderColor: "red",          // keyword we don't accept
+      headerFill: "url(x)",        // unsafe
+    } as never);
+    expect(t.borderColor).toBeUndefined();
+    expect(t.headerFill).toBeUndefined();
+  });
+
+  test("resolveTheme order: run override > firm default > built-in", () => {
+    const firm = { borderColor: "#000000", fontSizePt: 12 };
+    const run = { borderColor: "#fd5108" }; // overrides colour only
+    const t = resolveTheme(run, firm);
+    expect(t.borderColor).toBe("#fd5108"); // run wins
+    expect(t.fontSizePt).toBe(12); // inherited from firm
+    expect(t.borderStyle).toBe(DEFAULT_FORMAT_OPTIONS.borderStyle); // built-in
+  });
+
+  test("resolveTheme with no overrides equals the built-in default", () => {
+    expect(resolveTheme(null, null)).toEqual(DEFAULT_FORMAT_OPTIONS);
+  });
+
+  test("themeToCssVars: built-in default maps to the editor's historic look", () => {
+    // The un-customised theme must reproduce the editor's previous fixed values
+    // so an un-themed install looks unchanged.
+    const vars = themeToCssVars(DEFAULT_FORMAT_OPTIONS);
+    expect(vars["--nt-grid-border"]).toBe("1px solid #c9c9c9");
+    expect(vars["--nt-cell-padding"]).toBe("4px 8px");
+    expect(vars["--nt-cell-font-size"]).toBe("13px"); // 10pt → 13px
+    expect(vars["--nt-header-fill"]).toBe("#f4f4f4");
+    expect(vars["--nt-header-weight"]).toBe("600");
+  });
+
+  test("themeToCssVars: a customised theme drives the editor vars", () => {
+    const vars = themeToCssVars(
+      resolveTheme(null, {
+        borderStyle: "double",
+        borderColor: "#185fa5",
+        headerFill: "transparent",
+        headerBold: false,
+        paragraphSpacingPx: 16,
+      }),
+    );
+    expect(vars["--nt-grid-border"]).toBe("3px double #185fa5");
+    expect(vars["--nt-header-fill"]).toBe("transparent");
+    expect(vars["--nt-header-weight"]).toBe("400");
+    // Paragraph spacing reaches the editor too (peer-review HIGH #1).
+    expect(vars["--nt-para-spacing"]).toBe("16px");
+  });
+
+  test("themeToCssVars: default paragraph spacing is the editor's historic 8px", () => {
+    expect(themeToCssVars(DEFAULT_FORMAT_OPTIONS)["--nt-para-spacing"]).toBe("8px");
+  });
+
+  test("save/load round-trips the colour fields", () => {
+    globalThis.localStorage?.clear();
+    saveGlobalFormat({
+      ...DEFAULT_FORMAT_OPTIONS,
+      borderColor: "#185fa5",
+      headerFill: "#f4f4f4",
+      headerBold: false,
+    });
+    const loaded = loadGlobalFormat();
+    expect(loaded.borderColor).toBe("#185fa5");
+    expect(loaded.headerFill).toBe("#f4f4f4");
+    expect(loaded.headerBold).toBe(false);
   });
 });

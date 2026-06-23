@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
   useCallback,
+  useMemo,
 } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
@@ -51,6 +52,7 @@ import {
   applyCellBorderSide,
   applyCellBorderAll,
   applyCellDoubleUnderline,
+  resetCellToTheme,
   applyCellAlign,
   type CellAlign,
   gridBorderValue,
@@ -77,8 +79,12 @@ import { copyHtmlAsRichText } from "../lib/clipboard";
 import { tagNumericCells } from "../lib/tableAlign";
 import { formatGroupedInput } from "../lib/numberFormat";
 import {
-  loadGlobalFormat,
+  resolveTheme,
+  themeToCssVars,
+  parseThemeOptions,
+  type ClipboardFormatOptions,
 } from "../lib/clipboardFormat";
+import { ClipboardFormatControls } from "./ClipboardFormatControls";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
 import "./NotesReviewTab.css";
 
@@ -222,6 +228,21 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
   // stores the message "This will overwrite N edited cells".
   const [pendingCount, setPendingCount] = useState<number | null>(null);
 
+  // Notes-table style theme (docs/PLAN-notes-table-theme.md). `firmTheme` is the
+  // server-wide firm default (from /api/config); `runTheme` is this run's
+  // optional override (wired in Phase 5 — null until then). The resolved theme
+  // drives BOTH the editor preview (CSS vars on the root) AND the clipboard
+  // Copy, so they match.
+  const [firmTheme, setFirmTheme] = useState<Partial<ClipboardFormatOptions>>({});
+  const [runTheme, setRunTheme] = useState<Partial<ClipboardFormatOptions> | null>(
+    null,
+  );
+  const theme = useMemo(
+    () => resolveTheme(runTheme, firmTheme),
+    [runTheme, firmTheme],
+  );
+  const themeVars = useMemo(() => themeToCssVars(theme), [theme]);
+
   // Which sheet the navigator has focused. Clicking a nav chip expands +
   // scrolls that sheet (via SheetSection's focus effect). `key` bumps on
   // every click so re-clicking an already-focused-but-manually-collapsed
@@ -273,7 +294,91 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
     };
   }, [runId]);
 
+  // Firm-default theme (declared AFTER the notes-cells fetch so the cells load
+  // first — the editor renders with the CSS-var fallbacks until the theme
+  // arrives, which is a no-op for an un-customised firm). Fires once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/config")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => {
+        // Degrade silently to the historic look if config is unavailable — the
+        // CSS-var fallbacks already render today's grey grid.
+        if (!cancelled && cfg) setFirmTheme(cfg.notes_table_style ?? {});
+      })
+      .catch(() => {
+        /* leave firmTheme = {} → CSS-var fallbacks show the historic look */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Last value the SERVER confirmed for this run's override — restored on a
+  // failed save so the UI never shows/copies an unsaved theme (peer-review
+  // MEDIUM #5). Debounce timer coalesces per-keystroke number edits + keeps
+  // saves in order (peer-review HIGH #2).
+  const lastSavedRunThemeRef = useRef<Partial<ClipboardFormatOptions> | null>(null);
+  const runSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // This run's optional style override (v22). Re-fetched per run; null = inherit
+  // the firm default. Declared last so it never consumes the notes-cells fetch.
+  useEffect(() => {
+    let cancelled = false;
+    setRunTheme(null); // reset on run switch before the fetch resolves
+    lastSavedRunThemeRef.current = null;
+    fetch(`/api/runs/${runId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d) {
+          const override = d.notes_table_style ?? null;
+          setRunTheme(override);
+          lastSavedRunThemeRef.current = override;
+        }
+      })
+      .catch(() => {
+        /* no override → resolveTheme falls back to the firm default */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
   const isEmpty = sheets !== null && sheets.length === 0;
+
+  // Per-run "Table style" panel state + handlers (docs/PLAN-notes-table-theme.md).
+  const [styleOpen, setStyleOpen] = useState(false);
+  const [styleError, setStyleError] = useState<string | null>(null);
+
+  // Persist this run's override (or clear it) and re-paint instantly. The PATCH
+  // works on any run status — review happens after extraction.
+  const persistRunTheme = useCallback(
+    (next: ClipboardFormatOptions | null) => {
+      setRunTheme(next); // optimistic: tables re-theme immediately
+      // Clamp/validate before sending; clearing (null) is always valid.
+      const payload = next === null ? null : parseThemeOptions(next);
+      const send = () =>
+        fetch(`/api/runs/${runId}/notes_table_style`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notes_table_style: payload }),
+        })
+          .then((r) => {
+            if (!r.ok) throw new Error(String(r.status));
+            lastSavedRunThemeRef.current = payload;
+            setStyleError(null);
+          })
+          .catch(() => {
+            setStyleError("Couldn't save this run's table style — check your connection.");
+            setRunTheme(lastSavedRunThemeRef.current); // revert to last confirmed
+          });
+      if (runSaveTimer.current) clearTimeout(runSaveTimer.current);
+      // "Use firm default" (null) saves immediately; knob edits debounce.
+      if (next === null) send();
+      else runSaveTimer.current = setTimeout(send, 500);
+    },
+    [runId],
+  );
 
   // Regenerate click — pre-fetch edited_count so we only show the confirm
   // modal when there's actually something to overwrite (Step 12).
@@ -311,7 +416,13 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
   }, [runId, onRegenerate]);
 
   return (
-    <div className="notes-review-tab" style={styles.root}>
+    <div
+      className="notes-review-tab"
+      // The `--nt-*` custom properties (themeToCssVars) cascade to every table
+      // cell rule in NotesReviewTab.css, so changing the theme re-paints all
+      // tables instantly with no per-cell writes.
+      style={{ ...styles.root, ...themeVars }}
+    >
       {/* Regenerate action floats to the right of the section; the
           "NOTES REVIEW" heading lives in the parent (RunDetailView) to
           match the AGENTS / CROSS-CHECKS pattern, so no duplicate
@@ -321,11 +432,51 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
           type="button"
           className={uiClass.btnGhost}
           style={styles.regenerateButton}
+          aria-expanded={styleOpen}
+          onClick={() => setStyleOpen((v) => !v)}
+        >
+          Table style
+        </button>
+        <button
+          type="button"
+          className={uiClass.btnGhost}
+          style={styles.regenerateButton}
           onClick={handleRegenerateClick}
         >
           Regenerate notes
         </button>
       </header>
+
+      {/* Per-run "Table style" panel: re-themes EVERY table on this run at once
+          (editor preview + paste), persisted as the run override. Manual
+          per-cell edits still win; "Use firm default" clears the override. */}
+      {styleOpen && (
+        <div style={styles.stylePanel} data-testid="notes-table-style-panel">
+          <p style={styles.stylePanelHint}>
+            Style every table on this run — the on-screen preview and what you
+            paste into M-Tool. {runTheme ? "This run overrides the firm default." : "This run uses the firm default."}
+          </p>
+          {styleError && (
+            <p style={{ ...styles.stylePanelHint, color: pwc.error }} role="alert">
+              {styleError}
+            </p>
+          )}
+          <ClipboardFormatControls
+            value={theme}
+            onChange={(next) => persistRunTheme(next)}
+            idPrefix="run-fmt"
+          />
+          <button
+            type="button"
+            className={uiClass.btnGhost}
+            style={styles.regenerateButton}
+            disabled={!runTheme}
+            onClick={() => persistRunTheme(null)}
+          >
+            Use firm default
+          </button>
+        </div>
+      )}
 
       {loadError && (
         <div style={styles.errorBanner} role="alert">
@@ -385,6 +536,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
               key={`${runId}:${sh.sheet}`}
               runId={runId}
               sheet={sh}
+              theme={theme}
               focus={active.sheet === sh.sheet}
               focusKey={active.key}
             />
@@ -413,11 +565,14 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
 function SheetSection({
   runId,
   sheet,
+  theme,
   focus = false,
   focusKey = 0,
 }: {
   runId: number;
   sheet: NotesSheet;
+  /** Resolved notes-table theme — threaded to CellRow so Copy uses it. */
+  theme: ClipboardFormatOptions;
   /** When true (the reviewer picked this notes sub-tab / nav chip), the
    *  section opens and scrolls into view. */
   focus?: boolean;
@@ -502,6 +657,7 @@ function SheetSection({
                 runId={runId}
                 sheet={sheet.sheet}
                 cell={cell}
+                theme={theme}
               />
             ),
           )}
@@ -519,10 +675,14 @@ function CellRow({
   runId,
   sheet,
   cell,
+  theme,
 }: {
   runId: number;
   sheet: string;
   cell: NotesCell;
+  /** Resolved notes-table theme — Copy decorates the paste with it so the
+   *  clipboard output matches the editor preview. */
+  theme: ClipboardFormatOptions;
 }) {
   const [editable, setEditable] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
@@ -833,14 +993,14 @@ function CellRow({
     return () => node.removeEventListener("notes-review-test-edit", handler);
   }, [editor]);
 
-  // Copy is deliberately a single action: it reads the per-browser paste
-  // defaults at click time. Those defaults live in Settings because they
-  // affect the receiving application, not this note's saved document.
+  // Copy is a single action that decorates the paste with the RESOLVED notes
+  // table theme (per-run override ?? firm default), so the clipboard output
+  // matches the on-screen preview exactly (docs/PLAN-notes-table-theme.md).
   const handleCopy = useCallback(async () => {
     const html = editor?.getHTML() ?? cell.html;
-    const ok = await copyHtmlAsRichText(html, loadGlobalFormat());
+    const ok = await copyHtmlAsRichText(html, theme);
     if (ok) setCopiedAt(Date.now());
-  }, [editor, cell.html]);
+  }, [editor, cell.html, theme]);
 
   // Auto-dismiss the "Copied" pill after 2 seconds so the UI goes back
   // to a neutral state without the user clicking anywhere.
@@ -1267,6 +1427,9 @@ function EditorToolbar({ editor }: { editor: Editor }) {
               (currentCellAttrs(editor)?.textAlign as string | undefined) === a,
             ),
           ))}
+          {/* Drop manual per-cell overrides so the cell re-inherits the
+              firm/run theme (docs/PLAN-notes-table-theme.md). */}
+          {group("Reset", "↺", btn("↺", "Reset cell to theme", () => resetCellToTheme(editor)))}
           {group("Table structure", "▦", <>
             {btn("▤↑", "Insert row above", () => editor.chain().focus().addRowBefore().run())}
             {btn("▤↓", "Insert row below", () => editor.chain().focus().addRowAfter().run())}
@@ -1401,6 +1564,19 @@ const styles = {
     border: `1px solid ${pwc.errorBorder}`,
     borderRadius: 4,
     fontSize: 13,
+  } as React.CSSProperties,
+  // Per-run "Table style" panel (docs/PLAN-notes-table-theme.md).
+  stylePanel: {
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: 6,
+    background: pwc.white,
+    padding: 12,
+    marginBottom: 12,
+  } as React.CSSProperties,
+  stylePanelHint: {
+    fontSize: 12,
+    color: pwc.grey700,
+    margin: "0 0 10px 0",
   } as React.CSSProperties,
   dim: {
     color: pwc.grey700,

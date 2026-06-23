@@ -334,7 +334,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **21**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **22**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -429,6 +429,13 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   no ALTER). Startup (`server._lifespan`) calls
   `repo.reconcile_stale_doc_conversions` to fail any job left `running`/`queued`
   by a crash. Pinned by `tests/test_db_schema_v21.py`.
+- **v21 → v22:** adds the nullable `runs.notes_table_style TEXT` column (per-run
+  notes-table style override, gotcha #16 + docs/PLAN-notes-table-theme.md) —
+  `_V22_MIGRATION_COLUMNS`, one additive ALTER. NULL = the run inherits the
+  firm-default theme. Unlike `run_config_json` (draft-only editable), this is
+  editable on ANY run status via `PATCH /api/runs/{id}/notes_table_style`
+  because notes review happens after extraction. Pinned by
+  `tests/test_db_schema_v22.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -775,18 +782,44 @@ Key invariants:
   defaulting to `DEFAULT_FORMAT_OPTIONS`. **Calling with the defaults
   reproduces the previous hard-coded output byte-for-byte** — the
   pinning tests above depend on that equivalence, so keep the defaults
-  pinned when editing. The one GLOBAL default is persisted
-  per-browser in `localStorage` (key `xbrl.notesClipboardFormat`,
-  edited in the General settings "Notes paste format" section — this is
-  the codebase's only `localStorage`-backed preference, NOT a server
-  `.env`/`/api/settings` setting). The Notes toolbar has ONE Edit surface;
-  **Copy** always reads `loadGlobalFormat()` at click time. A totals double
+  pinned when editing.
+- **Notes-table style THEME (2026-06-23, docs/PLAN-notes-table-theme.md).** The
+  `ClipboardFormatOptions` shape was promoted to a full table-style **theme** and
+  is now the SHARED, SERVER-SIDE firm default (`XBRL_NOTES_TABLE_STYLE` JSON via
+  `/api/settings`, surfaced on `/api/config`) — it **replaced** the old
+  per-browser `localStorage` paste-format (so the firm shares one house style;
+  `loadGlobalFormat`/`saveGlobalFormat` remain only as a legacy fallback). Two
+  new optional fields — `borderColor`, `headerFill` (+ `headerBold`) — are
+  **absent in `DEFAULT_FORMAT_OPTIONS` so the byte-compat equivalence above still
+  holds**: only a customised theme changes output. The ONE resolved theme
+  (`resolveTheme(runOverride, firmDefault)`) drives BOTH surfaces, so preview ==
+  paste: the editor reads it as `--nt-*` CSS variables on the `.notes-review-tab`
+  root (`themeToCssVars`, `NotesReviewTab.css`); the clipboard reads
+  `opts.borderColor`/`headerFill` in `decorateHtmlForClipboard`. **This collapses
+  the deliberate editor-`#C9C9C9`-vs-clipboard-`#999` divergence noted below** —
+  intentional, since the firm value now unifies them (the historic per-surface
+  defaults still apply ONLY when the field is unset). A **per-run override** lives
+  on `runs.notes_table_style` (schema v22) and is editable post-run via the Notes
+  tab "Table style" picker (PATCH `/api/runs/{id}/notes_table_style`). Per-cell
+  manual styles still win over the theme; **"Reset cell to theme"**
+  (`resetCellToTheme`) nulls a cell's style attrs so it re-inherits the theme.
+  **Run-override is a SNAPSHOT, not a partial diff** (deliberate): the picker
+  persists the whole resolved theme for that run, so a later firm-default change
+  does NOT flow into an already-overridden run. This matches the "style THIS run"
+  mental model and is more predictable than silent per-field inheritance (the
+  numeric/style knobs have no "inherit" state anyway — only the colour swatches'
+  "Default" does). Saves debounce + clamp via `parseThemeOptions` before hitting
+  the server and revert to the last-confirmed value on failure, so a typed
+  out-of-range value never 400s and a failed save never strands an unsaved theme.
+  Validation (`parseThemeOptions` frontend / `_validate_notes_table_style`
+  backend) mirrors the sanitiser's colour rules. Pinned by
+  `tests/test_settings_api.py`, `test_run_notes_table_style.py`,
+  `test_db_schema_v22.py`, and the `clipboardFormat`/`clipboard`/`cellFormatting`/
+  `NotesReviewTab`/`SettingsModal` web tests.
+- **Totals double underline + single Copy.** The Notes toolbar has ONE Edit
+  surface; **Copy** reads the resolved theme at click time. A totals double
   underline is saved document formatting (`border-bottom: 3px double`) applied
   to the selected table row from that toolbar, not a transient copy override.
-  `loadGlobalFormat` runtime-validates stored prefs (enum membership +
-  2-number padding tuple + clamped numerics), not just malformed JSON. Pinned
-  by `web/src/__tests__/clipboardFormat.test.ts`, `clipboard.test.ts`,
-  `cellFormatting.test.ts`, and `NotesReviewTab.test.tsx`.
 - **Numeric notes '000 separator (2026-06-22):** the numeric Notes review
   rows (`NumericCellRow`, sheets 13/14) display grouped (`1,595`) at rest
   and raw while focused, mirroring the face-statement value inputs. The
