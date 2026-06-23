@@ -1762,15 +1762,25 @@ async def _run_notes_reviewer_pass(
         bound_inner_streams=False,
     )
 
-    def _persist_flags_and_refresh() -> None:
-        """Persist the reviewer's flags (replace prior) + refresh the durable
-        merged workbook from notes_cells. Best-effort — never fails the pass."""
+    def _persist_flags_and_refresh(replace_flags: bool = True) -> None:
+        """Persist the reviewer's flags + refresh the durable merged workbook
+        from notes_cells. Best-effort — never fails the pass.
+
+        Flag persistence NEVER touches ``answered`` / ``dismissed`` rows — a human
+        answer is durable guidance and must survive a re-review (peer-review HIGH).
+        ``replace_flags=True`` (a COMPLETED pass) supersedes only the prior OPEN
+        flags with this pass's set; ``replace_flags=False`` (a cancelled / timed-
+        out / errored pass) APPENDS whatever this pass raised without deleting,
+        so an interrupted rerun can't erase prior open flags either.
+        """
         try:
             from db import repository as _repo
             with _repo.db_session(db_path) as conn:
-                conn.execute(
-                    "DELETE FROM notes_review_flags WHERE run_id = ?", (run_id,)
-                )
+                if replace_flags:
+                    conn.execute(
+                        "DELETE FROM notes_review_flags WHERE run_id = ? "
+                        "AND status = 'open'", (run_id,)
+                    )
                 for f in deps.flags:
                     _repo.insert_notes_review_flag(
                         conn, run_id=run_id, kind=f.get("kind", "needs_human"),
@@ -1820,7 +1830,8 @@ async def _run_notes_reviewer_pass(
     except _asyncio.CancelledError:
         await _emit("complete", {"success": False, "error": "Cancelled by user"})
         outcome["error"] = "cancelled"
-        _persist_flags_and_refresh()
+        # Interrupted — append any raised flags, never delete prior open/answered.
+        _persist_flags_and_refresh(replace_flags=False)
         raise
     except (WallclockExceeded, _asyncio.TimeoutError):
         msg = (f"Notes reviewer exceeded wall-clock cap of {_wallclock_cap}s "
@@ -1828,7 +1839,7 @@ async def _run_notes_reviewer_pass(
         logger.warning(msg)
         outcome["error"] = "notes_reviewer_wallclock_exceeded"
         outcome["writes_performed"] = deps.writes_performed
-        _persist_flags_and_refresh()
+        _persist_flags_and_refresh(replace_flags=False)
         await _emit("error", {"type": "notes_reviewer_wallclock_exceeded", "message": msg})
         await _emit("complete", {"success": False,
                                  "error": "notes_reviewer_wallclock_exceeded",
@@ -1836,7 +1847,7 @@ async def _run_notes_reviewer_pass(
     except Exception as e:  # noqa: BLE001
         logger.exception("Notes reviewer pass failed")
         outcome["error"] = str(e)
-        _persist_flags_and_refresh()
+        _persist_flags_and_refresh(replace_flags=False)
         await _emit("error", {"type": "notes_reviewer_exception", "message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
 

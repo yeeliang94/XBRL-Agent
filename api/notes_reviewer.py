@@ -134,30 +134,28 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
     if not api_key:
         raise HTTPException(status_code=400, detail="API key not set. Check Settings.")
 
-    # Re-entrancy guard — never run two notes passes over the same run at once.
-    guard_conn = server._open_audit_conn()
-    try:
-        existing = repo.fetch_notes_review_task(guard_conn, run_id)
-    finally:
-        guard_conn.close()
-    if existing and existing.get("status") == "running":
-        return {"ok": True, "status": "running", "already_running": True,
-                "model": existing.get("model")}
-
-    # The initial 'running' persist is MANDATORY (mirrors api/reviewer.py): the
-    # guard above reads it, so write it directly and 503 on failure — no thread
-    # unless the row is durable.
+    # ATOMICALLY claim the run's re-review slot — a single conditional upsert so
+    # two concurrent POSTs can't both launch a pass (SQLite serialises writers;
+    # the loser's DO UPDATE WHERE status!='running' changes 0 rows). The claim IS
+    # the mandatory 'running' persist (the status poll + revert guard read it), so
+    # 503 on a DB failure — no thread unless the row is durable.
     launch_conn = server._open_audit_conn()
     try:
-        repo.upsert_notes_review_task(launch_conn, run_id, "running", model=model_name)
-        launch_conn.commit()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("notes re-review launch persist failed for run %s",
-                       run_id, exc_info=True)
-        raise HTTPException(
-            status_code=503,
-            detail="Could not record the re-review launch; please try again.",
-        ) from e
+        try:
+            claimed = repo.claim_notes_review_task(
+                launch_conn, run_id, model=model_name)
+            launch_conn.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("notes re-review launch persist failed for run %s",
+                           run_id, exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail="Could not record the re-review launch; please try again.",
+            ) from e
+        if not claimed:
+            existing = repo.fetch_notes_review_task(launch_conn, run_id)
+            return {"ok": True, "status": "running", "already_running": True,
+                    "model": (existing or {}).get("model")}
     finally:
         launch_conn.close()
 

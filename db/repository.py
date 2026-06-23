@@ -1133,6 +1133,30 @@ def upsert_notes_review_task(
     )
 
 
+def claim_notes_review_task(
+    conn: sqlite3.Connection, run_id: int, *, model: Optional[str] = None,
+) -> bool:
+    """Atomically CLAIM the run's notes re-review slot.
+
+    Returns ``True`` when THIS caller claimed it (no pass was running), ``False``
+    when one is already running. A single conditional upsert — the ``DO UPDATE``
+    only fires when ``status != 'running'`` — so two concurrent POSTs can't both
+    win: SQLite serialises writers, and the loser's update matches 0 rows. This
+    replaces the non-atomic read-then-upsert that let two threads launch over the
+    same run's notes_cells. Caller commits."""
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO notes_review_tasks(run_id, status, model, outcome, error, "
+        "created_at, updated_at) VALUES (?, 'running', ?, NULL, NULL, ?, ?) "
+        "ON CONFLICT(run_id) DO UPDATE SET status = 'running', "
+        "model = excluded.model, outcome = NULL, error = NULL, "
+        "updated_at = excluded.updated_at "
+        "WHERE notes_review_tasks.status != 'running'",
+        (run_id, model, now, now),
+    )
+    return cur.rowcount > 0
+
+
 def fetch_notes_review_task(
     conn: sqlite3.Connection, run_id: int,
 ) -> Optional[dict[str, Any]]:
@@ -1255,6 +1279,20 @@ def clear_notes_tombstones(conn: sqlite3.Connection, run_id: int) -> int:
     """Delete every tombstone for a run (used by revert). Returns rows deleted."""
     cur = conn.execute(
         "DELETE FROM notes_cell_tombstones WHERE run_id = ?", (run_id,)
+    )
+    return int(cur.rowcount)
+
+
+def clear_notes_tombstones_for_sheet(
+    conn: sqlite3.Connection, run_id: int, sheet: str,
+) -> int:
+    """Delete tombstones for one (run, sheet). Called when a notes-agent rerun
+    clobbers + repopulates a sheet: the reviewer's prior tombstones reference a
+    superseded extraction, so a stale tombstone must not blank a freshly-written
+    cell in the overlay. Returns rows deleted."""
+    cur = conn.execute(
+        "DELETE FROM notes_cell_tombstones WHERE run_id = ? AND sheet = ?",
+        (run_id, sheet),
     )
     return int(cur.rowcount)
 

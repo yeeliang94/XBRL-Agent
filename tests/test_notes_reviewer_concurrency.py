@@ -64,6 +64,35 @@ def test_revert_blocked_while_pass_live(client):
     assert "running" in r.json()["detail"].lower()
 
 
+def test_claim_is_atomic_only_one_winner(client):
+    """Peer-review HIGH: the re-review slot claim is atomic — a second claim
+    while one is 'running' loses (returns False) instead of launching a second
+    pass; once the first finishes ('done'), a fresh claim wins again."""
+    tc, db, run_id, _ = client
+    from db import repository as repo
+    with repo.db_session(db) as conn:
+        assert repo.claim_notes_review_task(conn, run_id, model="m1") is True
+    with repo.db_session(db) as conn:
+        assert repo.claim_notes_review_task(conn, run_id, model="m2") is False
+        # The losing claim did NOT clobber the running model.
+        assert repo.fetch_notes_review_task(conn, run_id)["model"] == "m1"
+    with repo.db_session(db) as conn:
+        repo.upsert_notes_review_task(conn, run_id, "done", model="m1",
+                                      outcome={"ok": True})
+    with repo.db_session(db) as conn:
+        assert repo.claim_notes_review_task(conn, run_id, model="m3") is True
+
+
+def test_second_re_review_post_reports_already_running(client):
+    """A real second POST while a pass is live returns already_running (the
+    route uses the atomic claim, not a read-then-upsert)."""
+    tc, db, run_id, _ = client
+    _mark_running(db, run_id)
+    r = tc.post(f"/api/runs/{run_id}/notes-review/re-review", json={})
+    assert r.status_code == 200, r.text
+    assert r.json().get("already_running") is True
+
+
 def test_revert_allowed_once_pass_done(client):
     """A 'done' task does not block revert (only 'running' does). With no
     snapshot the revert is a clean 409-from-versioning (nothing to revert),

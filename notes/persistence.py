@@ -59,6 +59,10 @@ def persist_notes_cells(
         repo.delete_notes_cells_for_run_sheet(
             conn, run_id=run_id, sheet=sheet_name,
         )
+        # A rerun (regenerate) supersedes any prior reviewer pass over this
+        # sheet: its tombstones reference the OLD extraction, so drop them or
+        # the overlay would blank these freshly-written cells (peer-review HIGH).
+        repo.clear_notes_tombstones_for_sheet(conn, run_id, sheet_name)
         for cell in cells_list:
             # Each cell dict must at minimum carry sheet/row/label/html.
             # `source_pages` is optional (defaults to []), `evidence`
@@ -206,6 +210,11 @@ def overlay_notes_cells_into_workbook(
             return
         ws_cell.value = value
 
+    # Coords with live prose — a tombstone must NEVER blank one of these (a
+    # rerun-after-review can leave a stale tombstone on a now-repopulated row;
+    # this is the self-healing backstop to persist_notes_cells clearing them).
+    live_coords = {(c.sheet, c.row) for c in cells}
+
     wb = openpyxl.load_workbook(str(tmp_path))
     try:
         for cell in cells:
@@ -239,9 +248,11 @@ def overlay_notes_cells_into_workbook(
             _set_cell(ws, cell.row, ev_col, cell.evidence or None)
 
         # Blank every coordinate the reviewer emptied (clear / move-out /
-        # authored-then-reverted) so a deletion actually reaches the export.
+        # authored-then-reverted) so a deletion actually reaches the export —
+        # but never a coord that now carries live prose (stale tombstone after
+        # a rerun-after-review).
         for sheet, row in tombstones:
-            if sheet not in wb.sheetnames:
+            if sheet not in wb.sheetnames or (sheet, row) in live_coords:
                 continue
             ws = wb[sheet]
             _set_cell(ws, row, 2, None)
