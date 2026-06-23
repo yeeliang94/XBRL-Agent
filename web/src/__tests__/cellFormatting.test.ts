@@ -134,6 +134,38 @@ describe("styled cell extension round-trip (real editor)", () => {
     editor.destroy();
   });
 
+  it("expands a browser-collapsed `border` shorthand to all four sides", () => {
+    // Real Chrome serialises four uniform per-side borders (a "Border all")
+    // as the `border:` shorthand on getHTML(). The sanitiser stores that, so
+    // on reload the cell arrives with `border: …` and NO per-side longhands —
+    // parsing must expand it or the saved border renders blank (real-Chrome
+    // incident, 2026-06-23; jsdom keeps longhands so this never showed before).
+    const editor = makeEditor(
+      '<table><tbody><tr>' +
+        '<td style="border: 1px solid rgb(24, 95, 165)">x</td>' +
+        "</tr></tbody></table>",
+    );
+    const attrs = firstCellAttrs(editor);
+    expect(attrs.borderTop).toBe("1px solid rgb(24, 95, 165)");
+    expect(attrs.borderRight).toBe("1px solid rgb(24, 95, 165)");
+    expect(attrs.borderBottom).toBe("1px solid rgb(24, 95, 165)");
+    expect(attrs.borderLeft).toBe("1px solid rgb(24, 95, 165)");
+    editor.destroy();
+  });
+
+  it("an explicit per-side longhand wins over the `border` shorthand", () => {
+    const editor = makeEditor(
+      '<table><tbody><tr>' +
+        '<td style="border: 1px solid rgb(24, 95, 165); ' +
+        'border-bottom: 3px double rgb(0, 0, 0)">x</td>' +
+        "</tr></tbody></table>",
+    );
+    const attrs = firstCellAttrs(editor);
+    expect(attrs.borderTop).toBe("1px solid rgb(24, 95, 165)");
+    expect(attrs.borderBottom).toBe("3px double rgb(0, 0, 0)");
+    editor.destroy();
+  });
+
   it("preserves colspan alongside the style attributes", () => {
     const editor = makeEditor(
       '<table><tbody><tr>' +

@@ -23,12 +23,17 @@ import type { Editor } from "@tiptap/react";
 // style string is built. This order is the contract with the sanitiser: it
 // preserves declaration order, so emitting them consistently here means the
 // server returns the identical string and no reconcile churn occurs.
-const STYLE_PROPS: ReadonlyArray<{ attr: string; css: string }> = [
+// `fallback` is the all-sides shorthand a browser collapses four uniform
+// per-side borders into on serialisation: `editor.getHTML()` emits
+// `border: 1px solid rgb(…)` for a "Border all", not four `border-<side>`
+// longhands. Parsing must expand that back to each side or a saved/reloaded
+// all-border cell renders blank (real-Chrome incident, 2026-06-23).
+const STYLE_PROPS: ReadonlyArray<{ attr: string; css: string; fallback?: string }> = [
   { attr: "backgroundColor", css: "background-color" },
-  { attr: "borderTop", css: "border-top" },
-  { attr: "borderRight", css: "border-right" },
-  { attr: "borderBottom", css: "border-bottom" },
-  { attr: "borderLeft", css: "border-left" },
+  { attr: "borderTop", css: "border-top", fallback: "border" },
+  { attr: "borderRight", css: "border-right", fallback: "border" },
+  { attr: "borderBottom", css: "border-bottom", fallback: "border" },
+  { attr: "borderLeft", css: "border-left", fallback: "border" },
   // Per-cell horizontal alignment (e.g. right-align a numeric column). Lands
   // last in the canonical order; the backend sanitiser allows `text-align` on
   // table cells (notes/html_sanitize.py `_STYLE_PROPS_BY_TAG`).
@@ -88,11 +93,13 @@ export function buildCellStyle(attrs: Record<string, unknown>): string | null {
  *  built in the fixed canonical order, not concatenated per-attribute). */
 function styleAttributes() {
   const attrs: Record<string, unknown> = {};
-  for (const { attr, css } of STYLE_PROPS) {
+  for (const { attr, css, fallback } of STYLE_PROPS) {
     attrs[attr] = {
       default: null,
-      parseHTML: (el: HTMLElement) =>
-        parseInlineStyle(el.getAttribute("style"))[css] ?? null,
+      parseHTML: (el: HTMLElement) => {
+        const parsed = parseInlineStyle(el.getAttribute("style"));
+        return parsed[css] ?? (fallback ? parsed[fallback] ?? null : null);
+      },
       // Rendered centrally in renderHTML — return nothing here so the per-
       // attribute merge doesn't double-emit / reorder the style string.
       renderHTML: () => ({}),

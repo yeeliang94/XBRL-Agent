@@ -637,12 +637,25 @@ Key invariants:
   stripped" (notes WYSIWYG, 2026-06-22, docs/PRD-notes-wysiwyg-formatting.md).**
   `sanitize_notes_html` keeps a value-checked set of inline `style=`
   declarations ONLY on `table/thead/tbody/tr/th/td`. The whitelist mirrors the
-  editor's controls EXACTLY — `background-color` + per-side
+  editor's controls — `background-color` + per-side
   `border-top|right|bottom|left` — so no persisted style can be silently
-  dropped on a later re-save (the all-sides `border` shorthand, `color`,
-  `text-align`, `font-weight`, and border `-color/-width/-style` longhands are
-  intentionally NOT accepted; widen `_CSS_PROPERTY_VALIDATORS` only when the
-  editor gains a matching control). The map shape-checks every value (rejects
+  dropped on a later re-save (`color`, `text-align`, `font-weight` are
+  intentionally NOT accepted on table cells; widen `_CSS_PROPERTY_VALIDATORS`
+  only when the editor gains a matching control). **Browser border-collapse
+  (2026-06-23 fix, real-Chrome incident):** the editor authors per-side
+  `border-<side>` longhands, but `editor.getHTML()` runs through the browser's
+  CSSOM serialiser which COLLAPSES four uniform per-side borders (a "Border
+  all") into the all-sides `border:` shorthand — and partly-uniform borders
+  into the `border-width`/`border-style`/`border-color` grouped longhands. So
+  those forms reach the sanitiser even though the editor never authors them;
+  `_CSS_PROPERTY_VALIDATORS` MUST accept them (`border` via
+  `_is_border_shorthand`, the groups via `_is_border_group` — each value still
+  shape-checked) or "Border all" is stripped on every save and the cell reverts
+  to the default grid. jsdom does NOT collapse (it keeps the longhands), so unit
+  tests miss this — pinned by `test_browser_collapsed_border_shorthand_survives_on_td`.
+  The editor's `StyledTableCell` parseHTML expands a collapsed `border:` back to
+  the four side attrs (`STYLE_PROPS` `fallback`, `cellFormatting.ts`) so a
+  reloaded all-border cell still renders. The map shape-checks every value (rejects
   `url()`, `expression()`, malformed border values, disallowed props). Off the
   table, `style=` is still stripped wholesale, so this gotcha's "DB stays
   style-free" rule holds for prose. "No fill"/"no border" persist as explicit
