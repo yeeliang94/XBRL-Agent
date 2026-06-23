@@ -7,7 +7,17 @@ import {
   fireEvent,
   within,
 } from "@testing-library/react";
-import { NotesReviewTab, isBlankHtml } from "../components/NotesReviewTab";
+import {
+  NotesReviewTab,
+  isBlankHtml,
+  canonicalizeHtmlForCompare,
+} from "../components/NotesReviewTab";
+import { Editor } from "@tiptap/core";
+import { StarterKit } from "@tiptap/starter-kit";
+import { TextStyle } from "@tiptap/extension-text-style";
+import { Color } from "@tiptap/extension-color";
+import { Highlight } from "@tiptap/extension-highlight";
+import { TextAlign } from "@tiptap/extension-text-align";
 import type { NotesCellsResponse } from "../lib/notesCells";
 
 // Issue 3 (2026-06-21): empty notes cells were flipping to "Saved" without
@@ -1838,5 +1848,66 @@ describe("NotesReviewTab — stale-response clobber guard", () => {
     // The final persisted body is edit 2, never the stale edit 1.
     expect(bodies[bodies.length - 1]).toBe("<p>v2-newest</p>");
     vi.useRealTimers();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reconcile no-churn contract for the v2 marks (peer-review HIGH, 2026-06-23).
+// TipTap serialises colour/highlight/alignment in the browser's style form
+// (`rgb(...)`, trailing `;`); the sanitiser re-emits them WITHOUT the trailing
+// `;`. The save-success reconcile must treat those as EQUAL so it doesn't call
+// setContent() (which resets the cursor) after every such save. We prove that
+// via canonicalizeHtmlForCompare: equal canonical forms ⇒ the reconcile branch
+// is skipped; a structural change still differs ⇒ a real change still reconciles.
+// ---------------------------------------------------------------------------
+describe("NotesReviewTab — reconcile no-churn for colour/highlight/align", () => {
+  function makeMarksEditor(): Editor {
+    return new Editor({
+      extensions: [
+        StarterKit.configure({
+          code: false,
+          codeBlock: false,
+          blockquote: false,
+          horizontalRule: false,
+        }),
+        TextStyle,
+        Color,
+        Highlight.configure({ multicolor: true }),
+        TextAlign.configure({ types: ["heading", "paragraph"] }),
+      ],
+      content: "<p>hello world</p>",
+    });
+  }
+
+  test("editor style form (trailing ;) canonicalises equal to the sanitiser form", () => {
+    const editor = makeMarksEditor();
+    editor.chain().focus().selectAll().setColor("#185fa5").run();
+    editor.chain().focus().selectAll().toggleHighlight({ color: "#fff3b0" }).run();
+    editor.chain().focus().setTextAlign("center").run();
+    const editorHtml = editor.getHTML();
+    editor.destroy();
+
+    // Sanity: the editor really did emit the browser form with trailing ';'.
+    expect(editorHtml).toMatch(/;"/);
+    // The backend sanitiser re-emits the same declarations WITHOUT the
+    // trailing ';' (its canonical "; ".join(prop: value) form). Simulate that.
+    const sanitiserHtml = editorHtml.replace(/;\s*(?=")/g, "");
+    expect(sanitiserHtml).not.toMatch(/;"/);
+
+    // The reconcile compares canonical forms — these must be EQUAL so no
+    // setContent() fires after the save.
+    expect(canonicalizeHtmlForCompare(editorHtml)).toBe(
+      canonicalizeHtmlForCompare(sanitiserHtml),
+    );
+  });
+
+  test("a MEANINGFUL (structural) change still differs, so a real edit reconciles", () => {
+    expect(canonicalizeHtmlForCompare("<p>hello</p>")).not.toBe(
+      canonicalizeHtmlForCompare("<p>world</p>"),
+    );
+    // A stripped disallowed tag (what the sanitiser actually removes) differs.
+    expect(
+      canonicalizeHtmlForCompare("<p>a<span style=\"color: rgb(1, 2, 3)\">b</span></p>"),
+    ).not.toBe(canonicalizeHtmlForCompare("<p>ab</p>"));
   });
 });
