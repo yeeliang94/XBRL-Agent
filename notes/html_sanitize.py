@@ -154,7 +154,12 @@ def _build_css_property_validators() -> dict[str, "callable"]:
         "color": _is_color,
         "text-align": lambda v: v in _TEXT_ALIGN_VALUES,
         # Column width (on <table>/<col>) and paragraph indent (margin-left).
+        # `min-width` is emitted by TipTap's resizable table on EVERY un-sized
+        # table/column — it must round-trip too, or the sanitiser strips its
+        # own editor output and re-triggers a setContent() reconcile on every
+        # table save (not just resized ones).
         "width": lambda v: bool(_WIDTH_LENGTH_RE.match(v)),
+        "min-width": lambda v: bool(_WIDTH_LENGTH_RE.match(v)),
         "margin-left": lambda v: bool(_INDENT_LENGTH_RE.match(v)),
     }
     # Per-side border shorthands only (border-top/right/bottom/left) — the
@@ -186,9 +191,10 @@ _TABLE_STYLE_PROPS: frozenset[str] = frozenset({
 _BLOCK_STYLE_PROPS: frozenset[str] = frozenset({"text-align", "margin-left"})
 _STYLE_PROPS_BY_TAG: dict[str, frozenset[str]] = {
     **{tag: _TABLE_STYLE_PROPS for tag in _TABLE_TAGS},
-    # The table element additionally carries its overall width when resized.
-    "table": _TABLE_STYLE_PROPS | frozenset({"width"}),
-    "col": frozenset({"width"}),
+    # The table element additionally carries its overall width when resized,
+    # or `min-width` when not (both from TipTap's resizable table).
+    "table": _TABLE_STYLE_PROPS | frozenset({"width", "min-width"}),
+    "col": frozenset({"width", "min-width"}),
     "span": frozenset({"color"}),
     "mark": frozenset({"background-color", "color"}),
     "p": _BLOCK_STYLE_PROPS,
