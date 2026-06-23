@@ -150,6 +150,65 @@ def test_move_produces_no_duplicate(tmp_path, db_path):
         wb.close()
 
 
+def test_rerun_after_review_does_not_blank_repopulated_cell(tmp_path, db_path):
+    """Peer-review HIGH: a notes-agent rerun repopulates a row the reviewer had
+    cleared. The overlay must write the fresh cell and NOT blank it with the
+    stale tombstone — both because persist_notes_cells drops the sheet's
+    tombstones and because the overlay refuses to blank a coord with live prose."""
+    merged = _seed_merged_workbook(tmp_path)
+    row = _target_row(merged)
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf")
+        # Reviewer previously cleared the row (tombstone present).
+        repo.add_notes_tombstone(conn, run_id=run_id, sheet=_SHEET, row=row)
+    # A notes-agent rerun now repopulates the same row.
+    persist_notes_cells(
+        db_path=str(db_path), run_id=run_id, sheet_name=_SHEET,
+        cells_written=[{
+            "sheet": _SHEET, "row": row, "label": "Financial reporting status",
+            "html": "<p>FRESH rerun content</p>", "evidence": "Page 3",
+            "source_pages": [3],
+        }],
+    )
+    # persist cleared the sheet's tombstones.
+    with repo.db_session(db_path) as conn:
+        assert (_SHEET, row) not in set(repo.fetch_notes_tombstones(conn, run_id))
+
+    overlaid = overlay_notes_cells_into_workbook(
+        xlsx_path=merged, run_id=run_id, db_path=str(db_path),
+        filing_level="company",
+    )
+    wb = openpyxl.load_workbook(overlaid)
+    try:
+        assert wb[_SHEET].cell(row=row, column=2).value == "FRESH rerun content"
+    finally:
+        wb.close()
+
+
+def test_overlay_never_blanks_live_coord_even_with_stale_tombstone(tmp_path, db_path):
+    """Belt-and-suspenders: even if a tombstone somehow co-exists with a live
+    cell at the same coord, the overlay writes the live prose and skips blanking."""
+    merged = _seed_merged_workbook(tmp_path)
+    row = _target_row(merged)
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf")
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=row,
+                               label="Financial reporting status",
+                               html="<p>LIVE</p>", evidence="Page 1")
+        # Inject a stale tombstone directly (bypassing the persist cleanup).
+        repo.add_notes_tombstone(conn, run_id=run_id, sheet=_SHEET, row=row)
+
+    overlaid = overlay_notes_cells_into_workbook(
+        xlsx_path=merged, run_id=run_id, db_path=str(db_path),
+        filing_level="company",
+    )
+    wb = openpyxl.load_workbook(overlaid)
+    try:
+        assert wb[_SHEET].cell(row=row, column=2).value == "LIVE"
+    finally:
+        wb.close()
+
+
 def test_evidence_column_refreshed_from_notes_cells(tmp_path, db_path):
     """Reviewer-updated evidence in notes_cells reaches the export's evidence
     column (D for Company) — not left stale/blank."""

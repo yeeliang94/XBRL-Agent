@@ -141,6 +141,31 @@ def test_revert_restores_original_prose(client, monkeypatch):
     assert rows == {49}  # original restored, authored move-target removed
 
 
+def test_re_review_preserves_prior_answered_flags(client, monkeypatch):
+    """Peer-review HIGH: a fresh pass must NOT erase a human-answered flag. The
+    success path supersedes only prior OPEN flags; answered guidance survives."""
+    tc, db, run_id, srv = client
+    from db import repository as repo
+    # Seed a prior flag and answer it (human guidance).
+    with repo.db_session(db) as conn:
+        fid = repo.insert_notes_review_flag(
+            conn, run_id=run_id, kind="disputes_prior", reason="old finding")
+        repo.answer_notes_review_flag(
+            conn, flag_id=fid, run_id=run_id, answer="keep as is")
+
+    monkeypatch.setattr(srv, "_create_proxy_model",
+                        lambda *a, **k: FunctionModel(_move_then_flag))
+    tc.post(f"/api/runs/{run_id}/notes-review/re-review", json={})
+    _await(tc, run_id)
+
+    flags = tc.get(f"/api/runs/{run_id}/notes-review").json()["flags"]
+    answered = [f for f in flags if f["id"] == fid]
+    assert answered and answered[0]["status"] == "answered"
+    assert answered[0]["answer"] == "keep as is", "human answer was erased"
+    # The new pass's flag is also present (open).
+    assert any(f["kind"] == "needs_human" and f["status"] == "open" for f in flags)
+
+
 def test_revert_without_version_409(client):
     tc, db, run_id, srv = client
     r = tc.post(f"/api/runs/{run_id}/notes-review/revert-to-original")

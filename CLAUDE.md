@@ -653,7 +653,10 @@ Key invariants:
   never reached the export. `clear`/`move` add a tombstone, `author`/`edit`
   remove it, and `revert` reconciles them (clears cleared-row tombstones,
   re-tombstones authored rows). Callers MUST pass the run's `filing_level`
-  so evidence lands in the right column. Pinned by
+  so evidence lands in the right column. **Rerun-safety:** a notes-agent
+  rerun (`persist_notes_cells`) drops the sheet's tombstones, and the overlay
+  additionally NEVER blanks a coord that has live prose — so a regenerated row
+  can't be wiped by a stale reviewer tombstone. Pinned by
   `tests/test_notes_reviewer_overlay_deletions.py`.
 - Cap is 30,000 **rendered** characters (`notes.html_to_text
   .rendered_length`), not 30k of raw HTML. The sanitiser-and-writer
