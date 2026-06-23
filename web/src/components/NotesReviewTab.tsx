@@ -168,6 +168,40 @@ const TIPTAP_EXTENSIONS = [
   StyledTableCell,
 ];
 
+// Canonicalise a notes-HTML string for EQUALITY comparison only (never for
+// storage or display). The editor serialises inline styles in the browser's
+// form — `rgb(...)`, a trailing `;`, idiosyncratic spacing — while the backend
+// sanitiser re-emits them canonically (`prop: value` joined by `; `,
+// lowercased, NO trailing `;`). Comparing the two raw reports a difference on
+// every colour / highlight / paragraph-alignment save and triggers a needless
+// `setContent()` that resets the cursor/selection (peer-review HIGH, 2026-06-23).
+// We rewrite each element's `style=` into the sanitiser's canonical shape so
+// only MEANINGFUL (structural) differences remain. DOM-based and explicit, so
+// it is robust in both the browser and jsdom (jsdom does NOT auto-normalise the
+// style attribute on an innerHTML round-trip — verified). Exported for tests.
+export function canonicalizeHtmlForCompare(html: string): string {
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  root.querySelectorAll<HTMLElement>("[style]").forEach((node) => {
+    const canon = (node.getAttribute("style") || "")
+      .split(";")
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => {
+        const i = d.indexOf(":");
+        if (i === -1) return d.toLowerCase();
+        return `${d.slice(0, i).trim().toLowerCase()}: ${d
+          .slice(i + 1)
+          .trim()
+          .toLowerCase()}`;
+      })
+      .join("; ");
+    if (canon) node.setAttribute("style", canon);
+    else node.removeAttribute("style");
+  });
+  return root.innerHTML;
+}
+
 export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
@@ -719,9 +753,6 @@ function CellRow({
           // while the newer PATCH is still running.
           return;
         }
-        // Track the persisted form so a subsequent re-render of the
-        // editor with the same HTML does not re-mark the cell dirty.
-        savedHtmlRef.current = updated.html;
         // Has the user typed MORE since this PATCH was sent? Compare the
         // current live HTML against what THIS request actually carried
         // (`attempted`). If they differ, the editor already shows newer
@@ -730,28 +761,42 @@ function CellRow({
         // the "PATCH returned during the next edit's debounce window" case
         // that the savePendingRef guard alone missed).
         const isStale = liveHtmlRef.current !== attempted;
-        if (!isStale) {
-          liveHtmlRef.current = updated.html;
-        }
-        // Reconcile the server-sanitised form back into the editor
-        // (peer-review [HIGH]). Without this, the Copy button would
-        // continue to emit the user's raw markup (with style attrs,
-        // disallowed tags, etc) even though the server has a cleaned
-        // version. Skip when the editor already matches — that avoids
-        // a spurious cursor reset on the common round-trip where the
-        // sanitiser was a no-op — and skip entirely when the user has typed
-        // newer content (the editor already shows it; don't overwrite).
-        if (!isStale && editor && editor.getHTML() !== updated.html) {
-          const sel = editor.state.selection;
-          editor.commands.setContent(updated.html, { emitUpdate: false });
-          // Best-effort selection restore. ProseMirror clamps out-of-
-          // range positions so a shorter doc after sanitisation won't
-          // throw; the try/catch is belt-and-braces for older tiptap.
-          try {
-            editor.commands.setTextSelection({ from: sel.from, to: sel.to });
-          } catch {
-            /* positions invalid after sanitisation — harmless */
+        if (isStale) {
+          // Newer edits exist; record the server form so the coalesced save
+          // reconciles later. Don't touch the editor (it shows newer content).
+          savedHtmlRef.current = updated.html;
+        } else {
+          // Reconcile the server-sanitised form back into the editor
+          // (peer-review [HIGH]). Without this, the Copy button would
+          // continue to emit the user's raw markup even though the server has
+          // a cleaned version. Compare STYLE-CANONICALISED HTML so a
+          // cosmetic-only diff (the browser's `rgb()` / trailing `;` that the
+          // sanitiser strips) does NOT fire a setContent() that blips the
+          // cursor after every colour/highlight/alignment save (peer-review
+          // HIGH, 2026-06-23). Only a MEANINGFUL (structural) change reconciles.
+          if (
+            editor &&
+            canonicalizeHtmlForCompare(editor.getHTML()) !==
+              canonicalizeHtmlForCompare(updated.html)
+          ) {
+            const sel = editor.state.selection;
+            editor.commands.setContent(updated.html, { emitUpdate: false });
+            // Best-effort selection restore. ProseMirror clamps out-of-range
+            // positions so a shorter doc after sanitisation won't throw.
+            try {
+              editor.commands.setTextSelection({ from: sel.from, to: sel.to });
+            } catch {
+              /* positions invalid after sanitisation — harmless */
+            }
           }
+          // Track the persisted content in the EDITOR's OWN serialisation form
+          // (not the raw server string). The editor re-serialises styles into
+          // the browser's form, which the sanitiser doesn't emit; storing the
+          // server string here would defeat the onUpdate dirty-guard's cheap
+          // `===` and mark every styled cell permanently dirty.
+          const settled = editor ? editor.getHTML() : updated.html;
+          liveHtmlRef.current = settled;
+          savedHtmlRef.current = settled;
         }
         // Only show "Saved" when this response reflects the latest content.
         // If the user has typed newer text (isStale), the coalesced save is

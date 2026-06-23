@@ -53,10 +53,10 @@ panel along the way.
   - **Verify (automated, done):** `cellFormatting.test.ts` → "applyCellFill fills EVERY cell in a multi-cell selection" passes; full web suite green.
   - **Verify (manual, for you):** open a run's Notes tab → Edit a cell with a table → drag across a 2×2 range → the cells now highlight (soft orange) → click a fill preset + a border side → **all selected cells** update at once.
   - **Deviations:** (1) built in real code, not throwaway (rationale above). (2) The cell attribute model is still the v1 shape (fill + 4 borders) — the clean typed-model rebuild is Phase 1.1, intentionally not pulled forward. (3) The *border-colour* native input has the same latent blur issue on the rare "change border colour first, then apply across a range" path; folded into the Phase 2.4 in-DOM colour popovers rather than patched twice.
-- [ ] 🟥 **Step 0.2: Office round-trip fidelity test** — the strict "both equally" requirement.
-  - [ ] 🟥 Paste a real Excel range into a notes cell; format it (fill, per-side borders, one merged header, a right-aligned numeric column)
-  - [ ] 🟥 Copy from the editor → paste into **Word** and into **M-Tool**
-  - [ ] 🟥 Record the result + a go/no-go decision at the top of this plan
+- [x] 🟩 **Step 0.2: Office round-trip fidelity test** — the strict "both equally" requirement. **GO (verified by the user, 2026-06-23):** the user manually pasted the formatted table into the desktop targets and confirmed "it works", authorising continuation on TipTap. (Automated agents cannot drive Word/M-Tool desktop paste, so this gate is owned by the human reviewer — recorded here per the result.)
+  - [x] 🟩 Paste a real Excel range into a notes cell; format it (fill, per-side borders, one merged header, a right-aligned numeric column)
+  - [x] 🟩 Copy from the editor → paste into **Word** and into **M-Tool**
+  - [x] 🟩 Result recorded: **GO on TipTap** (no CKEditor escalation needed).
   - **Verify:** the table renders correctly in all three (editor, Word, M-Tool). **Go** → proceed to Phase 1 on TipTap. **No-go** → stop and open a CKEditor evaluation (separate plan) with licensing/offline cost itemised.
 
 ### Phase 1: Foundation — one model, one renderer (delete the v1 cruft)
