@@ -59,6 +59,44 @@ def test_per_side_border_survives_on_td() -> None:
     assert "border-bottom: 1px solid #000" in out.lower()
 
 
+def test_browser_serialised_rgb_border_survives_on_td() -> None:
+    """Browser colour-picker output includes spaces inside rgb(). The
+    sanitiser must treat that as one valid colour token, not three fragments."""
+    out = _clean(
+        '<table><tr><td style="border-top: 1px solid rgb(255, 255, 255); '
+        'border-right: 1px solid rgb(255, 255, 255); '
+        'border-bottom: 1px solid rgb(255, 255, 255); '
+        'border-left: 1px solid rgb(255, 255, 255)">x</td></tr></table>'
+    )
+    assert out.lower().count("rgb(255, 255, 255)") == 4
+
+
+def test_valid_rgba_and_percentage_colours_survive() -> None:
+    out = _clean(
+        '<table><tr><td style="background-color: rgba(12, 34, 56, 0.5); '
+        'border-bottom: 1px solid rgb(100%, 50%, 0%)">x</td></tr></table>'
+    )
+    low = out.lower()
+    assert "background-color: rgba(12, 34, 56, 0.5)" in low
+    assert "border-bottom: 1px solid rgb(100%, 50%, 0%)" in low
+
+
+def test_malformed_or_out_of_range_function_colours_are_rejected() -> None:
+    for value in [
+        "rgb(999, 0, 0)",
+        "rgb(1, 2)",
+        "rgba(1, 2, 3)",
+        "rgba(1, 2, 3, 1.1)",
+        "rgb(1,,3)",
+    ]:
+        cleaned, warnings = sanitize_notes_html(
+            '<table><tr><td style="background-color: '
+            f'{value}">x</td></tr></table>'
+        )
+        assert "background-color" not in cleaned.lower(), value
+        assert any("background-color" in warning.lower() for warning in warnings)
+
+
 def test_multiple_declarations_kept_in_order() -> None:
     out = _clean(
         '<table><tr>'
@@ -352,6 +390,27 @@ def test_colspan_rowspan_round_trip() -> None:
     low = out.lower()
     assert 'colspan="2"' in low or "colspan='2'" in low
     assert 'rowspan="2"' in low or "rowspan='2'" in low
+
+
+def test_valid_tiptap_colwidth_round_trips() -> None:
+    out = _clean(
+        '<table><tr><td colspan="2" colwidth="120,0">x</td></tr></table>'
+    )
+    low = out.lower()
+    assert 'colspan="2"' in low or "colspan='2'" in low
+    assert 'colwidth="120,0"' in low or "colwidth='120,0'" in low
+
+
+def test_invalid_table_structure_values_are_removed() -> None:
+    cleaned, warnings = sanitize_notes_html(
+        '<table><tr><td colspan="0" rowspan="10000" '
+        'colwidth="120,evil">x</td></tr></table>'
+    )
+    low = cleaned.lower()
+    assert "colspan" not in low
+    assert "rowspan" not in low
+    assert "colwidth" not in low
+    assert sum("invalid value" in warning.lower() for warning in warnings) == 3
 
 
 def test_table_tags_use_an_attribute_allowlist() -> None:

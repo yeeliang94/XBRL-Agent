@@ -675,6 +675,13 @@ Key invariants:
     sanitiser validates *safe colour values* only. This is deliberate: a colour
     value isn't a security risk, and a cross-language palette list is the exact
     brittleness v2 set out to remove.
+  - **Browser RGB border round-trip.** A browser may serialise a swatch as
+    `rgb(255, 255, 255)` (with spaces). `_is_border_shorthand` must treat that
+    complete function as one colour token before its width/style/colour
+    validation; naive whitespace splitting strips the valid four per-side
+    borders and exposes the editor's default grey grid. Pinned by
+    `tests/test_notes_html_sanitize_css.py` and
+    `tests/test_server_notes_cells_api.py`.
   - **The sanitiser-warning UI panel was REMOVED** (it was developer-facing
     noise; a paste from Excel/Word produced a wall of it). The backend still
     sanitises and still returns `sanitizer_warnings` for logs — the UI just no
@@ -707,7 +714,10 @@ Key invariants:
     (`web/src/lib/notesIndent.ts`:
     `Indent` + `indentBlocks`/`outdentBlocks`) adding an integer level rendered
     as `margin-left` (em) on `<p>/<h3>`; the sanitiser allows `margin-left`
-    (positive em/px) on `<p>/<h3>/<li>` only. **Still deferred:** native
+    (positive em/px) on `<p>/<h3>/<li>` only. The clipboard decorator must
+    preserve that longhand: its paragraph/heading spacing uses a `margin:`
+    shorthand, which would otherwise reset `margin-left` in Word, so indented
+    blocks receive explicit top/right/bottom margins instead. **Still deferred:** native
     xlsx-download styling (download stays a text overlay). Pinned by
     `tests/test_notes_html_sanitize_css.py`, `tests/test_notes_html_to_text.py`,
     `web` `cellFormatting`/`notesIndent`/`NotesReviewTab` tests.
@@ -748,33 +758,22 @@ Key invariants:
 - **Configurable paste format (2026-06-22):** `decorateHtmlForClipboard`
   is now option-driven — it takes a `ClipboardFormatOptions`
   (`web/src/lib/clipboardFormat.ts`: `borderStyle` none/single/double,
-  `fontSizePt`, `cellPaddingPx`, `paragraphSpacingPx`, `rowUnderlines`)
+  `fontSizePt`, `cellPaddingPx`, `paragraphSpacingPx`)
   defaulting to `DEFAULT_FORMAT_OPTIONS`. **Calling with the defaults
   reproduces the previous hard-coded output byte-for-byte** — the
   pinning tests above depend on that equivalence, so keep the defaults
-  pinned when editing. Two layers feed it: a GLOBAL default persisted
+  pinned when editing. The one GLOBAL default is persisted
   per-browser in `localStorage` (key `xbrl.notesClipboardFormat`,
   edited in the General settings "Notes paste format" section — this is
   the codebase's only `localStorage`-backed preference, NOT a server
-  `.env`/`/api/settings` setting), and a TRANSIENT per-cell override set
-  in the Notes-tab Format popover (`CellRow` → `FormatPopover`, shared
-  controls in `ClipboardFormatControls.tsx`). The plain toolbar **Copy**
-  ALWAYS reads `loadGlobalFormat()` at click time; the override is
-  applied ONLY by the popover's own "Copy with this format" button, so a
-  tweak never silently changes the plain Copy. The override is re-seeded
-  from the global default each time the popover opens and is never
-  persisted (gotcha #16 — store stays style-free). Edit and Format modes
-  are mutually exclusive (so the table can't change under the row
-  picker's indices). `loadGlobalFormat` runtime-validates stored prefs
-  (enum membership + 2-number padding tuple + clamped numerics), not just
-  malformed-JSON. `rowUnderlines`
-  (the accountant double-underline on a user-picked totals row) is
-  per-cell/transient only and never written to the global default; its
-  0-based row index matches `decorateHtmlForClipboard`'s
-  `querySelectorAll("tr")` document order. Pinned by
-  `web/src/__tests__/clipboardFormat.test.ts`, the option tests in
-  `clipboard.test.ts`, and the Format-popover tests in
-  `NotesReviewTab.test.tsx`.
+  `.env`/`/api/settings` setting). The Notes toolbar has ONE Edit surface;
+  **Copy** always reads `loadGlobalFormat()` at click time. A totals double
+  underline is saved document formatting (`border-bottom: 3px double`) applied
+  to the selected table row from that toolbar, not a transient copy override.
+  `loadGlobalFormat` runtime-validates stored prefs (enum membership +
+  2-number padding tuple + clamped numerics), not just malformed JSON. Pinned
+  by `web/src/__tests__/clipboardFormat.test.ts`, `clipboard.test.ts`,
+  `cellFormatting.test.ts`, and `NotesReviewTab.test.tsx`.
 - **Numeric notes '000 separator (2026-06-22):** the numeric Notes review
   rows (`NumericCellRow`, sheets 13/14) display grouped (`1,595`) at rest
   and raw while focused, mirroring the face-statement value inputs. The
