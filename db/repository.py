@@ -82,6 +82,9 @@ class Run:
     # v16 gold-standard eval: the benchmark this run is graded against, or
     # None on every normal (non-eval) run.
     benchmark_id: Optional[int] = None
+    # v22 per-run notes-table style override (docs/PLAN-notes-table-theme.md).
+    # The hydrated Python dict, or None when the run inherits the firm default.
+    notes_table_style: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -354,6 +357,38 @@ def mark_draft_started(
         "UPDATE runs SET status = 'running', started_at = ? "
         "WHERE id = ? AND status = 'draft'",
         (_now(), run_id),
+    )
+    return cur.rowcount > 0
+
+
+def _parse_notes_table_style(raw: Any) -> Optional[dict[str, Any]]:
+    """Hydrate the runs.notes_table_style JSON blob to a dict (or None). A
+    corrupt blob degrades to None (inherit firm default) rather than crashing
+    the run-detail read."""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def set_run_notes_table_style(
+    conn: sqlite3.Connection,
+    run_id: int,
+    style: Optional[dict[str, Any]],
+) -> bool:
+    """Persist (or clear) a run's notes-table style override.
+
+    Unlike `update_run_config`, this works on ANY run status — notes review
+    happens AFTER extraction, so the override must be editable on a completed
+    run (docs/PLAN-notes-table-theme.md). `style=None` clears it (the run falls
+    back to the firm default). Returns True if a row was updated.
+    """
+    cur = conn.execute(
+        "UPDATE runs SET notes_table_style = ? WHERE id = ?",
+        (json.dumps(style) if style is not None else None, run_id),
     )
     return cur.rowcount > 0
 
@@ -1177,6 +1212,7 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         ended_at=_get("ended_at"),
         orchestration=_get("orchestration", "split") or "split",
         benchmark_id=_get("benchmark_id"),
+        notes_table_style=_parse_notes_table_style(_get("notes_table_style")),
     )
 
 

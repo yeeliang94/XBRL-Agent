@@ -1,6 +1,8 @@
-// Reusable controls for the table-wide notes-paste format knobs (border style,
-// font size, cell padding, paragraph spacing). Used by the "Notes paste
-// format" section in General settings to edit the per-browser global default.
+// Reusable controls for the notes-table style theme knobs (border style +
+// colour, header fill, font size, cell padding, paragraph spacing). Used by the
+// "Notes table style" section in General settings (firm default) and the
+// per-run picker on the Notes tab. The same preset drives BOTH the editor
+// preview and the clipboard paste (docs/PLAN-notes-table-theme.md).
 //
 // Inline styles only (gotcha #7).
 
@@ -9,6 +11,27 @@ import type {
   BorderStyle,
   ClipboardFormatOptions,
 } from "../lib/clipboardFormat";
+
+// Border-colour swatches mirror the editor's per-cell border palette
+// (NotesReviewTab BORDER_COLOURS) so the firm default reads from the same
+// vocabulary. "Default" (undefined) means each surface keeps its historic
+// grid colour (editor grey / clipboard #999).
+const BORDER_SWATCHES: ReadonlyArray<{ label: string; color?: string }> = [
+  { label: "Default" }, // undefined → surface default
+  { label: "Black", color: "#000000" },
+  { label: "Grey", color: "#c9c9c9" },
+  { label: "Orange", color: "#fd5108" },
+  { label: "Blue", color: "#185fa5" },
+];
+
+// Header-fill swatches. "Default" keeps the historic grey header; "None" stores
+// an explicit `transparent` so the header reads as un-filled on both surfaces.
+const HEADER_SWATCHES: ReadonlyArray<{ label: string; color?: string }> = [
+  { label: "Default" },
+  { label: "None", color: "transparent" },
+  { label: "Grey", color: "#f4f4f4" },
+  { label: "Light blue", color: "#e6eef6" },
+];
 
 const styles = {
   group: {
@@ -41,6 +64,27 @@ const styles = {
   } as React.CSSProperties,
   numberInput: {
     width: 88,
+  } as React.CSSProperties,
+  swatchRow: {
+    display: "flex",
+    gap: pwc.space.sm,
+    flexWrap: "wrap" as const,
+    alignItems: "center",
+  } as React.CSSProperties,
+  swatch: {
+    minWidth: 28,
+    height: 24,
+    padding: "0 6px",
+    borderRadius: pwc.radius.sm,
+    border: `1px solid ${pwc.grey300}`,
+    cursor: "pointer",
+    fontSize: 11,
+    lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: pwc.grey700,
+    background: "#fff",
   } as React.CSSProperties,
 };
 
@@ -76,6 +120,46 @@ export function ClipboardFormatControls({
   const clampField = (current: number, min: number, max: number) =>
     Math.min(max, Math.max(min, current));
 
+  // Render a row of colour swatches for one theme field. `current` is the
+  // field's value (undefined = "Default"); clicking a swatch patches that one
+  // field. A swatch with no colour patches the field to undefined so the
+  // surface falls back to its historic look.
+  const swatchGroup = (
+    fieldLabel: string,
+    field: "borderColor" | "headerFill",
+    current: string | undefined,
+    swatches: ReadonlyArray<{ label: string; color?: string }>,
+  ) => (
+    <div style={styles.group}>
+      <label style={styles.label}>{fieldLabel}</label>
+      <div style={styles.swatchRow} role="group" aria-label={fieldLabel}>
+        {swatches.map((sw) => {
+          const selected = (current ?? undefined) === (sw.color ?? undefined);
+          // A real colour shows as the button background; "Default"/"None"
+          // (no paintable colour) show their label text instead.
+          const showsColor = sw.color && sw.color !== "transparent";
+          return (
+            <button
+              key={sw.label}
+              type="button"
+              aria-label={`${fieldLabel}: ${sw.label}`}
+              aria-pressed={selected}
+              onClick={() => patch({ [field]: sw.color } as Partial<ClipboardFormatOptions>)}
+              style={{
+                ...styles.swatch,
+                ...(showsColor ? { background: sw.color, color: "transparent" } : null),
+                outline: selected ? `2px solid ${pwc.orange500}` : "none",
+                outlineOffset: 1,
+              }}
+            >
+              {showsColor ? " " : sw.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   return (
     <div>
       <div style={styles.group}>
@@ -96,6 +180,9 @@ export function ClipboardFormatControls({
           <option value="none">No border</option>
         </select>
       </div>
+
+      {swatchGroup("Border colour", "borderColor", value.borderColor, BORDER_SWATCHES)}
+      {swatchGroup("Header fill", "headerFill", value.headerFill, HEADER_SWATCHES)}
 
       <div style={styles.row}>
         <div style={styles.numberField}>

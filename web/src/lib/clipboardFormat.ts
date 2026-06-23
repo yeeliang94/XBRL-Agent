@@ -6,11 +6,13 @@
 // — gotcha #16). Those styles used to be hard-coded constants; this module
 // makes them user-configurable.
 //
-// These are GLOBAL defaults, persisted per-browser in localStorage and edited
-// in the General settings tab. They describe the receiving paste target
-// (M-Tool, Word, Outlook), not the note being edited. Per-note formatting,
-// including a totals double underline, belongs in the editor and is persisted
-// with the document instead of being hidden in a one-off copy popover.
+// This shape is now the **notes table style theme** (docs/PLAN-notes-table-theme.md):
+// one preset that drives BOTH the in-editor table preview (via CSS variables on
+// the notes root) AND the clipboard paste, so what you see equals what you
+// paste. It is sourced server-side as a firm-wide default (Settings) with an
+// optional per-run override; this module owns the shape, validation, and the
+// resolution order. (The legacy localStorage load/save below is retained for
+// back-compat but the firm default now lives on the server.)
 
 export type BorderStyle = "none" | "single" | "double";
 
@@ -23,6 +25,16 @@ export interface ClipboardFormatOptions {
   cellPaddingPx: [number, number];
   /** Bottom margin (px) between consecutive prose paragraphs. */
   paragraphSpacingPx: number;
+  /** Grid-line colour (hex or `transparent`). Theme addition: when ABSENT each
+   *  surface keeps its own historic default (editor `#C9C9C9`, clipboard
+   *  `#999`); when SET it applies to both so they match. Optional precisely so
+   *  an un-customised default stays byte-for-byte what shipped before. */
+  borderColor?: string;
+  /** Header-row fill colour (hex or `transparent`). Absent → editor `#F4F4F4`,
+   *  clipboard `#f3f4f6` (historic defaults, byte-compatible). */
+  headerFill?: string;
+  /** Whether header cells render bold. Absent → true (the historic behaviour). */
+  headerBold?: boolean;
 }
 
 // Defaults reproduce the previously hard-coded clipboard styling EXACTLY
@@ -48,6 +60,17 @@ const FONT_PT = { min: 6, max: 24 } as const;
 const PADDING_PX = { min: 0, max: 32 } as const;
 const PARA_PX = { min: 0, max: 48 } as const;
 const BORDER_STYLES: readonly BorderStyle[] = ["none", "single", "double"];
+
+// Colour shape check mirrors the backend sanitiser's `_HEX_COLOR_RE` + the
+// `transparent` keyword (notes/html_sanitize.py). A stored / server-sent value
+// that isn't a safe colour is DROPPED (returns undefined) so it falls back to
+// the surface's historic default rather than rendering broken CSS.
+const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+function validColor(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const s = v.trim().toLowerCase();
+  return s === "transparent" || HEX_COLOR_RE.test(s) ? s : undefined;
+}
 
 /** Coerce a stored value to a finite number clamped to [min, max], falling
  *  back to `fallback` when it isn't a finite number at all. */
@@ -82,33 +105,97 @@ function validatePadding(v: unknown): [number, number] {
   ];
 }
 
+/** Validate + clamp an untrusted theme object (from localStorage OR the server
+ *  firm-default / per-run override) into a safe `ClipboardFormatOptions`. Any
+ *  missing or malformed field falls back to its default; the optional colour
+ *  fields are dropped (left absent) when not a safe colour, so the surface's
+ *  historic default shows through. Single source of truth so the localStorage
+ *  and server paths validate identically. */
+export function parseThemeOptions(
+  parsed: Partial<ClipboardFormatOptions> | null | undefined,
+): ClipboardFormatOptions {
+  const p = parsed ?? {};
+  const out: ClipboardFormatOptions = {
+    // Enum membership check — an unknown string falls back to the default
+    // rather than slipping through to render as an accidental "single".
+    borderStyle: BORDER_STYLES.includes(p.borderStyle as BorderStyle)
+      ? (p.borderStyle as BorderStyle)
+      : DEFAULT_FORMAT_OPTIONS.borderStyle,
+    fontSizePt: clampNum(p.fontSizePt, DEFAULT_FORMAT_OPTIONS.fontSizePt, FONT_PT),
+    cellPaddingPx: validatePadding(p.cellPaddingPx),
+    paragraphSpacingPx: clampNum(
+      p.paragraphSpacingPx,
+      DEFAULT_FORMAT_OPTIONS.paragraphSpacingPx,
+      PARA_PX,
+    ),
+  };
+  // Optional colour / bold fields: only attach when valid, so an absent or
+  // bad value leaves the field undefined (→ surface default), never a broken
+  // CSS string.
+  const bc = validColor(p.borderColor);
+  if (bc) out.borderColor = bc;
+  const hf = validColor(p.headerFill);
+  if (hf) out.headerFill = hf;
+  if (typeof p.headerBold === "boolean") out.headerBold = p.headerBold;
+  return out;
+}
+
+/** Resolve the EFFECTIVE theme for a surface: per-run override wins over the
+ *  firm default wins over the built-in default. Each layer contributes only the
+ *  fields it actually sets (a run that overrides just the border colour still
+ *  inherits the firm font size), then the whole thing is validated. */
+export function resolveTheme(
+  runOverride: Partial<ClipboardFormatOptions> | null | undefined,
+  firmDefault: Partial<ClipboardFormatOptions> | null | undefined,
+): ClipboardFormatOptions {
+  return parseThemeOptions({
+    ...DEFAULT_FORMAT_OPTIONS,
+    ...(firmDefault ?? {}),
+    ...(runOverride ?? {}),
+  });
+}
+
+/** Map a resolved theme to the `--nt-*` CSS custom properties the notes editor
+ *  reads (`NotesReviewTab.css`). Set on the `.notes-review-tab` root so the
+ *  editor preview matches the clipboard paste. Crucially, the BUILT-IN default
+ *  theme maps to the editor's HISTORIC values (1px solid #c9c9c9 grid, #f4f4f4
+ *  header, 13px) — so an un-customised install looks unchanged. A per-cell
+ *  inline style still wins over these (CSS specificity: inline > rule). */
+export function themeToCssVars(theme: ClipboardFormatOptions): Record<string, string> {
+  // Grid line: the editor's historic default colour is #c9c9c9 (softer than the
+  // clipboard's #999) — used only when the theme leaves the colour unset.
+  const gridColor = theme.borderColor ?? "#c9c9c9";
+  const gridBorder =
+    theme.borderStyle === "none"
+      ? "none"
+      : theme.borderStyle === "double"
+        ? `3px double ${gridColor}`
+        : `1px solid ${gridColor}`;
+  // pt → px for the on-screen preview. The default 10pt rounds to 13px, exactly
+  // the editor's historic font size, so the default is unchanged.
+  const fontPx = Math.round(theme.fontSizePt * 1.3333);
+  return {
+    "--nt-grid-border": gridBorder,
+    "--nt-cell-padding": `${theme.cellPaddingPx[0]}px ${theme.cellPaddingPx[1]}px`,
+    "--nt-cell-font-size": `${fontPx}px`,
+    "--nt-header-fill": theme.headerFill ?? "#f4f4f4",
+    "--nt-header-weight": theme.headerBold === false ? "400" : "600",
+    // Paragraph gap — drives the editor's `.tiptap p` margin so the on-screen
+    // spacing matches the clipboard paste (peer-review HIGH #1). Default 8px is
+    // the editor's historic value, so an un-themed install is unchanged.
+    "--nt-para-spacing": `${theme.paragraphSpacingPx}px`,
+  };
+}
+
 /** Read the saved global default from localStorage, falling back to the
  *  built-in defaults. Tolerates a missing key, malformed JSON, or partial
- *  objects (any missing field falls back to its default) so a corrupt value
- *  can never break the settings form or a copy. */
+ *  objects so a corrupt value can never break the settings form or a copy.
+ *  (Legacy per-browser path; the firm default now lives on the server.) */
 export function loadGlobalFormat(): ClipboardFormatOptions {
   try {
     const raw = globalThis.localStorage?.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_FORMAT_OPTIONS };
-    const parsed = JSON.parse(raw) as Partial<GlobalFormat>;
-    return {
-      // Enum membership check — an unknown string falls back to the default
-      // rather than slipping through to render as an accidental "single".
-      borderStyle: BORDER_STYLES.includes(parsed.borderStyle as BorderStyle)
-        ? (parsed.borderStyle as BorderStyle)
-        : DEFAULT_FORMAT_OPTIONS.borderStyle,
-      fontSizePt: clampNum(
-        parsed.fontSizePt,
-        DEFAULT_FORMAT_OPTIONS.fontSizePt,
-        FONT_PT,
-      ),
-      cellPaddingPx: validatePadding(parsed.cellPaddingPx),
-      paragraphSpacingPx: clampNum(
-        parsed.paragraphSpacingPx,
-        DEFAULT_FORMAT_OPTIONS.paragraphSpacingPx,
-        PARA_PX,
-      ),
-    };
+    return parseThemeOptions(JSON.parse(raw) as Partial<ClipboardFormatOptions>);
   } catch {
     // Storage unavailable (private mode, SSR) or unparseable — defaults.
     return { ...DEFAULT_FORMAT_OPTIONS };
@@ -123,6 +210,11 @@ export function saveGlobalFormat(opts: ClipboardFormatOptions): void {
     fontSizePt: opts.fontSizePt,
     cellPaddingPx: opts.cellPaddingPx,
     paragraphSpacingPx: opts.paragraphSpacingPx,
+    // Only persist the optional theme fields when set, so the stored shape of
+    // an un-customised default stays exactly as before.
+    ...(opts.borderColor ? { borderColor: opts.borderColor } : {}),
+    ...(opts.headerFill ? { headerFill: opts.headerFill } : {}),
+    ...(typeof opts.headerBold === "boolean" ? { headerBold: opts.headerBold } : {}),
   };
   try {
     globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(toStore));

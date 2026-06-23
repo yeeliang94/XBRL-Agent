@@ -2377,6 +2377,26 @@ def _spot_check_mode() -> str:
     return mode if mode in ("light", "full") else "light"
 
 
+def _notes_table_style() -> dict:
+    """The firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
+
+    A JSON object in ``XBRL_NOTES_TABLE_STYLE`` (border colour/style, header
+    fill, font/padding/spacing) that drives BOTH the notes editor preview and
+    the clipboard paste so they match. Empty ``{}`` is the safe default — the
+    frontend then falls back to each surface's historic look. Read fresh each
+    call so a Settings change takes effect without a restart; a malformed value
+    degrades to ``{}`` rather than breaking the settings/config endpoints.
+    """
+    raw = os.environ.get("XBRL_NOTES_TABLE_STYLE", "")
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def _entity_memory_enabled() -> bool:
     """Whether per-entity advisory memory injects prior-year prompt hints (item 28).
 
@@ -2461,6 +2481,10 @@ def _load_extended_settings() -> dict:
         # Scanned-PDF → readable-doc OCR engine (docs/PLAN-scanned-pdf-to-doc.md).
         # 'rapidocr' (default, faster) | 'easyocr' (selectable fallback).
         "docling_ocr_engine": os.environ.get("XBRL_DOCLING_OCR_ENGINE", "rapidocr"),
+        # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md):
+        # drives the notes editor preview + clipboard paste. {} = each surface
+        # keeps its historic look until the firm sets a colour.
+        "notes_table_style": _notes_table_style(),
     }
 
 

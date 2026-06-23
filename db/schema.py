@@ -141,7 +141,7 @@ from pathlib import Path
 # adds the `doc_conversions` table — durable conversion-job state, independent
 # of the extraction pipeline. Pure CREATE TABLE IF NOT EXISTS walk-forward (new
 # table, no ALTER). Pinned by tests/test_db_schema_v21.py.
-CURRENT_SCHEMA_VERSION = 21
+CURRENT_SCHEMA_VERSION = 22
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -191,7 +191,12 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- a benchmark was explicitly attached at run-start. No FK CASCADE
         -- choice matters here (it points OUT to eval_benchmarks); ON DELETE
         -- SET NULL keeps the run row if its benchmark is later deleted.
-        benchmark_id          INTEGER REFERENCES eval_benchmarks(id) ON DELETE SET NULL
+        benchmark_id          INTEGER REFERENCES eval_benchmarks(id) ON DELETE SET NULL,
+        -- v22 per-run notes-table style override (docs/PLAN-notes-table-theme.md).
+        -- Nullable JSON; NULL = inherit the firm default. Editable post-run
+        -- (review happens after extraction), hence its own column, not the
+        -- draft-only run_config_json path.
+        notes_table_style     TEXT
     )
     """,
 
@@ -869,6 +874,15 @@ _V17_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # only because a constant default is supplied (see the constraint note below).
 _V20_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("auth_users", "is_admin", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+# v22 column: the per-run notes-table style override (docs/PLAN-notes-table-theme.md).
+# A nullable JSON string; NULL means the run inherits the firm default. Unlike
+# run_config_json this is editable AFTER a run finishes (review happens post-run),
+# so it gets its own column + endpoint rather than the draft-only config path.
+_V22_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("runs", "notes_table_style", "TEXT"),
 )
 
 
@@ -1599,6 +1613,45 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (21,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v21→v22 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v21 → v22: add runs.notes_table_style (per-run theme override). One
+        # additive nullable ALTER — same BEGIN IMMEDIATE + duplicate-column
+        # tolerance as the earlier column steps (v15/v16/v17/v20).
+        if current_version is not None and current_version < 22:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 22:
+                    for table, col_name, col_ddl in _V22_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (22,),
                     )
                 conn.commit()
             except Exception:

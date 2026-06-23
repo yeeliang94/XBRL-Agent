@@ -111,21 +111,75 @@ describe("SettingsModal — P3 enhancements", () => {
     );
   });
 
-  test("Notes paste format section persists the global default to localStorage", async () => {
-    localStorage.clear();
-    renderModal();
-    // The shared border control is rendered in the General settings body.
+  test("Notes table style section persists the firm default to the server", async () => {
+    // Migrated from localStorage to a shared, server-side firm default
+    // (docs/PLAN-notes-table-theme.md): editing a knob POSTs notes_table_style.
+    const { saveSettings } = renderModal({
+      notes_table_style: { borderStyle: "single" },
+    });
     const border = await screen.findByLabelText("Table border style");
-    expect((border as HTMLSelectElement).value).toBe("single"); // default
+    expect((border as HTMLSelectElement).value).toBe("single"); // seeded from server
 
     fireEvent.change(border, { target: { value: "none" } });
 
-    await waitFor(() => {
-      const stored = JSON.parse(
-        localStorage.getItem("xbrl.notesClipboardFormat") ?? "{}",
-      );
-      expect(stored.borderStyle).toBe("none");
+    await waitFor(() =>
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notes_table_style: expect.objectContaining({ borderStyle: "none" }),
+        }),
+      ),
+    );
+  });
+
+  test("Notes table style section saves a border colour to the server", async () => {
+    const { saveSettings } = renderModal({ notes_table_style: {} });
+    const blueSwatch = await screen.findByRole("button", {
+      name: "Border colour: Blue",
     });
+    fireEvent.click(blueSwatch);
+    await waitFor(() =>
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notes_table_style: expect.objectContaining({ borderColor: "#185fa5" }),
+        }),
+      ),
+    );
+  });
+
+  test("an out-of-range font size is clamped BEFORE the save (no 400)", async () => {
+    // Typing an out-of-range value used to POST it raw and get rejected
+    // (peer-review HIGH #2). The save now debounces + clamps via
+    // parseThemeOptions, so the server only ever sees an in-range value.
+    const { saveSettings } = renderModal({ notes_table_style: { fontSizePt: 10 } });
+    const font = await screen.findByLabelText("Font size in points");
+    fireEvent.change(font, { target: { value: "99" } }); // > max 24
+    await waitFor(
+      () => {
+        const calls = saveSettings.mock.calls;
+        const call = calls[calls.length - 1]?.[0] as
+          | { notes_table_style?: { fontSizePt?: number } }
+          | undefined;
+        expect(call?.notes_table_style?.fontSizePt).toBe(24); // clamped, not 99
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  test("a failed save reverts the control to the last confirmed value", async () => {
+    // Optimistic update must not strand an unsaved theme that a refresh would
+    // silently revert (peer-review MEDIUM #5).
+    const { saveSettings } = renderModal({
+      notes_table_style: { borderStyle: "single" },
+    });
+    saveSettings.mockRejectedValue(new Error("network"));
+    const border = (await screen.findByLabelText(
+      "Table border style",
+    )) as HTMLSelectElement;
+    expect(border.value).toBe("single");
+
+    fireEvent.change(border, { target: { value: "double" } });
+    // After the debounced save rejects, the select snaps back to "single".
+    await waitFor(() => expect(border.value).toBe("single"), { timeout: 2000 });
   });
 
   test("'Test Connection' button calls testConnection API", async () => {

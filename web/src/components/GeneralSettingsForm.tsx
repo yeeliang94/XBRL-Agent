@@ -8,8 +8,7 @@ import {
   type DocConvertModelsStatus,
 } from "../lib/api";
 import {
-  loadGlobalFormat,
-  saveGlobalFormat,
+  parseThemeOptions,
   type ClipboardFormatOptions,
 } from "../lib/clipboardFormat";
 import { ClipboardFormatControls } from "./ClipboardFormatControls";
@@ -25,8 +24,8 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; docling_ocr_engine?: string }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; docling_ocr_engine: string }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; docling_ocr_engine?: string; notes_table_style?: Partial<ClipboardFormatOptions> }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; docling_ocr_engine: string; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -505,10 +504,11 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         </p>
       </div>
 
-      {/* Notes paste format — global default for the Notes-tab Copy button.
-          localStorage-only (per browser): it does NOT go through the server
-          settings save below, because it's a personal paste preference. */}
-      <NotesPasteFormatSection />
+      {/* Notes table style — the firm-wide default theme for notes tables
+          (docs/PLAN-notes-table-theme.md). Server-side (shared by everyone),
+          persisted via /api/settings; it auto-saves on change, independent of
+          the form's main Save button below. */}
+      <NotesPasteFormatSection getSettings={getSettings} saveSettings={saveSettings} />
 
       {/* Scanned-PDF → readable-doc OCR engine (docs/PLAN-scanned-pdf-to-doc.md) */}
       <div style={styles.fieldGroup}>
@@ -603,27 +603,85 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   );
 }
 
-// Global default for the Notes-tab Copy button's paste formatting. Stored in
-// localStorage per browser (a personal paste preference — not a server-side,
-// shared-by-everyone setting), so this section saves on every change instead of
-// riding the form's main Save button.
-function NotesPasteFormatSection() {
-  const [fmt, setFmt] = useState<ClipboardFormatOptions>(loadGlobalFormat);
+// Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md). Unlike
+// the old per-browser localStorage paste format, this is the SHARED firm
+// default stored server-side (.env via /api/settings) — so the whole firm
+// inherits one house style for both the editor preview and the clipboard paste.
+// It auto-saves on every change (its own POST), independent of the form's main
+// Save button.
+function NotesPasteFormatSection({
+  getSettings,
+  saveSettings,
+}: Pick<Props, "getSettings" | "saveSettings">) {
+  const [fmt, setFmt] = useState<ClipboardFormatOptions>(() =>
+    parseThemeOptions(null),
+  );
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // Last value the SERVER confirmed — restored if a save fails so the UI never
+  // shows (or copies) an unsaved theme that a refresh would silently revert
+  // (peer-review MEDIUM #5).
+  const lastSavedRef = useRef<ClipboardFormatOptions>(parseThemeOptions(null));
+  // Debounce so a number input being typed ("1" on the way to "12") doesn't
+  // fire a save per keystroke — the unclamped interim "1" would 400, and
+  // rapid saves can land out of order (peer-review HIGH #2).
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const update = useCallback((next: ClipboardFormatOptions) => {
-    setFmt(next);
-    saveGlobalFormat(next); // persists immediately in this browser
-  }, []);
+  // Seed from the server firm default on mount.
+  useEffect(() => {
+    let cancelled = false;
+    getSettings()
+      .then((s) => {
+        if (!cancelled) {
+          const seeded = parseThemeOptions(s.notes_table_style);
+          setFmt(seeded);
+          lastSavedRef.current = seeded;
+        }
+      })
+      .catch(() => {
+        /* leave the built-in default showing; the save path surfaces errors */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [getSettings]);
+
+  const update = useCallback(
+    (next: ClipboardFormatOptions) => {
+      setFmt(next); // optimistic — keep the input controlled + preview live
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        // Clamp/validate BEFORE sending so an interim out-of-range value never
+        // reaches (and is rejected by) the server.
+        const clean = parseThemeOptions(next);
+        saveSettings({ notes_table_style: clean })
+          .then(() => {
+            lastSavedRef.current = clean;
+            setSaveError(null);
+          })
+          .catch(() => {
+            setSaveError("Couldn't save the table style — check your connection.");
+            setFmt(lastSavedRef.current); // revert to the last confirmed value
+          });
+      }, 500);
+    },
+    [saveSettings],
+  );
 
   return (
     <div style={styles.fieldGroup}>
-      <label style={styles.label}>Notes paste format</label>
+      <label style={styles.label}>Notes table style</label>
       <p style={styles.helperText}>
-        How tables and prose are styled when you use the Copy button in the
-        Notes review tab (the format your paste into M-Tool lands in). This is
-        your default for every copy. Changes save automatically, in this
-        browser only (no Save button).
+        The firm default look for notes tables — grid colour, header fill, font,
+        spacing. It styles BOTH the on-screen Notes review preview AND what you
+        paste into M-Tool, so they match. Shared by everyone; changes save
+        automatically (no Save button). You can still override it per run, and
+        format individual cells.
       </p>
+      {saveError && (
+        <p style={{ ...styles.helperText, color: pwc.error ?? "#b00020" }} role="alert">
+          {saveError}
+        </p>
+      )}
       <ClipboardFormatControls value={fmt} onChange={update} idPrefix="settings-fmt" />
     </div>
   );

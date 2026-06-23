@@ -57,7 +57,6 @@
 import { shouldRightAlignCell } from "./tableAlign";
 import {
   DEFAULT_FORMAT_OPTIONS,
-  type BorderStyle,
   type ClipboardFormatOptions,
 } from "./clipboardFormat";
 
@@ -74,13 +73,16 @@ function _fontCss(opts: ClipboardFormatOptions): string {
 }
 
 // Grid-line CSS for one cell. "none" emits no border declaration at all so the
-// cell pastes borderless; "double" is the accountant double rule; "single" is
-// the default 1px grey. Trailing space so it concatenates cleanly before the
-// padding declaration (and so "none" leaves the style starting at padding).
-function _borderCss(style: BorderStyle): string {
-  if (style === "none") return "";
-  if (style === "double") return "border: 3px double #999; ";
-  return "border: 1px solid #999; ";
+// cell pastes borderless; "double" is the accountant double rule; "single" is a
+// 1px grid. Colour comes from the theme (`opts.borderColor`); when unset it
+// keeps the historic clipboard `#999` (deliberately darker than the editor's
+// grey so the grid survives off-white paste targets — gotcha #16). Trailing
+// space so it concatenates cleanly before the padding declaration.
+function _borderCss(opts: ClipboardFormatOptions): string {
+  if (opts.borderStyle === "none") return "";
+  const color = opts.borderColor ?? "#999";
+  if (opts.borderStyle === "double") return `border: 3px double ${color}; `;
+  return `border: 1px solid ${color}; `;
 }
 
 // Width constraint: a faithful transcription of a wide movement table sizes
@@ -115,13 +117,24 @@ function _tableHasExplicitWidth(table: Element): boolean {
 function _cellStyleBase(opts: ClipboardFormatOptions): string {
   const [padV, padH] = opts.cellPaddingPx;
   return (
-    `${_borderCss(opts.borderStyle)}padding: ${padV}px ${padH}px; ` +
+    `${_borderCss(opts)}padding: ${padV}px ${padH}px; ` +
     "vertical-align: top; overflow-wrap: break-word; word-break: break-word; " +
     _fontCss(opts)
   );
 }
 
-const _CLIPBOARD_HEADER_EXTRA = " background: #f3f4f6; font-weight: 600;";
+// Header-row extra: fill + bold. Theme-driven (`opts.headerFill` / `headerBold`)
+// with the historic defaults (`#f3f4f6`, bold) when unset — so a default copy is
+// byte-identical to the old `_CLIPBOARD_HEADER_EXTRA` constant.
+function _headerExtra(opts: ClipboardFormatOptions): string {
+  const fill = opts.headerFill ?? "#f3f4f6";
+  // `<th>` renders bold by default in most paste targets, so `false` must emit
+  // an EXPLICIT `font-weight: 400` to override it — an empty string would leave
+  // the target's default bold intact (peer-review MEDIUM #3). `undefined`
+  // (un-themed) keeps the historic `600` so default output is byte-identical.
+  const weight = opts.headerBold === false ? " font-weight: 400;" : " font-weight: 600;";
+  return ` background: ${fill};${weight}`;
+}
 
 // Prose blocks: the same Arial face plus a bottom margin so consecutive
 // paragraphs get breathing space on paste. Without the margin, `<p>` tags
@@ -260,7 +273,7 @@ export function decorateHtmlForClipboard(
         ? " text-align: right;"
         : " text-align: left;";
       if (cell.tagName === "TH") {
-        _mergeCellStyle(cell, cellBase + _CLIPBOARD_HEADER_EXTRA + align);
+        _mergeCellStyle(cell, cellBase + _headerExtra(opts) + align);
       } else {
         _mergeCellStyle(cell, cellBase + align);
       }

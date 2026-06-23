@@ -10,6 +10,7 @@ import type {
   SSEEvent,
   AgentTraceJson,
 } from "./types";
+import type { ClipboardFormatOptions } from "./clipboardFormat";
 
 // Shared fetch helper — parses JSON error bodies for useful messages.
 // A 401 anywhere means the session expired mid-use: broadcast it so the app
@@ -184,6 +185,9 @@ export async function updateSettings(
     entity_memory: boolean;
     // Scanned-PDF → readable-doc OCR engine: 'rapidocr' | 'easyocr'.
     docling_ocr_engine: string;
+    // Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
+    // The server validates + cleans it before persisting.
+    notes_table_style: ClipboardFormatOptions;
   }>,
 ): Promise<{ status: string }> {
   return apiFetch<{ status: string }>("/api/settings", {

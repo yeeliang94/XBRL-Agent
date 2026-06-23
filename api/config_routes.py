@@ -14,11 +14,88 @@ from dotenv import load_dotenv, set_key
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
+import re
+
 import server
 
 logger = logging.getLogger("server")
 
 router = APIRouter()
+
+# Notes-table style theme validation (docs/PLAN-notes-table-theme.md). Mirrors
+# the frontend `parseThemeOptions` (clipboardFormat.ts) + the sanitiser colour
+# rule, so a value that survived the form is accepted and a tampered payload
+# fails loudly (400) rather than landing broken CSS in .env.
+_HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+_BORDER_STYLES = {"none", "single", "double"}
+
+
+def _valid_theme_color(value) -> bool:
+    return isinstance(value, str) and (
+        value.strip().lower() == "transparent"
+        or bool(_HEX_COLOR_RE.match(value.strip()))
+    )
+
+
+def _validate_notes_table_style(raw) -> dict:
+    """Validate + clean an incoming theme object. Returns the cleaned dict (only
+    known, in-range keys) or raises HTTPException(400) on a malformed field.
+    Unknown keys are dropped so the persisted shape stays auditable."""
+    if not isinstance(raw, dict):
+        raise HTTPException(
+            status_code=400, detail="notes_table_style must be an object."
+        )
+    cleaned: dict = {}
+    if "borderStyle" in raw:
+        if raw["borderStyle"] not in _BORDER_STYLES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"notes_table_style.borderStyle must be one of {sorted(_BORDER_STYLES)}.",
+            )
+        cleaned["borderStyle"] = raw["borderStyle"]
+    for key, lo, hi in (
+        ("fontSizePt", 6, 24),
+        ("paragraphSpacingPx", 0, 48),
+    ):
+        if key in raw:
+            v = raw[key]
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not (lo <= v <= hi):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"notes_table_style.{key} must be a number in [{lo}, {hi}].",
+                )
+            cleaned[key] = v
+    if "cellPaddingPx" in raw:
+        pad = raw["cellPaddingPx"]
+        if (
+            not isinstance(pad, list)
+            or len(pad) != 2
+            or any(
+                not isinstance(x, (int, float)) or isinstance(x, bool) or not (0 <= x <= 32)
+                for x in pad
+            )
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="notes_table_style.cellPaddingPx must be [vertical, horizontal] in [0, 32].",
+            )
+        cleaned["cellPaddingPx"] = pad
+    for color_key in ("borderColor", "headerFill"):
+        if color_key in raw and raw[color_key] is not None:
+            if not _valid_theme_color(raw[color_key]):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"notes_table_style.{color_key} must be a hex colour or 'transparent'.",
+                )
+            cleaned[color_key] = raw[color_key].strip().lower()
+    if "headerBold" in raw:
+        if not isinstance(raw["headerBold"], bool):
+            raise HTTPException(
+                status_code=400,
+                detail="notes_table_style.headerBold must be a boolean.",
+            )
+        cleaned["headerBold"] = raw["headerBold"]
+    return cleaned
 
 
 @router.get("/api/config")
@@ -40,6 +117,10 @@ async def get_config():
         "spot_check_mode": server._spot_check_mode(),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": server._entity_memory_enabled(),
+        # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
+        # Surfaced here so the Notes tab + clipboard read the firm default at
+        # render time without a separate /api/settings round-trip.
+        "notes_table_style": server._notes_table_style(),
     }
 
 
@@ -162,6 +243,13 @@ async def update_settings(body: dict):
                 f"{', '.join(SUPPORTED_OCR_ENGINES)}.",
             )
         set_key(str(ENV_FILE), "XBRL_DOCLING_OCR_ENGINE", engine)
+
+    # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md). Stored
+    # as a JSON object, like XBRL_DEFAULT_MODELS. Validated/cleaned first so a
+    # tampered payload can't land broken CSS in .env.
+    if "notes_table_style" in body:
+        cleaned = _validate_notes_table_style(body["notes_table_style"])
+        set_key(str(ENV_FILE), "XBRL_NOTES_TABLE_STYLE", json.dumps(cleaned))
 
     load_dotenv(ENV_FILE, override=True)
     return {"status": "ok"}

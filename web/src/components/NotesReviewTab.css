@@ -31,7 +31,9 @@
 }
 
 .notes-review-tab .tiptap p {
-  margin: 0 0 8px 0;
+  /* Paragraph gap is theme-driven (--nt-para-spacing) so the editor preview
+     matches the clipboard paste; 8px fallback = the historic default. */
+  margin: 0 0 var(--nt-para-spacing, 8px) 0;
 }
 
 .notes-review-tab .tiptap p:last-child {
@@ -63,11 +65,17 @@
 
 .notes-review-tab .tiptap th,
 .notes-review-tab .tiptap td {
-  border: 1px solid #C9C9C9; /* grey300 */
-  padding: 4px 8px;
+  /* Driven by the notes-table style theme (docs/PLAN-notes-table-theme.md): the
+   * `--nt-*` custom properties are set from the resolved theme on the
+   * `.notes-review-tab` root, so the editor preview matches the clipboard paste.
+   * The fallbacks below are the historic defaults — so an un-themed install (or
+   * a render before the vars are set) looks exactly as it did before. A per-cell
+   * inline `style=` still wins over these rules (manual overrides preserved). */
+  border: var(--nt-grid-border, 1px solid #C9C9C9); /* grey300 */
+  padding: var(--nt-cell-padding, 4px 8px);
   text-align: left;
   vertical-align: top;
-  font-size: 13px;
+  font-size: var(--nt-cell-font-size, 13px);
   /* The drag/multi-cell selection highlight below is drawn with an ::after
    * overlay, which needs a positioned ancestor to anchor against. */
   position: relative;
@@ -90,8 +98,8 @@
 }
 
 .notes-review-tab .tiptap th {
-  background: #F4F4F4; /* grey100 */
-  font-weight: 600;
+  background: var(--nt-header-fill, #F4F4F4); /* grey100 */
+  font-weight: var(--nt-header-weight, 600);
 }
 
 /* Numeric value cells right-align so the review preview matches the
