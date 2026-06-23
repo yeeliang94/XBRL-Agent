@@ -18,6 +18,7 @@ import {
   StyledTableHeader,
   applyCellFill,
   applyCellBorderAll,
+  applyCellAlign,
 } from "../lib/cellFormatting";
 
 describe("parseInlineStyle", () => {
@@ -188,6 +189,43 @@ describe("styled cell extension round-trip (real editor)", () => {
       return true;
     });
     expect(fills).toEqual(["#f4f4f4", "#f4f4f4"]);
+    editor.destroy();
+  });
+
+  it("applyCellAlign sets text-align on every cell in a selection", () => {
+    const editor = makeEditor(
+      "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>",
+    );
+    const cellPositions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") cellPositions.push(pos);
+      return true;
+    });
+    const sel = CellSelection.create(
+      editor.state.doc,
+      cellPositions[0],
+      cellPositions[1],
+    );
+    editor.view.dispatch(editor.state.tr.setSelection(sel));
+    applyCellAlign(editor, "right");
+
+    const aligns: unknown[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "tableCell") aligns.push(node.attrs.textAlign);
+      return true;
+    });
+    expect(aligns).toEqual(["right", "right"]);
+    // And it serialises into the cell style for persistence.
+    const td = editor.state.doc;
+    let firstAttrs: Record<string, unknown> = {};
+    td.descendants((node) => {
+      if (node.type.name === "tableCell" && !firstAttrs.textAlign) {
+        firstAttrs = node.attrs as Record<string, unknown>;
+        return false;
+      }
+      return true;
+    });
+    expect(buildCellStyle(firstAttrs)).toContain("text-align: right");
     editor.destroy();
   });
 

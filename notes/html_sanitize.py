@@ -65,6 +65,9 @@ ALLOWED_TAGS: frozenset[str] = frozenset({
     "h3",
     # v2 inline marks (human-applied via the editor toolbar):
     "u", "s", "sup", "sub", "mark", "span",
+    # v2 column widths: TipTap's resizable table emits a standard
+    # `<colgroup><col style="width: …">` (paste-faithful to Word/Excel).
+    "colgroup", "col",
 })
 
 # The six table tags. On these, attributes are an explicit allowlist
@@ -129,6 +132,13 @@ def _is_color(value: str) -> bool:
     return bool(_COLOR_RE.match(value)) or value == "inherit"
 
 
+# A width length: `Npx`, `N%`, or `auto`. Used for column widths on
+# `<table>`/`<col>` (TipTap resizable). Bounded shapes only — no `calc()`/`url()`.
+_WIDTH_LENGTH_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:px|%)|auto)$")
+# An indent length: positive `em`/`px` only (paragraph margin-left).
+_INDENT_LENGTH_RE = re.compile(r"^\d+(?:\.\d+)?(?:em|px)$")
+
+
 def _build_css_property_validators() -> dict[str, "callable"]:
     """Map each allowed CSS property to a value predicate. Properties absent
     from this map are dropped regardless of value; *which* of these a given tag
@@ -143,6 +153,9 @@ def _build_css_property_validators() -> dict[str, "callable"]:
         "background-color": _is_color,
         "color": _is_color,
         "text-align": lambda v: v in _TEXT_ALIGN_VALUES,
+        # Column width (on <table>/<col>) and paragraph indent (margin-left).
+        "width": lambda v: bool(_WIDTH_LENGTH_RE.match(v)),
+        "margin-left": lambda v: bool(_INDENT_LENGTH_RE.match(v)),
     }
     # Per-side border shorthands only (border-top/right/bottom/left) — the
     # exact set the Format bar emits. NOT the all-sides `border` shorthand
@@ -160,21 +173,27 @@ ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset(_CSS_PROPERTY_VALIDATORS)
 # Which validated properties each tag may carry. This is the tag-aware gate
 # that keeps each capability on exactly the tag that produces it:
 #   - table tags  : fill + per-side borders + cell alignment
+#   - <table>     : the above + width (TipTap resizable table)
+#   - <col>       : width only (the <colgroup> column widths)
 #   - <span>      : text colour (TipTap Color → <span style="color">)
 #   - <mark>      : highlight fill (+ the `color: inherit` it emits)
-#   - <p>/<h3>/<li>: paragraph alignment (TipTap TextAlign)
+#   - <p>/<h3>/<li>: paragraph alignment (TextAlign) + indent (margin-left)
 _TABLE_STYLE_PROPS: frozenset[str] = frozenset({
     "background-color",
     "border-top", "border-right", "border-bottom", "border-left",
     "text-align",
 })
+_BLOCK_STYLE_PROPS: frozenset[str] = frozenset({"text-align", "margin-left"})
 _STYLE_PROPS_BY_TAG: dict[str, frozenset[str]] = {
     **{tag: _TABLE_STYLE_PROPS for tag in _TABLE_TAGS},
+    # The table element additionally carries its overall width when resized.
+    "table": _TABLE_STYLE_PROPS | frozenset({"width"}),
+    "col": frozenset({"width"}),
     "span": frozenset({"color"}),
     "mark": frozenset({"background-color", "color"}),
-    "p": frozenset({"text-align"}),
-    "h3": frozenset({"text-align"}),
-    "li": frozenset({"text-align"}),
+    "p": _BLOCK_STYLE_PROPS,
+    "h3": _BLOCK_STYLE_PROPS,
+    "li": _BLOCK_STYLE_PROPS,
 }
 
 # Structural attributes kept on the style-bearing table tags. On those tags

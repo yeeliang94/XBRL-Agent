@@ -51,12 +51,15 @@ import {
   applyCellFill,
   applyCellBorderSide,
   applyCellBorderAll,
+  applyCellAlign,
+  type CellAlign,
   gridBorderValue,
   DEFAULT_BORDER_COLOR,
   BORDER_NONE,
   FILL_NONE,
   type BorderSide,
 } from "../lib/cellFormatting";
+import { Indent, indentBlocks, outdentBlocks } from "../lib/notesIndent";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
@@ -157,10 +160,15 @@ const TIPTAP_EXTENSIONS = [
   Color,
   Highlight.configure({ multicolor: true }),
   // Paragraph/heading alignment. Table-cell alignment is handled separately
-  // (the numeric auto-right-align + Phase 3 per-column control), so cells are
-  // intentionally NOT in this type list.
+  // (a per-cell `textAlign` attribute set from the Table toolbar group), so
+  // cells are intentionally NOT in this type list.
   TextAlign.configure({ types: ["heading", "paragraph"] }),
-  Table.configure({ resizable: false }),
+  // Paragraph indentation (custom; no first-party TipTap extension).
+  Indent,
+  // resizable: true enables drag-to-resize column widths. Widths serialise as
+  // a standard `<colgroup><col style="width">` + cell `colwidth` attrs, which
+  // the sanitiser accepts and which paste faithfully into Word/Excel.
+  Table.configure({ resizable: true }),
   TableRow,
   // Styled variants carry the WYSIWYG fill / per-side border attributes
   // (web/src/lib/cellFormatting.ts) so the accountant's formatting persists.
@@ -1313,6 +1321,8 @@ function EditorToolbar({ editor }: { editor: Editor }) {
           () => editor.chain().focus().toggleOrderedList().run(), editor.isActive("orderedList"))}
         {btn("H3", "Heading",
           () => editor.chain().focus().toggleHeading({ level: 3 }).run(), editor.isActive("heading", { level: 3 }))}
+        {btn("⇤", "Decrease indent", () => outdentBlocks(editor))}
+        {btn("⇥", "Increase indent", () => indentBlocks(editor))}
         {btn("Table", "Insert table",
           () => editor.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run())}
       </div>
@@ -1362,6 +1372,21 @@ function EditorToolbar({ editor }: { editor: Editor }) {
               onChange={(e) => setBorderColor(e.target.value)}
             />
           </label>
+
+          <span style={styles.tableFormatDivider} aria-hidden="true" />
+
+          {/* Per-cell alignment — applies across a drag-selected range (e.g.
+              right-align a whole numeric column). Distinct from the Tier-1
+              paragraph align and from the cosmetic numeric auto-right-align. */}
+          <span style={styles.tableFormatGroupLabel}>Align</span>
+          {(["left", "center", "right"] as CellAlign[]).map((a) =>
+            btn(
+              a === "left" ? "L" : a === "center" ? "C" : "R",
+              `Cell align ${a}`,
+              () => applyCellAlign(editor, a),
+              (currentCellAttrs(editor)?.textAlign as string | undefined) === a,
+            ),
+          )}
 
           <span style={styles.tableFormatDivider} aria-hidden="true" />
 

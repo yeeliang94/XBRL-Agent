@@ -39,6 +39,8 @@ def test_allowed_css_properties_is_exactly_the_editor_set() -> None:
         "border-left",
         "color",
         "text-align",
+        "width",        # column width on <table>/<col> (resizable table)
+        "margin-left",  # paragraph indent
     })
 
 
@@ -208,6 +210,61 @@ def test_dangerous_value_still_rejected_on_span_colour() -> None:
     low = cleaned.lower()
     assert "url(" not in low
     assert "javascript" not in low
+
+
+# --- v2 column width / indent / cell alignment -----------------------------
+
+def test_column_width_colgroup_survives() -> None:
+    """TipTap's resizable table emits `<colgroup><col style="width: …">` +
+    `<table style="width: …">`; those must survive so widths round-trip and
+    paste faithfully."""
+    out = _clean(
+        '<table style="width: 320px">'
+        '<colgroup><col style="width: 120px"><col style="width: 200px"></colgroup>'
+        '<tbody><tr><td colwidth="120">a</td><td colwidth="200">b</td></tr></tbody>'
+        "</table>"
+    )
+    low = out.lower()
+    assert "<colgroup>" in low
+    assert "width: 120px" in low
+    assert "width: 200px" in low
+    assert "width: 320px" in low  # table overall width
+    assert "colwidth=\"120\"" in low or "colwidth='120'" in low
+
+
+def test_invalid_width_value_rejected() -> None:
+    """A non-length width (e.g. `calc()` / junk) is dropped."""
+    cleaned, _ = sanitize_notes_html(
+        '<table><colgroup><col style="width: calc(100% - 5px)"></colgroup>'
+        "<tbody><tr><td>x</td></tr></tbody></table>"
+    )
+    assert "calc" not in cleaned.lower()
+
+
+def test_paragraph_indent_survives() -> None:
+    """Paragraph indentation persists as `margin-left` (em)."""
+    out = _clean('<p style="margin-left: 4em">indented</p>')
+    assert "margin-left: 4em" in out.lower()
+
+
+def test_indent_off_tag_and_bad_value_rejected() -> None:
+    """`margin-left` is a block concern only (not on a cell), and only a
+    positive em/px length is accepted."""
+    # Not allowed on a table cell.
+    cell, _ = sanitize_notes_html(
+        '<table><tr><td style="margin-left: 4em">x</td></tr></table>'
+    )
+    assert "margin-left" not in cell.lower()
+    # A non-length value is dropped on a paragraph.
+    bad, _ = sanitize_notes_html('<p style="margin-left: 50vw">x</p>')
+    assert "margin-left" not in bad.lower()
+
+
+def test_cell_text_align_survives() -> None:
+    """Per-cell alignment persists as `text-align` on the `<td>` (distinct from
+    the paragraph-level mark)."""
+    out = _clean('<table><tr><td style="text-align: right">1,595</td></tr></table>')
+    assert "text-align: right" in out.lower()
 
 
 # --- style still stripped off the table (gotcha #16 for prose) -------------

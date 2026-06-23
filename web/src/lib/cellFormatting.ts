@@ -29,6 +29,10 @@ const STYLE_PROPS: ReadonlyArray<{ attr: string; css: string }> = [
   { attr: "borderRight", css: "border-right" },
   { attr: "borderBottom", css: "border-bottom" },
   { attr: "borderLeft", css: "border-left" },
+  // Per-cell horizontal alignment (e.g. right-align a numeric column). Lands
+  // last in the canonical order; the backend sanitiser allows `text-align` on
+  // table cells (notes/html_sanitize.py `_STYLE_PROPS_BY_TAG`).
+  { attr: "textAlign", css: "text-align" },
 ];
 
 export type BorderSide = "Top" | "Right" | "Bottom" | "Left";
@@ -177,4 +181,13 @@ export function applyCellBorderAll(editor: Editor, value: string): boolean {
     chain = chain.setCellAttribute(`border${side}`, value);
   }
   return chain.run();
+}
+
+/** Horizontal alignment for every selected table cell (drag-select a column to
+ *  right-align all its figures). Persists as `text-align` in the cell style —
+ *  distinct from the paragraph-level TextAlign mark, and from the cosmetic
+ *  `.is-numeric` auto-right-align (which is a runtime CSS class, not stored). */
+export type CellAlign = "left" | "center" | "right";
+export function applyCellAlign(editor: Editor, align: CellAlign): boolean {
+  return editor.chain().focus().setCellAttribute("textAlign", align).run();
 }
