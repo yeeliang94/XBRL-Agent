@@ -18,6 +18,7 @@ import {
   StyledTableHeader,
   applyCellFill,
   applyCellBorderAll,
+  applyCellDoubleUnderline,
   applyCellAlign,
 } from "../lib/cellFormatting";
 
@@ -156,6 +157,30 @@ describe("styled cell extension round-trip (real editor)", () => {
     expect(attrs.backgroundColor).toBe("#f4f4f4"); // lowercased
     expect(attrs.borderTop).toBe("1px solid #000000");
     expect(attrs.borderLeft).toBe("1px solid #000000");
+    editor.destroy();
+  });
+
+  it("persists a double underline on every selected total cell", () => {
+    const editor = makeEditor(
+      "<table><tbody><tr><td>Total</td><td>2,000</td></tr></tbody></table>",
+    );
+    const positions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") positions.push(pos);
+      return true;
+    });
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        CellSelection.create(editor.state.doc, positions[0], positions[1]),
+      ),
+    );
+    applyCellDoubleUnderline(editor);
+    const borders: unknown[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "tableCell") borders.push(node.attrs.borderBottom);
+      return true;
+    });
+    expect(borders).toEqual(["3px double #000000", "3px double #000000"]);
     editor.destroy();
   });
 

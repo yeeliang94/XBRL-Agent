@@ -1,17 +1,18 @@
 // Paragraph indentation for the notes editor. TipTap ships no first-party
 // indent extension, so this is a small one: it adds an integer `indent` level
-// attribute to paragraph + heading nodes, rendered as a `margin-left` in `em`,
+// attribute to paragraph + heading + list-item nodes, rendered as a `margin-left` in `em`,
 // with increase/decrease helpers the toolbar calls. Persisted as inline
 // `margin-left` the backend sanitiser accepts on `<p>/<h3>/<li>` in lock-step
-// (notes/html_sanitize.py `_STYLE_PROPS_BY_TAG`). List nesting already handles
-// list indentation via Tab; this covers plain paragraphs/headings.
+// (notes/html_sanitize.py `_STYLE_PROPS_BY_TAG`). List nesting still handles
+// structural list indentation via Tab; this attribute preserves an explicit
+// pasted list-item offset without dropping it on the next edit.
 import { Extension } from "@tiptap/core";
 import type { Editor } from "@tiptap/react";
 
 // One indent level = 2em; cap the depth so a stuck key can't run away.
 export const INDENT_STEP_EM = 2;
 export const MAX_INDENT_LEVEL = 8;
-const INDENT_TYPES = ["paragraph", "heading"];
+const INDENT_TYPES = ["paragraph", "heading", "listItem"];
 
 export const Indent = Extension.create({
   name: "notesIndent",
@@ -54,7 +55,7 @@ export const Indent = Extension.create({
   },
 });
 
-// Increase/decrease the indent level of every paragraph/heading touched by the
+// Increase/decrease the indent level of every supported block touched by the
 // selection. Uses `.command()` (not a registered command name) to avoid the
 // TS module-augmentation boilerplate; mutates the transaction only when
 // dispatching, per TipTap's can-vs-do convention.

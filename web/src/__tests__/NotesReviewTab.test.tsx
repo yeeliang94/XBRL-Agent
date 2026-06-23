@@ -806,183 +806,17 @@ describe("NotesReviewTab — copy button (Step 11)", () => {
   });
 });
 
-describe("NotesReviewTab — per-cell paste-format tool", () => {
-  // A cell whose HTML contains a table so the per-row underline picker shows.
-  const TABLE_SAMPLE: NotesCellsResponse = {
-    sheets: [
-      {
-        sheet: "Notes-CI",
-        rows: [
-          {
-            row: 4,
-            label: "Corporate info",
-            html:
-              "<table><tr><th>Item</th><th>2024</th></tr>" +
-              "<tr><td>Cash</td><td>1,200</td></tr>" +
-              "<tr><td>Total</td><td>2,000</td></tr></table>",
-            evidence: "Page 3",
-            source_pages: [3],
-            updated_at: "2026-04-24T10:00:00Z",
-          },
-        ],
-      },
-    ],
-  };
-
-  test("Format button toggles the popover", async () => {
+describe("NotesReviewTab — single formatting experience", () => {
+  test("offers one Edit entry point and no competing per-copy Format control", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
     expandAllSheets();
-    expect(screen.queryByTestId("notes-format-popover")).toBeNull();
-    fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
-    expect(screen.getAllByTestId("notes-format-popover").length).toBeGreaterThan(
-      0,
-    );
-    // Controls present (table-wide border knob).
-    expect(
-      screen.getAllByLabelText(/table border style/i).length,
-    ).toBeGreaterThan(0);
-    // Toggle off hides it again.
-    fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
-    expect(screen.queryByTestId("notes-format-popover")).toBeNull();
-  });
-
-  test("Edit and Format are mutually exclusive", async () => {
-    // Peer-review [LOW]: editing while the row picker is open could change the
-    // table under stale row indices. Opening one mode closes the other.
-    mockFetchOnce(SAMPLE);
-    const { container } = render(<NotesReviewTab runId={42} />);
-    await waitFor(() =>
-      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
-    );
-    expandAllSheets();
-
-    // Enter edit mode, then open Format → editor leaves edit mode.
-    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
-    await waitFor(() =>
-      expect(
-        container.querySelectorAll("[contenteditable='true']").length,
-      ).toBeGreaterThan(0),
-    );
-    fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
-    await waitFor(() =>
-      expect(
-        container.querySelectorAll("[contenteditable='true']").length,
-      ).toBe(0),
-    );
-    expect(screen.getAllByTestId("notes-format-popover").length).toBeGreaterThan(
-      0,
-    );
-
-    // Now click Edit → the Format popover closes.
-    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
-    expect(screen.queryByTestId("notes-format-popover")).toBeNull();
-  });
-
-  test("toolbar Copy ignores a per-cell tweak and uses the global default", async () => {
-    // Peer-review [MEDIUM]: a per-cell override must NOT leak into the plain
-    // toolbar Copy. Mark a row in the popover, then click the toolbar Copy —
-    // the output must carry no double underline (global default has none).
-    localStorage.clear();
-    const blobCalls: { type: string; content: string }[] = [];
-    const RealBlob = globalThis.Blob;
-    (globalThis as any).Blob = class FakeBlob {
-      public type: string;
-      public content: string;
-      constructor(parts: BlobPart[], opts?: { type?: string }) {
-        this.type = opts?.type ?? "";
-        this.content = parts.map((p) => String(p)).join("");
-        blobCalls.push({ type: this.type, content: this.content });
-      }
-    };
-    const write = vi.fn(async () => undefined);
-    // @ts-expect-error — jsdom lacks navigator.clipboard
-    globalThis.navigator.clipboard = { write, writeText: vi.fn() };
-    // @ts-expect-error — ClipboardItem is not in jsdom
-    globalThis.ClipboardItem = class {
-      constructor(public items: Record<string, Blob>) {}
-    };
-
-    try {
-      mockFetchOnce(TABLE_SAMPLE);
-      render(<NotesReviewTab runId={42} />);
-      await waitFor(() =>
-        expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
-      );
-      expandAllSheets();
-      fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
-      fireEvent.click(screen.getByTestId("row-underline-2")); // mark Total
-      // Click the TOOLBAR Copy (exact "Copy", not "Copy with this format").
-      fireEvent.click(screen.getAllByRole("button", { name: /^copy$/i })[0]);
-      await waitFor(() => expect(write).toHaveBeenCalled());
-
-      const htmlCall = blobCalls.find((c) => c.type === "text/html");
-      expect(htmlCall).toBeDefined();
-      // No double underline anywhere — the tweak didn't leak into toolbar Copy.
-      expect(htmlCall!.content).not.toContain("border-bottom: 3px double #000");
-    } finally {
-      (globalThis as any).Blob = RealBlob;
-    }
-  });
-
-  test("marking a row + copy emits a double underline on that row only", async () => {
-    localStorage.clear();
-    // Capture the decorated text/html blob handed to the clipboard.
-    const blobCalls: { type: string; content: string }[] = [];
-    const RealBlob = globalThis.Blob;
-    (globalThis as any).Blob = class FakeBlob {
-      public type: string;
-      public content: string;
-      constructor(parts: BlobPart[], opts?: { type?: string }) {
-        this.type = opts?.type ?? "";
-        this.content = parts.map((p) => String(p)).join("");
-        blobCalls.push({ type: this.type, content: this.content });
-      }
-    };
-    const write = vi.fn(async () => undefined);
-    // @ts-expect-error — jsdom lacks navigator.clipboard
-    globalThis.navigator.clipboard = { write, writeText: vi.fn() };
-    // @ts-expect-error — ClipboardItem is not in jsdom
-    globalThis.ClipboardItem = class {
-      constructor(public items: Record<string, Blob>) {}
-    };
-
-    try {
-      mockFetchOnce(TABLE_SAMPLE);
-      render(<NotesReviewTab runId={42} />);
-      await waitFor(() =>
-        expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
-      );
-      expandAllSheets();
-      fireEvent.click(screen.getAllByRole("button", { name: /^format$/i })[0]);
-      // Row index 2 = the "Total" row (header=0, Cash=1, Total=2).
-      fireEvent.click(screen.getByTestId("row-underline-2"));
-      fireEvent.click(screen.getByTestId("notes-format-copy"));
-      await waitFor(() => expect(write).toHaveBeenCalled());
-
-      const htmlCall = blobCalls.find((c) => c.type === "text/html");
-      expect(htmlCall).toBeDefined();
-      // Parse the decorated HTML and inspect cells by text (TipTap wraps cell
-      // content in <p>, so a flat regex on ">Total<" wouldn't match).
-      const probe = document.createElement("div");
-      probe.innerHTML = htmlCall!.content;
-      const cells = Array.from(probe.querySelectorAll("td"));
-      const totalCell = cells.find((c) => c.textContent?.trim() === "Total");
-      const cashCell = cells.find((c) => c.textContent?.trim() === "Cash");
-      // The Total row carries the accountant double underline…
-      expect(totalCell?.getAttribute("style")).toContain(
-        "border-bottom: 3px double #000",
-      );
-      // …and the ordinary "Cash" row does not.
-      expect(cashCell?.getAttribute("style")).not.toContain(
-        "border-bottom: 3px double #000",
-      );
-    } finally {
-      (globalThis as any).Blob = RealBlob;
-    }
+    expect(screen.queryByRole("button", { name: /^format$/i })).toBeNull();
+    expect(screen.getAllByRole("button", { name: /^edit$/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /^copy$/i }).length).toBeGreaterThan(0);
   });
 });
 
@@ -1294,12 +1128,11 @@ describe("NotesReviewTab unmount flush", () => {
   });
 });
 
-describe("NotesReviewTab sanitizer warnings are NOT surfaced (v2)", () => {
-  test("a PATCH that returns sanitizer_warnings renders no warning panel", async () => {
-    // v2 removed the warning panel (it was developer-facing noise). The
-    // backend still sanitises + still returns the list (for logs), but the
-    // UI must not render it. We assert the panel never appears even when the
-    // server reports a removal.
+describe("NotesReviewTab sanitizer feedback", () => {
+  test("a PATCH warning shows a concise notice without exposing raw diagnostics", async () => {
+    // The raw backend strings are useful for logs but unpleasant in a review
+    // workflow. The UI should acknowledge the change in plain language while
+    // keeping implementation details such as the stripped tag out of view.
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       if (init?.method === "PATCH") {
         return new Response(
@@ -1342,7 +1175,7 @@ describe("NotesReviewTab sanitizer warnings are NOT surfaced (v2)", () => {
       }),
     );
 
-    // Give the debounce + PATCH ample time, then assert the panel is absent.
+    // Give the debounce + PATCH ample time, then assert the concise notice.
     await waitFor(
       () => {
         const patched = fetchMock.mock.calls.some(
@@ -1352,8 +1185,10 @@ describe("NotesReviewTab sanitizer warnings are NOT surfaced (v2)", () => {
       },
       { timeout: 4000 },
     );
-    expect(screen.queryByTestId("sanitizer-warning")).toBeNull();
-    expect(screen.queryByText(/Sanitiser removed content/i)).toBeNull();
+    expect(screen.getByTestId("format-adjusted-notice")).toHaveTextContent(
+      "Formatting adjusted",
+    );
+    expect(screen.queryByText(/Removed disallowed tag/i)).toBeNull();
   });
 });
 
@@ -1588,6 +1423,23 @@ describe("NotesReviewTab — table format bar", () => {
     expect(screen.queryByTestId("table-format-bar")).toBeNull();
   });
 
+  test("toolbar uses compact icon groups while retaining accessible labels", async () => {
+    mockFetchOnce(TABLE_CELL);
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+
+    expect(screen.getByRole("group", { name: "Text formatting" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Borders" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Table structure" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Insert table" })).toHaveTextContent("▦");
+    expect(screen.getByRole("button", { name: "Fill Grey" })).toHaveTextContent("■");
+    expect(screen.getByRole("button", { name: "Border Top" })).toHaveTextContent("▔");
+  });
+
   test("applying a fill preset persists a background-color via PATCH", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -1635,6 +1487,58 @@ describe("NotesReviewTab — table format bar", () => {
     expect(body.html.toLowerCase()).toMatch(
       /background-color:\s*(#f4f4f4|rgb\(244, 244, 244\))/,
     );
+    vi.useRealTimers();
+  });
+
+  test("white is an explicit, selection-safe border colour", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({
+            row: 5,
+            sheet: "Notes-Listofnotes",
+            label: "Capital commitments",
+            html: body.html,
+            evidence: "Page 9",
+            source_pages: [9],
+            updated_at: "2026-04-24T10:05:00Z",
+            sanitizer_warnings: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify(TABLE_CELL), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+    expandAllSheets();
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    await vi.runAllTimersAsync();
+
+    fireEvent.click(screen.getByRole("button", { name: "Border colour White" }));
+    expect(screen.getByRole("button", { name: "Border colour White" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await vi.advanceTimersByTimeAsync(1600);
+
+    const patches = fetchMock.mock.calls.filter(
+      (c) => (c[1] as RequestInit | undefined)?.method === "PATCH",
+    );
+    const body = JSON.parse(
+      (patches[patches.length - 1][1] as RequestInit).body as string,
+    );
+    expect(body.html.toLowerCase()).toMatch(
+      /border-top:\s*1px solid (?:#ffffff|rgb\(255, 255, 255\))/,
+    );
+    expect(body.html.toLowerCase()).not.toContain("#c9c9c9");
     vi.useRealTimers();
   });
 });

@@ -85,14 +85,12 @@ _TABLE_TAGS: frozenset[str] = frozenset({
 
 # A colour: hex (#rgb / #rgba / #rrggbb / #rrggbbaa), rgb()/rgba(), or the
 # `transparent` keyword (the persisted "no fill" reset value — peer-review #2).
-# The colour picker emits hex; `transparent` is how "remove fill" is stored.
-# Only the VALID hex lengths (3/4/6/8) are accepted — `{3,8}` would also pass
-# 5- and 7-digit strings that no browser renders, looser than the editor emits.
-_COLOR_RE = re.compile(
-    r"^(?:#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})"
-    r"|rgba?\(\s*[\d.\s,%]+\)"
-    r"|transparent)$"
-)
+# The colour picker emits hex; browser serialisation commonly emits comma-form
+# rgb()/rgba(). Keep the inexpensive shape check for hex, but parse the
+# functional form below: the old broad regex accepted malformed values such as
+# ``rgb(999,,)`` that a browser would discard anyway.
+_HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+_FUNCTION_COLOR_RE = re.compile(r"^(rgb|rgba)\(\s*(.*?)\s*\)$")
 # A length used for border widths: `Npx`, bare `0`, or the CSS keywords.
 _WIDTH_RE = re.compile(r"^(?:\d+(?:\.\d+)?px|0|thin|medium|thick)$")
 # Border line styles we accept (covers the accountant grid / underline / box).
@@ -101,19 +99,75 @@ _BORDER_STYLE_VALUES: frozenset[str] = frozenset({
 })
 
 
+def _is_css_number_in_range(value: str, upper: float) -> bool:
+    """Return whether a CSS colour component is a finite number in range."""
+    try:
+        parsed = float(value)
+    except ValueError:
+        return False
+    return 0 <= parsed <= upper
+
+
+def _is_css_color(value: str) -> bool:
+    """Validate the colour forms emitted by our editor and browser.
+
+    We deliberately support the legacy comma-form functional syntax that the
+    browser writes back (``rgb(255, 255, 255)``), rather than accepting every
+    CSS Color 4 variant. That keeps this allowlist small and auditable while
+    accepting every colour the Notes UI currently produces.
+    """
+    if value == "transparent" or _HEX_COLOR_RE.match(value):
+        return True
+    match = _FUNCTION_COLOR_RE.match(value)
+    if not match:
+        return False
+    function, body = match.groups()
+    components = [component.strip() for component in body.split(",")]
+    expected_components = 3 if function == "rgb" else 4
+    if len(components) != expected_components or any(not c for c in components):
+        return False
+
+    for component in components[:3]:
+        if component.endswith("%"):
+            if not _is_css_number_in_range(component[:-1], 100):
+                return False
+        elif not _is_css_number_in_range(component, 255):
+            return False
+
+    if function == "rgba":
+        alpha = components[3]
+        if alpha.endswith("%"):
+            return _is_css_number_in_range(alpha[:-1], 100)
+        return _is_css_number_in_range(alpha, 1)
+    return True
+
+
 def _is_border_shorthand(value: str) -> bool:
     """Validate a `border-<side>` shorthand value, e.g. `1px solid #000` or
     `none`. Every whitespace-separated token must classify as a width, a
     line-style, or a colour — one unrecognised token rejects the whole
-    declaration (peer-review #1: no loose values)."""
-    tokens = value.split()
+    declaration (peer-review #1: no loose values).
+
+    Browser serialisation uses CSS functional colours with spaces
+    (``rgb(255, 255, 255)``). Plain whitespace tokenisation splits that one
+    colour into invalid fragments, silently strips a valid border on save, and
+    makes the editor fall back to its default grid colour. Collapse whitespace
+    only inside complete rgb()/rgba() functions before tokenising; the strict
+    colour parser still validates the function as a whole.
+    """
+    token_value = re.sub(
+        r"rgba?\(([^)]*)\)",
+        lambda match: re.sub(r"\s+", "", match.group(0)),
+        value,
+    )
+    tokens = token_value.split()
     if not tokens:
         return False
     for tok in tokens:
         if (
             _WIDTH_RE.match(tok)
             or tok in _BORDER_STYLE_VALUES
-            or _COLOR_RE.match(tok)
+            or _is_css_color(tok)
         ):
             continue
         return False
@@ -129,7 +183,7 @@ _TEXT_ALIGN_VALUES: frozenset[str] = frozenset({
 def _is_color(value: str) -> bool:
     """A safe colour value: hex / rgb() / `transparent`, plus `inherit` (the
     TipTap highlight mark emits `color: inherit` alongside its background)."""
-    return bool(_COLOR_RE.match(value)) or value == "inherit"
+    return _is_css_color(value) or value == "inherit"
 
 
 # A width length: `Npx`, `N%`, or `auto`. Used for column widths on
@@ -213,6 +267,24 @@ _STYLE_PROPS_BY_TAG: dict[str, frozenset[str]] = {
 _TABLE_STRUCTURE_ATTRS: frozenset[str] = frozenset({
     "colspan", "rowspan", "colwidth",
 })
+
+# Table structure values cross the browser/ProseMirror boundary too. Bound
+# them to the values TipTap understands so malformed or enormous attributes
+# cannot create surprising table shapes. ``0`` is legitimate in a comma-
+# separated `colwidth` list: TipTap uses it for an unmeasured column width.
+_TABLE_SPAN_RE = re.compile(r"^[1-9]\d{0,3}$")
+_TABLE_COLWIDTH_RE = re.compile(
+    r"^(?:0|[1-9]\d{0,4})(?:,(?:0|[1-9]\d{0,4}))*$"
+)
+
+
+def _is_valid_table_structure_attr(name: str, value: object) -> bool:
+    raw = str(value).strip()
+    if name in {"colspan", "rowspan"}:
+        return bool(_TABLE_SPAN_RE.match(raw))
+    if name == "colwidth":
+        return bool(_TABLE_COLWIDTH_RE.match(raw))
+    return False
 
 # Tags whose *contents* are also removed on strip. A `<script>` stripped
 # of its `<script>` wrapper would dump raw JS text into the cell; same
@@ -377,15 +449,23 @@ def _strip_unsafe_attributes(node: Tag, warnings: list[str]) -> None:
             )
             continue
         # On the table tags, attributes are an explicit ALLOWLIST: keep only
-        # known structural attributes (`style=` is handled above;
-        # colspan/rowspan/colwidth pass here). Anything else on a table tag is
-        # dropped, so the surviving surface is auditable rather than "whatever
-        # wasn't blacklisted" (peer-review #6).
-        if tag_name in _TABLE_TAGS and lower not in _TABLE_STRUCTURE_ATTRS:
-            to_remove.append(attr_name)
-            warnings.append(
-                f"Removed {attr_name}= attribute on <{node.name}>"
-            )
+        # known structural attributes (`style=` is handled above). Their
+        # values are validated too: allowing arbitrary strings here would make
+        # this an attribute-name allowlist rather than an actual structural
+        # contract. Anything else on a table tag is dropped, so the surviving
+        # surface is auditable rather than "whatever wasn't blacklisted"
+        # (peer-review #6).
+        if tag_name in _TABLE_TAGS:
+            if lower not in _TABLE_STRUCTURE_ATTRS:
+                to_remove.append(attr_name)
+                warnings.append(
+                    f"Removed {attr_name}= attribute on <{node.name}>"
+                )
+            elif not _is_valid_table_structure_attr(lower, node.attrs[attr_name]):
+                to_remove.append(attr_name)
+                warnings.append(
+                    f"Removed invalid value for '{lower}' on <{node.name}>"
+                )
             continue
         # Off the table (e.g. `type` on <ol>, `data-color` on <mark>) we keep
         # by default — the tag whitelist is the gate there, and tightening

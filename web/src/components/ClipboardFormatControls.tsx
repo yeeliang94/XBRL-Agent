@@ -1,11 +1,6 @@
 // Reusable controls for the table-wide notes-paste format knobs (border style,
-// font size, cell padding, paragraph spacing). Used in two places so they stay
-// identical: the "Notes paste format" section of General settings (editing the
-// global default) and the per-cell Format popover in the Notes review tab
-// (editing a transient per-copy override).
-//
-// `rowUnderlines` is NOT rendered here — it is per-cell only (row indices make
-// sense for one table), so the Format popover handles it separately.
+// font size, cell padding, paragraph spacing). Used by the "Notes paste
+// format" section in General settings to edit the per-browser global default.
 //
 // Inline styles only (gotcha #7).
 

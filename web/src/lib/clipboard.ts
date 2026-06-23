@@ -35,11 +35,12 @@
 //
 // The styles are now built from a `ClipboardFormatOptions` value (see
 // `clipboardFormat.ts`) so the user can configure border style / font size /
-// cell padding / paragraph spacing and mark specific rows for an accountant
-// double underline — a GLOBAL default in localStorage (General settings) plus
-// a TRANSIENT per-cell override set in the Notes-tab Format tool. Calling the
-// decorator with DEFAULT_FORMAT_OPTIONS reproduces the previous hard-coded
-// output exactly; the clipboard pinning tests depend on that equivalence.
+// cell padding / paragraph spacing as GLOBAL defaults in localStorage (General
+// settings). A double underline is document formatting applied and persisted
+// from the editor toolbar, so the clipboard preserves it rather than creating
+// a one-off copy-only version. Calling the decorator with DEFAULT options
+// reproduces the previous hard-coded output exactly; the clipboard pinning
+// tests depend on that equivalence.
 //
 // Default spacing values match `web/src/components/NotesReviewTab.css` so the
 // M-Tool paste lays out the same way as the editor preview. The DEFAULT border
@@ -62,9 +63,9 @@ import {
 
 // The style strings below used to be module constants. They are now built from
 // a `ClipboardFormatOptions` value so the user can configure border / font /
-// padding / spacing (global default + per-cell override). Calling with the
-// DEFAULT options reproduces the previous hard-coded output exactly — the
-// clipboard pinning tests depend on that equivalence.
+// padding / spacing (global defaults). Calling with the DEFAULT options
+// reproduces the previous hard-coded output exactly — the clipboard pinning
+// tests depend on that equivalence.
 
 function _fontCss(opts: ClipboardFormatOptions): string {
   // `10pt` (NOT `10px`): paste targets like M-Tool / Word interpret a bare
@@ -122,11 +123,6 @@ function _cellStyleBase(opts: ClipboardFormatOptions): string {
 
 const _CLIPBOARD_HEADER_EXTRA = " background: #f3f4f6; font-weight: 600;";
 
-// Accountant "total" rule: a double bottom border on the cells of a row the
-// user marked in the Format tool. Black so it reads as a deliberate underline
-// regardless of the grid colour. Appended on top of the cell base style.
-const _CLIPBOARD_ROW_UNDERLINE = " border-bottom: 3px double #000;";
-
 // Prose blocks: the same Arial face plus a bottom margin so consecutive
 // paragraphs get breathing space on paste. Without the margin, `<p>` tags
 // reach M-Tool with no spacing and the paragraphs jam together (the reported
@@ -137,6 +133,38 @@ function _paragraphStyle(opts: ClipboardFormatOptions): string {
 }
 function _headingStyle(opts: ClipboardFormatOptions): string {
   return _fontCss(opts) + " margin: 12px 0 6px 0; font-weight: 600;";
+}
+
+/** Does this block own its left margin through persisted editor indentation? */
+function _hasPersistedIndent(el: Element): boolean {
+  return (el.getAttribute("style") || "")
+    .split(";")
+    .some(
+      (decl) =>
+        decl.slice(0, decl.indexOf(":")).trim().toLowerCase() ===
+        "margin-left",
+    );
+}
+
+/**
+ * Merge the paste defaults into a prose block without letting a `margin:`
+ * shorthand erase the editor's persisted `margin-left`. CSS shorthands reset
+ * every side, so appending `margin: 0 0 8px 0` after `margin-left: 2em` makes
+ * Word discard the indentation even though the saved HTML is correct.
+ *
+ * Keep the historic shorthand for unindented blocks (clipboard output remains
+ * byte-compatible); expand only the three non-left sides when indentation is
+ * present, letting the persisted left margin win.
+ */
+function _mergeBlockStyle(
+  el: Element,
+  defaultStyle: string,
+  expandedMarginStyle: string,
+): void {
+  _mergeStyle(
+    el,
+    _hasPersistedIndent(el) ? expandedMarginStyle : defaultStyle,
+  );
 }
 
 // Numeric-cell heuristic + row-label-column rule live in the shared
@@ -218,17 +246,11 @@ export function decorateHtmlForClipboard(
   // Walk row by row so the row-label column (first cell of a multi-column
   // row) can stay left-aligned while numeric value columns go right —
   // see shouldRightAlignCell. A bare single-cell numeric row still
-  // right-aligns. `rowIdx` is the 0-based <tr> position across the whole
-  // table (querySelectorAll document order) — the Format tool's row picker
-  // numbers rows the same way, so its `rowUnderlines` line up here.
-  Array.from(tmp.querySelectorAll("tr")).forEach((row, rowIdx) => {
+  // right-aligns.
+  Array.from(tmp.querySelectorAll("tr")).forEach((row) => {
     const cells = Array.from(row.children).filter(
       (c) => c.tagName === "TD" || c.tagName === "TH",
     );
-    // Optional accountant double-underline on this row's cells.
-    const underline = opts.rowUnderlines.includes(rowIdx)
-      ? _CLIPBOARD_ROW_UNDERLINE
-      : "";
     cells.forEach((cell, idx) => {
       const align = shouldRightAlignCell(
         cell.textContent ?? "",
@@ -238,9 +260,9 @@ export function decorateHtmlForClipboard(
         ? " text-align: right;"
         : " text-align: left;";
       if (cell.tagName === "TH") {
-        _mergeCellStyle(cell, cellBase + _CLIPBOARD_HEADER_EXTRA + align + underline);
+        _mergeCellStyle(cell, cellBase + _CLIPBOARD_HEADER_EXTRA + align);
       } else {
-        _mergeCellStyle(cell, cellBase + align + underline);
+        _mergeCellStyle(cell, cellBase + align);
       }
     });
   });
@@ -251,10 +273,20 @@ export function decorateHtmlForClipboard(
   const headingStyle = _headingStyle(opts);
   const fontCss = _fontCss(opts);
   for (const p of Array.from(tmp.querySelectorAll("p"))) {
-    _mergeStyle(p, paragraphStyle);
+    _mergeBlockStyle(
+      p,
+      paragraphStyle,
+      fontCss +
+        ` margin-top: 0; margin-right: 0; margin-bottom: ${opts.paragraphSpacingPx}px;`,
+    );
   }
   for (const h of Array.from(tmp.querySelectorAll("h3"))) {
-    _mergeStyle(h, headingStyle);
+    _mergeBlockStyle(
+      h,
+      headingStyle,
+      fontCss +
+        " margin-top: 12px; margin-right: 0; margin-bottom: 6px; font-weight: 600;",
+    );
   }
   for (const list of Array.from(tmp.querySelectorAll("ul, ol, li"))) {
     _mergeStyle(list, fontCss);

@@ -19,7 +19,6 @@ import {
   useRef,
   useState,
   useCallback,
-  useMemo,
 } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
@@ -51,6 +50,7 @@ import {
   applyCellFill,
   applyCellBorderSide,
   applyCellBorderAll,
+  applyCellDoubleUnderline,
   applyCellAlign,
   type CellAlign,
   gridBorderValue,
@@ -78,9 +78,7 @@ import { tagNumericCells } from "../lib/tableAlign";
 import { formatGroupedInput } from "../lib/numberFormat";
 import {
   loadGlobalFormat,
-  type ClipboardFormatOptions,
 } from "../lib/clipboardFormat";
-import { ClipboardFormatControls } from "./ClipboardFormatControls";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
 import "./NotesReviewTab.css";
 
@@ -159,10 +157,12 @@ const TIPTAP_EXTENSIONS = [
   TextStyle,
   Color,
   Highlight.configure({ multicolor: true }),
-  // Paragraph/heading alignment. Table-cell alignment is handled separately
+  // Block alignment. List-item alignment and indentation are included so
+  // paste-originated <li> formatting survives a save/reload cycle; table-cell
+  // alignment is handled separately
   // (a per-cell `textAlign` attribute set from the Table toolbar group), so
   // cells are intentionally NOT in this type list.
-  TextAlign.configure({ types: ["heading", "paragraph"] }),
+  TextAlign.configure({ types: ["heading", "paragraph", "listItem"] }),
   // Paragraph indentation (custom; no first-party TipTap extension).
   Indent,
   // resizable: true enables drag-to-resize column widths. Widths serialise as
@@ -515,24 +515,6 @@ function SheetSection({
 // Cell row — label + evidence on the left, editor + actions on the right.
 // ---------------------------------------------------------------------------
 
-// Build a short text preview per table row so the Format tool's underline
-// picker can list them. Enumerates <tr> across all tables in document order —
-// the SAME order decorateHtmlForClipboard walks — so a picked row's index maps
-// straight to `rowUnderlines`. Returns [] when the cell has no table.
-function extractTableRowPreviews(html: string): string[] {
-  if (!html) return [];
-  const tmp = document.createElement("div");
-  tmp.innerHTML = html;
-  return Array.from(tmp.querySelectorAll("tr")).map((row) => {
-    const cells = Array.from(row.children)
-      .filter((c) => c.tagName === "TD" || c.tagName === "TH")
-      .map((c) => (c.textContent ?? "").trim());
-    const text = cells.join(" | ").trim();
-    // Cap the preview so a long policy row doesn't blow out the popover.
-    return text.length > 60 ? text.slice(0, 57) + "…" : text || "(empty row)";
-  });
-}
-
 function CellRow({
   runId,
   sheet,
@@ -545,20 +527,11 @@ function CellRow({
   const [editable, setEditable] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [copiedAt, setCopiedAt] = useState<number | null>(null);
-  // Per-cell paste-format tool. `formatOpen` shows/hides the popover (like the
-  // Edit toggle); `formatOpts` is the TRANSIENT override Copy uses for this
-  // cell. It is re-seeded from the saved global default every time the popover
-  // opens, so it never persists and never leaks between cells (gotcha #16 — the
-  // store stays style-free; this lives only at copy time).
-  const [formatOpen, setFormatOpen] = useState(false);
-  const [formatOpts, setFormatOpts] =
-    useState<ClipboardFormatOptions>(loadGlobalFormat);
-  // (Notes editor v2) The sanitiser-warning panel was removed: it listed
-  // developer-phrased removals on every save and a paste from Excel/Word
-  // produced a wall of them, which read as "something broke" when nothing
-  // did. The backend still sanitises (and still returns the list for logs);
-  // we just no longer surface it in the UI. Dangerous markup is dropped
-  // silently and safely.
+  // The API's warning strings are deliberately developer-facing (and verbose
+  // after a Word/Excel paste), so never render them verbatim. A compact,
+  // human-readable signal is enough to explain why a saved edit looks a little
+  // different without turning the review screen into a diagnostics panel.
+  const [formatAdjusted, setFormatAdjusted] = useState(false);
   // Keep a mutable ref to the current HTML so the debounced saver reads
   // the latest value without resubscribing every keystroke.
   const liveHtmlRef = useRef<string>(cell.html);
@@ -707,6 +680,7 @@ function CellRow({
     editor.commands.setContent(cell.html, { emitUpdate: false });
     liveHtmlRef.current = cell.html;
     savedHtmlRef.current = cell.html;
+    setFormatAdjusted(false);
   }, [editor, cell.html]);
 
   // Right-align numeric table cells in the rendered editor so the review
@@ -806,6 +780,13 @@ function CellRow({
           liveHtmlRef.current = settled;
           savedHtmlRef.current = settled;
         }
+        // Show a single neutral acknowledgement for the most recent save when
+        // the backend removed unsupported markup or styling. A subsequent
+        // clean save clears it, so this remains a statement about the visible
+        // document rather than a sticky historical warning.
+        if (!isStale) {
+          setFormatAdjusted((updated.sanitizer_warnings?.length ?? 0) > 0);
+        }
         // Only show "Saved" when this response reflects the latest content.
         // If the user has typed newer text (isStale), the coalesced save is
         // still pending, so keep the cell marked dirty.
@@ -852,61 +833,14 @@ function CellRow({
     return () => node.removeEventListener("notes-review-test-edit", handler);
   }, [editor]);
 
-  // Toolbar Copy ALWAYS uses the saved global default, read at click time.
-  // The per-cell tweak is a one-off applied only via the popover's own copy
-  // button — so a tweak (or a closed popover) never silently changes what the
-  // plain Copy button does (peer-review [MEDIUM]).
+  // Copy is deliberately a single action: it reads the per-browser paste
+  // defaults at click time. Those defaults live in Settings because they
+  // affect the receiving application, not this note's saved document.
   const handleCopy = useCallback(async () => {
     const html = editor?.getHTML() ?? cell.html;
     const ok = await copyHtmlAsRichText(html, loadGlobalFormat());
     if (ok) setCopiedAt(Date.now());
   }, [editor, cell.html]);
-
-  // Popover "Copy with this format": the transient per-cell override, applied
-  // to this single copy. `formatOpts` is re-seeded from the global default each
-  // time the popover opens, so it is genuinely one-off.
-  const handleCopyWithFormat = useCallback(async () => {
-    const html = editor?.getHTML() ?? cell.html;
-    const ok = await copyHtmlAsRichText(html, formatOpts);
-    if (ok) setCopiedAt(Date.now());
-  }, [editor, cell.html, formatOpts]);
-
-  // Open the Format popover, re-seeding the transient options from the saved
-  // global default so each session of the tool starts from the user's default
-  // (and a previous tweak doesn't silently carry over). Editing and formatting
-  // are mutually exclusive: opening Format leaves edit mode so the table can't
-  // change underneath the row picker (peer-review [LOW] — stale row indices).
-  const toggleFormat = useCallback(() => {
-    setFormatOpen((open) => {
-      if (!open) {
-        setFormatOpts(loadGlobalFormat());
-        setEditable(false);
-      }
-      return !open;
-    });
-  }, []);
-
-  // Row previews for the underline picker — one entry per <tr> across the
-  // cell's table(s), in the same document order decorateHtmlForClipboard uses,
-  // so the 0-based index here lines up with `rowUnderlines` there.
-  const tableRows = useMemo(
-    () => extractTableRowPreviews(editor?.getHTML() ?? cell.html),
-    // Recompute when the popover opens (cheap; the editor HTML is stable while
-    // the popover is up since editing is a separate mode).
-    [editor, cell.html, formatOpen],
-  );
-
-  const toggleRowUnderline = useCallback((rowIdx: number) => {
-    setFormatOpts((prev) => {
-      const has = prev.rowUnderlines.includes(rowIdx);
-      return {
-        ...prev,
-        rowUnderlines: has
-          ? prev.rowUnderlines.filter((i) => i !== rowIdx)
-          : [...prev.rowUnderlines, rowIdx],
-      };
-    });
-  }, []);
 
   // Auto-dismiss the "Copied" pill after 2 seconds so the UI goes back
   // to a neutral state without the user clicking anywhere.
@@ -937,54 +871,36 @@ function CellRow({
         <div style={styles.cellToolbar}>
           <div style={styles.cellToolbarSpacer} />
           <SaveStatusBadge status={status} />
+          {formatAdjusted && (
+            <span
+              data-testid="format-adjusted-notice"
+              role="status"
+              style={styles.formatAdjustedNotice}
+              title="Unsupported pasted formatting was removed when this note was saved"
+            >
+              Formatting adjusted
+            </span>
+          )}
           {copiedAt !== null && (
             <span style={styles.copiedChip}>Copied</span>
           )}
           <button
             type="button"
             style={styles.smallButton}
-            onClick={() =>
-              setEditable((v) => {
-                // Entering edit mode closes the Format popover (mutually
-                // exclusive — see toggleFormat).
-                if (!v) setFormatOpen(false);
-                return !v;
-              })
-            }
+            onClick={() => setEditable((v) => !v)}
           >
             {editable ? "Done" : "Edit"}
           </button>
           <button
             type="button"
-            style={{
-              ...styles.smallButton,
-              ...(formatOpen ? styles.smallButtonActive : null),
-            }}
-            aria-expanded={formatOpen}
-            onClick={toggleFormat}
-          >
-            Format
-          </button>
-          <button
-            type="button"
             style={styles.smallButton}
             onClick={handleCopy}
+            title="Copies using your Notes paste format defaults in Settings"
           >
             Copy
           </button>
         </div>
         {editable && editor && <EditorToolbar editor={editor} />}
-        {formatOpen && (
-          <FormatPopover
-            options={formatOpts}
-            onChange={setFormatOpts}
-            tableRows={tableRows}
-            onToggleRowUnderline={toggleRowUnderline}
-            onCopy={() => {
-              void handleCopyWithFormat();
-            }}
-          />
-        )}
         <div data-testid="notes-review-editor">
           <EditorContent editor={editor} />
         </div>
@@ -1116,81 +1032,6 @@ function NumericCellRow({ runId, cell }: { runId: number; cell: NotesCell }) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-cell paste-format popover — table-wide knobs (shared controls) plus a
-// per-row double-underline picker. Everything here is transient: it tweaks the
-// options THIS cell's Copy uses, never the stored content (gotcha #16).
-// ---------------------------------------------------------------------------
-
-function FormatPopover({
-  options,
-  onChange,
-  tableRows,
-  onToggleRowUnderline,
-  onCopy,
-}: {
-  options: ClipboardFormatOptions;
-  onChange: (next: ClipboardFormatOptions) => void;
-  tableRows: string[];
-  onToggleRowUnderline: (rowIdx: number) => void;
-  onCopy: () => void;
-}) {
-  return (
-    <div style={styles.formatPopover} data-testid="notes-format-popover">
-      <p style={styles.formatPopoverHint}>
-        Format this copy only — starts from your default (Settings → Notes paste
-        format) and resets next time.
-      </p>
-
-      {/* Table-wide knobs, identical to the settings section. */}
-      <ClipboardFormatControls
-        value={options}
-        onChange={onChange}
-        idPrefix="cell-fmt"
-      />
-
-      {/* Per-row double-underline picker (e.g. mark the totals row). */}
-      {tableRows.length > 0 && (
-        <div style={styles.rowUnderlineBlock}>
-          <div style={styles.rowUnderlineHeading}>
-            Double underline rows (e.g. totals)
-          </div>
-          <div style={styles.rowUnderlineList}>
-            {tableRows.map((preview, idx) => (
-              <label
-                key={idx}
-                style={styles.rowUnderlineItem}
-                data-testid={`row-underline-${idx}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={options.rowUnderlines.includes(idx)}
-                  onChange={() => onToggleRowUnderline(idx)}
-                  aria-label={`Double underline row: ${preview}`}
-                />
-                <span style={styles.rowUnderlinePreview}>{preview}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <button
-        type="button"
-        style={{ ...styles.smallButton, ...styles.formatCopyButton }}
-        onClick={onCopy}
-        data-testid="notes-format-copy"
-      >
-        Copy with this format
-      </button>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Formatting toolbar — Bold / Italic / Lists / H3 / Table.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Editor toolbar — the single docked two-tier formatting bar (notes editor v2,
 // docs/PRD-notes-editor-v2.md §7). Tier 1 (Text · Colour · Paragraph) always
 // shows in edit mode; Tier 2 (Table: fill / borders / structure) activates
@@ -1209,6 +1050,18 @@ const FILL_PRESETS: ReadonlyArray<{ label: string; color: string }> = [
   { label: "White", color: "#ffffff" },
   { label: "Grey", color: "#f4f4f4" },
   { label: "Highlight", color: "#fff6e5" },
+];
+
+// Border colours intentionally use buttons, not a native colour input. Native
+// pickers steal focus from ProseMirror and collapse a multi-cell selection
+// before the user applies the colour. White is explicit: it is a valid border
+// colour, never a proxy for the default grey grid.
+const BORDER_COLOURS: ReadonlyArray<{ label: string; color: string }> = [
+  { label: "Black", color: "#000000" },
+  { label: "Grey", color: "#c9c9c9" },
+  { label: "White", color: "#ffffff" },
+  { label: "Orange", color: "#fd5108" },
+  { label: "Blue", color: "#185fa5" },
 ];
 
 const BORDER_SIDE_BTNS: ReadonlyArray<{ side: BorderSide; label: string }> = [
@@ -1237,12 +1090,38 @@ function EditorToolbar({ editor }: { editor: Editor }) {
       key={ariaLabel}
       type="button"
       aria-label={ariaLabel}
+      title={ariaLabel}
       onMouseDown={(e) => e.preventDefault()}
       style={active ? styles.toolbarButtonActive : styles.toolbarButton}
       onClick={onClick}
     >
       {label}
     </button>
+  );
+
+  // Compact, visually separated control groups keep the toolbar scannable
+  // without making a preparer memorise a wall of labels. Every icon still has
+  // an accessible name and a native tooltip through its child button.
+  const group = (
+    label: string,
+    icon: React.ReactNode,
+    children: React.ReactNode,
+  ) => (
+    <div role="group" aria-label={label} title={label} style={styles.toolbarGroup}>
+      <span aria-hidden="true" style={styles.toolbarGroupIcon}>
+        {icon}
+      </span>
+      {children}
+    </div>
+  );
+
+  const alignIcon = (align: "left" | "center" | "right") => (
+    <span
+      aria-hidden="true"
+      style={{ ...styles.alignIcon, textAlign: align }}
+    >
+      ≡
+    </span>
   );
 
   // A constrained-palette colour swatch (text colour or highlight). `null`
@@ -1285,46 +1164,40 @@ function EditorToolbar({ editor }: { editor: Editor }) {
     <div style={styles.editorToolbar} data-testid="editor-format-bar">
       {/* Tier 1 — always available in edit mode. */}
       <div role="toolbar" aria-label="Formatting" style={styles.toolbarRow}>
-        <span style={styles.tableFormatGroupLabel}>Text</span>
-        {btn(<span style={{ fontWeight: 700 }}>B</span>, "Bold",
-          () => editor.chain().focus().toggleBold().run(), editor.isActive("bold"))}
-        {btn(<span style={{ fontStyle: "italic" }}>I</span>, "Italic",
-          () => editor.chain().focus().toggleItalic().run(), editor.isActive("italic"))}
-        {btn(<span style={{ textDecoration: "underline" }}>U</span>, "Underline",
-          () => editor.chain().focus().toggleUnderline().run(), editor.isActive("underline"))}
-        {btn(<span style={{ textDecoration: "line-through" }}>S</span>, "Strikethrough",
-          () => editor.chain().focus().toggleStrike().run(), editor.isActive("strike"))}
-        {btn("x²", "Superscript",
-          () => editor.chain().focus().toggleSuperscript().run(), editor.isActive("superscript"))}
-        {btn("x₂", "Subscript",
-          () => editor.chain().focus().toggleSubscript().run(), editor.isActive("subscript"))}
-
-        <span style={styles.tableFormatDivider} aria-hidden="true" />
-
-        <span style={styles.tableFormatGroupLabel}>Colour</span>
-        {TEXT_COLORS.map((s) => swatch(s, "text"))}
-        <span style={styles.tableFormatGroupLabel}>Highlight</span>
-        {HIGHLIGHT_COLORS.map((s) => swatch(s, "highlight"))}
-
-        <span style={styles.tableFormatDivider} aria-hidden="true" />
-
-        <span style={styles.tableFormatGroupLabel}>Paragraph</span>
-        {btn("L", "Align left",
-          () => editor.chain().focus().setTextAlign("left").run(), editor.isActive({ textAlign: "left" }))}
-        {btn("C", "Align centre",
-          () => editor.chain().focus().setTextAlign("center").run(), editor.isActive({ textAlign: "center" }))}
-        {btn("R", "Align right",
-          () => editor.chain().focus().setTextAlign("right").run(), editor.isActive({ textAlign: "right" }))}
-        {btn("• List", "Bullet list",
-          () => editor.chain().focus().toggleBulletList().run(), editor.isActive("bulletList"))}
-        {btn("1. List", "Numbered list",
-          () => editor.chain().focus().toggleOrderedList().run(), editor.isActive("orderedList"))}
-        {btn("H3", "Heading",
-          () => editor.chain().focus().toggleHeading({ level: 3 }).run(), editor.isActive("heading", { level: 3 }))}
-        {btn("⇤", "Decrease indent", () => outdentBlocks(editor))}
-        {btn("⇥", "Increase indent", () => indentBlocks(editor))}
-        {btn("Table", "Insert table",
-          () => editor.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run())}
+        {group("Text formatting", "T", <>
+          {btn(<span style={{ fontWeight: 700 }}>B</span>, "Bold",
+            () => editor.chain().focus().toggleBold().run(), editor.isActive("bold"))}
+          {btn(<span style={{ fontStyle: "italic" }}>I</span>, "Italic",
+            () => editor.chain().focus().toggleItalic().run(), editor.isActive("italic"))}
+          {btn(<span style={{ textDecoration: "underline" }}>U</span>, "Underline",
+            () => editor.chain().focus().toggleUnderline().run(), editor.isActive("underline"))}
+          {btn(<span style={{ textDecoration: "line-through" }}>S</span>, "Strikethrough",
+            () => editor.chain().focus().toggleStrike().run(), editor.isActive("strike"))}
+          {btn("x²", "Superscript",
+            () => editor.chain().focus().toggleSuperscript().run(), editor.isActive("superscript"))}
+          {btn("x₂", "Subscript",
+            () => editor.chain().focus().toggleSubscript().run(), editor.isActive("subscript"))}
+        </>)}
+        {group("Text colour", "A", TEXT_COLORS.map((s) => swatch(s, "text")))}
+        {group("Highlight", "▰", HIGHLIGHT_COLORS.map((s) => swatch(s, "highlight")))}
+        {group("Paragraph", "¶", <>
+          {btn(alignIcon("left"), "Align left",
+            () => editor.chain().focus().setTextAlign("left").run(), editor.isActive({ textAlign: "left" }))}
+          {btn(alignIcon("center"), "Align centre",
+            () => editor.chain().focus().setTextAlign("center").run(), editor.isActive({ textAlign: "center" }))}
+          {btn(alignIcon("right"), "Align right",
+            () => editor.chain().focus().setTextAlign("right").run(), editor.isActive({ textAlign: "right" }))}
+          {btn("•≡", "Bullet list",
+            () => editor.chain().focus().toggleBulletList().run(), editor.isActive("bulletList"))}
+          {btn("1≡", "Numbered list",
+            () => editor.chain().focus().toggleOrderedList().run(), editor.isActive("orderedList"))}
+          {btn("H3", "Heading",
+            () => editor.chain().focus().toggleHeading({ level: 3 }).run(), editor.isActive("heading", { level: 3 }))}
+          {btn("⇤", "Decrease indent", () => outdentBlocks(editor))}
+          {btn("⇥", "Increase indent", () => indentBlocks(editor))}
+          {btn("▦", "Insert table",
+            () => editor.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run())}
+        </>)}
       </div>
 
       {/* Tier 2 — table controls, only inside a table. The data-testid is kept
@@ -1336,71 +1209,76 @@ function EditorToolbar({ editor }: { editor: Editor }) {
           data-testid="table-format-bar"
           style={styles.tableFormatBar}
         >
-          <span style={styles.tableFormatGroupLabel}>Fill</span>
-          {FILL_PRESETS.map((p) =>
-            btn(p.label, `Fill ${p.label}`, () => applyCellFill(editor, p.color)),
-          )}
-          {btn("No fill", "No fill", () => applyCellFill(editor, FILL_NONE))}
-
-          <span style={styles.tableFormatDivider} aria-hidden="true" />
-
-          <span style={styles.tableFormatGroupLabel}>Border</span>
-          {BORDER_SIDE_BTNS.map(({ side, label }) =>
-            btn(
-              label,
-              `Border ${label}`,
-              () =>
-                applyCellBorderSide(
-                  editor,
-                  side,
-                  sideIsOn(side) ? BORDER_NONE : gridBorderValue(borderColor),
-                ),
-              sideIsOn(side),
-            ),
-          )}
-          {btn("All", "Border all", () =>
-            applyCellBorderAll(editor, gridBorderValue(borderColor)))}
-          {btn("None", "Border none", () =>
-            applyCellBorderAll(editor, BORDER_NONE))}
-          <label style={styles.colorInputLabel} title="Border colour">
-            <span style={styles.visuallyHidden}>Border colour</span>
-            <input
-              type="color"
-              aria-label="Border colour"
-              value={borderColor}
-              style={styles.colorInput}
-              onChange={(e) => setBorderColor(e.target.value)}
+          {group("Cell fill", "▧", <>
+            {FILL_PRESETS.map((p) =>
+              btn("■", `Fill ${p.label}`, () => applyCellFill(editor, p.color)),
+            )}
+            {btn("∅", "No fill", () => applyCellFill(editor, FILL_NONE))}
+          </>)}
+          {group("Borders", "▦", <>
+            {BORDER_SIDE_BTNS.map(({ side, label }) =>
+              btn(
+                side === "Top" ? "▔" : side === "Right" ? "▕" : side === "Bottom" ? "▁" : "▏",
+                `Border ${label}`,
+                () =>
+                  applyCellBorderSide(
+                    editor,
+                    side,
+                    sideIsOn(side) ? BORDER_NONE : gridBorderValue(borderColor),
+                  ),
+                sideIsOn(side),
+              ),
+            )}
+            {btn("⊞", "Border all", () =>
+              applyCellBorderAll(editor, gridBorderValue(borderColor)))}
+            {btn("⊠", "Border none", () =>
+              applyCellBorderAll(editor, BORDER_NONE))}
+            {btn("═", "Double underline", () => applyCellDoubleUnderline(editor))}
+          </>)}
+          {group("Apply border colour", "◩", BORDER_COLOURS.map(({ label, color }) => (
+            <button
+              key={color}
+              type="button"
+              aria-label={`Border colour ${label}`}
+              aria-pressed={borderColor === color}
+              title={`Apply ${label.toLowerCase()} borders`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setBorderColor(color);
+                // Applying on swatch click makes the colour change explicit
+                // and keeps the selected range intact — especially important
+                // for white, which otherwise looked as though it had reverted.
+                applyCellBorderAll(editor, gridBorderValue(color));
+              }}
+              style={{
+                ...styles.swatchButton,
+                background: color,
+                outline:
+                  borderColor === color ? `2px solid ${pwc.orange500}` : "none",
+                outlineOffset: 1,
+              }}
             />
-          </label>
-
-          <span style={styles.tableFormatDivider} aria-hidden="true" />
-
-          {/* Per-cell alignment — applies across a drag-selected range (e.g.
-              right-align a whole numeric column). Distinct from the Tier-1
-              paragraph align and from the cosmetic numeric auto-right-align. */}
-          <span style={styles.tableFormatGroupLabel}>Align</span>
-          {(["left", "center", "right"] as CellAlign[]).map((a) =>
+          )))}
+          {group("Cell alignment", "≡", (["left", "center", "right"] as CellAlign[]).map((a) =>
             btn(
-              a === "left" ? "L" : a === "center" ? "C" : "R",
+              alignIcon(a),
               `Cell align ${a}`,
               () => applyCellAlign(editor, a),
               (currentCellAttrs(editor)?.textAlign as string | undefined) === a,
             ),
-          )}
-
-          <span style={styles.tableFormatDivider} aria-hidden="true" />
-
-          <span style={styles.tableFormatGroupLabel}>Table</span>
-          {btn("Row ↑", "Insert row above", () => editor.chain().focus().addRowBefore().run())}
-          {btn("Row ↓", "Insert row below", () => editor.chain().focus().addRowAfter().run())}
-          {btn("Col ←", "Insert column left", () => editor.chain().focus().addColumnBefore().run())}
-          {btn("Col →", "Insert column right", () => editor.chain().focus().addColumnAfter().run())}
-          {btn("Merge", "Merge cells", () => editor.chain().focus().mergeCells().run())}
-          {btn("Split", "Split cell", () => editor.chain().focus().splitCell().run())}
-          {btn("Header", "Toggle header row", () => editor.chain().focus().toggleHeaderRow().run())}
-          {btn("− Row", "Delete row", () => editor.chain().focus().deleteRow().run())}
-          {btn("− Col", "Delete column", () => editor.chain().focus().deleteColumn().run())}
-          {btn("Delete table", "Delete table", () => editor.chain().focus().deleteTable().run())}
+          ))}
+          {group("Table structure", "▦", <>
+            {btn("▤↑", "Insert row above", () => editor.chain().focus().addRowBefore().run())}
+            {btn("▤↓", "Insert row below", () => editor.chain().focus().addRowAfter().run())}
+            {btn("▥←", "Insert column left", () => editor.chain().focus().addColumnBefore().run())}
+            {btn("▥→", "Insert column right", () => editor.chain().focus().addColumnAfter().run())}
+            {btn("⊞", "Merge cells", () => editor.chain().focus().mergeCells().run())}
+            {btn("⊟", "Split cell", () => editor.chain().focus().splitCell().run())}
+            {btn("━", "Toggle header row", () => editor.chain().focus().toggleHeaderRow().run())}
+            {btn("▤−", "Delete row", () => editor.chain().focus().deleteRow().run())}
+            {btn("▥−", "Delete column", () => editor.chain().focus().deleteColumn().run())}
+            {btn("▦×", "Delete table", () => editor.chain().focus().deleteTable().run())}
+          </>)}
         </div>
       )}
     </div>
@@ -1710,16 +1588,37 @@ const styles = {
     display: "flex",
     flexWrap: "wrap" as const,
     alignItems: "center",
-    gap: 4,
-    padding: "6px 8px",
+    gap: 6,
+    padding: "7px 8px",
+    background: pwc.grey100,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: 4,
+  } as React.CSSProperties,
+  toolbarGroup: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 3,
+    padding: "3px 4px",
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
     borderRadius: 4,
   } as React.CSSProperties,
+  toolbarGroupIcon: {
+    width: 15,
+    color: pwc.grey700,
+    fontSize: 12,
+    fontWeight: 700,
+    textAlign: "center" as const,
+  } as React.CSSProperties,
+  alignIcon: {
+    display: "inline-block",
+    width: 13,
+    lineHeight: 1,
+  } as React.CSSProperties,
   // A small constrained-palette colour/highlight swatch button.
   swatchButton: {
-    width: 18,
-    height: 18,
+    width: 19,
+    height: 19,
     padding: 0,
     border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
     borderRadius: 3,
@@ -1732,24 +1631,34 @@ const styles = {
     justifyContent: "center",
   } as React.CSSProperties,
   toolbarButton: {
-    padding: "2px 8px",
-    fontSize: 12,
+    minWidth: 25,
+    height: 23,
+    padding: "2px 5px",
+    fontSize: 13,
     fontFamily: pwc.fontBody,
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
     borderRadius: 3,
     color: pwc.grey700,
     cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
   } as React.CSSProperties,
   toolbarButtonActive: {
-    padding: "2px 8px",
-    fontSize: 12,
+    minWidth: 25,
+    height: 23,
+    padding: "2px 5px",
+    fontSize: 13,
     fontFamily: pwc.fontBody,
     background: pwc.orange500,
     border: `1px solid ${pwc.orange500}`,
     borderRadius: 3,
     color: pwc.white,
     cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
   } as React.CSSProperties,
   smallButton: {
     padding: "3px 10px",
@@ -1761,105 +1670,17 @@ const styles = {
     color: pwc.grey900,
     cursor: "pointer",
   } as React.CSSProperties,
-  // Active state for the Format toggle (popover open).
-  smallButtonActive: {
-    background: pwc.grey100,
-    borderColor: pwc.grey700,
-  } as React.CSSProperties,
   // Selection-based table formatting bar (fill / borders / structure).
   tableFormatBar: {
     display: "flex",
     flexWrap: "wrap" as const,
     alignItems: "center",
-    gap: 4,
-    padding: "6px 8px",
+    gap: 6,
+    padding: "7px 8px",
     marginTop: 4,
     background: pwc.grey100,
     border: `1px solid ${pwc.grey200}`,
     borderRadius: 4,
-  } as React.CSSProperties,
-  tableFormatGroupLabel: {
-    fontSize: 11,
-    fontWeight: 700,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.4,
-    color: pwc.grey700,
-    marginRight: 2,
-  } as React.CSSProperties,
-  tableFormatDivider: {
-    width: 1,
-    alignSelf: "stretch",
-    background: pwc.grey300 ?? "#d1d5db",
-    margin: "0 4px",
-  } as React.CSSProperties,
-  colorInputLabel: {
-    display: "inline-flex",
-    alignItems: "center",
-  } as React.CSSProperties,
-  colorInput: {
-    width: 26,
-    height: 22,
-    padding: 0,
-    border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
-    borderRadius: 3,
-    background: pwc.white,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  visuallyHidden: {
-    position: "absolute" as const,
-    width: 1,
-    height: 1,
-    overflow: "hidden" as const,
-    clip: "rect(0 0 0 0)",
-    whiteSpace: "nowrap" as const,
-  } as React.CSSProperties,
-  // Per-cell paste-format popover.
-  formatPopover: {
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: 6,
-    background: pwc.white,
-    padding: 12,
-    marginBottom: 8,
-  } as React.CSSProperties,
-  formatPopoverHint: {
-    fontSize: 12,
-    color: pwc.grey700,
-    margin: "0 0 10px 0",
-  } as React.CSSProperties,
-  rowUnderlineBlock: {
-    marginTop: 12,
-    borderTop: `1px solid ${pwc.grey200}`,
-    paddingTop: 10,
-  } as React.CSSProperties,
-  rowUnderlineHeading: {
-    fontSize: 13,
-    fontWeight: 500,
-    color: pwc.grey700,
-    marginBottom: 6,
-  } as React.CSSProperties,
-  rowUnderlineList: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 4,
-    maxHeight: 160,
-    overflowY: "auto" as const,
-  } as React.CSSProperties,
-  rowUnderlineItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    fontSize: 13,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  rowUnderlinePreview: {
-    color: pwc.grey900,
-    whiteSpace: "nowrap" as const,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  } as React.CSSProperties,
-  formatCopyButton: {
-    marginTop: 12,
-    background: pwc.grey100,
   } as React.CSSProperties,
   // Numeric notes: a small grid of value inputs (1-4 columns by filing level).
   numericGrid: {
@@ -1893,6 +1714,15 @@ const styles = {
     fontWeight: 600,
     textTransform: "uppercase" as const,
     letterSpacing: 0.4,
+  } as React.CSSProperties,
+  formatAdjustedNotice: {
+    padding: "2px 5px",
+    fontSize: 10,
+    fontWeight: 600,
+    color: pwc.grey700,
+    background: pwc.grey100,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: 3,
   } as React.CSSProperties,
   copiedChip: {
     fontSize: 11,

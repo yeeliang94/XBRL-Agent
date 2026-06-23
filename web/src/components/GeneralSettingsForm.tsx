@@ -606,14 +606,13 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
 // Global default for the Notes-tab Copy button's paste formatting. Stored in
 // localStorage per browser (a personal paste preference — not a server-side,
 // shared-by-everyone setting), so this section saves on every change instead of
-// riding the form's main Save button. The per-cell Format popover seeds its
-// transient override from this same value.
+// riding the form's main Save button.
 function NotesPasteFormatSection() {
   const [fmt, setFmt] = useState<ClipboardFormatOptions>(loadGlobalFormat);
 
   const update = useCallback((next: ClipboardFormatOptions) => {
     setFmt(next);
-    saveGlobalFormat(next); // persists immediately (rowUnderlines stripped)
+    saveGlobalFormat(next); // persists immediately in this browser
   }, []);
 
   return (
@@ -622,8 +621,8 @@ function NotesPasteFormatSection() {
       <p style={styles.helperText}>
         How tables and prose are styled when you use the Copy button in the
         Notes review tab (the format your paste into M-Tool lands in). This is
-        your default — each cell&apos;s Format tool can override it for a single
-        copy. Changes save automatically, in this browser only (no Save button).
+        your default for every copy. Changes save automatically, in this
+        browser only (no Save button).
       </p>
       <ClipboardFormatControls value={fmt} onChange={update} idPrefix="settings-fmt" />
     </div>

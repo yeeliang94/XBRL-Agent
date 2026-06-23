@@ -348,19 +348,19 @@ describe("decorateHtmlForClipboard — configurable format options", () => {
     expect(out).toMatch(/<td[^>]*style="[^"]*border: 3px double #999/);
   });
 
-  test("rowUnderlines marks only the targeted row with a double underline", () => {
-    // Row index 2 is the "Total" row (header=0, data=1, total=2).
-    const out = decorateHtmlForClipboard(TABLE, {
-      ...DEFAULT_FORMAT_OPTIONS,
-      rowUnderlines: [2],
-    });
-    // The Total cell carries the bottom double border…
+  test("a persisted double underline survives into the clipboard", () => {
+    const html =
+      '<table><tbody><tr><td>x</td></tr>' +
+      '<tr><td style="border-bottom: 3px double #000000">Total</td></tr>' +
+      "</tbody></table>";
+    const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
+    // The Total cell carries the document-owned double underline…
     expect(out).toMatch(
-      /<td[^>]*style="[^"]*border-bottom: 3px double #000[^"]*">Total</,
+      /<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">Total</,
     );
-    // …while the ordinary data row above it does not.
+    // …while an ordinary cell does not.
     expect(out).not.toMatch(
-      /<td[^>]*style="[^"]*border-bottom: 3px double #000[^"]*">x</,
+      /<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">x</,
     );
   });
 
@@ -374,6 +374,37 @@ describe("decorateHtmlForClipboard — configurable format options", () => {
     expect(out).toMatch(/font-size: 12pt/);
     expect(out).toMatch(/<td[^>]*style="[^"]*padding: 2px 6px/);
     expect(out).toMatch(/<p[^>]*style="[^"]*margin: 0 0 14px 0/);
+  });
+
+  test("persisted paragraph indentation survives the paste spacing defaults", () => {
+    const out = decorateHtmlForClipboard(
+      '<p style="margin-left: 4em">Indented paragraph</p>',
+      {
+        ...DEFAULT_FORMAT_OPTIONS,
+        paragraphSpacingPx: 14,
+      },
+    );
+    const style = new DOMParser()
+      .parseFromString(out, "text/html")
+      .querySelector("p")
+      ?.getAttribute("style") ?? "";
+    expect(style).toContain("margin-left: 4em");
+    expect(style).toContain("margin-bottom: 14px");
+    // A trailing shorthand would reset Word's left margin back to zero.
+    expect(style).not.toMatch(/(^|;\s*)margin:\s/);
+  });
+
+  test("persisted heading indentation survives the heading margin defaults", () => {
+    const out = decorateHtmlForClipboard(
+      '<h3 style="margin-left: 2em">Indented heading</h3>',
+    );
+    const style = new DOMParser()
+      .parseFromString(out, "text/html")
+      .querySelector("h3")
+      ?.getAttribute("style") ?? "";
+    expect(style).toContain("margin-left: 2em");
+    expect(style).toContain("margin-bottom: 6px");
+    expect(style).not.toMatch(/(^|;\s*)margin:\s/);
   });
 });
 
@@ -398,6 +429,21 @@ describe("decorateHtmlForClipboard — persisted cell styles win", () => {
     // …and the decorator's `border:` shorthand was NOT appended (it would
     // reset all four sides).
     expect(style).not.toMatch(/(^|;\s*)border:\s/);
+  });
+
+  test("a persisted white border stays white instead of reverting to the paste grid", () => {
+    const html =
+      '<table><tbody><tr>' +
+      '<td style="border-top: 1px solid #ffffff; border-right: 1px solid #ffffff; border-bottom: 1px solid #ffffff; border-left: 1px solid #ffffff">x</td>' +
+      "</tr></tbody></table>";
+    const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
+    const style = new DOMParser()
+      .parseFromString(out, "text/html")
+      .querySelector("td")
+      ?.getAttribute("style") ?? "";
+    expect(style).toContain("border-top: 1px solid #ffffff");
+    expect(style).toContain("border-bottom: 1px solid #ffffff");
+    expect(style).not.toContain("border: 1px solid #999");
   });
 
   test("a persisted fill is NOT overwritten by the header grey", () => {

@@ -43,6 +43,9 @@ export const DEFAULT_BORDER_COLOR = "#000000";
 export function gridBorderValue(color: string = DEFAULT_BORDER_COLOR): string {
   return `1px solid ${color.toLowerCase()}`;
 }
+/** Accountant-style total underline. It is persisted on the selected cells,
+ * so the review view and every rich clipboard target see the same rule. */
+export const DOUBLE_UNDERLINE = "3px double #000000";
 /** The persisted RESET values (peer-review #2). "No border"/"No fill" are NOT
  *  attribute-absence — the editor CSS would repaint the default grid / header
  *  fill — so they store an explicit override. */
@@ -181,6 +184,11 @@ export function applyCellBorderAll(editor: Editor, value: string): boolean {
     chain = chain.setCellAttribute(`border${side}`, value);
   }
   return chain.run();
+}
+
+/** Apply a double rule below every selected cell, normally a totals row. */
+export function applyCellDoubleUnderline(editor: Editor): boolean {
+  return applyCellBorderSide(editor, "Bottom", DOUBLE_UNDERLINE);
 }
 
 /** Horizontal alignment for every selected table cell (drag-select a column to

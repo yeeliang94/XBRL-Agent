@@ -18,7 +18,6 @@ describe("clipboardFormat — global default round-trip", () => {
       fontSizePt: 10,
       cellPaddingPx: [4, 8],
       paragraphSpacingPx: 8,
-      rowUnderlines: [],
     });
   });
 
@@ -32,15 +31,12 @@ describe("clipboardFormat — global default round-trip", () => {
       fontSizePt: 12,
       cellPaddingPx: [2, 6],
       paragraphSpacingPx: 14,
-      rowUnderlines: [1, 2], // should NOT persist
     });
     const loaded = loadGlobalFormat();
     expect(loaded.borderStyle).toBe("double");
     expect(loaded.fontSizePt).toBe(12);
     expect(loaded.cellPaddingPx).toEqual([2, 6]);
     expect(loaded.paragraphSpacingPx).toBe(14);
-    // rowUnderlines is per-cell/transient — never restored from storage.
-    expect(loaded.rowUnderlines).toEqual([]);
   });
 
   test("corrupt JSON falls back to defaults instead of throwing", () => {

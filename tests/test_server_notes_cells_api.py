@@ -225,6 +225,24 @@ def test_patch_notes_cell_persists_whitelisted_table_styles(client_and_run) -> N
     assert any("position" in w.lower() for w in body["sanitizer_warnings"])
 
 
+def test_patch_notes_cell_preserves_browser_rgb_border_colour(client_and_run) -> None:
+    """TipTap/browser serialisation includes spaces in rgb(), so preserve the
+    border rather than silently falling back to the editor's grey grid."""
+    client, run_id = client_and_run
+    rgb_border = "rgb(255, 255, 255)"
+    style = "; ".join(
+        f"border-{side}: 1px solid {rgb_border}"
+        for side in ("top", "right", "bottom", "left")
+    )
+    resp = client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        json={"html": f'<table><tr><td style="{style}">x</td></tr></table>'},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["html"].lower().count(rgb_border) == 4
+    assert resp.json()["sanitizer_warnings"] == []
+
+
 def test_patch_notes_cell_reset_values_persist(client_and_run) -> None:
     """"No fill" / "no border" persist as explicit reset values (peer-review
     #2) — the panel needs them to override the default grid + header fill."""

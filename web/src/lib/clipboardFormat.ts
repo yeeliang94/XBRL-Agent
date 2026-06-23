@@ -6,16 +6,11 @@
 // — gotcha #16). Those styles used to be hard-coded constants; this module
 // makes them user-configurable.
 //
-// Two layers feed the decorator:
-//   1. a GLOBAL default, persisted per-browser in localStorage and edited in
-//      the General settings tab (the same for every copy on this machine), and
-//   2. a TRANSIENT per-cell override the user sets in the cell's Format tool
-//      just before copying (overrides the global default for that one copy
-//      only; never persisted).
-//
-// `rowUnderlines` is the per-row "double underline under a totals row" control.
-// It is inherently per-cell (row indices only make sense for one table), so it
-// is transient-only and is never written to the global default.
+// These are GLOBAL defaults, persisted per-browser in localStorage and edited
+// in the General settings tab. They describe the receiving paste target
+// (M-Tool, Word, Outlook), not the note being edited. Per-note formatting,
+// including a totals double underline, belongs in the editor and is persisted
+// with the document instead of being hidden in a one-off copy popover.
 
 export type BorderStyle = "none" | "single" | "double";
 
@@ -28,29 +23,23 @@ export interface ClipboardFormatOptions {
   cellPaddingPx: [number, number];
   /** Bottom margin (px) between consecutive prose paragraphs. */
   paragraphSpacingPx: number;
-  /** 0-based <tr> indices to give an accountant-style double underline.
-   *  Transient/per-cell only — never part of the saved global default. */
-  rowUnderlines: number[];
 }
 
 // Defaults reproduce the previously hard-coded clipboard styling EXACTLY
-// (single 1px #999 grid, Arial 10pt, 4×8px padding, 8px paragraph gap, no row
-// underlines) so a copy with default options is byte-for-byte what shipped
+// (single 1px #999 grid, Arial 10pt, 4×8px padding, 8px paragraph gap) so a
+// copy with default options is byte-for-byte what shipped
 // before this feature — the existing clipboard pinning tests depend on it.
 export const DEFAULT_FORMAT_OPTIONS: ClipboardFormatOptions = {
   borderStyle: "single",
   fontSizePt: 10,
   cellPaddingPx: [4, 8],
   paragraphSpacingPx: 8,
-  rowUnderlines: [],
 };
 
 // localStorage key for the per-browser global default.
 const STORAGE_KEY = "xbrl.notesClipboardFormat";
 
-// The table-wide knobs that are persisted globally — `rowUnderlines` is
-// deliberately excluded (it is per-cell/transient).
-type GlobalFormat = Omit<ClipboardFormatOptions, "rowUnderlines">;
+type GlobalFormat = ClipboardFormatOptions;
 
 // Clamp ranges mirror the input controls (ClipboardFormatControls) so a value
 // that survived the form is never re-clamped, but a tampered / out-of-range
@@ -119,8 +108,6 @@ export function loadGlobalFormat(): ClipboardFormatOptions {
         DEFAULT_FORMAT_OPTIONS.paragraphSpacingPx,
         PARA_PX,
       ),
-      // Never restored from storage — always starts empty (per-cell only).
-      rowUnderlines: [],
     };
   } catch {
     // Storage unavailable (private mode, SSR) or unparseable — defaults.
@@ -128,8 +115,7 @@ export function loadGlobalFormat(): ClipboardFormatOptions {
   }
 }
 
-/** Persist the table-wide knobs as the per-browser global default. Strips
- *  `rowUnderlines` (transient/per-cell). Swallows storage errors (quota /
+/** Persist the per-browser global defaults. Swallows storage errors (quota /
  *  private mode) so saving a preference never throws into the UI. */
 export function saveGlobalFormat(opts: ClipboardFormatOptions): void {
   const toStore: GlobalFormat = {

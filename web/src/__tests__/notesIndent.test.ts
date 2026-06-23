@@ -40,6 +40,18 @@ function firstParaIndent(editor: Editor): number {
   return indent;
 }
 
+function firstListItemIndent(editor: Editor): number {
+  let indent = -1;
+  editor.state.doc.descendants((node) => {
+    if (indent === -1 && node.type.name === "listItem") {
+      indent = Number(node.attrs.indent) || 0;
+      return false;
+    }
+    return true;
+  });
+  return indent;
+}
+
 describe("notesIndent", () => {
   it("indentBlocks increases the level and renders margin-left", () => {
     const editor = makeEditor("<p>hello</p>");
@@ -75,6 +87,17 @@ describe("notesIndent", () => {
       `<p style="margin-left: ${INDENT_STEP_EM * 3}em">x</p>`,
     );
     expect(firstParaIndent(editor)).toBe(3);
+    editor.destroy();
+  });
+
+  it("preserves an explicit pasted list-item indent on reload", () => {
+    const editor = makeEditor(
+      `<ul><li style="margin-left: ${INDENT_STEP_EM * 2}em">x</li></ul>`,
+    );
+    expect(firstListItemIndent(editor)).toBe(2);
+    expect(editor.getHTML()).toContain(
+      `margin-left: ${INDENT_STEP_EM * 2}em`,
+    );
     editor.destroy();
   });
 
