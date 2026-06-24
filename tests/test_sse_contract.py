@@ -1,7 +1,7 @@
 """Contract test: coordinator event payloads must match frontend types.ts.
 
 Verifies that the field names in events emitted by the coordinator's
-_build_event + streaming loop match what the frontend reducer expects.
+build_agent_event + streaming loop match what the frontend reducer expects.
 This catches payload drift between backend and frontend.
 """
 
@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from unittest.mock import patch, MagicMock
 
 from statement_types import StatementType
-from coordinator import run_extraction, RunConfig, _build_event
+from coordinator import run_extraction, RunConfig
+from agent_runner import build_agent_event
 
 
 # --- Expected field contracts (from web/src/lib/types.ts) ---
@@ -31,8 +32,8 @@ class TestEventContract:
     """Verify coordinator events conform to the frontend contract."""
 
     def test_build_event_always_includes_agent_fields(self):
-        """_build_event must always inject agent_id and agent_role."""
-        evt = _build_event("tool_call", "sofp_0", "SOFP", {"tool_name": "read_template"})
+        """build_agent_event must always inject agent_id and agent_role."""
+        evt = build_agent_event("tool_call", "sofp_0", "SOFP", {"tool_name": "read_template"})
         assert AGENT_FIELDS.issubset(evt["data"].keys())
 
     @pytest.mark.asyncio
