@@ -59,11 +59,11 @@ const styles: Record<string, CSSProperties> = {
   },
   title: {
     fontFamily: pwc.fontHeading,
-    // Large + light: hierarchy from scale, not weight (design principle).
-    // Slightly under the reference's 38px because this app keeps a global
-    // brand bar above the page, so the page title shouldn't compete with it.
+    // Semibold per the design system (titles/headings at 600; hierarchy from
+    // size + weight). Slightly under the reference's 38px because this app
+    // keeps a global brand bar above the page, so the title shouldn't compete.
     fontSize: 32,
-    fontWeight: pwc.weight.regular,
+    fontWeight: pwc.weight.semibold,
     letterSpacing: 0,
     lineHeight: 1.1,
     color: pwc.grey900,
@@ -72,7 +72,7 @@ const styles: Record<string, CSSProperties> = {
   titleCompact: {
     fontFamily: pwc.fontHeading,
     fontSize: 22,
-    fontWeight: pwc.weight.regular,
+    fontWeight: pwc.weight.semibold,
     letterSpacing: 0,
     lineHeight: 1.2,
     color: pwc.grey900,

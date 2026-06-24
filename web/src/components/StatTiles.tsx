@@ -46,7 +46,7 @@ export function StatTiles({ total, drafts, completedThisMonth, lastStatus }: Sta
       </div>
       <div style={styles.tile}>
         {last ? (
-          <span style={{ ...styles.badge, borderColor: last.accent }}>
+          <span style={{ ...ui.badge, alignSelf: "flex-start", borderColor: last.accent }}>
             <span aria-hidden="true" style={ui.badgeDot(last.accent)} />
             {last.label}
           </span>
@@ -92,14 +92,5 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 13,
     color: pwc.grey500,
-  } as React.CSSProperties,
-  badge: {
-    alignSelf: "flex-start" as const,
-    display: "inline-block",
-    padding: `2px ${pwc.space.sm}px`,
-    borderRadius: pwc.radius.lg,
-    fontSize: 13,
-    fontWeight: pwc.weight.medium,
-    lineHeight: 1.6,
   } as React.CSSProperties,
 } as const;

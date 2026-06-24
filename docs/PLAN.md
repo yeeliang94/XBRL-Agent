@@ -5,8 +5,9 @@
 **Last Updated:** 2026-06-24
 
 > Replaces the previous (completed, 100%) PLAN.md for the **Notes Reviewer Agent** —
-> that work is done; archived at `docs/Archive/PLAN-notes-reviewer-agent.md` and in
-> git history (commits `34d4bc1`, `aef6b8f`).
+> that work is done and preserved in git history (this is the same
+> replace-in-place convention the Notes Reviewer plan itself used; `docs/Archive/`
+> is read-only, so no copy is made there).
 
 ## Summary
 The 2026-06-24 design-doc redesign moved the status language from **filled chips/alerts**
@@ -85,6 +86,21 @@ rebuilds reference correct hues.
   - [ ] 🟩 Spot-check live: badges (History/run-detail), alerts (login), cards/stat numbers, status-text contrast
   - [ ] 🟩 Update memory note `project_pwc_design_system.md` — flip "code follow-through pending" to done
   - **Verify:** suite green + side-by-side screenshots (badges row, an alert, a stat tile) visually matching the doc's component specimens.
+
+## Scope boundary / follow-up (peer-review finding, 2026-06-24)
+This sweep delivered the **token + shared-primitive** layer 1:1 with the spec:
+`pwc.*` status tokens, the `ui.badge*` / `ui.alert*` primitives, and every call
+site that routes through them. It did **not** migrate the app's *bespoke,
+hand-rolled* status surfaces that build their own filled tints instead of using
+the primitives — peer review correctly flagged that "the live UI matches the
+spec 1:1" overstated this. Known remaining filled-tint surfaces (a separate,
+larger migration; ~a dozen+ sites): `AgentTimeline` terminal badges
+(`terminalDoneBadge`/`ErrorBadge`/`WarnBadge`), `AgentTabs` status fills,
+`ReviewTab` / `NotesReviewerPanel` panels, and assorted error banners / toasts
+(`UploadPanel`, `PreRunPanel`, `ExtractPage`, `HistoryPage`, `SuccessToast`).
+The spec still permits soft tints for "rare emphasis", so full-width error
+banners/toasts are a judgement call; the clear badge-shaped cases
+(AgentTimeline, AgentTabs) should move to the outline language in the follow-up.
 
 ## Rollback Plan
 If something goes badly wrong:

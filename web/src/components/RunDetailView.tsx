@@ -667,7 +667,7 @@ const styles = {
   filename: {
     fontFamily: pwc.fontHeading,
     fontSize: 22,
-    fontWeight: pwc.weight.regular,
+    fontWeight: pwc.weight.semibold,
     letterSpacing: "-0.3px",
     color: pwc.grey900,
     margin: 0,
