@@ -52,7 +52,7 @@ const styles = {
   metricValue: {
     fontFamily: pwc.fontMono,
     fontSize: 18,
-    fontWeight: pwc.weight.light,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
   } as React.CSSProperties,
   costSection: {
@@ -74,7 +74,7 @@ const styles = {
   costValue: {
     fontFamily: pwc.fontMono,
     fontSize: 18,
-    fontWeight: pwc.weight.light,
+    fontWeight: pwc.weight.regular,
     color: pwc.success,
   } as React.CSSProperties,
   pulsingDot: {
