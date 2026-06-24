@@ -41,6 +41,69 @@ from pricing import estimate_cost
 logger = logging.getLogger(__name__)
 
 
+def build_agent_event(
+    event_type: str,
+    agent_id: str,
+    agent_role: str,
+    data: dict,
+    *,
+    extra: Mapping[str, Any] | None = None,
+) -> dict:
+    """Construct the canonical SSE-shaped event dict with agent identification.
+
+    Single source of truth for the ``{"event": ..., "data": {**data,
+    "agent_id", "agent_role"}}`` shape every coordinator emits (rewrite Phase
+    2 follow-up). ``extra`` carries caller-specific payload keys that ride
+    inside the same ``data`` dict — e.g. the Sheet-12 sub-coordinator passes
+    the parent's ``agent_id`` here as ``agent_id`` and ``sub_agent_id`` via
+    ``extra`` so parallel sub-agents aggregate into one parent tab while still
+    being individually traceable. Applied *after* agent_id/agent_role so a
+    caller can override them when needed; dict-order differences are
+    irrelevant (consumers read by key)."""
+    payload = {**data, "agent_id": agent_id, "agent_role": agent_role}
+    if extra:
+        payload.update(extra)
+    return {"event": event_type, "data": payload}
+
+
+def make_emitter(
+    event_queue,
+    agent_id: str,
+    agent_role: str,
+    *,
+    extra: Mapping[str, Any] | None = None,
+    safe_swallow: tuple[type[BaseException], ...] = (asyncio.CancelledError,),
+):
+    """Build the ``(emit, safe_emit)`` pair every coordinator uses.
+
+    ``emit(event_type, data)`` pushes a :func:`build_agent_event` dict onto
+    ``event_queue`` (a no-op when the queue is ``None`` — the CLI path).
+    ``safe_emit`` is the teardown-safe variant used inside ``except``
+    cancellation blocks: awaiting ``queue.put`` during an active cancellation
+    can itself raise, which would trap the structured terminal return. The
+    *set* of swallowed exceptions is a parameter because the callers diverge —
+    the face coordinator swallows ``CancelledError`` only, while the notes
+    coordinators swallow ``Exception`` — and this preserves each one's exact
+    prior behaviour rather than unifying it."""
+
+    async def emit(event_type: str, data: dict) -> None:
+        if event_queue is not None:
+            await event_queue.put(
+                build_agent_event(event_type, agent_id, agent_role, data, extra=extra)
+            )
+
+    async def safe_emit(event_type: str, data: dict) -> None:
+        try:
+            await emit(event_type, data)
+        except safe_swallow:  # type: ignore[misc]
+            logger.debug(
+                "Dropped %s event during teardown for %s",
+                event_type, agent_id or agent_role,
+            )
+
+    return emit, safe_emit
+
+
 class IterationLimitReached(RuntimeError):
     """Agent exceeded its iteration cap (``AgentLoopSpec.max_iters``).
 

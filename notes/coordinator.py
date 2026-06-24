@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Set
 from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace  # noqa: F401
 from agent_runner import (
     AgentLoopSpec,
+    make_emitter,
     run_agent_loop,
     # Re-exported under the legacy name so
     # `from notes.coordinator import _iter_with_turn_timeout`
@@ -582,27 +583,14 @@ async def _run_single_notes_agent(
     callers that run a single agent leave it at 0.
     """
 
-    async def _emit(event_type: str, data: dict) -> None:
-        if event_queue is not None:
-            await event_queue.put({
-                "event": event_type,
-                "data": {**data, "agent_id": agent_id, "agent_role": template_type.value},
-            })
-
-    async def _safe_emit(event_type: str, data: dict) -> None:
-        """Emit variant that swallows errors — use inside ``except CancelledError``
-        blocks so a second cancellation raised by the ``await queue.put`` can't
-        trap the coordinator before it returns a terminal NotesAgentResult
-        (peer-review #3). The outer coordinator synthesizes its own fallback
-        SSE event if this one never lands, so dropping it is safe.
-        """
-        try:
-            await _emit(event_type, data)
-        except Exception:  # noqa: BLE001 — defensive teardown path
-            logger.debug(
-                "Dropped %s event during cancellation teardown for %s",
-                event_type, agent_id or template_type.value,
-            )
+    # Notes contract: safe_emit swallows Exception (the broad teardown catch
+    # used inside ``except CancelledError`` blocks so a second cancellation
+    # raised by ``await queue.put`` can't trap the terminal NotesAgentResult —
+    # peer-review #3). The outer coordinator synthesizes its own fallback SSE
+    # event if a dropped one never lands, so dropping is safe.
+    _emit, _safe_emit = make_emitter(
+        event_queue, agent_id, template_type.value, safe_swallow=(Exception,),
+    )
 
     # Stagger parallel agent launches so 5 concurrent notes agents don't
     # burst requests into the provider's TPM bucket at the same instant.
@@ -1028,25 +1016,13 @@ async def _run_list_of_notes_fanout(
     from notes_types import NOTES_REGISTRY, notes_template_path
     from pricing import resolve_notes_parallel
 
-    async def _emit(event_type: str, data: dict) -> None:
-        if event_queue is None:
-            return
-        await event_queue.put({
-            "event": event_type,
-            "data": {
-                **data,
-                "agent_id": agent_id,
-                "agent_role": NotesTemplateType.LIST_OF_NOTES.value,
-            },
-        })
-
-    async def _safe_emit(event_type: str, data: dict) -> None:
-        """Cancellation-safe emit — see the single-agent variant for rationale
-        (peer-review #3). Used only inside ``except CancelledError``."""
-        try:
-            await _emit(event_type, data)
-        except Exception:  # noqa: BLE001
-            logger.debug("Dropped %s event during Notes-12 cancellation teardown", event_type)
+    # Cancellation-safe emit swallows Exception — see the single-agent variant
+    # for rationale (peer-review #3); safe_emit is used only inside
+    # ``except CancelledError``.
+    _emit, _safe_emit = make_emitter(
+        event_queue, agent_id, NotesTemplateType.LIST_OF_NOTES.value,
+        safe_swallow=(Exception,),
+    )
 
     try:
         await _emit("status", {

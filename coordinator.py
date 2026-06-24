@@ -27,6 +27,8 @@ from agent_runner import (
     IterationLimitReached,
     TokenBudgetExceeded,
     WallclockExceeded,
+    build_agent_event,
+    make_emitter,
     resolve_token_budget,
     run_agent_loop,
 )
@@ -137,14 +139,6 @@ def _verify_is_clean(verify_result) -> bool:
     if getattr(verify_result, "mismatches", None):
         return False
     return True
-
-
-def _build_event(event_type: str, agent_id: str, agent_role: str, data: dict) -> dict:
-    """Construct an SSE-shaped event dict with agent identification."""
-    return {
-        "event": event_type,
-        "data": {**data, "agent_id": agent_id, "agent_role": agent_role},
-    }
 
 
 def build_face_page_hints(ref) -> dict:
@@ -372,9 +366,9 @@ async def run_extraction(
                 reconciled.conflict_note,
             )
             if event_queue is not None:
-                # Deliberately NOT via _build_event: this is a run-level scout
-                # warning, not a per-agent event. _build_event injects
-                # agent_id/agent_role, and the frontend creates a tab for ANY
+                # Deliberately NOT via build_agent_event: this is a run-level
+                # scout warning, not a per-agent event. build_agent_event
+                # injects agent_id/agent_role, and the frontend creates a tab for ANY
                 # event carrying agent identity — a "scout" tab would appear
                 # next to the statement tabs (Codex review P2). Emitting a bare
                 # event routes it to the run-level warnings banner instead.
@@ -514,7 +508,7 @@ async def run_extraction(
         # variant (peer-review I1). Fire-and-forget — if there's no queue
         # (CLI path) the logger.info above is the only record.
         if dropped_suggestion is not None and event_queue is not None:
-            await event_queue.put(_build_event(
+            await event_queue.put(build_agent_event(
                 "status",
                 agent_id,
                 stmt_type.value,
@@ -667,18 +661,11 @@ async def _run_single_agent(
 
     agent_role = statement_type.value
 
-    async def _emit(event_type: str, data: dict) -> None:
-        if event_queue is not None:
-            await event_queue.put(_build_event(event_type, agent_id, agent_role, data))
-
-    async def _safe_emit(event_type: str, data: dict) -> None:
-        # Awaiting queue.put inside an active cancellation can itself be
-        # cancelled (the notes loop's peer-review #3) — never let that trap
-        # the structured return below.
-        try:
-            await _emit(event_type, data)
-        except asyncio.CancelledError:
-            pass
+    # Face contract: safe_emit swallows CancelledError only (awaiting
+    # queue.put inside an active cancellation can itself be cancelled — the
+    # notes loop's peer-review #3 — and that must not trap the structured
+    # terminal return). A genuine Exception still surfaces.
+    _emit, _safe_emit = make_emitter(event_queue, agent_id, agent_role)
 
     rl_retries = 0
     connect_retry_used = False
@@ -884,10 +871,9 @@ async def _run_single_agent_attempt(
         from concept_model.parser import _derive_template_id
         template_id = _derive_template_id(Path(template_path))
 
-    async def _emit(event_type: str, data: dict) -> None:
-        """Push an event into the queue when streaming is active."""
-        if event_queue is not None:
-            await event_queue.put(_build_event(event_type, agent_id, agent_role, data))
+    # Push events into the queue when streaming is active (the attempt body
+    # has no cancellation-teardown path, so only the plain emit is needed).
+    _emit, _ = make_emitter(event_queue, agent_id, agent_role)
 
     # v8 telemetry: per-turn metrics captured during the agent.iter() loop
     # below. Attached to every AgentResult via `_finalize`, so the success

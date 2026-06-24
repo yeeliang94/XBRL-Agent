@@ -38,6 +38,7 @@ from pydantic_ai.messages import (
     ThinkingPartDelta,
 )
 
+from agent_runner import make_emitter
 from agent_tracing import MAX_AGENT_ITERATIONS
 from notes._rate_limit import (
     RATE_LIMIT_MAX_RETRIES,
@@ -637,21 +638,12 @@ async def _invoke_sub_agent_once(
         f"Follow your system prompt for the full contract."
     )
 
-    async def _emit(event_type: str, data: dict) -> None:
-        if event_queue is None:
-            return
-        await event_queue.put({
-            "event": event_type,
-            "data": {
-                **data,
-                # Parent agent_id so the UI aggregates into the single
-                # Notes-12 tab. sub_agent_id is preserved in the payload
-                # for timeline tracing.
-                "agent_id": parent_agent_id,
-                "agent_role": NotesTemplateType.LIST_OF_NOTES.value,
-                "sub_agent_id": sub_agent_id,
-            },
-        })
+    # Parent agent_id so the UI aggregates into the single Notes-12 tab;
+    # sub_agent_id rides in the payload (via `extra`) for timeline tracing.
+    _emit, _ = make_emitter(
+        event_queue, parent_agent_id, NotesTemplateType.LIST_OF_NOTES.value,
+        extra={"sub_agent_id": sub_agent_id},
+    )
 
     # Phase 5.2: include the batch's note-number range and PDF page span
     # in the "started" status so the Notes-12 tab can show something like
