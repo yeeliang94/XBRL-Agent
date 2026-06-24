@@ -62,13 +62,20 @@ const badgeBase: CSSProperties = {
   border: `1px solid ${pwc.grey300}`,
 };
 
+// Restrained alert (design-system Alerts): neutral surface, hairline border,
+// a status-coloured left rule + coloured icon carry the state. No coloured
+// fills. Variants set the left-rule colour; pair the icon with
+// `ui.alertIcon(<hue>)`.
 const alertBase: CSSProperties = {
   display: "flex",
   gap: pwc.space.md,
   alignItems: "flex-start",
   padding: pwc.space.lg,
   borderRadius: pwc.radius.md,
-  border: "1px solid transparent",
+  background: pwc.white,
+  border: `1px solid ${pwc.grey200}`,
+  borderLeft: `3px solid ${pwc.grey300}`,
+  color: pwc.grey800,
   fontFamily: pwc.fontBody,
   fontSize: 15,
   lineHeight: 1.55,
@@ -200,30 +207,33 @@ export const ui = {
   }),
 
   // --- Alerts ------------------------------------------------------------
+  // Neutral surface + a status-coloured left rule. Pair the icon with
+  // ui.alertIcon(<hue>) so the icon (not a fill) carries the status.
   alertInfo: {
     ...alertBase,
-    background: pwc.infoBg,
-    borderColor: pwc.infoBorder,
-    color: pwc.grey800,
+    borderLeft: `3px solid ${pwc.info}`,
   } as CSSProperties,
   alertSuccess: {
     ...alertBase,
-    background: pwc.successBg,
-    borderColor: pwc.successBorder,
-    color: pwc.grey800,
+    borderLeft: `3px solid ${pwc.success}`,
   } as CSSProperties,
   alertWarning: {
     ...alertBase,
-    background: pwc.warningBg,
-    borderColor: pwc.warningBorder,
-    color: pwc.grey800,
+    borderLeft: `3px solid ${pwc.warning}`,
   } as CSSProperties,
   alertError: {
     ...alertBase,
-    background: pwc.errorBg,
-    borderColor: pwc.errorBorder,
-    color: pwc.grey800,
+    borderLeft: `3px solid ${pwc.error}`,
   } as CSSProperties,
+
+  // Icon colour for an alert (the icon carries the status hue). 16px to match
+  // the design-system alert icon size.
+  alertIcon: (color: string): CSSProperties => ({
+    color,
+    fontSize: 16,
+    lineHeight: 1.4,
+    flexShrink: 0,
+  }),
 
   // --- Table -------------------------------------------------------------
   tableWrap: {
