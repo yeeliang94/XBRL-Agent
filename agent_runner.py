@@ -560,6 +560,7 @@ async def run_agent_with_retries(
     on_retry: Optional[Callable[[int, Optional[str]], Awaitable[None]]] = None,
     on_attempt_error: Optional[Callable[[BaseException], None]] = None,
     annotate_usage: Optional[Callable[[_RetryResult], _RetryResult]] = None,
+    label: str = "agent",
 ) -> _RetryResult:
     """Drive whole-attempt retries with per-lane budgets (see :class:`RetryPolicy`).
 
@@ -592,6 +593,11 @@ async def run_agent_with_retries(
       the exception; notes appends to its side-log; Sheet-12 snapshots usage).
     * ``annotate_usage(result)`` — finalize usage on EVERY returned result
       (success / cancelled / terminal). Defaults to identity.
+    * ``label`` — a short agent identifier prefixed onto the per-lane retry
+      WARNING logs (429 backoff delay, connection retry, generic retry). These
+      logs were per-coordinator before unification; centralising them here
+      keeps the rate-limit/backoff visibility operators rely on — and restores
+      it for the Sheet-12 sub-agents, which have no SSE retry marker.
     """
     _annotate = annotate_usage or (lambda r: r)
 
@@ -645,6 +651,11 @@ async def run_agent_with_retries(
             if rate_limited and rl_retries < policy.rate_limit_retries:
                 pending_backoff = policy.compute_backoff(e, rl_retries)
                 rl_retries += 1
+                logger.warning(
+                    "%s hit 429 (rl-retry %d/%d) — sleeping %.2fs: %s",
+                    label, rl_retries, policy.rate_limit_retries,
+                    pending_backoff, e,
+                )
                 continue
             if (
                 not rate_limited
@@ -653,6 +664,10 @@ async def run_agent_with_retries(
                 and connect_retries_used < policy.connection_retries
             ):
                 connect_retries_used += 1
+                logger.warning(
+                    "%s hit a connection error (retry %d/%d): %s",
+                    label, connect_retries_used, policy.connection_retries, e,
+                )
                 continue
             if (
                 not rate_limited
@@ -660,5 +675,9 @@ async def run_agent_with_retries(
                 and generic_retries < policy.generic_retries
             ):
                 generic_retries += 1
+                logger.warning(
+                    "%s failed (generic-retry %d/%d): %s — retrying",
+                    label, generic_retries, policy.generic_retries, e,
+                )
                 continue
             return _annotate(await make_terminal(e, last_error))

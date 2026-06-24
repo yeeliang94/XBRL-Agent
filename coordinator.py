@@ -819,6 +819,7 @@ async def _run_single_agent(
         on_retry=_on_retry,
         on_attempt_error=_accumulate_failed_attempt_usage,
         annotate_usage=_with_prior_attempt_usage,
+        label=f"Face agent {agent_role}",
     )
 
 
