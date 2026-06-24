@@ -710,7 +710,10 @@ async def _run_single_notes_agent(
         })
         # v17 (item 9): classify the terminal failure from the last attempt —
         # a per-turn stall is operationally distinct from a code error.
-        last_exc_class = attempts[-1]["error_type"] if attempts else type(e).__name__
+        # ``attempts`` is always non-empty here (on_attempt_error appends before
+        # terminal), but keep the original empty-list fallback (`""`) verbatim
+        # so this stays byte-identical to the pre-refactor classification.
+        last_exc_class = attempts[-1]["error_type"] if attempts else ""
         return NotesAgentResult(
             template_type=template_type,
             status="failed",
