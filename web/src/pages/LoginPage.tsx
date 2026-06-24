@@ -97,7 +97,8 @@ export function LoginPage({ onAuthenticated }: LoginPageProps) {
 
         {error && (
           <div style={styles.error} role="alert">
-            {error}
+            <span aria-hidden="true" style={ui.alertIcon(pwc.error)}>✕</span>
+            <span>{error}</span>
           </div>
         )}
 
