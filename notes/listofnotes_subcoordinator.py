@@ -38,11 +38,10 @@ from pydantic_ai.messages import (
     ThinkingPartDelta,
 )
 
-from agent_runner import make_emitter
+from agent_runner import RetryPolicy, make_emitter, run_agent_with_retries
 from agent_tracing import MAX_AGENT_ITERATIONS
 from notes._rate_limit import (
     RATE_LIMIT_MAX_RETRIES,
-    compute_backoff_delay,
     is_rate_limit_error,
 )
 from notes.agent import create_notes_agent
@@ -378,140 +377,114 @@ async def _run_list_of_notes_sub_agent(
     if launch_delay > 0:
         await asyncio.sleep(launch_delay)
 
-    last_error: Optional[str] = None
     # ``retry_count`` on the returned result is the number of retries
-    # performed (0 = first-try success). Tracked independently of the
-    # generic/rate-limit split below so the side-log stays compatible
-    # with the existing contract.
+    # performed (0 = first-try success); it equals the LAST attempt's
+    # retry_index, which the scaffold passes in (each retry bumps it by one,
+    # both for the generic and the rate-limit lane).
     retries_performed = 0
-
-    # Track the last attempt's usage so both success and failure paths
-    # return populated token counts. Final assignment wins — per Phase 5
-    # we don't sum across retries because the operator cares about the
-    # last attempt's cost, not the total trial-and-error spend.
+    # Track the last attempt's usage so both success and failure paths return
+    # populated token counts. Final assignment wins — per Phase 5 we don't sum
+    # across retries because the operator cares about the last attempt's cost,
+    # not the total trial-and-error spend.
     last_prompt_tokens = 0
     last_completion_tokens = 0
+    # The CURRENT attempt's mutable usage accumulator (peer-review MEDIUM):
+    # threaded into _invoke_sub_agent_once so the usage from a FAILING attempt
+    # isn't lost (the failure path reads it back, otherwise the aggregate cost
+    # report under-reports every time a sub-agent spends tokens then raises).
+    cur_usage: dict[str, int] = {"prompt": 0, "completion": 0}
 
-    # Two retry budgets — see notes.coordinator._run_single_notes_agent
-    # for the same two-budget treatment.
-    generic_retries = 0
-    rl_retries = 0
-    attempt_num = 0
-    # Backoff scheduled on the previous iteration, consumed at the top
-    # of the next — keeps the sleep inside the try/except so a user
-    # abort during backoff raises CancelledError through the runner
-    # instead of bubbling out of the retry loop raw (the parent fan-out
-    # interprets raised CancelledError as a cancelled sub-agent).
-    pending_backoff: float = 0.0
-
-    while True:
-        # Peer-review MEDIUM: mutable accumulator threaded into
-        # _invoke_sub_agent_once so the usage from a failing attempt
-        # isn't lost. Without this the failure branch below would fall
-        # back to 0/0 and the aggregate cost report under-reports every
-        # time a sub-agent spends tokens then raises.
-        usage_accumulator: dict[str, int] = {"prompt": 0, "completion": 0}
-        try:
-            if pending_backoff > 0:
-                await asyncio.sleep(pending_backoff)
-                pending_backoff = 0.0
-            payloads, prompt_t, completion_t, coverage = await _invoke_sub_agent_once(
-                sub_agent_id=sub_agent_id,
-                batch=batch,
-                pdf_path=pdf_path,
-                filing_level=filing_level,
-                model=model,
-                output_dir=output_dir,
-                event_queue=event_queue,
-                parent_agent_id=parent_agent_id,
-                attempt=attempt_num,
-                page_hints=page_hints,
-                page_offset=page_offset,
-                usage_out=usage_accumulator,
-                filing_standard=filing_standard,
-                scout_context=scout_context,
+    async def _attempt(retry_index: int) -> SubAgentRunResult:
+        nonlocal retries_performed, last_prompt_tokens, last_completion_tokens, cur_usage
+        retries_performed = retry_index
+        cur_usage = {"prompt": 0, "completion": 0}
+        payloads, prompt_t, completion_t, coverage = await _invoke_sub_agent_once(
+            sub_agent_id=sub_agent_id,
+            batch=batch,
+            pdf_path=pdf_path,
+            filing_level=filing_level,
+            model=model,
+            output_dir=output_dir,
+            event_queue=event_queue,
+            parent_agent_id=parent_agent_id,
+            attempt=retry_index,
+            page_hints=page_hints,
+            page_offset=page_offset,
+            usage_out=cur_usage,
+            filing_standard=filing_standard,
+            scout_context=scout_context,
+        )
+        last_prompt_tokens = prompt_t
+        last_completion_tokens = completion_t
+        # Zero-payload guard (peer-review #2): a non-empty batch that produces
+        # zero payloads is the Sheet-12 analogue of the single-sheet path's
+        # `_NoWriteError` — the model sometimes returns without ever calling
+        # `write_notes`, which should retry not succeed.
+        #
+        # Slice 5 carve-out: a submitted coverage receipt that legitimately
+        # skips every batch note (e.g. all notes in the slice belong on
+        # another sheet) is a real success — the agent looked and deliberately
+        # chose not to write. Treat "zero payloads AND a receipt covering every
+        # note" as success; the retry still catches "zero payloads AND no
+        # receipt" (silent abandon).
+        if batch and not payloads:
+            receipt_covers_batch = (
+                coverage is not None
+                and {e.note_num for e in coverage.entries}
+                >= {entry.note_num for entry in batch}
             )
-            last_prompt_tokens = prompt_t
-            last_completion_tokens = completion_t
-            # Zero-payload guard (peer-review #2): a non-empty batch
-            # that produces zero payloads is the Sheet-12 analogue of
-            # the single-sheet path's `_NoWriteError` — the model
-            # sometimes returns without ever calling `write_notes`,
-            # which should retry not succeed.
-            #
-            # Slice 5 carve-out: a submitted coverage receipt that
-            # legitimately skips every batch note (e.g. all notes in
-            # the slice belong on another sheet) is a real success —
-            # the agent looked and deliberately chose not to write.
-            # Treat "zero payloads AND a receipt covering every note"
-            # as success; the existing retry still catches "zero
-            # payloads AND no receipt" (silent abandon).
-            if batch and not payloads:
-                receipt_covers_batch = (
-                    coverage is not None
-                    and {e.note_num for e in coverage.entries}
-                    >= {entry.note_num for entry in batch}
+            if not receipt_covers_batch:
+                raise _SubAgentNoWriteError(
+                    f"Sub-agent finished without emitting any payloads "
+                    f"for a batch of {len(batch)} note(s)"
                 )
-                if not receipt_covers_batch:
-                    raise _SubAgentNoWriteError(
-                        f"Sub-agent finished without emitting any payloads "
-                        f"for a batch of {len(batch)} note(s)"
-                    )
-            return SubAgentRunResult(
-                sub_agent_id=sub_agent_id,
-                batch=batch,
-                payloads=payloads,
-                status="succeeded",
-                retry_count=retries_performed,
-                prompt_tokens=last_prompt_tokens,
-                completion_tokens=last_completion_tokens,
-                coverage=coverage,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            # Carry the accumulator's last-known counts into the failure
-            # record so retry-exhaustion still reports real spend.
-            last_prompt_tokens = usage_accumulator["prompt"]
-            last_completion_tokens = usage_accumulator["completion"]
-            last_error = str(e)
-            if is_rate_limit_error(e):
-                if rl_retries >= RATE_LIMIT_MAX_RETRIES:
-                    logger.warning(
-                        "Sub-agent %s rate-limit retries exhausted (%d) — giving up",
-                        sub_agent_id, RATE_LIMIT_MAX_RETRIES,
-                    )
-                    break
-                pending_backoff = compute_backoff_delay(e, rl_retries)
-                rl_retries += 1
-                retries_performed += 1
-                attempt_num += 1
-                logger.warning(
-                    "Sub-agent %s hit 429 (rl-retry %d/%d) — sleeping %.2fs: %s",
-                    sub_agent_id, rl_retries, RATE_LIMIT_MAX_RETRIES,
-                    pending_backoff, e,
-                )
-                continue
-            if generic_retries >= max_retries:
-                break
-            generic_retries += 1
-            retries_performed += 1
-            attempt_num += 1
-            logger.warning(
-                "Sub-agent %s failed (generic-retry %d/%d): %s — retrying",
-                sub_agent_id, generic_retries, max_retries, e,
-            )
+        return SubAgentRunResult(
+            sub_agent_id=sub_agent_id,
+            batch=batch,
+            payloads=payloads,
+            status="succeeded",
+            retry_count=retries_performed,
+            prompt_tokens=last_prompt_tokens,
+            completion_tokens=last_completion_tokens,
+            coverage=coverage,
+        )
 
-    logger.warning("Sub-agent %s exhausted retries: %s", sub_agent_id, last_error)
-    return SubAgentRunResult(
-        sub_agent_id=sub_agent_id,
-        batch=batch,
-        payloads=[],
-        status="failed",
-        error=last_error,
-        retry_count=retries_performed,
-        prompt_tokens=last_prompt_tokens,
-        completion_tokens=last_completion_tokens,
+    def _record_attempt(e: BaseException) -> None:
+        # Carry the accumulator's last-known counts into the failure record so
+        # retry-exhaustion still reports real spend.
+        nonlocal last_prompt_tokens, last_completion_tokens
+        last_prompt_tokens = cur_usage["prompt"]
+        last_completion_tokens = cur_usage["completion"]
+
+    async def _make_terminal(e: BaseException, last_error: str) -> SubAgentRunResult:
+        logger.warning("Sub-agent %s exhausted retries: %s", sub_agent_id, last_error)
+        return SubAgentRunResult(
+            sub_agent_id=sub_agent_id,
+            batch=batch,
+            payloads=[],
+            status="failed",
+            error=last_error,
+            retry_count=retries_performed,
+            prompt_tokens=last_prompt_tokens,
+            completion_tokens=last_completion_tokens,
+        )
+
+    # Same two-budget treatment as notes.coordinator._run_single_notes_agent.
+    # make_cancelled=None → a CancelledError re-raises through the scaffold;
+    # the parent fan-out interprets that as a cancelled sub-agent. Sub-agent
+    # retries are silent (no on_retry status marker at this level).
+    policy = RetryPolicy(
+        rate_limit_retries=RATE_LIMIT_MAX_RETRIES,
+        connection_retries=0,
+        generic_retries=max_retries,
+        is_rate_limit=is_rate_limit_error,
+    )
+    return await run_agent_with_retries(
+        attempt=_attempt,
+        policy=policy,
+        make_terminal=_make_terminal,
+        make_cancelled=None,
+        on_attempt_error=_record_attempt,
     )
 
 
