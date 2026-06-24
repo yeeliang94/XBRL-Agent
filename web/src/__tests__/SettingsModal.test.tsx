@@ -333,8 +333,8 @@ describe("SettingsModal — P3 enhancements", () => {
 
     await waitFor(() => {
       const errorText = screen.getByText(/Model name is required/);
-      // Error text should use pwc.error (#DC2626 → rgb(220, 38, 38))
-      expect(errorText.getAttribute("style")).toContain("rgb(220, 38, 38)");
+      // Error text should use pwc.error (#E5484D → rgb(229, 72, 77))
+      expect(errorText.getAttribute("style")).toContain("rgb(229, 72, 77)");
     });
   });
 });

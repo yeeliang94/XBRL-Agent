@@ -30,34 +30,37 @@ export const pwc = {
   grey800: '#2D2D2D',     // Body text (n-800)
   grey900: '#1A1A1A',     // Headings, primary text (n-900)
 
-  // Semantic
-  success:      '#059669',  // Green — completed steps, success badges
-  error:        '#DC2626',  // Red — errors, failed states
-  info:         '#2F6FB0',  // Blue — informational states
-  thinking:     '#7C3AED',  // Purple — agent thinking/reasoning blocks (functional, not brand)
+  // Semantic — bright, clean status family pitched to sit on the light theme
+  // without going dark or muddy (design-system Color section). Base hues drive
+  // dots, icons and left-rules; the *Text tokens below carry status LABELS.
+  success:      '#1FAB76',  // Fresh green — completed steps, success dot/border
+  warning:      '#EFA417',  // Warm gold — caution dot/border/left-rule
+  error:        '#E5484D',  // Clean red — errors, failed states
+  info:         '#3E84CC',  // Clean blue — informational states
+  thinking:     '#8B5CF6',  // Violet — agent thinking/reasoning blocks (functional, not brand)
 
-  // Semantic surfaces (backgrounds/borders/text tints for status UI).
-  // Centralized so the status look-and-feel can be themed in one place
-  // instead of replicating literals across components. Soft fills come from
-  // the design system; text shades are kept deliberately darker than the
-  // base status hue for legible contrast on those soft fills.
-  successBg:    '#E6F4EF',  // Tinted background for pass/success panels + badges
-  successBorder:'#C8E6D2',  // Border colour that pairs with successBg
-  successText:  '#166534',  // Foreground text on successBg (darker than `success` for contrast)
-  errorBg:      '#FBE9E9',  // Tinted background for fail/error panels + badges
-  errorBorder:  '#F4CFCA',  // Border colour that pairs with errorBg
-  errorText:    '#991B1B',  // Strong error text (headings, badge labels)
-  errorTextAlt: '#B91C1C',  // Secondary error text (body copy, tracebacks)
-  infoBg:       '#ECF3FA',  // Tinted background for info panels + badges
-  infoBorder:   '#CFE0F0',  // Border colour that pairs with infoBg
+  // Status text — darker shade of each hue, AA-legible on neutral/light
+  // surfaces. Carries status LABELS and inline coloured text (card deltas,
+  // do/don't headers); the bright base hue is for dots/icons/borders.
+  successText:  '#157A53',  // Foreground text for success status
+  errorText:    '#C0303A',  // Strong error text (headings, badge labels)
+  errorTextAlt: '#D14A4E',  // Secondary error text (body copy, tracebacks)
+  warningText:  '#8A6111',  // Warning status text
+  infoText:     '#2C6299',  // Info status text
 
-  // Warning surfaces — partial-success / non-fatal diagnostics. Used by the
-  // notes pipeline to surface writer skips, borderline fuzzy matches, and
-  // partial sub-agent coverage without flipping a run to "failed". Amber
-  // soft-fill from the design system; text kept dark for legibility.
-  warningBg:     '#FDF4E0',
-  warningBorder: '#F4E2B0',
-  warningText:   '#92400E',
+  // Soft tints — RESERVED for rare emphasis (e.g. highlighting one
+  // reconciliation row), NOT the default surface for badges/alerts (those are
+  // now outline/left-rule on a neutral surface). Light, airy, near-neutral
+  // versions of the hues above; centralized so the look can be themed in one
+  // place instead of replicating literals across components.
+  successBg:    '#E8F6EF',  // Tinted background for rare success emphasis
+  successBorder:'#C8E9DA',  // Border colour that pairs with successBg
+  errorBg:      '#FCECEC',  // Tinted background for rare error emphasis
+  errorBorder:  '#F6D5D6',  // Border colour that pairs with errorBg
+  infoBg:       '#EAF2FB',  // Tinted background for rare info emphasis
+  infoBorder:   '#D2E2F3',  // Border colour that pairs with infoBg
+  warningBg:     '#FCF3DF',
+  warningBorder: '#F3E2BB',
 
   // Typography — single Helvetica Neue family across the system (no licensed
   // PwC corporate face available). Hierarchy comes from size + weight, with
