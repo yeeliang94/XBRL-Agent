@@ -21,43 +21,48 @@ import { pwc } from "./theme";
 
 export interface RunStatusDisplay {
   label: string;
+  // `accent` is the bright status hue used for the outline badge's border +
+  // dot (design-system Badges: status is an accent, not a fill). `color`/`bg`
+  // are the legacy soft-fill tokens, kept for the rare emphasis surfaces that
+  // still tint a background (not used by the status badges anymore).
+  accent: string;
   color: string;
   bg: string;
 }
 
 const FALLBACK: RunStatusDisplay = {
   label: "Unknown",
+  accent: pwc.grey500,
   color: pwc.grey700,
   bg: pwc.grey100,
 };
 
 const RUN_STATUS_MAP: Record<string, RunStatusDisplay> = {
   // PLAN-persistent-draft-uploads.md (Phase D): drafts are unstarted
-  // uploads. Slate-grey neutral palette so they read as "waiting" rather
-  // than success/failure — distinct from `aborted` which uses warmer grey.
-  draft:                  { label: "Not started",          color: pwc.grey700,   bg: pwc.grey100 },
-  running:                { label: "Running",              color: pwc.orange500, bg: pwc.orange50 },
-  completed:              { label: "Completed",            color: pwc.success,   bg: pwc.successBg },
-  completed_with_errors:  { label: "Completed with errors", color: pwc.warningText, bg: pwc.warningBg },
+  // uploads. Neutral-grey so they read as "waiting" rather than
+  // success/failure — distinct from `aborted` which shares the neutral dot.
+  draft:                  { label: "Not started",          accent: pwc.grey500,  color: pwc.grey700,   bg: pwc.grey100 },
+  running:                { label: "Running",              accent: pwc.orange500, color: pwc.orange500, bg: pwc.orange50 },
+  completed:              { label: "Completed",            accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
+  completed_with_errors:  { label: "Completed with errors", accent: pwc.warning,  color: pwc.warningText, bg: pwc.warningBg },
   // RUN-REVIEW P0-1 (2026-04-26): correction agent hit its turn budget
-  // without converging. Shares the amber warning fill with
-  // completed_with_errors but uses error-grade (red) text so the
-  // "needs a human" runs stay visually distinct at a glance — both stay
-  // within the design system's status palette (warning bg + error text).
-  correction_exhausted:   { label: "Needs review",         color: pwc.errorText,   bg: pwc.warningBg },
-  failed:                 { label: "Failed",               color: pwc.error,     bg: pwc.errorBg },
-  aborted:                { label: "Aborted",              color: pwc.grey700,   bg: pwc.grey100 },
+  // without converging. Carries the red (error) accent so the "needs a human"
+  // runs read as more urgent than amber completed_with_errors; the distinct
+  // label ("Needs review" vs "Failed") keeps it apart from a hard failure.
+  correction_exhausted:   { label: "Needs review",         accent: pwc.error,     color: pwc.errorText,   bg: pwc.warningBg },
+  failed:                 { label: "Failed",               accent: pwc.error,     color: pwc.error,     bg: pwc.errorBg },
+  aborted:                { label: "Aborted",              accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
 };
 
 const AGENT_STATUS_MAP: Record<string, RunStatusDisplay> = {
-  running:    { label: "Running",   color: pwc.orange500, bg: pwc.orange50 },
+  running:    { label: "Running",   accent: pwc.orange500, color: pwc.orange500, bg: pwc.orange50 },
   // Coordinator-emitted "succeeded" is the per-agent equivalent of run-level
   // "completed" — render as Completed so the UI uses one consistent verb.
-  succeeded:  { label: "Completed", color: pwc.success,   bg: pwc.successBg },
-  completed:  { label: "Completed", color: pwc.success,   bg: pwc.successBg },
-  failed:     { label: "Failed",    color: pwc.error,     bg: pwc.errorBg },
-  cancelled:  { label: "Cancelled", color: pwc.grey700,   bg: pwc.grey100 },
-  aborted:    { label: "Aborted",   color: pwc.grey700,   bg: pwc.grey100 },
+  succeeded:  { label: "Completed", accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
+  completed:  { label: "Completed", accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
+  failed:     { label: "Failed",    accent: pwc.error,     color: pwc.error,     bg: pwc.errorBg },
+  cancelled:  { label: "Cancelled", accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
+  aborted:    { label: "Aborted",   accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
 };
 
 /** Look up a run-level status. Unknown values get a clearly-labeled fallback

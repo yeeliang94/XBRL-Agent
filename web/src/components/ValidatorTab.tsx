@@ -25,15 +25,15 @@ export interface ValidatorTabProps {
 
 const STATUS_DISPLAY: Record<
   CrossCheckResult["status"],
-  { label: string; color: string; bg: string }
+  { label: string; accent: string }
 > = {
-  passed: { label: "Passed", color: pwc.success, bg: pwc.successBg },
-  failed: { label: "Failed", color: pwc.error, bg: pwc.errorBg },
+  passed: { label: "Passed", accent: pwc.success },
+  failed: { label: "Failed", accent: pwc.error },
   // Advisory only (Phase 6.1 notes-consistency). Amber so it's distinct
-  // from success/error and reuses the shared warning palette.
-  warning: { label: "Warning", color: pwc.warningText, bg: pwc.warningBg },
-  pending: { label: "Pending", color: pwc.warningText, bg: pwc.warningBg },
-  not_applicable: { label: "N/A", color: pwc.grey500, bg: pwc.grey100 },
+  // from success/error.
+  warning: { label: "Warning", accent: pwc.warning },
+  pending: { label: "Pending", accent: pwc.warning },
+  not_applicable: { label: "N/A", accent: pwc.grey500 },
 };
 
 // ---------------------------------------------------------------------------
@@ -103,13 +103,8 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                     <span style={{ fontFamily: pwc.fontMono, fontSize: 13 }}>{check.name}</span>
                   </td>
                   <td style={styles.td}>
-                    <span
-                      style={{
-                        ...styles.badge,
-                        color: display.color,
-                        background: display.bg,
-                      }}
-                    >
+                    <span style={{ ...styles.badge, borderColor: display.accent }}>
+                      <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
                       {display.label}
                     </span>
                   </td>
@@ -144,11 +139,11 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                 <span
                   style={{
                     ...styles.badge,
-                    color: STATUS_DISPLAY.warning.color,
-                    background: STATUS_DISPLAY.warning.bg,
+                    borderColor: STATUS_DISPLAY.warning.accent,
                     marginRight: pwc.space.sm,
                   }}
                 >
+                  <span aria-hidden="true" style={ui.badgeDot(STATUS_DISPLAY.warning.accent)} />
                   {STATUS_DISPLAY.warning.label}
                 </span>
                 <span style={styles.warningName}>{w.name}</span>

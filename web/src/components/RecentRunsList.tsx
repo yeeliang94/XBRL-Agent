@@ -90,9 +90,8 @@ export function RecentRunsList({
                   <span style={styles.action}>{isDraft ? "Resume" : "View"}</span>
                 </div>
                 <div style={styles.cardMeta}>
-                  <span
-                    style={{ ...styles.badge, color: display.color, background: display.bg }}
-                  >
+                  <span style={{ ...styles.badge, borderColor: display.accent }}>
+                    <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
                     {display.label}
                   </span>
                   <span style={styles.date}>{formatDate(run.created_at)}</span>

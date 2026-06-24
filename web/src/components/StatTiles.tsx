@@ -46,7 +46,8 @@ export function StatTiles({ total, drafts, completedThisMonth, lastStatus }: Sta
       </div>
       <div style={styles.tile}>
         {last ? (
-          <span style={{ ...styles.badge, color: last.color, background: last.bg }}>
+          <span style={{ ...styles.badge, borderColor: last.accent }}>
+            <span aria-hidden="true" style={ui.badgeDot(last.accent)} />
             {last.label}
           </span>
         ) : (
