@@ -324,6 +324,54 @@ def test_on_retry_marker_carries_attempt_and_last_error():
     assert markers == [(2, "first failure")]
 
 
+def test_retry_lanes_emit_labeled_warning_logs(caplog):
+    """Per-lane retry visibility (peer-review): each retry lane logs a WARNING
+    prefixed with the caller-supplied label — restores the rate-limit/backoff
+    diagnostics the per-coordinator loops had (and Sheet-12 never got)."""
+    import logging as _logging
+
+    # rate-limit lane (backoff delay in the message)
+    seq = iter([_Rate(), None])
+
+    async def attempt(idx):
+        e = next(seq)
+        if e is not None:
+            raise e
+        return "ok"
+
+    async def make_terminal(exc, msg):
+        raise AssertionError
+
+    policy = _face_policy()
+    policy.compute_backoff = lambda e, n: 2.0
+    with caplog.at_level(_logging.WARNING, logger="agent_runner"):
+        _run(run_agent_with_retries(
+            attempt=attempt, policy=policy, make_terminal=make_terminal,
+            label="Face agent SOFP",
+        ))
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("Face agent SOFP" in m and "rl-retry 1/3" in m and "2.00s" in m
+               for m in msgs), msgs
+
+    # generic lane
+    caplog.clear()
+    seq2 = iter([ValueError("boom"), None])
+
+    async def attempt2(idx):
+        e = next(seq2)
+        if e is not None:
+            raise e
+        return "ok"
+
+    with caplog.at_level(_logging.WARNING, logger="agent_runner"):
+        _run(run_agent_with_retries(
+            attempt=attempt2, policy=_notes_policy(max_retries=1),
+            make_terminal=make_terminal, label="Sub-agent sub0",
+        ))
+    msgs2 = [r.getMessage() for r in caplog.records]
+    assert any("Sub-agent sub0" in m and "generic-retry 1/1" in m for m in msgs2), msgs2
+
+
 def test_annotate_usage_applies_to_success_too():
     async def attempt(idx):
         return {"ok": True}

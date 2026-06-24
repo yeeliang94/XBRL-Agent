@@ -741,6 +741,7 @@ async def _run_single_notes_agent(
         make_cancelled=_make_cancelled,
         on_retry=_on_retry,
         on_attempt_error=_record_attempt,
+        label=f"Notes agent {template_type.value}",
     )
 
 

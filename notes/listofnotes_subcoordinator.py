@@ -485,6 +485,7 @@ async def _run_list_of_notes_sub_agent(
         make_terminal=_make_terminal,
         make_cancelled=None,
         on_attempt_error=_record_attempt,
+        label=f"Sub-agent {sub_agent_id}",
     )
 
 

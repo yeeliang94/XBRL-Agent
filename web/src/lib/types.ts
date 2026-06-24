@@ -65,7 +65,7 @@ export type SSEEventType =
   | "scale_conflict";
 
 // Every multi-agent event carries these routing fields inside `data` (the
-// backend stamps them in coordinator._build_event). We keep them in `data`
+// backend stamps them in agent_runner.build_agent_event). We keep them in `data`
 // rather than hoisting to the event root so the runtime shape matches the
 // wire format for both live SSE and persisted history — no parse-time
 // transform is needed.
