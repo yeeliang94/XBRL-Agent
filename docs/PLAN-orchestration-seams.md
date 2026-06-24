@@ -1,8 +1,8 @@
 # Implementation Plan: Orchestration Seams — coordinator scaffold + cross-check pass
 
-**Overall Progress:** `0%`
+**Overall Progress:** `100%` — Parts A & B implemented + merged on `refactor/orchestration-seams`; full backend suite green (2705 passed).
 **Architecture Reference:** Architecture review 2026-06-24, candidates 1 & 2 (the two "Strong" deepenings). Design vocabulary: `/codebase-design` (module, interface, seam, adapter, depth, leverage, locality).
-**Last Updated:** 2026-06-24
+**Last Updated:** 2026-06-25
 
 > **Filename note:** the skill template says `docs/PLAN.md`, but that path already holds a completed plan (design-system sweep, 100%). This plan is written to `docs/PLAN-orchestration-seams.md` to match the repo's `docs/PLAN-<topic>.md` convention and avoid clobbering it.
 
