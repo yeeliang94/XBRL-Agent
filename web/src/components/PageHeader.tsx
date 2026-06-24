@@ -63,7 +63,7 @@ const styles: Record<string, CSSProperties> = {
     // Slightly under the reference's 38px because this app keeps a global
     // brand bar above the page, so the page title shouldn't compete with it.
     fontSize: 32,
-    fontWeight: pwc.weight.light,
+    fontWeight: pwc.weight.regular,
     letterSpacing: 0,
     lineHeight: 1.1,
     color: pwc.grey900,

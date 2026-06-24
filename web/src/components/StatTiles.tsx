@@ -81,9 +81,9 @@ const styles = {
   } as React.CSSProperties,
   value: {
     fontFamily: pwc.fontHeading,
-    // Light weight on the large number matches the design system's heading
-    // treatment (hierarchy from size, not boldness).
-    fontWeight: pwc.weight.light,
+    // Regular weight on the large number — hierarchy from size, not boldness
+    // (design system: two text weights, no Light 300).
+    fontWeight: pwc.weight.regular,
     fontSize: 28,
     lineHeight: 1.1,
     color: pwc.grey900,

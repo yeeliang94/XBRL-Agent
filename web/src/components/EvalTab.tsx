@@ -129,7 +129,7 @@ const styles = {
   headline: {
     fontFamily: pwc.fontMono,
     fontSize: 56,
-    fontWeight: pwc.weight.light,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
     lineHeight: 1,
   } as React.CSSProperties,

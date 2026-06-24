@@ -90,8 +90,8 @@ const styles = {
   cardValue: {
     fontFamily: pwc.fontMono,
     fontSize: 20,
-    // Metric values read as light display numerals (design .ui-card .v).
-    fontWeight: pwc.weight.light,
+    // Metric values at regular weight (design .ui-card .v — no Light 300).
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
   } as React.CSSProperties,
   successBadge: {

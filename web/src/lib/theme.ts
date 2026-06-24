@@ -63,13 +63,16 @@ export const pwc = {
   warningBorder: '#F3E2BB',
 
   // Typography — single Helvetica Neue family across the system (no licensed
-  // PwC corporate face available). Hierarchy comes from size + weight, with
-  // large headings sitting at light weight per the design principles.
+  // PwC corporate face available). Hierarchy comes from SIZE, not a wide weight
+  // range: two text weights carry everything (design system Typography).
   fontHeading: '"Helvetica Neue", Helvetica, Arial, system-ui, sans-serif',
   fontBody:    '"Helvetica Neue", Helvetica, Arial, system-ui, sans-serif',
   fontMono:    '"SF Mono", ui-monospace, Menlo, Consolas, monospace',
 
-  // Weight scale — avoid 700+ in product UI.
+  // Weight scale. Product UI uses TWO text weights — regular (body/data) +
+  // semibold (titles/headings/emphasis/labels); medium only on interactive
+  // controls. `light` (300) is retained for token-name stability but is NOT
+  // used in product UI (it reads as a different typeface); never 700+.
   weight: { light: 300, regular: 400, medium: 500, semibold: 600 },
 
   // Spacing scale (px) — 4px base. xxxl/xxxxl added to match the design

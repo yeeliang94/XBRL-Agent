@@ -667,7 +667,7 @@ const styles = {
   filename: {
     fontFamily: pwc.fontHeading,
     fontSize: 22,
-    fontWeight: pwc.weight.light,
+    fontWeight: pwc.weight.regular,
     letterSpacing: "-0.3px",
     color: pwc.grey900,
     margin: 0,
@@ -745,7 +745,7 @@ const styles = {
   metricValue: {
     fontFamily: pwc.fontMono,
     fontSize: 20,
-    fontWeight: pwc.weight.light,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
   } as React.CSSProperties,
   metricLabel: {
