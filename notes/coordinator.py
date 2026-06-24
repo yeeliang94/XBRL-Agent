@@ -16,8 +16,10 @@ from typing import Any, Dict, List, Optional, Set
 from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace  # noqa: F401
 from agent_runner import (
     AgentLoopSpec,
+    RetryPolicy,
     make_emitter,
     run_agent_loop,
+    run_agent_with_retries,
     # Re-exported under the legacy name so
     # `from notes.coordinator import _iter_with_turn_timeout`
     # (tests/test_notes_turn_timeout) keeps working — the implementation
@@ -26,7 +28,6 @@ from agent_runner import (
 )
 from notes._rate_limit import (
     RATE_LIMIT_MAX_RETRIES,
-    compute_backoff_delay,
     is_rate_limit_error,
 )
 from notes.agent import create_notes_agent
@@ -599,175 +600,144 @@ async def _run_single_notes_agent(
     if launch_delay > 0:
         await asyncio.sleep(launch_delay)
 
+    # Per-attempt failure history for the ``notes_<TEMPLATE>_failures.json``
+    # side-log written on exhaustion. ``on_attempt_error`` appends one entry
+    # per failed attempt; ``total_attempts`` for log/UX display is derived
+    # from its length.
     attempts: list[dict[str, Any]] = []
-    last_error: Optional[str] = None
-    filled_path: Optional[str] = None
 
-    # Two retry budgets: generic errors use ``max_retries`` (default 1);
-    # rate-limit 429s use ``RATE_LIMIT_MAX_RETRIES`` (default 3). Each is
-    # consumed independently so a flaky TPM bucket doesn't burn the
-    # generic budget and a real code error doesn't masquerade as rate
-    # limiting forever. ``total_attempts`` is purely for log/UX display.
-    generic_retries = 0
-    rl_retries = 0
-    total_attempts = 0
-    # Backoff between attempts is scheduled on the *previous* iteration
-    # and consumed at the top of the next one — keeps the sleep inside
-    # the try/except so a user abort during backoff lands on the
-    # CancelledError branch (and returns a structured cancelled result)
-    # instead of bubbling out of the retry loop raw.
-    pending_backoff: float = 0.0
+    async def _attempt(retry_index: int) -> NotesAgentResult:
+        # One whole invocation. Raises on failure (the invoke never converts
+        # a failure to a result), so the scaffold classifies + retries; on
+        # success we build the succeeded NotesAgentResult here.
+        outcome = await _invoke_single_notes_agent_once(
+            template_type=template_type,
+            pdf_path=pdf_path,
+            inventory=inventory,
+            filing_level=filing_level,
+            model=model,
+            output_dir=output_dir,
+            event_queue=event_queue,
+            agent_id=agent_id,
+            emit=_emit,
+            page_hints=page_hints,
+            page_offset=page_offset,
+            filing_standard=filing_standard,
+            scout_context=scout_context,
+        )
+        if retry_index > 0:
+            logger.info("Notes agent %s recovered on attempt %d",
+                        template_type.value, retry_index + 1)
+        warnings = _build_single_sheet_warnings(outcome)
+        if warnings:
+            logger.info(
+                "Notes agent %s succeeded with %d warning(s): %s",
+                template_type.value, len(warnings), "; ".join(warnings[:5]),
+            )
+        await _emit("complete", {
+            "success": True,
+            "workbook_path": outcome.filled_path,
+            "warnings": warnings,
+        })
+        return NotesAgentResult(
+            template_type=template_type,
+            status="succeeded",
+            workbook_path=outcome.filled_path,
+            warnings=warnings,
+            cells_written=list(outcome.cells_written),
+            numeric_cells=list(outcome.numeric_cells),
+            total_tokens=outcome.total_tokens,
+            total_cost=outcome.total_cost,
+            # v8 per-turn telemetry (peer-review [2]).
+            turns=list(outcome.turns),
+            prompt_tokens=outcome.prompt_tokens,
+            completion_tokens=outcome.completion_tokens,
+            cache_read_tokens=outcome.cache_read_tokens,
+            cache_write_tokens=outcome.cache_write_tokens,
+            turn_count=len(outcome.turns),
+            tool_call_count=outcome.tool_call_count,
+        )
 
-    while True:
-        total_attempts += 1
-        try:
-            if pending_backoff > 0:
-                await asyncio.sleep(pending_backoff)
-                pending_backoff = 0.0
-            if total_attempts > 1:
-                # Emit a visible retry marker so operators see the second
-                # attempt in the live UI / History timeline instead of
-                # guessing from the tool-event duplication. Reuses the
-                # existing ``reading_template`` phase so the PipelineStages
-                # indicator already has a pulse state for it — a dedicated
-                # ``retrying`` phase would need frontend plumbing for one
-                # edge-case message. The message text carries the attempt
-                # count so the UI can still surface the retry explicitly.
-                await _emit("status", {
-                    "phase": "reading_template",
-                    "message": (
-                        f"{template_type.value}: retrying "
-                        f"(attempt {total_attempts}) — last error: "
-                        f"{last_error or 'unknown'}"
-                    ),
-                })
-            outcome = await _invoke_single_notes_agent_once(
-                template_type=template_type,
-                pdf_path=pdf_path,
-                inventory=inventory,
-                filing_level=filing_level,
-                model=model,
-                output_dir=output_dir,
-                event_queue=event_queue,
-                agent_id=agent_id,
-                emit=_emit,
-                page_hints=page_hints,
-                page_offset=page_offset,
-                filing_standard=filing_standard,
-                scout_context=scout_context,
-            )
-            # Success — stop retrying.
-            if total_attempts > 1:
-                logger.info("Notes agent %s recovered on attempt %d",
-                            template_type.value, total_attempts)
-            warnings = _build_single_sheet_warnings(outcome)
-            if warnings:
-                logger.info(
-                    "Notes agent %s succeeded with %d warning(s): %s",
-                    template_type.value, len(warnings), "; ".join(warnings[:5]),
-                )
-            await _emit("complete", {
-                "success": True,
-                "workbook_path": outcome.filled_path,
-                "warnings": warnings,
-            })
-            return NotesAgentResult(
-                template_type=template_type,
-                status="succeeded",
-                workbook_path=outcome.filled_path,
-                warnings=warnings,
-                cells_written=list(outcome.cells_written),
-                numeric_cells=list(outcome.numeric_cells),
-                total_tokens=outcome.total_tokens,
-                total_cost=outcome.total_cost,
-                # v8 per-turn telemetry (peer-review [2]).
-                turns=list(outcome.turns),
-                prompt_tokens=outcome.prompt_tokens,
-                completion_tokens=outcome.completion_tokens,
-                cache_read_tokens=outcome.cache_read_tokens,
-                cache_write_tokens=outcome.cache_write_tokens,
-                turn_count=len(outcome.turns),
-                tool_call_count=outcome.tool_call_count,
-            )
-        except asyncio.CancelledError:
-            # Never retry on user cancellation — propagate the cancellation
-            # status untouched so task_registry abort logic remains predictable.
-            # _safe_emit (not _emit) because awaiting a queue.put inside an
-            # active cancellation can itself be cancelled, which would trap
-            # the return below (peer-review #3).
-            await _safe_emit("complete", {"success": False, "error": "Cancelled by user"})
-            return NotesAgentResult(
-                template_type=template_type,
-                status="cancelled",
-                error="Cancelled by user",
-            )
-        except Exception as e:  # noqa: BLE001 — we explicitly want broad catch
-            last_error = str(e)
-            attempts.append({
-                "attempt": total_attempts,
-                "error_type": type(e).__name__,
-                "error": last_error,
-                "rate_limited": is_rate_limit_error(e),
-            })
-            if is_rate_limit_error(e):
-                # 429s don't count against the generic budget. Honour the
-                # upstream retry-after hint with a floor + jitter; schedule
-                # the sleep for the top of the next iteration so user
-                # aborts during backoff land on the CancelledError branch.
-                if rl_retries >= RATE_LIMIT_MAX_RETRIES:
-                    logger.warning(
-                        "Notes agent %s rate-limit retries exhausted (%d) — giving up",
-                        template_type.value, RATE_LIMIT_MAX_RETRIES,
-                    )
-                    break
-                pending_backoff = compute_backoff_delay(e, rl_retries)
-                rl_retries += 1
-                logger.warning(
-                    "Notes agent %s hit 429 (rl-retry %d/%d) — sleeping %.2fs: %s",
-                    template_type.value, rl_retries, RATE_LIMIT_MAX_RETRIES,
-                    pending_backoff, e,
-                )
-                continue
-            # Generic (non-429) error — use the existing max-1 budget and
-            # skip the backoff sleep to preserve prior latency behaviour.
-            if generic_retries >= max_retries:
-                logger.exception(
-                    "Notes agent %s failed after %d attempt(s)",
-                    template_type.value, total_attempts,
-                )
-                break
-            generic_retries += 1
-            logger.warning(
-                "Notes agent %s failed on attempt %d: %s — retrying",
-                template_type.value, total_attempts, e,
-            )
+    def _record_attempt(e: BaseException) -> None:
+        attempts.append({
+            "attempt": len(attempts) + 1,
+            "error_type": type(e).__name__,
+            "error": str(e),
+            "rate_limited": is_rate_limit_error(e),
+        })
 
-    # Retries exhausted — persist the failure log and return a terminal result.
-    failures_path = _write_single_sheet_failure_log(
-        output_dir=output_dir,
-        template_type=template_type,
-        attempts=attempts,
+    async def _on_retry(total_attempts: int, last_error: Optional[str]) -> None:
+        # Visible retry marker so operators see the second attempt in the live
+        # UI / History timeline. Reuses the ``reading_template`` phase (the
+        # PipelineStages indicator already has a pulse state for it).
+        await _emit("status", {
+            "phase": "reading_template",
+            "message": (
+                f"{template_type.value}: retrying "
+                f"(attempt {total_attempts}) — last error: "
+                f"{last_error or 'unknown'}"
+            ),
+        })
+
+    async def _make_cancelled() -> NotesAgentResult:
+        # _safe_emit (not _emit): awaiting queue.put inside an active
+        # cancellation can itself be cancelled (peer-review #3).
+        await _safe_emit("complete", {"success": False, "error": "Cancelled by user"})
+        return NotesAgentResult(
+            template_type=template_type,
+            status="cancelled",
+            error="Cancelled by user",
+        )
+
+    async def _make_terminal(e: BaseException, last_error: str) -> NotesAgentResult:
+        logger.warning(
+            "Notes agent %s failed after %d attempt(s): %s",
+            template_type.value, len(attempts), last_error,
+        )
+        failures_path = _write_single_sheet_failure_log(
+            output_dir=output_dir,
+            template_type=template_type,
+            attempts=attempts,
+        )
+        if failures_path:
+            logger.info("Wrote notes failure log: %s", failures_path)
+        await _emit("error", {"message": last_error or "Unknown error"})
+        await _emit("complete", {
+            "success": False,
+            "error": last_error,
+            "attempts": len(attempts),
+            "failures_path": failures_path,
+        })
+        # v17 (item 9): classify the terminal failure from the last attempt —
+        # a per-turn stall is operationally distinct from a code error.
+        last_exc_class = attempts[-1]["error_type"] if attempts else type(e).__name__
+        return NotesAgentResult(
+            template_type=template_type,
+            status="failed",
+            error=last_error,
+            error_type=(
+                "turn_timeout" if last_exc_class == "TimeoutError"
+                else "tool_exception"
+            ),
+        )
+
+    # Two retry budgets, consumed independently (so a flaky TPM bucket doesn't
+    # burn the generic budget and a real code error doesn't masquerade as rate
+    # limiting): rate-limit 429s use RATE_LIMIT_MAX_RETRIES with backoff;
+    # generic errors use ``max_retries`` (default 1), no backoff.
+    policy = RetryPolicy(
+        rate_limit_retries=RATE_LIMIT_MAX_RETRIES,
+        connection_retries=0,
+        generic_retries=max_retries,
+        is_rate_limit=is_rate_limit_error,
     )
-    if failures_path:
-        logger.info("Wrote notes failure log: %s", failures_path)
-    await _emit("error", {"message": last_error or "Unknown error"})
-    await _emit("complete", {
-        "success": False,
-        "error": last_error,
-        "attempts": len(attempts),
-        "failures_path": failures_path,
-    })
-    # v17 (item 9): classify the terminal failure from the last attempt —
-    # a per-turn stall is operationally distinct from a code error.
-    last_exc_class = attempts[-1]["error_type"] if attempts else ""
-    return NotesAgentResult(
-        template_type=template_type,
-        status="failed",
-        error=last_error,
-        error_type=(
-            "turn_timeout" if last_exc_class == "TimeoutError"
-            else "tool_exception"
-        ),
+    return await run_agent_with_retries(
+        attempt=_attempt,
+        policy=policy,
+        make_terminal=_make_terminal,
+        make_cancelled=_make_cancelled,
+        on_retry=_on_retry,
+        on_attempt_error=_record_attempt,
     )
 
 
