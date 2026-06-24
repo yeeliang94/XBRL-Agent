@@ -58,13 +58,8 @@ export interface RunDetailViewProps {
  *  in each context (run-level vs per-agent enums differ slightly). */
 function statusBadge(display: RunStatusDisplay) {
   return (
-    <span
-      style={{
-        ...ui.badge,
-        color: display.color,
-        background: display.bg,
-      }}
-    >
+    <span style={{ ...ui.badge, borderColor: display.accent }}>
+      <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
       {display.label}
     </span>
   );

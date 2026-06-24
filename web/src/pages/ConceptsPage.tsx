@@ -1758,21 +1758,12 @@ function StatusBadge({
   label: string;
   tone: "neutral" | "accent" | "error";
 }) {
-  const palette =
-    tone === "accent"
-      ? { bg: pwc.orange50, color: pwc.orange700, border: pwc.orange100 }
-      : tone === "error"
-      ? { bg: pwc.errorBg, color: pwc.errorText, border: pwc.errorBorder }
-      : { bg: pwc.grey50, color: pwc.grey700, border: pwc.grey200 };
+  // Outline pill, border carries the tone (design-system Badges). Label stays
+  // neutral; these are short status tags, dot-less by convention.
+  const accent =
+    tone === "accent" ? pwc.orange500 : tone === "error" ? pwc.error : pwc.grey300;
   return (
-    <span
-      style={{
-        ...ui.badge,
-        background: palette.bg,
-        color: palette.color,
-        border: `1px solid ${palette.border}`,
-      }}
-    >
+    <span style={{ ...ui.badge, borderColor: accent }}>
       {label.replace(/_/g, " ")}
     </span>
   );

@@ -137,22 +137,24 @@ export function HistoryList({
                     {run.pdf_filename}
                   </span>
                   {run.filing_level === "group" && (
-                    <span style={{ ...styles.inlineBadge, background: pwc.infoBg, color: pwc.info }}>
+                    // Category tag (not a status) — outline pill, info-blue
+                    // border, neutral label. Dot-less; the dot connotes state.
+                    <span style={{ ...styles.inlineBadge, borderColor: pwc.info }}>
                       Group
                     </span>
                   )}
                   {run.filing_standard === "mpers" && (
-                    // MPERS-only badge. Default (mfrs) is implied — showing a
-                    // badge on every row would be noise. Brand-orange tint to
-                    // stay distinct from the blue Group badge right next to it.
-                    <span style={{ ...styles.inlineBadge, background: pwc.orange50, color: pwc.orange500 }}>
+                    // MPERS-only tag. Default (mfrs) is implied — a badge on
+                    // every row would be noise. Brand-orange border to stay
+                    // distinct from the blue Group tag right next to it.
+                    <span style={{ ...styles.inlineBadge, borderColor: pwc.orange500 }}>
                       MPERS
                     </span>
                   )}
                   {run.denomination && run.denomination !== "thousands" && (
                     // Non-default denomination only. "thousands" (RM '000) is
-                    // the common case and implied; a badge on every row is noise.
-                    <span style={{ ...styles.inlineBadge, background: pwc.grey100, color: pwc.grey700 }}>
+                    // the common case and implied; a tag on every row is noise.
+                    <span style={styles.inlineBadge}>
                       {run.denomination === "units" ? "RM" : "RM mil"}
                     </span>
                   )}
@@ -161,13 +163,8 @@ export function HistoryList({
                   <span style={styles.dim}>{formatDate(run.created_at)}</span>
                 </td>
                 <td style={styles.td}>
-                  <span
-                    style={{
-                      ...styles.badge,
-                      color: display.color,
-                      background: display.bg,
-                    }}
-                  >
+                  <span style={{ ...styles.badge, borderColor: display.accent }}>
+                    <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
                     {display.label}
                   </span>
                 </td>

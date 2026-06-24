@@ -42,18 +42,24 @@ const buttonBase: CSSProperties = {
   transition: "background .15s ease, border-color .15s ease",
 };
 
+// Outline pill (design-system Badges): transparent fill, a thin status-coloured
+// border + matching dot, neutral grey label. Variants override only borderColor;
+// pair with `ui.badgeDot(<hue>)` for the leading dot.
 const badgeBase: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  gap: 5,
+  gap: 7,
   minHeight: 22,
-  padding: "3px 10px",
+  padding: "3px 11px",
   borderRadius: pwc.radius.pill,
   fontFamily: pwc.fontHeading,
   fontSize: 12,
   fontWeight: pwc.weight.medium,
   lineHeight: 1.4,
   whiteSpace: "nowrap",
+  background: "transparent",
+  color: pwc.grey800,
+  border: `1px solid ${pwc.grey300}`,
 };
 
 const alertBase: CSSProperties = {
@@ -153,42 +159,45 @@ export const ui = {
   } as CSSProperties,
 
   // --- Badges ------------------------------------------------------------
-  // `badge` kept as the neutral default for backward-compatible call sites.
+  // Outline pills: `badge`/`badgeNeutral` keep the neutral grey300 border;
+  // status variants override only the border hue. Labels stay neutral
+  // (grey800); status is carried by the border + the paired dot.
   badge: {
     ...badgeBase,
-    background: pwc.grey100,
-    color: pwc.grey700,
   } as CSSProperties,
   badgeNeutral: {
     ...badgeBase,
-    background: pwc.grey100,
-    color: pwc.grey700,
   } as CSSProperties,
   badgeSuccess: {
     ...badgeBase,
-    background: pwc.successBg,
-    color: pwc.success,
+    borderColor: pwc.success,
   } as CSSProperties,
   badgeWarning: {
     ...badgeBase,
-    background: pwc.warningBg,
-    color: pwc.warningText,
+    borderColor: pwc.warning,
   } as CSSProperties,
   badgeError: {
     ...badgeBase,
-    background: pwc.errorBg,
-    color: pwc.error,
+    borderColor: pwc.error,
   } as CSSProperties,
   badgeInfo: {
     ...badgeBase,
-    background: pwc.infoBg,
-    color: pwc.info,
+    borderColor: pwc.info,
   } as CSSProperties,
   badgeBrand: {
     ...badgeBase,
-    background: pwc.orange50,
-    color: pwc.orange500,
+    borderColor: pwc.orange500,
   } as CSSProperties,
+
+  // Leading status dot for an outline badge. Pass the status hue (use
+  // pwc.grey500 for neutral). 7px circle per the design-system spec.
+  badgeDot: (color: string): CSSProperties => ({
+    width: 7,
+    height: 7,
+    borderRadius: "50%",
+    background: color,
+    flexShrink: 0,
+  }),
 
   // --- Alerts ------------------------------------------------------------
   alertInfo: {
