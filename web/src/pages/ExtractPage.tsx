@@ -698,9 +698,9 @@ const styles = {
     lineHeight: 1.4,
   } as const,
   destructiveBtn: {
-    color: pwc.errorText,
-    background: pwc.errorBg,
-    border: `1px solid ${pwc.errorBorder}`,
+    color: pwc.error,
+    background: pwc.white,
+    border: `1px solid ${pwc.error}`,
   } as const,
   primaryBtn: {
     color: pwc.orange700,
@@ -708,8 +708,9 @@ const styles = {
     border: `1px solid ${pwc.orange400}`,
   } as const,
   errorBox: {
-    background: pwc.errorBg,
-    border: `1px solid ${pwc.errorBorder}`,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.error}`,
     borderRadius: pwc.radius.md,
     padding: pwc.space.lg,
   } as const,
@@ -722,14 +723,14 @@ const styles = {
   } as const,
   errorMessage: {
     fontFamily: pwc.fontBody,
-    color: pwc.errorTextAlt,
+    color: pwc.grey800,
     fontSize: 14,
     marginTop: pwc.space.xs,
   } as const,
   errorTraceback: {
     fontFamily: pwc.fontMono,
     fontSize: 12,
-    color: pwc.errorTextAlt,
+    color: pwc.grey800,
     whiteSpace: "pre-wrap" as const,
     overflow: "auto",
     marginTop: pwc.space.sm,
@@ -739,8 +740,9 @@ const styles = {
   // "your work failed". Warning amber matches the chip used for the
   // correction_exhausted run status (RUN-REVIEW P0-1).
   partialMergeBox: {
-    background: pwc.warningBg,
-    border: `1px solid ${pwc.warningBorder}`,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.warning}`,
     borderRadius: pwc.radius.md,
     padding: pwc.space.lg,
     marginBottom: pwc.space.md,
@@ -754,7 +756,7 @@ const styles = {
   } as const,
   partialMergeMessage: {
     fontFamily: pwc.fontBody,
-    color: pwc.warningText,
+    color: pwc.grey800,
     fontSize: 14,
     marginTop: pwc.space.xs,
     marginBottom: 0,

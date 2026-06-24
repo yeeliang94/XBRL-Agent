@@ -224,8 +224,9 @@ const styles = {
   warningsSection: {
     marginTop: pwc.space.lg,
     padding: pwc.space.md,
-    background: pwc.warningBg,
-    border: `1px solid ${pwc.warningBorder}`,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.warning}`,
     borderRadius: pwc.radius.md,
   } as React.CSSProperties,
   subheading: {

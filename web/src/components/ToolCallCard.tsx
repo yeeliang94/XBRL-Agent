@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import type { ToolTimelineEntry } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 import {
   humanToolName,
   argsPreview,
@@ -103,7 +104,7 @@ const CARD_STYLES: Record<GlyphState, React.CSSProperties> = {
     background: pwc.white,
   },
   failed: {
-    background: pwc.errorBg,
+    background: pwc.white,
     borderLeft: `3px solid ${pwc.error}`,
   },
   cancelled: {
@@ -149,11 +150,10 @@ const styles = {
     whiteSpace: "nowrap" as const,
     maxWidth: 300,
   } as React.CSSProperties,
+  // Spread AFTER ui.badge: keep the mono numerals/labels, let the outline-pill
+  // primitive own the geometry (pill radius, dot gap, neutral grey label).
   badge: {
     fontFamily: pwc.fontMono,
-    fontSize: 12,
-    padding: "2px 8px",
-    borderRadius: pwc.radius.sm,
     flexShrink: 0,
   } as React.CSSProperties,
   detail: {
@@ -177,13 +177,14 @@ const styles = {
   } as React.CSSProperties,
 };
 
-// Badge background/foreground colour pairs per tone.
-const BADGE_TONE: Record<ResultTone, { bg: string; fg: string }> = {
-  success: { bg: pwc.successBg, fg: pwc.success },
-  warn: { bg: pwc.warningBg, fg: pwc.warningText },
+// Outline-pill hue per tone (design-system: status is a border + dot accent,
+// never a fill). The label stays neutral grey; the hue rides the border/dot.
+const BADGE_TONE: Record<ResultTone, string> = {
+  success: pwc.success,
+  warn: pwc.warning,
 };
 
-const NEUTRAL_BADGE = { bg: pwc.grey50, fg: pwc.grey500 };
+const NEUTRAL_BADGE_HUE = pwc.grey500;
 
 /** Render expanded arguments — structured for known tools, JSON for unknown. */
 function renderArgs(toolName: string, args: Record<string, unknown>): React.ReactNode {
@@ -224,14 +225,20 @@ function renderResult(toolName: string, summary: string): React.ReactNode {
           const isPass = /:\s*True/i.test(line);
           const isFail = /:\s*False/i.test(line);
           const isMismatch = line.startsWith("Mismatches:") || line.startsWith("Action required:");
+          // Status as an accent, not a fill: neutral surface + a coloured
+          // left rule (design-system "neutral-surface accent"). Pass → success,
+          // fail/mismatch → error, otherwise a quiet grey rule.
+          const ruleColor = isPass ? pwc.success : (isFail || isMismatch) ? pwc.error : pwc.grey300;
           return (
             <div key={i} style={{
               fontSize: 12,
               fontFamily: pwc.fontMono,
               padding: "4px 8px",
               borderRadius: 4,
-              background: isPass ? pwc.successBg : (isFail || isMismatch) ? pwc.errorBg : pwc.grey50,
-              color: isPass ? pwc.successText : (isFail || isMismatch) ? pwc.errorText : pwc.grey800,
+              background: pwc.white,
+              border: `1px solid ${pwc.grey200}`,
+              borderLeft: `3px solid ${ruleColor}`,
+              color: pwc.grey800,
             }}>
               {line}
             </div>
@@ -255,15 +262,17 @@ function ToolCallCardImpl({ entry }: Props) {
   if (!isActive) {
     const rs = entry.result_summary ? resultSummary(entry.tool_name, entry.result_summary) : null;
     if (rs) {
-      const tone = BADGE_TONE[rs.tone];
+      const hue = BADGE_TONE[rs.tone];
       badge = (
-        <span style={{ ...styles.badge, background: tone.bg, color: tone.fg }}>
+        <span style={{ ...ui.badge, ...styles.badge, borderColor: hue }}>
+          <span aria-hidden="true" style={ui.badgeDot(hue)} />
           {rs.text}
         </span>
       );
     } else if (entry.duration_ms != null) {
       badge = (
-        <span style={{ ...styles.badge, background: NEUTRAL_BADGE.bg, color: NEUTRAL_BADGE.fg }}>
+        <span style={{ ...ui.badge, ...styles.badge, borderColor: pwc.grey300 }}>
+          <span aria-hidden="true" style={ui.badgeDot(NEUTRAL_BADGE_HUE)} />
           {entry.duration_ms}ms
         </span>
       );

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 import type { ModelEntry } from "../lib/types";
 
 /**
@@ -304,6 +305,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       <div style={styles.headerRow}>
         {data.has_reviewer_version ? (
           <span style={styles.badge} data-testid="reviewer-version-indicator">
+            <span aria-hidden="true" style={ui.badgeDot(pwc.info)} />
             Reviewer version
           </span>
         ) : (
@@ -387,6 +389,12 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
                 <span
                   style={f.category === "disputes_prior" ? styles.disputeChip : styles.stuckChip}
                 >
+                  <span
+                    aria-hidden="true"
+                    style={ui.badgeDot(
+                      f.category === "disputes_prior" ? pwc.error : pwc.warning,
+                    )}
+                  />
                   {f.category === "disputes_prior" ? "Disputes prior" : "Stuck"}
                 </span>
                 <span style={styles.dim}>{f.status}</span>
@@ -484,21 +492,15 @@ const styles = {
   dim: { color: pwc.grey500, fontSize: 13 },
   error: { color: pwc.errorText, fontSize: 13 },
   notice: {
-    color: pwc.info,
-    background: pwc.infoBg,
-    border: `1px solid ${pwc.infoBorder}`,
-    borderRadius: pwc.radius.sm,
+    ...ui.alertInfo,
     padding: pwc.space.sm,
     fontSize: 13,
     margin: `0 0 ${pwc.space.md}px`,
   } as const,
   // Soft warning banner (items 11/12): stale totals / stale download. Warning
-  // palette, distinct from the info `notice` and the red `error`.
+  // left-rule, distinct from the info `notice` and the red `error`.
   warning: {
-    color: pwc.warningText,
-    background: pwc.warningBg,
-    border: `1px solid ${pwc.warningBorder}`,
-    borderRadius: pwc.radius.sm,
+    ...ui.alertWarning,
     padding: pwc.space.sm,
     fontSize: 13,
     margin: `0 0 ${pwc.space.md}px`,
@@ -531,13 +533,8 @@ const styles = {
     marginBottom: pwc.space.md,
   } as const,
   badge: {
-    background: pwc.infoBg,
-    border: `1px solid ${pwc.infoBorder}`,
-    color: pwc.info,
-    borderRadius: pwc.radius.pill,
-    padding: `2px ${pwc.space.sm}px`,
-    fontSize: 12,
-    fontWeight: 600,
+    ...ui.badge,
+    borderColor: pwc.info,
   } as const,
   h3: {
     fontFamily: pwc.fontHeading,
@@ -591,22 +588,12 @@ const styles = {
     marginBottom: pwc.space.xs,
   } as const,
   stuckChip: {
-    background: pwc.warningBg,
-    border: `1px solid ${pwc.warningBorder}`,
-    color: pwc.warningText,
-    borderRadius: pwc.radius.pill,
-    padding: `1px ${pwc.space.sm}px`,
-    fontSize: 11,
-    fontWeight: 600,
+    ...ui.badge,
+    borderColor: pwc.warning,
   } as const,
   disputeChip: {
-    background: pwc.errorBg,
-    border: `1px solid ${pwc.errorBorder}`,
-    color: pwc.errorText,
-    borderRadius: pwc.radius.pill,
-    padding: `1px ${pwc.space.sm}px`,
-    fontSize: 11,
-    fontWeight: 600,
+    ...ui.badge,
+    borderColor: pwc.error,
   } as const,
   flagReason: { color: pwc.grey800, fontSize: 13, margin: `${pwc.space.xs}px 0` },
   answerGiven: { color: pwc.successText, fontSize: 13, margin: 0 },

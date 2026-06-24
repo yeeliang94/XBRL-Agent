@@ -292,10 +292,8 @@ const styles = {
     alignSelf: "flex-start" as const,
   } as React.CSSProperties,
   traceError: {
+    ...ui.alertError,
     padding: pwc.space.sm,
-    background: pwc.errorBg,
-    color: pwc.errorTextAlt,
-    borderRadius: pwc.radius.sm,
     fontSize: 12,
   } as React.CSSProperties,
   traceDetails: {

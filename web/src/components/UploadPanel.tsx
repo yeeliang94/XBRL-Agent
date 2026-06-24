@@ -60,7 +60,9 @@ const styles = {
   fileIcon: {
     width: 32,
     height: 32,
-    background: pwc.errorBg,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.error}`,
     borderRadius: pwc.radius.sm,
     display: "flex",
     alignItems: "center",

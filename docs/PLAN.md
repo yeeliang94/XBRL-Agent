@@ -87,20 +87,24 @@ rebuilds reference correct hues.
   - [ ] 🟩 Update memory note `project_pwc_design_system.md` — flip "code follow-through pending" to done
   - **Verify:** suite green + side-by-side screenshots (badges row, an alert, a stat tile) visually matching the doc's component specimens.
 
-## Scope boundary / follow-up (peer-review finding, 2026-06-24)
-This sweep delivered the **token + shared-primitive** layer 1:1 with the spec:
-`pwc.*` status tokens, the `ui.badge*` / `ui.alert*` primitives, and every call
-site that routes through them. It did **not** migrate the app's *bespoke,
-hand-rolled* status surfaces that build their own filled tints instead of using
-the primitives — peer review correctly flagged that "the live UI matches the
-spec 1:1" overstated this. Known remaining filled-tint surfaces (a separate,
-larger migration; ~a dozen+ sites): `AgentTimeline` terminal badges
-(`terminalDoneBadge`/`ErrorBadge`/`WarnBadge`), `AgentTabs` status fills,
-`ReviewTab` / `NotesReviewerPanel` panels, and assorted error banners / toasts
-(`UploadPanel`, `PreRunPanel`, `ExtractPage`, `HistoryPage`, `SuccessToast`).
-The spec still permits soft tints for "rare emphasis", so full-width error
-banners/toasts are a judgement call; the clear badge-shaped cases
-(AgentTimeline, AgentTabs) should move to the outline language in the follow-up.
+## Phase 6: bespoke status surfaces (peer-review follow-up — DONE 2026-06-24)
+Peer review flagged that "the live UI matches the spec 1:1" overstated Phase 1-5,
+which only covered the `ui.badge*`/`ui.alert*` primitives + their call sites. This
+phase migrated EVERY remaining hand-rolled filled-tint status surface to the new
+language — badge-shaped → outline pill + dot, banner/panel/toast/callout →
+neutral white surface + 3px coloured left-rule + coloured icon. Files: 🟩
+`AgentTimeline` (terminal badges + row frames + warningsBlock), `AgentTabs`
+(status-dot halos → transparent), `PipelineStages` (complete circle),
+`ToolCallCard` (result/duration badges + verify chips + failed card),
+`UploadPanel`, `PreRunPanel`, `RunDetailPage`, `HistoryList` (errorBanner),
+`SuccessToast`, `ExtractPage`, `HistoryPage`, `ReviewTab`, `NotesReviewerPanel`,
+`AgentTelemetryPanel`, `ValidatorTab` (warningsSection), `ConceptsPage`,
+`BenchmarksPage`. Pinning test updated: `ToolCallCard.test.tsx` (verify chips →
+outline structure). **Deliberately left** (spec permits soft tints for rare
+emphasis / dot accents): the 3px soft-tint halo ring around status dots
+(`ToolCallCard`, `AgentTimeline`) and the `ConceptsPage` `MetricTile` emphasis
+tile (its accent/neutral tones also use soft surface tints by design).
+`NotesReviewTab`/clipboard untouched (gotcha #16). Suite green (814).
 
 ## Rollback Plan
 If something goes badly wrong:

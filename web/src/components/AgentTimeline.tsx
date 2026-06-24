@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { ToolCallCard } from "./ToolCallCard";
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 
 // AgentTimeline is the single replacement for ChatFeed. It renders one row
 // per tool call via ToolCallCard, plus a terminal row for the final
@@ -86,52 +87,31 @@ const styles = {
     fontWeight: 600,
     color: pwc.grey900,
   } as React.CSSProperties,
-  terminalBadge: {
-    fontFamily: pwc.fontMono,
-    fontSize: 12,
-    padding: "2px 8px",
-    borderRadius: pwc.radius.sm,
-    flexShrink: 0,
-  } as React.CSSProperties,
+  // Status frames: neutral white surface, hairline border, a status-coloured
+  // left rule carries the state (design-system "neutral-surface accent"). No
+  // coloured fills — the badge + left rule signal done/error.
   terminalDone: {
-    borderColor: pwc.successBg,
-    background: pwc.white,
+    borderLeft: `3px solid ${pwc.success}`,
   } as React.CSSProperties,
   terminalError: {
-    borderColor: pwc.errorBorder,
-    background: pwc.errorBg,
-  } as React.CSSProperties,
-  terminalDoneBadge: {
-    background: pwc.successBg,
-    color: pwc.successText,
-  } as React.CSSProperties,
-  terminalErrorBadge: {
-    background: pwc.errorBg,
-    color: pwc.errorText,
-  } as React.CSSProperties,
-  // Partial-success styling — greenish frame (still "completed") with a
-  // tinted amber badge so the row reads as "done but read this". Borrowed
-  // from the standard warningBg/warningText tokens so dark-mode stays
-  // consistent with the rest of the UI.
-  terminalWarnBadge: {
-    background: pwc.warningBg,
-    color: pwc.warningText,
+    borderLeft: `3px solid ${pwc.error}`,
   } as React.CSSProperties,
   warningsBlock: {
     marginTop: pwc.space.xs,
     padding: "8px 10px",
     borderRadius: pwc.radius.sm,
-    border: `1px solid ${pwc.warningBorder}`,
-    background: pwc.warningBg,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.warning}`,
     fontFamily: pwc.fontBody,
     fontSize: 12,
-    color: pwc.grey900,
+    color: pwc.grey800,
   } as React.CSSProperties,
   warningsTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
     fontWeight: 600,
-    color: pwc.warningText,
+    color: pwc.grey800,
     marginBottom: 4,
   } as React.CSSProperties,
   warningsList: {
@@ -172,10 +152,12 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
             </div>
             <span
               style={{
-                ...styles.terminalBadge,
-                ...(hasWarnings ? styles.terminalWarnBadge : styles.terminalDoneBadge),
+                ...ui.badge,
+                borderColor: hasWarnings ? pwc.warning : pwc.success,
+                flexShrink: 0,
               }}
             >
+              <span aria-hidden="true" style={ui.badgeDot(hasWarnings ? pwc.warning : pwc.success)} />
               {hasWarnings ? `Completed · ${warnings!.length} warning${warnings!.length === 1 ? "" : "s"}` : "Completed"}
             </span>
           </div>
@@ -220,7 +202,8 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
           />
           <span style={styles.terminalLabel}>{err ?? "Failed"}</span>
         </div>
-        <span style={{ ...styles.terminalBadge, ...styles.terminalErrorBadge }}>
+        <span style={{ ...ui.badge, borderColor: pwc.error, flexShrink: 0 }}>
+          <span aria-hidden="true" style={ui.badgeDot(pwc.error)} />
           Failed
         </span>
       </div>
@@ -240,7 +223,8 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
         />
         <span style={styles.terminalLabel}>{msg}</span>
       </div>
-      <span style={{ ...styles.terminalBadge, ...styles.terminalErrorBadge }}>
+      <span style={{ ...ui.badge, borderColor: pwc.error, flexShrink: 0 }}>
+        <span aria-hidden="true" style={ui.badgeDot(pwc.error)} />
         Failed
       </span>
     </div>
