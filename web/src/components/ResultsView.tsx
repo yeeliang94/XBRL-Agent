@@ -97,24 +97,8 @@ const styles = {
   successBadge: {
     ...ui.badgeSuccess,
   } as React.CSSProperties,
-  successDot: {
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    background: pwc.success,
-    display: "inline-block",
-    flexShrink: 0,
-  } as React.CSSProperties,
   failBadge: {
     ...ui.badgeError,
-  } as React.CSSProperties,
-  failDot: {
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    background: pwc.error,
-    display: "inline-block",
-    flexShrink: 0,
   } as React.CSSProperties,
   // Data Preview
   table: {
@@ -388,12 +372,12 @@ function SummaryTab({ complete, runStartTime }: { complete: CompleteData; runSta
           <div>
             {complete.success ? (
               <span style={styles.successBadge}>
-                <span aria-hidden="true" style={styles.successDot} />
+                <span aria-hidden="true" style={ui.badgeDot(pwc.success)} />
                 Success
               </span>
             ) : (
               <span style={styles.failBadge}>
-                <span aria-hidden="true" style={styles.failDot} />
+                <span aria-hidden="true" style={ui.badgeDot(pwc.error)} />
                 Failed
               </span>
             )}
