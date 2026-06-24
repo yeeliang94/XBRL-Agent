@@ -28,7 +28,7 @@ const styles = {
   } as CSSProperties,
   title: {
     fontFamily: pwc.fontHeading,
-    fontWeight: pwc.weight.regular,
+    fontWeight: pwc.weight.semibold,
     fontSize: 22,
     color: pwc.grey900,
     margin: 0,

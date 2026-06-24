@@ -44,10 +44,10 @@ const styles = {
   } as const,
   headerTitle: {
     fontFamily: pwc.fontHeading,
-    // Brand wordmark at regular weight — large headings earn hierarchy
-    // through size + letter-spacing, not weight (design system: two text
-    // weights, no Light 300).
-    fontWeight: pwc.weight.regular,
+    // Brand wordmark at semibold — the design system sets titles, headings
+    // and the wordmark at 600 (two text weights: regular for body/data,
+    // semibold for headings; no Light 300).
+    fontWeight: pwc.weight.semibold,
     fontSize: 20,
     letterSpacing: 0,
     color: pwc.grey900,

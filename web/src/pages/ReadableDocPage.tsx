@@ -207,7 +207,7 @@ const styles = {
   title: {
     fontFamily: pwc.fontHeading,
     fontSize: 28,
-    fontWeight: pwc.weight.regular,
+    fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
     margin: 0,
   } as React.CSSProperties,

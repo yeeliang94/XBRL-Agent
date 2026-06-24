@@ -22,6 +22,17 @@ describe("StatTiles", () => {
     expect(screen.getByText(/completed with errors/i)).toBeTruthy();
   });
 
+  test("last-run badge is an outline pill (transparent fill + visible status border)", () => {
+    // Regression guard: the tile previously used a local inline-block style
+    // with no border, so the accent border + dot were invisible. It must use
+    // the ui.badge outline primitive (warning accent = #EFA417 → rgb 239,164,23).
+    render(<StatTiles total={1} drafts={0} completedThisMonth={1} lastStatus="completed_with_errors" />);
+    const badge = screen.getByText(/completed with errors/i).closest("span")!;
+    expect(badge.style.background).toBe("transparent");
+    expect(badge.style.borderColor).toBe("rgb(239, 164, 23)");
+    expect(badge.style.borderWidth).toBe("1px");
+  });
+
   test("shows dashes while counts are undefined (loading / failed fetch)", () => {
     render(<StatTiles />);
     // Three numeric tiles + the last-status tile all fall back to a dash.
