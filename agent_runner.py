@@ -24,7 +24,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, List, Mapping
+from typing import Any, Awaitable, Callable, List, Mapping, Optional, TypeVar
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
@@ -493,3 +493,172 @@ async def run_agent_loop(
             )
 
     return iteration
+
+
+# --------------------------------------------------------------------------- #
+# Retry-and-backoff scaffold (PLAN-orchestration-seams Part A / Phase A2).
+#
+# The per-agent retry loop used to be copy-pasted across coordinator.py,
+# notes/coordinator.py and notes/listofnotes_subcoordinator.py. The mechanics
+# — schedule-backoff-then-consume-inside-the-try (so a Stop-All during the
+# backoff sleep lands on CancelledError), per-budget transient classification,
+# failed-attempt bookkeeping, and terminal/cancelled result construction — are
+# identical; only the budgets, the result type, and the cleanup/emit
+# side-effects differ per caller. Those differences are data (RetryPolicy) and
+# callbacks, so one implementation serves face + notes + Sheet-12 without
+# leaking their specifics into the loop.
+# --------------------------------------------------------------------------- #
+
+_RetryResult = TypeVar("_RetryResult")
+
+
+def _default_is_rate_limit(e: BaseException) -> bool:
+    from notes._rate_limit import is_rate_limit_error
+    return is_rate_limit_error(e)
+
+
+def _default_compute_backoff(e: BaseException, prior_retries: int) -> float:
+    from notes._rate_limit import compute_backoff_delay
+    return compute_backoff_delay(e, prior_retries)
+
+
+@dataclass
+class RetryPolicy:
+    """Per-caller retry budgets + classifiers for :func:`run_agent_with_retries`.
+
+    Three independent lanes, each consumed separately so a flaky provider on
+    one lane never burns another's budget:
+
+    * **rate-limit** (``rate_limit_retries``): provider 429s; uses honoured
+      retry-after backoff (``compute_backoff``). A rate-limit error whose
+      budget is exhausted is terminal — it does NOT fall through to the
+      generic lane (matches the notes coordinators' ``break``).
+    * **connection** (``connection_retries``): connection-class errors
+      (``is_connection``); retried immediately, no backoff. The face
+      coordinator's 1-shot connection retry; notes/Sheet-12 leave this 0.
+    * **generic** (``generic_retries``): any other exception; retried
+      immediately, no backoff. The notes coordinators' ``max_retries``; the
+      face coordinator leaves this 0 because its attempt only re-raises
+      transient errors (everything else is already a structured result).
+    """
+
+    rate_limit_retries: int
+    connection_retries: int = 0
+    generic_retries: int = 0
+    is_rate_limit: Callable[[BaseException], bool] = _default_is_rate_limit
+    is_connection: Callable[[BaseException], bool] = lambda e: False
+    compute_backoff: Callable[[BaseException, int], float] = _default_compute_backoff
+
+
+async def run_agent_with_retries(
+    *,
+    attempt: Callable[[int], Awaitable[_RetryResult]],
+    policy: RetryPolicy,
+    make_terminal: Callable[[BaseException, str], Awaitable[_RetryResult]],
+    make_cancelled: Optional[Callable[[], Awaitable[_RetryResult]]] = None,
+    discard_attempt_cleanup: Optional[Callable[[], None]] = None,
+    on_retry: Optional[Callable[[int, Optional[str]], Awaitable[None]]] = None,
+    on_attempt_error: Optional[Callable[[BaseException], None]] = None,
+    annotate_usage: Optional[Callable[[_RetryResult], _RetryResult]] = None,
+) -> _RetryResult:
+    """Drive whole-attempt retries with per-lane budgets (see :class:`RetryPolicy`).
+
+    ``attempt(retry_index)`` runs ONE whole attempt (fresh agent + deps — never
+    a resumed half-run). It returns the caller's result on success (or on a
+    failure it already converted to a structured result), and RAISES only for
+    errors the caller wants the loop to classify/retry. ``retry_index`` is the
+    number of prior attempts (0 on the first), threaded through for callers
+    (Sheet-12) that pass an attempt counter into their invocation.
+
+    Callbacks carry the per-caller side-effects so this loop stays generic:
+
+    * ``make_terminal(exc, last_error)`` — build (and emit) the terminal
+      *failed* result once budgets are exhausted.
+    * ``make_cancelled()`` — build (and emit) the terminal *cancelled* result
+      when a ``CancelledError`` reaches the loop (during the backoff sleep or
+      the pre-retry cleanup/marker). ``None`` re-raises instead (Sheet-12,
+      whose parent fan-out maps a raised ``CancelledError`` to a cancelled
+      sub-agent).
+    * ``discard_attempt_cleanup()`` — discard a scheduled-but-abandoned
+      attempt's side-effects. Invoked in TWO places: before a retry (where a
+      raise propagates — shipping stale state is worse than failing) AND on the
+      ``CancelledError`` path (guarded, so a cleanup hiccup never masks the
+      cancellation). The face adapter clears stale ``run_concept_facts`` + the
+      scratch workbook here; notes/Sheet-12 pass ``None``.
+    * ``on_retry(total_attempts, last_error)`` — emit the visible retry marker.
+      ``None`` skips it (Sheet-12 retries silently).
+    * ``on_attempt_error(exc)`` — per-exception bookkeeping the caller needs
+      regardless of retry/terminal (face accumulates failed-attempt tokens off
+      the exception; notes appends to its side-log; Sheet-12 snapshots usage).
+    * ``annotate_usage(result)`` — finalize usage on EVERY returned result
+      (success / cancelled / terminal). Defaults to identity.
+    """
+    _annotate = annotate_usage or (lambda r: r)
+
+    rl_retries = 0
+    connect_retries_used = 0
+    generic_retries = 0
+    total_attempts = 0
+    last_error: Optional[str] = None
+    # Backoff is scheduled on the previous iteration and consumed at the top
+    # of the next, inside the try — so a user abort during the sleep lands on
+    # the CancelledError branch (the coordinators' verbatim pattern).
+    pending_backoff: float = 0.0
+
+    while True:
+        total_attempts += 1
+        try:
+            if pending_backoff > 0:
+                await asyncio.sleep(pending_backoff)
+                pending_backoff = 0.0
+            if total_attempts > 1:
+                # Discard the abandoned prior attempt's side-effects BEFORE the
+                # retry. A raise here propagates to the except below (shipping
+                # stale state silently is worse than failing the statement).
+                if discard_attempt_cleanup is not None:
+                    discard_attempt_cleanup()
+                if on_retry is not None:
+                    await on_retry(total_attempts, last_error)
+            return _annotate(await attempt(total_attempts - 1))
+        except asyncio.CancelledError:
+            # Abort during the backoff sleep / pre-retry cleanup. (In-attempt
+            # cancellation is converted to a structured result by the attempt
+            # itself, where the caller does so.) The discarded attempt's
+            # side-effects are still live, so run cleanup here too — guarded,
+            # because a cancellation must always win.
+            if discard_attempt_cleanup is not None:
+                try:
+                    discard_attempt_cleanup()
+                except Exception:  # noqa: BLE001 — cancellation must win
+                    logger.warning(
+                        "failed-attempt cleanup during cancellation skipped",
+                        exc_info=True,
+                    )
+            if make_cancelled is None:
+                raise
+            return _annotate(await make_cancelled())
+        except Exception as e:  # noqa: BLE001 — classify-then-retry filter
+            last_error = str(e)
+            if on_attempt_error is not None:
+                on_attempt_error(e)
+            rate_limited = bool(policy.is_rate_limit(e))
+            if rate_limited and rl_retries < policy.rate_limit_retries:
+                pending_backoff = policy.compute_backoff(e, rl_retries)
+                rl_retries += 1
+                continue
+            if (
+                not rate_limited
+                and policy.connection_retries
+                and policy.is_connection(e)
+                and connect_retries_used < policy.connection_retries
+            ):
+                connect_retries_used += 1
+                continue
+            if (
+                not rate_limited
+                and policy.generic_retries
+                and generic_retries < policy.generic_retries
+            ):
+                generic_retries += 1
+                continue
+            return _annotate(await make_terminal(e, last_error))

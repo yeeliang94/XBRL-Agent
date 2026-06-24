@@ -25,12 +25,14 @@ from agent_tracing import MAX_AGENT_ITERATIONS  # noqa: F401 (re-export)
 from agent_runner import (
     AgentLoopSpec,
     IterationLimitReached,
+    RetryPolicy,
     TokenBudgetExceeded,
     WallclockExceeded,
     build_agent_event,
     make_emitter,
     resolve_token_budget,
     run_agent_loop,
+    run_agent_with_retries,
 )
 from statement_types import (
     StatementType,
@@ -667,10 +669,6 @@ async def _run_single_agent(
     # terminal return). A genuine Exception still surfaces.
     _emit, _safe_emit = make_emitter(event_queue, agent_id, agent_role)
 
-    rl_retries = 0
-    connect_retry_used = False
-    total_attempts = 0
-    last_error: Optional[str] = None
     # Code-review fix (2026-06-13): tokens/cost burned by FAILED transient
     # attempts. The attempt annotates its usage onto the re-raised exception
     # (``_xbrl_attempt_tokens`` / ``_xbrl_attempt_cost``); accumulated here
@@ -684,11 +682,11 @@ async def _run_single_agent(
             result.total_tokens = int(result.total_tokens or 0) + failed_attempt_tokens
             result.total_cost = float(result.total_cost or 0.0) + failed_attempt_cost
         return result
-    # Backoff is scheduled on the previous iteration and consumed at the
-    # top of the next, inside the try — so a user abort during backoff
-    # lands on the CancelledError branch (the notes loop's
-    # ``pending_backoff`` pattern, verbatim).
-    pending_backoff: float = 0.0
+
+    def _accumulate_failed_attempt_usage(e: BaseException) -> None:
+        nonlocal failed_attempt_tokens, failed_attempt_cost
+        failed_attempt_tokens += int(getattr(e, "_xbrl_attempt_tokens", 0) or 0)
+        failed_attempt_cost += float(getattr(e, "_xbrl_attempt_cost", 0.0) or 0.0)
 
     def _clear_failed_attempt_facts() -> None:
         """Retry hygiene (peer-review HIGH, 2026-06-12): ``write_facts``
@@ -727,116 +725,101 @@ async def _run_single_agent(
                 agent_role, exc_info=True,
             )
 
-    while True:
-        total_attempts += 1
-        try:
-            if pending_backoff > 0:
-                await asyncio.sleep(pending_backoff)
-                pending_backoff = 0.0
-            if total_attempts > 1:
-                _clear_failed_attempt_facts()
-                await _emit("status", {
-                    "phase": "reading_template",
-                    "message": (
-                        f"{agent_role}: retrying (attempt {total_attempts}) "
-                        f"— last error: {last_error or 'unknown'}"
-                    ),
-                })
-            return _with_prior_attempt_usage(await _run_single_agent_attempt(
-                statement_type=statement_type,
-                variant=variant,
-                pdf_path=pdf_path,
-                template_path=template_path,
-                model=model,
-                output_dir=output_dir,
-                page_hints=page_hints,
-                scout_context=scout_context,
-                event_queue=event_queue,
-                agent_id=agent_id,
-                filing_level=filing_level,
-                filing_standard=filing_standard,
-                denomination=denomination,
-                run_id=run_id,
-                db_path=db_path,
-            ))
-        except asyncio.CancelledError:
-            # Abort during the backoff sleep (in-attempt cancellation is
-            # already converted to a structured result by the attempt).
-            # Reaching this branch means a transient attempt failed and we
-            # were sleeping before the retry — its facts/scratch are still
-            # on disk + in the DB and were never cleared (the top-of-attempt
-            # clear runs AFTER the sleep). The Stop-All partial merge ships
-            # whatever {stmt}_filled.xlsx + DB facts exist (gotcha #10), so
-            # clear the discarded attempt here too. Best-effort: a cleanup
-            # hiccup must never mask the cancellation.
-            try:
-                _clear_failed_attempt_facts()
-            except Exception:  # noqa: BLE001 — cancellation must win
-                logger.warning(
-                    "%s: failed-attempt cleanup during cancellation skipped",
-                    agent_role, exc_info=True,
-                )
-            await _safe_emit("complete", {
-                "success": False, "error": "Cancelled by user",
-            })
-            return _with_prior_attempt_usage(AgentResult(
-                statement_type=statement_type,
-                variant=variant,
-                status="cancelled",
-                error="Cancelled by user",
-                error_type=ERROR_TYPE_CANCELLED,
-            ))
-        except Exception as e:  # noqa: BLE001 — transient-only retry filter
-            # The attempt re-raises ONLY errors classified transient (429s
-            # + connection-class); everything else was already converted to
-            # a structured failed AgentResult inside the attempt. The
-            # shared `_is_transient_error` predicate gates the retry
-            # branches so the two classifications can't drift apart.
-            last_error = str(e)
-            failed_attempt_tokens += int(getattr(e, "_xbrl_attempt_tokens", 0) or 0)
-            failed_attempt_cost += float(getattr(e, "_xbrl_attempt_cost", 0.0) or 0.0)
-            if _is_transient_error(e):
-                if is_rate_limit_error(e) and rl_retries < RATE_LIMIT_MAX_RETRIES:
-                    pending_backoff = compute_backoff_delay(e, rl_retries)
-                    rl_retries += 1
-                    logger.warning(
-                        "Face agent %s hit 429 (rl-retry %d/%d) — sleeping %.2fs: %s",
-                        agent_role, rl_retries, RATE_LIMIT_MAX_RETRIES,
-                        pending_backoff, e,
-                    )
-                    continue
-                if (
-                    isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
-                    and not connect_retry_used
-                ):
-                    connect_retry_used = True
-                    logger.warning(
-                        "Face agent %s hit a connection error — one retry: %s",
-                        agent_role, e,
-                    )
-                    continue
-            # Budget exhausted — terminal structured failure. A transient error
-            # that ran out of retries is classified distinctly from a genuine
-            # tool exception (only transient errors are re-raised to this block,
-            # so this is transient_exhausted in practice; the fallback guards a
-            # future non-transient re-raise).
-            terminal_error_type = (
-                ERROR_TYPE_TRANSIENT_EXHAUSTED if _is_transient_error(e)
-                else ERROR_TYPE_TOOL_EXCEPTION
-            )
-            logger.exception(
-                "Face agent %s failed after %d attempt(s)",
-                agent_role, total_attempts,
-            )
-            await _safe_emit("error", {"message": last_error})
-            await _safe_emit("complete", {"success": False, "error": last_error})
-            return _with_prior_attempt_usage(AgentResult(
-                statement_type=statement_type,
-                variant=variant,
-                status="failed",
-                error=last_error,
-                error_type=terminal_error_type,
-            ))
+    async def _attempt(_retry_index: int) -> AgentResult:
+        # _run_single_agent_attempt is unchanged — a whole attempt (fresh
+        # agent + deps) that returns a structured AgentResult on every path
+        # except errors classified transient (429s + connection-class), which
+        # it re-raises so the scaffold can decide whether to retry.
+        return await _run_single_agent_attempt(
+            statement_type=statement_type,
+            variant=variant,
+            pdf_path=pdf_path,
+            template_path=template_path,
+            model=model,
+            output_dir=output_dir,
+            page_hints=page_hints,
+            scout_context=scout_context,
+            event_queue=event_queue,
+            agent_id=agent_id,
+            filing_level=filing_level,
+            filing_standard=filing_standard,
+            denomination=denomination,
+            run_id=run_id,
+            db_path=db_path,
+        )
+
+    async def _on_retry(total_attempts: int, last_error: Optional[str]) -> None:
+        await _emit("status", {
+            "phase": "reading_template",
+            "message": (
+                f"{agent_role}: retrying (attempt {total_attempts}) "
+                f"— last error: {last_error or 'unknown'}"
+            ),
+        })
+
+    async def _make_cancelled() -> AgentResult:
+        # The scaffold already ran _clear_failed_attempt_facts (guarded) before
+        # calling this — the Stop-All partial merge must not ship the discarded
+        # attempt's facts/scratch (gotcha #10).
+        await _safe_emit("complete", {
+            "success": False, "error": "Cancelled by user",
+        })
+        return AgentResult(
+            statement_type=statement_type,
+            variant=variant,
+            status="cancelled",
+            error="Cancelled by user",
+            error_type=ERROR_TYPE_CANCELLED,
+        )
+
+    async def _make_terminal(e: BaseException, last_error: str) -> AgentResult:
+        # Budget exhausted — terminal structured failure. A transient error
+        # that ran out of retries is classified distinctly from a genuine tool
+        # exception (only transient errors are re-raised to the scaffold, so
+        # this is transient_exhausted in practice; the fallback guards a future
+        # non-transient re-raise — e.g. a cleanup error).
+        terminal_error_type = (
+            ERROR_TYPE_TRANSIENT_EXHAUSTED if _is_transient_error(e)
+            else ERROR_TYPE_TOOL_EXCEPTION
+        )
+        logger.exception(
+            "Face agent %s failed: %s", agent_role, last_error,
+            exc_info=e,
+        )
+        await _safe_emit("error", {"message": last_error})
+        await _safe_emit("complete", {"success": False, "error": last_error})
+        return AgentResult(
+            statement_type=statement_type,
+            variant=variant,
+            status="failed",
+            error=last_error,
+            error_type=terminal_error_type,
+        )
+
+    # Face budgets: 1 connection retry + RATE_LIMIT_MAX_RETRIES rate-limit
+    # retries; no generic budget (face retries re-bill a large PDF context, so
+    # a genuine code error fails fast — the attempt already converted it to a
+    # structured result and never re-raised it here).
+    policy = RetryPolicy(
+        rate_limit_retries=RATE_LIMIT_MAX_RETRIES,
+        connection_retries=1,
+        generic_retries=0,
+        is_rate_limit=is_rate_limit_error,
+        is_connection=lambda e: isinstance(
+            e, (httpx.ConnectError, httpx.ConnectTimeout)
+        ),
+        compute_backoff=compute_backoff_delay,
+    )
+    return await run_agent_with_retries(
+        attempt=_attempt,
+        policy=policy,
+        make_terminal=_make_terminal,
+        make_cancelled=_make_cancelled,
+        discard_attempt_cleanup=_clear_failed_attempt_facts,
+        on_retry=_on_retry,
+        on_attempt_error=_accumulate_failed_attempt_usage,
+        annotate_usage=_with_prior_attempt_usage,
+    )
 
 
 async def _run_single_agent_attempt(
