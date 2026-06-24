@@ -425,7 +425,7 @@ const badgeStyles = {
     width: 12,
     height: 12,
     borderRadius: "50%",
-    background: pwc.successBg,
+    background: "transparent",
   } as React.CSSProperties,
   completeDot: {
     width: 6,
@@ -457,7 +457,7 @@ const badgeStyles = {
     width: 12,
     height: 12,
     borderRadius: "50%",
-    background: pwc.errorBg,
+    background: "transparent",
   } as React.CSSProperties,
   failedDot: {
     width: 6,
@@ -487,7 +487,7 @@ const badgeStyles = {
     width: 12,
     height: 12,
     borderRadius: "50%",
-    background: pwc.errorBg,
+    background: "transparent",
   } as React.CSSProperties,
   abortingDot: {
     display: "inline-block",

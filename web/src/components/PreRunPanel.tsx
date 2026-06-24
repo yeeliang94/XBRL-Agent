@@ -112,11 +112,12 @@ const styles = {
   errorText: {
     fontFamily: pwc.fontBody,
     fontSize: 14,
-    color: pwc.error,
+    color: pwc.grey800,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.errorBg,
+    background: pwc.white,
     borderRadius: pwc.radius.sm,
-    border: `1px solid ${pwc.errorBorder}`,
+    border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.error}`,
   } as React.CSSProperties,
   progressText: {
     fontFamily: pwc.fontBody,

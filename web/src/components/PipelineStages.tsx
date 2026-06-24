@@ -55,7 +55,7 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    background: pwc.successBg,
+    background: pwc.white,
     border: `2px solid ${pwc.success}`,
     flexShrink: 0,
   } as React.CSSProperties,

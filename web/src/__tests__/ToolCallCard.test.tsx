@@ -133,9 +133,13 @@ describe("ToolCallCard", () => {
     const matches = screen.getByText(/Matches PDF: False/);
     expect(balanced).toBeInTheDocument();
     expect(matches).toBeInTheDocument();
-    // Verify the coloring via style attributes (jsdom converts hex to rgb)
-    expect(balanced.style.background).toBe("rgb(232, 246, 239)");  // successBg #E8F6EF
-    expect(matches.style.background).toBe("rgb(252, 236, 236)");   // errorBg #FCECEC
+    // Design-system "neutral-surface accent": status is now a coloured left
+    // rule on a white surface, not a tinted fill. Pass → success rule,
+    // fail → error rule.
+    expect(balanced.style.background).toBe("rgb(255, 255, 255)");           // white surface
+    expect(balanced.style.borderLeft).toContain("rgb(31, 171, 118)");      // success #1FAB76
+    expect(matches.style.background).toBe("rgb(255, 255, 255)");            // white surface
+    expect(matches.style.borderLeft).toContain("rgb(229, 72, 77)");        // error #E5484D
   });
 
   // --- Step 11: collapsed preview is human-readable ---

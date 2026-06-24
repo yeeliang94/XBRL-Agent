@@ -20,16 +20,26 @@ export interface SuccessToastProps {
 
 const AUTO_DISMISS_MS = 4000;
 
-const TONE_STYLES: Record<ToastState["tone"], { background: string; border: string; color: string }> = {
+// Neutral surface for every tone (design-system: status is an accent, not a
+// fill). The tone is carried by a coloured left rule + close-button icon;
+// the surface itself is white with a hairline grey border and grey800 body.
+const TONE_STYLES: Record<
+  ToastState["tone"],
+  { background: string; border: string; borderLeft: string; color: string; accent: string }
+> = {
   success: {
-    background: pwc.successBg,
-    border: `1px solid ${pwc.successBorder}`,
-    color: pwc.successText,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.success}`,
+    color: pwc.grey800,
+    accent: pwc.success,
   },
   error: {
-    background: pwc.errorBg,
-    border: `1px solid ${pwc.errorBorder}`,
-    color: pwc.errorText,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.error}`,
+    color: pwc.grey800,
+    accent: pwc.error,
   },
 };
 
@@ -68,6 +78,7 @@ export function SuccessToast({ toast, onDismiss }: SuccessToastProps) {
         ...styles.toast,
         background: palette.background,
         border: palette.border,
+        borderLeft: palette.borderLeft,
         color: palette.color,
       }}
     >
@@ -76,7 +87,7 @@ export function SuccessToast({ toast, onDismiss }: SuccessToastProps) {
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss notification"
-        style={{ ...styles.closeBtn, color: palette.color }}
+        style={{ ...styles.closeBtn, color: palette.accent }}
       >
         <CloseIcon />
       </button>
