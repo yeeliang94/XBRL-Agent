@@ -98,11 +98,22 @@ def delta(baseline: dict, treatment: dict) -> dict:
 
 
 def load_record(conn: sqlite3.Connection, run_id: int) -> Optional[RunRecord]:
-    """Read one run's scorecard + token/tool totals, or None if it isn't graded."""
-    score = fetch_eval_score_for_run(conn, run_id)
-    if score is None:
-        return None
-    agents = fetch_run_agents(conn, run_id)
+    """Read one run's scorecard + token/tool totals, or None if it isn't graded.
+
+    ``fetch_run_agents`` indexes rows by COLUMN NAME, so it needs the
+    ``sqlite3.Row`` factory — but the CLI opens the DB with the default tuple
+    factory. Force it here (save + restore, like ``db.repository.fetch_run``
+    does) so any caller is safe regardless of how it opened the connection.
+    """
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        score = fetch_eval_score_for_run(conn, run_id)
+        if score is None:
+            return None
+        agents = fetch_run_agents(conn, run_id)
+    finally:
+        conn.row_factory = prior_factory
     total_tokens = sum(
         a.total_tokens or (a.prompt_tokens + a.completion_tokens) for a in agents
     )
