@@ -14,6 +14,10 @@ from notes_types import NotesTemplateType
 # Default output directory relative to this script, not the working directory
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _DEFAULT_OUTPUT_DIR = str(_SCRIPT_DIR / "output")
+# Module-level so tests can redirect it away from the real repo .env (the CLI
+# loads it with override=True, which would otherwise clobber test env defaults —
+# mirrors server.ENV_FILE).
+ENV_FILE = _SCRIPT_DIR / ".env"
 
 
 @dataclass
@@ -104,7 +108,7 @@ def run_agent(
     # ``session_dir/uploaded.pdf``; copy the caller's PDF into place.
     shutil.copyfile(pdf_path, session_dir / "uploaded.pdf")
 
-    load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+    load_dotenv(ENV_FILE, override=True)
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
     api_key = (os.environ.get("GOOGLE_API_KEY", "")
                or os.environ.get("GEMINI_API_KEY", ""))
@@ -282,7 +286,7 @@ if __name__ == "__main__":
     notes_set = {_NOTES_CLI_MAP[n] for n in args.notes}
 
     # Resolve model: CLI flag > TEST_MODEL env var > default
-    load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+    load_dotenv(ENV_FILE, override=True)
     model = args.model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
 
     print(f"Model: {model}")
