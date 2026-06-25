@@ -18,6 +18,20 @@ from typing import Literal
 FilingStandard = Literal["mfrs", "mpers"]
 
 
+# The `run_agents.status` values for a statement whose extracted facts WERE
+# persisted to `run_concept_facts` — i.e. the statements that carry data and
+# must be scoped IN whenever the run is reconstructed from the DB (cross-check
+# recheck, canonical re-export, reviewer self-verify). `completed_with_errors`
+# is the `acknowledge_unresolved` save: the agent finalised the statement with
+# a known imbalance/unfilled-mandatory, so its facts are real and a human (or
+# the reviewer) still acts on them. The in-memory coordinator result keeps such
+# a statement at `status="succeeded"` (+ a flag) and only the PERSISTED row is
+# remapped to `completed_with_errors` (server.py), so a DB-derived scope that
+# filters `succeeded`-only silently drops it — diverging from the in-memory
+# pass and excluding a facts-bearing statement from verification / export.
+FACTS_BEARING_AGENT_STATUSES = frozenset({"succeeded", "completed_with_errors"})
+
+
 class StatementType(str, Enum):
     """The 5 primary MBRS face statements."""
     SOFP = "SOFP"   # Statement of Financial Position

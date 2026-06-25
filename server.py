@@ -311,7 +311,7 @@ def _reexport_and_remerge_from_facts(run_id: int) -> Optional[Path]:
     import tempfile
     from types import SimpleNamespace
     from db import repository as repo
-    from statement_types import StatementType
+    from statement_types import StatementType, FACTS_BEARING_AGENT_STATUSES
     from notes_types import NotesTemplateType
     from workbook_merger import merge as merge_workbooks
 
@@ -338,7 +338,15 @@ def _reexport_and_remerge_from_facts(run_id: int) -> Optional[Path]:
         # download time.
         agent_results = []
         for a in agents:
-            if a.status != "succeeded":
+            # Scope IN every facts-bearing statement, not just `succeeded`:
+            # a `completed_with_errors` (acknowledge_unresolved) statement has
+            # real facts that the reviewer may have edited, so it MUST be
+            # re-exported from `run_concept_facts` or the download silently
+            # keeps the stale scratch workbook for it. We normalise the
+            # synthesized status to "succeeded" so the downstream
+            # _export_canonical_workbooks filter keeps it (it mirrors the
+            # in-memory pass, where such a statement is already "succeeded").
+            if a.status not in FACTS_BEARING_AGENT_STATUSES:
                 continue
             try:
                 stmt = StatementType(a.statement_type)
@@ -584,7 +592,7 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
     """
     from types import SimpleNamespace
     from db import repository as repo
-    from statement_types import StatementType
+    from statement_types import StatementType, FACTS_BEARING_AGENT_STATUSES
     from cross_checks.framework import build_default_cross_checks
 
     try:
@@ -608,7 +616,12 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
         variants: dict = {}
         statements_to_run: set = set()
         for a in agents:
-            if a.status != "succeeded":
+            # Facts-bearing statements only — but that INCLUDES
+            # `completed_with_errors` (acknowledge_unresolved) saves, whose
+            # facts are real and checkable. A `succeeded`-only filter would
+            # drop them and the recheck would report their checks as pending
+            # (diverging from the in-memory pipeline pass, which keeps them).
+            if a.status not in FACTS_BEARING_AGENT_STATUSES:
                 continue
             try:
                 stmt = StatementType(a.statement_type)
@@ -1295,6 +1308,7 @@ async def _run_reviewer_pass(
     guidance: Optional[str] = None,
     agent_id: str = CORRECTION_AGENT_ID,
     spot_check: Optional[str] = None,
+    verify_scope: Optional[list] = None,
 ) -> dict:
     """Reviewer pass (docs/Archive/PLAN-reviewer-agent.md) — replaces the autonomous
     canonical correction pass.
@@ -1497,6 +1511,10 @@ async def _run_reviewer_pass(
             pdf_path=pdf_path,
             failed_checks=failed_payload, conflicts=conflicts, guidance=guidance,
             spot_check_mode=spot_mode,
+            # Inline pass: scope verify_fixes off the in-memory succeeded set
+            # (the DB run_agents rows aren't 'succeeded' yet — run-58 fix). None
+            # on the manual /re-review path → DB fallback (rows are terminal).
+            verify_scope=verify_scope,
         )
     except Exception:  # noqa: BLE001
         logger.exception("Reviewer agent construction failed")
@@ -4924,6 +4942,18 @@ async def run_multi_agent_stream(
                             "reviewer model %s failed to build; using the "
                             "run's model instead", _rm, exc_info=True)
                         reviewer_model = model
+                # Scope the reviewer's verify_fixes off the SAME in-memory
+                # succeeded set the cross-check pass used. The extraction
+                # run_agents rows aren't flipped to 'succeeded' in the DB until
+                # the finish_run_agent loop further below — AFTER this pass — so
+                # a DB-status scope would resolve zero statements and the
+                # self-verifier would falsely report "all 0 PASS" (run 58).
+                reviewer_verify_scope = [
+                    (getattr(ar.statement_type, "value", ar.statement_type),
+                     ar.variant)
+                    for ar in coordinator_result.agent_results
+                    if ar.status == "succeeded"
+                ]
                 correction_task = asyncio.create_task(
                     _run_reviewer_pass(
                         failed_checks=hard_failures,
@@ -4936,6 +4966,7 @@ async def run_multi_agent_stream(
                         run_id=run_id,
                         spot_check=spot_check_mode,
                         pdf_path=str(session_dir / "uploaded.pdf"),
+                        verify_scope=reviewer_verify_scope,
                     ))
                 # Register the reviewer task so Stop-All (POST /api/abort →
                 # task_registry.cancel_all) can actually cancel it. The reviewer

@@ -81,6 +81,43 @@ def test_format_distinguishes_still_failing_from_new():
     assert "NEW" in sofp_line
 
 
+# --- False-green guards (run 58, 2026-06-26) -------------------------------
+# An empty / all-pending / target-not-reevaluated result must NEVER render as
+# a verified pass. These pin the exact regression: the reviewer scoped its
+# verify to zero checks and the formatter printed "all 0 PASS".
+
+def test_format_empty_results_is_inconclusive_not_green():
+    # The run-58 shape: verify_fixes scoped to zero statements → empty list.
+    out = _format_verification([], original_failed_names={"sofp_balance"})
+    assert "VERIFIED" not in out
+    assert "INCONCLUSIVE" in out
+
+
+def test_format_all_pending_is_inconclusive_not_green():
+    # Nothing FAILED, but nothing PASSED either — every check was scoped out.
+    out = _format_verification(
+        [
+            _result("sofp_balance", "pending"),
+            _result("socf_to_sofp_cash", "not_applicable"),
+        ],
+        original_failed_names={"sofp_balance"},
+    )
+    assert "VERIFIED" not in out
+    assert "INCONCLUSIVE" in out
+
+
+def test_format_target_not_reevaluated_is_not_confirmed():
+    # Some unrelated check passed, but the failure the reviewer was ASKED to
+    # fix wasn't re-evaluated to a pass → not confirmed resolved, not green.
+    out = _format_verification(
+        [_result("some_other_check", "passed")],
+        original_failed_names={"sofp_balance"},
+    )
+    assert "VERIFIED" not in out
+    assert "NOT CONFIRMED" in out
+    assert "sofp_balance" in out
+
+
 # --------------------------------------------------------------------------
 # run_verification_checks — real template + cascade + cross-checks
 # --------------------------------------------------------------------------
@@ -208,6 +245,65 @@ def test_run_verification_detects_reviewer_introduced_regression(sofp_run):
     assert bal.name in summary
 
 
+def test_explicit_scope_overrides_unfinalized_db_status(sofp_run):
+    """Run-58 root cause + fix (Part A).
+
+    The INLINE reviewer runs BEFORE the extraction ``run_agents`` rows are
+    finalized to 'succeeded' in the DB (``finish_run_agent`` runs after the
+    reviewer pass). A DB-status scope then resolves ZERO statements and
+    ``run_verification_checks`` returns ``[]`` — the empty list the formatter
+    used to render as a false "all 0 PASS". An explicit ``scope`` (the same
+    in-memory succeeded set the cross-check pass uses) must override the DB and
+    evaluate the real suite.
+    """
+    db, run_id, template_id, conn = sofp_run
+    ta = _uuid_by_label(conn, template_id, "total assets")
+    el = _uuid_by_label(conn, template_id, "total equity and liabilities")
+    _seed(conn, run_id, _descendant_leaf(conn, ta), 1000.0)
+    _seed(conn, run_id, _descendant_leaf(conn, el), 1000.0)
+    # Simulate the inline-pass timing: the agent row is still 'running'.
+    conn.execute(
+        "UPDATE run_agents SET status='running' WHERE run_id=?", (run_id,))
+    conn.commit()
+
+    # DB-status scope sees no succeeded statement → empty (the false-green
+    # path that the formatter guard ALSO defends, Part B).
+    assert run_verification_checks(str(db), run_id) == []
+
+    # Explicit scope evaluates the real suite against the current facts.
+    scoped = run_verification_checks(
+        str(db), run_id, scope=[("SOFP", "CuNonCu")])
+    bal = _balance_result(scoped)
+    assert bal is not None and bal.status == "passed", scoped
+
+
+def test_db_fallback_includes_completed_with_errors(sofp_run):
+    """Manual /re-review (scope=None → DB fallback) must scope IN a
+    ``completed_with_errors`` statement.
+
+    That status is the ``acknowledge_unresolved`` save: the agent finalised the
+    statement with a known imbalance, so its facts are REAL and checkable. A
+    ``succeeded``-only filter would drop it and the verifier would go
+    INCONCLUSIVE over a still-checkable run (the peer-review MEDIUM follow-up to
+    the run-58 fix). Mirrors how the in-memory pipeline pass keeps it
+    (``status`` stays 'succeeded' there; only the persisted row is remapped).
+    """
+    db, run_id, template_id, conn = sofp_run
+    ta = _uuid_by_label(conn, template_id, "total assets")
+    el = _uuid_by_label(conn, template_id, "total equity and liabilities")
+    _seed(conn, run_id, _descendant_leaf(conn, ta), 1000.0)
+    _seed(conn, run_id, _descendant_leaf(conn, el), 1000.0)
+    conn.execute(
+        "UPDATE run_agents SET status='completed_with_errors' WHERE run_id=?",
+        (run_id,))
+    conn.commit()
+
+    # No explicit scope → DB fallback. It must still evaluate the real suite.
+    results = run_verification_checks(str(db), run_id)
+    bal = _balance_result(results)
+    assert bal is not None and bal.status == "passed", results
+
+
 def test_cascade_failure_blocks_verification(sofp_run, monkeypatch):
     """peer-review MEDIUM: if the cascade recompute fails, the COMPUTED totals
     are stale (reviewer writes don't cascade per write), so verification must
@@ -255,3 +351,23 @@ def test_factory_registers_verify_fixes_tool(sofp_run):
     assert "verify_fixes" in names
     # The baseline failing set is seeded onto deps for regression detection.
     assert deps.original_failed_names == {"socf_to_sofp_cash"}
+
+
+def test_factory_threads_verify_scope_onto_deps(sofp_run):
+    """Part A wiring: the inline pass's succeeded-statement scope reaches deps
+    so verify_fixes can hand it to run_verification_checks."""
+    from pydantic_ai.models.test import TestModel
+
+    db, run_id, _tid, _conn = sofp_run
+    _agent, deps = create_reviewer_agent(
+        model=TestModel(call_tools=[]), db_path=db, run_id=run_id,
+        failed_checks=[{"name": "sofp_balance"}],
+        verify_scope=[("SOFP", "CuNonCu")],
+    )
+    assert deps.verify_scope == [("SOFP", "CuNonCu")]
+    # Manual /re-review path passes nothing → None → DB fallback.
+    _agent2, deps2 = create_reviewer_agent(
+        model=TestModel(call_tools=[]), db_path=db, run_id=run_id,
+        failed_checks=[{"name": "sofp_balance"}],
+    )
+    assert deps2.verify_scope is None

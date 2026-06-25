@@ -834,6 +834,16 @@ class ReviewerDeps:
     # newly INTRODUCED (was green before its edits) — the regression the
     # one-shot pass used to ship silently.
     original_failed_names: set = field(default_factory=set)
+    # The run's succeeded statements as ``(statement_type_value, variant)``
+    # pairs. ``verify_fixes`` passes this straight to ``run_verification_checks``
+    # so the self-verifier scopes the cross-checks off the SAME in-memory
+    # succeeded set the pipeline's cross-check pass uses. The INLINE reviewer
+    # runs BEFORE the extraction ``run_agents`` rows are finalized to
+    # 'succeeded' in the DB, so a DB-status scope would see zero statements and
+    # silently verify nothing (the run-58 false "all 0 PASS"). None → the
+    # manual /re-review path, where the DB rows ARE terminal, so it falls back
+    # to the DB read.
+    verify_scope: Optional[list] = None
 
 
 def _family_prefix(filing_standard: str, filing_level: str) -> str:
@@ -1185,6 +1195,7 @@ def run_verification_checks(
     filing_level: str = "company",
     filing_standard: str = "mfrs",
     recompute: bool = True,
+    scope: "Optional[list]" = None,
 ) -> list:
     """Re-run the cross-check suite against the run's CURRENT facts.
 
@@ -1197,11 +1208,22 @@ def run_verification_checks(
     reviewer's in-progress writes (the xlsx isn't re-exported until after the
     pass). ``recompute`` runs the cascade first so leaf edits flow up into the
     COMPUTED totals the balance/tie-out checks read (``apply_reviewer_fix``
-    deliberately does NOT cascade per write). Scoping mirrors the pipeline's
-    ``_build_check_template_ids`` exactly (gotcha #21): succeeded statements +
-    their variants come from ``run_agents``, each mapped to its ``template_id``
-    via the canonical template path, so every check reads its own statements'
-    facts and the result matches the post-correction pass the user sees.
+    deliberately does NOT cascade per write).
+
+    Scoping mirrors the pipeline's ``_build_check_template_ids`` exactly
+    (gotcha #21): succeeded statements + their variants, each mapped to its
+    ``template_id`` via the canonical template path, so every check reads its
+    own statements' facts and the result matches the post-correction pass the
+    user sees. ``scope`` — an explicit iterable of
+    ``(statement_type_value, variant)`` pairs — REPLACES the DB
+    ``run_agents.status == 'succeeded'`` read when provided. The INLINE
+    auto-reviewer / spot-check run BEFORE the extraction rows are finalized to
+    'succeeded' in the DB ([server.py] finish_run_agent runs AFTER the reviewer
+    pass), so a DB-status scope would see every row still 'running', resolve
+    ZERO statements, and return ``[]`` — which the formatter rendered as a
+    false "all 0 PASS" (run 58). Passing the same in-memory succeeded set the
+    cross-check pass uses fixes that at the source. ``None`` falls back to the
+    DB read for the manual /re-review path, where the rows ARE terminal.
 
     Returns the list of ``CrossCheckResult`` objects (empty if the run has no
     succeeded statements to scope).
@@ -1210,7 +1232,10 @@ def run_verification_checks(
         FactsContext, build_default_cross_checks, run_all_facts,
         DEFAULT_TOLERANCE_RM,
     )
-    from statement_types import StatementType, template_path as _tpl_path
+    from statement_types import (
+        StatementType, template_path as _tpl_path,
+        FACTS_BEARING_AGENT_STATUSES,
+    )
     from concept_model.parser import _derive_template_id
     from db import repository as repo
 
@@ -1237,29 +1262,44 @@ def run_verification_checks(
     # facts through the same FactsContext.conn).
     conn = _open_conn(db_path)
     try:
-        agents = repo.fetch_run_agents(conn, run_id)
+        if scope is not None:
+            # Inline reviewer: the caller hands us the run's succeeded
+            # statements directly (the extraction rows aren't 'succeeded' in
+            # the DB yet at this point in the pipeline — see the docstring).
+            rows = [(st, var) for st, var in scope]
+        else:
+            # Manual /re-review: the DB rows ARE terminal by now. Scope IN
+            # every facts-bearing statement — including the
+            # `completed_with_errors` (acknowledge_unresolved) saves, which
+            # carry real facts the reviewer must verify. A `succeeded`-only
+            # filter here would drop them and the verifier would go
+            # INCONCLUSIVE over a still-checkable run (matches the recheck +
+            # re-export scope; see FACTS_BEARING_AGENT_STATUSES).
+            rows = [
+                (a.statement_type, a.variant)
+                for a in repo.fetch_run_agents(conn, run_id)
+                if a.status in FACTS_BEARING_AGENT_STATUSES
+            ]
 
         template_ids: dict = {}
         statements_to_run: set = set()
         variants: dict = {}
-        for a in agents:
-            if a.status != "succeeded":
-                continue
+        for statement_type, variant in rows:
             try:
-                stmt = StatementType(a.statement_type)
+                stmt = StatementType(statement_type)
             except ValueError:
                 # Pseudo-agent rows (CORRECTION / notes-validator / scout)
                 # don't map to a StatementType — skip, as the recheck path does.
                 continue
             try:
                 master = _tpl_path(
-                    stmt, a.variant, level=filing_level, standard=filing_standard,
+                    stmt, variant, level=filing_level, standard=filing_standard,
                 )
             except (ValueError, KeyError):
                 continue
             template_ids[stmt] = _derive_template_id(Path(master))
             statements_to_run.add(stmt)
-            variants[stmt] = a.variant
+            variants[stmt] = variant
 
         if not statements_to_run:
             return []
@@ -1291,6 +1331,16 @@ def _format_verification(results: list, original_failed_names: set) -> str:
     it was ASKED to fix (``STILL FAILING``) or one its OWN edits introduced
     (``⚠ NEW``) — the regression signal. Passing/advisory checks are summarised
     by count, not listed, to keep the reply short.
+
+    A clean verdict requires POSITIVE confirmation, never the mere ABSENCE of
+    failures. An empty result set — or one where every check came back
+    ``pending`` / ``not_applicable`` — is reported ``INCONCLUSIVE``, and a run
+    whose ORIGINALLY-FAILING checks weren't re-evaluated to ``passed`` is
+    reported ``NOT CONFIRMED``. Both used to fall through the ``if not failed``
+    branch and print "✓ VERIFIED: all 0 evaluated cross-check(s) PASS" — the
+    false green that let the reviewer declare itself done over a still-broken
+    run (run 58). The verifier must fail SAFE, never green, when it evaluated
+    nothing.
     """
     failed = [r for r in results if getattr(r, "status", None) == "failed"]
     passed = [r for r in results if getattr(r, "status", None) == "passed"]
@@ -1299,6 +1349,33 @@ def _format_verification(results: list, original_failed_names: set) -> str:
 
     lines: list[str] = []
     if not failed:
+        # --- False-green guards (run-58): never report a pass without having
+        # actually evaluated checks to a PASS. ---
+        if not passed:
+            # Empty results, or every check pending / not_applicable: nothing
+            # was verified. This is the absence of evidence, not a pass.
+            return (
+                "⚠ INCONCLUSIVE: verify_fixes evaluated 0 cross-checks to a "
+                "PASS (the suite returned nothing, or every check was pending "
+                "or not applicable). This is NOT a verification — do NOT treat "
+                "the run as resolved. Re-examine the facts directly; if a "
+                "targeted failure remains, keep fixing it, and if you truly "
+                "cannot resolve one, raise a flag."
+            )
+        confirmed = {getattr(r, "name", None) for r in passed}
+        unconfirmed = sorted(n for n in original if n not in confirmed)
+        if unconfirmed:
+            # No check is FAILING, but a check the reviewer was asked to fix
+            # was not re-evaluated to a pass (scoped out → pending /
+            # not_applicable / absent). Can't claim it's resolved.
+            return (
+                "⚠ NOT CONFIRMED: no check is currently failing, but these "
+                "targeted check(s) were NOT re-evaluated to a PASS, so they "
+                "are not confirmed resolved: " + ", ".join(unconfirmed) + ". "
+                "They may have been scoped out (pending / not applicable). Do "
+                "not declare done — confirm each targeted failure actually "
+                "passes, or raise a flag explaining why it cannot be checked."
+            )
         lines.append(
             f"✓ VERIFIED: all {len(passed)} evaluated cross-check(s) PASS "
             f"after your edits — no failure remains and you introduced none."
@@ -1351,6 +1428,7 @@ def create_reviewer_agent(
     conflicts: Optional[Sequence[dict[str, Any]]] = None,
     guidance: Optional[str] = None,
     spot_check_mode: Optional[str] = None,
+    verify_scope: Optional[list] = None,
 ):
     """Build the reviewer agent. Returns ``(agent, deps)``.
 
@@ -1362,6 +1440,14 @@ def create_reviewer_agent(
     ``spot_check_mode`` (``"light"`` / ``"full"`` / ``None``) selects the
     clean-run spot-check framing — see :func:`render_reviewer_prompt`. The
     registered toolset is identical either way; only the system prompt changes.
+
+    ``verify_scope`` — the run's succeeded statements as
+    ``(statement_type_value, variant)`` pairs — is carried onto
+    ``ReviewerDeps`` so ``verify_fixes`` scopes its cross-checks off the SAME
+    in-memory set the pipeline used. The inline reviewer MUST pass this (the
+    extraction ``run_agents`` rows aren't 'succeeded' in the DB yet); manual
+    /re-review passes ``None`` and lets ``run_verification_checks`` read the
+    (by-then terminal) DB rows. See :func:`run_verification_checks`.
     """
     from model_settings import build_model_settings
     from concept_model.facts_api import FactWrite
@@ -1375,6 +1461,9 @@ def create_reviewer_agent(
         original_failed_names={
             c.get("name") for c in (failed_checks or []) if c.get("name")
         },
+        # Inline pass hands us the succeeded-statement scope explicitly so
+        # verify_fixes doesn't read an un-finalized 'running' DB (run-58 fix).
+        verify_scope=list(verify_scope) if verify_scope is not None else None,
     )
     system_prompt = render_reviewer_prompt(
         db_path=db_path, run_id=run_id, failed_checks=failed_checks,
@@ -1734,6 +1823,7 @@ def create_reviewer_agent(
                 ctx.deps.db_path, ctx.deps.run_id,
                 filing_level=ctx.deps.filing_level,
                 filing_standard=ctx.deps.filing_standard,
+                scope=ctx.deps.verify_scope,
             )
         except Exception as exc:  # noqa: BLE001 — never crash the agent loop
             logger.warning(
