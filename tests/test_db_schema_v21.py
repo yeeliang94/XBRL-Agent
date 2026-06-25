@@ -1,9 +1,11 @@
 """DB migration v20 -> v21: the doc_conversions table.
 
-Durable conversion-job state for the scanned-PDF → readable-document feature
-(docs/PLAN-scanned-pdf-to-doc.md). New table → pure CREATE TABLE IF NOT EXISTS
-walk-forward (no ALTER), same pinning shape as v18→v19: fresh init carries the
-table + version 21, a v20 fixture walks forward, and re-init is idempotent.
+Durable conversion-job state for the (now removed) scanned-PDF → readable-document
+feature (docs/PLAN-deprecate-docconvert.md). The table is RETAINED as an inert
+artifact so the migration chain stays intact. New table → pure CREATE TABLE IF
+NOT EXISTS walk-forward (no ALTER), same pinning shape as v18→v19: fresh init
+carries the table + version 21, a v20 fixture walks forward, and re-init is
+idempotent.
 """
 from __future__ import annotations
 

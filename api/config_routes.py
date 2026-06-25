@@ -235,17 +235,6 @@ async def update_settings(body: dict):
                 "true" if body["entity_memory"] else "false")
     if "tolerance_rm" in body:
         set_key(str(ENV_FILE), "XBRL_TOLERANCE_RM", str(body["tolerance_rm"]))
-    # Scanned-PDF → readable-doc OCR engine (docs/PLAN-scanned-pdf-to-doc.md).
-    if "docling_ocr_engine" in body:
-        from docconvert.converter import SUPPORTED_OCR_ENGINES
-        engine = str(body["docling_ocr_engine"]).strip().lower()
-        if engine not in SUPPORTED_OCR_ENGINES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"docling_ocr_engine must be one of: "
-                f"{', '.join(SUPPORTED_OCR_ENGINES)}.",
-            )
-        set_key(str(ENV_FILE), "XBRL_DOCLING_OCR_ENGINE", engine)
 
     # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md). Stored
     # as a JSON object, like XBRL_DEFAULT_MODELS. Validated/cleaned first so a

@@ -472,8 +472,6 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   spot_check_mode?: string;
   /** Whether per-entity advisory memory injects prior-year prompt hints (item 28). */
   entity_memory?: boolean;
-  /** OCR engine for the scanned-PDF → readable-doc feature: 'rapidocr' | 'easyocr'. */
-  docling_ocr_engine?: string;
 }
 
 export type FilingLevel = "company" | "group";

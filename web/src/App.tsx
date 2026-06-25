@@ -16,7 +16,6 @@ import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
-import { ReadableDocPage } from "./pages/ReadableDocPage";
 import "./index.css";
 
 // ---------------------------------------------------------------------------
@@ -261,9 +260,6 @@ export default function App() {
       expected = state.selectedRunId != null
         ? `/benchmarks/${state.selectedRunId}`
         : "/benchmarks";
-    } else if (state.view === "doc-convert") {
-      // Standalone scanned-PDF → readable-document utility — singleton surface.
-      expected = "/readable-doc";
     } else if (state.view === "settings") {
       // Singleton settings surface — no entity id rides along.
       expected = "/settings";
@@ -619,11 +615,7 @@ export default function App() {
             : styles.main
         }
       >
-        {state.view === "doc-convert" ? (
-          // Standalone scanned-PDF → readable-document utility, independent of
-          // the extraction pipeline (docs/PLAN-scanned-pdf-to-doc.md).
-          <ReadableDocPage />
-        ) : state.view === "settings" ? (
+        {state.view === "settings" ? (
           // Consolidated settings page (replaces the gear's settings modal):
           // General · Account · Users. The Users tab is admin-gated (and the
           // server enforces it independently).

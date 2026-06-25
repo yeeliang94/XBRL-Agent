@@ -183,8 +183,6 @@ export async function updateSettings(
     spot_check: boolean;
     spot_check_mode: "light" | "full";
     entity_memory: boolean;
-    // Scanned-PDF → readable-doc OCR engine: 'rapidocr' | 'easyocr'.
-    docling_ocr_engine: string;
     // Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
     // The server validates + cleans it before persisting.
     notes_table_style: ClipboardFormatOptions;
@@ -480,63 +478,4 @@ export async function fetchRunEval(runId: number): Promise<EvalScoreJson | null>
   } catch {
     return null;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Scanned-PDF → readable-document feature (docs/PLAN-scanned-pdf-to-doc.md).
-// Standalone utility, independent of extraction.
-// ---------------------------------------------------------------------------
-
-export interface DocConvertStatus {
-  job_id: number;
-  status: "queued" | "running" | "done" | "failed";
-  current_page: number;
-  total_pages: number;
-  original_filename: string;
-  error: string | null;
-}
-
-/** Upload a PDF and launch a conversion. Returns the new job id. */
-export async function startDocConvert(
-  file: File,
-): Promise<{ job_id: number; status: string }> {
-  const form = new FormData();
-  form.append("file", file);
-  return apiFetch("/api/doc-convert", { method: "POST", body: form });
-}
-
-/** Poll the current status/progress of a conversion job. */
-export async function getDocConvertStatus(jobId: number): Promise<DocConvertStatus> {
-  return apiFetch(`/api/doc-convert/${jobId}`);
-}
-
-/** Same-origin URL for the converted HTML (rendered in an iframe). */
-export function docConvertViewUrl(jobId: number): string {
-  return `/api/doc-convert/${jobId}/view`;
-}
-
-/** Same-origin URL for the Word download (an <a download> target). */
-export function docConvertDocxUrl(jobId: number): string {
-  return `/api/doc-convert/${jobId}/download/docx`;
-}
-
-export interface DocConvertModelsStatus {
-  current: string;
-  engines: { id: string; bundled: boolean; fetching: boolean; error?: string | null }[];
-}
-
-/** Which OCR engines are bundled + the current selection (Settings). */
-export async function getDocConvertModels(): Promise<DocConvertModelsStatus> {
-  return apiFetch("/api/doc-convert/models");
-}
-
-/** Launch a background download of an OCR engine's models (online-only). */
-export async function fetchDocConvertModels(
-  engine: string,
-): Promise<{ status: string; engine: string }> {
-  return apiFetch("/api/doc-convert/models/fetch", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ engine }),
-  });
 }

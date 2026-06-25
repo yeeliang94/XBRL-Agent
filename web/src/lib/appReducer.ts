@@ -122,8 +122,7 @@ export type AppView =
   | "history"
   | "concepts"
   | "benchmarks"
-  | "settings"
-  | "doc-convert";
+  | "settings";
 
 export type AppAction =
   | { type: "UPLOADED"; payload: { sessionId: string; filename: string; runId?: number | null } }
@@ -228,11 +227,6 @@ export function parseRouteFromPath(
     // The consolidated settings page (model/proxy + account + admin users).
     // No entity id — it's a singleton surface.
     return { view: "settings", selectedRunId: null, currentRunId: null };
-  }
-  if (pathname.startsWith("/readable-doc")) {
-    // Scanned-PDF → readable-document utility — a singleton surface,
-    // independent of extraction (docs/PLAN-scanned-pdf-to-doc.md).
-    return { view: "doc-convert", selectedRunId: null, currentRunId: null };
   }
   if (pathname.startsWith("/run")) {
     const m = RUN_RE.exec(pathname);
