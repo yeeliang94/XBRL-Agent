@@ -122,6 +122,12 @@ SESSION_SECRET=                # REQUIRED in prod (startup fails without it); de
 # XBRL_FACT_BASED_CHECKS=1     # cross-checks read run_concept_facts; 0 = xlsx path
 # XBRL_FACT_BASED_VERIFY=1     # verifier reads facts; 0 = xlsx formula-eval path
 
+# Skill-first workflow-reference activation gate (DEFAULT ON). When on, the first
+# write_facts on a SOCIE/SOCF agent is refused until it calls
+# load_workflow_reference (a refuse-once, like the verify re-gate). conftest
+# defaults it OFF for the suite (like XBRL_SPOT_CHECK).
+# XBRL_WORKFLOW_REFERENCE_GATE=1   # 0 = disarm the activation gate
+
 # Canonical concept model is now MANDATORY (rewrite Phase 1.1): the legacy
 # direct-xlsx pipeline and the XBRL_CANONICAL_MODE opt-out were removed.
 # The flag is no longer read (see gotcha #21).
