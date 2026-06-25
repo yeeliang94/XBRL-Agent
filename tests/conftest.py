@@ -54,6 +54,35 @@ def _notes_auto_review_off_by_default():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_env_file_from_repo_dotenv(tmp_path_factory, monkeypatch):
+    """Point ``server.ENV_FILE`` at an empty temp file for every test.
+
+    The run path (`api/run_control.py`), scout, reviewer, and settings endpoints
+    all call ``load_dotenv(server.ENV_FILE, override=True)`` on each invocation.
+    With ``override=True`` that re-reads the developer's real repo ``.env`` and
+    **clobbers** the env-var defaults the autouse fixtures above set — e.g. a
+    local ``.env`` carrying ``XBRL_SPOT_CHECK='true'`` re-enables the spot-check
+    mid-run and adds an unexpected CORRECTION agent, breaking the deterministic
+    pipeline-count tests (the failure only shows up on a machine that HAS a
+    populated ``.env``; CI has none, which is why it hid).
+
+    Redirecting ENV_FILE to an empty file makes that `load_dotenv` a no-op, so
+    the conftest env defaults hold regardless of the developer's `.env`. Tests
+    that need their own env file (e.g. ``test_settings_api`` / ``test_server_scout``
+    / ``test_server_run_lifecycle``) still set ``server.ENV_FILE`` themselves —
+    those `monkeypatch.setattr` calls run after this autouse fixture and win.
+    """
+    empty_env = tmp_path_factory.mktemp("env") / ".env-test"
+    empty_env.write_text("", encoding="utf-8")
+    import server
+    monkeypatch.setattr(server, "ENV_FILE", empty_env)
+    # The CLI (`run.py`) loads its own hard-pathed copy with override=True too.
+    import run
+    monkeypatch.setattr(run, "ENV_FILE", empty_env)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _spot_check_off_by_default():
     """Default the clean-run spot-check (issue 1) OFF for the suite.
 
