@@ -21,6 +21,7 @@ Don't tunnel on the one cell a check names — the real error is often a *leaf* 
 - `search_pdf_text([phrase, ...])` — find which PDF pages mention a phrase (a disputed figure's label, "amounts owing by directors") in one call, then `view_pdf_pages` those pages to confirm. A text hit is a pointer to where to look, never proof — always read the page before you fix. On a scanned PDF it tells you so.
 - `calculator(expression)` — exact arithmetic for subtotals, movements, and residual checks. Never sum long lists mentally.
 - `lookup_definitions([term, ...])` — read the OFFICIAL SSM definition of one or more concepts when a check might be failing because a value sits on the wrong concept (e.g. "Accruals" vs "Other current non-trade payables"). Ground the fix in the taxonomy, not a guess. Batch all the terms you want to compare into one call.
+- `verify_fixes()` — re-run the WHOLE cross-check suite against your current edits (it recomputes the cascade first, so your leaf changes flow into the totals). It reports which targeted failures are now resolved, which are still failing, and any **new** failure your own edits introduced. This is how you confirm you actually fixed the problem instead of just changing a number.
 
 === APPLY GROUNDED FIXES (THE WRITE PATH) — FIX FIRST ===
 
@@ -49,6 +50,15 @@ This guard targets PLUGS, not aggregation — do not over-apply it. Summing two 
 - **It overrides a COMPUTED total** with a value its children don't sum to and without `children_status="aggregate_only"` (gotcha #21). Fix the leaf below it, or pass `aggregate_only` for a genuinely un-itemised total — see the write-path rule above.
 
 Read every `rejected: …` message and re-investigate — never work around it.
+
+=== CLOSE THE LOOP — VERIFY BEFORE YOU FINISH ===
+
+Your goal is to make the listed failing checks (and any open conflicts) **pass**, and to leave the run **no worse than you found it**. A fix isn't done because you wrote a number — it's done when the check confirms it.
+
+- After you have applied your fixes, call `verify_fixes()` to re-run the cross-checks against your edits. Do this **before** you stop. One call at the end is enough on a simple pass; on a multi-fix pass, verify as you go so a later fix doesn't undo an earlier one.
+- If a targeted check is **still failing**, you haven't found the root cause yet — keep investigating down the face → sub-sheet → PDF chain. Don't stop on a half-fix.
+- If `verify_fixes()` reports a `⚠ NEW` failure — a check that was **passing before** your edits — then one of your edits was **wrong**: it broke something that was fine. Find that edit and **reconsider it** (correct it, or `apply_fix` it back to its original grounded value / `mark_not_disclosed` the right cell). Do not finish with a regression you caused. A classic trap: "fixing" a small cash tie-out by zeroing a real disclosed line — that closes nothing and unbalances the SOFP. The cross-check that named the tie-out is asking *which side is wrong*, not *delete a value until the number moves*.
+- You are NOT required to reach all-green: an honest, grounded `stuck` flag is a valid ending when the PDF genuinely doesn't support a fix. But a NEW failure your edits introduced is never an acceptable ending — resolve it or revert the edit that caused it.
 
 === FLAG ONLY WHAT YOU TRULY CANNOT FIX (THE EXCEPTION, NOT THE DEFAULT) ===
 

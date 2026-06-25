@@ -94,6 +94,9 @@ class NotesReviewerDeps:
         filing_standard: str,
         output_dir: str,
         model: Any,
+        inventory_note_nums: Optional[List[int]] = None,
+        inventory_subnotes: Optional[dict] = None,
+        sidecar_paths: Optional[List[str]] = None,
     ):
         self.run_id = run_id
         self.db_path = db_path
@@ -102,6 +105,22 @@ class NotesReviewerDeps:
         self.filing_standard = filing_standard
         self.output_dir = output_dir
         self.model = model
+        # Detector inputs, kept so verify_findings can RE-run the detectors
+        # against the current state (not just the construction-time packet).
+        self.inventory_note_nums = inventory_note_nums
+        self.inventory_subnotes = inventory_subnotes
+        self.sidecar_paths = sidecar_paths
+        # Whether this run had durable DB provenance at construction. The sidecar
+        # fallback is a LEGACY/failed-write affordance only; for a DB-backed run
+        # an empty post-edit provenance set is REAL (the reviewer cleared it) and
+        # must NOT resurrect the original sidecars — that would mask an over-clear
+        # (peer-review HIGH). Seeded by the factory.
+        self.db_provenance_present = False
+        # The finding identities present BEFORE the reviewer wrote anything —
+        # seeded by the factory. verify_findings diffs the recomputed findings
+        # against this so a finding the reviewer INTRODUCED (e.g. over-cleared a
+        # note into a coverage gap) is surfaced as a regression, not hidden.
+        self.original_finding_keys: set = set()
         # Template family prefix ("mfrs-company-") so notes_nodes lookups
         # resolve THIS run's templates (gotcha #21).
         self.template_prefix = f"{filing_standard}-{filing_level}-"
@@ -387,6 +406,141 @@ def _build_context(
     }
 
 
+def finding_keys(context: dict) -> set:
+    """Stable identity per finding so two detector runs can be diffed.
+
+    Lets ``verify_findings`` tell a RESOLVED finding from one that's STILL
+    open from one the reviewer's own edits INTRODUCED. Each family keys on the
+    coordinates/refs that make a finding "the same finding" across runs.
+    """
+    keys: set = set()
+    for d in context.get("duplicates") or []:
+        keys.add((
+            "duplicate", str(d.get("note_ref")),
+            (d.get("sheet_11") or {}).get("row"),
+            (d.get("sheet_12") or {}).get("row"),
+        ))
+    for c in context.get("row_collisions") or []:
+        keys.add(("collision", c.get("row"), tuple(c.get("note_nums") or [])))
+    for g in context.get("subnote_gaps") or []:
+        keys.add(("subnote_gap", g.get("note_num")))
+    for n in context.get("coverage_gaps") or []:
+        keys.add(("coverage_gap", n))
+    for o in context.get("overlap_candidates") or []:
+        keys.add((
+            "overlap",
+            (o.get("sheet_11") or {}).get("row"),
+            (o.get("sheet_12") or {}).get("row"),
+        ))
+    for t in context.get("title_issues") or []:
+        keys.add(("title", t.get("sheet"), t.get("row")))
+    return keys
+
+
+def _backfill_sidecar_provenance(
+    run_id: int, db_path: str, sidecar_paths: List[str],
+) -> bool:
+    """One-time migration of on-disk sidecar entries into ``notes_cell_provenance``.
+
+    A run that has no durable DB provenance (legacy pre-v23, or a swallowed
+    provenance-write at merge time) keeps its detector inputs only in the
+    run-dir ``*_payloads.json`` sidecars. Copy them into the DB once, here, so
+    the DB is the SINGLE source of truth for the whole reviewer pass — baseline
+    findings, every clear/move/author edit, and ``verify_findings``' recompute
+    then all read the same store.
+
+    Without this, an ``author`` (which adds a DB provenance row) would make
+    ``load_provenance_entries`` non-empty mid-pass, suppressing the sidecar
+    fallback in ``_build_context`` so the recompute would see ONLY the authored
+    row and silently drop every other finding — falsely reporting "VERIFIED".
+
+    Returns True if at least one row was written (the caller then treats the run
+    as DB-backed).
+    """
+    from notes.validator_agent import load_sidecar_entries
+
+    entries = load_sidecar_entries(sidecar_paths)
+    if not entries:
+        return False
+    written = 0
+    with repo.db_session(db_path) as conn:
+        for e in entries:
+            sheet = e.get("sheet")
+            row = e.get("row")
+            if not sheet or row is None:
+                continue
+            refs = e.get("source_note_refs") or None
+            repo.upsert_notes_provenance(
+                conn, run_id=run_id, sheet=sheet, row=int(row),
+                row_label=e.get("row_label") or "",
+                source_note_refs=[str(x) for x in refs] if refs else None,
+                content_preview=e.get("content_preview"),
+            )
+            written += 1
+    return written > 0
+
+
+def recompute_notes_findings(deps: "NotesReviewerDeps") -> dict:
+    """Re-run the structural detectors against the run's CURRENT state.
+
+    Because the write tools now keep ``notes_cell_provenance`` in step with
+    every clear/move/author, re-reading it here reflects the reviewer's edits:
+    a cleared duplicate disappears, a moved note follows its refs, and an
+    over-clear that left a note uncited surfaces as a fresh coverage gap.
+
+    Every run reaching here is DB-backed: a sidecar-only run is migrated into
+    ``notes_cell_provenance`` at construction (``_backfill_sidecar_provenance``),
+    so ``db_provenance_present`` is True and the DB is the single source of
+    truth. The sidecar fallback is therefore suppressed — once the reviewer has
+    cleared every provenance row the live set is *legitimately* empty, and
+    re-reading the on-disk sidecars would resurrect the very entries the
+    reviewer deleted and hide the over-clear (peer-review HIGH). Sidecars stay
+    available only for a run whose backfill found nothing to migrate.
+    """
+    sidecars = None if deps.db_provenance_present else deps.sidecar_paths
+    return _build_context(
+        run_id=deps.run_id, db_path=deps.db_path,
+        inventory_subnotes=deps.inventory_subnotes,
+        inventory_note_nums=deps.inventory_note_nums,
+        sidecar_paths=sidecars,
+    )
+
+
+def format_notes_verification(context: dict, original_keys: set) -> str:
+    """Render the verify_findings result with regression marking."""
+    current = finding_keys(context)
+    resolved = original_keys - current
+    remaining = original_keys & current
+    introduced = current - original_keys
+
+    if not current:
+        return (
+            f"✓ VERIFIED: no structural findings remain "
+            f"({len(resolved)} resolved). You introduced none. "
+            f"If every packet finding is handled, you're done."
+        )
+
+    lines: list[str] = []
+    if resolved:
+        lines.append(f"✓ {len(resolved)} finding(s) resolved.")
+    if remaining:
+        lines.append(
+            f"{len(remaining)} packet finding(s) STILL open — keep working or "
+            f"flag if genuinely unfixable:"
+        )
+        for k in sorted(remaining, key=lambda x: tuple(str(p) for p in x)):
+            lines.append(f"  - still open: {k}")
+    if introduced:
+        lines.append(
+            f"⚠ {len(introduced)} NEW finding(s) your edits INTRODUCED — a fix "
+            f"made things worse (e.g. you cleared the last copy of a note and "
+            f"left a coverage gap). Reconsider that edit before you finish:"
+        )
+        for k in sorted(introduced, key=lambda x: tuple(str(p) for p in x)):
+            lines.append(f"  - NEW: {k}")
+    return "\n".join(lines)
+
+
 def create_notes_reviewer_agent(
     *,
     run_id: int,
@@ -410,14 +564,31 @@ def create_notes_reviewer_agent(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path,
         filing_level=filing_level, filing_standard=filing_standard,
         output_dir=output_dir, model=model,
+        inventory_note_nums=inventory_note_nums,
+        inventory_subnotes=inventory_subnotes,
+        sidecar_paths=sidecar_paths,
     )
+
+    # Settle the source of truth ONCE, before any reviewer write. The run is
+    # DB-backed iff notes_cell_provenance carries rows for it. A sidecar-only
+    # run (legacy / a swallowed provenance-write) is migrated into the DB here
+    # so baseline, every edit, and verify_findings' recompute all read the same
+    # store — see _backfill_sidecar_provenance for the failure it prevents.
+    deps.db_provenance_present = bool(load_provenance_entries(run_id, db_path))
+    if not deps.db_provenance_present and sidecar_paths:
+        if _backfill_sidecar_provenance(run_id, db_path, sidecar_paths):
+            deps.db_provenance_present = True
 
     context = _build_context(
         run_id=run_id, db_path=db_path,
         inventory_subnotes=inventory_subnotes,
         inventory_note_nums=inventory_note_nums,
-        sidecar_paths=sidecar_paths,
+        # After a successful backfill the DB is authoritative; only a run still
+        # sidecar-only (backfill found nothing) needs the on-disk fallback.
+        sidecar_paths=None if deps.db_provenance_present else sidecar_paths,
     )
+    # Baseline for verify_findings regression detection (before any write).
+    deps.original_finding_keys = finding_keys(context)
 
     base_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
     packet = build_notes_reviewer_packet(context)
@@ -577,6 +748,31 @@ def create_notes_reviewer_agent(
         })
         return f"flagged: {kind_norm}"
 
+    @agent.tool
+    def verify_findings(ctx: RunContext[NotesReviewerDeps]) -> str:
+        """Re-run the structural detectors against your CURRENT edits.
+
+        Call this AFTER you have applied fixes, BEFORE you finish. Your clears,
+        moves and authors update the detector inputs, so this tells you which
+        packet findings are now RESOLVED, which are STILL open, and — critically
+        — any NEW finding your own edits introduced (e.g. you cleared the last
+        copy of a note and left a coverage gap). Don't finish while a finding you
+        can fix, or one you caused, remains.
+        """
+        try:
+            context = recompute_notes_findings(ctx.deps)
+        except Exception as exc:  # noqa: BLE001 — never crash the agent loop
+            logger.warning(
+                "verify_findings failed for run %s", ctx.deps.run_id,
+                exc_info=True,
+            )
+            return (
+                f"verify_findings could not run ({type(exc).__name__}). "
+                f"Re-read the cells you changed with read_note_cell / "
+                f"list_note_cells to judge whether your fixes hold."
+            )
+        return format_notes_verification(context, ctx.deps.original_finding_keys)
+
     # -------------------- shared write impls --------------------
 
     def _guard_and_target(
@@ -671,6 +867,16 @@ def create_notes_reviewer_agent(
                 repo.remove_notes_tombstone(
                     conn, run_id=ctx.deps.run_id, sheet=sheet, row=row,
                 )
+                # Keep provenance in step so verify_findings (and a later manual
+                # re-review) credit an AUTHORED note as covered at its new home.
+                # An edit leaves the note ownership unchanged, so only author
+                # needs a provenance row.
+                if action == "author" and note_num is not None:
+                    repo.upsert_notes_provenance(
+                        conn, run_id=ctx.deps.run_id, sheet=sheet, row=row,
+                        row_label=label,
+                        source_note_refs=[str(int(note_num))],
+                    )
             ctx.deps.writes_performed += 1
             ctx.deps.correction_log.append({
                 "op": action, "sheet": sheet, "row": row, "evidence": ev,
@@ -729,6 +935,15 @@ def create_notes_reviewer_agent(
                     "DELETE FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
                     (ctx.deps.run_id, from_sheet, from_row),
                 )
+                # Relocate provenance with the prose so the detectors follow the
+                # move (the refs travel to the new coord); without this a moved
+                # note would look uncited and verify_findings would cry a false
+                # coverage gap.
+                repo.move_notes_provenance(
+                    conn, run_id=ctx.deps.run_id,
+                    from_sheet=from_sheet, from_row=from_row,
+                    to_sheet=to_sheet, to_row=to_row, to_label=label,
+                )
                 # Blank the vacated source cell in the workbook overlay; the
                 # destination now has content so any stale tombstone there must go.
                 repo.add_notes_tombstone(
@@ -766,6 +981,12 @@ def create_notes_reviewer_agent(
                 conn.execute(
                     "DELETE FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
                     (ctx.deps.run_id, sheet, row),
+                )
+                # Drop provenance so the cleared cell stops feeding the detectors
+                # — both this pass's verify_findings and a later manual re-review
+                # must see the cell as gone, not resurrect a resolved duplicate.
+                repo.delete_notes_provenance(
+                    conn, run_id=ctx.deps.run_id, sheet=sheet, row=row,
                 )
                 # Tombstone so the workbook overlay blanks the original prose
                 # written at merge time (it survives the notes_cells DELETE).

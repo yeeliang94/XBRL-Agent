@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -827,6 +828,12 @@ class ReviewerDeps:
     # outcome["fix_rejections"] so a pass reports how many fixes it refused +
     # why — without softening any guard. Empty until the first refusal.
     rejections: dict = field(default_factory=dict)
+    # The cross-check names that were FAILING when this pass started. The
+    # ``verify_fixes`` tool uses this to tell the reviewer which post-fix
+    # failures it was asked to resolve (STILL FAILING) versus a failure it
+    # newly INTRODUCED (was green before its edits) — the regression the
+    # one-shot pass used to ship silently.
+    original_failed_names: set = field(default_factory=set)
 
 
 def _family_prefix(filing_standard: str, filing_level: str) -> str:
@@ -1171,6 +1178,167 @@ def compute_spot_check_turn_cap(*, filing_level: str, mode: str) -> int:
     return 8 if is_group else 6
 
 
+def run_verification_checks(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    filing_level: str = "company",
+    filing_standard: str = "mfrs",
+    recompute: bool = True,
+) -> list:
+    """Re-run the cross-check suite against the run's CURRENT facts.
+
+    This is what lets the reviewer CLOSE THE LOOP on its own edits: after it
+    applies a fix it can confirm the targeted failure is gone AND that it
+    didn't break a previously-passing check (the silent one-shot regression
+    this guards against).
+
+    It reads ``run_concept_facts`` directly — the only store that reflects the
+    reviewer's in-progress writes (the xlsx isn't re-exported until after the
+    pass). ``recompute`` runs the cascade first so leaf edits flow up into the
+    COMPUTED totals the balance/tie-out checks read (``apply_reviewer_fix``
+    deliberately does NOT cascade per write). Scoping mirrors the pipeline's
+    ``_build_check_template_ids`` exactly (gotcha #21): succeeded statements +
+    their variants come from ``run_agents``, each mapped to its ``template_id``
+    via the canonical template path, so every check reads its own statements'
+    facts and the result matches the post-correction pass the user sees.
+
+    Returns the list of ``CrossCheckResult`` objects (empty if the run has no
+    succeeded statements to scope).
+    """
+    from cross_checks.framework import (
+        FactsContext, build_default_cross_checks, run_all_facts,
+        DEFAULT_TOLERANCE_RM,
+    )
+    from statement_types import StatementType, template_path as _tpl_path
+    from concept_model.parser import _derive_template_id
+    from db import repository as repo
+
+    if recompute:
+        from concept_model.cascade import recompute_after_turn
+        try:
+            recompute_after_turn(db_path, run_id)
+        except Exception as exc:  # noqa: BLE001
+            # A leaf edit does NOT cascade per write, so without this recompute
+            # the COMPUTED totals are stale and the checks would read pre-edit
+            # values — the exact false "VERIFIED" this tool exists to prevent
+            # (peer-review MEDIUM). BLOCK: raise so verify_fixes surfaces a
+            # "could not run", never a green pass on un-propagated totals.
+            logger.warning(
+                "verify_fixes: cascade recompute failed for run %s", run_id,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"cascade recompute failed ({type(exc).__name__}); cross-check "
+                f"totals would be stale, so verification cannot be trusted"
+            ) from exc
+
+    # One connection for both the scoping read and the checks (the checks read
+    # facts through the same FactsContext.conn).
+    conn = _open_conn(db_path)
+    try:
+        agents = repo.fetch_run_agents(conn, run_id)
+
+        template_ids: dict = {}
+        statements_to_run: set = set()
+        variants: dict = {}
+        for a in agents:
+            if a.status != "succeeded":
+                continue
+            try:
+                stmt = StatementType(a.statement_type)
+            except ValueError:
+                # Pseudo-agent rows (CORRECTION / notes-validator / scout)
+                # don't map to a StatementType — skip, as the recheck path does.
+                continue
+            try:
+                master = _tpl_path(
+                    stmt, a.variant, level=filing_level, standard=filing_standard,
+                )
+            except (ValueError, KeyError):
+                continue
+            template_ids[stmt] = _derive_template_id(Path(master))
+            statements_to_run.add(stmt)
+            variants[stmt] = a.variant
+
+        if not statements_to_run:
+            return []
+
+        check_config = {
+            "statements_to_run": statements_to_run,
+            "variants": variants,
+            "filing_level": filing_level,
+            "filing_standard": filing_standard,
+        }
+        tolerance = float(
+            os.environ.get("XBRL_TOLERANCE_RM", str(DEFAULT_TOLERANCE_RM))
+        )
+        ctx = FactsContext(
+            conn=conn, run_id=run_id, template_ids=template_ids,
+            filing_level=filing_level, filing_standard=filing_standard,
+        )
+        return run_all_facts(
+            build_default_cross_checks(), ctx, check_config, tolerance=tolerance,
+        )
+    finally:
+        conn.close()
+
+
+def _format_verification(results: list, original_failed_names: set) -> str:
+    """Render a compact verification summary for the reviewer.
+
+    Each failing check is tagged so the reviewer knows whether it's a problem
+    it was ASKED to fix (``STILL FAILING``) or one its OWN edits introduced
+    (``⚠ NEW``) — the regression signal. Passing/advisory checks are summarised
+    by count, not listed, to keep the reply short.
+    """
+    failed = [r for r in results if getattr(r, "status", None) == "failed"]
+    passed = [r for r in results if getattr(r, "status", None) == "passed"]
+    warnings = [r for r in results if getattr(r, "status", None) == "warning"]
+    original = original_failed_names or set()
+
+    lines: list[str] = []
+    if not failed:
+        lines.append(
+            f"✓ VERIFIED: all {len(passed)} evaluated cross-check(s) PASS "
+            f"after your edits — no failure remains and you introduced none."
+        )
+        if warnings:
+            lines.append(
+                f"({len(warnings)} advisory warning(s) — not blocking.)"
+            )
+        lines.append(
+            "If every targeted failure and open conflict is resolved, you are "
+            "done. Otherwise keep going."
+        )
+        return "\n".join(lines)
+
+    introduced = [r for r in failed if getattr(r, "name", None) not in original]
+    lines.append(
+        f"{len(failed)} cross-check(s) STILL FAILING after your edits "
+        f"({len(introduced)} of them NEW — introduced by your edits):"
+    )
+    for r in failed:
+        tag = (
+            "⚠ NEW — your edit caused this; it was PASSING before. Reconsider "
+            "(revise or revert) the edit that broke it"
+            if getattr(r, "name", None) not in original
+            else "still failing — your fix has not resolved it yet"
+        )
+        detail = getattr(r, "message", None) or (
+            f"expected {getattr(r, 'expected', None)} vs "
+            f"actual {getattr(r, 'actual', None)} (diff {getattr(r, 'diff', None)})"
+        )
+        lines.append(f"  - [{getattr(r, 'name', '?')}] {tag}. {detail}")
+    if introduced:
+        lines.append(
+            "A NEW failure means a fix you made was wrong — go back and "
+            "reconsider it before you finish. Do not leave the run worse than "
+            "you found it."
+        )
+    return "\n".join(lines)
+
+
 def create_reviewer_agent(
     *,
     model,
@@ -1202,6 +1370,11 @@ def create_reviewer_agent(
         db_path=str(db_path), run_id=run_id, filing_level=filing_level,
         filing_standard=filing_standard,
         pdf_path=str(pdf_path) if pdf_path is not None else None,
+        # Seed the baseline so verify_fixes can distinguish a failure the
+        # reviewer was asked to fix from one it newly introduced.
+        original_failed_names={
+            c.get("name") for c in (failed_checks or []) if c.get("name")
+        },
     )
     system_prompt = render_reviewer_prompt(
         db_path=db_path, run_id=run_id, failed_checks=failed_checks,
@@ -1539,5 +1712,39 @@ def create_reviewer_agent(
         if out.startswith("ok"):
             ctx.deps.flags_raised += 1
         return out
+
+    @agent.tool
+    def verify_fixes(ctx: RunContext[ReviewerDeps]) -> str:
+        """Re-run the cross-checks against your CURRENT edits and report back.
+
+        Call this AFTER you have applied fixes, BEFORE you finish. It
+        recomputes the cascade (so your leaf edits flow into the totals) and
+        re-runs the SAME cross-check suite that flagged the failures, reading
+        your in-progress facts. It tells you, per check:
+          - which targeted failures are now RESOLVED,
+          - which are STILL FAILING (keep working), and
+          - any ``⚠ NEW`` failure your own edit introduced (a check that was
+            PASSING before) — meaning that edit was wrong; revise or revert it.
+
+        Do not declare yourself done while a failure you can fix — or any
+        failure your edits caused — remains.
+        """
+        try:
+            results = run_verification_checks(
+                ctx.deps.db_path, ctx.deps.run_id,
+                filing_level=ctx.deps.filing_level,
+                filing_standard=ctx.deps.filing_standard,
+            )
+        except Exception as exc:  # noqa: BLE001 — never crash the agent loop
+            logger.warning(
+                "verify_fixes failed for run %s", ctx.deps.run_id,
+                exc_info=True,
+            )
+            return (
+                f"verify_fixes could not run ({type(exc).__name__}). Continue "
+                f"investigating from the facts and the PDF; rely on your "
+                f"cascade traces to judge whether the fix holds."
+            )
+        return _format_verification(results, ctx.deps.original_failed_names)
 
     return agent, deps
