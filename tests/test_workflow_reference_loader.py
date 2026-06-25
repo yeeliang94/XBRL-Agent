@@ -75,6 +75,40 @@ def test_every_mapped_key_has_a_shipped_file():
         assert path.exists(), f"reference shelf missing {filename} for key {key}"
 
 
+# --- standard scoping: the MFRS-only shelf must NOT serve MPERS runs ----------
+# (regression for the gotcha #15 MPERS-SOCIE failure: socie-default is the MFRS
+# 24-col matrix reference and contradicts socie_mpers.md, which uses field_label.)
+
+@pytest.mark.parametrize(
+    "stmt,variant",
+    [
+        (S.SOCIE, "Default"),   # the dangerous one — matrix vs field_label
+        (S.SOCF, "Indirect"),
+        (S.SOCF, "Direct"),
+        (S.SOFP, "CuNonCu"),
+        (S.SOPL, "Function"),
+    ],
+)
+def test_resolve_returns_none_on_mpers(stmt, variant):
+    assert wr.resolve_reference_key(stmt, variant, "mpers") is None
+    assert "No workflow reference is available" in wr.load_reference_text(stmt, variant, "mpers")
+
+
+def test_resolve_still_serves_mfrs():
+    # The fix must not regress MFRS resolution.
+    assert wr.resolve_reference_key(S.SOCIE, "Default", "mfrs") == "socie-default"
+    assert wr.resolve_reference_key(S.SOCF, "Indirect", "mfrs") == "socf-indirect"
+
+
+def test_gate_noop_for_mpers_socie_socf(monkeypatch):
+    """Even armed, the gate must NOT force an MPERS SOCIE/SOCF agent to load the
+    MFRS reference (there is none for MPERS) — it no-ops and the agent uses the
+    MPERS prompt + read_template."""
+    monkeypatch.setenv("XBRL_WORKFLOW_REFERENCE_GATE", "1")
+    assert wr.workflow_reference_gate_error(S.SOCIE, "Default", "mpers", reference_loaded=False) is None
+    assert wr.workflow_reference_gate_error(S.SOCF, "Indirect", "mpers", reference_loaded=False) is None
+
+
 # --- loading: wrapping, content, no-ref, size cap ---------------------------
 
 def test_load_reference_text_wraps_with_marker():

@@ -79,6 +79,19 @@ _REFERENCE_FILES: dict[str, str] = {
     "socie-default": "socie-default.md",
 }
 
+# Filing standards each reference is valid for. EVERY shipped reference is
+# derived from the MFRS (FINCO) workflow docs; the SOCIE one in particular
+# describes a 24-column MATRIX with explicit row/col writes, which directly
+# CONTRADICTS the MPERS SOCIE layout (prompts/socie_mpers.md uses field_label,
+# not a matrix — gotcha #15). Serving an MFRS reference to an MPERS run would
+# reintroduce that MPERS-SOCIE failure class, so the shelf is MFRS-only for now:
+# an MPERS run resolves to NO reference and falls back to its (correct, tested)
+# MPERS prompt + read_template(). Author MPERS-specific references later, mark
+# them frozenset({"mpers"}) (or both), and the resolver picks them up.
+_REFERENCE_STANDARDS: dict[str, frozenset] = {
+    key: frozenset({"mfrs"}) for key in _REFERENCE_FILES
+}
+
 # Process-global cache of rendered reference bodies, keyed by reference key.
 # Mirrors ``extraction.agent._TEMPLATE_SUMMARY_CACHE``: the file is read +
 # wrapped once per process, then reused.
@@ -103,17 +116,22 @@ def resolve_reference_key(
         2. standard tier   ``{stmt}-{standard}``  (e.g. ``socie-mpers`` — none yet)
         3. generic tier   ``{stmt}``             (e.g. ``socf`` — none yet)
 
-    Returns the FIRST tier present in ``_REFERENCE_FILES``. The lookup keys are
-    derived solely from typed run config — never from model input.
+    A candidate only resolves if the run's ``filing_standard`` is in that
+    reference's ``_REFERENCE_STANDARDS`` set — so an MFRS-only reference is
+    NEVER served to an MPERS run (which would reintroduce the gotcha #15
+    MPERS-SOCIE failure; the whole shelf is MFRS-only today). Returns the FIRST
+    matching tier. The lookup keys are derived solely from typed run config —
+    never from model input.
     """
     stmt = statement_type.value.lower()
+    std = filing_standard.lower()
     candidates = [
         f"{stmt}-{variant.lower()}",
-        f"{stmt}-{filing_standard.lower()}",
+        f"{stmt}-{std}",
         stmt,
     ]
     for key in candidates:
-        if key in _REFERENCE_FILES:
+        if key in _REFERENCE_FILES and std in _REFERENCE_STANDARDS.get(key, frozenset()):
             return key
     return None
 
