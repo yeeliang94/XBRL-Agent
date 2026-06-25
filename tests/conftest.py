@@ -83,6 +83,30 @@ def _isolate_env_file_from_repo_dotenv(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _workflow_reference_gate_off_by_default():
+    """Default the skill-first workflow-reference activation gate OFF for the suite.
+
+    The gate (extraction/workflow_reference.py) refuses the FIRST write_facts on
+    a SOCIE/SOCF agent until it has called load_workflow_reference. Leaving it on
+    (the production default) would make the mocked SOCIE/SOCF agents in the
+    deterministic pipeline tests refuse their first write and diverge from the
+    canned tool sequence. Tests that exercise the gate opt IN with
+    `monkeypatch.setenv("XBRL_WORKFLOW_REFERENCE_GATE", "1")`; the loader's
+    default-armed behaviour is verified directly via `workflow_reference_gate_armed`.
+    Set via os.environ for monkeypatch.undo() resilience (like XBRL_SPOT_CHECK).
+    """
+    prior = os.environ.get("XBRL_WORKFLOW_REFERENCE_GATE")
+    os.environ["XBRL_WORKFLOW_REFERENCE_GATE"] = "0"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop("XBRL_WORKFLOW_REFERENCE_GATE", None)
+        else:
+            os.environ["XBRL_WORKFLOW_REFERENCE_GATE"] = prior
+
+
+@pytest.fixture(autouse=True)
 def _spot_check_off_by_default():
     """Default the clean-run spot-check (issue 1) OFF for the suite.
 

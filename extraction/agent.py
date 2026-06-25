@@ -31,6 +31,11 @@ from extraction.history_processors import (
     compact_old_text_results_ctx,
     strip_stale_images_ctx,
     strip_duplicate_template,
+    strip_duplicate_workflow_reference,
+)
+from extraction.workflow_reference import (
+    load_reference_text,
+    workflow_reference_gate_error,
 )
 from prompts import render_prompt
 
@@ -97,6 +102,12 @@ class ExtractionDeps:
         # a "forced" save even if verify failed — used only by the edge
         # case where the PDF genuinely cannot be balanced (gotcha #6).
         self.save_attempts = 0
+        # Skill-first harness (Phase 1): set True once the agent calls
+        # load_workflow_reference this run. For matrix/articulation-heavy
+        # statements (SOCIE/SOCF) the first write_facts is gated on it (a
+        # refuse-once, mirroring last_verify_result) so activation is
+        # deterministic, not "the agent remembers".
+        self.workflow_reference_loaded: bool = False
         # Peer-review (Edge AFS, 2026-05-28): coordinator success contract.
         # `filled_path` alone is too weak — an agent can write a workbook,
         # have every save_result attempt refused by the gate, and end the
@@ -704,6 +715,7 @@ def create_extraction_agent(
         history_processors=[
             strip_stale_images_ctx,
             strip_duplicate_template,
+            strip_duplicate_workflow_reference,
             compact_old_text_results_ctx,
         ],
     )
@@ -746,6 +758,26 @@ def create_extraction_agent(
         """Read the template structure. Returns the full template summary
         (cached after the first call so repeated calls are free)."""
         return _render_template_summary(ctx.deps)
+
+    @agent.tool
+    def load_workflow_reference(ctx: RunContext[ExtractionDeps]) -> str:
+        """Load the fill-workflow reference for THIS statement (no arguments).
+
+        Returns the deep, statement-specific fill workflow — matrix/column map,
+        which rows are formulas vs. data-entry, the sign conventions, a
+        common-mistakes catalogue, and a worked example. Call it ONCE when you
+        start a matrix- or articulation-heavy statement (SOCIE, SOCF) before
+        writing — it is the depth the system prompt deliberately leaves out to
+        keep every run lean. The live `read_template()` and the statement prompt
+        still win on any conflict; the reference's row numbers are illustrative.
+        Returns a short "no reference available" note for statements that don't
+        have extra depth (most SOFP/SOPL/SOCI runs need only read_template())."""
+        ctx.deps.workflow_reference_loaded = True
+        return load_reference_text(
+            ctx.deps.statement_type,
+            ctx.deps.variant,
+            ctx.deps.filing_standard,
+        )
 
     @agent.tool
     def view_pdf_pages(ctx: RunContext[ExtractionDeps], pages: List[int]) -> List[Union[str, BinaryContent]]:
@@ -824,6 +856,21 @@ def create_extraction_agent(
 
         Only write to data-entry cells. Never write to formula cells.
         """
+        # Skill-first harness (Phase 1): deterministic activation. For
+        # matrix/articulation-heavy statements (SOCIE/SOCF) with a workflow
+        # reference, refuse the FIRST write until the agent has read it — a
+        # refuse-once that mirrors how last_verify_result re-gates save_result.
+        # No-op once load_workflow_reference has been called, for non-gated
+        # statements, for combos with no reference, and when the gate is
+        # disarmed (XBRL_WORKFLOW_REFERENCE_GATE=0 / conftest default).
+        gate_error = workflow_reference_gate_error(
+            ctx.deps.statement_type,
+            ctx.deps.variant,
+            ctx.deps.filing_standard,
+            ctx.deps.workflow_reference_loaded,
+        )
+        if gate_error is not None:
+            return gate_error
         output_path = str(Path(ctx.deps.output_dir) / ctx.deps.filled_filename)
         source_path = (
             ctx.deps.filled_path

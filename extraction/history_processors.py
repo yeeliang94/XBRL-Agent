@@ -406,9 +406,13 @@ def compact_old_text_results(
 
     out = messages
     for mi, pi, part in tool_returns:
-        # Image batches and template summaries are owned by the other two
-        # processors; never double-handle them here.
-        if _part_has_image(part) or _is_template_summary(part):
+        # Image batches, template summaries, and workflow references are owned
+        # by the other processors; never double-handle them here.
+        if (
+            _part_has_image(part)
+            or _is_template_summary(part)
+            or _is_workflow_reference(part)
+        ):
             continue
         # Write confirmations are the durable record of what already landed
         # in the workbook/DB — never compact them (see docstring rule).
@@ -442,6 +446,56 @@ def _is_template_summary(part: ToolReturnPart) -> bool:
             for item in content
         )
     return False
+
+
+# Banner wrapped around every loaded workflow reference (see
+# extraction/workflow_reference.py). Distinct from _TEMPLATE_SUMMARY_MARKER so
+# the two dedup processors never double-handle each other's payloads.
+_WORKFLOW_REFERENCE_MARKER = "=== WORKFLOW REFERENCE:"
+
+
+def _is_workflow_reference(part: ToolReturnPart) -> bool:
+    """True if this tool return is a load_workflow_reference body."""
+    content = part.content
+    if isinstance(content, str):
+        return _WORKFLOW_REFERENCE_MARKER in content
+    if isinstance(content, list):
+        return any(
+            isinstance(item, str) and _WORKFLOW_REFERENCE_MARKER in item
+            for item in content
+        )
+    return False
+
+
+def strip_duplicate_workflow_reference(
+    messages: List[ModelMessage],
+) -> List[ModelMessage]:
+    """Collapse repeated load_workflow_reference bodies to a one-line pointer.
+
+    Direct analogue of ``strip_duplicate_template``: the ~9 KB reference is
+    otherwise re-billed on every turn once the agent has loaded it. An
+    extraction agent only ever loads ONE reference (its own statement's), so
+    every later copy is identical — keep the first intact, replace the rest with
+    a pointer. Without this the Phase 2 token measurement of the loader would be
+    meaningless. Purity contract identical to the other processors (the input
+    list is never mutated; changed parts are rebuilt with ``dataclasses.replace``).
+    """
+    reference_parts = [
+        (mi, pi, part)
+        for mi, pi, part in _tool_return_parts(messages)
+        if _is_workflow_reference(part)
+    ]
+    if len(reference_parts) <= 1:
+        return messages
+
+    out = messages
+    for mi, pi, _part in reference_parts[1:]:
+        new_part = dataclasses.replace(
+            _part, content="Workflow reference already provided above."
+        )
+        out = _replace_part(out, mi, pi, new_part)
+
+    return out
 
 
 def strip_duplicate_template(messages: List[ModelMessage]) -> List[ModelMessage]:
