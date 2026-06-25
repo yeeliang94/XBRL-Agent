@@ -959,6 +959,61 @@ def fetch_notes_provenance(
     return out
 
 
+def delete_notes_provenance(
+    conn: sqlite3.Connection, *, run_id: int, sheet: str, row: int,
+) -> None:
+    """Drop the provenance row for a (run, sheet, row).
+
+    Keeps ``notes_cell_provenance`` in step with a reviewer ``clear`` so the
+    structural detectors (which key on these rows) no longer see the cleared
+    cell — without this the notes reviewer's self-verification (and a later
+    manual re-review) would recompute STALE findings."""
+    conn.execute(
+        "DELETE FROM notes_cell_provenance "
+        "WHERE run_id = ? AND sheet = ? AND row = ?",
+        (run_id, sheet, row),
+    )
+
+
+def move_notes_provenance(
+    conn: sqlite3.Connection, *,
+    run_id: int, from_sheet: str, from_row: int,
+    to_sheet: str, to_row: int, to_label: str = "",
+) -> bool:
+    """Relocate a provenance row, PRESERVING its ``source_note_refs``.
+
+    The detectors key on note refs, so a reviewer ``move`` must carry the
+    refs to the destination — otherwise re-running the detectors would report
+    a false coverage gap (the moved note would look uncited). Returns False
+    (no-op) when the source has no provenance row (legacy / sidecar-only run)."""
+    r = conn.execute(
+        "SELECT row_label, source_note_refs, content_preview "
+        "FROM notes_cell_provenance WHERE run_id = ? AND sheet = ? AND row = ?",
+        (run_id, from_sheet, from_row),
+    ).fetchone()
+    if r is None:
+        return False
+    label, refs_json, preview = r[0], r[1], r[2]
+    try:
+        refs = json.loads(refs_json) if refs_json else None
+        if refs is not None and not isinstance(refs, list):
+            refs = None
+    except (TypeError, json.JSONDecodeError):
+        refs = None
+    conn.execute(
+        "DELETE FROM notes_cell_provenance "
+        "WHERE run_id = ? AND sheet = ? AND row = ?",
+        (run_id, from_sheet, from_row),
+    )
+    upsert_notes_provenance(
+        conn, run_id=run_id, sheet=to_sheet, row=to_row,
+        row_label=to_label or label or "",
+        source_note_refs=[str(x) for x in refs] if refs else None,
+        content_preview=preview,
+    )
+    return True
+
+
 def fetch_notes_node(
     conn: sqlite3.Connection,
     *,

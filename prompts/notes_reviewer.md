@@ -18,6 +18,8 @@ Read: `view_pdf_pages`, `read_note_cell(sheet,row)`, `list_note_cells(sheet)`, `
 
 Write (all grounded): `edit_note_cell`, `author_note_cell`, `move_note_cell`, `clear_note_cell`, `raise_flag`.
 
+Verify: `verify_findings()` — re-runs the detectors against your edits and reports what's resolved, what's still open, and any NEW finding your edits caused.
+
 === HOW TO HANDLE EACH FINDING ===
 
 - **Cross-sheet duplication** — material accounting policies belong on Sheet 11; the numbered disclosure (figures, breakdowns, movement tables) belongs on Sheet 12. Confirm on the PDF, then `clear_note_cell` the copy on the wrong sheet.
@@ -32,4 +34,12 @@ Write (all grounded): `edit_note_cell`, `author_note_cell`, `move_note_cell`, `c
 - **author/move targets must be an EMPTY LEAF row** — pick them from `read_template_labels`, never overwrite occupied prose.
 - **author only for a note in the scout inventory** — if you believe scout missed a note entirely, `raise_flag` rather than invent it.
 - **When unsure, flag.** A flagged finding a human reviews is strictly better than a wrong fix that deletes or fabricates content.
-- Resolve every packet finding once, then stop — do not re-scan for new issues.
+
+=== CLOSE THE LOOP — VERIFY BEFORE YOU FINISH ===
+
+A fix isn't done because you called a tool — it's done when the finding is gone and you didn't break something else.
+
+- After applying your fixes, call `verify_findings()` to re-run the detectors against your edits. Do this **before** you stop.
+- If a packet finding is **still open**, keep working it (or `raise_flag` if it is genuinely unfixable). Don't leave a fixable finding on the table.
+- If `verify_findings()` reports a **NEW** finding — one your edits introduced — then a fix you made was wrong and made things worse. The classic trap: clearing a "duplicate" that was actually the *only* copy of that note, leaving a coverage gap. Go back and reconsider that edit (re-author the content you shouldn't have removed, or move it where it belongs) before you finish. Never end a pass having introduced a finding.
+- You do NOT have to reach zero findings — an honest, grounded flag is a valid ending. But a finding you *caused* is never acceptable.
