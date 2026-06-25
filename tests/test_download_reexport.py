@@ -99,6 +99,34 @@ def test_reexport_reflects_edited_fact(seeded_run):
             out.unlink(missing_ok=True)
 
 
+def test_reexport_includes_completed_with_errors_statement(seeded_run):
+    """A statement saved via ``acknowledge_unresolved`` is persisted
+    ``completed_with_errors`` but carries real, possibly reviewer-edited facts.
+    The download re-export must scope it IN — a ``succeeded``-only DB filter
+    drops it (``agent_results`` empties → re-export returns None) and the
+    download silently keeps the stale scratch workbook for that statement.
+    """
+    server, db_path, run_id, sheet, row = seeded_run
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "UPDATE run_agents SET status='completed_with_errors' "
+            "WHERE run_id=?", (run_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    out = server._reexport_and_remerge_from_facts(run_id)
+    try:
+        assert out is not None and out.exists(), (
+            "completed_with_errors statement was dropped from the re-export")
+        wb = openpyxl.load_workbook(str(out), data_only=False)
+        assert wb[sheet][f"B{row}"].value == 7777.0
+    finally:
+        if out is not None:
+            out.unlink(missing_ok=True)
+
+
 def test_run_without_facts_skips_reexport(tmp_path):
     """A legacy run with no facts returns None so the download falls back to
     the on-disk workbook."""
