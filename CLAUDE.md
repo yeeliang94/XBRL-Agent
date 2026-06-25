@@ -423,12 +423,11 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   (gotcha #24, Settings → Users tab + `/api/admin/*`). One additive ALTER;
   existing accounts walk forward as non-admins. Pinned by
   `tests/test_db_schema_v20.py`.
-- **v20 → v21:** adds the `doc_conversions` table (scanned-PDF → readable-document
-  feature, gotcha #26) — durable conversion-job state, independent of the
-  extraction pipeline. Pure `CREATE TABLE IF NOT EXISTS` walk-forward (new table,
-  no ALTER). Startup (`server._lifespan`) calls
-  `repo.reconcile_stale_doc_conversions` to fail any job left `running`/`queued`
-  by a crash. Pinned by `tests/test_db_schema_v21.py`.
+- **v20 → v21:** adds the `doc_conversions` table (formerly the scanned-PDF →
+  readable-document feature, now REMOVED — see gotcha #26). The table is RETAINED
+  as an inert artifact so the migration chain stays intact, but no code reads or
+  writes it. Pure `CREATE TABLE IF NOT EXISTS` walk-forward (new table, no ALTER).
+  Pinned by `tests/test_db_schema_v21.py`.
 - **v21 → v22:** adds the nullable `runs.notes_table_style TEXT` column (per-run
   notes-table style override, gotcha #16 + docs/PLAN-notes-table-theme.md) —
   `_V22_MIGRATION_COLUMNS`, one additive ALTER. NULL = the run inherits the
@@ -1379,43 +1378,15 @@ until Phase 4 (xlsx retirement) lands — it is NOT removed yet. Export still
 keeps live formulas (downloads recompute in Excel); item 32 is verification-only,
 no static-value export. Plan: docs/PLAN-orchestration-hardening (item 32).
 
-### 26. Scanned-PDF → readable-document — standalone, offline, separate from extraction
+### 26. Scanned-PDF → readable-document — REMOVED
 
-The `docconvert/` package + the "Readable Doc" frontend page convert a scanned
-PDF into readable HTML (+ a Word download). It is **deliberately independent of
-the extraction pipeline** — no coordinator, no concept model, no templates — and
-must run **fully offline / no API calls** (docs/PLAN-scanned-pdf-to-doc.md,
-docs/PRD-scanned-pdf-to-doc.md). Load-bearing details:
-
-- **Engine = Docling, never LiteParse.** Only Docling reconstructs scanned
-  financial tables (it runs a TableFormer model on top of OCR). LiteParse
-  collapses columns on scans at any DPI — proven in the 2026-06-19 bake-off.
-- **Offline by bundle.** `scripts/fetch_docling_models.py` pre-downloads ~599MB
-  of weights into `models/docling/` (gitignored). `docconvert/converter.py`
-  loads them via `PdfPipelineOptions(artifacts_path=...)` + `RapidOcrOptions`
-  pointed at the bundled **.onnx** files + `HF_HUB_OFFLINE=1`. **`onnxruntime`
-  is required** — RapidOCR's bundled models are ONNX (the gotcha from the spike).
-  Conversion is verified with all network blocked at the socket level
-  (`tests/test_docconvert.py`).
-- **Page-by-page** (no cross-page table stitching in v1) — gives real per-page
-  progress and matches the product decision.
-- **Word export = pandoc, not Docling.** Docling has **no** docx exporter
-  (HTML/MD/JSON only), so `_html_to_docx_bytes` renders the HTML via
-  `pypandoc_binary` (the pandoc executable ships in the pip wheel — no host
-  install, preserves the offline-deploy story).
-- **Durable background job** (schema v21 `doc_conversions`, gotcha #11):
-  serialised to **one conversion at a time** (`is_doc_conversion_running` →
-  409); daemon-thread worker (`docconvert/worker.py`) with a wall-clock cap
-  (`XBRL_DOC_CONVERT_TIMEOUT_S`) and a try/except landing **every** exit in a
-  terminal status (gotcha #10); stale `running` rows reconciled at startup
-  (gotcha #21 pattern). Routes (`docconvert/routes.py`,
-  `register_doc_convert_routes`, mirrors `reviewer_routes`) are under `/api/*`
-  so the auth middleware gates them (gotcha #24). Converted HTML is heavy → kept
-  on disk with a DB pointer (hybrid storage, gotcha #6). Pinned by
-  `tests/test_doc_convert_*.py` + `web/src/__tests__/ReadableDocPage.test.tsx`.
-- **Deploy caveat (deferred):** Docling adds ~630MB libs (force **CPU-only**
-  torch) + 599MB weights ≈ 1.2GB → fights Oryx zip-deploy; container + a memory
-  bump are recommended but undecided. See the PRD "Deferred" section.
+The `docconvert/` package + "Readable Doc" frontend page (a standalone, offline
+scanned-PDF → HTML/Word converter built on Docling) was **removed** — see
+docs/PLAN-deprecate-docconvert.md. The `doc_conversions` table (schema v21)
+remains as an inert artifact because the migration chain replays every step
+(gotcha #11), but no code reads or writes it. The heavy deps it alone pulled in
+(`docling`, `torch`, `onnxruntime`, `rapidocr`, `easyocr`, `pypandoc_binary`,
+`python-docx`) and the `models/` weight bundle are gone.
 
 ## Testing
 
@@ -1476,7 +1447,6 @@ Some tests auto-skip when sample data is absent (e.g. `test_pdf_viewer.py`).
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full module map + data flow |
 | [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md) | Notes subsystem deep-dive |
 | [docs/MPERS.md](docs/MPERS.md) | MPERS filing-standard deep-dive |
-| [docs/PLAN-scanned-pdf-to-doc.md](docs/PLAN-scanned-pdf-to-doc.md) | Scanned-PDF → readable-doc feature (gotcha #26) |
 | [docs/SYNC-MATRIX.md](docs/SYNC-MATRIX.md) | Cross-file impact for a given change |
 | [docs/PORTING-WINDOWS.md](docs/PORTING-WINDOWS.md) | Mac → Windows porting checklist |
 | [docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md](docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md) | SOFP formula-offset incident audit trail |

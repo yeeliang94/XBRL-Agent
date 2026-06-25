@@ -96,21 +96,6 @@ describe("SettingsModal — P3 enhancements", () => {
     });
   });
 
-  test("Readable-Doc OCR engine selector loads + saves docling_ocr_engine", async () => {
-    const { saveSettings } = renderModal({ docling_ocr_engine: "rapidocr" });
-    const select = await screen.findByLabelText("Readable-Doc OCR engine");
-    expect((select as HTMLSelectElement).value).toBe("rapidocr");
-
-    fireEvent.change(select, { target: { value: "easyocr" } });
-    fireEvent.click(screen.getByRole("button", { name: /save/i }));
-
-    await waitFor(() =>
-      expect(saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ docling_ocr_engine: "easyocr" }),
-      ),
-    );
-  });
-
   test("Notes table style section persists the firm default to the server", async () => {
     // Migrated from localStorage to a shared, server-side firm default
     // (docs/PLAN-notes-table-theme.md): editing a knob POSTs notes_table_style.

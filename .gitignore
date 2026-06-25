@@ -42,8 +42,3 @@ XBRL-Agent/
 
 # Phase 4.2 A/B harness scratch (live-run DBs, rendered xlsx, copied PDFs)
 ab_work/
-
-# Docling model weights for the scanned-PDF→readable-doc feature (~599MB).
-# Fetched once via scripts/fetch_docling_models.py; bundled into the deploy
-# artifact, never committed (too large for git). See docs/PLAN-scanned-pdf-to-doc.md.
-models/

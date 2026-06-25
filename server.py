@@ -2502,23 +2502,6 @@ async def _lifespan(app: FastAPI):
         logger.warning("notes re-review task reconciliation failed at startup",
                        exc_info=True)
 
-    # Retire scanned-PDF → readable-doc conversions orphaned by a restart
-    # (the worker thread dies with the process). Same best-effort discipline as
-    # the re-review reconcile above. See docs/PLAN-scanned-pdf-to-doc.md.
-    try:
-        from db import repository as repo
-        conn = _open_audit_conn()
-        try:
-            n = repo.reconcile_stale_doc_conversions(conn)
-            conn.commit()
-        finally:
-            conn.close()
-        if n:
-            logger.info("reconciled %d stale doc-conversion(s) at startup", n)
-    except Exception:
-        logger.warning("doc-conversion reconciliation failed at startup",
-                       exc_info=True)
-
     # Sweep auth sessions that idled out and were never accessed again (the user
     # closed the tab). resolve_session deletes expired rows lazily on access, so
     # this only reaps the never-touched-again ones; without it the table grows
@@ -2596,12 +2579,6 @@ _register_concept_routes(app, lambda: AUDIT_DB_PATH)
 # need server orchestration are defined further down in this module.
 from concept_model.reviewer_routes import register_reviewer_routes as _register_reviewer_routes
 _register_reviewer_routes(app, lambda: AUDIT_DB_PATH)
-# Scanned-PDF → readable-document feature (docs/PLAN-scanned-pdf-to-doc.md):
-# a standalone utility, independent of extraction. Registers its own /api/doc-convert
-# routes + background worker. Getters mirror the pattern above so tests can swap
-# the module attributes at runtime.
-from docconvert.routes import register_doc_convert_routes as _register_doc_convert_routes
-_register_doc_convert_routes(app, lambda: AUDIT_DB_PATH, lambda: OUTPUT_DIR)
 
 
 # ---------------------------------------------------------------------------
@@ -2887,9 +2864,6 @@ def _load_extended_settings() -> dict:
         "spot_check_mode": _spot_check_mode(),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": _entity_memory_enabled(),
-        # Scanned-PDF → readable-doc OCR engine (docs/PLAN-scanned-pdf-to-doc.md).
-        # 'rapidocr' (default, faster) | 'easyocr' (selectable fallback).
-        "docling_ocr_engine": os.environ.get("XBRL_DOCLING_OCR_ENGINE", "rapidocr"),
         # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md):
         # drives the notes editor preview + clipboard paste. {} = each surface
         # keeps its historic look until the firm sets a colour.

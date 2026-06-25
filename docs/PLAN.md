@@ -74,7 +74,7 @@ rebuilds reference correct hues.
 
 ### Phase 4: Typography weight (drop Light 300)
 - [ ] 🟩 **Step 6: Replace `pwc.weight.light` usage with `regular`** across the 11 sites in 9 files.
-  - [ ] 🟩 `App.tsx:49`, `PageHeader.tsx:66`, `RunDetailView.tsx:675,753`, `TokenDashboard.tsx:55,77`, `EvalTab.tsx:132`, `StatTiles.tsx:85`, `ResultsView.tsx:94`, `LoginPage.tsx:31`, `ReadableDocPage.tsx:210` → `pwc.weight.regular`
+  - [ ] 🟩 `App.tsx:49`, `PageHeader.tsx:66`, `RunDetailView.tsx:675,753`, `TokenDashboard.tsx:55,77`, `EvalTab.tsx:132`, `StatTiles.tsx:85`, `ResultsView.tsx:94`, `LoginPage.tsx:31` → `pwc.weight.regular` (`ReadableDocPage.tsx` removed — see docs/PLAN-deprecate-docconvert.md)
   - [ ] 🟩 Fix the stale `theme.ts` comment ("large headings sitting at light weight…") to the two-weight rule (regular 400 + semibold 600; medium 500 on controls)
   - [ ] 🟩 Leave the `weight.light` key in place (name stability); note it's unused in product UI
   - **Verify:** `npx vitest run` (fix any `fontWeight` assertions, e.g. `StatTiles.test.tsx`). Preview dashboard/stat tiles + page headers; confirm large numbers/headings render at regular 400 (no hairline look). Screenshot.

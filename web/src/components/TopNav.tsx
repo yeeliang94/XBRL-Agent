@@ -25,9 +25,6 @@ const ITEMS: { id: AppView; label: string }[] = [
   // Gold-standard eval (v16): the benchmark library. Gated behind the same
   // canonical-mode flag as Template (eval is built on the canonical store).
   { id: "benchmarks", label: "Benchmarks" },
-  // Scanned-PDF → readable-document utility (docs/PLAN-scanned-pdf-to-doc.md).
-  // Standalone, not canonical-gated — always shown.
-  { id: "doc-convert", label: "Readable Doc" },
 ];
 
 export function TopNav({ view, onViewChange, showConcepts = true }: TopNavProps) {

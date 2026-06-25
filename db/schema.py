@@ -137,7 +137,8 @@ from pathlib import Path
 # nullable-or-defaulted ALTER (NOT NULL DEFAULT 0). Pinned by
 # tests/test_db_schema_v20.py.
 #
-# v21 (scanned-PDF → readable-document feature, docs/PLAN-scanned-pdf-to-doc.md)
+# v21 (formerly the scanned-PDF → readable-document feature, now REMOVED — see
+# docs/PLAN-deprecate-docconvert.md; the table is retained but unused)
 # adds the `doc_conversions` table — durable conversion-job state, independent
 # of the extraction pipeline. Pure CREATE TABLE IF NOT EXISTS walk-forward (new
 # table, no ALTER). Pinned by tests/test_db_schema_v21.py.
@@ -704,14 +705,13 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     """,
 
     # -----------------------------------------------------------------
-    # v21: scanned-PDF → readable-document conversion jobs
-    # (docs/PLAN-scanned-pdf-to-doc.md). One row per conversion. The feature
-    # is standalone (no FK to runs / extraction tables). Durable like
-    # run_review_tasks so a finished conversion survives a server restart and
-    # a stale 'running' row left by a crash is reconciled at startup. The
-    # converted HTML is heavy, so it lives on disk (result_html_path) and the
-    # row only points at it — same hybrid-storage rule as the agent traces
-    # (gotcha #6). No CHECK on `status` (same rationale as runs.status).
+    # v21: scanned-PDF → readable-document conversion jobs.
+    # DEPRECATED / UNUSED — the scanned-PDF → readable-doc feature was removed
+    # (see docs/PLAN-deprecate-docconvert.md). This CREATE is RETAINED on purpose:
+    # the schema migrates one version at a time, so deleting the v20→v21 step
+    # would break the upgrade chain for any existing DB. No code reads or writes
+    # this table anymore; it is an inert artifact in databases created at/after
+    # v21. Do not add a drop migration without weighing the full chain.
     # -----------------------------------------------------------------
     """
     CREATE TABLE IF NOT EXISTS doc_conversions (
