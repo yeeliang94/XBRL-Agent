@@ -5334,7 +5334,7 @@ async def run_multi_agent_stream(
                 ]
                 try:
                     from notes.persistence import persist_notes_review_inputs
-                    from notes.validator_agent import load_sidecar_entries
+                    from notes.detectors import load_sidecar_entries
                     persist_notes_review_inputs(
                         db_path=str(AUDIT_DB_PATH),
                         run_id=run_id,

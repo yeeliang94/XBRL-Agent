@@ -20,7 +20,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
 import notes.reviewer_agent as ra
-import notes.validator_agent as va
+import notes.detectors as det  # detector surface + load_sidecar_entries live here now
 from db import repository as repo
 from db.schema import init_db
 from notes.persistence import persist_notes_review_inputs
@@ -193,7 +193,7 @@ def test_over_clear_not_masked_by_sidecar_fallback(db_path: Path, monkeypatch):
         {"sheet": _S12, "row": 49, "source_note_refs": ["5"],
          "row_label": "N", "content_preview": "d"},
     ]
-    monkeypatch.setattr(va, "load_sidecar_entries", lambda paths: stale)
+    monkeypatch.setattr(det, "load_sidecar_entries", lambda paths: stale)
 
     agent, deps, _ctx0 = ra.create_notes_reviewer_agent(
         run_id=run_id, db_path=str(db_path), pdf_path="/tmp/x.pdf",
@@ -221,7 +221,7 @@ def test_legacy_run_is_migrated_to_db_and_recompute_uses_db(db_path: Path, monke
     from pydantic_ai.models.test import TestModel
 
     run_id = _seed_run(db_path)  # NO persist_notes_review_inputs → no DB provenance
-    monkeypatch.setattr(va, "load_sidecar_entries", lambda paths: [
+    monkeypatch.setattr(det, "load_sidecar_entries", lambda paths: [
         {"sheet": _S12, "row": 49, "source_note_refs": ["4", "20"],
          "row_label": "Fair value", "content_preview": "x"},
     ])
@@ -254,7 +254,7 @@ def test_sidecar_run_keeps_other_findings_after_author(db_path: Path, monkeypatc
     from pydantic_ai.models.test import TestModel
 
     run_id = _seed_run(db_path)
-    monkeypatch.setattr(va, "load_sidecar_entries", lambda paths: [
+    monkeypatch.setattr(det, "load_sidecar_entries", lambda paths: [
         {"sheet": _S12, "row": 49, "source_note_refs": ["4", "20"],
          "row_label": "Fair value", "content_preview": "x"},
     ])
@@ -283,7 +283,7 @@ def test_sidecar_run_keeps_other_findings_after_author(db_path: Path, monkeypatc
 def _mock_pdf(monkeypatch):
     monkeypatch.setattr(ra, "count_pdf_pages", lambda _p: 30)
     monkeypatch.setattr(
-        va, "render_pages_to_png_bytes",
+        det, "render_pages_to_png_bytes",
         lambda pdf_path, start, end, dpi=200: [b"png"])
 
 

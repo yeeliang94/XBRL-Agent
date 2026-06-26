@@ -41,7 +41,7 @@ from notes.versioning import ensure_notes_snapshot
 from notes.writer import CELL_CHAR_LIMIT, truncate_with_footer
 from notes_types import NOTES_REGISTRY
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
-from notes.validator_agent import (
+from notes.detectors import (
     _render_single_page,
     detect_cross_sheet_duplicates_by_ref,
     detect_cross_sheet_overlap_candidates,
@@ -377,7 +377,7 @@ def _build_context(
     legacy pre-v23 runs, or a swallowed provenance-write failure). Without the
     fallback, structural findings would silently vanish for those runs.
     """
-    from notes.validator_agent import load_sidecar_entries
+    from notes.detectors import load_sidecar_entries
 
     entries = load_provenance_entries(run_id, db_path)
     if not entries and sidecar_paths:
@@ -457,7 +457,7 @@ def _backfill_sidecar_provenance(
     Returns True if at least one row was written (the caller then treats the run
     as DB-backed).
     """
-    from notes.validator_agent import load_sidecar_entries
+    from notes.detectors import load_sidecar_entries
 
     entries = load_sidecar_entries(sidecar_paths)
     if not entries:

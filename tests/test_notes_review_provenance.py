@@ -139,13 +139,14 @@ def test_view_pdf_pages_records_only_valid_rendered_pages(
     rendered (valid) pages — never an out-of-range request (99 of a 6-page PDF).
     """
     import notes.validator_agent as va
+    import notes.detectors as det  # _render_single_page (PDF render) lives here now
     from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
 
     # 6-page PDF; page 99 is invalid and must NOT enter viewed_pages.
     monkeypatch.setattr(va, "count_pdf_pages", lambda _p: 6)
     monkeypatch.setattr(
-        va, "render_pages_to_png_bytes",
+        det, "render_pages_to_png_bytes",
         lambda pdf_path, start, end, dpi=200: [b"png"],
     )
 
