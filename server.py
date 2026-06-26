@@ -626,12 +626,18 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
             return None
 
         # Shared scoping (docs/PLAN.md Step 7) — one resolve_check_scope call
-        # replaces the hand-rolled statements_to_run/variants loop, identical in
-        # every reachable state (every facts-bearing statement resolves a
-        # template: the server rejects variant/standard mismatches before
-        # launch, gotcha #15) and consistent with the pipeline + reviewer paths.
-        # template_ids is still built by select_cross_check_backend below (it
-        # also needs agent_results for the xlsx provider).
+        # replaces the hand-rolled statements_to_run/variants loop, consistent
+        # with the pipeline + reviewer paths. Equivalent in practice: a
+        # facts-bearing succeeded statement always carries the concrete variant
+        # it extracted under, so template_path resolves and the statement is
+        # kept. The ONE divergence from the old loop (which added every
+        # StatementType-valid row unconditionally) is a degenerate
+        # NULL/unresolvable-variant row — which a succeeded agent never
+        # produces; there resolve_check_scope drops it, surfacing a check that
+        # needs it as 'pending' (not extracted) rather than the old 'failed:
+        # workbook missing', if anything more accurate. template_ids is still
+        # built by select_cross_check_backend below, which also needs
+        # agent_results for the xlsx provider.
         from cross_checks.framework import resolve_check_scope
         check_scope = resolve_check_scope(
             [(ar.statement_type, ar.variant) for ar in agent_results],
