@@ -1,6 +1,6 @@
 # Implementation Plan: Reviewer Self-Verify — Review Follow-ups
 
-**Overall Progress:** `87%`
+**Overall Progress:** `100%`
 **PRD Reference:** none — this plan implements the four follow-ups from the five-axis
 code review of commits `0746a25` (feat: agents verify their own fixes) and
 `3e6502a` (fix: close the `verify_fixes` false-green loophole). See CLAUDE.md
@@ -39,11 +39,14 @@ refinement in Step 2.
   `(statement_type, variant)` pairs. The callers keep their own status filters
   (`"succeeded"`-only in-memory vs `FACTS_BEARING_AGENT_STATUSES` from the DB) —
   those legitimately differ and must not be flattened into the helper.
-- **`load_sidecar_entries` moves to `notes/persistence.py`.** It is plain JSON/file
-  I/O with no validator-specific deps, and `notes/persistence.py` already exists and
-  is the natural home. The validator (`notes/validator_agent.py`) is dead-but-green
-  and slated for deletion; moving this first is the prerequisite that keeps the
-  notes reviewer working after that deletion.
+- **The reviewer-shared surface moves to a new `notes/detectors.py` (Step 1, scope
+  expanded with user approval).** The reviewer didn't import just `load_sidecar_entries`
+  from the dead-but-green `notes/validator_agent.py` — it imported a *bundle* of 9
+  names (the 5 detectors + the three loaders + `_render_single_page`). Moving one
+  wouldn't de-risk the deletion, so the **whole** pure-detector surface moved to a
+  new neutral module (not `notes/persistence.py` — these are detectors, not
+  persistence). `validator_agent.py` re-exports them so its own code + tests are
+  untouched until it's deleted.
 
 ## Pre-Implementation Checklist
 - [x] 🟩 Scope confirmed with user (all four follow-ups selected)
@@ -102,10 +105,10 @@ refinement in Step 2.
   - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_cross_checks.py tests/test_download_reexport.py tests/test_reviewer_routes.py -q` → **50 passed**.
 
 ### Phase 3: Final sweep
-- [ ] 🟥 **Step 8: Full-suite regression + dead-code check**
-  - [ ] 🟥 `./venv/bin/python -m pytest tests/ -q` — full backend suite green (review baseline: 2692 passed).
-  - [ ] 🟥 `grep` for any now-orphaned helper or stale comment referencing the old inline loops; remove only what is provably unused (ask before deleting anything ambiguous, per the dead-code-hygiene rule).
-  - **Verify:** clean full-suite run + no orphaned references.
+- [x] 🟩 **Step 8: Full-suite regression + dead-code check**
+  - [x] 🟩 `./venv/bin/python -m pytest tests/ -q` → **2701 passed, 2 skipped, 0 failed** (the first full run surfaced one stale render-mock in `test_notes_reviewer_pipeline.py` — the Step-1 sweep missed it because `setattr(` and the function name sit on separate lines; fixed and re-run clean).
+  - [x] 🟩 `py_compile` of all touched modules OK; orphan scan clean — the only `_derive_template_id` / `_tpl_path` references left are docstrings, and `resolve_check_scope` has exactly its 3 intended consumers. No code deleted beyond the relocated/replaced blocks.
+  - **Verify:** ✅ clean full-suite run, no orphaned references.
 
 ## Rollback Plan
 If something goes wrong:
