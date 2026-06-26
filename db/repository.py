@@ -994,6 +994,12 @@ def move_notes_provenance(
     if r is None:
         return False
     label, refs_json, preview = r[0], r[1], r[2]
+    # `[]` and `None` are deliberately equivalent across the whole provenance
+    # subsystem: upsert_notes_provenance stores an empty list as SQL NULL
+    # (`if source_note_refs`), fetch_notes_provenance reads NULL back as `[]`,
+    # and the detectors treat "no refs" and "absent refs" identically (a note
+    # with no refs contributes nothing to coverage). So collapsing falsy refs to
+    # None here is consistent end-to-end — not a lossy bug. (docs/PLAN.md Step 3)
     try:
         refs = json.loads(refs_json) if refs_json else None
         if refs is not None and not isinstance(refs, list):

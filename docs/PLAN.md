@@ -1,6 +1,6 @@
 # Implementation Plan: Reviewer Self-Verify — Review Follow-ups
 
-**Overall Progress:** `25%`
+**Overall Progress:** `37%`
 **PRD Reference:** none — this plan implements the four follow-ups from the five-axis
 code review of commits `0746a25` (feat: agents verify their own fixes) and
 `3e6502a` (fix: close the `verify_fixes` false-green loophole). See CLAUDE.md
@@ -71,10 +71,10 @@ refinement in Step 2.
   - [x] 🟩 Added the two formatter tests (warning-only + empty original → not INCONCLUSIVE / not "all 0"; warning-only + open target → NOT CONFIRMED).
   - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_reviewer_self_verify.py -q` → **15 passed** (incl. the unchanged false-green guards).
 
-- [ ] 🟥 **Step 3: Preserve empty-vs-unknown refs in `move_notes_provenance`** (nit) — `[]` (note has no refs) currently collapses to `None` (refs unknown). (db/repository.py:998–1011)
-  - [ ] 🟥 Change `refs = json.loads(refs_json) if refs_json else None` + `[str(x) for x in refs] if refs else None` to use an explicit `is not None` test so an empty list round-trips as `[]`, not `None`.
-  - [ ] 🟥 Check `upsert_notes_provenance`: if it also `if refs`-collapses on write, the distinction is lost regardless — either fix it there too, or decide `[]`≡`None` is intentional and close this nit with a one-line comment instead.
-  - **Verify:** extend `test_move_notes_provenance_relocates_and_preserves_refs` (or add a sibling) with a `source_note_refs=[]` row and assert it reads back as `[]`; `./venv/bin/python -m pytest tests/test_notes_reviewer_self_verify.py -q` green.
+- [x] 🟩 **Step 3: `move_notes_provenance` refs nit — investigated, resolved as "intentional, document + pin"** (NO behavior change). Investigation showed the nit is inert: `upsert_notes_provenance` already collapses `[]`→SQL NULL on write (`if source_note_refs`), `fetch_notes_provenance` normalizes NULL→`[]` on read, and the detectors treat empty/absent refs identically. So `[]`≡`None`≡NULL is a subsystem-wide invariant; "fixing" `move` alone would be a no-op (upsert re-collapses) and making it meaningful would require changing that invariant for zero functional gain.
+  - [x] 🟩 Added a clarifying comment in `move_notes_provenance` so a future reader doesn't "fix" the intentional collapse.
+  - [x] 🟩 Pinned the behavior: new `test_move_notes_provenance_empty_refs_round_trip` asserts an empty-refs row moves and reads back as `[]` (never `None`).
+  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_notes_reviewer_self_verify.py -q -k "provenance or move"` → **4 passed**.
 
 ### Phase 2: DRY the cross-check scoping (horizontal split — shared helper first, then migrate each consumer one at a time)
 
