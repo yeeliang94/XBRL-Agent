@@ -118,6 +118,29 @@ def test_move_notes_provenance_relocates_and_preserves_refs(db_path: Path):
     assert prov[0]["source_note_refs"] == ["20", "20.7"]  # refs travelled
 
 
+def test_move_notes_provenance_empty_refs_round_trip(db_path: Path):
+    # docs/PLAN.md Step 3: `[]` and absent refs are equivalent end-to-end —
+    # an empty-refs row moves and reads back as `[]` (NULL on disk), never None.
+    run_id = _seed_run(db_path)
+    persist_notes_review_inputs(
+        db_path=str(db_path), run_id=run_id,
+        sidecar_entries=[{"sheet": _S12, "row": 49, "col": 2,
+                          "row_label": "X", "source_note_refs": [],
+                          "content_preview": "p"}],
+        inventory=[],
+    )
+    with repo.db_session(db_path) as conn:
+        moved = repo.move_notes_provenance(
+            conn, run_id=run_id, from_sheet=_S12, from_row=49,
+            to_sheet=_S12, to_row=60, to_label="Y")
+    assert moved is True
+    with repo.db_session(db_path) as conn:
+        prov = repo.fetch_notes_provenance(conn, run_id)
+    assert len(prov) == 1
+    assert prov[0]["row"] == 60
+    assert prov[0]["source_note_refs"] == []   # reads back as [], not None
+
+
 # --------------------------------------------------------------------------
 # The regression the fix guards: an over-clear leaves a coverage gap
 # --------------------------------------------------------------------------
