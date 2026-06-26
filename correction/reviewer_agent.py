@@ -1230,13 +1230,9 @@ def run_verification_checks(
     """
     from cross_checks.framework import (
         FactsContext, build_default_cross_checks, run_all_facts,
-        DEFAULT_TOLERANCE_RM,
+        DEFAULT_TOLERANCE_RM, resolve_check_scope,
     )
-    from statement_types import (
-        StatementType, template_path as _tpl_path,
-        FACTS_BEARING_AGENT_STATUSES,
-    )
-    from concept_model.parser import _derive_template_id
+    from statement_types import FACTS_BEARING_AGENT_STATUSES
     from db import repository as repo
 
     if recompute:
@@ -1281,32 +1277,18 @@ def run_verification_checks(
                 if a.status in FACTS_BEARING_AGENT_STATUSES
             ]
 
-        template_ids: dict = {}
-        statements_to_run: set = set()
-        variants: dict = {}
-        for statement_type, variant in rows:
-            try:
-                stmt = StatementType(statement_type)
-            except ValueError:
-                # Pseudo-agent rows (CORRECTION / notes-validator / scout)
-                # don't map to a StatementType — skip, as the recheck path does.
-                continue
-            try:
-                master = _tpl_path(
-                    stmt, variant, level=filing_level, standard=filing_standard,
-                )
-            except (ValueError, KeyError):
-                continue
-            template_ids[stmt] = _derive_template_id(Path(master))
-            statements_to_run.add(stmt)
-            variants[stmt] = variant
-
-        if not statements_to_run:
+        # Shared scoping (docs/PLAN.md Step 6): pseudo-agent rows and
+        # unresolvable variants are skipped inside the helper, exactly as the
+        # pipeline's _build_check_template_ids does.
+        check_scope = resolve_check_scope(
+            rows, filing_level=filing_level, filing_standard=filing_standard,
+        )
+        if not check_scope.statements_to_run:
             return []
 
         check_config = {
-            "statements_to_run": statements_to_run,
-            "variants": variants,
+            "statements_to_run": check_scope.statements_to_run,
+            "variants": check_scope.variants,
             "filing_level": filing_level,
             "filing_standard": filing_standard,
         }
@@ -1314,7 +1296,7 @@ def run_verification_checks(
             os.environ.get("XBRL_TOLERANCE_RM", str(DEFAULT_TOLERANCE_RM))
         )
         ctx = FactsContext(
-            conn=conn, run_id=run_id, template_ids=template_ids,
+            conn=conn, run_id=run_id, template_ids=check_scope.template_ids,
             filing_level=filing_level, filing_standard=filing_standard,
         )
         return run_all_facts(
