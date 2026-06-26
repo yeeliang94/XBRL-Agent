@@ -432,28 +432,20 @@ def _build_check_template_ids(
     """Map each succeeded statement to its ``template_id`` (the fact-based
     checks' analogue of ``all_workbook_paths``). Mirrors how
     ``_export_canonical_workbooks`` derives the id from the master template,
-    so the scoping stays variant-precise (gotcha #21)."""
-    from statement_types import template_path as _tpl_path
-    from concept_model.parser import _derive_template_id
+    so the scoping stays variant-precise (gotcha #21).
 
-    out: Dict = {}
-    for ar in agent_results:
-        if ar.status != "succeeded":
-            continue
-        try:
-            master = _tpl_path(
-                ar.statement_type, ar.variant,
-                level=filing_level, standard=filing_standard,
-            )
-        except (ValueError, KeyError):
-            # No template to scope this statement's facts: NotPrepared /
-            # standard-variant mismatch (ValueError), or an unresolved/None
-            # variant (KeyError from get_variant). Skip it — the xlsx path
-            # tolerates the same case via workbook_paths, so the fact path must
-            # degrade identically rather than crash the whole run.
-            continue
-        out[ar.statement_type] = _derive_template_id(Path(master))
-    return out
+    Thin wrapper over ``cross_checks.framework.resolve_check_scope`` — the
+    shared scoping source of truth (docs/PLAN.md Step 5). The ``"succeeded"``
+    status filter stays here (in-memory ``agent_results``); the helper resolves
+    each surviving pair's ``template_id`` and skips a NotPrepared /
+    standard-variant-mismatch / unresolved-variant statement exactly as before."""
+    from cross_checks.framework import resolve_check_scope
+
+    return resolve_check_scope(
+        [(ar.statement_type, ar.variant)
+         for ar in agent_results if ar.status == "succeeded"],
+        filing_level=filing_level, filing_standard=filing_standard,
+    ).template_ids
 
 
 @dataclasses.dataclass
