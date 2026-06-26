@@ -16,7 +16,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
 import notes.reviewer_agent as ra
-import notes.validator_agent as va
+import notes.detectors as det  # _render_single_page (PDF render) lives here now
 from db import repository as repo
 from db.schema import init_db
 
@@ -37,7 +37,7 @@ def _mock_pdf(monkeypatch):
     # the page into viewed_pages without a real file.
     monkeypatch.setattr(ra, "count_pdf_pages", lambda _p: 30)
     monkeypatch.setattr(
-        va, "render_pages_to_png_bytes",
+        det, "render_pages_to_png_bytes",
         lambda pdf_path, start, end, dpi=200: [b"png"],
     )
 

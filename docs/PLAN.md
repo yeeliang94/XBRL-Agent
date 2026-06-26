@@ -1,114 +1,114 @@
-# Implementation Plan: Design-System Code Sweep (align live UI with `docs/pwc-design-system.html`)
+# Implementation Plan: Reviewer Self-Verify — Review Follow-ups
 
-**Overall Progress:** `100%`
-**Design Reference:** `docs/pwc-design-system.html` (the spec — source of truth) · live tokens `web/src/lib/theme.ts` + `web/src/lib/uiStyles.ts` + `web/src/index.css` · CLAUDE.md gotcha #7 (inline-styles + rgb pinning tests).
-**Last Updated:** 2026-06-24
+**Overall Progress:** `12%`
+**PRD Reference:** none — this plan implements the four follow-ups from the five-axis
+code review of commits `0746a25` (feat: agents verify their own fixes) and
+`3e6502a` (fix: close the `verify_fixes` false-green loophole). See CLAUDE.md
+gotcha #21 (reviewer pass) and the `reviewer_verify_scope_false_green` memory.
+**Last Updated:** 2026-06-26
 
-> Replaces the previous (completed, 100%) PLAN.md for the **Notes Reviewer Agent** —
-> that work is done and preserved in git history (this is the same
-> replace-in-place convention the Notes Reviewer plan itself used; `docs/Archive/`
+> Replaces the previous (completed, 100%) PLAN.md for the **Design-System Code
+> Sweep** — that work is done and preserved in git history (the same
+> replace-in-place convention this repo's PLAN.md slot already uses; `docs/Archive/`
 > is read-only, so no copy is made there).
 
 ## Summary
-The 2026-06-24 design-doc redesign moved the status language from **filled chips/alerts**
-to a calmer **outline-and-accent** language, but the code still ships the old style.
-This sweep aligns `theme.ts` status tokens to the doc, rebuilds `ui.badge*` as
-outline pills with a status dot, rebuilds `ui.alert*` to a neutral surface with a
-coloured left-rule + icon, and removes Light-300 weight usage (→ regular 400).
-Foundational tokens (orange, greys, spacing, radius, shadow, fonts, type sizes)
-already match and are **out of scope**.
+The close-the-loop reviewer self-verification shipped correct and well-tested.
+This plan addresses the four non-blocking follow-ups the review surfaced: one
+real refactor (de-duplicate the cross-check scoping logic now spread across
+`server.py` and the reviewer) and three small isolated fixes (de-risk a future
+validator deletion, refine one fail-safe message, and a provenance nit). Nothing
+here changes externally observable behavior except the deliberate message
+refinement in Step 2.
 
 ## Key Decisions
-- **Scope = the 4 audited divergences only.** Status hues/text/tints, badges, alerts,
-  type-weight. No restyling of components beyond what these primitives cascade into.
-- **Tokens cascade; components rarely change.** Audit confirmed **zero** hardcoded
-  status hexes in components — every status colour flows through `pwc.*`. So badge/alert
-  *call sites* change only where they must now emit a `<dot>`/icon element.
-- **`pwc.weight.light` key is retained, usage removed.** Deleting the key widens blast
-  radius for no gain; gotcha #7 keeps token *names* stable. We stop using `light` in
-  product UI and correct the stale `theme.ts` comment.
-- **Notes-table subsystem is excluded** (gotcha #16): `NotesReviewTab.tsx` /
-  `ClipboardFormatControls.tsx` raw hexes are the intentionally-non-tokenised theme
-  subsystem — untouched here.
-- **Lockstep tests (gotcha #7).** Every token hex maps to an `rgb()` some test asserts.
-  Each phase updates its pinning tests in the same step; "Verify" = the vitest suite green.
+- **Scope = the 4 reviewed follow-ups only.** No new reviewer behavior, no new
+  tools, no prompt changes. Surgical per CLAUDE.md "How to Behave Here".
+- **The duplication is two-way, not three-way.** `_recheck_from_facts` already
+  reuses `_build_check_template_ids` (via `select_cross_check_backend`). The genuine
+  duplication is `_build_check_template_ids` (server.py:429) vs the inline loop in
+  `run_verification_checks` (correction/reviewer_agent.py:1191). The shared helper
+  collapses both, and lets `_recheck_from_facts` drop its own hand-rolled
+  `statements_to_run`/`variants` loop as a bonus.
+- **Shared helper lives in `cross_checks/framework.py`.** Both `server.py` and
+  `correction/reviewer_agent.py` already import from it; it has no dependency on
+  either, so no import cycle. Heavy imports (`statement_types.template_path`,
+  `concept_model.parser._derive_template_id`) stay **lazy/inside the function**,
+  matching the existing pattern, to keep `cross_checks` import-light.
+- **Status filtering stays at the call site.** The helper takes already-resolved
+  `(statement_type, variant)` pairs. The callers keep their own status filters
+  (`"succeeded"`-only in-memory vs `FACTS_BEARING_AGENT_STATUSES` from the DB) —
+  those legitimately differ and must not be flattened into the helper.
+- **`load_sidecar_entries` moves to `notes/persistence.py`.** It is plain JSON/file
+  I/O with no validator-specific deps, and `notes/persistence.py` already exists and
+  is the natural home. The validator (`notes/validator_agent.py`) is dead-but-green
+  and slated for deletion; moving this first is the prerequisite that keeps the
+  notes reviewer working after that deletion.
 
 ## Pre-Implementation Checklist
-- [x] 🟩 Audit complete — divergences enumerated against the spec
-- [x] 🟩 Call sites + pinning tests mapped (badges: 7 components; alerts: LoginPage; direct rgb pins: PipelineStages, SettingsModal + badge/alert component tests)
-- [ ] 🟩 Working tree clean on `theme.ts` / `uiStyles.ts` / `index.css` at start
-- [ ] 🟩 Baseline: `cd web && npx vitest run` green before any change
+- [x] 🟩 Scope confirmed with user (all four follow-ups selected)
+- [x] 🟩 No conflicting in-progress work (working tree clean; both source commits landed)
+- [x] 🟩 Baseline green — new + adjacent suites pass (28 + 130 at review time)
 
 ## Tasks
 
-### Phase 1: Status tokens (`theme.ts`)
-The foundation — every later phase consumes these values. Land tokens first so badge/alert
-rebuilds reference correct hues.
+> Verify command convention (per `venv_interpreter_for_tests` memory): run pytest as
+> `./venv/bin/python -m pytest …` — bare `python3` is a stale interpreter.
 
-- [ ] 🟩 **Step 1: Align status base hues + add the two missing tokens** — bring `theme.ts` status values to the spec and fill the gaps the redesign introduced.
-  - [ ] 🟩 Base hues: `success #059669→#1FAB76`, `error #DC2626→#E5484D`, `info #2F6FB0→#3E84CC`, `thinking #7C3AED→#8B5CF6`
-  - [ ] 🟩 Add **base `warning: #EFA417`** (currently absent — required for the new dot/left-rule)
-  - [ ] 🟩 Add **`infoText: #2C6299`** (only status family missing its `*Text`)
-  - [ ] 🟩 Status text: `successText #166534→#157A53`, `errorText #991B1B→#C0303A`, `errorTextAlt #B91C1C→#D14A4E`, `warningText #92400E→#8A6111`
-  - [ ] 🟩 Soft tints (8): `successBg #E6F4EF→#E8F6EF`, `successBorder #C8E6D2→#C8E9DA`, `errorBg #FBE9E9→#FCECEC`, `errorBorder #F4CFCA→#F6D5D6`, `infoBg #ECF3FA→#EAF2FB`, `infoBorder #CFE0F0→#D2E2F3`, `warningBg #FDF4E0→#FCF3DF`, `warningBorder #F4E2B0→#F3E2BB`
-  - **Verify:** `cd web && npx vitest run __tests__/PipelineStages.test.tsx __tests__/SettingsModal.test.tsx` — update the success rgb in PipelineStages (`5,150,105→31,171,118`) and error rgb in SettingsModal (`220,38,38→229,72,77`) so both pass. Then full `npx vitest run`; fix any other status-colour assertion to the new rgb.
+### Phase 1: Low-risk isolated fixes (independent; land first to keep the refactor isolated)
 
-### Phase 2: Badges → outline pills with dot (`uiStyles.ts` + 7 call sites)
-- [ ] 🟩 **Step 2: Rebuild `ui.badge*` primitives** — transparent fill, thin status border, neutral label; expose a shared dot.
-  - [ ] 🟩 `badgeBase` → `background: transparent`, `color: pwc.grey800`, `border: 1px solid pwc.grey300`, keep pill radius + gap; padding to spec `3px 11px`
-  - [ ] 🟩 Per-variant overrides **only `borderColor`** to the status hue (`success`/`warning`/`error`/`info`, `orange500` for brand); neutral keeps grey300
-  - [ ] 🟩 Add exported `ui.badgeDot(status)` (or `Dot` helper) = 7px circle, `background` = status hue (grey500 for neutral)
-  - **Verify:** `npx vitest run` — badge tests in `HistoryList`/`ValidatorTab`/`ResultsView`/`RunDetailView`/`ConceptsPage` flip from filled-bg to border assertions; update each to assert `borderColor` + transparent background.
-- [ ] 🟩 **Step 3: Emit the dot at each badge call site** — 7 components render a badge.
-  - [ ] 🟩 `HistoryList.tsx`, `RecentRunsList.tsx`, `ResultsView.tsx`, `RunDetailView.tsx`, `ValidatorTab.tsx`, `BenchmarksPage.tsx`, `ConceptsPage.tsx`: prepend `<span style={ui.badgeDot(<status>)} />` inside each badge
-  - **Verify:** start the dev preview; open History + a run-detail page; confirm each status badge is a transparent pill with a coloured ring + matching dot and a dark-grey label. Screenshot before/after.
+- [x] 🟩 **Step 1: Relocate the whole reviewer-shared surface out of the doomed validator** — de-risks the eventual `notes/validator_agent.py` deletion. **Scope expanded (user-approved): full move, not just `load_sidecar_entries`.** The reviewer imported a *bundle* of 9 names from `validator_agent` (5 detectors + `inventory_coverage_gaps` + `load_inventory_from_db` + `load_provenance_entries` + `_render_single_page`) plus the lazy `load_sidecar_entries`; moving only one would have left the reviewer broken after the deletion. Neutral home = new `notes/detectors.py` (not `notes/persistence.py` — these are pure detectors, not persistence).
+  - [x] 🟩 Created `notes/detectors.py` with the full surface: `load_sidecar_entries`, `load_provenance_entries`, `load_inventory_from_db`, the 5 `detect_*`, `inventory_coverage_gaps`, `_render_single_page`, and their private helpers/constants (`_top_note_num`, `_subnote_key`, `_top_note_nums`, `_char_shingles`, `_jaccard`, `_CATCH_ALL_ROW_LABELS`, `_SHINGLE_SIZE`, `_OVERLAP_THRESHOLD`).
+  - [x] 🟩 `notes/validator_agent.py` re-exports them all (`from notes.detectors import …`) so its remaining code + `tests/test_notes_validator_agent.py` keep their import surface unchanged.
+  - [x] 🟩 Repointed `notes/reviewer_agent.py` (bundle import + 2 lazy imports) and `server.py:5337` to `notes.detectors`.
+  - [x] 🟩 Retargeted render/sidecar monkeypatches in 5 test files — `_render_single_page` now resolves `render_pages_to_png_bytes` in `notes.detectors`'s namespace, so every render mock for a reviewer/validator path moved from `va.*` to `det.*` (`test_notes_reviewer_self_verify`, `_tools`, `_authoring`, `_routes`, `test_notes_review_provenance`).
+  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_notes_reviewer_self_verify.py tests/test_notes_reviewer_tools.py tests/test_notes_review_provenance.py tests/test_notes_validator_agent.py tests/test_notes_reviewer_authoring.py tests/test_notes_reviewer_routes.py -q` → **67 passed**; no live importer left on `from notes.validator_agent import load_sidecar_entries`.
 
-### Phase 3: Alerts → neutral surface + left-rule (`uiStyles.ts` + LoginPage)
-- [ ] 🟩 **Step 4: Rebuild `ui.alert*` primitives** — neutral surface, hairline border, coloured 3px left-rule; icon carries the hue.
-  - [ ] 🟩 `alertBase` → `background: pwc.white`, `border: 1px solid pwc.grey200`, `borderLeft: 3px solid` (per variant), `color: pwc.grey800`
-  - [ ] 🟩 Per-variant `borderLeftColor` = status hue (`info`/`success`/`warning`/`error`); drop the soft-fill backgrounds
-  - [ ] 🟩 Add `ui.alertIcon(status)` colour token so the icon (not the fill) carries status
-  - **Verify:** `npx vitest run` — update any alert bg/border assertion (notably `LoginPage.test.tsx`) to the neutral-surface + left-rule values.
-- [ ] 🟩 **Step 5: Apply icon colour at the one alert call site** — `LoginPage.tsx` error alert: colour the icon via `ui.alertIcon('error')`, body stays grey800.
-  - **Verify:** preview the login error state (bad creds / force the error branch); confirm white surface, red left-rule, red icon, dark body. Screenshot.
+- [ ] 🟥 **Step 2: Refine `_format_verification` so an all-advisory result isn't mislabeled** — a result with only `warning` checks (no `passed`) is currently reported `INCONCLUSIVE`; a warning *is* an evaluation. (correction/reviewer_agent.py:1354)
+  - [ ] 🟥 Change the empty-evidence guard from `if not passed:` to `if not passed and not warnings:` so genuinely-empty/all-pending → `INCONCLUSIVE`, but warning-only → falls through.
+  - [ ] 🟥 Fix the fall-through `VERIFIED` line so it does NOT regress to "all 0 ... PASS" when `passed` is empty but warnings exist — phrase it as "no failing checks; N advisory warning(s)" when `len(passed) == 0`.
+  - [ ] 🟥 Confirm the correction path is unaffected: with a non-empty `original_failed_names` and empty `passed`, `unconfirmed = original - {}` is non-empty → still `NOT CONFIRMED` (never a silent green). This is the safety property — re-read it, don't assume.
+  - [ ] 🟥 Add formatter unit tests: (a) warning-only + empty original → clean/non-INCONCLUSIVE; (b) warning-only + non-empty original → still `NOT CONFIRMED`.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_reviewer_self_verify.py -q` green, including the new cases and all existing false-green guards (`test_format_empty_results_is_inconclusive_not_green`, `…all_pending…`, `…not_confirmed`).
 
-### Phase 4: Typography weight (drop Light 300)
-- [ ] 🟩 **Step 6: Replace `pwc.weight.light` usage with `regular`** across the 11 sites in 9 files.
-  - [ ] 🟩 `App.tsx:49`, `PageHeader.tsx:66`, `RunDetailView.tsx:675,753`, `TokenDashboard.tsx:55,77`, `EvalTab.tsx:132`, `StatTiles.tsx:85`, `ResultsView.tsx:94`, `LoginPage.tsx:31` → `pwc.weight.regular` (`ReadableDocPage.tsx` removed — see docs/PLAN-deprecate-docconvert.md)
-  - [ ] 🟩 Fix the stale `theme.ts` comment ("large headings sitting at light weight…") to the two-weight rule (regular 400 + semibold 600; medium 500 on controls)
-  - [ ] 🟩 Leave the `weight.light` key in place (name stability); note it's unused in product UI
-  - **Verify:** `npx vitest run` (fix any `fontWeight` assertions, e.g. `StatTiles.test.tsx`). Preview dashboard/stat tiles + page headers; confirm large numbers/headings render at regular 400 (no hairline look). Screenshot.
+- [ ] 🟥 **Step 3: Preserve empty-vs-unknown refs in `move_notes_provenance`** (nit) — `[]` (note has no refs) currently collapses to `None` (refs unknown). (db/repository.py:998–1011)
+  - [ ] 🟥 Change `refs = json.loads(refs_json) if refs_json else None` + `[str(x) for x in refs] if refs else None` to use an explicit `is not None` test so an empty list round-trips as `[]`, not `None`.
+  - [ ] 🟥 Check `upsert_notes_provenance`: if it also `if refs`-collapses on write, the distinction is lost regardless — either fix it there too, or decide `[]`≡`None` is intentional and close this nit with a one-line comment instead.
+  - **Verify:** extend `test_move_notes_provenance_relocates_and_preserves_refs` (or add a sibling) with a `source_note_refs=[]` row and assert it reads back as `[]`; `./venv/bin/python -m pytest tests/test_notes_reviewer_self_verify.py -q` green.
 
-### Phase 5: Full verification + doc reconciliation
-- [ ] 🟩 **Step 7: Whole-suite + visual sweep** — prove nothing regressed and the UI matches the doc.
-  - [ ] 🟩 `cd web && npx vitest run` fully green
-  - [ ] 🟩 Re-read `docs/pwc-design-system.html` Color/Badges/Alerts/Typography against the final `theme.ts`/`uiStyles.ts` — confirm 1:1
-  - [ ] 🟩 Spot-check live: badges (History/run-detail), alerts (login), cards/stat numbers, status-text contrast
-  - [ ] 🟩 Update memory note `project_pwc_design_system.md` — flip "code follow-through pending" to done
-  - **Verify:** suite green + side-by-side screenshots (badges row, an alert, a stat tile) visually matching the doc's component specimens.
+### Phase 2: DRY the cross-check scoping (horizontal split — shared helper first, then migrate each consumer one at a time)
 
-## Phase 6: bespoke status surfaces (peer-review follow-up — DONE 2026-06-24)
-Peer review flagged that "the live UI matches the spec 1:1" overstated Phase 1-5,
-which only covered the `ui.badge*`/`ui.alert*` primitives + their call sites. This
-phase migrated EVERY remaining hand-rolled filled-tint status surface to the new
-language — badge-shaped → outline pill + dot, banner/panel/toast/callout →
-neutral white surface + 3px coloured left-rule + coloured icon. Files: 🟩
-`AgentTimeline` (terminal badges + row frames + warningsBlock), `AgentTabs`
-(status-dot halos → transparent), `PipelineStages` (complete circle),
-`ToolCallCard` (result/duration badges + verify chips + failed card),
-`UploadPanel`, `PreRunPanel`, `RunDetailPage`, `HistoryList` (errorBanner),
-`SuccessToast`, `ExtractPage`, `HistoryPage`, `ReviewTab`, `NotesReviewerPanel`,
-`AgentTelemetryPanel`, `ValidatorTab` (warningsSection), `ConceptsPage`,
-`BenchmarksPage`. Pinning test updated: `ToolCallCard.test.tsx` (verify chips →
-outline structure). **Deliberately left** (spec permits soft tints for rare
-emphasis / dot accents): the 3px soft-tint halo ring around status dots
-(`ToolCallCard`, `AgentTimeline`) and the `ConceptsPage` `MetricTile` emphasis
-tile (its accent/neutral tones also use soft surface tints by design).
-`NotesReviewTab`/clipboard untouched (gotcha #16). Suite green (814).
+- [ ] 🟥 **Step 4: Add the shared `resolve_check_scope` helper (pure addition, no call-site changes)** — single source of truth for "(statement, variant) pairs → template_ids + statements_to_run + variants".
+  - [ ] 🟥 In `cross_checks/framework.py`, add a small dataclass `CheckScope(template_ids, statements_to_run, variants)` and `resolve_check_scope(pairs, *, filing_level, filing_standard) -> CheckScope`.
+  - [ ] 🟥 Body mirrors today's loop exactly: per pair, `StatementType(value)` (skip pseudo-rows on `ValueError`), `template_path(...)` (skip on `ValueError`/`KeyError`), `_derive_template_id(...)`. Lazy-import the heavy deps inside the function (no module-level cycle).
+  - [ ] 🟥 Accept either an enum or a string statement_type in each pair (callers pass both shapes today) — normalize via `getattr(st, "value", st)` before `StatementType(...)`.
+  - [ ] 🟥 New unit test file `tests/test_check_scope.py`: pseudo-row skipped, bad-variant skipped, enum-and-string inputs both resolve, all three outputs populated and mutually consistent.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_check_scope.py -q` green; no other suite touched yet (helper is unused).
+
+- [ ] 🟥 **Step 5: Migrate `_build_check_template_ids` to delegate to the helper** — covers BOTH the pipeline pass and `_recheck_from_facts` (which reaches it via `select_cross_check_backend`).
+  - [ ] 🟥 Reduce `_build_check_template_ids` (server.py:429) to: filter `agent_results` to `status == "succeeded"`, call `resolve_check_scope`, return `.template_ids`. Keep the docstring's gotcha #21 note.
+  - [ ] 🟥 Confirm skip-on-error semantics are byte-identical (same `except (ValueError, KeyError)` swallow) so a NotPrepared/variant-mismatch statement still degrades, never crashes.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_cross_checks.py tests/test_e2e.py tests/test_download_reexport.py -q` green (pipeline + recheck + re-export all exercise this path).
+
+- [ ] 🟥 **Step 6: Migrate the reviewer's `run_verification_checks` to the helper** — removes the second copy of the loop.
+  - [ ] 🟥 Replace the inline `for statement_type, variant in rows:` block (correction/reviewer_agent.py) with `scope = resolve_check_scope(rows, filing_level=…, filing_standard=…)`, then build `check_config` from `scope.statements_to_run`/`scope.variants` and pass `scope.template_ids` into `FactsContext`.
+  - [ ] 🟥 Preserve the two scope sources unchanged: explicit in-memory `scope` arg vs the DB `FACTS_BEARING_AGENT_STATUSES` fallback — only the mapping moves, not the status filtering.
+  - [ ] 🟥 Keep the early `return []` when `scope.statements_to_run` is empty (the false-green guard relies on empty being possible here; the formatter handles it).
+  - **Verify:** `./venv/bin/python -m pytest tests/test_reviewer_self_verify.py tests/test_reviewer_pipeline.py tests/test_reviewer_agent.py -q` green — especially `test_explicit_scope_overrides_unfinalized_db_status` and `test_db_fallback_includes_completed_with_errors`.
+
+- [ ] 🟥 **Step 7: Drop `_recheck_from_facts`' hand-rolled scope loop (bonus dedup)** — it still builds `statements_to_run`/`variants` by hand (server.py:618–636) though the helper now yields them.
+  - [ ] 🟥 Build the `(stmt, variant)` pairs from the `FACTS_BEARING_AGENT_STATUSES`-filtered DB agents, call `resolve_check_scope` once, and source `statements_to_run`/`variants` for `check_config` from it. Keep the `SimpleNamespace(status="succeeded", …)` `agent_results` list that `select_cross_check_backend`/`_xlsx_provider` still consume.
+  - [ ] 🟥 Confirm the `if not agent_results: return None` early-out still fires for a run with zero facts-bearing statements.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_cross_checks.py tests/test_download_reexport.py -q` green; manually confirm the recheck endpoint still returns rows for a `completed_with_errors` run.
+
+### Phase 3: Final sweep
+- [ ] 🟥 **Step 8: Full-suite regression + dead-code check**
+  - [ ] 🟥 `./venv/bin/python -m pytest tests/ -q` — full backend suite green (review baseline: 2692 passed).
+  - [ ] 🟥 `grep` for any now-orphaned helper or stale comment referencing the old inline loops; remove only what is provably unused (ask before deleting anything ambiguous, per the dead-code-hygiene rule).
+  - **Verify:** clean full-suite run + no orphaned references.
 
 ## Rollback Plan
-If something goes badly wrong:
-- All changes are confined to `web/src/lib/theme.ts`, `web/src/lib/uiStyles.ts`, `web/src/index.css`, ~9 component files, and their tests — **no DB/schema/backend impact**. Revert with `git restore` per file or `git revert` the phase commit.
-- Each phase is an independent commit; a broken phase reverts without touching earlier green phases.
-- If a token change cascades to an unexpected component, the "no hardcoded status hex" finding means the fix is always in `theme.ts` — check there first, not the component.
-- Check after revert: `cd web && npx vitest run` returns to the Phase-0 baseline green.
+If something goes wrong:
+- Each step is an isolated commit — `git revert <sha>` the offending step. The shared helper (Step 4) is additive, so reverting a migration step (5/6/7) leaves the helper unused but harmless.
+- The risk-bearing change is Step 5 (it sits under the live pipeline cross-check pass). If a pipeline check result changes, diff `resolve_check_scope`'s output against the pre-refactor `_build_check_template_ids` for the same `agent_results` — the dict must be identical.
+- State to check on any regression: a run's post-correction cross-check results in the ValidatorTab, and the `filled.xlsx` download for a `completed_with_errors` run (the re-export inclusion path) — the two user-visible surfaces the scoping feeds.

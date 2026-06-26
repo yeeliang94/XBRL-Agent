@@ -51,10 +51,10 @@ def client(tmp_path: Path, monkeypatch):
             source_note_refs=["4.1", "20.7"], content_preview="fv",
         )
     # Mock PDF rendering so the reviewer's grounding works without a real file.
-    import notes.validator_agent as va
+    import notes.detectors as det  # _render_single_page (PDF render) lives here now
     import notes.reviewer_agent as ra
     monkeypatch.setattr(ra, "count_pdf_pages", lambda _p: 60)
-    monkeypatch.setattr(va, "render_pages_to_png_bytes",
+    monkeypatch.setattr(det, "render_pages_to_png_bytes",
                         lambda pdf_path, start, end, dpi=200: [b"png"])
     (tmp_path / "uploaded.pdf").write_bytes(b"%PDF-1.4")
     return TestClient(srv.app), db, run_id, srv
