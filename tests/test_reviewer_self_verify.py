@@ -118,6 +118,37 @@ def test_format_target_not_reevaluated_is_not_confirmed():
     assert "sofp_balance" in out
 
 
+# --- Advisory-only refinement (docs/PLAN.md Step 2) ------------------------
+# A `warning` IS an evaluation, so a result carrying only warnings (and no
+# `passed`) must NOT be lumped in with the truly-empty "nothing evaluated"
+# INCONCLUSIVE case — while still never rendering the false-green "all 0 PASS".
+
+def test_format_warning_only_empty_original_is_not_inconclusive():
+    # Spot-check shape: no original failing target, the only evaluated check is
+    # advisory. Nothing failed, nothing the reviewer had to fix is open → this
+    # is a clean (non-blocking) result, not INCONCLUSIVE, and never "all 0 PASS".
+    out = _format_verification(
+        [_result("some_advisory", "warning")],
+        original_failed_names=set(),
+    )
+    assert "INCONCLUSIVE" not in out
+    assert "NOT CONFIRMED" not in out
+    assert "all 0" not in out           # the exact run-58 false-green wording
+
+
+def test_format_warning_only_with_open_target_is_not_confirmed():
+    # Correction shape: the reviewer was asked to fix sofp_balance but the only
+    # evaluated check came back advisory — the target wasn't confirmed passed,
+    # so it must read NOT CONFIRMED, never green.
+    out = _format_verification(
+        [_result("some_advisory", "warning")],
+        original_failed_names={"sofp_balance"},
+    )
+    assert "VERIFIED" not in out
+    assert "NOT CONFIRMED" in out
+    assert "sofp_balance" in out
+
+
 # --------------------------------------------------------------------------
 # run_verification_checks — real template + cascade + cross-checks
 # --------------------------------------------------------------------------
