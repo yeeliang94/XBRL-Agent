@@ -1351,23 +1351,24 @@ def _format_verification(results: list, original_failed_names: set) -> str:
     if not failed:
         # --- False-green guards (run-58): never report a pass without having
         # actually evaluated checks to a PASS. ---
-        if not passed:
+        if not passed and not warnings:
             # Empty results, or every check pending / not_applicable: nothing
-            # was verified. This is the absence of evidence, not a pass.
+            # was evaluated at all. This is the absence of evidence, not a pass.
+            # (A `warning` IS an evaluation, so warning-only falls through.)
             return (
-                "⚠ INCONCLUSIVE: verify_fixes evaluated 0 cross-checks to a "
-                "PASS (the suite returned nothing, or every check was pending "
-                "or not applicable). This is NOT a verification — do NOT treat "
-                "the run as resolved. Re-examine the facts directly; if a "
-                "targeted failure remains, keep fixing it, and if you truly "
-                "cannot resolve one, raise a flag."
+                "⚠ INCONCLUSIVE: verify_fixes evaluated 0 cross-checks (the "
+                "suite returned nothing, or every check was pending or not "
+                "applicable). This is NOT a verification — do NOT treat the run "
+                "as resolved. Re-examine the facts directly; if a targeted "
+                "failure remains, keep fixing it, and if you truly cannot "
+                "resolve one, raise a flag."
             )
         confirmed = {getattr(r, "name", None) for r in passed}
         unconfirmed = sorted(n for n in original if n not in confirmed)
         if unconfirmed:
             # No check is FAILING, but a check the reviewer was asked to fix
             # was not re-evaluated to a pass (scoped out → pending /
-            # not_applicable / absent). Can't claim it's resolved.
+            # not_applicable / advisory / absent). Can't claim it's resolved.
             return (
                 "⚠ NOT CONFIRMED: no check is currently failing, but these "
                 "targeted check(s) were NOT re-evaluated to a PASS, so they "
@@ -1376,13 +1377,24 @@ def _format_verification(results: list, original_failed_names: set) -> str:
                 "not declare done — confirm each targeted failure actually "
                 "passes, or raise a flag explaining why it cannot be checked."
             )
-        lines.append(
-            f"✓ VERIFIED: all {len(passed)} evaluated cross-check(s) PASS "
-            f"after your edits — no failure remains and you introduced none."
-        )
-        if warnings:
+        if passed:
             lines.append(
-                f"({len(warnings)} advisory warning(s) — not blocking.)"
+                f"✓ VERIFIED: all {len(passed)} evaluated cross-check(s) PASS "
+                f"after your edits — no failure remains and you introduced none."
+            )
+            if warnings:
+                lines.append(
+                    f"({len(warnings)} advisory warning(s) — not blocking.)"
+                )
+        else:
+            # Warning-only: nothing FAILED and nothing the reviewer had to fix
+            # is unconfirmed, but no check evaluated to a hard PASS either.
+            # Report the advisory-only state honestly — never the misleading
+            # "all 0 ... PASS" false-green (run-58).
+            lines.append(
+                f"✓ No cross-check is failing after your edits "
+                f"({len(warnings)} advisory warning(s) only — none blocking, "
+                f"none evaluated to a hard PASS). You introduced no failure."
             )
         lines.append(
             "If every targeted failure and open conflict is resolved, you are "

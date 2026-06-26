@@ -1,6 +1,6 @@
 # Implementation Plan: Reviewer Self-Verify — Review Follow-ups
 
-**Overall Progress:** `12%`
+**Overall Progress:** `25%`
 **PRD Reference:** none — this plan implements the four follow-ups from the five-axis
 code review of commits `0746a25` (feat: agents verify their own fixes) and
 `3e6502a` (fix: close the `verify_fixes` false-green loophole). See CLAUDE.md
@@ -64,12 +64,12 @@ refinement in Step 2.
   - [x] 🟩 Retargeted render/sidecar monkeypatches in 5 test files — `_render_single_page` now resolves `render_pages_to_png_bytes` in `notes.detectors`'s namespace, so every render mock for a reviewer/validator path moved from `va.*` to `det.*` (`test_notes_reviewer_self_verify`, `_tools`, `_authoring`, `_routes`, `test_notes_review_provenance`).
   - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_notes_reviewer_self_verify.py tests/test_notes_reviewer_tools.py tests/test_notes_review_provenance.py tests/test_notes_validator_agent.py tests/test_notes_reviewer_authoring.py tests/test_notes_reviewer_routes.py -q` → **67 passed**; no live importer left on `from notes.validator_agent import load_sidecar_entries`.
 
-- [ ] 🟥 **Step 2: Refine `_format_verification` so an all-advisory result isn't mislabeled** — a result with only `warning` checks (no `passed`) is currently reported `INCONCLUSIVE`; a warning *is* an evaluation. (correction/reviewer_agent.py:1354)
-  - [ ] 🟥 Change the empty-evidence guard from `if not passed:` to `if not passed and not warnings:` so genuinely-empty/all-pending → `INCONCLUSIVE`, but warning-only → falls through.
-  - [ ] 🟥 Fix the fall-through `VERIFIED` line so it does NOT regress to "all 0 ... PASS" when `passed` is empty but warnings exist — phrase it as "no failing checks; N advisory warning(s)" when `len(passed) == 0`.
-  - [ ] 🟥 Confirm the correction path is unaffected: with a non-empty `original_failed_names` and empty `passed`, `unconfirmed = original - {}` is non-empty → still `NOT CONFIRMED` (never a silent green). This is the safety property — re-read it, don't assume.
-  - [ ] 🟥 Add formatter unit tests: (a) warning-only + empty original → clean/non-INCONCLUSIVE; (b) warning-only + non-empty original → still `NOT CONFIRMED`.
-  - **Verify:** `./venv/bin/python -m pytest tests/test_reviewer_self_verify.py -q` green, including the new cases and all existing false-green guards (`test_format_empty_results_is_inconclusive_not_green`, `…all_pending…`, `…not_confirmed`).
+- [x] 🟩 **Step 2: Refine `_format_verification` so an all-advisory result isn't mislabeled** — a result with only `warning` checks (no `passed`) was reported `INCONCLUSIVE`; a warning *is* an evaluation. (TDD — tests written red first.)
+  - [x] 🟩 Changed the empty-evidence guard from `if not passed:` to `if not passed and not warnings:` so genuinely-empty/all-pending → `INCONCLUSIVE`, but warning-only → falls through.
+  - [x] 🟩 Branched the fall-through so `passed==0` (warning-only) emits "✓ No cross-check is failing … (N advisory warning(s) only …)" instead of the false-green "all 0 … PASS".
+  - [x] 🟩 Verified the correction path is unaffected: non-empty `original_failed_names` + empty `passed` → `unconfirmed` non-empty → still `NOT CONFIRMED` (pinned by the new `…with_open_target_is_not_confirmed` test).
+  - [x] 🟩 Added the two formatter tests (warning-only + empty original → not INCONCLUSIVE / not "all 0"; warning-only + open target → NOT CONFIRMED).
+  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_reviewer_self_verify.py -q` → **15 passed** (incl. the unchanged false-green guards).
 
 - [ ] 🟥 **Step 3: Preserve empty-vs-unknown refs in `move_notes_provenance`** (nit) — `[]` (note has no refs) currently collapses to `None` (refs unknown). (db/repository.py:998–1011)
   - [ ] 🟥 Change `refs = json.loads(refs_json) if refs_json else None` + `[str(x) for x in refs] if refs else None` to use an explicit `is not None` test so an empty list round-trips as `[]`, not `None`.
