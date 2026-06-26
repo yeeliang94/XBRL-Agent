@@ -194,6 +194,65 @@ class FactsContext:
     filing_standard: str = "mfrs"
 
 
+@dataclass
+class CheckScope:
+    """Resolved cross-check scoping for a set of ``(statement, variant)`` pairs.
+
+    The single source of truth for "which statements does this run check, and
+    where do their facts live" — shared by the pipeline pass
+    (``server._build_check_template_ids``), the review-UI recheck
+    (``server._recheck_from_facts``) and the reviewer's self-verify
+    (``correction.reviewer_agent.run_verification_checks``). Each consumer
+    status-filters its own rows first (in-memory ``"succeeded"`` vs the DB's
+    ``FACTS_BEARING_AGENT_STATUSES``) and hands the surviving pairs here.
+    """
+    template_ids: Dict[StatementType, str] = field(default_factory=dict)
+    statements_to_run: Set[StatementType] = field(default_factory=set)
+    variants: Dict[StatementType, str] = field(default_factory=dict)
+
+
+def resolve_check_scope(
+    pairs: Sequence[tuple],
+    *,
+    filing_level: str = "company",
+    filing_standard: str = "mfrs",
+) -> CheckScope:
+    """Map ``(statement_type, variant)`` pairs → their cross-check scope.
+
+    Mirrors the gotcha #21 scoping the pipeline has always done: each statement
+    resolves to a ``StatementType``, its master ``template_path``, and that
+    path's ``template_id`` (so every check reads its own statements' facts,
+    variant-precisely). A statement that doesn't map to a ``StatementType``
+    (pseudo-agent rows: CORRECTION / notes-validator / scout) or whose template
+    can't be resolved (NotPrepared / standard-variant mismatch / unresolved
+    variant) is SKIPPED — exactly as the xlsx and facts paths already tolerate,
+    never raised.
+
+    ``statement_type`` may be a ``StatementType`` or its ``.value`` string —
+    callers pass both shapes; ``StatementType(...)`` normalises either.
+    """
+    from pathlib import Path
+    from statement_types import template_path as _tpl_path
+    from concept_model.parser import _derive_template_id
+
+    scope = CheckScope()
+    for statement_type, variant in pairs:
+        try:
+            stmt = StatementType(statement_type)
+        except ValueError:
+            continue
+        try:
+            master = _tpl_path(
+                stmt, variant, level=filing_level, standard=filing_standard,
+            )
+        except (ValueError, KeyError):
+            continue
+        scope.template_ids[stmt] = _derive_template_id(Path(master))
+        scope.statements_to_run.add(stmt)
+        scope.variants[stmt] = variant
+    return scope
+
+
 def run_all_facts(
     checks: list,
     ctx: "FactsContext",

@@ -1,6 +1,6 @@
 # Implementation Plan: Reviewer Self-Verify — Review Follow-ups
 
-**Overall Progress:** `37%`
+**Overall Progress:** `50%`
 **PRD Reference:** none — this plan implements the four follow-ups from the five-axis
 code review of commits `0746a25` (feat: agents verify their own fixes) and
 `3e6502a` (fix: close the `verify_fixes` false-green loophole). See CLAUDE.md
@@ -78,12 +78,12 @@ refinement in Step 2.
 
 ### Phase 2: DRY the cross-check scoping (horizontal split — shared helper first, then migrate each consumer one at a time)
 
-- [ ] 🟥 **Step 4: Add the shared `resolve_check_scope` helper (pure addition, no call-site changes)** — single source of truth for "(statement, variant) pairs → template_ids + statements_to_run + variants".
-  - [ ] 🟥 In `cross_checks/framework.py`, add a small dataclass `CheckScope(template_ids, statements_to_run, variants)` and `resolve_check_scope(pairs, *, filing_level, filing_standard) -> CheckScope`.
-  - [ ] 🟥 Body mirrors today's loop exactly: per pair, `StatementType(value)` (skip pseudo-rows on `ValueError`), `template_path(...)` (skip on `ValueError`/`KeyError`), `_derive_template_id(...)`. Lazy-import the heavy deps inside the function (no module-level cycle).
-  - [ ] 🟥 Accept either an enum or a string statement_type in each pair (callers pass both shapes today) — normalize via `getattr(st, "value", st)` before `StatementType(...)`.
-  - [ ] 🟥 New unit test file `tests/test_check_scope.py`: pseudo-row skipped, bad-variant skipped, enum-and-string inputs both resolve, all three outputs populated and mutually consistent.
-  - **Verify:** `./venv/bin/python -m pytest tests/test_check_scope.py -q` green; no other suite touched yet (helper is unused).
+- [x] 🟩 **Step 4: Add the shared `resolve_check_scope` helper (pure addition, no call-site changes)** — single source of truth for "(statement, variant) pairs → template_ids + statements_to_run + variants".
+  - [x] 🟩 Added `CheckScope(template_ids, statements_to_run, variants)` dataclass + `resolve_check_scope(pairs, *, filing_level, filing_standard)` in `cross_checks/framework.py`.
+  - [x] 🟩 Body mirrors the existing loop: `StatementType(...)` (skip pseudo-rows on `ValueError`), `template_path(...)` (skip on `ValueError`/`KeyError`), `_derive_template_id(...)`. Heavy deps lazy-imported inside the function.
+  - [x] 🟩 `StatementType(...)` normalises both an enum and its `.value` string, so no separate getattr is needed (pinned by `test_enum_and_string_statement_type_resolve_identically`).
+  - [x] 🟩 New `tests/test_check_scope.py`: pseudo-row skipped, unresolvable-variant skipped, enum-and-string both resolve, mixed input keeps valid + drops invalid, outputs mutually consistent.
+  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_check_scope.py -q` → **6 passed**; no consumer touched yet (helper unused).
 
 - [ ] 🟥 **Step 5: Migrate `_build_check_template_ids` to delegate to the helper** — covers BOTH the pipeline pass and `_recheck_from_facts` (which reaches it via `select_cross_check_backend`).
   - [ ] 🟥 Reduce `_build_check_template_ids` (server.py:429) to: filter `agent_results` to `status == "succeeded"`, call `resolve_check_scope`, return `.template_ids`. Keep the docstring's gotcha #21 note.
