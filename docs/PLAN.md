@@ -1,6 +1,6 @@
 # Implementation Plan: Reviewer Self-Verify — Review Follow-ups
 
-**Overall Progress:** `50%`
+**Overall Progress:** `87%`
 **PRD Reference:** none — this plan implements the four follow-ups from the five-axis
 code review of commits `0746a25` (feat: agents verify their own fixes) and
 `3e6502a` (fix: close the `verify_fixes` false-green loophole). See CLAUDE.md
@@ -85,21 +85,21 @@ refinement in Step 2.
   - [x] 🟩 New `tests/test_check_scope.py`: pseudo-row skipped, unresolvable-variant skipped, enum-and-string both resolve, mixed input keeps valid + drops invalid, outputs mutually consistent.
   - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_check_scope.py -q` → **6 passed**; no consumer touched yet (helper unused).
 
-- [ ] 🟥 **Step 5: Migrate `_build_check_template_ids` to delegate to the helper** — covers BOTH the pipeline pass and `_recheck_from_facts` (which reaches it via `select_cross_check_backend`).
-  - [ ] 🟥 Reduce `_build_check_template_ids` (server.py:429) to: filter `agent_results` to `status == "succeeded"`, call `resolve_check_scope`, return `.template_ids`. Keep the docstring's gotcha #21 note.
-  - [ ] 🟥 Confirm skip-on-error semantics are byte-identical (same `except (ValueError, KeyError)` swallow) so a NotPrepared/variant-mismatch statement still degrades, never crashes.
-  - **Verify:** `./venv/bin/python -m pytest tests/test_cross_checks.py tests/test_e2e.py tests/test_download_reexport.py -q` green (pipeline + recheck + re-export all exercise this path).
+- [x] 🟩 **Step 5: Migrate `_build_check_template_ids` to delegate to the helper** — covers BOTH the pipeline pass and `_recheck_from_facts` (which reaches it via `select_cross_check_backend`).
+  - [x] 🟩 Reduced `_build_check_template_ids` to: filter `agent_results` to `status == "succeeded"`, call `resolve_check_scope`, return `.template_ids`. gotcha #21 note kept.
+  - [x] 🟩 Skip-on-error semantics preserved — the helper applies the same `except (ValueError, KeyError)` swallow.
+  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_cross_checks.py tests/test_e2e.py tests/test_download_reexport.py -q` → **24 passed**.
 
-- [ ] 🟥 **Step 6: Migrate the reviewer's `run_verification_checks` to the helper** — removes the second copy of the loop.
-  - [ ] 🟥 Replace the inline `for statement_type, variant in rows:` block (correction/reviewer_agent.py) with `scope = resolve_check_scope(rows, filing_level=…, filing_standard=…)`, then build `check_config` from `scope.statements_to_run`/`scope.variants` and pass `scope.template_ids` into `FactsContext`.
-  - [ ] 🟥 Preserve the two scope sources unchanged: explicit in-memory `scope` arg vs the DB `FACTS_BEARING_AGENT_STATUSES` fallback — only the mapping moves, not the status filtering.
-  - [ ] 🟥 Keep the early `return []` when `scope.statements_to_run` is empty (the false-green guard relies on empty being possible here; the formatter handles it).
-  - **Verify:** `./venv/bin/python -m pytest tests/test_reviewer_self_verify.py tests/test_reviewer_pipeline.py tests/test_reviewer_agent.py -q` green — especially `test_explicit_scope_overrides_unfinalized_db_status` and `test_db_fallback_includes_completed_with_errors`.
+- [x] 🟩 **Step 6: Migrate the reviewer's `run_verification_checks` to the helper** — removes the second copy of the loop.
+  - [x] 🟩 Replaced the inline `for statement_type, variant in rows:` block with `check_scope = resolve_check_scope(rows, …)`; `check_config` reads `check_scope.statements_to_run`/`.variants` and `FactsContext` takes `check_scope.template_ids`. Dropped the now-unused `template_path`/`StatementType`/`_derive_template_id` imports.
+  - [x] 🟩 Both scope sources unchanged: explicit in-memory `scope` arg vs DB `FACTS_BEARING_AGENT_STATUSES` fallback — only the mapping moved.
+  - [x] 🟩 Kept the early `return []` on empty `check_scope.statements_to_run` so the false-green formatter guards still fire.
+  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_reviewer_self_verify.py tests/test_reviewer_pipeline.py tests/test_reviewer_agent.py -q` → **46 passed** (incl. `test_explicit_scope_overrides_unfinalized_db_status`, `test_db_fallback_includes_completed_with_errors`).
 
-- [ ] 🟥 **Step 7: Drop `_recheck_from_facts`' hand-rolled scope loop (bonus dedup)** — it still builds `statements_to_run`/`variants` by hand (server.py:618–636) though the helper now yields them.
-  - [ ] 🟥 Build the `(stmt, variant)` pairs from the `FACTS_BEARING_AGENT_STATUSES`-filtered DB agents, call `resolve_check_scope` once, and source `statements_to_run`/`variants` for `check_config` from it. Keep the `SimpleNamespace(status="succeeded", …)` `agent_results` list that `select_cross_check_backend`/`_xlsx_provider` still consume.
-  - [ ] 🟥 Confirm the `if not agent_results: return None` early-out still fires for a run with zero facts-bearing statements.
-  - **Verify:** `./venv/bin/python -m pytest tests/test_cross_checks.py tests/test_download_reexport.py -q` green; manually confirm the recheck endpoint still returns rows for a `completed_with_errors` run.
+- [x] 🟩 **Step 7: Drop `_recheck_from_facts`' hand-rolled scope loop (bonus dedup)** — built `statements_to_run`/`variants` by hand though the helper now yields them.
+  - [x] 🟩 Build the `(stmt, variant)` pairs from the `FACTS_BEARING_AGENT_STATUSES`-filtered DB agents, call `resolve_check_scope` once, source `statements_to_run`/`variants` from it. Kept the `SimpleNamespace(status="succeeded", …)` `agent_results` list `select_cross_check_backend`/`_xlsx_provider` consume. Confirmed identical in every reachable state (gotcha #15 prevents an unresolvable succeeded statement).
+  - [x] 🟩 `if not agent_results: return None` early-out preserved.
+  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_cross_checks.py tests/test_download_reexport.py tests/test_reviewer_routes.py -q` → **50 passed**.
 
 ### Phase 3: Final sweep
 - [ ] 🟥 **Step 8: Full-suite regression + dead-code check**

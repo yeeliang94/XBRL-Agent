@@ -605,8 +605,6 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
         filing_standard = config.get("filing_standard", "mfrs")
 
         agent_results = []
-        variants: dict = {}
-        statements_to_run: set = set()
         for a in agents:
             # Facts-bearing statements only — but that INCLUDES
             # `completed_with_errors` (acknowledge_unresolved) saves, whose
@@ -624,14 +622,24 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
                     status="succeeded", statement_type=stmt, variant=a.variant
                 )
             )
-            variants[stmt] = a.variant
-            statements_to_run.add(stmt)
         if not agent_results:
             return None
 
+        # Shared scoping (docs/PLAN.md Step 7) — one resolve_check_scope call
+        # replaces the hand-rolled statements_to_run/variants loop, identical in
+        # every reachable state (every facts-bearing statement resolves a
+        # template: the server rejects variant/standard mismatches before
+        # launch, gotcha #15) and consistent with the pipeline + reviewer paths.
+        # template_ids is still built by select_cross_check_backend below (it
+        # also needs agent_results for the xlsx provider).
+        from cross_checks.framework import resolve_check_scope
+        check_scope = resolve_check_scope(
+            [(ar.statement_type, ar.variant) for ar in agent_results],
+            filing_level=filing_level, filing_standard=filing_standard,
+        )
         check_config = {
-            "statements_to_run": statements_to_run,
-            "variants": variants,
+            "statements_to_run": check_scope.statements_to_run,
+            "variants": check_scope.variants,
             "filing_level": filing_level,
             "filing_standard": filing_standard,
         }
