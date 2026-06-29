@@ -506,6 +506,101 @@ describe("styled cell extension round-trip (real editor)", () => {
     editor.destroy();
   });
 
+  it("top border paints the shared edge on the row above so collapsed tables show it", () => {
+    const black = gridBorderValue("#000000");
+    const editor = makeEditor(
+      "<table><tbody><tr><td>above</td></tr><tr><td>selected</td></tr></tbody></table>",
+    );
+    const cellPositions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") cellPositions.push(pos);
+      return true;
+    });
+    editor.view.dispatch(
+      editor.state.tr.setSelection(CellSelection.create(editor.state.doc, cellPositions[1])),
+    );
+
+    applyCellBorderSide(editor, "Top", black);
+
+    expect(sideValues(editor, "borderTop")).toEqual([null, black]);
+    expect(sideValues(editor, "borderBottom")).toEqual([black, null]);
+    editor.destroy();
+  });
+
+  it("reset clears shared-edge helper borders around the selected cell", () => {
+    const black = gridBorderValue("#000000");
+    const editor = makeEditor(
+      "<table><tbody><tr><td>above</td></tr><tr><td>selected</td></tr></tbody></table>",
+    );
+    const cellPositions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") cellPositions.push(pos);
+      return true;
+    });
+    editor.view.dispatch(
+      editor.state.tr.setSelection(CellSelection.create(editor.state.doc, cellPositions[1])),
+    );
+    applyCellBorderSide(editor, "Top", black);
+
+    resetCellToTheme(editor);
+
+    expect(sideValues(editor, "borderTop")).toEqual([null, null]);
+    expect(sideValues(editor, "borderBottom")).toEqual([null, null]);
+    editor.destroy();
+  });
+
+  it("'All borders' paints the shared outer edges too (parity with per-side)", () => {
+    // The per-side fix paints the neighbour's opposite edge so the selection's
+    // outer edge wins the border-collapse conflict against the grey grid. "All
+    // borders" must do the same or its top/left outer edges stay grey.
+    const black = gridBorderValue("#000000");
+    const editor = makeEditor(
+      "<table><tbody><tr><td>above</td></tr><tr><td>selected</td></tr></tbody></table>",
+    );
+    const cellPositions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") cellPositions.push(pos);
+      return true;
+    });
+    editor.view.dispatch(
+      editor.state.tr.setSelection(CellSelection.create(editor.state.doc, cellPositions[1])),
+    );
+
+    applyCellBorderAll(editor, black);
+
+    // Selected cell gets all four sides; the cell above gets the shared bottom.
+    expect(sideValues(editor, "borderTop")).toEqual([null, black]);
+    expect(sideValues(editor, "borderBottom")).toEqual([black, black]);
+    editor.destroy();
+  });
+
+  it("reset preserves a neighbour border that was set independently", () => {
+    // Resetting the selected cell must NOT wipe a border the user set on a
+    // neighbour directly (different value on the shared edge) — only the
+    // shared-edge helper paint (matching value) is ours to clear.
+    const editor = makeEditor(
+      "<table><tbody>" +
+        '<tr><td style="border-bottom: 1px solid #000000">above</td></tr>' +
+        "<tr><td>selected</td></tr></tbody></table>",
+    );
+    const cellPositions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") cellPositions.push(pos);
+      return true;
+    });
+    // The selected cell never carried a top border, so the above cell's bottom
+    // border is independent — reset must leave it intact.
+    editor.view.dispatch(
+      editor.state.tr.setSelection(CellSelection.create(editor.state.doc, cellPositions[1])),
+    );
+
+    resetCellToTheme(editor);
+
+    expect(sideValues(editor, "borderBottom")).toEqual(["1px solid #000000", null]);
+    expect(sideValues(editor, "borderTop")).toEqual([null, null]);
+    editor.destroy();
+  });
+
   // toggleCellBorderSide decides clear-vs-paint from the WHOLE selection, not
   // just the anchor — `setCellAttribute` writes every selected cell, so an
   // anchor-only decision would clear a mixed range whenever the anchor matched.
@@ -604,6 +699,57 @@ describe("styled cell extension round-trip (real editor)", () => {
       spanned.push(node.textContent);
     });
     expect(spanned).toEqual(["a", "b"]);
+    editor.destroy();
+  });
+
+  it("restoring a captured CellSelection lets toolbar border/reset actions hit the original range", () => {
+    // Real toolbar clicks can briefly collapse a drag-selected cell range before
+    // the click handler runs. The component captures on mousedown and restores
+    // before executing the action; this pins the command-level contract.
+    const editor = makeEditor(
+      '<table><tbody><tr>' +
+        '<td style="background-color: #fff6e5">a</td>' +
+        '<td style="background-color: #fff6e5">b</td>' +
+      "</tr></tbody></table>",
+    );
+    const cellPositions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") cellPositions.push(pos);
+      return true;
+    });
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        CellSelection.create(editor.state.doc, cellPositions[0], cellPositions[1]),
+      ),
+    );
+    const captured = captureSelection(editor);
+
+    // Simulate the browser/editor collapsing the selection to the first cell
+    // before the toolbar click is delivered.
+    editor.commands.setTextSelection(cellPositions[0] + 1);
+    applyCellBorderSide(editor, "Top", gridBorderValue("#000000"));
+    expect(sideValues(editor)).toEqual(["1px solid #000000", null]);
+
+    restoreSelection(editor, captured);
+    applyCellBorderSide(editor, "Top", gridBorderValue("#000000"));
+    expect(sideValues(editor)).toEqual([
+      "1px solid #000000",
+      "1px solid #000000",
+    ]);
+
+    restoreSelection(editor, captured);
+    resetCellToTheme(editor);
+    const fills: unknown[] = [];
+    const tops: unknown[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "tableCell") {
+        fills.push(node.attrs.backgroundColor);
+        tops.push(node.attrs.borderTop);
+      }
+      return true;
+    });
+    expect(fills).toEqual([null, null]);
+    expect(tops).toEqual([null, null]);
     editor.destroy();
   });
 });
