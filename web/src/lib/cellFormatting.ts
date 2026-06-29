@@ -17,7 +17,14 @@
 import { mergeAttributes } from "@tiptap/core";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
-import { CellSelection } from "@tiptap/pm/tables";
+import {
+  CellSelection,
+  TableMap,
+  cellAround,
+  inSameTable,
+  selectedRect,
+} from "@tiptap/pm/tables";
+import type { Transaction } from "@tiptap/pm/state";
 import type { Editor } from "@tiptap/react";
 
 // The visual properties we persist on a table cell, in the FIXED order the
@@ -134,7 +141,14 @@ function expandPositional(
 }
 
 const _SIDE_ORDER = ["Top", "Right", "Bottom", "Left"] as const;
+const ALL_SIDES: BorderSide[] = [..._SIDE_ORDER];
 type BorderAttr = "borderTop" | "borderRight" | "borderBottom" | "borderLeft";
+const OPPOSITE_BORDER_ATTR: Record<BorderSide, BorderAttr> = {
+  Top: "borderBottom",
+  Right: "borderLeft",
+  Bottom: "borderTop",
+  Left: "borderRight",
+};
 
 /** Resolve each side's `border-<side>` value from a parsed inline-style map,
  *  expanding the forms a browser's CSSOM serialiser collapses uniform /
@@ -296,11 +310,115 @@ export function applyCellBorderSide(
   side: BorderSide,
   value: string | null,
 ): boolean {
-  return editor
-    .chain()
-    .focus()
-    .setCellAttribute(`border${side}`, value)
-    .run();
+  return applySharedBorderSide(editor, side, value);
+}
+
+function setCellAttrsAt(
+  tr: Transaction,
+  pos: number,
+  attrs: Record<string, unknown>,
+): void {
+  const node = tr.doc.nodeAt(pos);
+  if (!node) return;
+  tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attrs });
+}
+
+function selectedCellPositions(
+  map: TableMap,
+  tableStart: number,
+  rect: { left: number; right: number; top: number; bottom: number },
+): number[] {
+  const positions = new Set<number>();
+  for (let row = rect.top; row < rect.bottom; row += 1) {
+    for (let col = rect.left; col < rect.right; col += 1) {
+      positions.add(tableStart + map.map[row * map.width + col]);
+    }
+  }
+  return [...positions];
+}
+
+/** Each cell just OUTSIDE the selection's `side` edge, paired with the selected
+ *  cell it shares that physical edge with. In a `border-collapse: collapse`
+ *  table the selected cell's `border-<side>` and the neighbour's opposite side
+ *  are ONE edge; when both are equal width/style the top-/left-most cell wins
+ *  the conflict, so painting only the selected side loses to a neighbour's
+ *  themed grey grid. Painting the neighbour's opposite side too makes the edge
+ *  show; pairing (vs a bare position) lets reset clear ONLY the neighbour edges
+ *  that were ours to paint. */
+function sharedEdgePairs(
+  map: TableMap,
+  tableStart: number,
+  rect: { left: number; right: number; top: number; bottom: number },
+  side: BorderSide,
+): Array<{ neighbour: number; selected: number }> {
+  const at = (row: number, col: number) =>
+    tableStart + map.map[row * map.width + col];
+  const seen = new Set<number>();
+  const pairs: Array<{ neighbour: number; selected: number }> = [];
+  const push = (neighbour: number, selected: number) => {
+    if (seen.has(neighbour)) return; // a spanning neighbour appears once
+    seen.add(neighbour);
+    pairs.push({ neighbour, selected });
+  };
+  if (side === "Top" && rect.top > 0) {
+    for (let col = rect.left; col < rect.right; col += 1)
+      push(at(rect.top - 1, col), at(rect.top, col));
+  } else if (side === "Bottom" && rect.bottom < map.height) {
+    for (let col = rect.left; col < rect.right; col += 1)
+      push(at(rect.bottom, col), at(rect.bottom - 1, col));
+  } else if (side === "Left" && rect.left > 0) {
+    for (let row = rect.top; row < rect.bottom; row += 1)
+      push(at(row, rect.left - 1), at(row, rect.left));
+  } else if (side === "Right" && rect.right < map.width) {
+    for (let row = rect.top; row < rect.bottom; row += 1)
+      push(at(row, rect.right), at(row, rect.right - 1));
+  }
+  return pairs;
+}
+
+/** Write `value` onto every selected cell's `side` AND the shared neighbour edge
+ *  (see sharedEdgePairs) into `tr`. Used by both the per-side and the all-sides
+ *  helpers so they collapse edges identically (the per-side fix must not skip
+ *  "All borders"). */
+function paintBorderSide(
+  tr: Transaction,
+  rect: ReturnType<typeof selectedRect>,
+  side: BorderSide,
+  value: string | null,
+): void {
+  const attr = `border${side}` as BorderAttr;
+  for (const pos of selectedCellPositions(rect.map, rect.tableStart, rect)) {
+    setCellAttrsAt(tr, pos, { [attr]: value });
+  }
+  for (const { neighbour } of sharedEdgePairs(
+    rect.map,
+    rect.tableStart,
+    rect,
+    side,
+  )) {
+    setCellAttrsAt(tr, neighbour, { [OPPOSITE_BORDER_ATTR[side]]: value });
+  }
+}
+
+function applySharedBorderSide(
+  editor: Editor,
+  side: BorderSide,
+  value: string | null,
+): boolean {
+  try {
+    const rect = selectedRect(editor.state);
+    const tr = editor.state.tr;
+    paintBorderSide(tr, rect, side, value);
+    if (!tr.docChanged) return false;
+    editor.view.dispatch(tr);
+    return true;
+  } catch {
+    return editor
+      .chain()
+      .focus()
+      .setCellAttribute(`border${side}`, value)
+      .run();
+  }
 }
 
 /** Compare two border values for the side-button TOGGLE, treating a
@@ -377,14 +495,25 @@ export function toggleCellBorderSide(
   );
 }
 
-/** Set all four sides at once — used by the "All borders" / "No borders"
- *  shortcuts. `value` is a grid line or `none`. */
+/** Set all four sides at once — used by the "All borders" / "All hidden"
+ *  shortcuts. `value` is a grid line or `hidden`/`none`. Routes through the same
+ *  shared-edge painter as the per-side buttons so the selection's OUTER edges
+ *  win the collapse against neighbour grey grid too (not just internal edges). */
 export function applyCellBorderAll(editor: Editor, value: string): boolean {
-  let chain = editor.chain().focus();
-  for (const side of ["Top", "Right", "Bottom", "Left"] as BorderSide[]) {
-    chain = chain.setCellAttribute(`border${side}`, value);
+  try {
+    const rect = selectedRect(editor.state);
+    const tr = editor.state.tr;
+    for (const side of ALL_SIDES) paintBorderSide(tr, rect, side, value);
+    if (!tr.docChanged) return false;
+    editor.view.dispatch(tr);
+    return true;
+  } catch {
+    let chain = editor.chain().focus();
+    for (const side of ALL_SIDES) {
+      chain = chain.setCellAttribute(`border${side}`, value);
+    }
+    return chain.run();
   }
-  return chain.run();
 }
 
 /** Apply a double rule below every selected cell, normally a totals row. */
@@ -398,11 +527,52 @@ export function applyCellDoubleUnderline(editor: Editor): boolean {
  *  default (the `--nt-*` variables) shows through. Lets a user undo a manual
  *  tweak and re-inherit the firm/run theme. */
 export function resetCellToTheme(editor: Editor): boolean {
-  let chain = editor.chain().focus();
-  for (const { attr } of STYLE_PROPS) {
-    chain = chain.setCellAttribute(attr, null);
+  try {
+    const rect = selectedRect(editor.state);
+    const tr = editor.state.tr;
+    const resetAttrs = Object.fromEntries(
+      STYLE_PROPS.map(({ attr }) => [attr, null]),
+    );
+    // Clear shared-edge neighbour borders BEFORE resetting the selected cells
+    // (so the comparison still sees the selected cells' current values). Only
+    // clear a neighbour's opposite side when it MATCHES the selected cell's
+    // value on that shared edge — i.e. it was painted as our shared-edge helper.
+    // A neighbour border set independently (different value) is left intact, so
+    // resetting one cell never silently wipes a deliberately-styled neighbour.
+    for (const side of ALL_SIDES) {
+      const attr = `border${side}` as BorderAttr;
+      const opp = OPPOSITE_BORDER_ATTR[side];
+      for (const { neighbour, selected } of sharedEdgePairs(
+        rect.map,
+        rect.tableStart,
+        rect,
+        side,
+      )) {
+        const selNode = tr.doc.nodeAt(selected);
+        const nbrNode = tr.doc.nodeAt(neighbour);
+        if (!selNode || !nbrNode) continue;
+        const nbrValue = nbrNode.attrs[opp] as string | null;
+        if (
+          nbrValue != null &&
+          borderValuesEqual(nbrValue, selNode.attrs[attr] as string | null)
+        ) {
+          setCellAttrsAt(tr, neighbour, { [opp]: null });
+        }
+      }
+    }
+    for (const pos of selectedCellPositions(rect.map, rect.tableStart, rect)) {
+      setCellAttrsAt(tr, pos, resetAttrs);
+    }
+    if (!tr.docChanged) return false;
+    editor.view.dispatch(tr);
+    return true;
+  } catch {
+    let chain = editor.chain().focus();
+    for (const { attr } of STYLE_PROPS) {
+      chain = chain.setCellAttribute(attr, null);
+    }
+    return chain.run();
   }
-  return chain.run();
 }
 
 /** Horizontal alignment for every selected table cell (drag-select a column to
@@ -426,12 +596,45 @@ export type CapturedSelection =
   | { kind: "cell"; anchor: number; head: number }
   | { kind: "text"; from: number; to: number };
 
+function textSelectionAsCellSelection(editor: Editor): CapturedSelection | null {
+  const sel = editor.state.selection;
+  if (sel.empty) return null;
+
+  const anchorCell = cellAround(sel.$anchor);
+  const headCell = cellAround(sel.$head);
+  if (
+    anchorCell &&
+    headCell &&
+    anchorCell.pos !== headCell.pos &&
+    inSameTable(anchorCell, headCell)
+  ) {
+    return { kind: "cell", anchor: anchorCell.pos, head: headCell.pos };
+  }
+
+  const cells: number[] = [];
+  editor.state.doc.nodesBetween(sel.from, sel.to, (node, pos) => {
+    if (node.type.name === "tableCell" || node.type.name === "tableHeader") {
+      cells.push(pos);
+      return false;
+    }
+    return true;
+  });
+  if (cells.length < 2) return null;
+
+  const first = cellAround(editor.state.doc.resolve(cells[0] + 1));
+  const last = cellAround(editor.state.doc.resolve(cells[cells.length - 1] + 1));
+  if (!first || !last || !inSameTable(first, last)) return null;
+  return { kind: "cell", anchor: first.pos, head: last.pos };
+}
+
 /** Snapshot the current selection so it can be rebuilt after a doc replacement. */
 export function captureSelection(editor: Editor): CapturedSelection {
   const sel = editor.state.selection;
   if (sel instanceof CellSelection) {
     return { kind: "cell", anchor: sel.$anchorCell.pos, head: sel.$headCell.pos };
   }
+  const tableRange = textSelectionAsCellSelection(editor);
+  if (tableRange) return tableRange;
   return { kind: "text", from: sel.from, to: sel.to };
 }
 

@@ -1264,10 +1264,42 @@ function EditorToolbar({ editor }: { editor: Editor }) {
   const paintValue = eraseActive ? BORDER_HIDDEN : gridBorderValue(borderPaint);
 
   const inTable = editor.isActive("table");
+  const toolbarSelectionRef = useRef<ReturnType<typeof captureSelection> | null>(
+    null,
+  );
 
-  // All buttons preventDefault on mousedown so clicking them never blurs the
-  // editor / collapses a (multi-cell or text) selection before the command
-  // runs — the same fix that makes range fill work (Step 0.1).
+  const rememberToolbarSelection = () => {
+    toolbarSelectionRef.current = captureSelection(editor);
+  };
+
+  const restoreToolbarSelection = () => {
+    const captured = toolbarSelectionRef.current;
+    if (!captured) return;
+    try {
+      restoreSelection(editor, captured);
+    } catch {
+      /* structural edits can invalidate captured cell anchors */
+    }
+  };
+
+  // Every toolbar control shares one guard: preventDefault on mousedown so the
+  // click never blurs the editor / collapses a (multi-cell or text) selection
+  // before the command runs (the same fix that makes range fill work,
+  // Step 0.1), plus capture-on-mousedown / restore-before-click because real
+  // browsers can still briefly collapse a CellSelection during toolbar
+  // interaction (notably after drag-selecting cells), which made side-border /
+  // reset actions feel randomly dead.
+  const guarded = (run: () => void) => ({
+    onMouseDown: (e: React.MouseEvent) => {
+      rememberToolbarSelection();
+      e.preventDefault();
+    },
+    onClick: () => {
+      restoreToolbarSelection();
+      run();
+    },
+  });
+
   const btn = (
     label: React.ReactNode,
     ariaLabel: string,
@@ -1279,25 +1311,22 @@ function EditorToolbar({ editor }: { editor: Editor }) {
       type="button"
       aria-label={ariaLabel}
       title={ariaLabel}
-      onMouseDown={(e) => e.preventDefault()}
       style={active ? styles.toolbarButtonActive : styles.toolbarButton}
-      onClick={onClick}
+      {...guarded(onClick)}
     >
       {label}
     </button>
   );
 
-  // Compact, visually separated control groups keep the toolbar scannable
-  // without making a preparer memorise a wall of labels. Every icon still has
-  // an accessible name and a native tooltip through its child button.
-  const group = (
-    label: string,
-    icon: React.ReactNode,
-    children: React.ReactNode,
-  ) => (
+  // Each control group carries a short visible caption (not just a cryptic
+  // glyph) so a preparer can tell at a glance what the buttons in that section
+  // do — the icons alone weren't discoverable without hovering every one. The
+  // caption is aria-hidden because the group already exposes the same text as
+  // its accessible name; every button keeps its own tooltip + accessible name.
+  const group = (label: string, children: React.ReactNode) => (
     <div role="group" aria-label={label} title={label} style={styles.toolbarGroup}>
-      <span aria-hidden="true" style={styles.toolbarGroupIcon}>
-        {icon}
+      <span aria-hidden="true" style={styles.toolbarGroupLabel}>
+        {label}
       </span>
       {children}
     </div>
@@ -1331,8 +1360,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
         type="button"
         title={s.label}
         aria-label={`${kind === "text" ? "Text colour" : "Highlight"} ${s.label}`}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={apply}
+        {...guarded(apply)}
         style={{
           ...styles.swatchButton,
           background: s.value ?? pwc.white,
@@ -1360,7 +1388,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
     <div style={styles.editorToolbar} data-testid="editor-format-bar">
       {/* Tier 1 — always available in edit mode. */}
       <div role="toolbar" aria-label="Formatting" style={styles.toolbarRow}>
-        {group("Text formatting", "T", <>
+        {group("Text formatting", <>
           {btn(<span style={{ fontWeight: 700 }}>B</span>, "Bold",
             () => editor.chain().focus().toggleBold().run(), editor.isActive("bold"))}
           {btn(<span style={{ fontStyle: "italic" }}>I</span>, "Italic",
@@ -1374,9 +1402,9 @@ function EditorToolbar({ editor }: { editor: Editor }) {
           {btn("x₂", "Subscript",
             () => editor.chain().focus().toggleSubscript().run(), editor.isActive("subscript"))}
         </>)}
-        {group("Text colour", "A", TEXT_COLORS.map((s) => swatch(s, "text")))}
-        {group("Highlight", "▰", HIGHLIGHT_COLORS.map((s) => swatch(s, "highlight")))}
-        {group("Paragraph", "¶", <>
+        {group("Text colour", TEXT_COLORS.map((s) => swatch(s, "text")))}
+        {group("Highlight", HIGHLIGHT_COLORS.map((s) => swatch(s, "highlight")))}
+        {group("Paragraph", <>
           {btn(alignIcon("left"), "Align left",
             () => editor.chain().focus().setTextAlign("left").run(), editor.isActive({ textAlign: "left" }))}
           {btn(alignIcon("center"), "Align centre",
@@ -1405,13 +1433,13 @@ function EditorToolbar({ editor }: { editor: Editor }) {
           data-testid="table-format-bar"
           style={styles.tableFormatBar}
         >
-          {group("Cell fill", "▧", <>
+          {group("Cell fill", <>
             {FILL_PRESETS.map((p) =>
               btn("■", `Fill ${p.label}`, () => applyCellFill(editor, p.color)),
             )}
             {btn("∅", "No fill", () => applyCellFill(editor, FILL_NONE))}
           </>)}
-          {group("Borders", "▦", <>
+          {group("Borders", <>
             {BORDER_SIDE_BTNS.map(({ side, label }) =>
               btn(
                 side === "Top" ? "▔" : side === "Right" ? "▕" : side === "Bottom" ? "▁" : "▏",
@@ -1436,7 +1464,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
               applyCellBorderAll(editor, BORDER_HIDDEN))}
             {btn("═", "Double underline", () => applyCellDoubleUnderline(editor))}
           </>)}
-          {group("Border colour", "◩", <>
+          {group("Border colour", <>
             {BORDER_COLOURS.map(({ label, color }) => (
               <button
                 key={color}
@@ -1444,11 +1472,10 @@ function EditorToolbar({ editor }: { editor: Editor }) {
                 aria-label={`Border colour ${label}`}
                 aria-pressed={borderPaint === color}
                 title={`Use ${label.toLowerCase()} for the border buttons`}
-                onMouseDown={(e) => e.preventDefault()}
                 // Select-only: pick the colour, then click an edge / All to
                 // paint it. Decoupling colour from application is what lets a
                 // cell hold a different colour per side.
-                onClick={() => setBorderPaint(color)}
+                {...guarded(() => setBorderPaint(color))}
                 style={{
                   ...styles.swatchButton,
                   background: color,
@@ -1464,8 +1491,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
               aria-label="Border colour erase"
               aria-pressed={eraseActive}
               title="Erase the chosen edge(s) — no line, not the grey grid"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setBorderPaint(BORDER_HIDDEN)}
+              {...guarded(() => setBorderPaint(BORDER_HIDDEN))}
               style={{
                 ...styles.swatchButton,
                 background: pwc.white,
@@ -1476,7 +1502,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
               ✕
             </button>
           </>)}
-          {group("Cell alignment", "≡", (["left", "center", "right"] as CellAlign[]).map((a) =>
+          {group("Cell alignment", (["left", "center", "right"] as CellAlign[]).map((a) =>
             btn(
               alignIcon(a),
               `Cell align ${a}`,
@@ -1486,8 +1512,8 @@ function EditorToolbar({ editor }: { editor: Editor }) {
           ))}
           {/* Drop manual per-cell overrides so the cell re-inherits the
               firm/run theme (docs/PLAN-notes-table-theme.md). */}
-          {group("Reset", "↺", btn("↺", "Reset cell to theme", () => resetCellToTheme(editor)))}
-          {group("Table structure", "▦", <>
+          {group("Reset", btn("↺", "Reset cell to theme", () => resetCellToTheme(editor)))}
+          {group("Table structure", <>
             {btn("▤↑", "Insert row above", () => editor.chain().focus().addRowBefore().run())}
             {btn("▤↓", "Insert row below", () => editor.chain().focus().addRowAfter().run())}
             {btn("▥←", "Insert column left", () => editor.chain().focus().addColumnBefore().run())}
@@ -1836,12 +1862,14 @@ const styles = {
     border: `1px solid ${pwc.grey200}`,
     borderRadius: 4,
   } as React.CSSProperties,
-  toolbarGroupIcon: {
-    width: 15,
+  toolbarGroupLabel: {
     color: pwc.grey700,
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: 700,
-    textAlign: "center" as const,
+    letterSpacing: 0.3,
+    textTransform: "uppercase" as const,
+    whiteSpace: "nowrap" as const,
+    marginRight: 1,
   } as React.CSSProperties,
   alignIcon: {
     display: "inline-block",
