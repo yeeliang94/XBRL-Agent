@@ -14,6 +14,8 @@ import {
   resolveCellBorders,
   splitCssTokens,
   borderValuesEqual,
+  allSelectedCellsHaveBorder,
+  toggleCellBorderSide,
   gridBorderValue,
   BORDER_NONE,
   BORDER_HIDDEN,
@@ -501,6 +503,65 @@ describe("styled cell extension round-trip (real editor)", () => {
     const attrs = firstCellAttrs(editor);
     expect(attrs.borderLeft).toBeNull();
     expect(buildCellStyle(attrs)).toBeNull(); // no inline style at all
+    editor.destroy();
+  });
+
+  // toggleCellBorderSide decides clear-vs-paint from the WHOLE selection, not
+  // just the anchor — `setCellAttribute` writes every selected cell, so an
+  // anchor-only decision would clear a mixed range whenever the anchor matched.
+  const selectAllCells = (editor: Editor): number => {
+    const positions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") positions.push(pos);
+      return true;
+    });
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        CellSelection.create(
+          editor.state.doc,
+          positions[0],
+          positions[positions.length - 1],
+        ),
+      ),
+    );
+    return positions.length;
+  };
+  const sideValues = (editor: Editor, attr = "borderTop"): unknown[] => {
+    const out: unknown[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "tableCell") out.push(node.attrs[attr]);
+      return true;
+    });
+    return out;
+  };
+
+  it("toggle on a MIXED selection PAINTS the whole range (anchor matches, rest don't)", () => {
+    const black = gridBorderValue("#000000");
+    const editor = makeEditor(
+      "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>",
+    );
+    // Anchor (cell 0) already black on top; cell 1 has no top border.
+    applyCellBorderSide(editor, "Top", black); // lands on the anchor cell
+    selectAllCells(editor);
+    // Mixed: not every selected cell matches → must PAINT, not clear.
+    expect(allSelectedCellsHaveBorder(editor, "Top", black)).toBe(false);
+    toggleCellBorderSide(editor, "Top", black);
+    expect(sideValues(editor)).toEqual([black, black]); // both painted
+    editor.destroy();
+  });
+
+  it("toggle on an ALL-MATCHING range clears every cell (uniform undo)", () => {
+    const black = gridBorderValue("#000000");
+    const editor = makeEditor(
+      "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>",
+    );
+    selectAllCells(editor);
+    toggleCellBorderSide(editor, "Top", black); // paint both
+    expect(sideValues(editor)).toEqual([black, black]);
+    // Now every selected cell matches → re-click clears the whole range.
+    expect(allSelectedCellsHaveBorder(editor, "Top", black)).toBe(true);
+    toggleCellBorderSide(editor, "Top", black);
+    expect(sideValues(editor)).toEqual([null, null]);
     editor.destroy();
   });
 

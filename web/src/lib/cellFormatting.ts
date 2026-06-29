@@ -330,6 +330,53 @@ function _normBorder(v: string | null | undefined): string {
     .trim();
 }
 
+/** Whether EVERY cell in the current selection already carries `value` on the
+ *  given side. A CellSelection is inspected cell-by-cell (not just the anchor),
+ *  falling back to the single anchor cell for a caret / text selection. */
+export function allSelectedCellsHaveBorder(
+  editor: Editor,
+  side: BorderSide,
+  value: string,
+): boolean {
+  const sel = editor.state.selection;
+  const attr = `border${side}`;
+  if (sel instanceof CellSelection) {
+    let count = 0;
+    let all = true;
+    sel.forEachCell((node) => {
+      count += 1;
+      if (!borderValuesEqual(node.attrs[attr] as string | undefined, value)) {
+        all = false;
+      }
+    });
+    return count > 0 && all;
+  }
+  return borderValuesEqual(
+    currentCellAttrs(editor)?.[attr] as string | undefined,
+    value,
+  );
+}
+
+/** Toggle the active paint on one side across the WHOLE selection. Clears the
+ *  side (→ themed default grid) only when EVERY selected cell already carries
+ *  `value`, so a re-click undoes a uniform range; otherwise it paints `value`
+ *  onto the full selection (filling the cells that don't yet match). Deciding
+ *  from all selected cells — not just the anchor — is load-bearing: a
+ *  setCellAttribute write hits every selected cell, so an anchor-only decision
+ *  would CLEAR a mixed range whenever the anchor happened to match, instead of
+ *  painting the rest. */
+export function toggleCellBorderSide(
+  editor: Editor,
+  side: BorderSide,
+  value: string,
+): boolean {
+  return applyCellBorderSide(
+    editor,
+    side,
+    allSelectedCellsHaveBorder(editor, side, value) ? null : value,
+  );
+}
+
 /** Set all four sides at once — used by the "All borders" / "No borders"
  *  shortcuts. `value` is a grid line or `none`. */
 export function applyCellBorderAll(editor: Editor, value: string): boolean {

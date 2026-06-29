@@ -49,15 +49,14 @@ import {
   StyledTableHeader,
   currentCellAttrs,
   applyCellFill,
-  applyCellBorderSide,
   applyCellBorderAll,
+  toggleCellBorderSide,
   applyCellDoubleUnderline,
   resetCellToTheme,
   applyCellAlign,
   type CellAlign,
   captureSelection,
   restoreSelection,
-  borderValuesEqual,
   gridBorderValue,
   DEFAULT_BORDER_COLOR,
   BORDER_NONE,
@@ -1418,20 +1417,11 @@ function EditorToolbar({ editor }: { editor: Editor }) {
                 side === "Top" ? "▔" : side === "Right" ? "▕" : side === "Bottom" ? "▁" : "▏",
                 `Border ${label}`,
                 // Toggle, applied to THIS side only (preserving the other
-                // three): re-clicking with the SAME active paint removes the
-                // edge (back to the default grid) — the Word-like undo; clicking
-                // with a DIFFERENT colour recolours it. `setCellAttribute`
-                // touches one attr.
-                () => {
-                  const cur = currentCellAttrs(editor)?.[`border${side}`] as
-                    | string
-                    | undefined;
-                  applyCellBorderSide(
-                    editor,
-                    side,
-                    borderValuesEqual(cur, paintValue) ? null : paintValue,
-                  );
-                },
+                // three): re-clicking when the WHOLE selection already shows the
+                // active paint removes the edge (back to the default grid) — the
+                // Word-like undo; otherwise paints the colour onto the full
+                // selection (recolouring / filling cells that don't yet match).
+                () => toggleCellBorderSide(editor, side, paintValue),
                 sidePainted(side),
               ),
             )}
