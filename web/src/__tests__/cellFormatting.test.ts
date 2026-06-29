@@ -13,6 +13,7 @@ import {
   buildCellStyle,
   resolveCellBorders,
   splitCssTokens,
+  borderValuesEqual,
   gridBorderValue,
   BORDER_NONE,
   BORDER_HIDDEN,
@@ -161,6 +162,24 @@ describe("resolveCellBorders — browser-collapse expansion (parse side)", () =>
       borderBottom: null,
       borderLeft: null,
     });
+  });
+});
+
+describe("borderValuesEqual — toggle-off comparison (hex ↔ rgb)", () => {
+  it("treats a hex colour and its round-tripped rgb() form as equal", () => {
+    // The active paint is hex (gridBorderValue); a re-parsed cell carries rgb.
+    // The side-button toggle must see them as the same border to undo it.
+    expect(borderValuesEqual("1px solid #000000", "1px solid rgb(0, 0, 0)")).toBe(true);
+    expect(borderValuesEqual("1px hidden #000000", "1px hidden rgb(0, 0, 0)")).toBe(true);
+    expect(gridBorderValue("#abcdef")).toBe("1px solid #abcdef");
+    expect(borderValuesEqual("1px solid #abcdef", "1px solid rgb(171, 205, 239)")).toBe(true);
+  });
+
+  it("distinguishes different colours / styles, and handles null", () => {
+    expect(borderValuesEqual("1px solid #000000", "1px solid #ffffff")).toBe(false);
+    expect(borderValuesEqual("1px solid #000000", "1px hidden #000000")).toBe(false);
+    expect(borderValuesEqual(null, undefined)).toBe(true); // both "no border"
+    expect(borderValuesEqual("1px solid #000000", null)).toBe(false);
   });
 });
 
@@ -466,6 +485,22 @@ describe("styled cell extension round-trip (real editor)", () => {
     expect(attrs.borderRight).toBe("1px hidden #000000");
     expect(attrs.borderTop).toBe("1px solid #ffffff"); // untouched
     expect(buildCellStyle(attrs)).toContain("border-right: 1px hidden #000000");
+    editor.destroy();
+  });
+
+  it("clearing a side with null removes the override (toggle-off → default grid)", () => {
+    // Re-clicking a side that already carries the active paint clears it: the
+    // attr goes null so buildCellStyle emits no inline border for that side and
+    // the themed default grid shows through again.
+    const editor = makeEditor(
+      "<table><tbody><tr><td>x</td></tr></tbody></table>",
+    );
+    applyCellBorderSide(editor, "Left", gridBorderValue("#000000"));
+    expect(firstCellAttrs(editor).borderLeft).toBe("1px solid #000000");
+    applyCellBorderSide(editor, "Left", null); // toggle-off
+    const attrs = firstCellAttrs(editor);
+    expect(attrs.borderLeft).toBeNull();
+    expect(buildCellStyle(attrs)).toBeNull(); // no inline style at all
     editor.destroy();
   });
 

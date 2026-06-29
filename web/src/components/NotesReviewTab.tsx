@@ -57,6 +57,7 @@ import {
   type CellAlign,
   captureSelection,
   restoreSelection,
+  borderValuesEqual,
   gridBorderValue,
   DEFAULT_BORDER_COLOR,
   BORDER_NONE,
@@ -1416,10 +1417,21 @@ function EditorToolbar({ editor }: { editor: Editor }) {
               btn(
                 side === "Top" ? "▔" : side === "Right" ? "▕" : side === "Bottom" ? "▁" : "▏",
                 `Border ${label}`,
-                // Paint the active colour (or erase) onto THIS side only,
-                // preserving the other three — `setCellAttribute` touches one
-                // attr. No longer a toggle: the eraser is how you remove a side.
-                () => applyCellBorderSide(editor, side, paintValue),
+                // Toggle, applied to THIS side only (preserving the other
+                // three): re-clicking with the SAME active paint removes the
+                // edge (back to the default grid) — the Word-like undo; clicking
+                // with a DIFFERENT colour recolours it. `setCellAttribute`
+                // touches one attr.
+                () => {
+                  const cur = currentCellAttrs(editor)?.[`border${side}`] as
+                    | string
+                    | undefined;
+                  applyCellBorderSide(
+                    editor,
+                    side,
+                    borderValuesEqual(cur, paintValue) ? null : paintValue,
+                  );
+                },
                 sidePainted(side),
               ),
             )}
