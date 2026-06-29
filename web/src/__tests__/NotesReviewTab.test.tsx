@@ -1522,11 +1522,16 @@ describe("NotesReviewTab — table format bar", () => {
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
     await vi.runAllTimersAsync();
 
+    // Two-step model: the swatch SELECTS the colour (it no longer paints all
+    // four sides), then a border button applies it. This is what lets a cell
+    // hold a different colour per side; white stays a real colour, never a
+    // proxy for the default grey grid.
     fireEvent.click(screen.getByRole("button", { name: "Border colour White" }));
     expect(screen.getByRole("button", { name: "Border colour White" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Border all" }));
     await vi.advanceTimersByTimeAsync(1600);
 
     const patches = fetchMock.mock.calls.filter(
@@ -1539,6 +1544,88 @@ describe("NotesReviewTab — table format bar", () => {
       /border-top:\s*1px solid (?:#ffffff|rgb\(255, 255, 255\))/,
     );
     expect(body.html.toLowerCase()).not.toContain("#c9c9c9");
+    vi.useRealTimers();
+  });
+
+  // The two-step model (swatch SELECTS a colour, a border button APPLIES it to
+  // one edge) is what gives independent per-side control. Each case is a single
+  // save cycle right after entering edit mode (the editor's cell cursor is
+  // fresh) — the same shape as the white-border test above.
+  const renderEditingTableCell = async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({
+            row: 5,
+            sheet: "Notes-Listofnotes",
+            label: "Capital commitments",
+            html: body.html,
+            evidence: "Page 9",
+            source_pages: [9],
+            updated_at: "2026-04-24T10:05:00Z",
+            sanitizer_warnings: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify(TABLE_CELL), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+    expandAllSheets();
+    fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
+    await vi.runAllTimersAsync();
+    const lastPatchHtml = () => {
+      const patches = fetchMock.mock.calls.filter(
+        (c) => (c[1] as RequestInit | undefined)?.method === "PATCH",
+      );
+      return JSON.parse(
+        (patches[patches.length - 1][1] as RequestInit).body as string,
+      ).html.toLowerCase();
+    };
+    return lastPatchHtml;
+  };
+
+  test("a colour swatch + side button paints ONLY that side", async () => {
+    vi.useFakeTimers();
+    const lastPatchHtml = await renderEditingTableCell();
+
+    // Pick black, then paint only the top edge — the other three stay unpainted.
+    fireEvent.click(screen.getByRole("button", { name: "Border colour Black" }));
+    fireEvent.click(screen.getByRole("button", { name: "Border Top" }));
+    await vi.advanceTimersByTimeAsync(1600);
+
+    const html = lastPatchHtml();
+    expect(html).toMatch(/border-top:\s*1px solid (?:#000000|rgb\(0, 0, 0\))/);
+    expect(html).not.toContain("border-bottom");
+    expect(html).not.toContain("border-left");
+    expect(html).not.toContain("border-right");
+    vi.useRealTimers();
+  });
+
+  test("the eraser is a selectable paint, mutually exclusive with a colour", async () => {
+    vi.useFakeTimers();
+    await renderEditingTableCell();
+
+    // Selecting the eraser presses it and clears any colour swatch — it's the
+    // active "paint" the side buttons then apply as `hidden`. (That the apply
+    // persists `hidden` is pinned by the cellFormatting lib test;
+    // editor.getHTML() can't assert it here because jsdom's CSSOM drops
+    // `border-style: hidden` on serialisation — a jsdom limitation, not
+    // production, mirroring the collapsed-border note in gotcha #16.)
+    const erase = screen.getByRole("button", { name: "Border colour erase" });
+    const black = screen.getByRole("button", { name: "Border colour Black" });
+    fireEvent.click(black);
+    expect(black).toHaveAttribute("aria-pressed", "true");
+    expect(erase).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(erase);
+    expect(erase).toHaveAttribute("aria-pressed", "true");
+    expect(black).toHaveAttribute("aria-pressed", "false");
     vi.useRealTimers();
   });
 });

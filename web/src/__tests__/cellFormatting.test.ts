@@ -13,14 +13,18 @@ import {
   buildCellStyle,
   gridBorderValue,
   BORDER_NONE,
+  BORDER_HIDDEN,
   FILL_NONE,
   StyledTableCell,
   StyledTableHeader,
   applyCellFill,
+  applyCellBorderSide,
   applyCellBorderAll,
   applyCellDoubleUnderline,
   resetCellToTheme,
   applyCellAlign,
+  captureSelection,
+  restoreSelection,
 } from "../lib/cellFormatting";
 
 describe("parseInlineStyle", () => {
@@ -344,6 +348,82 @@ describe("styled cell extension round-trip (real editor)", () => {
     expect(attrs.backgroundColor).toBe("transparent");
     expect(attrs.borderTop).toBe("none");
     expect(buildCellStyle(attrs)).toContain("border-top: none");
+    editor.destroy();
+  });
+
+  it("recolouring one side leaves the other three untouched (per-side control)", () => {
+    // The user's core complaint: making the top edge black turned the other
+    // edges grey. The data layer already supports independence — paint one
+    // side and the others must keep their existing value, not fall back.
+    const editor = makeEditor(
+      "<table><tbody><tr><td>x</td></tr></tbody></table>",
+    );
+    // Start from an all-white grid, then recolour ONLY the top to black.
+    applyCellBorderAll(editor, gridBorderValue("#ffffff"));
+    applyCellBorderSide(editor, "Top", gridBorderValue("#000000"));
+    const attrs = firstCellAttrs(editor);
+    expect(attrs.borderTop).toBe("1px solid #000000");
+    expect(attrs.borderRight).toBe("1px solid #ffffff");
+    expect(attrs.borderBottom).toBe("1px solid #ffffff");
+    expect(attrs.borderLeft).toBe("1px solid #ffffff");
+    editor.destroy();
+  });
+
+  it("erasing a side persists `hidden`, which wins the collapsed shared edge", () => {
+    // `none` has the LOWEST collapse priority (the neighbour's grey grid wins
+    // and the edge still shows grey); `hidden` has the HIGHEST and truly
+    // removes the line. The eraser writes BORDER_HIDDEN per side.
+    const editor = makeEditor(
+      "<table><tbody><tr><td>x</td></tr></tbody></table>",
+    );
+    applyCellBorderAll(editor, gridBorderValue("#ffffff"));
+    applyCellBorderSide(editor, "Right", BORDER_HIDDEN);
+    const attrs = firstCellAttrs(editor);
+    expect(attrs.borderRight).toBe("hidden");
+    expect(attrs.borderTop).toBe("1px solid #ffffff"); // untouched
+    expect(buildCellStyle(attrs)).toContain("border-right: hidden");
+    editor.destroy();
+  });
+
+  it("a multi-cell CellSelection survives a setContent() (capture/restore)", () => {
+    // The save-reconcile replaces the doc via setContent(), which resets the
+    // selection to the doc start. A restore via setTextSelection would collapse
+    // a multi-cell drag-select; captureSelection/restoreSelection must rebuild
+    // it AS a CellSelection so the user doesn't re-select after every save.
+    const editor = makeEditor(
+      "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>",
+    );
+    const cellPositions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "tableCell") cellPositions.push(pos);
+      return true;
+    });
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        CellSelection.create(editor.state.doc, cellPositions[0], cellPositions[1]),
+      ),
+    );
+    expect(editor.state.selection).toBeInstanceOf(CellSelection);
+
+    const captured = captureSelection(editor);
+    expect(captured.kind).toBe("cell");
+    // Replace the doc the way the reconcile path does (same structure, only the
+    // inline style differs in production — here an identical re-set suffices).
+    editor.commands.setContent(
+      "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>",
+      { emitUpdate: false },
+    );
+    // setContent reset the selection off the cells…
+    expect(editor.state.selection).not.toBeInstanceOf(CellSelection);
+    restoreSelection(editor, captured);
+    // …and restore rebuilds the multi-cell CellSelection spanning both cells.
+    const sel = editor.state.selection;
+    expect(sel).toBeInstanceOf(CellSelection);
+    const spanned: string[] = [];
+    (sel as CellSelection).forEachCell((node) => {
+      spanned.push(node.textContent);
+    });
+    expect(spanned).toEqual(["a", "b"]);
     editor.destroy();
   });
 });
