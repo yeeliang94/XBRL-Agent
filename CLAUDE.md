@@ -694,10 +694,27 @@ Key invariants:
   reloaded all-border cell still renders. The map shape-checks every value (rejects
   `url()`, `expression()`, malformed border values, disallowed props). Off the
   table, `style=` is still stripped wholesale, so this gotcha's "DB stays
-  style-free" rule holds for prose. "No fill"/"no border" persist as explicit
-  reset values (`background-color: transparent`, `border: none`), NOT
-  attribute-absence (the editor CSS would otherwise repaint the default grid
-  + header fill). **Agents still emit style-free HTML** (the prompt forbids
+  style-free" rule holds for prose. "No fill" persists as an explicit reset
+  value (`background-color: transparent`), NOT attribute-absence (the editor
+  CSS would otherwise repaint the default grid + header fill). **Per-side
+  border control + `hidden`-erase (2026-06-29):** the border toolbar is
+  two-step — a colour swatch SELECTS the active paint (or the eraser); the
+  per-side / "All" buttons APPLY it, leaving the untouched sides intact
+  (`applyCellBorderSide` writes ONE side, so a cell can hold a different colour
+  per edge). Erasing an edge writes `border-style: hidden`, NOT `none`: the
+  table is `border-collapse: collapse`, where `none` has the LOWEST conflict
+  priority (a neighbour's default grey grid line wins, so the edge still shows
+  grey) and `hidden` the HIGHEST (the edge truly disappears). The sanitiser
+  already accepted `hidden` (`_BORDER_STYLE_VALUES`). `BORDER_NONE`
+  (`border: none`) is NO LONGER the toolbar's erase value — it remains only the
+  editor's own style-RESET (`resetCellToTheme` re-inherits the theme), a
+  separate concern from erasing a line. The save-reconcile AND parent-refetch
+  `setContent` now capture/restore the multi-cell `CellSelection`
+  (`captureSelection`/`restoreSelection` in `cellFormatting.ts`) so a formatting
+  save no longer collapses a drag-select. Pinned by the
+  `cellFormatting`/`NotesReviewTab` web tests +
+  `test_notes_html_sanitize_css.py::test_hidden_border_survives_on_td`.
+  **Agents still emit style-free HTML** (the prompt forbids
   it); styling is a human-only post-step in the editor. The decision to
   hand-roll the CSS validator (no `bleach` dependency) is recorded in
   docs/PLAN-notes-wysiwyg-formatting.md. On the style-bearing table tags,
