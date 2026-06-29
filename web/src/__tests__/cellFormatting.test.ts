@@ -11,6 +11,8 @@ import { CellSelection } from "@tiptap/pm/tables";
 import {
   parseInlineStyle,
   buildCellStyle,
+  resolveCellBorders,
+  splitCssTokens,
   gridBorderValue,
   BORDER_NONE,
   BORDER_HIDDEN,
@@ -80,6 +82,85 @@ describe("buildCellStyle", () => {
 
   it("gridBorderValue lowercases the colour", () => {
     expect(gridBorderValue("#ABCDEF")).toBe("1px solid #abcdef");
+  });
+});
+
+describe("resolveCellBorders — browser-collapse expansion (parse side)", () => {
+  // Real Chrome collapses uniform / partly-uniform per-side borders on
+  // editor.getHTML(). These are the exact forms it emits; the parse must
+  // expand them back to per-side or an erased / mixed-colour border is lost on
+  // the save round-trip (the "border-none reappears as grey" bug). jsdom keeps
+  // the longhands, so this is unit-tested on the parsed map directly.
+  it("splitCssTokens keeps rgb()/rgba() functions whole", () => {
+    expect(
+      splitCssTokens("rgb(0, 0, 0) rgb(255, 255, 255) rgb(24, 95, 165) rgb(0, 0, 0)"),
+    ).toEqual([
+      "rgb(0, 0, 0)",
+      "rgb(255, 255, 255)",
+      "rgb(24, 95, 165)",
+      "rgb(0, 0, 0)",
+    ]);
+    expect(splitCssTokens("1px")).toEqual(["1px"]);
+  });
+
+  it("expands `border-style: hidden` (the 'Border none' collapse) to all sides", () => {
+    // All four sides hidden, no width/colour set → Chrome emits just the
+    // grouped style longhand. Each side must come back as `hidden`.
+    const out = resolveCellBorders({ "border-style": "hidden" });
+    expect(out).toEqual({
+      borderTop: "hidden",
+      borderRight: "hidden",
+      borderBottom: "hidden",
+      borderLeft: "hidden",
+    });
+  });
+
+  it("expands grouped width/style/color longhands into per-side values", () => {
+    // Top black, the other three white → Chrome collapses to grouped longhands
+    // with a 4-colour border-color. Each side recomposes as `<w> <s> <c>`.
+    const out = resolveCellBorders({
+      "border-width": "1px",
+      "border-style": "solid",
+      "border-color": "rgb(0, 0, 0) rgb(255, 255, 255) rgb(255, 255, 255) rgb(255, 255, 255)",
+    });
+    expect(out.borderTop).toBe("1px solid rgb(0, 0, 0)");
+    expect(out.borderRight).toBe("1px solid rgb(255, 255, 255)");
+    expect(out.borderBottom).toBe("1px solid rgb(255, 255, 255)");
+    expect(out.borderLeft).toBe("1px solid rgb(255, 255, 255)");
+  });
+
+  it("expands the all-sides `border:` shorthand to every side", () => {
+    const out = resolveCellBorders({ border: "1px solid rgb(24, 95, 165)" });
+    expect(out.borderTop).toBe("1px solid rgb(24, 95, 165)");
+    expect(out.borderLeft).toBe("1px solid rgb(24, 95, 165)");
+  });
+
+  it("an explicit per-side longhand wins over the grouped / shorthand forms", () => {
+    const out = resolveCellBorders({
+      border: "1px solid rgb(24, 95, 165)",
+      "border-bottom": "3px double rgb(0, 0, 0)",
+    });
+    expect(out.borderTop).toBe("1px solid rgb(24, 95, 165)");
+    expect(out.borderBottom).toBe("3px double rgb(0, 0, 0)");
+  });
+
+  it("two-value positional border-style expands T/B + R/L", () => {
+    const out = resolveCellBorders({ "border-style": "hidden solid" });
+    expect(out).toEqual({
+      borderTop: "hidden",
+      borderRight: "solid",
+      borderBottom: "hidden",
+      borderLeft: "solid",
+    });
+  });
+
+  it("returns nulls when no border declarations are present", () => {
+    expect(resolveCellBorders({ "background-color": "#eee" })).toEqual({
+      borderTop: null,
+      borderRight: null,
+      borderBottom: null,
+      borderLeft: null,
+    });
   });
 });
 
@@ -369,19 +450,22 @@ describe("styled cell extension round-trip (real editor)", () => {
     editor.destroy();
   });
 
-  it("erasing a side persists `hidden`, which wins the collapsed shared edge", () => {
+  it("erasing a side persists the `hidden` STYLE, which wins the collapsed edge", () => {
     // `none` has the LOWEST collapse priority (the neighbour's grey grid wins
-    // and the edge still shows grey); `hidden` has the HIGHEST and truly
-    // removes the line. The eraser writes BORDER_HIDDEN per side.
+    // and the edge still shows grey); the `hidden` style has the HIGHEST and
+    // truly removes the line. The eraser writes BORDER_HIDDEN — a full
+    // width/style/colour triplet so it round-trips like a solid border (see the
+    // BORDER_HIDDEN doc): the explicit colour avoids the bare-`hidden`
+    // → `currentcolor` collapse the sanitiser rejects.
     const editor = makeEditor(
       "<table><tbody><tr><td>x</td></tr></tbody></table>",
     );
     applyCellBorderAll(editor, gridBorderValue("#ffffff"));
     applyCellBorderSide(editor, "Right", BORDER_HIDDEN);
     const attrs = firstCellAttrs(editor);
-    expect(attrs.borderRight).toBe("hidden");
+    expect(attrs.borderRight).toBe("1px hidden #000000");
     expect(attrs.borderTop).toBe("1px solid #ffffff"); // untouched
-    expect(buildCellStyle(attrs)).toContain("border-right: hidden");
+    expect(buildCellStyle(attrs)).toContain("border-right: 1px hidden #000000");
     editor.destroy();
   });
 
