@@ -33,7 +33,7 @@ from pydantic_ai.models import Model
 from model_settings import build_model_settings
 
 from notes.writer import payload_sidecar_path
-from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
+from tools.pdf_viewer import count_pdf_pages
 # Promoted to utils/workbook_io.py (item 8) so every workbook saver shares
 # one atomic mechanism. Re-exported under the original private name to keep
 # this module's import/test contract (tests/test_notes_validator_agent.py)

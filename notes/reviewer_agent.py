@@ -40,7 +40,7 @@ from notes.html_to_text import rendered_length
 from notes.versioning import ensure_notes_snapshot
 from notes.writer import CELL_CHAR_LIMIT, truncate_with_footer
 from notes_types import NOTES_REGISTRY
-from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
+from tools.pdf_viewer import count_pdf_pages
 from notes.detectors import (
     _render_single_page,
     detect_cross_sheet_duplicates_by_ref,
