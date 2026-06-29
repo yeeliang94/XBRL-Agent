@@ -58,11 +58,19 @@ export const DOUBLE_UNDERLINE = "3px double #000000";
 export const BORDER_NONE = "none";
 /** Erase one edge in a `border-collapse: collapse` table. `none` has the LOWEST
  *  priority in the collapsed-border conflict resolution, so a neighbour cell's
- *  default grid line wins and the edge still shows the grey grid; `hidden` has
- *  the HIGHEST priority and always wins, so the edge truly disappears. The
- *  sanitiser already accepts `hidden` (notes/html_sanitize.py
- *  `_BORDER_STYLE_VALUES`), so this round-trips unchanged. */
-export const BORDER_HIDDEN = "hidden";
+ *  default grid line wins and the edge still shows the grey grid; the `hidden`
+ *  STYLE has the HIGHEST priority and always wins, so the edge truly disappears.
+ *
+ *  We carry the full `<width> <style> <color>` triplet (not a bare `hidden`)
+ *  deliberately: `editor.getHTML()` serialises through the browser's CSSOM,
+ *  which collapses a bare per-side `hidden` (only the style is non-initial) into
+ *  `border-style: hidden` + `border-color: currentcolor` — and the sanitiser
+ *  rejects the `currentcolor` keyword, so the round-trip churns. With an
+ *  explicit colour, hidden collapses the SAME way solid borders do (the
+ *  `border:` shorthand when uniform, or the grouped longhands with an explicit
+ *  rgb() colour when mixed) — both round-trip cleanly through resolveCellBorders
+ *  + the sanitiser. (`border-style: hidden` wins regardless of width/colour.) */
+export const BORDER_HIDDEN = "1px hidden #000000";
 export const FILL_NONE = "transparent";
 
 /** Parse a raw inline-style string into a prop→value map WITHOUT the browser's
@@ -78,6 +86,99 @@ export function parseInlineStyle(style: string | null): Record<string, string> {
     const value = decl.slice(idx + 1).trim().toLowerCase();
     if (prop && value) out[prop] = value;
   }
+  return out;
+}
+
+/** Split a CSS multi-value list (e.g. a `border-color` carrying four colours)
+ *  into tokens, keeping `rgb()`/`rgba()` functions — which contain spaces and
+ *  commas — as single tokens. A plain `split(/\s+/)` would shred
+ *  `rgb(0, 0, 0)` into invalid fragments. */
+export function splitCssTokens(value: string): string[] {
+  const tokens: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of value) {
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth = Math.max(0, depth - 1);
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) {
+        tokens.push(cur);
+        cur = "";
+      }
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+/** Expand the 1–4 positional tokens of a grouped border longhand into the
+ *  [top, right, bottom, left] order CSS uses (1→all; 2→T/B + R/L; 3→T + R/L + B;
+ *  4→T R B L). */
+function expandPositional(
+  tokens: string[],
+): [string?, string?, string?, string?] {
+  switch (tokens.length) {
+    case 1:
+      return [tokens[0], tokens[0], tokens[0], tokens[0]];
+    case 2:
+      return [tokens[0], tokens[1], tokens[0], tokens[1]];
+    case 3:
+      return [tokens[0], tokens[1], tokens[2], tokens[1]];
+    default:
+      return tokens.length >= 4
+        ? [tokens[0], tokens[1], tokens[2], tokens[3]]
+        : [undefined, undefined, undefined, undefined];
+  }
+}
+
+const _SIDE_ORDER = ["Top", "Right", "Bottom", "Left"] as const;
+type BorderAttr = "borderTop" | "borderRight" | "borderBottom" | "borderLeft";
+
+/** Resolve each side's `border-<side>` value from a parsed inline-style map,
+ *  expanding the forms a browser's CSSOM serialiser collapses uniform /
+ *  partly-uniform per-side borders into on `editor.getHTML()`:
+ *    - the all-sides `border:` shorthand (fully uniform),
+ *    - the `border-width` / `border-style` / `border-color` grouped longhands
+ *      (partly-uniform — e.g. a mixed-colour grid, or an erased `hidden` edge
+ *      where only the style is non-initial → Chrome emits `border-style: hidden`),
+ *    - explicit per-side `border-<side>` longhands (which WIN over the above).
+ *  Without expanding the grouped longhands, an erased or mixed-colour per-side
+ *  border is dropped on the save round-trip and the cell snaps back to the
+ *  default grid. jsdom does NOT collapse (it keeps the per-side longhands), so
+ *  this only reproduces in a real browser — the divergence noted in CLAUDE.md
+ *  gotcha #16, here biting the PARSE side, not just serialisation. */
+export function resolveCellBorders(
+  parsed: Record<string, string>,
+): Record<BorderAttr, string | null> {
+  const widths = parsed["border-width"]
+    ? expandPositional(splitCssTokens(parsed["border-width"]))
+    : null;
+  const styles = parsed["border-style"]
+    ? expandPositional(splitCssTokens(parsed["border-style"]))
+    : null;
+  const colors = parsed["border-color"]
+    ? expandPositional(splitCssTokens(parsed["border-color"]))
+    : null;
+  const shorthand = parsed["border"] ?? null;
+  const grouped = widths || styles || colors;
+
+  const out = {} as Record<BorderAttr, string | null>;
+  _SIDE_ORDER.forEach((Side, i) => {
+    const attr = `border${Side}` as BorderAttr;
+    const perSide = parsed[`border-${Side.toLowerCase()}`];
+    if (perSide) {
+      out[attr] = perSide; // explicit per-side longhand always wins
+    } else if (grouped) {
+      const parts = [widths?.[i], styles?.[i], colors?.[i]].filter(
+        (t): t is string => Boolean(t),
+      );
+      out[attr] = parts.length ? parts.join(" ") : shorthand;
+    } else {
+      out[attr] = shorthand;
+    }
+  });
   return out;
 }
 
@@ -102,10 +203,18 @@ export function buildCellStyle(attrs: Record<string, unknown>): string | null {
 function styleAttributes() {
   const attrs: Record<string, unknown> = {};
   for (const { attr, css, fallback } of STYLE_PROPS) {
+    const isBorder = attr.startsWith("border");
     attrs[attr] = {
       default: null,
       parseHTML: (el: HTMLElement) => {
         const parsed = parseInlineStyle(el.getAttribute("style"));
+        // Borders go through resolveCellBorders, which expands the grouped
+        // longhands / `border:` shorthand the browser collapses uniform
+        // per-side borders into; the simple `fallback` only covered `border:`
+        // and dropped `border-style: hidden` / mixed-colour grids on reload.
+        if (isBorder) {
+          return resolveCellBorders(parsed)[attr as BorderAttr] ?? null;
+        }
         return parsed[css] ?? (fallback ? parsed[fallback] ?? null : null);
       },
       // Rendered centrally in renderHTML — return nothing here so the per-
