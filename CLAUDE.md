@@ -689,9 +689,13 @@ Key invariants:
   shape-checked) or "Border all" is stripped on every save and the cell reverts
   to the default grid. jsdom does NOT collapse (it keeps the longhands), so unit
   tests miss this — pinned by `test_browser_collapsed_border_shorthand_survives_on_td`.
-  The editor's `StyledTableCell` parseHTML expands a collapsed `border:` back to
-  the four side attrs (`STYLE_PROPS` `fallback`, `cellFormatting.ts`) so a
-  reloaded all-border cell still renders. The map shape-checks every value (rejects
+  The editor's `StyledTableCell` parseHTML expands the collapsed forms back to
+  the four side attrs via `resolveCellBorders` (`cellFormatting.ts`) — the
+  `border:` shorthand AND the grouped `border-width`/`border-style`/`border-color`
+  longhands (1–4 positional tokens, rgb()-aware) — so a reloaded all-border /
+  mixed-colour / erased cell still renders (see the `hidden`-erase note below;
+  the old simple `border:`-only `fallback` dropped the grouped form and the cell
+  snapped back to the grid). The map shape-checks every value (rejects
   `url()`, `expression()`, malformed border values, disallowed props). Off the
   table, `style=` is still stripped wholesale, so this gotcha's "DB stays
   style-free" rule holds for prose. "No fill" persists as an explicit reset
@@ -701,11 +705,19 @@ Key invariants:
   two-step — a colour swatch SELECTS the active paint (or the eraser); the
   per-side / "All" buttons APPLY it, leaving the untouched sides intact
   (`applyCellBorderSide` writes ONE side, so a cell can hold a different colour
-  per edge). Erasing an edge writes `border-style: hidden`, NOT `none`: the
-  table is `border-collapse: collapse`, where `none` has the LOWEST conflict
-  priority (a neighbour's default grey grid line wins, so the edge still shows
-  grey) and `hidden` the HIGHEST (the edge truly disappears). The sanitiser
-  already accepted `hidden` (`_BORDER_STYLE_VALUES`). `BORDER_NONE`
+  per edge). Erasing an edge uses the `hidden` STYLE, NOT `none`: the table is
+  `border-collapse: collapse`, where `none` has the LOWEST conflict priority (a
+  neighbour's default grey grid line wins, so the edge still shows grey) and
+  `hidden` the HIGHEST (the edge truly disappears). `BORDER_HIDDEN` is the full
+  `1px hidden #000000` TRIPLET, not a bare `hidden`, on purpose: a bare `hidden`
+  collapses (via getHTML's CSSOM) to `border-style: hidden` + `border-color:
+  currentcolor`, and the sanitiser rejects `currentcolor` → the round-trip
+  churns and the edge can revert; an explicit colour collapses the same way a
+  solid border does and round-trips cleanly through `resolveCellBorders` + the
+  sanitiser (the `hidden` style still wins regardless of width/colour). So EVERY
+  border value the editor emits is a `<width> <style> <colour>` triplet —
+  Chrome only ever collapses to forms `resolveCellBorders` handles, never the
+  bare-style/`currentcolor`/`*-style` sub-longhand forms. `BORDER_NONE`
   (`border: none`) is NO LONGER the toolbar's erase value — it remains only the
   editor's own style-RESET (`resetCellToTheme` re-inherits the theme), a
   separate concern from erasing a line. The save-reconcile AND parent-refetch
@@ -713,7 +725,8 @@ Key invariants:
   (`captureSelection`/`restoreSelection` in `cellFormatting.ts`) so a formatting
   save no longer collapses a drag-select. Pinned by the
   `cellFormatting`/`NotesReviewTab` web tests +
-  `test_notes_html_sanitize_css.py::test_hidden_border_survives_on_td`.
+  `test_notes_html_sanitize_css.py`. (Verified in real Chrome: jsdom does NOT
+  reproduce the collapse, so the round-trip can only be confirmed in a browser.)
   **Agents still emit style-free HTML** (the prompt forbids
   it); styling is a human-only post-step in the editor. The decision to
   hand-roll the CSS validator (no `bleach` dependency) is recorded in
