@@ -1,117 +1,163 @@
-# Implementation Plan: Reviewer Self-Verify — Review Follow-ups
+# Implementation Plan: Notes Editor — Per-Side Border Control + Selection Persistence
 
-**Overall Progress:** `100%`
-**PRD Reference:** none — this plan implements the four follow-ups from the five-axis
-code review of commits `0746a25` (feat: agents verify their own fixes) and
-`3e6502a` (fix: close the `verify_fixes` false-green loophole). See CLAUDE.md
-gotcha #21 (reviewer pass) and the `reviewer_verify_scope_false_green` memory.
-**Last Updated:** 2026-06-26
+**Overall Progress:** `100%` — code complete, all automated tests green (frontend 814,
+sanitizer 41). Live in-app manual checks (the `Verify` steps that drive the running app)
+are left for the user to confirm; they were validated via the component/unit suite instead.
+**PRD Reference:** none — shaped via `/brainstorm` on 2026-06-29 (see Summary). Relates to
+CLAUDE.md gotcha #16 (notes editor v2, table-cell styling) and the
+`notes_wysiwyg_formatting` memory.
+**Last Updated:** 2026-06-29
 
-> Replaces the previous (completed, 100%) PLAN.md for the **Design-System Code
-> Sweep** — that work is done and preserved in git history (the same
-> replace-in-place convention this repo's PLAN.md slot already uses; `docs/Archive/`
-> is read-only, so no copy is made there).
+> Replaces the previous (completed, 100%) PLAN.md for **Reviewer Self-Verify — Review
+> Follow-ups** — that work is done and preserved in git history (the same
+> replace-in-place convention this repo's PLAN.md slot uses; `docs/Archive/` is
+> read-only, so no copy is made there). **This work is unrelated to the current
+> `feat/reviewer-verify-followups` branch — start a fresh branch before coding
+> (see Pre-Implementation Checklist).**
 
 ## Summary
-The close-the-loop reviewer self-verification shipped correct and well-tested.
-This plan addresses the four non-blocking follow-ups the review surfaced: one
-real refactor (de-duplicate the cross-check scoping logic now spread across
-`server.py` and the reviewer) and three small isolated fixes (de-risk a future
-validator deletion, refine one fail-safe message, and a provenance nit). Nothing
-here changes externally observable behavior except the deliberate message
-refinement in Step 2.
+
+The notes table editor can't give a cell independent per-side borders. Picking a colour
+repaints all four sides, the per-side buttons only toggle a side on/off, "off" leaves the
+default grey grid showing, and every formatting click drops the multi-cell selection so the
+user re-selects constantly. This plan rewires the border toolbar to a **two-step model**
+(pick a colour or the eraser → click the edge(s) to paint), makes "erase" use CSS `hidden`
+(which wins the collapsed shared-edge contest) instead of `none` (which loses to the
+neighbour's grey), and **preserves the multi-cell `CellSelection`** across the save-reconcile
+re-render. No backend/exporter changes — the data layer and sanitiser already support all of it.
 
 ## Key Decisions
-- **Scope = the 4 reviewed follow-ups only.** No new reviewer behavior, no new
-  tools, no prompt changes. Surgical per CLAUDE.md "How to Behave Here".
-- **The duplication is two-way, not three-way.** `_recheck_from_facts` already
-  reuses `_build_check_template_ids` (via `select_cross_check_backend`). The genuine
-  duplication is `_build_check_template_ids` (server.py:429) vs the inline loop in
-  `run_verification_checks` (correction/reviewer_agent.py:1191). The shared helper
-  collapses both, and lets `_recheck_from_facts` drop its own hand-rolled
-  `statements_to_run`/`variants` loop as a bonus.
-- **Shared helper lives in `cross_checks/framework.py`.** Both `server.py` and
-  `correction/reviewer_agent.py` already import from it; it has no dependency on
-  either, so no import cycle. Heavy imports (`statement_types.template_path`,
-  `concept_model.parser._derive_template_id`) stay **lazy/inside the function**,
-  matching the existing pattern, to keep `cross_checks` import-light.
-- **Status filtering stays at the call site.** The helper takes already-resolved
-  `(statement_type, variant)` pairs. The callers keep their own status filters
-  (`"succeeded"`-only in-memory vs `FACTS_BEARING_AGENT_STATUSES` from the DB) —
-  those legitimately differ and must not be flattened into the helper.
-- **The reviewer-shared surface moves to a new `notes/detectors.py` (Step 1, scope
-  expanded with user approval).** The reviewer didn't import just `load_sidecar_entries`
-  from the dead-but-green `notes/validator_agent.py` — it imported a *bundle* of 9
-  names (the 5 detectors + the three loaders + `_render_single_page`). Moving one
-  wouldn't de-risk the deletion, so the **whole** pure-detector surface moved to a
-  new neutral module (not `notes/persistence.py` — these are detectors, not
-  persistence). `validator_agent.py` re-exports them so its own code + tests are
-  untouched until it's deleted.
+
+- **Erase with `hidden`, not `none`** — The table is `border-collapse: collapse`. In a
+  collapsed table the visible line between two cells is resolved from *both* cells' edges;
+  `border-style: none` has the **lowest** priority and always loses to the neighbour's default
+  grey line, so "no border" shows grey. `border-style: hidden` has the **highest** priority and
+  always wins, so the edge truly disappears. Sanitiser already accepts `hidden`
+  (`html_sanitize.py:98`) — no backend change.
+- **Two-step toolbar (select colour → apply to edge)** — replaces "swatch paints all four
+  sides". Selecting a colour (or the eraser) only sets the *active* colour; clicking
+  Top/Right/Bottom/Left/All paints that colour onto those edges, leaving the others untouched.
+  This is the single missing capability ("this colour, on this side, leave the rest") that
+  causes symptoms 1–3. The "All" button preserves the old one-click "whole grid one colour" flow.
+- **Restore `CellSelection`, not a text range, after reconcile** — the current restore uses
+  `setTextSelection` (`NotesReviewTab.tsx:929`), which can't represent a multi-cell selection.
+  Capture the `CellSelection` before `setContent` and rebuild it after, so the multi-cell
+  selection (and its visible highlight) survive the save.
+- **Scope: frontend + (verify-only) sanitiser** — `applyCellBorderSide` already preserves the
+  other three sides (`cellFormatting.ts:174`); the xlsx download is text-only
+  (`html_to_excel_text`), so borders never reach the workbook. Only the editor preview and the
+  clipboard paste render borders. No exporter, no DB, no schema work.
+- **Keep the existing 5-colour palette (+ an eraser); defer a free colour picker** — the
+  "finer control" the user asked for is delivered by per-side independence, not by more colours.
+  A free/custom colour picker is explicitly out of scope for this plan (possible follow-up).
 
 ## Pre-Implementation Checklist
-- [x] 🟩 Scope confirmed with user (all four follow-ups selected)
-- [x] 🟩 No conflicting in-progress work (working tree clean; both source commits landed)
-- [x] 🟩 Baseline green — new + adjacent suites pass (28 + 130 at review time)
+
+- [ ] 🟩 All questions from `/brainstorm` resolved — **done** (4 symptoms reproduced + root-caused)
+- [ ] 🟩 Confirm a fresh branch off `main` (e.g. `feat/notes-border-per-side`); do **not** build
+      this on `feat/reviewer-verify-followups`
+- [ ] 🟩 Stash / commit the two uncommitted reviewer files (`notes/reviewer_agent.py`,
+      `notes/validator_agent.py`) so they don't ride along on the new branch
+- [ ] 🟩 Confirm the two-step toolbar UX (Key Decision #2) — it intentionally changes how the
+      colour swatches behave, so the existing `NotesReviewTab` pinning tests will be updated in
+      the same commit (expected, per gotcha #7 "change a token and its pinning test together")
 
 ## Tasks
 
-> Verify command convention (per `venv_interpreter_for_tests` memory): run pytest as
-> `./venv/bin/python -m pytest …` — bare `python3` is a stale interpreter.
+### Phase 1: Reliable erase + per-side recolor (fixes symptoms 1, 2, 3)
 
-### Phase 1: Low-risk isolated fixes (independent; land first to keep the refactor isolated)
+- [ ] 🟩 **Step 1: Add the `hidden`-erase primitive** — give the editor a value that truly
+      removes one edge in a collapsed table, replacing the grey-leaking `none`.
+  - [ ] 🟩 In `web/src/lib/cellFormatting.ts`, add `export const BORDER_HIDDEN = "hidden"`
+        (alongside `BORDER_NONE`), and a comment explaining the collapse-priority reason.
+  - [ ] 🟩 Decide the stored shape (`"hidden"` vs `"1px hidden #000000"`) — prefer bare
+        `"hidden"`; both validate, bare is cleanest and renders `border-<side>: hidden`.
+  - [ ] 🟩 Confirm (no change expected) the sanitiser keeps it: `_is_border_shorthand` accepts a
+        lone `hidden` token (`html_sanitize.py:145`, `_BORDER_STYLE_VALUES` at :98).
+  - **Verify:** Add/extend a unit test in `tests/test_notes_html_sanitize_css.py` asserting
+    `<td style="border-top: hidden">` survives sanitisation unchanged. Run
+    `./venv/bin/python -m pytest tests/test_notes_html_sanitize_css.py -v` → green.
 
-- [x] 🟩 **Step 1: Relocate the whole reviewer-shared surface out of the doomed validator** — de-risks the eventual `notes/validator_agent.py` deletion. **Scope expanded (user-approved): full move, not just `load_sidecar_entries`.** The reviewer imported a *bundle* of 9 names from `validator_agent` (5 detectors + `inventory_coverage_gaps` + `load_inventory_from_db` + `load_provenance_entries` + `_render_single_page`) plus the lazy `load_sidecar_entries`; moving only one would have left the reviewer broken after the deletion. Neutral home = new `notes/detectors.py` (not `notes/persistence.py` — these are pure detectors, not persistence).
-  - [x] 🟩 Created `notes/detectors.py` with the full surface: `load_sidecar_entries`, `load_provenance_entries`, `load_inventory_from_db`, the 5 `detect_*`, `inventory_coverage_gaps`, `_render_single_page`, and their private helpers/constants (`_top_note_num`, `_subnote_key`, `_top_note_nums`, `_char_shingles`, `_jaccard`, `_CATCH_ALL_ROW_LABELS`, `_SHINGLE_SIZE`, `_OVERLAP_THRESHOLD`).
-  - [x] 🟩 `notes/validator_agent.py` re-exports them all (`from notes.detectors import …`) so its remaining code + `tests/test_notes_validator_agent.py` keep their import surface unchanged.
-  - [x] 🟩 Repointed `notes/reviewer_agent.py` (bundle import + 2 lazy imports) and `server.py:5337` to `notes.detectors`.
-  - [x] 🟩 Retargeted render/sidecar monkeypatches in 5 test files — `_render_single_page` now resolves `render_pages_to_png_bytes` in `notes.detectors`'s namespace, so every render mock for a reviewer/validator path moved from `va.*` to `det.*` (`test_notes_reviewer_self_verify`, `_tools`, `_authoring`, `_routes`, `test_notes_review_provenance`).
-  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_notes_reviewer_self_verify.py tests/test_notes_reviewer_tools.py tests/test_notes_review_provenance.py tests/test_notes_validator_agent.py tests/test_notes_reviewer_authoring.py tests/test_notes_reviewer_routes.py -q` → **67 passed**; no live importer left on `from notes.validator_agent import load_sidecar_entries`.
+- [ ] 🟩 **Step 2: Rewire the border toolbar to two-step (select colour → apply to edge)** —
+      the core fix. In `web/src/components/NotesReviewTab.tsx` border controls (~lines 1380–1418):
+  - [ ] 🟩 Colour swatches set the active `borderColor` only — **remove** the
+        `applyCellBorderAll(...)` call on swatch click (line ~1411). Keep the selected-swatch
+        highlight (`aria-pressed`).
+  - [ ] 🟩 Add an **Eraser** choice to the colour row; selecting it sets the active colour to a
+        sentinel meaning "erase" (applies `BORDER_HIDDEN`).
+  - [ ] 🟩 Change per-side buttons (Top/Right/Bottom/Left) from toggle to **recolor**: each calls
+        `applyCellBorderSide(editor, side, eraserActive ? BORDER_HIDDEN : gridBorderValue(borderColor))`.
+        Delete the `sideIsOn(side) ? BORDER_NONE : …` toggle branch (line ~1387).
+  - [ ] 🟩 "All borders" applies the active colour (or `BORDER_HIDDEN`) to all four sides
+        (keep `applyCellBorderAll`); point the existing "No borders" button at `BORDER_HIDDEN`.
+  - [ ] 🟩 Keep the `.focus()` chain and `onMouseDown={preventDefault}` on every button (already
+        present — do not remove; they're load-bearing for selection per `cellFormatting.ts:143`).
+  - **Verify:** In the running app (`./start.sh`, open a notes cell, enter edit mode): select all
+    cells → White → All → grid goes white; select 2 cells → Black → Top → only the top edges turn
+    black, the other three stay white; pick Eraser → Right → the right edge disappears (no grey).
+    All three of the user's original symptoms gone.
 
-- [x] 🟩 **Step 2: Refine `_format_verification` so an all-advisory result isn't mislabeled** — a result with only `warning` checks (no `passed`) was reported `INCONCLUSIVE`; a warning *is* an evaluation. (TDD — tests written red first.)
-  - [x] 🟩 Changed the empty-evidence guard from `if not passed:` to `if not passed and not warnings:` so genuinely-empty/all-pending → `INCONCLUSIVE`, but warning-only → falls through.
-  - [x] 🟩 Branched the fall-through so `passed==0` (warning-only) emits "✓ No cross-check is failing … (N advisory warning(s) only …)" instead of the false-green "all 0 … PASS".
-  - [x] 🟩 Verified the correction path is unaffected: non-empty `original_failed_names` + empty `passed` → `unconfirmed` non-empty → still `NOT CONFIRMED` (pinned by the new `…with_open_target_is_not_confirmed` test).
-  - [x] 🟩 Added the two formatter tests (warning-only + empty original → not INCONCLUSIVE / not "all 0"; warning-only + open target → NOT CONFIRMED).
-  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_reviewer_self_verify.py -q` → **15 passed** (incl. the unchanged false-green guards).
+- [ ] 🟩 **Step 3: Reflect per-side state in the toolbar** — so the controls show what the
+      focused cell actually has (the old `sideIsOn` boolean is now insufficient).
+  - [ ] 🟩 Update the per-side button's pressed/active styling to read the focused cell's
+        `border<Side>` attr via `currentCellAttrs(editor)` and show whether that side is painted
+        / erased / default. Keep it advisory (anchor cell only is acceptable for v1).
+  - **Verify:** Click into a cell with a known mix (top black, right hidden, rest white) → the
+    toolbar's per-side indicators match. `cd web && npx vitest run` cellFormatting/NotesReviewTab → green.
 
-- [x] 🟩 **Step 3: `move_notes_provenance` refs nit — investigated, resolved as "intentional, document + pin"** (NO behavior change). Investigation showed the nit is inert: `upsert_notes_provenance` already collapses `[]`→SQL NULL on write (`if source_note_refs`), `fetch_notes_provenance` normalizes NULL→`[]` on read, and the detectors treat empty/absent refs identically. So `[]`≡`None`≡NULL is a subsystem-wide invariant; "fixing" `move` alone would be a no-op (upsert re-collapses) and making it meaningful would require changing that invariant for zero functional gain.
-  - [x] 🟩 Added a clarifying comment in `move_notes_provenance` so a future reader doesn't "fix" the intentional collapse.
-  - [x] 🟩 Pinned the behavior: new `test_move_notes_provenance_empty_refs_round_trip` asserts an empty-refs row moves and reads back as `[]` (never `None`).
-  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_notes_reviewer_self_verify.py -q -k "provenance or move"` → **4 passed**.
+### Phase 2: Selection persistence (fixes symptom 4)
 
-### Phase 2: DRY the cross-check scoping (horizontal split — shared helper first, then migrate each consumer one at a time)
+- [ ] 🟩 **Step 4: Preserve the multi-cell `CellSelection` across the save-reconcile** — stop the
+      formatting save from collapsing the selection.
+  - [ ] 🟩 In `NotesReviewTab.tsx` reconcile branch (~lines 919–933), before `setContent`, detect
+        `editor.state.selection instanceof CellSelection` (import `CellSelection` from
+        `@tiptap/pm/tables`). Capture its anchor/head cell positions.
+  - [ ] 🟩 After `setContent`, if a `CellSelection` was captured, rebuild it
+        (`CellSelection.create(doc, anchorPos, headPos)` mapped into the new doc) and dispatch it;
+        otherwise fall back to the existing `setTextSelection` for caret/text cases. Wrap in
+        try/catch (positions may be invalid after sanitisation — harmless, mirrors current code).
+  - [ ] 🟩 Sanity-check the prop-sync path (`:837`): confirm it does **not** fire on a normal
+        self-originated save (the `cell.html` prop is stable; only the internal refs change). If
+        it can fire, apply the same CellSelection-restore guard there.
+  - **Verify:** In the app, drag-select several cells, apply a border colour, and confirm the
+    multi-cell highlight **stays** after the save settles (watch the `.selectedCell` highlight;
+    no re-select needed). Repeat rapidly across several edges — selection persists each time.
 
-- [x] 🟩 **Step 4: Add the shared `resolve_check_scope` helper (pure addition, no call-site changes)** — single source of truth for "(statement, variant) pairs → template_ids + statements_to_run + variants".
-  - [x] 🟩 Added `CheckScope(template_ids, statements_to_run, variants)` dataclass + `resolve_check_scope(pairs, *, filing_level, filing_standard)` in `cross_checks/framework.py`.
-  - [x] 🟩 Body mirrors the existing loop: `StatementType(...)` (skip pseudo-rows on `ValueError`), `template_path(...)` (skip on `ValueError`/`KeyError`), `_derive_template_id(...)`. Heavy deps lazy-imported inside the function.
-  - [x] 🟩 `StatementType(...)` normalises both an enum and its `.value` string, so no separate getattr is needed (pinned by `test_enum_and_string_statement_type_resolve_identically`).
-  - [x] 🟩 New `tests/test_check_scope.py`: pseudo-row skipped, unresolvable-variant skipped, enum-and-string both resolve, mixed input keeps valid + drops invalid, outputs mutually consistent.
-  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_check_scope.py -q` → **6 passed**; no consumer touched yet (helper unused).
+### Phase 3: Cross-surface verification + regression tests
 
-- [x] 🟩 **Step 5: Migrate `_build_check_template_ids` to delegate to the helper** — covers BOTH the pipeline pass and `_recheck_from_facts` (which reaches it via `select_cross_check_backend`).
-  - [x] 🟩 Reduced `_build_check_template_ids` to: filter `agent_results` to `status == "succeeded"`, call `resolve_check_scope`, return `.template_ids`. gotcha #21 note kept.
-  - [x] 🟩 Skip-on-error semantics preserved — the helper applies the same `except (ValueError, KeyError)` swallow.
-  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_cross_checks.py tests/test_e2e.py tests/test_download_reexport.py -q` → **24 passed**.
+- [ ] 🟩 **Step 5: Verify the clipboard paste honours `hidden` + per-side colours** — borders
+      only render in the editor and on paste; make sure paste matches.
+  - [ ] 🟩 Trace `decorateHtmlForClipboard` (`web/src/lib/clipboard.ts:214`): it already
+        preserves cell-owned `style="border…"` and suppresses the table-level `border="1"` when
+        cells own borders (line ~242). Confirm a `hidden`/per-side cell pastes as intended.
+  - [ ] 🟩 Confirm the xlsx **download** is unaffected (text-only via `html_to_excel_text`) — no
+        change expected; note it explicitly so a reviewer doesn't go looking.
+  - **Verify:** Copy a styled table from the editor, paste into Word/Excel/M-Tool: per-side colours
+    and erased edges render; download the workbook and confirm cell text is intact (borders absent
+    by design). Extend `web/src/__tests__/clipboard.test.ts` if a gap is found.
 
-- [x] 🟩 **Step 6: Migrate the reviewer's `run_verification_checks` to the helper** — removes the second copy of the loop.
-  - [x] 🟩 Replaced the inline `for statement_type, variant in rows:` block with `check_scope = resolve_check_scope(rows, …)`; `check_config` reads `check_scope.statements_to_run`/`.variants` and `FactsContext` takes `check_scope.template_ids`. Dropped the now-unused `template_path`/`StatementType`/`_derive_template_id` imports.
-  - [x] 🟩 Both scope sources unchanged: explicit in-memory `scope` arg vs DB `FACTS_BEARING_AGENT_STATUSES` fallback — only the mapping moved.
-  - [x] 🟩 Kept the early `return []` on empty `check_scope.statements_to_run` so the false-green formatter guards still fire.
-  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_reviewer_self_verify.py tests/test_reviewer_pipeline.py tests/test_reviewer_agent.py -q` → **46 passed** (incl. `test_explicit_scope_overrides_unfinalized_db_status`, `test_db_fallback_includes_completed_with_errors`).
-
-- [x] 🟩 **Step 7: Drop `_recheck_from_facts`' hand-rolled scope loop (bonus dedup)** — built `statements_to_run`/`variants` by hand though the helper now yields them.
-  - [x] 🟩 Build the `(stmt, variant)` pairs from the `FACTS_BEARING_AGENT_STATUSES`-filtered DB agents, call `resolve_check_scope` once, source `statements_to_run`/`variants` from it. Kept the `SimpleNamespace(status="succeeded", …)` `agent_results` list `select_cross_check_backend`/`_xlsx_provider` consume. **Equivalent in practice, not byte-identical** (review follow-up): the old loop added every StatementType-valid row unconditionally; the helper additionally requires `template_path` to resolve, so it skips a degenerate NULL/unresolvable-variant row the old loop kept — which a *succeeded* agent never produces (it always carries its extracted variant). In that unreachable case a needing-check surfaces as `pending` rather than the old `failed: workbook missing` (if anything more accurate). Comment tightened to say this precisely.
-  - [x] 🟩 `if not agent_results: return None` early-out preserved.
-  - **Verify:** ✅ `./venv/bin/python -m pytest tests/test_cross_checks.py tests/test_download_reexport.py tests/test_reviewer_routes.py -q` → **50 passed**.
-
-### Phase 3: Final sweep
-- [x] 🟩 **Step 8: Full-suite regression + dead-code check**
-  - [x] 🟩 `./venv/bin/python -m pytest tests/ -q` → **2701 passed, 2 skipped, 0 failed** (the first full run surfaced one stale render-mock in `test_notes_reviewer_pipeline.py` — the Step-1 sweep missed it because `setattr(` and the function name sit on separate lines; fixed and re-run clean).
-  - [x] 🟩 `py_compile` of all touched modules OK; orphan scan clean — the only `_derive_template_id` / `_tpl_path` references left are docstrings, and `resolve_check_scope` has exactly its 3 intended consumers. No code deleted beyond the relocated/replaced blocks.
-  - **Verify:** ✅ clean full-suite run, no orphaned references.
+- [ ] 🟩 **Step 6: Lock the behaviour with tests** — pin every changed seam.
+  - [ ] 🟩 Backend: `tests/test_notes_html_sanitize_css.py` — `hidden` border survives (from Step 1).
+  - [ ] 🟩 Frontend: cellFormatting test — per-side recolor preserves the other three sides;
+        eraser writes `hidden`; "All"/"No borders" behaviours.
+  - [ ] 🟩 Frontend: NotesReviewTab test — two-step toolbar (swatch selects, side applies);
+        update any existing assertions that expected swatch-applies-all (intentional change).
+  - [ ] 🟩 Frontend: a focused test for Step 4 — a `CellSelection` survives a reconcile
+        `setContent` (mock the patch response to differ canonically).
+  - **Verify:** `cd web && npx vitest run` (full) green; `./venv/bin/python -m pytest tests/ -q`
+    green. Update `docs/PLAN.md` progress markers as each step lands.
 
 ## Rollback Plan
-If something goes wrong:
-- Each step is an isolated commit — `git revert <sha>` the offending step. The shared helper (Step 4) is additive, so reverting a migration step (5/6/7) leaves the helper unused but harmless.
-- The risk-bearing change is Step 5 (it sits under the live pipeline cross-check pass). If a pipeline check result changes, diff `resolve_check_scope`'s output against the pre-refactor `_build_check_template_ids` for the same `agent_results` — the dict must be identical.
-- State to check on any regression: a run's post-correction cross-check results in the ValidatorTab, and the `filled.xlsx` download for a `completed_with_errors` run (the re-export inclusion path) — the two user-visible surfaces the scoping feeds.
+
+If something goes badly wrong:
+
+- All changes are confined to a fresh feature branch — `git checkout main` / delete the branch
+  reverts everything; nothing here touches `main`, the DB, schema, or the exporter.
+- No data migration and no persisted-format change: `hidden` is just another inline border value
+  the sanitiser already accepts. Cells styled before/after this change keep rendering; reverting
+  the frontend leaves any `hidden` values harmlessly parsed as a hidden edge (or re-style them).
+- If only Phase 2 (selection) misbehaves, it can be reverted independently of Phase 1 — they touch
+  different code (toolbar wiring vs. the reconcile effect) and are committed separately.
+- State to check on revert: open a previously-styled notes cell and confirm it still renders; run
+  the gotcha #16 pinning suite (`tests/test_notes_html_sanitize_css.py`, the `cellFormatting` /
+  `NotesReviewTab` / `clipboard` web tests) to confirm no regression.

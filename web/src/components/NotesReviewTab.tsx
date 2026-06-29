@@ -55,9 +55,12 @@ import {
   resetCellToTheme,
   applyCellAlign,
   type CellAlign,
+  captureSelection,
+  restoreSelection,
   gridBorderValue,
   DEFAULT_BORDER_COLOR,
   BORDER_NONE,
+  BORDER_HIDDEN,
   FILL_NONE,
   type BorderSide,
 } from "../lib/cellFormatting";
@@ -831,13 +834,22 @@ function CellRow({
   // (say a future inline-regenerate, or a parent-driven refresh) that
   // delivers a new HTML payload for the SAME key would otherwise leave
   // the editor showing stale content. Latent today because runId is in
-  // the key (cross-run switches already remount the component), but we
-  // cover the same-runId refetch case so a future caller can't trip
-  // into a stale-editor bug.
+  // the key (cross-run switches already remount the component), and a
+  // normal formatting save updates the internal refs, NOT this `cell.html`
+  // prop — so this effect does not fire on a self-originated save. It only
+  // fires on a genuine parent-driven refetch, where we still capture/restore
+  // the selection (same as the save-reconcile) so a future caller can't
+  // collapse a mid-formatting multi-cell selection.
   useEffect(() => {
     if (!editor) return;
     if (editor.getHTML() === cell.html) return;
+    const captured = captureSelection(editor);
     editor.commands.setContent(cell.html, { emitUpdate: false });
+    try {
+      restoreSelection(editor, captured);
+    } catch {
+      /* positions invalid after a structural change — harmless */
+    }
     liveHtmlRef.current = cell.html;
     savedHtmlRef.current = cell.html;
     setFormatAdjusted(false);
@@ -921,12 +933,19 @@ function CellRow({
             canonicalizeHtmlForCompare(editor.getHTML()) !==
               canonicalizeHtmlForCompare(updated.html)
           ) {
-            const sel = editor.state.selection;
+            // Capture the selection BEFORE setContent (which resets it to the
+            // doc start), then rebuild it after. A multi-cell border edit holds
+            // a CellSelection that a text range CANNOT represent — restoring it
+            // as text collapses the highlight and forces a re-select after every
+            // formatting save (captureSelection/restoreSelection in
+            // cellFormatting.ts preserve the cell anchors).
+            const captured = captureSelection(editor);
             editor.commands.setContent(updated.html, { emitUpdate: false });
-            // Best-effort selection restore. ProseMirror clamps out-of-range
-            // positions so a shorter doc after sanitisation won't throw.
+            // Best-effort restore. ProseMirror clamps out-of-range text positions
+            // so a shorter doc after sanitisation won't throw; the try/catch also
+            // covers a structural change invalidating the captured cell anchors.
             try {
-              editor.commands.setTextSelection({ from: sel.from, to: sel.to });
+              restoreSelection(editor, captured);
             } catch {
               /* positions invalid after sanitisation — harmless */
             }
@@ -1232,8 +1251,17 @@ const BORDER_SIDE_BTNS: ReadonlyArray<{ side: BorderSide; label: string }> = [
 ];
 
 function EditorToolbar({ editor }: { editor: Editor }) {
-  // Border colour for newly-added grid lines — a tool setting, not cell state.
-  const [borderColor, setBorderColor] = useState<string>(DEFAULT_BORDER_COLOR);
+  // The active border "paint" the side / all buttons apply: a hex colour from
+  // BORDER_COLOURS, or the BORDER_HIDDEN sentinel (the eraser). Selecting a
+  // swatch only sets this — it no longer paints all four sides — so the user
+  // picks a colour (or the eraser), then clicks the edge(s) to paint. That
+  // two-step is what gives independent per-side control (e.g. top black, the
+  // other three white) which a single all-sides apply cannot express.
+  const [borderPaint, setBorderPaint] = useState<string>(DEFAULT_BORDER_COLOR);
+  const eraseActive = borderPaint === BORDER_HIDDEN;
+  // The concrete cell value for the active paint: a grid line, or `hidden`
+  // (which truly erases the edge in the collapsed table — see BORDER_HIDDEN).
+  const paintValue = eraseActive ? BORDER_HIDDEN : gridBorderValue(borderPaint);
 
   const inTable = editor.isActive("table");
 
@@ -1315,9 +1343,17 @@ function EditorToolbar({ editor }: { editor: Editor }) {
     );
   };
 
-  const sideIsOn = (side: BorderSide): boolean => {
+  // Whether the focused cell's edge carries a visible painted border (not empty,
+  // not a `none`/`hidden` erase). Advisory — reads the anchor cell only — and
+  // used purely to light the matching per-side button.
+  const sidePainted = (side: BorderSide): boolean => {
     const v = currentCellAttrs(editor)?.[`border${side}`];
-    return typeof v === "string" && v !== "" && v !== BORDER_NONE;
+    return (
+      typeof v === "string" &&
+      v !== "" &&
+      v !== BORDER_NONE &&
+      v !== BORDER_HIDDEN
+    );
   };
 
   return (
@@ -1380,45 +1416,64 @@ function EditorToolbar({ editor }: { editor: Editor }) {
               btn(
                 side === "Top" ? "▔" : side === "Right" ? "▕" : side === "Bottom" ? "▁" : "▏",
                 `Border ${label}`,
-                () =>
-                  applyCellBorderSide(
-                    editor,
-                    side,
-                    sideIsOn(side) ? BORDER_NONE : gridBorderValue(borderColor),
-                  ),
-                sideIsOn(side),
+                // Paint the active colour (or erase) onto THIS side only,
+                // preserving the other three — `setCellAttribute` touches one
+                // attr. No longer a toggle: the eraser is how you remove a side.
+                () => applyCellBorderSide(editor, side, paintValue),
+                sidePainted(side),
               ),
             )}
             {btn("⊞", "Border all", () =>
-              applyCellBorderAll(editor, gridBorderValue(borderColor)))}
+              applyCellBorderAll(editor, paintValue))}
+            {/* "Border none" erases all four edges with BORDER_HIDDEN (wins the
+                collapsed shared-edge conflict — see BORDER_HIDDEN), NOT
+                BORDER_NONE: `none` loses to a neighbour's grid line and shows
+                grey. BORDER_NONE remains the editor's own style-reset value
+                (resetCellToTheme), a separate concern from erasing a line. */}
             {btn("⊠", "Border none", () =>
-              applyCellBorderAll(editor, BORDER_NONE))}
+              applyCellBorderAll(editor, BORDER_HIDDEN))}
             {btn("═", "Double underline", () => applyCellDoubleUnderline(editor))}
           </>)}
-          {group("Apply border colour", "◩", BORDER_COLOURS.map(({ label, color }) => (
+          {group("Border colour", "◩", <>
+            {BORDER_COLOURS.map(({ label, color }) => (
+              <button
+                key={color}
+                type="button"
+                aria-label={`Border colour ${label}`}
+                aria-pressed={borderPaint === color}
+                title={`Use ${label.toLowerCase()} for the border buttons`}
+                onMouseDown={(e) => e.preventDefault()}
+                // Select-only: pick the colour, then click an edge / All to
+                // paint it. Decoupling colour from application is what lets a
+                // cell hold a different colour per side.
+                onClick={() => setBorderPaint(color)}
+                style={{
+                  ...styles.swatchButton,
+                  background: color,
+                  outline:
+                    borderPaint === color ? `2px solid ${pwc.orange500}` : "none",
+                  outlineOffset: 1,
+                }}
+              />
+            ))}
             <button
-              key={color}
+              key="erase"
               type="button"
-              aria-label={`Border colour ${label}`}
-              aria-pressed={borderColor === color}
-              title={`Apply ${label.toLowerCase()} borders`}
+              aria-label="Border colour erase"
+              aria-pressed={eraseActive}
+              title="Erase the chosen edge(s) — no line, not the grey grid"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                setBorderColor(color);
-                // Applying on swatch click makes the colour change explicit
-                // and keeps the selected range intact — especially important
-                // for white, which otherwise looked as though it had reverted.
-                applyCellBorderAll(editor, gridBorderValue(color));
-              }}
+              onClick={() => setBorderPaint(BORDER_HIDDEN)}
               style={{
                 ...styles.swatchButton,
-                background: color,
-                outline:
-                  borderColor === color ? `2px solid ${pwc.orange500}` : "none",
+                background: pwc.white,
+                outline: eraseActive ? `2px solid ${pwc.orange500}` : "none",
                 outlineOffset: 1,
               }}
-            />
-          )))}
+            >
+              ✕
+            </button>
+          </>)}
           {group("Cell alignment", "≡", (["left", "center", "right"] as CellAlign[]).map((a) =>
             btn(
               alignIcon(a),

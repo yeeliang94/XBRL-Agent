@@ -66,6 +66,20 @@ def test_per_side_border_survives_on_td() -> None:
     assert "border-bottom: 1px solid #000" in out.lower()
 
 
+def test_hidden_border_survives_on_td() -> None:
+    """The notes editor's eraser writes `hidden` (not `none`) on a side so it
+    truly disappears in the collapsed table — `none` loses the shared-edge
+    conflict to a neighbour's grid line, `hidden` wins. The sanitiser must keep
+    `hidden`, both as a per-side longhand and bare, or erasing an edge reverts
+    to the default grey grid on the next save."""
+    out = _clean(
+        '<table><tr><td style="border-right: hidden">x</td></tr></table>'
+    )
+    assert "border-right: hidden" in out.lower()
+    bare = _clean('<table><tr><td style="border-top: 1px hidden #000">x</td></tr></table>')
+    assert "border-top: 1px hidden #000" in bare.lower()
+
+
 def test_browser_serialised_rgb_border_survives_on_td() -> None:
     """Browser colour-picker output includes spaces inside rgb(). The
     sanitiser must treat that as one valid colour token, not three fragments."""

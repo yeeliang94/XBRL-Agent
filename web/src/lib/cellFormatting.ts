@@ -17,6 +17,7 @@
 import { mergeAttributes } from "@tiptap/core";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
+import { CellSelection } from "@tiptap/pm/tables";
 import type { Editor } from "@tiptap/react";
 
 // The visual properties we persist on a table cell, in the FIXED order the
@@ -55,6 +56,13 @@ export const DOUBLE_UNDERLINE = "3px double #000000";
  *  attribute-absence — the editor CSS would repaint the default grid / header
  *  fill — so they store an explicit override. */
 export const BORDER_NONE = "none";
+/** Erase one edge in a `border-collapse: collapse` table. `none` has the LOWEST
+ *  priority in the collapsed-border conflict resolution, so a neighbour cell's
+ *  default grid line wins and the edge still shows the grey grid; `hidden` has
+ *  the HIGHEST priority and always wins, so the edge truly disappears. The
+ *  sanitiser already accepts `hidden` (notes/html_sanitize.py
+ *  `_BORDER_STYLE_VALUES`), so this round-trips unchanged. */
+export const BORDER_HIDDEN = "hidden";
 export const FILL_NONE = "transparent";
 
 /** Parse a raw inline-style string into a prop→value map WITHOUT the browser's
@@ -218,4 +226,44 @@ export function resetCellToTheme(editor: Editor): boolean {
 export type CellAlign = "left" | "center" | "right";
 export function applyCellAlign(editor: Editor, align: CellAlign): boolean {
   return editor.chain().focus().setCellAttribute("textAlign", align).run();
+}
+
+// --- Selection capture / restore across a setContent() ----------------------
+// `setContent()` replaces the document and resets the selection to the doc
+// start. A multi-cell CellSelection (a drag-select the user is mid-formatting)
+// CANNOT be re-expressed as a text range, so restoring it with
+// `setTextSelection` collapses the highlight and forces a re-select after every
+// formatting save. Capture the cell anchors before, rebuild the CellSelection
+// after. A caret / text selection falls back to a text range.
+
+export type CapturedSelection =
+  | { kind: "cell"; anchor: number; head: number }
+  | { kind: "text"; from: number; to: number };
+
+/** Snapshot the current selection so it can be rebuilt after a doc replacement. */
+export function captureSelection(editor: Editor): CapturedSelection {
+  const sel = editor.state.selection;
+  if (sel instanceof CellSelection) {
+    return { kind: "cell", anchor: sel.$anchorCell.pos, head: sel.$headCell.pos };
+  }
+  return { kind: "text", from: sel.from, to: sel.to };
+}
+
+/** Re-apply a captured selection after the document was replaced. Best-effort:
+ *  ProseMirror clamps out-of-range text positions; invalid cell anchors (a
+ *  structural change) throw, which the caller is expected to swallow. */
+export function restoreSelection(
+  editor: Editor,
+  captured: CapturedSelection,
+): void {
+  if (captured.kind === "cell") {
+    const restored = CellSelection.create(
+      editor.state.doc,
+      captured.anchor,
+      captured.head,
+    );
+    editor.view.dispatch(editor.state.tr.setSelection(restored));
+  } else {
+    editor.commands.setTextSelection({ from: captured.from, to: captured.to });
+  }
 }
