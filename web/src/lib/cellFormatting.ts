@@ -287,17 +287,47 @@ export function applyCellFill(editor: Editor, color: string): boolean {
     .run();
 }
 
-/** Turn one border side on (a grid line of `color`) or off (`none`). */
+/** Set one border side to `value` (a grid line / `hidden` erase), or CLEAR it
+ *  with `null` so the side falls back to the themed default grid — the
+ *  toggle-off used when the user re-clicks a side that already carries the
+ *  active paint. */
 export function applyCellBorderSide(
   editor: Editor,
   side: BorderSide,
-  value: string,
+  value: string | null,
 ): boolean {
   return editor
     .chain()
     .focus()
     .setCellAttribute(`border${side}`, value)
     .run();
+}
+
+/** Compare two border values for the side-button TOGGLE, treating a
+ *  freshly-applied hex colour (`1px solid #000000`) and the same colour after a
+ *  browser / sanitiser round-trip (`1px solid rgb(0, 0, 0)`) as equal — so
+ *  re-clicking a side reliably toggles it off whether or not a save has
+ *  re-parsed the cell. */
+export function borderValuesEqual(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  return _normBorder(a) === _normBorder(b);
+}
+function _normBorder(v: string | null | undefined): string {
+  if (!v) return "";
+  return v
+    .toLowerCase()
+    .replace(
+      /#([0-9a-f]{6})\b/g,
+      (_m, h: string) =>
+        `rgb(${parseInt(h.slice(0, 2), 16)}, ${parseInt(
+          h.slice(2, 4),
+          16,
+        )}, ${parseInt(h.slice(4, 6), 16)})`,
+    )
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /** Set all four sides at once — used by the "All borders" / "No borders"

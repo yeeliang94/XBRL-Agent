@@ -1608,6 +1608,23 @@ describe("NotesReviewTab — table format bar", () => {
     vi.useRealTimers();
   });
 
+  test("re-clicking a side with the same colour toggles it off (Word-like undo)", async () => {
+    vi.useFakeTimers();
+    const lastPatchHtml = await renderEditingTableCell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Border colour Black" }));
+    // First click paints the top edge…
+    fireEvent.click(screen.getByRole("button", { name: "Border Top" }));
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(lastPatchHtml()).toMatch(/border-top:\s*1px solid (?:#000000|rgb\(0, 0, 0\))/);
+
+    // …re-clicking it with the same colour selected removes it (toggle-off).
+    fireEvent.click(screen.getByRole("button", { name: "Border Top" }));
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(lastPatchHtml()).not.toContain("border-top");
+    vi.useRealTimers();
+  });
+
   test("the eraser is a selectable paint, mutually exclusive with a colour", async () => {
     vi.useFakeTimers();
     await renderEditingTableCell();
