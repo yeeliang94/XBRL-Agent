@@ -69,6 +69,8 @@ import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
   fetchNotesCells,
+  fetchNotesFormatStatus,
+  launchNotesFormatter,
   patchNotesCell,
   patchNotesFact,
   parseNumericInput,
@@ -76,6 +78,7 @@ import {
   INVALID_NUMBER,
   NUMERIC_VALUE_COLUMNS,
   type NotesCell,
+  type NotesFormatStatus,
   type NotesSheet,
 } from "../lib/notesCells";
 import { copyHtmlAsRichText } from "../lib/clipboard";
@@ -295,6 +298,15 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
     return () => {
       cancelled = true;
     };
+  }, [runId]);
+
+  const reloadNotes = useCallback(() => {
+    return fetchNotesCells(runId).then((resp) => {
+      setSheets(sortSheetsBySlot(resp.sheets));
+      setLoadError(null);
+    }).catch((err: Error) => {
+      setLoadError(err.message);
+    });
   }, [runId]);
 
   // Firm-default theme (declared AFTER the notes-cells fetch so the cells load
@@ -542,6 +554,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
               theme={theme}
               focus={active.sheet === sh.sheet}
               focusKey={active.key}
+              onFormatted={reloadNotes}
             />
           ))}
         </div>
@@ -569,6 +582,7 @@ function SheetSection({
   runId,
   sheet,
   theme,
+  onFormatted,
   focus = false,
   focusKey = 0,
 }: {
@@ -576,6 +590,7 @@ function SheetSection({
   sheet: NotesSheet;
   /** Resolved notes-table theme — threaded to CellRow so Copy uses it. */
   theme: ClipboardFormatOptions;
+  onFormatted: () => Promise<void>;
   /** When true (the reviewer picked this notes sub-tab / nav chip), the
    *  section opens and scrolls into view. */
   focus?: boolean;
@@ -588,6 +603,9 @@ function SheetSection({
   // in RunDetailView — reviewer clicks the heading to reveal rows. A focused
   // section starts open so the picked note is immediately readable.
   const [expanded, setExpanded] = useState(focus);
+  const [formatStatus, setFormatStatus] = useState<NotesFormatStatus | null>(null);
+  const [formatError, setFormatError] = useState<string | null>(null);
+  const [rowSaveStatuses, setRowSaveStatuses] = useState<Record<number, SaveStatus>>({});
   const rowCount = sheet.rows.length;
   const sectionRef = useRef<HTMLElement | null>(null);
 
@@ -600,6 +618,82 @@ function SheetSection({
     sectionRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
   }, [focus, focusKey]);
 
+  // Hydrate format state on mount so a pass launched in another tab/session
+  // (or one that finished while this section was unmounted) is reflected here:
+  // a still-running task resumes the "Formatting..." indicator + polling below,
+  // and a finished one shows its summary instead of a stale idle button.
+  useEffect(() => {
+    if ((sheet.kind ?? "prose") !== "prose") return;
+    let cancelled = false;
+    fetchNotesFormatStatus(runId, sheet.sheet)
+      .then((state) => {
+        if (cancelled || state.status === "idle") return;
+        setFormatStatus(state);
+      })
+      .catch(() => {
+        /* Non-fatal: the Format button still works from a clean state. */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, sheet.sheet, sheet.kind]);
+
+  useEffect(() => {
+    if (formatStatus?.status !== "running") return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      fetchNotesFormatStatus(runId, sheet.sheet)
+        .then(async (state) => {
+          if (cancelled) return;
+          setFormatStatus(state);
+          if (state.status === "done") {
+            clearInterval(timer);
+            if (!state.error) await onFormatted();
+          }
+        })
+        .catch((err: Error) => {
+          if (!cancelled) {
+            clearInterval(timer);
+            setFormatError(err.message);
+            setFormatStatus(null);
+          }
+        });
+    }, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [formatStatus?.status, onFormatted, runId, sheet.sheet]);
+
+  const handleFormat = useCallback(async () => {
+    setFormatError(null);
+    try {
+      const state = await launchNotesFormatter(runId, sheet.sheet);
+      setFormatStatus(state);
+      setExpanded(true);
+    } catch (err) {
+      setFormatError(err instanceof Error ? err.message : "Could not start formatter.");
+    }
+  }, [runId, sheet.sheet]);
+
+  const handleRowSaveStatus = useCallback((row: number, status: SaveStatus) => {
+    setRowSaveStatuses((prev) => (
+      prev[row] === status ? prev : { ...prev, [row]: status }
+    ));
+  }, []);
+
+  const canFormat = (sheet.kind ?? "prose") === "prose";
+  const hasPendingRowSave = Object.values(rowSaveStatuses)
+    .some((status) => (
+      status === "dirty" || status === "saving" || status === "failed"
+    ));
+  const isFormatting = formatStatus?.status === "running";
+  const formatButtonLabel = hasPendingRowSave
+    ? "Save pending"
+    : isFormatting
+      ? "Formatting..."
+      : "Format";
+
   return (
     <section
       ref={sectionRef}
@@ -610,35 +704,70 @@ function SheetSection({
         borderLeftColor: expanded ? pwc.orange500 : pwc.grey300,
       }}
     >
-      {/* Button-inside-h4 keeps the heading role so
-          getByRole("heading", { level: 4, name }) still works while
-          letting the whole header act as the toggle. */}
-      <h4 style={styles.sheetHeadingWrap}>
-        <button
-          type="button"
-          onClick={() => setExpanded((prev) => !prev)}
-          aria-expanded={expanded}
-          style={styles.sheetHeadingButton}
-        >
-          <span style={styles.sheetChevron} aria-hidden="true">
-            {expanded ? "▾" : "▸"}
-          </span>
-          <span
-            style={styles.sheetHeadingText}
-            data-testid="sheet-title"
-            title={sheet.sheet}
+      <div style={styles.sheetHeadingButton}>
+        {/* Button-inside-h4 keeps the heading role so
+            getByRole("heading", { level: 4, name }) still works while
+            letting the title act as the toggle. Sheet actions live outside
+            the h4 so they do not pollute the heading's accessible name. */}
+        <h4 style={styles.sheetHeadingWrap}>
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            aria-expanded={expanded}
+            style={styles.sheetHeadingToggle}
           >
-            {notesSheetDisplayName(sheet.sheet)}
-          </span>
-          {/* Row count is visual-only metadata; aria-hidden keeps the
-              heading's accessible name equal to the sheet title so
-              getByRole("heading", { level: 4, name: "Notes-…" })
-              stays exact. */}
-          <span style={styles.sheetRowCount} aria-hidden="true">
-            {rowCount} {rowCount === 1 ? "row" : "rows"}
-          </span>
-        </button>
-      </h4>
+            <span style={styles.sheetChevron} aria-hidden="true">
+              {expanded ? "▾" : "▸"}
+            </span>
+            <span
+              style={styles.sheetHeadingText}
+              data-testid="sheet-title"
+              title={sheet.sheet}
+            >
+              {notesSheetDisplayName(sheet.sheet)}
+            </span>
+          </button>
+        </h4>
+        <span style={styles.sheetRowCount} aria-hidden="true">
+          {rowCount} {rowCount === 1 ? "row" : "rows"}
+        </span>
+        {canFormat && (
+          <button
+            type="button"
+            className={uiClass.btnGhost}
+            style={styles.sheetFormatButton}
+            disabled={isFormatting || hasPendingRowSave}
+            onClick={handleFormat}
+            aria-label={`AI format ${notesSheetDisplayName(sheet.sheet)}`}
+            title={
+              hasPendingRowSave
+                ? "Resolve notes save status before formatting."
+                : undefined
+            }
+            data-testid="notes-format-button"
+          >
+            {formatButtonLabel}
+          </button>
+        )}
+      </div>
+      {(formatStatus?.status === "done" || formatError) && (
+        <div
+          style={{
+            ...styles.formatSummary,
+            color: formatError || formatStatus?.error ? pwc.errorText : pwc.grey700,
+          }}
+          role={formatError || formatStatus?.error ? "alert" : "status"}
+          data-testid="notes-format-summary"
+        >
+          {formatError || formatStatus?.error || (
+            `${formatStatus?.summary || "Formatting complete."} ` +
+            `Changed ${formatStatus?.changed_rows ?? 0} row(s).` +
+            (typeof formatStatus?.confidence === "number"
+              ? ` Confidence ${(formatStatus.confidence * 100).toFixed(0)}%.`
+              : "")
+          )}
+        </div>
+      )}
       {expanded && (
         <div style={styles.rowStack}>
           {sheet.rows.map((cell) =>
@@ -661,6 +790,7 @@ function SheetSection({
                 sheet={sheet.sheet}
                 cell={cell}
                 theme={theme}
+                onSaveStatusChange={handleRowSaveStatus}
               />
             ),
           )}
@@ -679,6 +809,7 @@ function CellRow({
   sheet,
   cell,
   theme,
+  onSaveStatusChange,
 }: {
   runId: number;
   sheet: string;
@@ -686,6 +817,7 @@ function CellRow({
   /** Resolved notes-table theme — Copy decorates the paste with it so the
    *  clipboard output matches the editor preview. */
   theme: ClipboardFormatOptions;
+  onSaveStatusChange?: (row: number, status: SaveStatus) => void;
 }) {
   const [editable, setEditable] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
@@ -723,6 +855,10 @@ function CellRow({
   // components silently, but we still want to avoid the dangling
   // PATCH from racing against a fresh mount of the same cell.
   const isMountedRef = useRef(true);
+  useEffect(() => {
+    onSaveStatusChange?.(cell.row, status);
+  }, [cell.row, onSaveStatusChange, status]);
+
   useEffect(() => {
     // Flush any pending debounced save on unmount (peer-review [MEDIUM] #3).
     //
@@ -1730,6 +1866,7 @@ const styles = {
   // fills the card header cleanly.
   sheetHeadingWrap: {
     margin: 0,
+    minWidth: 0,
   } as React.CSSProperties,
   // Full-width button so the whole row is clickable, not just the text.
   // Grey header band makes the sheet boundary read as a section divider
@@ -1742,6 +1879,20 @@ const styles = {
     padding: "11px 14px",
     background: pwc.grey100,
     border: "none",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    font: "inherit",
+    color: "inherit",
+    textAlign: "left" as const,
+  } as React.CSSProperties,
+  sheetHeadingToggle: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+    background: "transparent",
+    border: "none",
+    padding: 0,
     cursor: "pointer",
     fontFamily: "inherit",
     font: "inherit",
@@ -1767,6 +1918,17 @@ const styles = {
     fontFamily: pwc.fontMono,
     fontSize: 12,
     color: pwc.grey500,
+  } as React.CSSProperties,
+  sheetFormatButton: {
+    ...ui.buttonGhost,
+    ...ui.buttonSm,
+    flexShrink: 0,
+  } as React.CSSProperties,
+  formatSummary: {
+    padding: "7px 14px",
+    borderTop: `1px solid ${pwc.grey200}`,
+    background: pwc.white,
+    fontSize: 12,
   } as React.CSSProperties,
   rowStack: {
     display: "flex",

@@ -142,7 +142,9 @@ from pathlib import Path
 # adds the `doc_conversions` table — durable conversion-job state, independent
 # of the extraction pipeline. Pure CREATE TABLE IF NOT EXISTS walk-forward (new
 # table, no ALTER). Pinned by tests/test_db_schema_v21.py.
-CURRENT_SCHEMA_VERSION = 25
+# v26 adds `notes_format_tasks`, the durable latest async formatter pass per
+# run+sheet for the Notes Review panel.
+CURRENT_SCHEMA_VERSION = 26
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -865,6 +867,29 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         UNIQUE(run_id, sheet, row)
     )
     """,
+
+    # -----------------------------------------------------------------
+    # v26: notes formatter task state.
+    # -----------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS notes_format_tasks (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id            INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        sheet             TEXT NOT NULL,
+        status            TEXT NOT NULL,       -- running | done
+        model             TEXT,
+        summary           TEXT,
+        confidence        REAL,
+        changed_rows      INTEGER NOT NULL DEFAULT 0,
+        result_json       TEXT,
+        error             TEXT,
+        before_text_hash  TEXT,
+        after_text_hash   TEXT,
+        created_at        TEXT NOT NULL DEFAULT '',
+        updated_at        TEXT NOT NULL DEFAULT '',
+        UNIQUE(run_id, sheet)
+    )
+    """,
 )
 
 
@@ -909,6 +934,8 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_notes_review_flags_run_id ON notes_review_flags(run_id)",
     # v25: notes-reviewer tombstones queried per-run at overlay time.
     "CREATE INDEX IF NOT EXISTS ix_notes_cell_tombstones_run_id ON notes_cell_tombstones(run_id)",
+    # v26: notes formatter task poll/reconciliation queries.
+    "CREATE INDEX IF NOT EXISTS ix_notes_format_tasks_run_id ON notes_format_tasks(run_id)",
 )
 
 
@@ -1873,6 +1900,30 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (25,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v25→v26 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v25 → v26: add notes_format_tasks. Pure CREATE TABLE IF NOT EXISTS
+        # (already run above), so this block only advances the marker. Same
+        # BEGIN IMMEDIATE + re-check discipline.
+        if current_version is not None and current_version < 26:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 26:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (26,),
                     )
                 conn.commit()
             except Exception:

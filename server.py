@@ -1184,6 +1184,9 @@ CORRECTION_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
 NOTES_VALIDATOR_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
     "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", 300.0,
 )
+NOTES_FORMATTER_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
+    "XBRL_NOTES_FORMATTER_WALLCLOCK_S", 300.0,
+)
 
 # PLAN-orchestration-hardening item 16: cross-checks used to run
 # synchronously inside async handlers — while openpyxl walked workbooks the
@@ -2524,6 +2527,21 @@ async def _lifespan(app: FastAPI):
             logger.info("reconciled %d stale notes re-review task(s) at startup", n)
     except Exception:
         logger.warning("notes re-review task reconciliation failed at startup",
+                       exc_info=True)
+
+    # Retire notes formatter tasks orphaned by a restart (v26).
+    try:
+        from db import repository as repo
+        conn = _open_audit_conn()
+        try:
+            n = repo.reconcile_stale_notes_format_tasks(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        if n:
+            logger.info("reconciled %d stale notes formatter task(s) at startup", n)
+    except Exception:
+        logger.warning("notes formatter task reconciliation failed at startup",
                        exc_info=True)
 
     # Sweep auth sessions that idled out and were never accessed again (the user
@@ -6397,6 +6415,7 @@ from api.reviewer import router as _reviewer_router
 from api.notes_reviewer import router as _notes_reviewer_router
 from api.runs import router as _runs_router
 from api.notes import router as _notes_router
+from api.notes_formatter import router as _notes_formatter_router
 from api.files import router as _files_router
 from api.eval import router as _eval_router
 from auth.routes import router as _auth_router
@@ -6408,6 +6427,7 @@ app.include_router(_reviewer_router)
 app.include_router(_notes_reviewer_router)
 app.include_router(_runs_router)
 app.include_router(_notes_router)
+app.include_router(_notes_formatter_router)
 app.include_router(_files_router)
 app.include_router(_eval_router)
 app.include_router(_auth_router)
@@ -6434,6 +6454,9 @@ from api.runs import (  # noqa: E402,F401
 from api.notes import (  # noqa: E402,F401
     list_notes_cells_endpoint, patch_notes_cell_endpoint,
     notes_cells_edited_count_endpoint, facts_edited_count_endpoint,
+)
+from api.notes_formatter import (  # noqa: E402,F401
+    launch_notes_formatter, notes_formatter_status,
 )
 from api.files import (  # noqa: E402,F401
     pdf_info_endpoint, pdf_page_endpoint, download_filled_endpoint,

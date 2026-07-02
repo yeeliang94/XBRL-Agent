@@ -52,6 +52,10 @@ or reintroduce documented bugs.
   swallows audit-write exceptions so error handlers never double-fault.
 - **Don't add deterministic label-matching, OCR, or synonym dictionaries to
   the notes pipeline.** Matching is intentionally pure LLM judgement.
+- **Don't let extraction or reviewer agents rewrite notes formatting.** Notes
+  extraction remains style-free; the notes formatter agent may apply only
+  validated style patches to existing `notes_cells.html` and must never mutate
+  rendered text, numbers, row/column structure, or note placement.
 - **Don't pass `base_url=` or `openai_client=` directly to `OpenAIModel`.**
   Removed in pydantic-ai 1.x — use the `provider=OpenAIProvider(...)` pattern.
 - **Don't use temperature `< 1.0` for Gemini 3 through the proxy** — causes
