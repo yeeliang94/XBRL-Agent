@@ -146,13 +146,16 @@ export async function fetchNotesCells(runId: number): Promise<NotesCellsResponse
 export async function launchNotesFormatter(
   runId: number,
   sheet: string,
+  model?: string,
 ): Promise<NotesFormatStatus & { ok: boolean; already_running?: boolean }> {
   return apiFetch<NotesFormatStatus & { ok: boolean; already_running?: boolean }>(
     `/api/runs/${runId}/notes-format`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sheet }),
+      // Omit `model` when unset so the server falls back to the configured
+      // notes_formatter default / the run's model (api/notes_formatter.py).
+      body: JSON.stringify(model ? { sheet, model } : { sheet }),
     },
   );
 }

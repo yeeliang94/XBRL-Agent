@@ -1986,6 +1986,7 @@ describe("NotesReviewTab — AI formatter", () => {
     status?: Handler;
     launch?: Handler;
     revert?: Handler;
+    settings?: Handler;
   }) {
     const json = (body: unknown, status = 200) =>
       new Response(JSON.stringify(body), {
@@ -1994,6 +1995,9 @@ describe("NotesReviewTab — AI formatter", () => {
       });
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (handlers.settings && url.includes("/api/settings")) {
+        return json(handlers.settings(url));
+      }
       if (url.includes("/notes-format/status")) {
         return json(
           handlers.status?.(url) ?? { status: "idle", sheet: "x" },
@@ -2064,6 +2068,42 @@ describe("NotesReviewTab — AI formatter", () => {
     // A finished pass refetches the cells so the styled HTML renders.
     expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
     vi.useRealTimers();
+  });
+
+  test("model picker seeds from the default and sends the choice on launch", async () => {
+    const launchBodies: string[] = [];
+    const fetchMock = routedFetch({
+      settings: () => ({
+        available_models: [
+          { id: "openai.gpt-5.4", display_name: "GPT-5.4" },
+          { id: "claude-opus-4-8", display_name: "Opus 4.8" },
+        ],
+        default_models: { notes_formatter: "claude-opus-4-8" },
+        model: "openai.gpt-5.4",
+      }),
+      launch: () => ({ ok: true, status: "running", sheet: "Notes-CI" }),
+    });
+    // Capture the launch POST body for the assertion.
+    const orig = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/notes-format") && !url.includes("/status")
+          && !url.includes("/revert") && init?.body) {
+        launchBodies.push(String(init.body));
+      }
+      return orig(input, init);
+    });
+
+    render(<NotesReviewTab runId={42} />);
+    const picker = (await screen.findAllByTestId("notes-format-model"))[0] as HTMLSelectElement;
+    // Seeds from default_models.notes_formatter, not the global run model.
+    expect(picker.value).toBe("claude-opus-4-8");
+
+    // Change the selection, then launch — the choice must reach the POST body.
+    fireEvent.change(picker, { target: { value: "openai.gpt-5.4" } });
+    fireEvent.click(screen.getAllByTestId("notes-format-button")[0]);
+    await waitFor(() => expect(launchBodies.length).toBeGreaterThan(0));
+    expect(JSON.parse(launchBodies[0])).toMatchObject({ model: "openai.gpt-5.4" });
   });
 
   test("a failed pass renders as role=alert and does not refetch cells", async () => {

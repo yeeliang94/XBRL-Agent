@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 
 import pytest
 
@@ -89,6 +90,131 @@ def test_total_rows_can_get_single_and_double_rules():
     assert "border-top: 1px solid #000000" in out.rows[1]
     assert "border-bottom: 3px double #000000" in out.rows[1]
     assert "text-align: right" in out.rows[1]
+
+
+def test_interior_rules_survive_border_collapse_after_clear():
+    """Regression: with `border-collapse: collapse`, a `hidden` from clear_border
+    (highest collapse priority) killed any interior rule added afterwards, so only
+    the table's outer edges showed. Reconciliation must mirror each interior rule
+    onto BOTH shared sides so the neighbour's `hidden` can't drop it."""
+    html = (
+        "<table>"
+        "<tr><td>Item</td><td>Amount</td></tr>"
+        "<tr><td>Total</td><td>100</td></tr>"
+        "<tr><td>Cash</td><td>40</td></tr>"
+        "</table>"
+    )
+    patch = {
+        "cells": [{
+            "row": 1,
+            "operations": [
+                {"target": {"table": 0, "range": "all"},
+                 "style": {"clear_border": ["top", "right", "bottom", "left"]}},
+                {"target": {"table": 0, "range": "total_rows"}, "style": {
+                    "border_top": {"width": "1px", "style": "solid",
+                                   "color": "#000000"},
+                    "border_bottom": {"width": "3px", "style": "double",
+                                      "color": "#000000"},
+                }},
+            ],
+        }],
+    }
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    cells = re.findall(r"<td[^>]*>[^<]*</td>", out)
+    # Header row's shared edge with the Total row now carries the Total's solid
+    # top rule (not the leftover `hidden`), so the collapse renders it.
+    assert 'border-bottom: 1px solid #000000' in cells[0]  # Item
+    assert 'border-bottom: 1px solid #000000' in cells[1]  # Amount
+    # The Total row keeps its own top + bottom rules.
+    assert 'border-top: 1px solid #000000' in cells[2]     # Total
+    assert 'border-bottom: 3px double #000000' in cells[2]
+    # The interior double line reaches the row below's shared top edge.
+    assert 'border-top: 3px double #000000' in cells[4]    # Cash
+    assert 'border-top: 3px double #000000' in cells[5]
+
+
+def test_clear_border_on_one_interior_edge_is_not_resurrected():
+    """A patch that clears ONLY one side of a shared interior edge must clear it,
+    not have the neighbour's still-visible border win it back (Codex review P2).
+    The clear mirrors `hidden` onto BOTH sides so the collapsed edge disappears."""
+    grid = "1px solid #000000"
+    html = (
+        "<table>"
+        f'<tr><td style="border: {grid}">A</td></tr>'
+        f'<tr><td style="border: {grid}">B</td></tr>'
+        "</table>"
+    )
+    patch = {
+        "cells": [{
+            "row": 1,
+            "operations": [{
+                "target": {"table": 0, "cell": {"r": 1, "c": 1}},
+                "style": {"clear_border": ["bottom"]},
+            }],
+        }],
+    }
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    cells = re.findall(r"<td[^>]*>[^<]*</td>", out)
+    # The cleared side AND the neighbour's shared side both go hidden — so the
+    # interior edge truly disappears in the collapsed-border table.
+    assert "border-bottom: 1px hidden #000000" in cells[0]  # A (cleared side)
+    assert "border-top: 1px hidden #000000" in cells[1]     # B (shared side)
+
+
+def test_later_clear_overrides_earlier_paint_on_shared_edge():
+    """Op order is respected: a paint then a later clear of the same edge leaves
+    it cleared (the last op to touch an edge wins on BOTH sides)."""
+    html = (
+        "<table>"
+        "<tr><td>A</td></tr>"
+        "<tr><td>B</td></tr>"
+        "</table>"
+    )
+    patch = {
+        "cells": [{
+            "row": 1,
+            "operations": [
+                {"target": {"table": 0, "range": "all"}, "style": {
+                    "border_bottom": {"width": "1px", "style": "solid",
+                                      "color": "#000000"},
+                    "border_top": {"width": "1px", "style": "solid",
+                                   "color": "#000000"},
+                }},
+                {"target": {"table": 0, "cell": {"r": 1, "c": 1}},
+                 "style": {"clear_border": ["bottom"]}},
+            ],
+        }],
+    }
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    cells = re.findall(r"<td[^>]*>[^<]*</td>", out)
+    assert "border-bottom: 1px hidden #000000" in cells[0]  # A cleared last
+    assert "border-top: 1px hidden #000000" in cells[1]     # B shared side too
+
+
+def test_visible_rule_wins_over_neighbours_default_grid():
+    """A single-cell rule with no prior clear must still win its shared edge: it
+    propagates to the neighbour's opposite side so it doesn't lose the collapse
+    tie to the neighbour's themed default grid."""
+    html = (
+        "<table>"
+        "<tr><td>A</td><td>1</td></tr>"
+        "<tr><td>B</td><td>2</td></tr>"
+        "</table>"
+    )
+    patch = {
+        "cells": [{
+            "row": 1,
+            "operations": [{
+                "target": {"table": 0, "cell": {"r": 2, "c": 1}},
+                "style": {"border_top": {"width": "1px", "style": "solid",
+                                         "color": "#666666"}},
+            }],
+        }],
+    }
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    cells = re.findall(r"<td[^>]*>[^<]*</td>", out)
+    assert 'border-top: 1px solid #666666' in cells[2]      # B (targeted)
+    assert 'border-bottom: 1px solid #666666' in cells[0]   # A (shared edge)
 
 
 def test_rejects_text_changes_after_sanitize():

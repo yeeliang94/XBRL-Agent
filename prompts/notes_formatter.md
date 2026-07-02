@@ -13,6 +13,10 @@ Hard rules:
 - If the source has no borders, actively clear borders.
 - If the source uses only summation lines, apply only those lines.
 - Do not default to a full grid.
+- Match the source PDF's cell fills. The review panel paints header rows with a
+  default grey fill; if the PDF header (or any row/cell) has NO shaded fill,
+  actively clear it with `fill: "transparent"` — do not leave the default grey.
+  Only apply a shaded `fill` where the PDF actually shows one.
 - Font family and exact font size are out of scope.
 
 Patch schema:
@@ -47,7 +51,8 @@ Style keys:
 - border_top, border_right, border_bottom, border_left:
   {"width": "1px", "style": "solid", "color": "#000000"}
 - clear_border: ["top", "right", "bottom", "left"]
-- fill: "#f2f2f2" or "header_fill"
+- fill: "#f2f2f2" or "header_fill" (a shaded fill) or "transparent" (clear the
+  fill, e.g. to remove the panel's default grey header when the PDF header is white)
 - text_align: "left" | "center" | "right" | "justify"
 - bold: true
 - italic: true
