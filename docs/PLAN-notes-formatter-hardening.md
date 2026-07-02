@@ -138,7 +138,8 @@ the five code-review findings from 2026-07-02.
 
 - [x] 🟩 **Step 7: Trace persistence** — a formatter pass must be debuggable
   after the fact, exactly like every other agent pass (gotcha #6).
-  - [x] 🟩 Dump the conversation (all up-to-three `agent.run` passes, including
+  - [x] 🟩 Dump the conversation (all up-to-four `agent.run` passes — initial ·
+    output-rejection retry · validation repair · self-check — including
     the timeout/budget/exception failure paths via the `save_messages_trace`
     fallback pattern) to `{output_dir}/notes_format_{sheet}_trace.json`.
   - [x] 🟩 `GET /api/runs/{id}/notes-format/trace?sheet=…` serving it, with the

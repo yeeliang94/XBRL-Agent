@@ -276,10 +276,28 @@ def test_describe_effective_appearance_resolves_theme_defaults():
     )
     lines = "\n".join(describe_effective_appearance(html))
     assert "r1c1" in lines and "none (explicitly cleared)" in lines
-    assert "theme header grey (default)" in lines          # unstyled th fill
+    assert "#f4f4f4 (theme default)" in lines              # unstyled th fill
     assert "bottom=3px double #000000" in lines            # explicit rule
     assert "top=no line (cleared)" in lines                # hidden edge
-    assert "theme grid (thin grey, default)" in lines      # unstyled edges
+    assert "1px solid #c9c9c9 (theme default)" in lines    # unstyled edges
+
+
+def test_describe_effective_appearance_honours_custom_theme():
+    """A firm/run theme with no grid and no header fill must be described as
+    such — hardcoded grey-grid wording would tell the self-check a border
+    exists where nothing renders (Codex review MEDIUM)."""
+    from notes.format_patch import describe_effective_appearance
+
+    html = "<table><tr><th>Name</th><td>10</td></tr></table>"
+    theme = {"borderStyle": "none", "headerFill": "transparent"}
+    lines = "\n".join(describe_effective_appearance(html, theme))
+    assert "no line (theme default)" in lines       # unstyled edges render nothing
+    assert "none (theme default)" in lines          # th fill renders nothing
+    assert "#f4f4f4" not in lines and "#c9c9c9" not in lines
+
+    double = {"borderStyle": "double", "borderColor": "#336699"}
+    lines2 = "\n".join(describe_effective_appearance(html, double))
+    assert "3px double #336699 (theme default)" in lines2
 
 
 def test_rejects_text_changes_after_sanitize():
@@ -507,6 +525,37 @@ def test_output_rejected_prompt_carries_error_and_response():
     assert "REJECTION: formatter returned invalid JSON: x" in prompt
     assert "no prose" in prompt
     assert "not-json" in prompt
+
+
+def test_resolve_notes_table_theme_precedence(monkeypatch, formatter_db):
+    """Run override (schema v22 snapshot) wins over the firm default env; env
+    wins over nothing; malformed env degrades to {} (historic defaults)."""
+    from db import repository as repo
+    import notes.formatting_agent as fa
+
+    db_path, _pdf, run_id = formatter_db
+    monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
+    assert fa._resolve_notes_table_theme(str(db_path), run_id) == {}
+
+    monkeypatch.setenv(
+        "XBRL_NOTES_TABLE_STYLE", json.dumps({"borderStyle": "none"}),
+    )
+    assert fa._resolve_notes_table_theme(str(db_path), run_id) == {
+        "borderStyle": "none",
+    }
+
+    with repo.db_session(db_path) as conn:
+        repo.set_run_notes_table_style(
+            conn, run_id, {"borderStyle": "double", "headerFill": "transparent"},
+        )
+    assert fa._resolve_notes_table_theme(str(db_path), run_id) == {
+        "borderStyle": "double", "headerFill": "transparent",
+    }
+
+    monkeypatch.setenv("XBRL_NOTES_TABLE_STYLE", "{not json")
+    with repo.db_session(db_path) as conn:
+        repo.set_run_notes_table_style(conn, run_id, None)
+    assert fa._resolve_notes_table_theme(str(db_path), run_id) == {}
 
 
 def test_self_check_prompt_uses_rendered_appearance():

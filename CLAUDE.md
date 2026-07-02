@@ -853,7 +853,8 @@ Key invariants:
     (default 300s) + cumulative per-click request budget
     `XBRL_NOTES_FORMATTER_MAX_REQUESTS` (default 16, clamped ≤45 — below
     pydantic-ai's silent request_limit=50 per gotcha #18) shared across the
-    up-to-three `agent.run` passes.
+    up-to-four `agent.run` passes (initial · output-rejection retry ·
+    validation repair · self-check).
   - **Observability:** structured `error_type` taxonomy on the task row
     (`FORMATTER_ERROR_TYPES` in `notes/formatting_agent.py` — branch on
     codes, not error prose) + cross-pass token telemetry (v27 columns); the
