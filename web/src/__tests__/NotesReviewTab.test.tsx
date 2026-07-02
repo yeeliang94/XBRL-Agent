@@ -2091,7 +2091,9 @@ describe("NotesReviewTab — AI formatter", () => {
           && !url.includes("/revert") && init?.body) {
         launchBodies.push(String(init.body));
       }
-      return orig(input, init);
+      // routedFetch's mock reads only `input` (it ignores init), so a single
+      // argument satisfies its 1-param type under the build's `tsc -b`.
+      return orig(input);
     });
 
     render(<NotesReviewTab runId={42} />);
