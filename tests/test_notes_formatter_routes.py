@@ -33,6 +33,8 @@ def formatter_client(tmp_path: Path, monkeypatch):
             label="Disclosure of other notes", html="<p>abc</p>",
             evidence="Page 3", source_pages=[3],
         )
+        # The launch endpoint only formats finished runs (lifecycle interlock).
+        repo.mark_run_finished(conn, run_id, "completed")
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setattr(server_module, "_create_proxy_model", lambda *a, **k: "fake-model")
@@ -61,6 +63,47 @@ def test_notes_formatter_status_idle(formatter_client):
     )
     assert r.status_code == 200
     assert r.json()["status"] == "idle"
+
+
+def test_notes_formatter_launch_refused_on_non_terminal_run(formatter_client):
+    """Formatting is post-extraction review tooling — a draft/running run 409s."""
+    client, _run_id, server_module = formatter_client
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        running_id = repo.create_run(
+            conn, "other.pdf", session_id="s2", output_dir="",
+            config={"notes_to_run": ["list_of_notes"]},
+        )
+    r = client.post(
+        f"/api/runs/{running_id}/notes-format",
+        json={"sheet": "Notes-Listofnotes"},
+    )
+    assert r.status_code == 409
+    assert "finished" in r.json()["detail"]
+
+
+def test_notes_formatter_launch_refused_while_notes_reviewer_running(formatter_client):
+    """Interlock: the formatter must not start over a running reviewer pass."""
+    client, run_id, server_module = formatter_client
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.claim_notes_review_task(conn, run_id, model="m")
+    r = client.post(
+        f"/api/runs/{run_id}/notes-format",
+        json={"sheet": "Notes-Listofnotes"},
+    )
+    assert r.status_code == 409
+    assert "reviewer" in r.json()["detail"]
+
+
+def test_notes_reviewer_launch_refused_while_formatter_running(formatter_client):
+    """Mirror interlock: the reviewer must not start over a running formatter."""
+    client, run_id, server_module = formatter_client
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.claim_notes_format_task(
+            conn, run_id, "Notes-Listofnotes", model="m",
+        )
+    r = client.post(f"/api/runs/{run_id}/notes-review/re-review", json={})
+    assert r.status_code == 409
+    assert "formatter" in r.json()["detail"]
 
 
 def test_notes_formatter_rejects_numeric_sheet(formatter_client):

@@ -66,6 +66,21 @@ def _resolve_max_requests() -> int:
 
 MAX_FORMATTER_REQUESTS = _resolve_max_requests()
 
+# Failure taxonomy persisted to notes_format_tasks.error_type (schema v27) —
+# branch on these codes, not on the human-facing error prose. No CHECK
+# constraint on the column (same rationale as runs.status).
+FORMATTER_ERROR_TYPES = (
+    "timeout",              # wall-clock cap (XBRL_NOTES_FORMATTER_WALLCLOCK_S)
+    "turn_budget",          # cumulative request cap (UsageLimitExceeded)
+    "low_confidence",       # patch confidence below MIN_CONFIDENCE
+    "validation_failed",    # bad JSON / content-preservation gate refused it
+    "wrong_sheet",          # patch targeted a different sheet
+    "precondition_failed",  # no PDF / no filled cells / missing source pages
+    "model_error",          # unexpected exception in the pass
+    "restarted",            # server restarted while the pass was running
+    "reverted",             # user reverted the pass's formatting
+)
+
 
 @dataclass
 class NotesFormatterDeps:
@@ -151,6 +166,67 @@ def create_notes_formatter_agent(
     return agent, deps
 
 
+@dataclass(frozen=True)
+class _ScreenedPatch:
+    patch: dict[str, Any]
+    confidence: float
+    summary: str
+
+
+def _screen_patch(
+    output_text: str, sheet: str, *, revised: bool = False,
+) -> tuple[Optional[dict[str, Any]], Optional[_ScreenedPatch], str]:
+    """Run the gates every model output must pass before it may be applied:
+    JSON parse, numeric confidence, confidence threshold, sheet match.
+
+    Returns ``(error_return, screened, stage)`` where exactly one of
+    ``error_return`` / ``screened`` is set and ``stage`` names the failing
+    gate (``"parse" | "confidence" | "threshold" | "sheet" | "ok"``) so
+    callers can special-case a parse failure (the repair pass keeps the
+    original error; the self-check pass keeps the original patch).
+    """
+    prefix = "revised " if revised else ""
+    try:
+        patch = _parse_json_patch(output_text)
+    except FormatPatchError as exc:
+        return (
+            {"ok": False, "error": str(exc), "error_type": "validation_failed"},
+            None, "parse",
+        )
+    try:
+        confidence = float(patch.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return (
+            {
+                "ok": False,
+                "error": f"{prefix}formatter confidence must be numeric",
+                "error_type": "validation_failed", "patch": patch,
+            },
+            None, "confidence",
+        )
+    summary = str(patch.get("format_summary") or "").strip()
+    if confidence < MIN_CONFIDENCE:
+        return (
+            {
+                "ok": False, "error": "formatter confidence below threshold",
+                "error_type": "low_confidence",
+                "summary": summary or "Formatter confidence below threshold.",
+                "confidence": confidence, "patch": patch,
+            },
+            None, "threshold",
+        )
+    if patch.get("sheet") != sheet:
+        return (
+            {
+                "ok": False,
+                "error": f"{prefix}formatter patch targeted the wrong sheet",
+                "error_type": "wrong_sheet",
+            },
+            None, "sheet",
+        )
+    return None, _ScreenedPatch(patch, confidence, summary), "ok"
+
+
 async def run_notes_formatter(
     *,
     run_id: int,
@@ -160,7 +236,10 @@ async def run_notes_formatter(
     model: Union[str, Model],
 ) -> dict[str, Any]:
     if not pdf_path or not Path(pdf_path).exists():
-        return {"ok": False, "error": "source PDF is not available"}
+        return {
+            "ok": False, "error": "source PDF is not available",
+            "error_type": "precondition_failed",
+        }
 
     with repo.db_session(db_path) as conn:
         cells = [
@@ -168,13 +247,17 @@ async def run_notes_formatter(
             if c.sheet == sheet and (c.html or "").strip()
         ]
     if not cells:
-        return {"ok": False, "error": f"no filled prose cells found on {sheet}"}
+        return {
+            "ok": False, "error": f"no filled prose cells found on {sheet}",
+            "error_type": "precondition_failed",
+        }
 
     missing_pages = [f"row {c.row}" for c in cells if not c.source_pages]
     if missing_pages:
         return {
             "ok": False,
             "error": "source pages are missing for " + ", ".join(missing_pages[:5]),
+            "error_type": "precondition_failed",
         }
 
     rows_for_patch = {c.row: c.html for c in cells}
@@ -197,28 +280,10 @@ async def run_notes_formatter(
         )
 
     result = await _agent_run(prompt)
-    try:
-        patch = _parse_json_patch(str(result.output))
-    except FormatPatchError as exc:
-        return {"ok": False, "error": str(exc)}
-
-    try:
-        confidence = float(patch.get("confidence") or 0.0)
-    except (TypeError, ValueError):
-        return {
-            "ok": False, "error": "formatter confidence must be numeric",
-            "patch": patch,
-        }
-    summary = str(patch.get("format_summary") or "").strip()
-    if confidence < MIN_CONFIDENCE:
-        return {
-            "ok": False, "error": "formatter confidence below threshold",
-            "summary": summary or "Formatter confidence below threshold.",
-            "confidence": confidence, "patch": patch,
-        }
-
-    if patch.get("sheet") != sheet:
-        return {"ok": False, "error": "formatter patch targeted the wrong sheet"}
+    err, screened, _stage = _screen_patch(str(result.output), sheet)
+    if err is not None:
+        return err
+    patch, confidence, summary = screened.patch, screened.confidence, screened.summary
 
     try:
         applied = apply_sheet_patch(rows_for_patch, patch)
@@ -231,34 +296,21 @@ async def run_notes_formatter(
             sheet, patch, str(exc), rows_for_patch,
         )
         repair_result = await _agent_run(repair_prompt)
-        try:
-            revised = _parse_json_patch(str(repair_result.output))
-        except FormatPatchError:
+        err, screened, stage = _screen_patch(
+            str(repair_result.output), sheet, revised=True,
+        )
+        if stage == "parse":
+            # The repair didn't even parse — report the ORIGINAL validation
+            # error; it is more actionable than "invalid JSON" from the retry.
             return {
-                "ok": False, "error": str(exc), "summary": summary,
+                "ok": False, "error": str(exc),
+                "error_type": "validation_failed", "summary": summary,
                 "confidence": confidence, "patch": patch,
             }
+        if err is not None:
+            return err
         try:
-            revised_confidence = float(revised.get("confidence") or 0.0)
-        except (TypeError, ValueError):
-            return {
-                "ok": False,
-                "error": "revised formatter confidence must be numeric",
-                "patch": revised,
-            }
-        if revised_confidence < MIN_CONFIDENCE:
-            return {
-                "ok": False, "error": "formatter confidence below threshold",
-                "summary": str(revised.get("format_summary") or ""),
-                "confidence": revised_confidence, "patch": revised,
-            }
-        if revised.get("sheet") != sheet:
-            return {
-                "ok": False,
-                "error": "revised formatter patch targeted the wrong sheet",
-            }
-        try:
-            applied = apply_sheet_patch(rows_for_patch, revised)
+            applied = apply_sheet_patch(rows_for_patch, screened.patch)
         except FormatPatchError as revised_exc:
             logger.warning(
                 "notes formatter repaired patch validation failed run=%s sheet=%s error=%s",
@@ -266,12 +318,13 @@ async def run_notes_formatter(
             )
             return {
                 "ok": False, "error": str(revised_exc),
-                "summary": str(revised.get("format_summary") or ""),
-                "confidence": revised_confidence, "patch": revised,
+                "error_type": "validation_failed",
+                "summary": screened.summary,
+                "confidence": screened.confidence, "patch": screened.patch,
             }
-        patch = revised
-        confidence = revised_confidence
-        summary = str(patch.get("format_summary") or "").strip()
+        patch, confidence, summary = (
+            screened.patch, screened.confidence, screened.summary,
+        )
 
     # One self-check revision pass: show the agent the sanitized preview HTML
     # that would be saved and let it either return the same patch or a revised
@@ -279,32 +332,16 @@ async def run_notes_formatter(
     if applied.changed_rows:
         review_prompt = _build_self_check_prompt(sheet, patch, applied.rows)
         review_result = await _agent_run(review_prompt)
-        try:
-            revised = _parse_json_patch(str(review_result.output))
-        except FormatPatchError:
-            revised = patch
-        if revised != patch:
+        err, screened, stage = _screen_patch(
+            str(review_result.output), sheet, revised=True,
+        )
+        if stage == "parse":
+            pass  # self-check output unparseable — keep the validated patch
+        elif err is not None:
+            return err
+        elif screened.patch != patch:
             try:
-                revised_confidence = float(revised.get("confidence") or 0.0)
-            except (TypeError, ValueError):
-                return {
-                    "ok": False,
-                    "error": "revised formatter confidence must be numeric",
-                    "patch": revised,
-                }
-            if revised_confidence < MIN_CONFIDENCE:
-                return {
-                    "ok": False, "error": "formatter confidence below threshold",
-                    "summary": str(revised.get("format_summary") or ""),
-                    "confidence": revised_confidence, "patch": revised,
-                }
-            if revised.get("sheet") != sheet:
-                return {
-                    "ok": False,
-                    "error": "revised formatter patch targeted the wrong sheet",
-                }
-            try:
-                applied = apply_sheet_patch(rows_for_patch, revised)
+                applied = apply_sheet_patch(rows_for_patch, screened.patch)
             except FormatPatchError as exc:
                 logger.warning(
                     "notes formatter revised patch validation failed run=%s sheet=%s error=%s",
@@ -312,35 +349,58 @@ async def run_notes_formatter(
                 )
                 return {
                     "ok": False, "error": str(exc),
-                    "summary": str(revised.get("format_summary") or ""),
-                    "confidence": revised_confidence, "patch": revised,
+                    "error_type": "validation_failed",
+                    "summary": screened.summary,
+                    "confidence": screened.confidence, "patch": screened.patch,
                 }
-            patch = revised
-            confidence = revised_confidence
-            summary = str(patch.get("format_summary") or "").strip()
+            patch, confidence, summary = (
+                screened.patch, screened.confidence, screened.summary,
+            )
 
     if applied.changed_rows == 0:
         return {
             "ok": True, "summary": summary or "No formatting changes needed.",
-            "confidence": confidence, "changed_rows": 0, "patch": patch,
+            "confidence": confidence, "changed_rows": 0, "skipped_rows": [],
+            "patch": patch,
             "before_text_hash": applied.before_text_hash,
             "after_text_hash": applied.after_text_hash,
         }
 
     by_row = {c.row: c for c in cells}
+    skipped_rows: list[int] = []
+    written = 0
     with repo.db_session(db_path) as conn:
-        for row, html in applied.rows.items():
+        current = {
+            c.row: c.html
+            for c in repo.list_notes_cells_for_run(conn, run_id)
+            if c.sheet == sheet
+        }
+        for row, html in sorted(applied.rows.items()):
             if html == rows_for_patch[row]:
+                continue
+            # Compare-and-swap: write only over the exact HTML this pass
+            # formatted. A row edited since launch (user PATCH, reviewer fix)
+            # or deleted since launch (sheet regenerate) is skipped — never
+            # clobbered, never resurrected.
+            if current.get(row) != rows_for_patch[row]:
+                skipped_rows.append(row)
                 continue
             c = by_row[row]
             repo.upsert_notes_cell(
                 conn, run_id=run_id, sheet=sheet, row=row, label=c.label,
                 html=html, evidence=c.evidence, source_pages=c.source_pages,
             )
+            written += 1
 
+    summary_out = summary or "Formatting applied."
+    if skipped_rows:
+        summary_out += (
+            f" {len(skipped_rows)} row(s) skipped — edited during formatting."
+        )
     return {
-        "ok": True, "summary": summary or "Formatting applied.",
-        "confidence": confidence, "changed_rows": applied.changed_rows,
+        "ok": True, "summary": summary_out,
+        "confidence": confidence, "changed_rows": written,
+        "skipped_rows": skipped_rows,
         "patch": patch, "before_text_hash": applied.before_text_hash,
         "after_text_hash": applied.after_text_hash,
     }

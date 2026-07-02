@@ -139,7 +139,12 @@ def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag
     table_index = target.get("table")
     if table_index is None:
         if target.get("blocks") == "all":
-            yield from soup.find_all(["p", "h3", "li"])
+            # Top-level prose blocks only — a paragraph INSIDE a table cell is
+            # the cell's content, styled via cell targets; block-level
+            # indent/align must not fight the cell-level text_align.
+            for el in soup.find_all(["p", "h3", "li"]):
+                if el.find_parent("table") is None:
+                    yield el
             return
         raise FormatPatchError("target.table is required for table styles")
     if not isinstance(table_index, int) or table_index < 0:
