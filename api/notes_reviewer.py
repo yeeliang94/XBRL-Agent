@@ -101,18 +101,13 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
     conn = server._open_audit_conn()
     try:
         run = repo.fetch_run(conn, run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Run not found")
-        # Mirror of the notes-formatter launch guard: both passes write
-        # notes_cells prose rows, so neither may start over the other.
-        if repo.any_notes_format_task_running(conn, run_id):
-            raise HTTPException(
-                status_code=409,
-                detail="A notes formatter pass is running for this run; "
-                       "wait for it to finish before re-reviewing.",
-            )
     finally:
         conn.close()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    # (The formatter-not-running interlock lives INSIDE the atomic claim
+    # below — both passes write notes_cells prose rows, so neither may start
+    # over the other, and the check must be atomic with the claim.)
 
     config = run.config or {}
     filing_level = config.get("filing_level", "company")
@@ -150,9 +145,10 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
     launch_conn = server._open_audit_conn()
     try:
         try:
-            claimed = repo.claim_notes_review_task(
+            # Atomic "formatter not running + claim slot" (BEGIN IMMEDIATE
+            # inside the helper) — mirrors the formatter launch guard.
+            outcome = repo.claim_notes_review_task_guarded(
                 launch_conn, run_id, model=model_name)
-            launch_conn.commit()
         except Exception as e:  # noqa: BLE001
             logger.warning("notes re-review launch persist failed for run %s",
                            run_id, exc_info=True)
@@ -160,7 +156,13 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
                 status_code=503,
                 detail="Could not record the re-review launch; please try again.",
             ) from e
-        if not claimed:
+        if outcome == "formatter_running":
+            raise HTTPException(
+                status_code=409,
+                detail="A notes formatter pass is running for this run; "
+                       "wait for it to finish before re-reviewing.",
+            )
+        if outcome == "review_running":
             existing = repo.fetch_notes_review_task(launch_conn, run_id)
             return {"ok": True, "status": "running", "already_running": True,
                     "model": (existing or {}).get("model")}

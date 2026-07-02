@@ -444,41 +444,38 @@ async def _run_notes_formatter_impl(
             "after_text_hash": applied.after_text_hash,
         }
 
-    by_row = {c.row: c for c in cells}
     skipped_rows: list[int] = []
+    written_rows: list[int] = []
     with repo.db_session(db_path) as conn:
-        current = {
-            c.row: c.html
-            for c in repo.list_notes_cells_for_run(conn, run_id)
-            if c.sheet == sheet
-        }
-        to_write: list[int] = []
+        # Take the write lock up front so the conditional writes + snapshot
+        # below commit as one atomic unit (WAL + busy_timeout make concurrent
+        # writers wait, not fail).
+        conn.execute("BEGIN IMMEDIATE")
         for row, html in sorted(applied.rows.items()):
             if html == rows_for_patch[row]:
                 continue
-            # Compare-and-swap: write only over the exact HTML this pass
-            # formatted. A row edited since launch (user PATCH, reviewer fix)
-            # or deleted since launch (sheet regenerate) is skipped — never
-            # clobbered, never resurrected.
-            if current.get(row) != rows_for_patch[row]:
+            # Statement-atomic compare-and-swap (`WHERE html = ?`): only
+            # overwrite the exact HTML this pass formatted. A row edited
+            # since launch (user PATCH, reviewer fix) or deleted since
+            # launch (sheet regenerate) fails the WHERE and is skipped —
+            # never clobbered, never resurrected. The check lives IN the
+            # UPDATE itself, so there is no read-then-write window.
+            if repo.cas_update_notes_cell_html(
+                conn, run_id=run_id, sheet=sheet, row=row,
+                expected_html=rows_for_patch[row], new_html=html,
+            ):
+                written_rows.append(row)
+            else:
                 skipped_rows.append(row)
-                continue
-            to_write.append(row)
-        if to_write:
-            # Snapshot the pre-format HTML BEFORE the first write so "Revert
-            # formatting" can restore it (schema v27; safety is versioning).
+        if written_rows:
+            # Snapshot the pre-format HTML of exactly the rows written, in
+            # the SAME transaction — "Revert formatting" restores from here
+            # (schema v27; safety is versioning).
             repo.save_notes_format_snapshots(
                 conn, run_id, sheet,
-                {row: rows_for_patch[row] for row in to_write},
+                {row: rows_for_patch[row] for row in written_rows},
             )
-        for row in to_write:
-            c = by_row[row]
-            repo.upsert_notes_cell(
-                conn, run_id=run_id, sheet=sheet, row=row, label=c.label,
-                html=applied.rows[row], evidence=c.evidence,
-                source_pages=c.source_pages,
-            )
-        written = len(to_write)
+        written = len(written_rows)
 
     summary_out = summary or "Formatting applied."
     if skipped_rows:

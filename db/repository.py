@@ -1378,6 +1378,89 @@ def fetch_notes_format_task(
     }
 
 
+def cas_update_notes_cell_html(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    sheet: str,
+    row: int,
+    expected_html: str,
+    new_html: str,
+) -> bool:
+    """Statement-atomic compare-and-swap on one notes cell's HTML.
+
+    The ``WHERE html = ?`` clause makes check-and-write ONE statement, so a
+    concurrent PATCH can never land between a read and this write. Returns
+    False (nothing written) when the row was edited away from
+    ``expected_html`` — or no longer exists at all (sheet regenerate).
+    Touches only ``html`` + ``updated_at``; label/evidence/concept_uuid are
+    preserved.
+    """
+    cur = conn.execute(
+        "UPDATE notes_cells SET html = ?, updated_at = ? "
+        "WHERE run_id = ? AND sheet = ? AND row = ? AND html = ?",
+        (new_html, _now(), run_id, sheet, row, expected_html),
+    )
+    return cur.rowcount > 0
+
+
+def claim_notes_format_task_guarded(
+    conn: sqlite3.Connection,
+    run_id: int,
+    sheet: str,
+    *,
+    model: Optional[str] = None,
+) -> str:
+    """Atomically check the notes reviewer isn't running AND claim the
+    formatter slot — one BEGIN IMMEDIATE transaction, so two concurrent
+    launches (formatter + reviewer) can't both pass each other's
+    "other task not running" check and both claim.
+
+    Returns ``'claimed' | 'format_running' | 'reviewer_running'``. Commits /
+    rolls back itself; the caller must not wrap it in another transaction.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        other = conn.execute(
+            "SELECT 1 FROM notes_review_tasks "
+            "WHERE run_id = ? AND status = 'running' LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if other is not None:
+            conn.rollback()
+            return "reviewer_running"
+        claimed = claim_notes_format_task(conn, run_id, sheet, model=model)
+        conn.commit()
+        return "claimed" if claimed else "format_running"
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def claim_notes_review_task_guarded(
+    conn: sqlite3.Connection,
+    run_id: int,
+    *,
+    model: Optional[str] = None,
+) -> str:
+    """Mirror of :func:`claim_notes_format_task_guarded` for the reviewer
+    launch: check no formatter pass is running, then claim, atomically.
+
+    Returns ``'claimed' | 'review_running' | 'formatter_running'``.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if any_notes_format_task_running(conn, run_id):
+            conn.rollback()
+            return "formatter_running"
+        claimed = claim_notes_review_task(conn, run_id, model=model)
+        conn.commit()
+        return "claimed" if claimed else "review_running"
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def any_notes_format_task_running(
     conn: sqlite3.Connection, run_id: int,
 ) -> bool:

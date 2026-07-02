@@ -50,13 +50,9 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
                 detail=f"Run is {run.status}; formatting is available once "
                        "the run has finished.",
             )
-        review_task = repo.fetch_notes_review_task(conn, run_id)
-        if review_task and review_task.get("status") == "running":
-            raise HTTPException(
-                status_code=409,
-                detail="A notes reviewer pass is running for this run; "
-                       "wait for it to finish before formatting.",
-            )
+        # (The reviewer-not-running interlock lives INSIDE the atomic claim
+        # below — checking it here would be a TOCTOU against a concurrent
+        # reviewer launch.)
         config = run.config or {}
         standard = config.get("filing_standard", "mfrs")
         level = config.get("filing_level", "company")
@@ -102,10 +98,12 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
     launch_conn = server._open_audit_conn()
     try:
         try:
-            claimed = repo.claim_notes_format_task(
+            # Atomic "reviewer not running + claim slot" — one BEGIN IMMEDIATE
+            # transaction inside the helper, so a concurrent reviewer launch
+            # can't interleave between the check and the claim.
+            outcome = repo.claim_notes_format_task_guarded(
                 launch_conn, run_id, body.sheet, model=model_name,
             )
-            launch_conn.commit()
         except Exception as exc:  # noqa: BLE001
             logger.warning("notes formatter launch persist failed for run %s",
                            run_id, exc_info=True)
@@ -113,7 +111,13 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
                 status_code=503,
                 detail="Could not record the formatter launch; please try again.",
             ) from exc
-        if not claimed:
+        if outcome == "reviewer_running":
+            raise HTTPException(
+                status_code=409,
+                detail="A notes reviewer pass is running for this run; "
+                       "wait for it to finish before formatting.",
+            )
+        if outcome == "format_running":
             existing = repo.fetch_notes_format_task(launch_conn, run_id, body.sheet)
             return {
                 "ok": True, "status": "running", "already_running": True,
@@ -300,11 +304,18 @@ async def revert_notes_formatter(run_id: int, body: _NotesFormatRevert):
     HTML renders the same text as the snapshot, so restoring it can never
     lose content. Rows deleted since the pass (regenerate) are left alone.
     """
+    from notes.format_verify import verify_format_only
+    from notes.html_sanitize import sanitize_notes_html
+
     conn = server._open_audit_conn()
     try:
         run = repo.fetch_run(conn, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
+        # One write lock across check → verify → restore, so a concurrent
+        # PATCH or pass launch can't interleave (an early HTTPException
+        # leaves the transaction to roll back on close).
+        conn.execute("BEGIN IMMEDIATE")
         task = repo.fetch_notes_format_task(conn, run_id, body.sheet)
         if task and task.get("status") == "running":
             raise HTTPException(
@@ -332,38 +343,58 @@ async def revert_notes_formatter(run_id: int, body: _NotesFormatRevert):
             for c in repo.list_notes_cells_for_run(conn, run_id)
             if c.sheet == body.sheet
         }
-        from notes.html_sanitize import sanitize_notes_html
-
-        restored = 0
+        restored_rows: list[int] = []
+        skipped_rows: list[int] = []
         for row, html in snapshot.items():
             cell = cells.get(row)
             if cell is None:
-                continue  # row deleted since the pass — nothing to restore onto
+                skipped_rows.append(row)  # deleted since the pass
+                continue
+            # The formatter's write was style-only, so snapshot vs current
+            # must still be CONTENT-equal. If the user edited content after
+            # formatting, restoring the snapshot would clobber that edit —
+            # skip the row instead (the verifier gate cuts the other way
+            # here: it protects the newer content, not the older).
+            vr = verify_format_only(html, cell.html or "")
+            if not vr.ok:
+                skipped_rows.append(row)
+                continue
             # Snapshots originate from already-sanitised DB rows, but every
             # notes_cells write goes through the sanitiser (gotcha #16 flow)
             # — defence-in-depth against a tampered snapshot row.
             cleaned, _warnings = sanitize_notes_html(html)
-            repo.upsert_notes_cell(
+            if repo.cas_update_notes_cell_html(
                 conn, run_id=run_id, sheet=body.sheet, row=row,
-                label=cell.label, html=cleaned, evidence=cell.evidence,
-                source_pages=cell.source_pages,
+                expected_html=cell.html, new_html=cleaned,
+            ):
+                restored_rows.append(row)
+            else:
+                skipped_rows.append(row)
+        summary = "Formatting reverted to the pre-format state."
+        if skipped_rows:
+            summary += (
+                f" {len(skipped_rows)} row(s) kept — content edited after "
+                "formatting."
             )
-            restored += 1
         repo.upsert_notes_format_task(
             conn, run_id, body.sheet, "done",
             model=(task or {}).get("model"),
-            summary="Formatting reverted to the pre-format state.",
+            summary=summary,
             changed_rows=0, error=None, error_type="reverted",
-            result={"ok": True, "reverted": True, "restored_rows": restored},
+            result={
+                "ok": True, "reverted": True,
+                "restored_rows": restored_rows, "skipped_rows": skipped_rows,
+            },
         )
         conn.commit()
     finally:
         conn.close()
     logger.info(
-        "notes formatter reverted run=%s sheet=%s restored=%d",
-        run_id, body.sheet, restored,
+        "notes formatter reverted run=%s sheet=%s restored=%d skipped=%d",
+        run_id, body.sheet, len(restored_rows), len(skipped_rows),
     )
     return {
         "ok": True, "status": "done", "sheet": body.sheet,
-        "restored_rows": restored, "error_type": "reverted",
+        "restored_rows": len(restored_rows), "skipped_rows": skipped_rows,
+        "error_type": "reverted",
     }
