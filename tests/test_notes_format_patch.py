@@ -217,6 +217,71 @@ def test_visible_rule_wins_over_neighbours_default_grid():
     assert 'border-bottom: 1px solid #666666' in cells[0]   # A (shared edge)
 
 
+def test_cols_filter_restricts_row_targets_to_amount_columns():
+    """`cols` on total_rows/rows styles only those 1-based cells — the
+    accountant pattern where summation rules underline the amounts, not the
+    label column."""
+    html = (
+        "<table>"
+        "<tr><td>Revenue</td><td>10</td><td>20</td></tr>"
+        "<tr><td>Total</td><td>10</td><td>20</td></tr>"
+        "</table>"
+    )
+    patch = {
+        "cells": [{
+            "row": 1,
+            "operations": [{
+                "target": {"table": 0, "range": "total_rows", "cols": [2, 3]},
+                "style": {
+                    "border_bottom": {"width": "3px", "style": "double",
+                                      "color": "#000000"},
+                },
+            }],
+        }],
+    }
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    cells = re.findall(r"<td[^>]*>[^<]*</td>", out)
+    assert "border-bottom" not in cells[3]          # Total label — untouched
+    assert "border-bottom: 3px double" in cells[4]  # amount col 2
+    assert "border-bottom: 3px double" in cells[5]  # amount col 3
+
+
+def test_cols_filter_validates_shape():
+    html = "<table><tr><td>Total</td><td>10</td></tr></table>"
+    patch = {
+        "cells": [{
+            "row": 1,
+            "operations": [{
+                "target": {"table": 0, "range": "total_rows", "cols": [0]},
+                "style": {"text_align": "right"},
+            }],
+        }],
+    }
+    with pytest.raises(FormatPatchError, match="cols"):
+        apply_sheet_patch({1: html}, patch)
+
+
+def test_describe_effective_appearance_resolves_theme_defaults():
+    """The self-check feedback resolves each cell to its RENDERED look —
+    theme defaults where unstyled, explicit values, cleared edges/fills."""
+    from notes.format_patch import describe_effective_appearance
+
+    html = (
+        "<table>"
+        '<tr><th style="background-color: transparent">Name</th><th>Amt</th></tr>'
+        '<tr><td>Total</td>'
+        '<td style="border-bottom: 3px double #000000; '
+        'border-top: 1px hidden #000000">10</td></tr>'
+        "</table>"
+    )
+    lines = "\n".join(describe_effective_appearance(html))
+    assert "r1c1" in lines and "none (explicitly cleared)" in lines
+    assert "theme header grey (default)" in lines          # unstyled th fill
+    assert "bottom=3px double #000000" in lines            # explicit rule
+    assert "top=no line (cleared)" in lines                # hidden edge
+    assert "theme grid (thin grey, default)" in lines      # unstyled edges
+
+
 def test_rejects_text_changes_after_sanitize():
     html = "<table><tr><td>A</td></tr></table>"
     # Force an unsupported target by changing table shape through raw malformed
@@ -392,6 +457,69 @@ async def test_formatter_writes_unedited_rows(monkeypatch, formatter_db):
     # The pass snapshotted the pre-format HTML before its first write
     # (schema v27) so "Revert formatting" can restore it.
     assert snapshot == {112: _TABLE_HTML}
+
+
+@pytest.mark.asyncio
+async def test_formatter_accepts_prose_wrapped_json(monkeypatch, formatter_db):
+    """A patch wrapped in prose ("Here is the patch: {…}") parses via the
+    balanced-object extraction — no retry pass is consumed."""
+    wrapped = f"Here is the formatting patch you asked for:\n{_GOOD_PATCH}\nDone."
+    fake = _FakeAgent([wrapped, _GOOD_PATCH])  # initial + self-check only
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is True
+    assert result["changed_rows"] == 1
+    assert fake.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_formatter_retries_once_with_feedback_on_rejected_output(
+    monkeypatch, formatter_db,
+):
+    """Unparseable first output → ONE retry carrying the rejection reason;
+    a good retry completes the pass normally."""
+    garbage = "I could not produce a patch in the requested format."
+    fake = _FakeAgent([garbage, _GOOD_PATCH, _GOOD_PATCH])  # init + retry + self-check
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is True
+    assert result["changed_rows"] == 1
+    assert fake.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_formatter_reports_original_error_when_retry_also_fails(
+    monkeypatch, formatter_db,
+):
+    garbage = "no json here"
+    fake = _FakeAgent([garbage, "still no json"])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is False
+    assert result["error_type"] == "validation_failed"
+    assert "invalid JSON" in result["error"]
+    assert fake.calls == 2  # exactly one retry — no loop
+
+
+def test_output_rejected_prompt_carries_error_and_response():
+    import notes.formatting_agent as fa
+
+    prompt = fa._build_output_rejected_prompt(
+        _SHEET, "Sure! ```json\nnot-json\n```", "formatter returned invalid JSON: x",
+    )
+    assert "REJECTION: formatter returned invalid JSON: x" in prompt
+    assert "no prose" in prompt
+    assert "not-json" in prompt
+
+
+def test_self_check_prompt_uses_rendered_appearance():
+    import notes.formatting_agent as fa
+
+    prompt = fa._build_self_check_prompt(
+        _SHEET, {"sheet": _SHEET, "cells": []},
+        {112: '<table><tr><td style="border-bottom: 3px double #000000">10'
+              "</td></tr></table>"},
+    )
+    assert "RENDERED APPEARANCE BY ROW" in prompt
+    assert "bottom=3px double #000000" in prompt
+    assert "EXTENT" in prompt  # directs attention to border span vs the PDF
 
 
 @pytest.mark.asyncio

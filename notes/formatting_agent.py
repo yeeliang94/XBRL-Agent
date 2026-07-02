@@ -23,7 +23,11 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 
 from agent_tracing import save_messages_trace
 from db import repository as repo
-from notes.format_patch import FormatPatchError, apply_sheet_patch
+from notes.format_patch import (
+    FormatPatchError,
+    apply_sheet_patch,
+    describe_effective_appearance,
+)
 from model_settings import build_model_settings
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 
@@ -358,7 +362,28 @@ async def _run_notes_formatter_impl(
         return result
 
     result = await _agent_run(prompt)
-    err, screened, _stage = _screen_patch(str(result.output), sheet)
+    err, screened, stage = _screen_patch(str(result.output), sheet)
+    if err is not None and stage in ("parse", "confidence", "sheet"):
+        # Mechanically rejected output (unparseable JSON / wrong sheet /
+        # non-numeric confidence) — tell the model WHY and give it one retry,
+        # mirroring the validation-repair pass below. Without this, a model
+        # that formats well but wraps its answer in prose fails silently with
+        # no feedback. A low-confidence patch (stage "threshold") is NOT
+        # retried: that is the model's honest self-assessment, and re-asking
+        # only pressures it to inflate the number.
+        logger.warning(
+            "notes formatter output rejected run=%s sheet=%s stage=%s error=%s",
+            run_id, sheet, stage, err.get("error"),
+        )
+        retry_result = await _agent_run(
+            _build_output_rejected_prompt(sheet, str(result.output), err["error"]),
+        )
+        retry_err, retry_screened, _retry_stage = _screen_patch(
+            str(retry_result.output), sheet, revised=True,
+        )
+        if retry_err is not None:
+            return err  # keep the ORIGINAL rejection — it names the root cause
+        err, screened = None, retry_screened
     if err is not None:
         return err
     patch, confidence, summary = screened.patch, screened.confidence, screened.summary
@@ -530,21 +555,48 @@ def _build_validation_repair_prompt(
     )
 
 
+def _build_output_rejected_prompt(
+    sheet: str, rejected_output: str, error: str,
+) -> str:
+    snippet = rejected_output.strip()
+    if len(snippet) > 4000:
+        snippet = snippet[:4000] + " …[truncated]"
+    return (
+        "Your previous response was rejected before it could be validated:\n"
+        f"REJECTION: {error}\n\n"
+        "Return the SAME formatting decisions as ONE raw JSON object using the "
+        "patch schema — no prose, no Markdown fences, nothing before or after "
+        f"the JSON. The patch's \"sheet\" must be {sheet!r} and \"confidence\" "
+        "must be a number.\n\n"
+        f"YOUR REJECTED RESPONSE:\n{snippet}"
+    )
+
+
 def _build_self_check_prompt(
     sheet: str, patch: dict[str, Any], preview_rows: dict[int, str],
 ) -> str:
-    compact_preview = [
-        {"row": row, "html": html} for row, html in sorted(preview_rows.items())
+    # Effective rendered appearance, not raw HTML: the review panel paints a
+    # default grey grid + grey header fill from theme CSS that is invisible in
+    # the HTML, and models misread border EXTENT out of per-cell style soup
+    # (the "double rule across the whole row instead of one column" failure).
+    appearance = [
+        {"row": row, "rendered_appearance": describe_effective_appearance(html)}
+        for row, html in sorted(preview_rows.items())
     ]
     return (
         "Self-check your formatting patch against the original source pages you "
-        "viewed. If the preview matches the source formatting pattern, return "
-        "the same JSON patch. If borders/fills/alignment are wrong, return one "
-        "revised JSON patch using the same schema. Do not change content.\n\n"
+        "viewed. Below is the EFFECTIVE RENDERED APPEARANCE of every cell after "
+        "your patch (explicit styles resolved, theme defaults shown where you "
+        "set nothing). Check each rule's EXTENT: a border must span exactly the "
+        "same cells as in the source — e.g. a summation rule under only the "
+        "amount column must not run across the label column. Check fills the "
+        "same way. If everything matches the source, return the same JSON "
+        "patch. If borders/fills/alignment are wrong, return one revised JSON "
+        "patch using the same schema. Do not change content.\n\n"
         f"SHEET: {sheet}\n"
         f"PATCH:\n{json.dumps(patch, ensure_ascii=False)}\n\n"
-        f"SANITIZED PREVIEW HTML BY ROW:\n"
-        f"{json.dumps(compact_preview, ensure_ascii=False)}"
+        f"RENDERED APPEARANCE BY ROW:\n"
+        f"{json.dumps(appearance, ensure_ascii=False)}"
     )
 
 
@@ -556,10 +608,51 @@ def _parse_json_patch(text: str) -> dict[str, Any]:
     try:
         obj = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise FormatPatchError(f"formatter returned invalid JSON: {exc}") from exc
+        # Models routinely wrap the patch in prose ("Here is the patch: {…}")
+        # despite the JSON-only instruction. Before rejecting, try to extract
+        # the first balanced top-level JSON object from the text — this rescues
+        # the most common failure shape without another model round-trip.
+        obj = _extract_json_object(raw)
+        if obj is None:
+            raise FormatPatchError(
+                f"formatter returned invalid JSON: {exc}"
+            ) from exc
     if not isinstance(obj, dict):
         raise FormatPatchError("formatter output must be a JSON object")
     return obj
+
+
+def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
+    """First parseable balanced ``{…}`` object in ``text``, or None. Tracks
+    string/escape state so braces inside JSON strings don't break the scan."""
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_str = False
+        escaped = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        obj = json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break  # malformed candidate — try the next "{"
+                    return obj if isinstance(obj, dict) else None
+        start = text.find("{", start + 1)
+    return None
 
 
 def _table_geometry(html: str) -> list[dict[str, Any]]:
