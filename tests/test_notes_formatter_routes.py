@@ -183,8 +183,98 @@ def test_notes_formatter_turn_budget_records_done(formatter_client, monkeypatch)
     assert r.status_code == 200
     done = _poll_done(client, run_id, "Notes-Listofnotes")
     assert done["status"] == "done"
+    assert done["error_type"] == "turn_budget"
     assert "turn budget" in (done["error"] or "")
     assert "turn budget" in (done["summary"] or "")
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
     assert cells[0].html == "<p>abc</p>"
+
+
+def test_notes_formatter_timeout_records_error_type(formatter_client, monkeypatch):
+    """A pass that outlives the wall-clock cap lands as error_type='timeout'."""
+    import asyncio as aio
+
+    client, run_id, server_module = formatter_client
+    monkeypatch.setattr(server_module, "NOTES_FORMATTER_WALLCLOCK_TIMEOUT", 0.05)
+
+    async def slow_run_notes_formatter(**_kwargs):
+        await aio.sleep(5)
+        return {"ok": True}
+
+    import notes.formatting_agent as formatting_agent
+    monkeypatch.setattr(
+        formatting_agent, "run_notes_formatter", slow_run_notes_formatter,
+    )
+    r = client.post(
+        f"/api/runs/{run_id}/notes-format",
+        json={"sheet": "Notes-Listofnotes"},
+    )
+    assert r.status_code == 200
+    done = _poll_done(client, run_id, "Notes-Listofnotes")
+    assert done["error_type"] == "timeout"
+    assert "timed out" in (done["error"] or "")
+
+
+def test_notes_formatter_revert_restores_pre_format_html(formatter_client):
+    """Revert restores the v27 snapshot into notes_cells and marks the task
+    'reverted'; rows deleted since the pass are left alone."""
+    client, run_id, server_module = formatter_client
+    sheet = "Notes-Listofnotes"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        # Emulate a completed pass: snapshot of the pre-format HTML, styled
+        # HTML written over it, task row 'done'.
+        repo.save_notes_format_snapshots(conn, run_id, sheet, {112: "<p>abc</p>"})
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=sheet, row=112,
+            label="Disclosure of other notes",
+            html='<table><tr><td style="text-align: right">abc</td></tr></table>',
+            evidence="Page 3", source_pages=[3],
+        )
+        repo.upsert_notes_format_task(
+            conn, run_id, sheet, "done", model="m", summary="Formatted.",
+            confidence=0.9, changed_rows=1, result={"ok": True},
+        )
+
+    status = client.get(
+        f"/api/runs/{run_id}/notes-format/status", params={"sheet": sheet},
+    ).json()
+    assert status["can_revert"] is True
+
+    r = client.post(
+        f"/api/runs/{run_id}/notes-format/revert", json={"sheet": sheet},
+    )
+    assert r.status_code == 200
+    assert r.json()["restored_rows"] == 1
+
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        cells = repo.list_notes_cells_for_run(conn, run_id)
+    assert cells[0].html == "<p>abc</p>"
+
+    status = client.get(
+        f"/api/runs/{run_id}/notes-format/status", params={"sheet": sheet},
+    ).json()
+    assert status["status"] == "done"
+    assert status["error_type"] == "reverted"
+    assert status["error"] is None
+
+
+def test_notes_formatter_revert_without_snapshot_404s(formatter_client):
+    client, run_id, _server = formatter_client
+    r = client.post(
+        f"/api/runs/{run_id}/notes-format/revert",
+        json={"sheet": "Notes-Listofnotes"},
+    )
+    assert r.status_code == 404
+
+
+def test_notes_formatter_revert_while_running_409s(formatter_client):
+    client, run_id, server_module = formatter_client
+    sheet = "Notes-Listofnotes"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.save_notes_format_snapshots(conn, run_id, sheet, {112: "<p>abc</p>"})
+        repo.claim_notes_format_task(conn, run_id, sheet, model="m")
+    r = client.post(
+        f"/api/runs/{run_id}/notes-format/revert", json={"sheet": sheet},
+    )
+    assert r.status_code == 409

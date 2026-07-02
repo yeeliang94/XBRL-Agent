@@ -368,13 +368,13 @@ async def run_notes_formatter(
 
     by_row = {c.row: c for c in cells}
     skipped_rows: list[int] = []
-    written = 0
     with repo.db_session(db_path) as conn:
         current = {
             c.row: c.html
             for c in repo.list_notes_cells_for_run(conn, run_id)
             if c.sheet == sheet
         }
+        to_write: list[int] = []
         for row, html in sorted(applied.rows.items()):
             if html == rows_for_patch[row]:
                 continue
@@ -385,12 +385,22 @@ async def run_notes_formatter(
             if current.get(row) != rows_for_patch[row]:
                 skipped_rows.append(row)
                 continue
+            to_write.append(row)
+        if to_write:
+            # Snapshot the pre-format HTML BEFORE the first write so "Revert
+            # formatting" can restore it (schema v27; safety is versioning).
+            repo.save_notes_format_snapshots(
+                conn, run_id, sheet,
+                {row: rows_for_patch[row] for row in to_write},
+            )
+        for row in to_write:
             c = by_row[row]
             repo.upsert_notes_cell(
                 conn, run_id=run_id, sheet=sheet, row=row, label=c.label,
-                html=html, evidence=c.evidence, source_pages=c.source_pages,
+                html=applied.rows[row], evidence=c.evidence,
+                source_pages=c.source_pages,
             )
-            written += 1
+        written = len(to_write)
 
     summary_out = summary or "Formatting applied."
     if skipped_rows:

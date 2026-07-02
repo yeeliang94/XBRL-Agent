@@ -144,7 +144,10 @@ from pathlib import Path
 # table, no ALTER). Pinned by tests/test_db_schema_v21.py.
 # v26 adds `notes_format_tasks`, the durable latest async formatter pass per
 # run+sheet for the Notes Review panel.
-CURRENT_SCHEMA_VERSION = 26
+# v27 adds `notes_format_snapshots` (pre-format HTML per row — "Revert
+# formatting" restores from here) + taxonomy/token columns on
+# `notes_format_tasks` (docs/PLAN-notes-formatter-hardening.md).
+CURRENT_SCHEMA_VERSION = 27
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -885,9 +888,34 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         error             TEXT,
         before_text_hash  TEXT,
         after_text_hash   TEXT,
+        -- v27 columns (ALTERed in for DBs that walked to v26 first):
+        -- failure taxonomy + per-pass token telemetry.
+        error_type        TEXT,
+        prompt_tokens     INTEGER DEFAULT 0,
+        completion_tokens INTEGER DEFAULT 0,
+        cache_read_tokens INTEGER DEFAULT 0,
+        cache_write_tokens INTEGER DEFAULT 0,
         created_at        TEXT NOT NULL DEFAULT '',
         updated_at        TEXT NOT NULL DEFAULT '',
         UNIQUE(run_id, sheet)
+    )
+    """,
+
+    # -----------------------------------------------------------------
+    # v27: notes formatter pre-format snapshots. One snapshot per
+    # (run, sheet), overwritten by each pass BEFORE its first row write —
+    # "Revert formatting" restores from here (safety is versioning, not
+    # write-gating; mirrors the reviewer's run_fact_snapshots philosophy).
+    # -----------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS notes_format_snapshots (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        sheet       TEXT NOT NULL,
+        row         INTEGER NOT NULL,
+        html        TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT '',
+        UNIQUE(run_id, sheet, row)
     )
     """,
 )
@@ -936,6 +964,8 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_notes_cell_tombstones_run_id ON notes_cell_tombstones(run_id)",
     # v26: notes formatter task poll/reconciliation queries.
     "CREATE INDEX IF NOT EXISTS ix_notes_format_tasks_run_id ON notes_format_tasks(run_id)",
+    # v27: formatter snapshots fetched per (run, sheet) at revert time.
+    "CREATE INDEX IF NOT EXISTS ix_notes_format_snapshots_run_id ON notes_format_snapshots(run_id)",
 )
 
 
@@ -1056,6 +1086,20 @@ _V20_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # so it gets its own column + endpoint rather than the draft-only config path.
 _V22_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("runs", "notes_table_style", "TEXT"),
+)
+
+
+# v27 columns on notes_format_tasks: the failure taxonomy code (`error_type`,
+# nullable, no CHECK — same rationale as runs.status: a new code must not
+# require a full-table migration) and per-pass token telemetry (mirrors the
+# v15 run_agents cache columns). All nullable-or-defaulted so the ALTER is
+# legal on SQLite.
+_V27_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("notes_format_tasks", "error_type", "TEXT"),
+    ("notes_format_tasks", "prompt_tokens", "INTEGER DEFAULT 0"),
+    ("notes_format_tasks", "completion_tokens", "INTEGER DEFAULT 0"),
+    ("notes_format_tasks", "cache_read_tokens", "INTEGER DEFAULT 0"),
+    ("notes_format_tasks", "cache_write_tokens", "INTEGER DEFAULT 0"),
 )
 
 
@@ -1924,6 +1968,47 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (26,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v26→v27 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v26 → v27: notes_format_snapshots (already created above) + the
+        # notes_format_tasks taxonomy/token columns. Same BEGIN IMMEDIATE +
+        # re-check + duplicate-column tolerance as the earlier column steps
+        # (a DB that never reached v26 got the full CREATE with the columns
+        # inline, so the PRAGMA check skips the ALTERs there).
+        if current_version is not None and current_version < 27:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 27:
+                    for table, col_name, col_ddl in _V27_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (27,),
                     )
                 conn.commit()
             except Exception:

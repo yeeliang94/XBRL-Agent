@@ -82,3 +82,4 @@ def test_notes_format_task_round_trips_and_reconciles(tmp_path):
         t = repo.fetch_notes_format_task(conn, run_id, "Notes-Listofnotes")
         assert t["status"] == "done"
         assert t["error"] == "restarted"
+        assert t["error_type"] == "restarted"

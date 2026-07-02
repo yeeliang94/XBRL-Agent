@@ -1271,12 +1271,18 @@ def claim_notes_format_task(
     cur = conn.execute(
         "INSERT INTO notes_format_tasks("
         "run_id, sheet, status, model, summary, confidence, changed_rows, "
-        "result_json, error, before_text_hash, after_text_hash, created_at, updated_at"
-        ") VALUES (?, ?, 'running', ?, NULL, NULL, 0, NULL, NULL, NULL, NULL, ?, ?) "
+        "result_json, error, before_text_hash, after_text_hash, "
+        "error_type, prompt_tokens, completion_tokens, "
+        "cache_read_tokens, cache_write_tokens, created_at, updated_at"
+        ") VALUES (?, ?, 'running', ?, NULL, NULL, 0, NULL, NULL, NULL, NULL, "
+        "NULL, 0, 0, 0, 0, ?, ?) "
         "ON CONFLICT(run_id, sheet) DO UPDATE SET status = 'running', "
         "model = excluded.model, summary = NULL, confidence = NULL, "
         "changed_rows = 0, result_json = NULL, error = NULL, "
-        "before_text_hash = NULL, after_text_hash = NULL, updated_at = excluded.updated_at "
+        "before_text_hash = NULL, after_text_hash = NULL, "
+        "error_type = NULL, prompt_tokens = 0, completion_tokens = 0, "
+        "cache_read_tokens = 0, cache_write_tokens = 0, "
+        "updated_at = excluded.updated_at "
         "WHERE notes_format_tasks.status != 'running'",
         (run_id, sheet, model, now, now),
     )
@@ -1297,6 +1303,11 @@ def upsert_notes_format_task(
     error: Optional[str] = None,
     before_text_hash: Optional[str] = None,
     after_text_hash: Optional[str] = None,
+    error_type: Optional[str] = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> None:
     """Insert/update the durable async notes formatter task."""
     now = _now()
@@ -1304,17 +1315,27 @@ def upsert_notes_format_task(
     conn.execute(
         "INSERT INTO notes_format_tasks("
         "run_id, sheet, status, model, summary, confidence, changed_rows, "
-        "result_json, error, before_text_hash, after_text_hash, created_at, updated_at"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "result_json, error, before_text_hash, after_text_hash, "
+        "error_type, prompt_tokens, completion_tokens, "
+        "cache_read_tokens, cache_write_tokens, created_at, updated_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(run_id, sheet) DO UPDATE SET status = excluded.status, "
         "model = excluded.model, summary = excluded.summary, "
         "confidence = excluded.confidence, changed_rows = excluded.changed_rows, "
         "result_json = excluded.result_json, error = excluded.error, "
         "before_text_hash = excluded.before_text_hash, "
-        "after_text_hash = excluded.after_text_hash, updated_at = excluded.updated_at",
+        "after_text_hash = excluded.after_text_hash, "
+        "error_type = excluded.error_type, "
+        "prompt_tokens = excluded.prompt_tokens, "
+        "completion_tokens = excluded.completion_tokens, "
+        "cache_read_tokens = excluded.cache_read_tokens, "
+        "cache_write_tokens = excluded.cache_write_tokens, "
+        "updated_at = excluded.updated_at",
         (
             run_id, sheet, status, model, summary, confidence, changed_rows,
-            result_json, error, before_text_hash, after_text_hash, now, now,
+            result_json, error, before_text_hash, after_text_hash,
+            error_type, prompt_tokens, completion_tokens,
+            cache_read_tokens, cache_write_tokens, now, now,
         ),
     )
 
@@ -1328,7 +1349,9 @@ def fetch_notes_format_task(
     try:
         row = conn.execute(
             "SELECT status, model, summary, confidence, changed_rows, "
-            "result_json, error, before_text_hash, after_text_hash, updated_at "
+            "result_json, error, before_text_hash, after_text_hash, "
+            "error_type, prompt_tokens, completion_tokens, "
+            "cache_read_tokens, cache_write_tokens, updated_at "
             "FROM notes_format_tasks WHERE run_id = ? AND sheet = ?",
             (run_id, sheet),
         ).fetchone()
@@ -1346,6 +1369,11 @@ def fetch_notes_format_task(
         "changed_rows": row["changed_rows"], "result": result,
         "error": row["error"], "before_text_hash": row["before_text_hash"],
         "after_text_hash": row["after_text_hash"],
+        "error_type": row["error_type"],
+        "prompt_tokens": row["prompt_tokens"],
+        "completion_tokens": row["completion_tokens"],
+        "cache_read_tokens": row["cache_read_tokens"],
+        "cache_write_tokens": row["cache_write_tokens"],
         "updated_at": row["updated_at"],
     }
 
@@ -1376,11 +1404,51 @@ def reconcile_stale_notes_format_tasks(conn: sqlite3.Connection) -> int:
     })
     cur = conn.execute(
         "UPDATE notes_format_tasks SET status = 'done', result_json = ?, "
-        "error = 'restarted', summary = 'Formatter interrupted by server restart.', "
+        "error = 'restarted', error_type = 'restarted', "
+        "summary = 'Formatter interrupted by server restart.', "
         "updated_at = ? WHERE status = 'running'",
         (result_json, now),
     )
     return int(cur.rowcount)
+
+
+def save_notes_format_snapshots(
+    conn: sqlite3.Connection,
+    run_id: int,
+    sheet: str,
+    rows: dict[int, str],
+) -> None:
+    """Overwrite the sheet's pre-format snapshot (schema v27).
+
+    Written ONCE per formatter pass, before its first row write, holding the
+    pre-format HTML of exactly the rows the pass is about to restyle —
+    "Revert formatting" restores from here. A later pass overwrites the
+    previous pass's snapshot (last-pass-only revert, by design).
+    """
+    now = _now()
+    conn.execute(
+        "DELETE FROM notes_format_snapshots WHERE run_id = ? AND sheet = ?",
+        (run_id, sheet),
+    )
+    conn.executemany(
+        "INSERT INTO notes_format_snapshots(run_id, sheet, row, html, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(run_id, sheet, row, html, now) for row, html in sorted(rows.items())],
+    )
+
+
+def fetch_notes_format_snapshots(
+    conn: sqlite3.Connection, run_id: int, sheet: str,
+) -> dict[int, str]:
+    """Return the sheet's pre-format snapshot as row -> html (empty if none)."""
+    return {
+        int(r[0]): r[1]
+        for r in conn.execute(
+            "SELECT row, html FROM notes_format_snapshots "
+            "WHERE run_id = ? AND sheet = ? ORDER BY row",
+            (run_id, sheet),
+        ).fetchall()
+    }
 
 
 def fetch_notes_inventory(

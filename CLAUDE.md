@@ -450,6 +450,21 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   represent a deletion). See gotcha #16 (overlay is authoritative for the notes
   region). Pure `CREATE TABLE IF NOT EXISTS` walk-forward. Pinned by
   `tests/test_db_schema_v25.py`.
+- **v25 → v26:** adds `notes_format_tasks` — the durable latest async notes
+  formatter pass per (run, sheet), claimed atomically (`ON CONFLICT … WHERE
+  status != 'running'`), reconciled at startup like the review tasks. Pure
+  `CREATE TABLE IF NOT EXISTS` walk-forward. Pinned by
+  `tests/test_db_schema_v26.py`. See gotcha #16 (notes formatter agent).
+- **v26 → v27:** adds `notes_format_snapshots` (pre-format HTML per row —
+  "Revert formatting" restores from here; one snapshot per sheet, overwritten
+  per pass) PLUS `_V27_MIGRATION_COLUMNS` on `notes_format_tasks`: the
+  failure-taxonomy code `error_type` (nullable, no CHECK — same rationale as
+  `runs.status`; vocabulary lives next to `FORMATTER_ERROR_TYPES` in
+  `notes/formatting_agent.py`) and per-pass token telemetry (`prompt_tokens` /
+  `completion_tokens` / `cache_read_tokens` / `cache_write_tokens`, all
+  `INTEGER DEFAULT 0`, mirroring v15). A DB that never reached v26 gets the
+  columns inline from the CREATE; a v26 DB gets the duplicate-column-tolerant
+  ALTERs. Pinned by `tests/test_db_schema_v27.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
