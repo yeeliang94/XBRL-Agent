@@ -81,6 +81,9 @@ def verify_format_only(before_html: str, after_html: str) -> VerificationResult:
         return VerificationResult(
             False, "rendered text changed", before_hash, after_hash,
         )
+    # Defense-in-depth only: with equal normalised text (checked above) the
+    # numeric tokens are necessarily equal too. This fires only if the text
+    # normalisation ever diverges from what accountants care about — keep it.
     if _numbers(before_html) != _numbers(after_html):
         return VerificationResult(
             False, "numeric tokens changed", before_hash, after_hash,

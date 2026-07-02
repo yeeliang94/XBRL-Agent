@@ -101,10 +101,18 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
     conn = server._open_audit_conn()
     try:
         run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        # Mirror of the notes-formatter launch guard: both passes write
+        # notes_cells prose rows, so neither may start over the other.
+        if repo.any_notes_format_task_running(conn, run_id):
+            raise HTTPException(
+                status_code=409,
+                detail="A notes formatter pass is running for this run; "
+                       "wait for it to finish before re-reviewing.",
+            )
     finally:
         conn.close()
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
 
     config = run.config or {}
     filing_level = config.get("filing_level", "company")

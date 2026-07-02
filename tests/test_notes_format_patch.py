@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 
 import pytest
 
@@ -145,6 +146,170 @@ def test_can_set_table_width_without_structure_change():
     }
     out = apply_sheet_patch({1: html}, patch)
     assert '<table style="width: 100%">' in out.rows[1]
+
+
+def test_blocks_all_excludes_paragraphs_inside_tables():
+    """{"blocks": "all"} styles top-level prose only — a paragraph inside a
+    table cell is the cell's content and must not receive block styling."""
+    html = "<p>Intro</p><table><tr><td><p>In cell</p></td></tr></table>"
+    patch = {
+        "cells": [{
+            "row": 1,
+            "operations": [{
+                "target": {"blocks": "all"},
+                "style": {"indent": "1em"},
+            }],
+        }],
+    }
+    out = apply_sheet_patch({1: html}, patch)
+    assert out.rows[1].count("margin-left: 1em") == 1
+    assert '<td><p>In cell</p></td>' in out.rows[1]
+
+
+# ---------------------------------------------------------------------------
+# Write-time compare-and-swap: run_notes_formatter must never clobber a row
+# edited during the pass, and must never resurrect a row a regenerate deleted.
+# ---------------------------------------------------------------------------
+
+_SHEET = "Notes-Listofnotes"
+_TABLE_HTML = "<table><tr><td>Total</td><td>10</td></tr></table>"
+_GOOD_PATCH = json.dumps({
+    "sheet": _SHEET,
+    "cells": [{
+        "row": 112,
+        "operations": [{
+            "target": {"table": 0, "range": "all"},
+            "style": {"text_align": "right"},
+        }],
+    }],
+    "format_summary": "Right-aligned numeric columns.",
+    "confidence": 0.9,
+})
+
+
+class _FakeResult:
+    def __init__(self, output: str):
+        self.output = output
+
+
+class _FakeAgent:
+    """Stands in for the pydantic-ai Agent: returns canned patch JSON and can
+    run a side-effect per call (to simulate a concurrent writer mid-pass)."""
+
+    def __init__(self, outputs, on_call=None):
+        self._outputs = list(outputs)
+        self._on_call = on_call
+        self.calls = 0
+
+    async def run(self, prompt, **_kwargs):
+        self.calls += 1
+        if self._on_call:
+            self._on_call(self.calls)
+        return _FakeResult(self._outputs.pop(0))
+
+
+@pytest.fixture()
+def formatter_db(tmp_path):
+    from db import repository as repo
+    from db.schema import init_db
+
+    db_path = tmp_path / "audit.sqlite"
+    init_db(db_path)
+    pdf_path = tmp_path / "uploaded.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(
+            conn, "sample.pdf", session_id="s", output_dir=str(tmp_path),
+        )
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_SHEET, row=112,
+            label="Disclosure of other notes", html=_TABLE_HTML,
+            evidence="Page 3", source_pages=[3],
+        )
+    return db_path, str(pdf_path), run_id
+
+
+async def _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake_agent):
+    import notes.formatting_agent as fa
+
+    db_path, pdf_path, run_id = formatter_db
+    monkeypatch.setattr(
+        fa, "create_notes_formatter_agent",
+        lambda **_kw: (fake_agent, None),
+    )
+    return await fa.run_notes_formatter(
+        run_id=run_id, db_path=str(db_path), pdf_path=pdf_path,
+        sheet=_SHEET, model="fake-model",
+    )
+
+
+@pytest.mark.asyncio
+async def test_formatter_writes_unedited_rows(monkeypatch, formatter_db):
+    from db import repository as repo
+
+    fake = _FakeAgent([_GOOD_PATCH, _GOOD_PATCH])  # initial + self-check
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is True
+    assert result["changed_rows"] == 1
+    assert result["skipped_rows"] == []
+    db_path, _pdf, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        cells = repo.list_notes_cells_for_run(conn, run_id)
+    assert "text-align: right" in cells[0].html
+
+
+@pytest.mark.asyncio
+async def test_formatter_skips_row_edited_during_pass(monkeypatch, formatter_db):
+    """A user PATCH landing between launch snapshot and final write wins —
+    the formatter skips the row instead of writing stale-but-styled HTML."""
+    from db import repository as repo
+
+    db_path, _pdf, run_id = formatter_db
+
+    def edit_mid_pass(call_number: int) -> None:
+        if call_number == 2:  # during the self-check pass
+            with repo.db_session(db_path) as conn:
+                repo.upsert_notes_cell(
+                    conn, run_id=run_id, sheet=_SHEET, row=112,
+                    label="Disclosure of other notes",
+                    html="<p>user edited</p>",
+                    evidence="Page 3", source_pages=[3],
+                )
+
+    fake = _FakeAgent([_GOOD_PATCH, _GOOD_PATCH], on_call=edit_mid_pass)
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is True
+    assert result["changed_rows"] == 0
+    assert result["skipped_rows"] == [112]
+    assert "skipped" in result["summary"]
+    with repo.db_session(db_path) as conn:
+        cells = repo.list_notes_cells_for_run(conn, run_id)
+    assert cells[0].html == "<p>user edited</p>"
+
+
+@pytest.mark.asyncio
+async def test_formatter_never_resurrects_deleted_rows(monkeypatch, formatter_db):
+    """A sheet regenerate deletes the rows mid-pass; the formatter must not
+    upsert its stale snapshot back (deleted row != changed row — both skip)."""
+    from db import repository as repo
+
+    db_path, _pdf, run_id = formatter_db
+
+    def delete_mid_pass(call_number: int) -> None:
+        if call_number == 2:
+            with repo.db_session(db_path) as conn:
+                repo.delete_notes_cells_for_run_sheet(
+                    conn, run_id=run_id, sheet=_SHEET,
+                )
+
+    fake = _FakeAgent([_GOOD_PATCH, _GOOD_PATCH], on_call=delete_mid_pass)
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is True
+    assert result["changed_rows"] == 0
+    assert result["skipped_rows"] == [112]
+    with repo.db_session(db_path) as conn:
+        cells = repo.list_notes_cells_for_run(conn, run_id)
+    assert cells == []
 
 
 def test_bold_is_idempotent_across_repeated_patches():

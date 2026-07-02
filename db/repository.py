@@ -1350,6 +1350,22 @@ def fetch_notes_format_task(
     }
 
 
+def any_notes_format_task_running(
+    conn: sqlite3.Connection, run_id: int,
+) -> bool:
+    """True when any sheet of this run has a formatter pass in flight.
+
+    Interlock input: the notes reviewer must not launch over a running
+    formatter (and vice versa) — both write notes_cells prose rows.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM notes_format_tasks "
+        "WHERE run_id = ? AND status = 'running' LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    return row is not None
+
+
 def reconcile_stale_notes_format_tasks(conn: sqlite3.Connection) -> int:
     """Retire notes formatter tasks orphaned by a process restart."""
     now = _now()

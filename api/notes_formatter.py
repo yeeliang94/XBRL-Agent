@@ -39,6 +39,23 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
         run = repo.fetch_run(conn, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
+        # Lifecycle interlocks: formatting is post-extraction review tooling.
+        # The write-time compare-and-swap makes concurrent writers *safe*;
+        # these guards make them *not confusing* (no pass that silently skips
+        # most of its rows because another writer owned the sheet).
+        if run.status not in repo._TERMINAL_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Run is {run.status}; formatting is available once "
+                       "the run has finished.",
+            )
+        review_task = repo.fetch_notes_review_task(conn, run_id)
+        if review_task and review_task.get("status") == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="A notes reviewer pass is running for this run; "
+                       "wait for it to finish before formatting.",
+            )
         config = run.config or {}
         standard = config.get("filing_standard", "mfrs")
         level = config.get("filing_level", "company")
@@ -55,7 +72,7 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
         if template["is_numeric"]:
             raise HTTPException(
                 status_code=422,
-                detail="Numeric notes sheets are not supported by the formatter prototype.",
+                detail="Numeric notes sheets are not supported by the formatter.",
             )
     finally:
         conn.close()
@@ -76,8 +93,8 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
             logger.warning("notes formatter model override %r unknown", override)
     model_name = (
         override
-        or server._notes_reviewer_model_name()
-        or (run.config or {}).get("model")
+        or server._notes_formatter_model_name()
+        or config.get("model")
         or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
     )
 
@@ -110,7 +127,7 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
         if cand.exists():
             pdf_path = str(cand)
 
-    timeout = getattr(server, "NOTES_FORMATTER_WALLCLOCK_TIMEOUT", 300.0)
+    timeout = server.NOTES_FORMATTER_WALLCLOCK_TIMEOUT
 
     async def _runner_async() -> dict:
         from notes.formatting_agent import run_notes_formatter

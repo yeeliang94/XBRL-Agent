@@ -1,6 +1,6 @@
 # Implementation Plan: Notes Formatter — Prototype → Production Hardening
 
-**Overall Progress:** `0%`
+**Overall Progress:** `23%` — Phase 1 complete
 **PRD Reference:** none — scoped via `/agent-skills:review` findings + hardening
 discussion on 2026-07-02. Builds on the uncommitted formatter prototype
 (CLAUDE.md gotcha #16, "Notes formatter agent (2026-07-01 prototype)").
@@ -42,23 +42,23 @@ the five code-review findings from 2026-07-02.
 
 ## Pre-Implementation Checklist
 
-- [ ] 🟥 Commit the current formatter prototype as the baseline commit — on its
-  own branch (e.g. `feat/notes-formatter`); the working tree currently sits on
-  `feat/reviewer-verify-followups`, which is unrelated work.
-- [ ] 🟥 Decisions above confirmed by the user (esp. panel-only + manual-only).
-- [ ] 🟥 No conflicting in-progress work on `notes_cells` / notes reviewer.
+- [x] 🟩 Commit the current formatter prototype as the baseline commit — done:
+  `feat/notes-formatter` branched off `feat/reviewer-verify-followups`,
+  baseline commit c0f7985.
+- [x] 🟩 Decisions above confirmed by the user (`/implement all phases`).
+- [x] 🟩 No conflicting in-progress work on `notes_cells` / notes reviewer.
 
 ## Tasks
 
 ### Phase 1: Write Safety (backend)
 
-- [ ] 🟥 **Step 1: Write-time compare-and-swap** — the formatter snapshots rows
+- [x] 🟩 **Step 1: Write-time compare-and-swap** — the formatter snapshots rows
   at launch and writes up to 300s later; today it clobbers anything written in
   between and *resurrects* rows a regenerate deleted.
-  - [ ] 🟥 In `run_notes_formatter`'s final `db_session` block, re-read each
+  - [x] 🟩 In `run_notes_formatter`'s final `db_session` block, re-read each
     target row; upsert only when current HTML == `rows_for_patch[row]`.
-  - [ ] 🟥 Treat a **missing** row (regenerate deleted it) as changed → skip.
-  - [ ] 🟥 Report `skipped_rows: [...]` in the result dict and append
+  - [x] 🟩 Treat a **missing** row (regenerate deleted it) as changed → skip.
+  - [x] 🟩 Report `skipped_rows: [...]` in the result dict and append
     "N row(s) skipped — edited during formatting" to the summary when non-zero.
   - **Verify:** new tests in `tests/test_notes_format_patch.py` /
     `test_notes_formatter_routes.py`: (a) mutate a cell between launch and
@@ -66,24 +66,24 @@ the five code-review findings from 2026-07-02.
     resurrected. `./venv/bin/python -m pytest tests/test_notes_format*.py -q`
     green.
 
-- [ ] 🟥 **Step 2: Lifecycle interlocks on launch** — formatting mid-extraction
+- [x] 🟩 **Step 2: Lifecycle interlocks on launch** — formatting mid-extraction
   or mid-review is meaningless even when CAS makes it safe.
-  - [ ] 🟥 `launch_notes_formatter` refuses (409) when the run status is not
+  - [x] 🟩 `launch_notes_formatter` refuses (409) when the run status is not
     terminal (`draft`/`running`).
-  - [ ] 🟥 Refuse (409) when `notes_review_tasks` has a `running` row for the
+  - [x] 🟩 Refuse (409) when `notes_review_tasks` has a `running` row for the
     run; add the mirror-image guard to the notes reviewer launch
     (`api/notes_reviewer.py`) so neither pass starts over the other.
   - **Verify:** route tests assert both 409s (and that terminal-status runs
     still launch). Existing reviewer route tests stay green.
 
-- [ ] 🟥 **Step 3: Code-quality findings (#4, #5, nits)** — no behavior change
+- [x] 🟩 **Step 3: Code-quality findings (#4, #5, nits)** — no behavior change
   beyond the `blocks` fix.
-  - [ ] 🟥 Collapse the triplicated parse → confidence → sheet-match → apply
+  - [x] 🟩 Collapse the triplicated parse → confidence → sheet-match → apply
     block in `run_notes_formatter` into one `_validate_and_apply` helper
     (initial / repair / self-check paths share it).
-  - [ ] 🟥 `{"blocks": "all"}` in `notes/format_patch.py::_resolve_target`
+  - [x] 🟩 `{"blocks": "all"}` in `notes/format_patch.py::_resolve_target`
     excludes elements with a `<table>` ancestor.
-  - [ ] 🟥 Nits: reuse `config` at `api/notes_formatter.py:80`; direct
+  - [x] 🟩 Nits: reuse `config` at `api/notes_formatter.py:80`; direct
     attribute access instead of `getattr(server, "NOTES_FORMATTER_…")`; comment
     on the (intentionally redundant) numeric-token check in
     `notes/format_verify.py`.
@@ -93,7 +93,7 @@ the five code-review findings from 2026-07-02.
 
 ### Phase 2: Recoverability + Taxonomy (schema v27)
 
-- [ ] 🟥 **Step 4: v27 migration** — one bump carrying everything Phase 2/3
+- [x] 🟩 **Step 4: v27 migration** — one bump carrying everything Phase 2/3
   needs on disk.
   - [ ] 🟥 `notes_format_snapshots` table: `(run_id, sheet, row)` unique, `html`
     pre-format payload, FK → runs ON DELETE CASCADE, per-run index. Pure

@@ -2851,6 +2851,22 @@ def _notes_reviewer_model_name() -> Optional[str]:
     return val if isinstance(val, str) and val else None
 
 
+def _notes_formatter_model_name() -> Optional[str]:
+    """The configured notes-formatter model id, or None to inherit the run's model.
+
+    Reads ``XBRL_DEFAULT_MODELS["notes_formatter"]``; otherwise None so the
+    caller falls back to the run's extraction model (mirrors
+    ``_notes_reviewer_model_name``).
+    """
+    raw = os.environ.get("XBRL_DEFAULT_MODELS", "")
+    try:
+        models = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return None
+    val = models.get("notes_formatter")
+    return val if isinstance(val, str) and val else None
+
+
 def _load_available_models() -> list[dict]:
     """Read the pinned model list from config/models.json.
 
