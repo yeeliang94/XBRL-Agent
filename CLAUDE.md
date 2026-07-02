@@ -815,22 +815,52 @@ Key invariants:
     xlsx-download styling (download stays a text overlay). Pinned by
     `tests/test_notes_html_sanitize_css.py`, `tests/test_notes_html_to_text.py`,
     `web` `cellFormatting`/`notesIndent`/`NotesReviewTab` tests.
-- **Notes formatter agent (2026-07-01 prototype).** Extraction and notes
-  reviewer agents still do NOT author styling as part of content extraction /
-  correction. The standalone formatter (`POST /api/runs/{id}/notes-format`) is
-  the only AI role allowed to apply formatting, and it returns constrained JSON
-  style patches that the backend applies to existing `notes_cells.html`.
-  Formatter writes are rejected unless rendered text, numeric tokens, and table
-  geometry stay unchanged after `sanitize_notes_html`. Border removal is an
-  explicit `hidden` border operation so source-borderless tables remain
-  borderless in the Review panel. This prototype intentionally does not change
-  Excel download rendering. The async pass is bounded two ways: a wall-clock
-  timeout (`XBRL_NOTES_FORMATTER_WALLCLOCK_S`, default 300s) and a cumulative
-  per-click model-request budget shared across its (up to three) `agent.run`
-  passes (`XBRL_NOTES_FORMATTER_MAX_REQUESTS`, default 16, clamped below
-  pydantic-ai's silent request_limit=50 per gotcha #18); both surface a
-  structured "timed out" / "turn budget" outcome. Pinned by
-  `tests/test_notes_format_patch.py`, `tests/test_notes_formatter_routes.py`.
+- **Notes formatter agent (2026-07-01, production-hardened 2026-07-02 —
+  docs/PLAN-notes-formatter-hardening.md).** Extraction and notes reviewer
+  agents still do NOT author styling as part of content extraction /
+  correction. The standalone formatter (`POST /api/runs/{id}/notes-format`,
+  per prose sheet, manual-only) is the only AI role allowed to apply
+  formatting: it returns constrained JSON style patches the backend applies
+  to existing `notes_cells.html`, rejected unless rendered text, numeric
+  tokens, and table geometry stay unchanged after `sanitize_notes_html`.
+  Border removal is an explicit `hidden` border operation so source-borderless
+  tables remain borderless. Styling reaches the Review panel + clipboard
+  paste ONLY — the xlsx download stays a text overlay (native xlsx styling
+  still deferred). Production invariants:
+  - **Write safety is compare-and-swap, not locking:** the final write skips
+    any row whose current HTML differs from the launch snapshot (edited
+    mid-pass) or that no longer exists (sheet regenerate) — never clobbers a
+    concurrent edit, never resurrects a deleted row. Skips surface as
+    `skipped_rows` + a summary note.
+  - **Safety is versioning (mirrors the reviewer):** every pass snapshots the
+    pre-format HTML into `notes_format_snapshots` (schema v27) before its
+    first write; `POST /notes-format/revert` restores it (409 while a pass
+    runs, 404 with no snapshot) and marks the task `error_type='reverted'`.
+  - **Interlocks:** launch 409s on non-terminal runs and while a notes
+    reviewer pass is `running`; the notes reviewer launch carries the mirror
+    guard (`any_notes_format_task_running`). Both passes write notes_cells
+    prose — neither may start over the other.
+  - **Bounded two ways:** wall-clock `XBRL_NOTES_FORMATTER_WALLCLOCK_S`
+    (default 300s) + cumulative per-click request budget
+    `XBRL_NOTES_FORMATTER_MAX_REQUESTS` (default 16, clamped ≤45 — below
+    pydantic-ai's silent request_limit=50 per gotcha #18) shared across the
+    up-to-three `agent.run` passes.
+  - **Observability:** structured `error_type` taxonomy on the task row
+    (`FORMATTER_ERROR_TYPES` in `notes/formatting_agent.py` — branch on
+    codes, not error prose) + cross-pass token telemetry (v27 columns); the
+    conversation trace is re-written after EVERY completed pass to
+    `{output_dir}/notes_format_{sheet}_conversation_trace.json` (gotcha #6
+    pattern — the trace survives a later pass's timeout), served by
+    `GET /notes-format/trace` with a sheet whitelist + under-output_dir
+    path guard.
+  - **Config:** `notes_formatter` is a first-class `_AGENT_ROLES` member
+    (Settings default model; launch falls back to the run's model);
+    confidence floor `XBRL_NOTES_FORMATTER_MIN_CONFIDENCE` (default 0.70,
+    validated + clamped to [0, 1]).
+  Numeric sheets (13/14) stay excluded (422). Pinned by
+  `tests/test_notes_format_patch.py`, `tests/test_notes_formatter_routes.py`,
+  `tests/test_db_schema_v26.py` / `_v27.py`, `tests/test_settings_api.py`,
+  and the `NotesReviewTab` "AI formatter" web tests.
 - Evidence column is **read-only** in the editor — it's the audit
   trail. `PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}` ignores
   any `evidence` key in the body.
