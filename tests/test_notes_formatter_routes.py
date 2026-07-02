@@ -259,6 +259,37 @@ def test_notes_formatter_revert_restores_pre_format_html(formatter_client):
     assert status["error"] is None
 
 
+def test_notes_formatter_trace_endpoint_serves_and_guards(formatter_client):
+    """The trace endpoint serves the on-disk JSON, 400s an unknown sheet
+    (which also blocks traversal via the query param), 404s a missing file."""
+    client, run_id, server_module = formatter_client
+    sheet = "Notes-Listofnotes"
+
+    r = client.get(
+        f"/api/runs/{run_id}/notes-format/trace", params={"sheet": sheet},
+    )
+    assert r.status_code == 404  # no trace captured yet
+
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        run = repo.fetch_run(conn, run_id)
+    trace_path = (
+        Path(run.output_dir) / f"notes_format_{sheet}_conversation_trace.json"
+    )
+    trace_path.write_text('{"messages": [{"raw": "hi"}]}', encoding="utf-8")
+
+    r = client.get(
+        f"/api/runs/{run_id}/notes-format/trace", params={"sheet": sheet},
+    )
+    assert r.status_code == 200
+    assert r.json()["messages"] == [{"raw": "hi"}]
+
+    r = client.get(
+        f"/api/runs/{run_id}/notes-format/trace",
+        params={"sheet": "../../etc/passwd"},
+    )
+    assert r.status_code == 400
+
+
 def test_notes_formatter_revert_without_snapshot_404s(formatter_client):
     client, run_id, _server = formatter_client
     r = client.post(

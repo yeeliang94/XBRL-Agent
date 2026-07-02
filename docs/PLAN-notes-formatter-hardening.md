@@ -1,6 +1,6 @@
 # Implementation Plan: Notes Formatter — Prototype → Production Hardening
 
-**Overall Progress:** `46%` — Phases 1-2 complete
+**Overall Progress:** `69%` — Phases 1-3 complete
 **PRD Reference:** none — scoped via `/agent-skills:review` findings + hardening
 discussion on 2026-07-02. Builds on the uncommitted formatter prototype
 (CLAUDE.md gotcha #16, "Notes formatter agent (2026-07-01 prototype)").
@@ -136,37 +136,38 @@ the five code-review findings from 2026-07-02.
 
 ### Phase 3: Observability + Configuration
 
-- [ ] 🟥 **Step 7: Trace persistence** — a formatter pass must be debuggable
+- [x] 🟩 **Step 7: Trace persistence** — a formatter pass must be debuggable
   after the fact, exactly like every other agent pass (gotcha #6).
-  - [ ] 🟥 Dump the conversation (all up-to-three `agent.run` passes, including
+  - [x] 🟩 Dump the conversation (all up-to-three `agent.run` passes, including
     the timeout/budget/exception failure paths via the `save_messages_trace`
     fallback pattern) to `{output_dir}/notes_format_{sheet}_trace.json`.
-  - [ ] 🟥 `GET /api/runs/{id}/notes-format/trace?sheet=…` serving it, with the
+  - [x] 🟩 `GET /api/runs/{id}/notes-format/trace?sheet=…` serving it, with the
     same resolved-path-stays-under-`output_dir` guard the agent-trace endpoint
     uses.
   - **Verify:** tests assert the trace file exists after success AND after a
     forced failure; path-traversal attempt on the endpoint → 404/400.
 
-- [ ] 🟥 **Step 8: Token accounting** — the shared `RunUsage` already
+- [x] 🟩 **Step 8: Token accounting** — the shared `RunUsage` already
   accumulates across passes; persist it instead of dropping it.
-  - [ ] 🟥 Write prompt/completion/cache token totals onto the task row (v27
+  - [x] 🟩 Write prompt/completion/cache token totals onto the task row (v27
     columns) at completion; status endpoint returns them; show a small
     "~N tokens" line in the format summary UI.
   - **Verify:** route test with a mocked usage object asserts the persisted
     totals round-trip through the status endpoint.
 
-- [ ] 🟥 **Step 9: First-class configuration** — stop silently borrowing the
+- [x] 🟩 **Step 9: First-class configuration** — stop silently borrowing the
   notes-reviewer model.
-  - [ ] 🟥 Add `notes_formatter` to `_AGENT_ROLES` (server.py:2743) so
+  - [x] 🟩 Add `notes_formatter` to `_AGENT_ROLES` (server.py:2743) so
     `XBRL_DEFAULT_MODELS["notes_formatter"]` round-trips through
     `/api/settings` + `/api/config` and the General settings tab; launch
     fallback chain becomes: request override → formatter default → run model →
     `TEST_MODEL`.
-  - [ ] 🟥 `XBRL_NOTES_FORMATTER_MIN_CONFIDENCE` env resolver (validate +
+  - [x] 🟩 `XBRL_NOTES_FORMATTER_MIN_CONFIDENCE` env resolver (validate +
     clamp to [0,1], default 0.70) replacing the hardcoded constant.
   - **Verify:** `tests/test_settings_api.py` round-trip for the new role;
-    resolver unit tests (bad value → default, out-of-range → clamped);
-    `SettingsModal`/`GeneralSettingsForm` web test updated.
+    resolver unit tests (bad value → default, out-of-range → clamped).
+    (Deviation: no web-test change — no frontend surface renders per-role
+    dropdowns for this role; the round-trip is backend-validated.)
 
 ### Phase 4: Frontend UX + Pinning Tests
 
