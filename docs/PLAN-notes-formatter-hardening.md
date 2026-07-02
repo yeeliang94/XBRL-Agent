@@ -1,6 +1,6 @@
 # Implementation Plan: Notes Formatter — Prototype → Production Hardening
 
-**Overall Progress:** `23%` — Phase 1 complete
+**Overall Progress:** `46%` — Phases 1-2 complete
 **PRD Reference:** none — scoped via `/agent-skills:review` findings + hardening
 discussion on 2026-07-02. Builds on the uncommitted formatter prototype
 (CLAUDE.md gotcha #16, "Notes formatter agent (2026-07-01 prototype)").
@@ -95,26 +95,26 @@ the five code-review findings from 2026-07-02.
 
 - [x] 🟩 **Step 4: v27 migration** — one bump carrying everything Phase 2/3
   needs on disk.
-  - [ ] 🟥 `notes_format_snapshots` table: `(run_id, sheet, row)` unique, `html`
+  - [x] 🟩 `notes_format_snapshots` table: `(run_id, sheet, row)` unique, `html`
     pre-format payload, FK → runs ON DELETE CASCADE, per-run index. Pure
     CREATE TABLE IF NOT EXISTS walk-forward.
-  - [ ] 🟥 `_V27_MIGRATION_COLUMNS` on `notes_format_tasks`: `error_type TEXT`
+  - [x] 🟩 `_V27_MIGRATION_COLUMNS` on `notes_format_tasks`: `error_type TEXT`
     (nullable, no CHECK — same rationale as `runs.status`), `prompt_tokens` /
     `completion_tokens` / `cache_read_tokens` / `cache_write_tokens`
     (`INTEGER DEFAULT 0`, mirroring the v15 columns).
-  - [ ] 🟥 `CURRENT_SCHEMA_VERSION = 27`; v26→v27 block with the BEGIN
+  - [x] 🟩 `CURRENT_SCHEMA_VERSION = 27`; v26→v27 block with the BEGIN
     IMMEDIATE + re-check discipline; re-read marker after the v26 block.
-  - [ ] 🟥 Update CLAUDE.md gotcha #11 with the v26 and v27 entries.
+  - [x] 🟩 Update CLAUDE.md gotcha #11 with the v26 and v27 entries.
   - **Verify:** new `tests/test_db_schema_v27.py` (fresh init has the table +
     columns; a v25 and a v26 DB both walk forward; idempotent re-run). Existing
     `test_db_schema_v26.py` green.
 
-- [ ] 🟥 **Step 5: Snapshot + revert endpoint** — "safety is versioning": a
+- [x] 🟩 **Step 5: Snapshot + revert endpoint** — "safety is versioning": a
   verifier-passing but ugly style pass must be one click to undo.
-  - [ ] 🟥 Repo helpers: `save_notes_format_snapshot` (written ONCE per pass,
+  - [x] 🟩 Repo helpers: `save_notes_format_snapshot` (written ONCE per pass,
     before the first row write, overwriting the previous pass's snapshot for
     that sheet) + `fetch/restore` counterparts.
-  - [ ] 🟥 `POST /api/runs/{id}/notes-format/revert` (body: `{sheet}`): restores
+  - [x] 🟩 `POST /api/runs/{id}/notes-format/revert` (body: `{sheet}`): restores
     snapshot HTML into `notes_cells`, clears the task row to a terminal
     "reverted" state; 409 while a pass is `running`; 404 with no snapshot.
     Revert is pure-style (verifier guaranteed content equality) so it never
@@ -123,11 +123,11 @@ the five code-review findings from 2026-07-02.
     revert, assert byte-identical pre-format HTML restored; revert-while-running
     → 409; revert-without-snapshot → 404.
 
-- [ ] 🟥 **Step 6: Structured error taxonomy** — branch on codes, not prose.
-  - [ ] 🟥 Vocabulary next to the formatter: `timeout · turn_budget ·
+- [x] 🟩 **Step 6: Structured error taxonomy** — branch on codes, not prose.
+  - [x] 🟩 Vocabulary next to the formatter: `timeout · turn_budget ·
     low_confidence · validation_failed · wrong_sheet · model_error · restarted
     · reverted`.
-  - [ ] 🟥 Worker (`api/notes_formatter.py::_thread_main`) and
+  - [x] 🟩 Worker (`api/notes_formatter.py::_thread_main`) and
     `run_notes_formatter` failure returns set `error_type`;
     `reconcile_stale_notes_format_tasks` sets `restarted`; status endpoint
     returns it; `NotesFormatStatus` TS type gains the field.

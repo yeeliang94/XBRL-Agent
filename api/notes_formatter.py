@@ -153,7 +153,7 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
                 timeout, run_id, body.sheet,
             )
             result = {
-                "ok": False, "model": model_name,
+                "ok": False, "model": model_name, "error_type": "timeout",
                 "error": f"Formatter timed out after {int(timeout)}s.",
                 "summary": "Formatter timed out; no changes were saved.",
             }
@@ -163,14 +163,14 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
                 run_id, body.sheet,
             )
             result = {
-                "ok": False, "model": model_name,
+                "ok": False, "model": model_name, "error_type": "turn_budget",
                 "error": "Formatter reached its turn budget without finishing.",
                 "summary": "Formatter stopped at its turn budget; no changes were saved.",
             }
         except Exception as exc:  # noqa: BLE001
             logger.exception("background notes formatter failed for run %s", run_id)
             result = {
-                "ok": False, "model": model_name,
+                "ok": False, "model": model_name, "error_type": "model_error",
                 "error": f"{type(exc).__name__}: {exc}",
             }
         try:
@@ -182,8 +182,13 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
                     confidence=result.get("confidence"),
                     changed_rows=int(result.get("changed_rows") or 0),
                     result=result, error=result.get("error"),
+                    error_type=result.get("error_type"),
                     before_text_hash=result.get("before_text_hash"),
                     after_text_hash=result.get("after_text_hash"),
+                    prompt_tokens=int(result.get("prompt_tokens") or 0),
+                    completion_tokens=int(result.get("completion_tokens") or 0),
+                    cache_read_tokens=int(result.get("cache_read_tokens") or 0),
+                    cache_write_tokens=int(result.get("cache_write_tokens") or 0),
                 )
                 tc.commit()
             finally:
@@ -217,10 +222,85 @@ async def notes_formatter_status(run_id: int, sheet: str):
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
         state = repo.fetch_notes_format_task(conn, run_id, sheet)
+        has_snapshot = bool(
+            repo.fetch_notes_format_snapshots(conn, run_id, sheet),
+        )
     finally:
         conn.close()
     if state is None:
-        return {"status": "idle", "sheet": sheet}
+        return {"status": "idle", "sheet": sheet, "can_revert": False}
     if state.get("status") == "running":
         return {"status": "running", "sheet": sheet, "model": state.get("model")}
-    return {"status": "done", "sheet": sheet, **state}
+    # Lift skipped_rows out of result_json so the panel can render the
+    # "edited during formatting" note without unpacking the whole result.
+    skipped = (state.get("result") or {}).get("skipped_rows") or []
+    return {
+        "status": "done", "sheet": sheet, "skipped_rows": skipped,
+        "can_revert": has_snapshot, **state,
+    }
+
+
+class _NotesFormatRevert(BaseModel):
+    sheet: str
+
+
+@router.post("/api/runs/{run_id}/notes-format/revert")
+async def revert_notes_formatter(run_id: int, body: _NotesFormatRevert):
+    """Restore the sheet's pre-format HTML from the v27 snapshot.
+
+    Revert is pure-style: the deterministic verifier guaranteed the formatted
+    HTML renders the same text as the snapshot, so restoring it can never
+    lose content. Rows deleted since the pass (regenerate) are left alone.
+    """
+    conn = server._open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        task = repo.fetch_notes_format_task(conn, run_id, body.sheet)
+        if task and task.get("status") == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="A formatter pass is running for this sheet; wait for "
+                       "it to finish before reverting.",
+            )
+        snapshot = repo.fetch_notes_format_snapshots(conn, run_id, body.sheet)
+        if not snapshot:
+            raise HTTPException(
+                status_code=404,
+                detail="No formatting snapshot to revert for this sheet.",
+            )
+        cells = {
+            c.row: c
+            for c in repo.list_notes_cells_for_run(conn, run_id)
+            if c.sheet == body.sheet
+        }
+        restored = 0
+        for row, html in snapshot.items():
+            cell = cells.get(row)
+            if cell is None:
+                continue  # row deleted since the pass — nothing to restore onto
+            repo.upsert_notes_cell(
+                conn, run_id=run_id, sheet=body.sheet, row=row,
+                label=cell.label, html=html, evidence=cell.evidence,
+                source_pages=cell.source_pages,
+            )
+            restored += 1
+        repo.upsert_notes_format_task(
+            conn, run_id, body.sheet, "done",
+            model=(task or {}).get("model"),
+            summary="Formatting reverted to the pre-format state.",
+            changed_rows=0, error=None, error_type="reverted",
+            result={"ok": True, "reverted": True, "restored_rows": restored},
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(
+        "notes formatter reverted run=%s sheet=%s restored=%d",
+        run_id, body.sheet, restored,
+    )
+    return {
+        "ok": True, "status": "done", "sheet": body.sheet,
+        "restored_rows": restored, "error_type": "reverted",
+    }

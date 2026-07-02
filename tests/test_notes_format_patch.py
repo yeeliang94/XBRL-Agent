@@ -255,7 +255,22 @@ async def test_formatter_writes_unedited_rows(monkeypatch, formatter_db):
     db_path, _pdf, run_id = formatter_db
     with repo.db_session(db_path) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
+        snapshot = repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)
     assert "text-align: right" in cells[0].html
+    # The pass snapshotted the pre-format HTML before its first write
+    # (schema v27) so "Revert formatting" can restore it.
+    assert snapshot == {112: _TABLE_HTML}
+
+
+@pytest.mark.asyncio
+async def test_formatter_low_confidence_returns_error_type(monkeypatch, formatter_db):
+    low_conf = json.loads(_GOOD_PATCH)
+    low_conf["confidence"] = 0.2
+    fake = _FakeAgent([json.dumps(low_conf)])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is False
+    assert result["error_type"] == "low_confidence"
+    assert result["confidence"] == 0.2
 
 
 @pytest.mark.asyncio

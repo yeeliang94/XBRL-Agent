@@ -72,7 +72,15 @@ export interface NotesFormatStatus {
   summary?: string | null;
   confidence?: number | null;
   changed_rows?: number;
+  /** Rows the CAS write skipped because they were edited during the pass. */
+  skipped_rows?: number[];
+  /** True when a pre-format snapshot exists — enables "Revert formatting". */
+  can_revert?: boolean;
   error?: string | null;
+  /** Failure taxonomy code (timeout | turn_budget | low_confidence | ...). */
+  error_type?: string | null;
+  prompt_tokens?: number;
+  completion_tokens?: number;
 }
 
 // Slot order of the five notes templates, mirroring the NotesTemplateType
@@ -155,6 +163,21 @@ export async function fetchNotesFormatStatus(
 ): Promise<NotesFormatStatus> {
   return apiFetch<NotesFormatStatus>(
     `/api/runs/${runId}/notes-format/status?sheet=${encodeURIComponent(sheet)}`,
+  );
+}
+
+/** Restore the sheet's pre-format HTML from the formatter snapshot. */
+export async function revertNotesFormatter(
+  runId: number,
+  sheet: string,
+): Promise<{ ok: boolean; restored_rows: number }> {
+  return apiFetch<{ ok: boolean; restored_rows: number }>(
+    `/api/runs/${runId}/notes-format/revert`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sheet }),
+    },
   );
 }
 
