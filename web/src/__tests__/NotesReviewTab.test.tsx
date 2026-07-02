@@ -1971,3 +1971,240 @@ describe("NotesReviewTab — per-run table style picker", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// AI formatter (docs/PLAN-notes-formatter-hardening.md Phase 4) — launch,
+// poll, hydration, save-pending gate, revert, in-progress banner.
+// ---------------------------------------------------------------------------
+describe("NotesReviewTab — AI formatter", () => {
+  type Handler = (url: string) => unknown;
+
+  /** URL-routing fetch mock: formatter endpoints get per-test handlers,
+   *  everything else (notes_cells load, theme, PATCH flushes) falls through
+   *  to the SAMPLE payload the read-only tests use. */
+  function routedFetch(handlers: {
+    status?: Handler;
+    launch?: Handler;
+    revert?: Handler;
+  }) {
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/notes-format/status")) {
+        return json(
+          handlers.status?.(url) ?? { status: "idle", sheet: "x" },
+        );
+      }
+      if (url.includes("/notes-format/revert")) {
+        return json(
+          handlers.revert?.(url) ?? { ok: true, restored_rows: 1 },
+        );
+      }
+      if (url.includes("/notes-format")) {
+        return json(
+          handlers.launch?.(url) ?? { ok: true, status: "running", sheet: "x" },
+        );
+      }
+      return json(SAMPLE);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
+
+  function notesCellsCalls(fetchMock: ReturnType<typeof vi.fn>) {
+    return fetchMock.mock.calls.filter((c) =>
+      String(c[0]).includes("/notes_cells"),
+    ).length;
+  }
+
+  test("Format launches, polls to done, refetches cells and shows summary", async () => {
+    vi.useFakeTimers();
+    let launched = false;
+    const fetchMock = routedFetch({
+      status: (url) => {
+        if (!url.includes("Notes-CI") || !launched) {
+          return { status: "idle", sheet: "other" };
+        }
+        return {
+          status: "done", sheet: "Notes-CI", summary: "Cleared borders.",
+          changed_rows: 2, confidence: 0.9, error: null,
+          prompt_tokens: 1200, completion_tokens: 300, can_revert: true,
+        };
+      },
+      launch: () => {
+        launched = true;
+        return { ok: true, status: "running", sheet: "Notes-CI" };
+      },
+    });
+
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+
+    const formatButtons = screen.getAllByTestId("notes-format-button");
+    fireEvent.click(formatButtons[0]);
+    // Flush only microtasks (the launch fetch) — NOT the pending 2s poll
+    // tick, which would resolve the pass before we assert the busy state.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(formatButtons[0]).toHaveTextContent("Formatting...");
+    expect(formatButtons[0]).toBeDisabled();
+
+    const before = notesCellsCalls(fetchMock);
+    // One 2s poll tick resolves the pass to done.
+    await vi.advanceTimersByTimeAsync(2100);
+
+    const summary = screen.getByTestId("notes-format-summary");
+    expect(summary).toHaveTextContent("Cleared borders.");
+    expect(summary).toHaveTextContent("Changed 2 row(s).");
+    expect(summary).toHaveTextContent("Confidence 90%.");
+    expect(summary).toHaveTextContent("tokens.");
+    // A finished pass refetches the cells so the styled HTML renders.
+    expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
+    vi.useRealTimers();
+  });
+
+  test("a failed pass renders as role=alert and does not refetch cells", async () => {
+    vi.useFakeTimers();
+    let launched = false;
+    const fetchMock = routedFetch({
+      status: (url) => {
+        if (!url.includes("Notes-CI") || !launched) {
+          return { status: "idle", sheet: "other" };
+        }
+        return {
+          status: "done", sheet: "Notes-CI",
+          summary: "Formatter timed out; no changes were saved.",
+          error: "Formatter timed out after 300s.", error_type: "timeout",
+          changed_rows: 0,
+        };
+      },
+      launch: () => {
+        launched = true;
+        return { ok: true, status: "running", sheet: "Notes-CI" };
+      },
+    });
+
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+    const before = notesCellsCalls(fetchMock);
+
+    fireEvent.click(screen.getAllByTestId("notes-format-button")[0]);
+    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(2100);
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("timed out");
+    expect(notesCellsCalls(fetchMock)).toBe(before);
+    vi.useRealTimers();
+  });
+
+  test("hydration on mount resumes a running pass with banner", async () => {
+    routedFetch({
+      status: (url) =>
+        url.includes("Notes-CI")
+          ? { status: "running", sheet: "Notes-CI", model: "m" }
+          : { status: "idle", sheet: "other" },
+    });
+
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId("notes-format-button")[0],
+      ).toHaveTextContent("Formatting...");
+    });
+    expect(screen.getAllByTestId("notes-format-button")[0]).toBeDisabled();
+
+    // Expanding the sheet shows the in-progress banner over the editors.
+    expandAllSheets();
+    expect(
+      screen.getByTestId("notes-format-running-banner"),
+    ).toHaveTextContent("Formatting in progress");
+  });
+
+  test("hydration on mount shows a finished pass's summary", async () => {
+    routedFetch({
+      status: (url) =>
+        url.includes("Notes-CI")
+          ? {
+              status: "done", sheet: "Notes-CI", summary: "Applied source style.",
+              changed_rows: 1, error: null,
+            }
+          : { status: "idle", sheet: "other" },
+    });
+
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("notes-format-summary"),
+      ).toHaveTextContent("Applied source style.");
+    });
+  });
+
+  test("pending row save disables Format; collapsing the section releases it", async () => {
+    vi.useFakeTimers();
+    routedFetch({});
+
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+    expandAllSheets();
+
+    fireEvent.click(screen.getAllByRole("button", { name: /edit/i })[0]);
+    await vi.runOnlyPendingTimersAsync();
+    const editors = document.querySelectorAll(
+      "[data-testid='notes-review-editor']",
+    );
+    editors[0].dispatchEvent(
+      new CustomEvent("notes-review-test-edit", {
+        detail: { html: "<p>edited</p>" },
+        bubbles: true,
+      }),
+    );
+    await vi.runOnlyPendingTimersAsync();
+
+    const button = screen.getAllByTestId("notes-format-button")[0];
+    expect(button).toHaveTextContent("Save pending");
+    expect(button).toBeDisabled();
+
+    // Collapse the section: the row unmounts, flushes its save, and
+    // WITHDRAWS its status entry — the Format button must not stay wedged.
+    const toggle = screen.getAllByTestId("sheet-title")[0].closest("button")!;
+    fireEvent.click(toggle);
+    await vi.runOnlyPendingTimersAsync();
+    expect(
+      screen.getAllByTestId("notes-format-button")[0],
+    ).toHaveTextContent("Format");
+    expect(screen.getAllByTestId("notes-format-button")[0]).toBeEnabled();
+    vi.useRealTimers();
+  });
+
+  test("Revert formatting confirms, calls the endpoint, and refetches cells", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = routedFetch({
+      status: (url) =>
+        url.includes("Notes-CI")
+          ? {
+              status: "done", sheet: "Notes-CI", summary: "Formatted.",
+              changed_rows: 1, can_revert: true, error: null,
+            }
+          : { status: "idle", sheet: "other" },
+    });
+
+    render(<NotesReviewTab runId={42} />);
+    const revertButton = await screen.findByTestId("notes-format-revert");
+    const before = notesCellsCalls(fetchMock);
+    fireEvent.click(revertButton);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some((c) =>
+          String(c[0]).includes("/notes-format/revert"),
+        ),
+      ).toBe(true);
+      expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
+    });
+    expect(confirmSpy).toHaveBeenCalled();
+  });
+});

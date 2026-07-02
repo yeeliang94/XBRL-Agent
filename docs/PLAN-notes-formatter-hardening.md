@@ -1,6 +1,6 @@
 # Implementation Plan: Notes Formatter — Prototype → Production Hardening
 
-**Overall Progress:** `69%` — Phases 1-3 complete
+**Overall Progress:** `92%` — Phases 1-4 complete
 **PRD Reference:** none — scoped via `/agent-skills:review` findings + hardening
 discussion on 2026-07-02. Builds on the uncommitted formatter prototype
 (CLAUDE.md gotcha #16, "Notes formatter agent (2026-07-01 prototype)").
@@ -171,30 +171,30 @@ the five code-review findings from 2026-07-02.
 
 ### Phase 4: Frontend UX + Pinning Tests
 
-- [ ] 🟥 **Step 10: `rowSaveStatuses` unmount cleanup (finding #3)** —
+- [x] 🟩 **Step 10: `rowSaveStatuses` unmount cleanup (finding #3)** —
   collapsing a section while a row is `dirty`/`failed` currently wedges the
   Format button at "Save pending".
-  - [ ] 🟥 The reporting effect in `CellRow` deletes its row's entry (or
+  - [x] 🟩 The reporting effect in `CellRow` deletes its row's entry (or
     reports `idle`) on unmount.
   - **Verify:** vitest — edit a row, collapse the section, Format button
     re-enables.
 
-- [ ] 🟥 **Step 11: UX for skip / revert / in-progress**
-  - [ ] 🟥 Summary line renders `skipped_rows` ("N rows skipped — edited during
+- [x] 🟩 **Step 11: UX for skip / revert / in-progress**
+  - [x] 🟩 Summary line renders `skipped_rows` ("N rows skipped — edited during
     formatting") and the token count.
-  - [ ] 🟥 "Revert formatting" button next to the summary (confirm dialog),
+  - [x] 🟩 "Revert formatting" button next to the summary (confirm dialog),
     wired to the Step-5 endpoint, refetches cells on success.
-  - [ ] 🟥 While a sheet's pass is `running`: banner over that sheet's editors
+  - [x] 🟩 While a sheet's pass is `running`: banner over that sheet's editors
     ("Formatting in progress — edits made now are preserved and skipped") and a
     note that styling applies to preview + paste, not the Excel download.
   - **Verify:** vitest for all three states (skipped message, revert flow with
     mocked API, running banner).
 
-- [ ] 🟥 **Step 12: Frontend pinning tests for the core flow (finding #2)** —
+- [x] 🟩 **Step 12: Frontend pinning tests for the core flow (finding #2)** —
   mocked `launchNotesFormatter` / `fetchNotesFormatStatus`.
-  - [ ] 🟥 Launch → polling → `done` → cells refetched; error → `role="alert"`.
-  - [ ] 🟥 Hydration on mount resumes a running pass / shows a finished one.
-  - [ ] 🟥 Save-pending gate disables the button with the tooltip.
+  - [x] 🟩 Launch → polling → `done` → cells refetched; error → `role="alert"`.
+  - [x] 🟩 Hydration on mount resumes a running pass / shows a finished one.
+  - [x] 🟩 Save-pending gate disables the button with the tooltip.
   - **Verify:** `cd web && npx vitest run src/__tests__/NotesReviewTab.test.tsx`
     green (new tests + existing 46).
 
