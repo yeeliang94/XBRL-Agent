@@ -64,7 +64,8 @@ def _resolve_min_confidence() -> float:
 MIN_CONFIDENCE = _resolve_min_confidence()
 
 # Cumulative per-click model-request budget across the formatter's (up to
-# three) agent.run passes. Like the extraction MAX_AGENT_ITERATIONS cap, it
+# four) agent.run passes — initial, output-rejection retry, validation repair,
+# self-check. Like the extraction MAX_AGENT_ITERATIONS cap, it
 # MUST stay strictly below pydantic-ai's silent UsageLimits.request_limit=50
 # (gotcha #18) — otherwise pydantic-ai fires its own UsageLimitExceeded from
 # inside request preparation and we lose the structured "turn budget" message.
@@ -337,7 +338,8 @@ async def _run_notes_formatter_impl(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
     )
     # One shared usage accumulator + request cap across every pass below, so
-    # the whole click (initial + repair + self-check) is bounded — not each
+    # the whole click (initial + output-rejection retry + validation repair +
+    # self-check) is bounded — not each
     # pass independently. UsageLimitExceeded surfaces as a structured "turn
     # budget" outcome in the API worker (mirrors the wall-clock timeout).
     limits = UsageLimits(request_limit=MAX_FORMATTER_REQUESTS)
@@ -433,7 +435,10 @@ async def _run_notes_formatter_impl(
     # that would be saved and let it either return the same patch or a revised
     # patch. The deterministic verifier still gates the final write.
     if applied.changed_rows:
-        review_prompt = _build_self_check_prompt(sheet, patch, applied.rows)
+        review_prompt = _build_self_check_prompt(
+            sheet, patch, applied.rows,
+            _resolve_notes_table_theme(db_path, run_id),
+        )
         review_result = await _agent_run(review_prompt)
         err, screened, stage = _screen_patch(
             str(review_result.output), sheet, revised=True,
@@ -572,15 +577,48 @@ def _build_output_rejected_prompt(
     )
 
 
+def _resolve_notes_table_theme(db_path: str, run_id: int) -> dict[str, Any]:
+    """The RESOLVED notes-table style theme for a run: the run's own override
+    (a full snapshot — schema v22) wins, else the firm default from
+    ``XBRL_NOTES_TABLE_STYLE`` (same source as ``server._notes_table_style``;
+    parsed here to avoid importing server), else ``{}`` → the editor's historic
+    defaults. Mirrors ``resolveTheme`` in web/src/lib/clipboardFormat.ts so the
+    self-check describes what the panel will actually render."""
+    try:
+        with repo.db_session(db_path) as conn:
+            run = repo.fetch_run(conn, run_id)
+        override = getattr(run, "notes_table_style", None) if run else None
+        if isinstance(override, dict) and override:
+            return override
+    except Exception:  # noqa: BLE001 — theme is advisory; never fail the pass
+        logger.warning(
+            "could not read run notes_table_style run=%s", run_id, exc_info=True,
+        )
+    raw = os.environ.get("XBRL_NOTES_TABLE_STYLE", "")
+    if raw:
+        try:
+            value = json.loads(raw)
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
 def _build_self_check_prompt(
     sheet: str, patch: dict[str, Any], preview_rows: dict[int, str],
+    theme: Optional[dict[str, Any]] = None,
 ) -> str:
     # Effective rendered appearance, not raw HTML: the review panel paints a
-    # default grey grid + grey header fill from theme CSS that is invisible in
-    # the HTML, and models misread border EXTENT out of per-cell style soup
-    # (the "double rule across the whole row instead of one column" failure).
+    # default grid + header fill from THEME CSS that is invisible in the HTML
+    # (configurable per firm/run — hence the resolved `theme`), and models
+    # misread border EXTENT out of per-cell style soup (the "double rule across
+    # the whole row instead of one column" failure).
     appearance = [
-        {"row": row, "rendered_appearance": describe_effective_appearance(html)}
+        {
+            "row": row,
+            "rendered_appearance": describe_effective_appearance(html, theme),
+        }
         for row, html in sorted(preview_rows.items())
     ]
     return (

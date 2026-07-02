@@ -238,17 +238,28 @@ _NEIGHBOUR: dict[str, tuple[int, int, str]] = {
 }
 
 
-def describe_effective_appearance(html: str) -> list[str]:
+def describe_effective_appearance(
+    html: str, theme: Optional[dict[str, Any]] = None,
+) -> list[str]:
     """Human-readable per-cell summary of what the saved HTML will actually
     RENDER in the review panel, for the formatter's self-check pass.
 
     The raw HTML is a poor feedback signal: the panel's theme CSS paints a
-    default grey grid on every edge and a grey fill on every header cell —
-    neither appears in the HTML — and reading border extent out of per-cell
-    style soup is exactly what models get wrong (e.g. a double rule painted
-    across a whole row when the PDF shows it under one column). This summary
-    resolves each cell to its effective look — explicit style, else the theme
-    default — so "which cells does the rule span" is directly readable."""
+    default grid on every edge and a fill on every header cell — neither
+    appears in the HTML — and reading border extent out of per-cell style soup
+    is exactly what models get wrong (e.g. a double rule painted across a whole
+    row when the PDF shows it under one column). This summary resolves each
+    cell to its effective look — explicit style, else the theme default — so
+    "which cells does the rule span" is directly readable.
+
+    ``theme`` is the RESOLVED notes-table style for this run (run override
+    else firm default — docs/PLAN-notes-table-theme.md); the description of
+    unstyled cells must reflect it, because a firm using ``borderStyle:
+    "none"`` or ``headerFill: "transparent"`` renders nothing where the
+    built-in theme paints a grey grid/header. Unset fields fall back to the
+    editor's historic defaults (mirrors ``themeToCssVars`` in
+    web/src/lib/clipboardFormat.ts)."""
+    default_edge, default_th_fill = _theme_defaults(theme or {})
     soup = BeautifulSoup(html or "", "html.parser")
     lines: list[str] = []
     for t_idx, table in enumerate(soup.find_all("table")):
@@ -264,18 +275,39 @@ def describe_effective_appearance(html: str) -> list[str]:
                 lines.append(
                     f"  r{r_idx}c{c_idx}"
                     f" {cell.get_text(' ', strip=True)[:24]!r}:"
-                    f" {_cell_appearance(cell)}"
+                    f" {_cell_appearance(cell, default_edge, default_th_fill)}"
                 )
     return lines
 
 
-def _cell_appearance(cell: Tag) -> str:
+def _theme_defaults(theme: dict[str, Any]) -> tuple[str, str]:
+    """(unstyled-edge description, unstyled-<th>-fill description) for the
+    resolved theme. Value mapping mirrors ``themeToCssVars``:
+    borderStyle none → no line; double → 3px double; single/unset → 1px solid;
+    colour defaults #c9c9c9; headerFill defaults #f4f4f4."""
+    border_style = theme.get("borderStyle")
+    grid_color = theme.get("borderColor") or "#c9c9c9"
+    if border_style == "none":
+        default_edge = "no line (theme default)"
+    elif border_style == "double":
+        default_edge = f"3px double {grid_color} (theme default)"
+    else:
+        default_edge = f"1px solid {grid_color} (theme default)"
+    header_fill = theme.get("headerFill") or "#f4f4f4"
+    if header_fill == "transparent":
+        default_th_fill = "none (theme default)"
+    else:
+        default_th_fill = f"{header_fill} (theme default)"
+    return default_edge, default_th_fill
+
+
+def _cell_appearance(
+    cell: Tag, default_edge: str, default_th_fill: str,
+) -> str:
     style = _parse_style(cell.get("style") or "")
     fill = style.get("background-color")
     if fill in (None, ""):
-        fill_desc = (
-            "theme header grey (default)" if cell.name == "th" else "none"
-        )
+        fill_desc = default_th_fill if cell.name == "th" else "none"
     elif fill == "transparent":
         fill_desc = "none (explicitly cleared)"
     else:
@@ -285,7 +317,7 @@ def _cell_appearance(cell: Tag) -> str:
     for side in SIDES:
         value = style.get(f"border-{side}") or shorthand
         if value is None:
-            desc = "theme grid (thin grey, default)"
+            desc = default_edge
         elif "hidden" in value.split() or value.split() == ["none"]:
             desc = "no line (cleared)"
         else:
