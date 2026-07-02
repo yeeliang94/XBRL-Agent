@@ -221,15 +221,17 @@ def test_notes_formatter_revert_restores_pre_format_html(formatter_client):
     'reverted'; rows deleted since the pass are left alone."""
     client, run_id, server_module = formatter_client
     sheet = "Notes-Listofnotes"
+    # A realistic style-only pair: same text + geometry, styling added.
+    pre_format = "<table><tr><td>abc</td></tr></table>"
+    styled = '<table><tr><td style="text-align: right">abc</td></tr></table>'
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
         # Emulate a completed pass: snapshot of the pre-format HTML, styled
         # HTML written over it, task row 'done'.
-        repo.save_notes_format_snapshots(conn, run_id, sheet, {112: "<p>abc</p>"})
+        repo.save_notes_format_snapshots(conn, run_id, sheet, {112: pre_format})
         repo.upsert_notes_cell(
             conn, run_id=run_id, sheet=sheet, row=112,
             label="Disclosure of other notes",
-            html='<table><tr><td style="text-align: right">abc</td></tr></table>',
-            evidence="Page 3", source_pages=[3],
+            html=styled, evidence="Page 3", source_pages=[3],
         )
         repo.upsert_notes_format_task(
             conn, run_id, sheet, "done", model="m", summary="Formatted.",
@@ -246,10 +248,11 @@ def test_notes_formatter_revert_restores_pre_format_html(formatter_client):
     )
     assert r.status_code == 200
     assert r.json()["restored_rows"] == 1
+    assert r.json()["skipped_rows"] == []
 
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
-    assert cells[0].html == "<p>abc</p>"
+    assert cells[0].html == pre_format
 
     status = client.get(
         f"/api/runs/{run_id}/notes-format/status", params={"sheet": sheet},
@@ -338,6 +341,62 @@ def test_notes_formatter_revert_while_running_409s(formatter_client):
         f"/api/runs/{run_id}/notes-format/revert", json={"sheet": sheet},
     )
     assert r.status_code == 409
+
+
+def test_notes_formatter_revert_keeps_content_edited_after_formatting(formatter_client):
+    """A row whose CONTENT the user edited after the formatter pass is kept
+    on revert — restoring the snapshot would clobber the newer edit."""
+    client, run_id, server_module = formatter_client
+    sheet = "Notes-Listofnotes"
+    edited = "<p>User rewrote this note entirely after formatting.</p>"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.save_notes_format_snapshots(conn, run_id, sheet, {112: "<p>abc</p>"})
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=sheet, row=112,
+            label="Disclosure of other notes", html=edited,
+            evidence="Page 3", source_pages=[3],
+        )
+        repo.upsert_notes_format_task(
+            conn, run_id, sheet, "done", model="m", summary="Formatted.",
+            confidence=0.9, changed_rows=1, result={"ok": True},
+        )
+    r = client.post(
+        f"/api/runs/{run_id}/notes-format/revert", json={"sheet": sheet},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["restored_rows"] == 0
+    assert body["skipped_rows"] == [112]
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        cells = repo.list_notes_cells_for_run(conn, run_id)
+    assert cells[0].html == edited
+
+
+def test_guarded_claims_are_mutually_exclusive(formatter_client):
+    """The cross-table interlock is atomic: check-other + claim-mine happen
+    inside one BEGIN IMMEDIATE transaction in the repo helpers."""
+    client, run_id, server_module = formatter_client
+    sheet = "Notes-Listofnotes"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        assert repo.claim_notes_format_task_guarded(
+            conn, run_id, sheet, model="m",
+        ) == "claimed"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        assert repo.claim_notes_review_task_guarded(
+            conn, run_id, model="m",
+        ) == "formatter_running"
+        assert repo.claim_notes_format_task_guarded(
+            conn, run_id, sheet, model="m",
+        ) == "format_running"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.upsert_notes_format_task(conn, run_id, sheet, "done", model="m")
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        assert repo.claim_notes_review_task_guarded(
+            conn, run_id, model="m",
+        ) == "claimed"
+        assert repo.claim_notes_format_task_guarded(
+            conn, run_id, sheet, model="m",
+        ) == "reviewer_running"
 
 
 def test_notes_formatter_revert_refused_while_notes_reviewer_running(formatter_client):

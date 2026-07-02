@@ -355,7 +355,35 @@ async def test_formatter_skips_row_edited_during_pass(monkeypatch, formatter_db)
     assert "skipped" in result["summary"]
     with repo.db_session(db_path) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
+        snapshot = repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)
     assert cells[0].html == "<p>user edited</p>"
+    # Snapshots cover only rows actually WRITTEN — a fully-skipped pass
+    # leaves no snapshot (nothing to revert).
+    assert snapshot == {}
+
+
+def test_cas_update_notes_cell_html_is_statement_atomic(formatter_db):
+    """The compare lives in the UPDATE's WHERE clause: a mismatched
+    expected_html writes nothing — there is no read-then-write window."""
+    from db import repository as repo
+
+    db_path, _pdf, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        assert not repo.cas_update_notes_cell_html(
+            conn, run_id=run_id, sheet=_SHEET, row=112,
+            expected_html="<p>stale expectation</p>", new_html="<p>x</p>",
+        )
+        assert not repo.cas_update_notes_cell_html(
+            conn, run_id=run_id, sheet=_SHEET, row=999,  # missing row
+            expected_html=_TABLE_HTML, new_html="<p>x</p>",
+        )
+        assert repo.cas_update_notes_cell_html(
+            conn, run_id=run_id, sheet=_SHEET, row=112,
+            expected_html=_TABLE_HTML, new_html="<p>swapped</p>",
+        )
+    with repo.db_session(db_path) as conn:
+        cells = repo.list_notes_cells_for_run(conn, run_id)
+    assert cells[0].html == "<p>swapped</p>"
 
 
 @pytest.mark.asyncio

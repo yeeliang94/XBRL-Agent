@@ -235,6 +235,20 @@ Findings from the two-axis branch review, either fixed or accepted:
   token totals have a real persistence round-trip route test; the skipped-
   rows summary note has a vitest; `notes_formatter_trace` re-exported from
   server.py alongside its siblings.
+- **Fixed post-review round 2 (concurrency audit, 3 HIGH findings):**
+  1. The formatter's final write had a read-then-upsert window — now a
+     statement-atomic conditional UPDATE (`cas_update_notes_cell_html`,
+     `WHERE html = <launch snapshot>`) under `BEGIN IMMEDIATE`; the snapshot
+     covers only rows actually written, in the same transaction.
+  2. The formatter/reviewer interlocks were a cross-table TOCTOU (both
+     launches could pass each other's "other not running" check, then each
+     claim its own slot) — check-other + claim-mine now happen inside one
+     `BEGIN IMMEDIATE` repo helper per direction
+     (`claim_notes_format_task_guarded` / `claim_notes_review_task_guarded`).
+  3. Revert could clobber a content edit made AFTER the formatter pass —
+     each row is now gated on `verify_format_only(snapshot, current)`;
+     content-edited rows are kept and reported in `skipped_rows`, and the
+     whole revert runs under `BEGIN IMMEDIATE`.
 
 ## Rollback Plan
 

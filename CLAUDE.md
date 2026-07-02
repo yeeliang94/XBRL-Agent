@@ -827,19 +827,28 @@ Key invariants:
   tables remain borderless. Styling reaches the Review panel + clipboard
   paste ONLY — the xlsx download stays a text overlay (native xlsx styling
   still deferred). Production invariants:
-  - **Write safety is compare-and-swap, not locking:** the final write skips
-    any row whose current HTML differs from the launch snapshot (edited
-    mid-pass) or that no longer exists (sheet regenerate) — never clobbers a
-    concurrent edit, never resurrects a deleted row. Skips surface as
-    `skipped_rows` + a summary note.
+  - **Write safety is compare-and-swap, not locking:** the final write is a
+    STATEMENT-ATOMIC conditional UPDATE (`cas_update_notes_cell_html`,
+    `WHERE html = <launch snapshot>`) under one `BEGIN IMMEDIATE`
+    transaction — there is no read-then-write window; a row edited mid-pass
+    (user PATCH, reviewer fix) or deleted (sheet regenerate) fails the WHERE
+    and is skipped, never clobbered, never resurrected. Skips surface as
+    `skipped_rows` + a summary note. The snapshot covers only rows actually
+    written, saved in the same transaction.
   - **Safety is versioning (mirrors the reviewer):** every pass snapshots the
-    pre-format HTML into `notes_format_snapshots` (schema v27) before its
-    first write; `POST /notes-format/revert` restores it (409 while a pass
-    runs, 404 with no snapshot) and marks the task `error_type='reverted'`.
-  - **Interlocks:** launch 409s on non-terminal runs and while a notes
-    reviewer pass is `running`; the notes reviewer launch carries the mirror
-    guard (`any_notes_format_task_running`). Both passes write notes_cells
-    prose — neither may start over the other.
+    pre-format HTML into `notes_format_snapshots` (schema v27);
+    `POST /notes-format/revert` restores it (409 while a pass runs, 404 with
+    no snapshot) and marks the task `error_type='reverted'`. Revert is
+    CONTENT-GUARDED: each row passes `verify_format_only(snapshot, current)`
+    first, so a row whose content the user edited AFTER formatting is kept
+    (reported in `skipped_rows`) — revert undoes styling, never a newer
+    content edit. The whole revert runs under one `BEGIN IMMEDIATE`.
+  - **Interlocks are ATOMIC with the claim:** `claim_notes_format_task_guarded`
+    / `claim_notes_review_task_guarded` check the OTHER pass's task table and
+    claim their own slot inside one `BEGIN IMMEDIATE` transaction — a
+    check-then-claim in the endpoint would be a cross-table TOCTOU. Launch
+    also 409s on non-terminal runs. Both passes write notes_cells prose —
+    neither may start (or revert) over the other.
   - **Bounded two ways:** wall-clock `XBRL_NOTES_FORMATTER_WALLCLOCK_S`
     (default 300s) + cumulative per-click request budget
     `XBRL_NOTES_FORMATTER_MAX_REQUESTS` (default 16, clamped ≤45 — below
