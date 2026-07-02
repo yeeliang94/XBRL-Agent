@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -238,6 +238,65 @@ _NEIGHBOUR: dict[str, tuple[int, int, str]] = {
 }
 
 
+def describe_effective_appearance(html: str) -> list[str]:
+    """Human-readable per-cell summary of what the saved HTML will actually
+    RENDER in the review panel, for the formatter's self-check pass.
+
+    The raw HTML is a poor feedback signal: the panel's theme CSS paints a
+    default grey grid on every edge and a grey fill on every header cell —
+    neither appears in the HTML — and reading border extent out of per-cell
+    style soup is exactly what models get wrong (e.g. a double rule painted
+    across a whole row when the PDF shows it under one column). This summary
+    resolves each cell to its effective look — explicit style, else the theme
+    default — so "which cells does the rule span" is directly readable."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    lines: list[str] = []
+    for t_idx, table in enumerate(soup.find_all("table")):
+        if not isinstance(table, Tag):
+            continue
+        lines.append(f"table {t_idx}:")
+        for r_idx, tr in enumerate(_table_rows(table), start=1):
+            cells = [
+                c for c in tr.find_all(["th", "td"], recursive=False)
+                if isinstance(c, Tag)
+            ]
+            for c_idx, cell in enumerate(cells, start=1):
+                lines.append(
+                    f"  r{r_idx}c{c_idx}"
+                    f" {cell.get_text(' ', strip=True)[:24]!r}:"
+                    f" {_cell_appearance(cell)}"
+                )
+    return lines
+
+
+def _cell_appearance(cell: Tag) -> str:
+    style = _parse_style(cell.get("style") or "")
+    fill = style.get("background-color")
+    if fill in (None, ""):
+        fill_desc = (
+            "theme header grey (default)" if cell.name == "th" else "none"
+        )
+    elif fill == "transparent":
+        fill_desc = "none (explicitly cleared)"
+    else:
+        fill_desc = fill
+    parts = [f"fill={fill_desc}"]
+    shorthand = style.get("border")
+    for side in SIDES:
+        value = style.get(f"border-{side}") or shorthand
+        if value is None:
+            desc = "theme grid (thin grey, default)"
+        elif "hidden" in value.split() or value.split() == ["none"]:
+            desc = "no line (cleared)"
+        else:
+            desc = value
+        parts.append(f"{side}={desc}")
+    align = style.get("text-align")
+    if align:
+        parts.append(f"align={align}")
+    return ", ".join(parts)
+
+
 def _mirror_border_writes(
     elements: list[Tag], side_writes: dict[str, str],
 ) -> None:
@@ -296,10 +355,11 @@ def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag
             yield from first.find_all(["th", "td"], recursive=False)
         return
     if target.get("range") == "total_rows":
+        cols = _cols_filter(target)
         for tr in table.find_all("tr"):
             text = tr.get_text(" ", strip=True).lower()
             if "total" in text:
-                yield from tr.find_all(["th", "td"], recursive=False)
+                yield from _row_cells(tr, cols)
         return
     if target.get("range") == "numeric_cells":
         for cell in table.find_all(["th", "td"]):
@@ -326,12 +386,42 @@ def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag
         rows = target["rows"]
         if not isinstance(rows, list) or not all(isinstance(x, int) for x in rows):
             raise FormatPatchError("target.rows must be a list of 1-based row numbers")
+        cols = _cols_filter(target)
         all_rows = table.find_all("tr")
         for r in rows:
             if 1 <= r <= len(all_rows):
-                yield from all_rows[r - 1].find_all(["th", "td"], recursive=False)
+                yield from _row_cells(all_rows[r - 1], cols)
         return
     raise FormatPatchError("unsupported target")
+
+
+def _cols_filter(target: dict[str, Any]) -> Optional[list[int]]:
+    """Optional `cols` restriction on the row-shaped targets (`rows` /
+    `total_rows`): 1-based positional cell numbers within each matched row.
+    Lets one operation express the common accountant pattern — a summation
+    rule under ONLY the amount columns — without one `cell` op per column."""
+    cols = target.get("cols")
+    if cols is None:
+        return None
+    if (
+        not isinstance(cols, list)
+        or not cols
+        or not all(isinstance(x, int) and x >= 1 for x in cols)
+    ):
+        raise FormatPatchError(
+            "target.cols must be a non-empty list of 1-based column numbers"
+        )
+    return cols
+
+
+def _row_cells(tr: Tag, cols: Optional[list[int]]) -> Iterable[Tag]:
+    cells = tr.find_all(["th", "td"], recursive=False)
+    if cols is None:
+        yield from cells
+        return
+    for c in cols:
+        if 1 <= c <= len(cells):
+            yield cells[c - 1]
 
 
 def _looks_numeric(text: str) -> bool:
