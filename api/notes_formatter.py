@@ -7,6 +7,7 @@ checks pass.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -135,6 +136,7 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
         coro = run_notes_formatter(
             run_id=run_id, db_path=str(server.AUDIT_DB_PATH),
             pdf_path=pdf_path, sheet=body.sheet, model=model,
+            output_dir=run.output_dir or "",
         )
         # Bound the whole pass the way the reviewer / notes-validator passes are
         # bounded — without this a hung LLM call leaves the task 'running'
@@ -238,6 +240,52 @@ async def notes_formatter_status(run_id: int, sheet: str):
         "status": "done", "sheet": sheet, "skipped_rows": skipped,
         "can_revert": has_snapshot, **state,
     }
+
+
+@router.get("/api/runs/{run_id}/notes-format/trace")
+async def notes_formatter_trace(run_id: int, sheet: str):
+    """Serve the formatter pass's conversation trace (gotcha #6 pattern).
+
+    Security: `sheet` is validated against the run's template index before
+    touching the filesystem, and the resolved path must stay under the run's
+    output_dir — a caller can't traverse via the query param.
+    """
+    conn = server._open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    config = run.config or {}
+    known_sheets = {
+        e["sheet"]
+        for e in _notes_template_index(
+            config.get("filing_standard", "mfrs"),
+            config.get("filing_level", "company"),
+        )
+    }
+    if sheet not in known_sheets:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown notes sheet {sheet!r} for this run.",
+        )
+    if not run.output_dir:
+        raise HTTPException(status_code=404, detail="Run has no output directory")
+    out_root = Path(run.output_dir).resolve()
+    trace_path = (
+        out_root / f"notes_format_{sheet}_conversation_trace.json"
+    ).resolve()
+    if not trace_path.is_relative_to(out_root):
+        raise HTTPException(status_code=400, detail="Invalid trace path")
+    if not trace_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No formatter trace captured for {sheet}.",
+        )
+    try:
+        return json.loads(trace_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read trace: {exc}")
 
 
 class _NotesFormatRevert(BaseModel):

@@ -144,6 +144,29 @@ def test_reviewer_model_name_reads_default_models(tmp_path, monkeypatch):
     assert server._reviewer_model_name() == "google.gemini-3"
 
 
+def test_notes_formatter_model_round_trips(tmp_path, monkeypatch):
+    """notes_formatter is a first-class agent role: the settings PUT accepts
+    a default model for it and _notes_formatter_model_name reads it back."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.delenv("XBRL_DEFAULT_MODELS", raising=False)
+
+    assert "notes_formatter" in server._AGENT_ROLES
+    assert server._notes_formatter_model_name() is None  # unset → inherit
+
+    resp = client.post("/api/settings", json={
+        "default_models": {"notes_formatter": "openai.gpt-5.4"},
+    })
+    assert resp.status_code == 200
+    from dotenv import load_dotenv
+    load_dotenv(env_file, override=True)
+    assert server._notes_formatter_model_name() == "openai.gpt-5.4"
+    assert (
+        server._load_extended_settings()["default_models"]["notes_formatter"]
+        == "openai.gpt-5.4"
+    )
+
+
 def test_notes_table_style_round_trips(tmp_path, monkeypatch):
     """The firm notes-table theme persists to .env and reads back via both
     /api/settings and /api/config (docs/PLAN-notes-table-theme.md)."""

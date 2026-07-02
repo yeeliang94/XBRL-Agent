@@ -2740,7 +2740,8 @@ class RunConfigPatchRequest(BaseModel):
 # --- Settings helpers ---
 
 # Statement type keys used for per-agent model defaults
-_AGENT_ROLES = ("scout", "reviewer", "notes_reviewer", "SOFP", "SOPL", "SOCI", "SOCF", "SOCIE")
+_AGENT_ROLES = ("scout", "reviewer", "notes_reviewer", "notes_formatter",
+                "SOFP", "SOPL", "SOCI", "SOCF", "SOCIE")
 
 
 def _auto_review_enabled() -> bool:

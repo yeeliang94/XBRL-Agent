@@ -191,6 +191,9 @@ class _FakeResult:
     def __init__(self, output: str):
         self.output = output
 
+    def all_messages(self) -> list:
+        return [f"fake-pass-message: {self.output[:40]}"]
+
 
 class _FakeAgent:
     """Stands in for the pydantic-ai Agent: returns canned patch JSON and can
@@ -230,6 +233,8 @@ def formatter_db(tmp_path):
 
 
 async def _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake_agent):
+    from pathlib import Path
+
     import notes.formatting_agent as fa
 
     db_path, pdf_path, run_id = formatter_db
@@ -240,6 +245,7 @@ async def _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake_agent):
     return await fa.run_notes_formatter(
         run_id=run_id, db_path=str(db_path), pdf_path=pdf_path,
         sheet=_SHEET, model="fake-model",
+        output_dir=str(Path(pdf_path).parent),
     )
 
 
@@ -271,6 +277,56 @@ async def test_formatter_low_confidence_returns_error_type(monkeypatch, formatte
     assert result["ok"] is False
     assert result["error_type"] == "low_confidence"
     assert result["confidence"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_formatter_writes_trace_on_success_and_failure(monkeypatch, formatter_db):
+    """The trace lands after every completed pass — present on success AND
+    when a later gate fails (gotcha #6: traces matter most for failures)."""
+    from pathlib import Path
+
+    _db, pdf_path, _run_id = formatter_db
+    trace = Path(pdf_path).parent / f"notes_format_{_SHEET}_conversation_trace.json"
+
+    fake = _FakeAgent([_GOOD_PATCH, _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is True
+    assert trace.exists()
+    payload = json.loads(trace.read_text(encoding="utf-8"))
+    assert len(payload["messages"]) == 2  # initial + self-check pass
+
+    trace.unlink()
+    low_conf = json.loads(_GOOD_PATCH)
+    low_conf["confidence"] = 0.1
+    fake = _FakeAgent([json.dumps(low_conf)])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is False
+    assert trace.exists()  # the completed first pass is already on disk
+
+
+@pytest.mark.asyncio
+async def test_formatter_result_carries_token_fields(monkeypatch, formatter_db):
+    fake = _FakeAgent([_GOOD_PATCH, _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    for key in ("prompt_tokens", "completion_tokens",
+                "cache_read_tokens", "cache_write_tokens"):
+        assert key in result
+        assert isinstance(result[key], int)
+
+
+def test_min_confidence_resolver_validates_and_clamps(monkeypatch):
+    import notes.formatting_agent as fa
+
+    monkeypatch.delenv("XBRL_NOTES_FORMATTER_MIN_CONFIDENCE", raising=False)
+    assert fa._resolve_min_confidence() == 0.70
+    monkeypatch.setenv("XBRL_NOTES_FORMATTER_MIN_CONFIDENCE", "not-a-number")
+    assert fa._resolve_min_confidence() == 0.70
+    monkeypatch.setenv("XBRL_NOTES_FORMATTER_MIN_CONFIDENCE", "1.5")
+    assert fa._resolve_min_confidence() == 1.0
+    monkeypatch.setenv("XBRL_NOTES_FORMATTER_MIN_CONFIDENCE", "-0.3")
+    assert fa._resolve_min_confidence() == 0.0
+    monkeypatch.setenv("XBRL_NOTES_FORMATTER_MIN_CONFIDENCE", "0.85")
+    assert fa._resolve_min_confidence() == 0.85
 
 
 @pytest.mark.asyncio

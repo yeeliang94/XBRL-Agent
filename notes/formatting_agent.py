@@ -21,6 +21,7 @@ from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage, UsageLimits
 
+from agent_tracing import save_messages_trace
 from db import repository as repo
 from notes.format_patch import FormatPatchError, apply_sheet_patch
 from model_settings import build_model_settings
@@ -29,7 +30,34 @@ from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 logger = logging.getLogger(__name__)
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "notes_formatter.md"
-MIN_CONFIDENCE = 0.70
+
+
+def _resolve_min_confidence() -> float:
+    """Patch-confidence floor, operator-tunable via
+    XBRL_NOTES_FORMATTER_MIN_CONFIDENCE (validated + clamped to [0, 1])."""
+    default = 0.70
+    raw = os.environ.get("XBRL_NOTES_FORMATTER_MIN_CONFIDENCE", "")
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+    except ValueError:
+        logger.warning(
+            "XBRL_NOTES_FORMATTER_MIN_CONFIDENCE=%r is not a number; using %.2f",
+            raw, default,
+        )
+        return default
+    if not 0.0 <= v <= 1.0:
+        clamped = min(max(v, 0.0), 1.0)
+        logger.warning(
+            "XBRL_NOTES_FORMATTER_MIN_CONFIDENCE=%.3f outside [0, 1]; "
+            "clamping to %.2f", v, clamped,
+        )
+        return clamped
+    return v
+
+
+MIN_CONFIDENCE = _resolve_min_confidence()
 
 # Cumulative per-click model-request budget across the formatter's (up to
 # three) agent.run passes. Like the extraction MAX_AGENT_ITERATIONS cap, it
@@ -227,6 +255,16 @@ def _screen_patch(
     return None, _ScreenedPatch(patch, confidence, summary), "ok"
 
 
+def _usage_fields(usage: RunUsage) -> dict[str, int]:
+    """Flatten the accumulated cross-pass usage into the task-row columns."""
+    return {
+        "prompt_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+        "completion_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+        "cache_read_tokens": int(getattr(usage, "cache_read_tokens", 0) or 0),
+        "cache_write_tokens": int(getattr(usage, "cache_write_tokens", 0) or 0),
+    }
+
+
 async def run_notes_formatter(
     *,
     run_id: int,
@@ -234,6 +272,33 @@ async def run_notes_formatter(
     pdf_path: str,
     sheet: str,
     model: Union[str, Model],
+    output_dir: str = "",
+) -> dict[str, Any]:
+    """Run the formatter pass and attach cross-pass token telemetry.
+
+    The shared ``RunUsage`` accumulates across every ``agent.run`` inside the
+    impl; flattening it here (one exit point) keeps the many early returns in
+    the impl free of usage bookkeeping. Tokens are lost only when the pass
+    raises (timeout / turn budget) — the API worker builds that outcome.
+    """
+    usage = RunUsage()
+    outcome = await _run_notes_formatter_impl(
+        run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
+        model=model, output_dir=output_dir, usage=usage,
+    )
+    outcome.update(_usage_fields(usage))
+    return outcome
+
+
+async def _run_notes_formatter_impl(
+    *,
+    run_id: int,
+    db_path: str,
+    pdf_path: str,
+    sheet: str,
+    model: Union[str, Model],
+    output_dir: str,
+    usage: RunUsage,
 ) -> dict[str, Any]:
     if not pdf_path or not Path(pdf_path).exists():
         return {
@@ -271,13 +336,26 @@ async def run_notes_formatter(
     # the whole click (initial + repair + self-check) is bounded — not each
     # pass independently. UsageLimitExceeded surfaces as a structured "turn
     # budget" outcome in the API worker (mirrors the wall-clock timeout).
-    usage = RunUsage()
     limits = UsageLimits(request_limit=MAX_FORMATTER_REQUESTS)
+    trace_messages: list = []
 
     async def _agent_run(user_prompt: str):
-        return await agent.run(
+        result = await agent.run(
             user_prompt, deps=deps, usage=usage, usage_limits=limits,
         )
+        # Re-write the trace after EVERY completed pass (best-effort, gotcha
+        # #6): the trace is most valuable when a LATER pass times out or
+        # errors — the completed passes are already on disk by then.
+        if hasattr(result, "all_messages"):
+            try:
+                trace_messages.extend(result.all_messages())
+            except Exception:  # noqa: BLE001
+                pass
+        if output_dir and trace_messages:
+            save_messages_trace(
+                trace_messages, output_dir, f"notes_format_{sheet}",
+            )
+        return result
 
     result = await _agent_run(prompt)
     err, screened, _stage = _screen_patch(str(result.output), sheet)
