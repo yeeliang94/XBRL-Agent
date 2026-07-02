@@ -800,6 +800,22 @@ Key invariants:
     xlsx-download styling (download stays a text overlay). Pinned by
     `tests/test_notes_html_sanitize_css.py`, `tests/test_notes_html_to_text.py`,
     `web` `cellFormatting`/`notesIndent`/`NotesReviewTab` tests.
+- **Notes formatter agent (2026-07-01 prototype).** Extraction and notes
+  reviewer agents still do NOT author styling as part of content extraction /
+  correction. The standalone formatter (`POST /api/runs/{id}/notes-format`) is
+  the only AI role allowed to apply formatting, and it returns constrained JSON
+  style patches that the backend applies to existing `notes_cells.html`.
+  Formatter writes are rejected unless rendered text, numeric tokens, and table
+  geometry stay unchanged after `sanitize_notes_html`. Border removal is an
+  explicit `hidden` border operation so source-borderless tables remain
+  borderless in the Review panel. This prototype intentionally does not change
+  Excel download rendering. The async pass is bounded two ways: a wall-clock
+  timeout (`XBRL_NOTES_FORMATTER_WALLCLOCK_S`, default 300s) and a cumulative
+  per-click model-request budget shared across its (up to three) `agent.run`
+  passes (`XBRL_NOTES_FORMATTER_MAX_REQUESTS`, default 16, clamped below
+  pydantic-ai's silent request_limit=50 per gotcha #18); both surface a
+  structured "timed out" / "turn budget" outcome. Pinned by
+  `tests/test_notes_format_patch.py`, `tests/test_notes_formatter_routes.py`.
 - Evidence column is **read-only** in the editor — it's the audit
   trail. `PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}` ignores
   any `evidence` key in the body.

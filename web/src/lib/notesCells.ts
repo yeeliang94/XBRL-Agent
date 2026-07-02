@@ -65,6 +65,16 @@ export interface NotesCellsResponse {
   sheets: NotesSheet[];
 }
 
+export interface NotesFormatStatus {
+  status: "idle" | "running" | "done";
+  sheet: string;
+  model?: string | null;
+  summary?: string | null;
+  confidence?: number | null;
+  changed_rows?: number;
+  error?: string | null;
+}
+
 // Slot order of the five notes templates, mirroring the NotesTemplateType
 // enum in notes_types.py. MFRS and MPERS share the same sheet names
 // (notes_types.py:71), so one array covers both filing standards. The DB
@@ -123,6 +133,29 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
  *  a transport-level failure. */
 export async function fetchNotesCells(runId: number): Promise<NotesCellsResponse> {
   return apiFetch<NotesCellsResponse>(`/api/runs/${runId}/notes_cells`);
+}
+
+export async function launchNotesFormatter(
+  runId: number,
+  sheet: string,
+): Promise<NotesFormatStatus & { ok: boolean; already_running?: boolean }> {
+  return apiFetch<NotesFormatStatus & { ok: boolean; already_running?: boolean }>(
+    `/api/runs/${runId}/notes-format`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sheet }),
+    },
+  );
+}
+
+export async function fetchNotesFormatStatus(
+  runId: number,
+  sheet: string,
+): Promise<NotesFormatStatus> {
+  return apiFetch<NotesFormatStatus>(
+    `/api/runs/${runId}/notes-format/status?sheet=${encodeURIComponent(sheet)}`,
+  );
 }
 
 /** PATCH one cell's HTML. Returns the updated cell shape (includes the

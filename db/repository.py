@@ -1259,6 +1259,114 @@ def reconcile_stale_notes_review_tasks(conn: sqlite3.Connection) -> int:
     return int(cur.rowcount)
 
 
+def claim_notes_format_task(
+    conn: sqlite3.Connection,
+    run_id: int,
+    sheet: str,
+    *,
+    model: Optional[str] = None,
+) -> bool:
+    """Atomically claim the latest formatter slot for one run+sheet."""
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO notes_format_tasks("
+        "run_id, sheet, status, model, summary, confidence, changed_rows, "
+        "result_json, error, before_text_hash, after_text_hash, created_at, updated_at"
+        ") VALUES (?, ?, 'running', ?, NULL, NULL, 0, NULL, NULL, NULL, NULL, ?, ?) "
+        "ON CONFLICT(run_id, sheet) DO UPDATE SET status = 'running', "
+        "model = excluded.model, summary = NULL, confidence = NULL, "
+        "changed_rows = 0, result_json = NULL, error = NULL, "
+        "before_text_hash = NULL, after_text_hash = NULL, updated_at = excluded.updated_at "
+        "WHERE notes_format_tasks.status != 'running'",
+        (run_id, sheet, model, now, now),
+    )
+    return cur.rowcount > 0
+
+
+def upsert_notes_format_task(
+    conn: sqlite3.Connection,
+    run_id: int,
+    sheet: str,
+    status: str,
+    *,
+    model: Optional[str] = None,
+    summary: Optional[str] = None,
+    confidence: Optional[float] = None,
+    changed_rows: int = 0,
+    result: Optional[dict[str, Any]] = None,
+    error: Optional[str] = None,
+    before_text_hash: Optional[str] = None,
+    after_text_hash: Optional[str] = None,
+) -> None:
+    """Insert/update the durable async notes formatter task."""
+    now = _now()
+    result_json = json.dumps(result) if result is not None else None
+    conn.execute(
+        "INSERT INTO notes_format_tasks("
+        "run_id, sheet, status, model, summary, confidence, changed_rows, "
+        "result_json, error, before_text_hash, after_text_hash, created_at, updated_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(run_id, sheet) DO UPDATE SET status = excluded.status, "
+        "model = excluded.model, summary = excluded.summary, "
+        "confidence = excluded.confidence, changed_rows = excluded.changed_rows, "
+        "result_json = excluded.result_json, error = excluded.error, "
+        "before_text_hash = excluded.before_text_hash, "
+        "after_text_hash = excluded.after_text_hash, updated_at = excluded.updated_at",
+        (
+            run_id, sheet, status, model, summary, confidence, changed_rows,
+            result_json, error, before_text_hash, after_text_hash, now, now,
+        ),
+    )
+
+
+def fetch_notes_format_task(
+    conn: sqlite3.Connection, run_id: int, sheet: str,
+) -> Optional[dict[str, Any]]:
+    """Return the latest notes formatter task for one run+sheet, or None."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT status, model, summary, confidence, changed_rows, "
+            "result_json, error, before_text_hash, after_text_hash, updated_at "
+            "FROM notes_format_tasks WHERE run_id = ? AND sheet = ?",
+            (run_id, sheet),
+        ).fetchone()
+    finally:
+        conn.row_factory = prior
+    if row is None:
+        return None
+    try:
+        result = json.loads(row["result_json"]) if row["result_json"] else None
+    except (TypeError, json.JSONDecodeError):
+        result = None
+    return {
+        "status": row["status"], "model": row["model"],
+        "summary": row["summary"], "confidence": row["confidence"],
+        "changed_rows": row["changed_rows"], "result": result,
+        "error": row["error"], "before_text_hash": row["before_text_hash"],
+        "after_text_hash": row["after_text_hash"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def reconcile_stale_notes_format_tasks(conn: sqlite3.Connection) -> int:
+    """Retire notes formatter tasks orphaned by a process restart."""
+    now = _now()
+    result_json = json.dumps({
+        "ok": False,
+        "error": "Server restarted while the notes formatter was running. "
+                 "Relaunch it to retry.",
+    })
+    cur = conn.execute(
+        "UPDATE notes_format_tasks SET status = 'done', result_json = ?, "
+        "error = 'restarted', summary = 'Formatter interrupted by server restart.', "
+        "updated_at = ? WHERE status = 'running'",
+        (result_json, now),
+    )
+    return int(cur.rowcount)
+
+
 def fetch_notes_inventory(
     conn: sqlite3.Connection, run_id: int,
 ) -> list[dict]:
