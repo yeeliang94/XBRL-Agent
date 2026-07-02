@@ -132,7 +132,137 @@ def _apply_operations(html: str, operations: list[dict[str, Any]]) -> str:
             raise FormatPatchError("operation.style must be an object")
         for el in elements:
             _apply_style(el, style)
+        # Tables render with `border-collapse: collapse`, where every interior
+        # edge is SHARED by two cells and CSS keeps only one border for it — with
+        # `border-style: hidden` winning over everything. Writing a border onto
+        # one cell's side only leaves the neighbour's opposite side unchanged, so
+        # a later interior rule was hidden by a prior clear (invisible line), or a
+        # deliberate clear was overridden by the neighbour's leftover line. Mirror
+        # each side THIS operation set onto the neighbour's opposite side, in op
+        # order — so the LAST op to touch an edge sets both sides and wins,
+        # whether it paints or clears. This is exactly the editor toolbar's
+        # per-edge write (paintBorderSide in web/src/lib/cellFormatting.ts) and,
+        # unlike a whole-table post-pass on final values, it preserves a targeted
+        # single-edge `clear_border` (both sides land `hidden`). Presentation-only:
+        # verify_format_only still sees identical text + table geometry.
+        side_writes = _border_side_writes(style)
+        if side_writes:
+            _mirror_border_writes(elements, side_writes)
     return str(soup)
+
+
+def _table_rows(table: Tag) -> list[Tag]:
+    """Ordered <tr> list of a table, flattening thead/tbody/tfoot (matches
+    `format_verify._table_signature`)."""
+    rows: list[Tag] = []
+    for child in table.children:
+        if not isinstance(child, Tag):
+            continue
+        if child.name == "tr":
+            rows.append(child)
+        elif child.name in {"thead", "tbody", "tfoot"}:
+            rows.extend(
+                row for row in child.find_all("tr", recursive=False)
+                if isinstance(row, Tag)
+            )
+    return rows
+
+
+def _build_grid(
+    table: Tag,
+) -> tuple[dict[tuple[int, int], Tag], dict[int, list[tuple[int, int]]]]:
+    """Return ``(grid, positions)`` for a table. ``grid`` maps every (row, col)
+    position to its cell Tag (expanding colspan/rowspan so a spanned position
+    points at the covering cell); ``positions`` maps ``id(cell)`` to the list of
+    positions it occupies, so a spanned cell can find every neighbour it touches.
+    """
+    grid: dict[tuple[int, int], Tag] = {}
+    positions: dict[int, list[tuple[int, int]]] = {}
+    for r, tr in enumerate(_table_rows(table)):
+        col = 0
+        for cell in tr.find_all(["th", "td"], recursive=False):
+            if not isinstance(cell, Tag):
+                continue
+            while (r, col) in grid:  # skip positions covered by a rowspan above
+                col += 1
+            try:
+                colspan = max(1, int(cell.get("colspan") or 1))
+            except (TypeError, ValueError):
+                colspan = 1
+            try:
+                rowspan = max(1, int(cell.get("rowspan") or 1))
+            except (TypeError, ValueError):
+                rowspan = 1
+            occupied = positions.setdefault(id(cell), [])
+            for dr in range(rowspan):
+                for dc in range(colspan):
+                    grid[(r + dr, col + dc)] = cell
+                    occupied.append((r + dr, col + dc))
+            col += colspan
+    return grid, positions
+
+
+def _set_cell_side(cell: Tag, side: str, value: str) -> None:
+    """Write `border-<side>: value` on a cell, re-serialising in the same
+    canonical sorted form as `_apply_style` so the save round-trip is a no-op."""
+    current = _parse_style(cell.get("style") or "")
+    current[f"border-{side}"] = value
+    cell["style"] = "; ".join(f"{k}: {v}" for k, v in sorted(current.items()))
+
+
+def _border_side_writes(style: dict[str, Any]) -> dict[str, str]:
+    """The `side -> css-value` border writes a style dict produces, so a mirror
+    pass can replay THIS operation's edge writes onto the neighbours. Ordered like
+    `_apply_style`'s own iteration (last key wins), and reuses `_border_value`, so
+    the values match exactly what was written to the targeted cell."""
+    writes: dict[str, str] = {}
+    for key, value in style.items():
+        if key in STYLE_TO_CSS:
+            writes[STYLE_TO_CSS[key].split("-", 1)[1]] = _border_value(value)
+        elif key == "clear_border":
+            sides = value if isinstance(value, list) else SIDES
+            for side in sides:
+                if side in SIDES:
+                    writes[side] = "1px hidden #000000"
+    return writes
+
+
+# Neighbour offset + the neighbour's opposing side for each shared edge: a cell's
+# top edge is its upper neighbour's bottom, its right edge the right neighbour's
+# left, and so on.
+_NEIGHBOUR: dict[str, tuple[int, int, str]] = {
+    "top": (-1, 0, "bottom"),
+    "bottom": (1, 0, "top"),
+    "left": (0, -1, "right"),
+    "right": (0, 1, "left"),
+}
+
+
+def _mirror_border_writes(
+    elements: list[Tag], side_writes: dict[str, str],
+) -> None:
+    """Replay ``side_writes`` (the border sides one operation set on ``elements``)
+    onto each targeted cell's shared-edge neighbour, so the collapsed edge shows
+    the intended border on BOTH sides. Only ``th``/``td`` are edges; a ``range:
+    table`` target (the table element itself) has no shared edges and is skipped.
+    Grids are built once per table across the operation's cells."""
+    grids: dict[int, tuple[dict[tuple[int, int], Tag],
+                           dict[int, list[tuple[int, int]]]]] = {}
+    for cell in elements:
+        if cell.name not in ("td", "th"):
+            continue
+        table = cell.find_parent("table")
+        if table is None:
+            continue
+        grid_key = id(table)
+        grid, positions = grids.get(grid_key) or _build_grid(table)
+        grids[grid_key] = (grid, positions)
+        for (r, c) in positions.get(id(cell), []):
+            for side, value in side_writes.items():
+                dr, dc, opp = _NEIGHBOUR[side]
+                neighbour = grid.get((r + dr, c + dc))
+                if neighbour is not None and neighbour is not cell:
+                    _set_cell_side(neighbour, opp, value)
 
 
 def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag]:

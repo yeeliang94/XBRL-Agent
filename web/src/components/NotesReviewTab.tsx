@@ -93,6 +93,7 @@ import {
 } from "../lib/clipboardFormat";
 import { ClipboardFormatControls } from "./ClipboardFormatControls";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
+import type { ModelEntry } from "../lib/types";
 import "./NotesReviewTab.css";
 
 // Debounce window for the PATCH save. Matched to the 1.5s decision in
@@ -235,6 +236,16 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
   // stores the message "This will overwrite N edited cells".
   const [pendingCount, setPendingCount] = useState<number | null>(null);
 
+  // Formatter model picker (mirrors ReviewTab / NotesReviewerPanel). Loaded
+  // once at the tab level and threaded into every SheetSection so per-sheet
+  // sections don't each re-fetch /api/settings. `formatterDefaultModel` seeds
+  // each section's dropdown; empty = the server default (the run's model).
+  const [formatterModels, setFormatterModels] = useState<ModelEntry[]>([]);
+  const [formatterDefaultModel, setFormatterDefaultModel] = useState<string>("");
+  // (The /api/settings fetch that populates these is declared AFTER the
+  // notes-cells load effect below, so the notes GET stays the first request —
+  // order matters to the order-sensitive fetch mocks in the tests.)
+
   // Notes-table style theme (docs/PLAN-notes-table-theme.md). `firmTheme` is the
   // server-wide firm default (from /api/config); `runTheme` is this run's
   // optional override (wired in Phase 5 — null until then). The resolved theme
@@ -328,6 +339,27 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Formatter model list + configured default (see the state declarations
+  // above). Declared here — after the notes-cells load — so the notes GET is
+  // still the first request under order-sensitive test mocks. Best-effort:
+  // the Format button falls back to the server default without it.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (cancelled || !s) return;
+        setFormatterModels(s.available_models || []);
+        setFormatterDefaultModel(
+          (s.default_models && s.default_models.notes_formatter) || "",
+        );
+      })
+      .catch(() => {
+        /* best-effort — server default (the run's model) still applies */
+      });
+    return () => { cancelled = true; };
   }, []);
 
   // Last value the SERVER confirmed for this run's override — restored on a
@@ -553,6 +585,8 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
               runId={runId}
               sheet={sh}
               theme={theme}
+              formatterModels={formatterModels}
+              formatterDefaultModel={formatterDefaultModel}
               focus={active.sheet === sh.sheet}
               focusKey={active.key}
               onFormatted={reloadNotes}
@@ -583,6 +617,8 @@ function SheetSection({
   runId,
   sheet,
   theme,
+  formatterModels,
+  formatterDefaultModel,
   onFormatted,
   focus = false,
   focusKey = 0,
@@ -591,6 +627,9 @@ function SheetSection({
   sheet: NotesSheet;
   /** Resolved notes-table theme — threaded to CellRow so Copy uses it. */
   theme: ClipboardFormatOptions;
+  /** Model list + configured notes_formatter default for the AI-format picker. */
+  formatterModels: ModelEntry[];
+  formatterDefaultModel: string;
   onFormatted: () => Promise<void>;
   /** When true (the reviewer picked this notes sub-tab / nav chip), the
    *  section opens and scrolls into view. */
@@ -607,6 +646,13 @@ function SheetSection({
   const [formatStatus, setFormatStatus] = useState<NotesFormatStatus | null>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
   const [rowSaveStatuses, setRowSaveStatuses] = useState<Record<number, SaveStatus>>({});
+  // Which model the AI formatter runs on. Seeds from the configured
+  // notes_formatter default; empty falls through to the server's fallback
+  // (the run's extraction model — api/notes_formatter.py).
+  const [selectedModel, setSelectedModel] = useState<string>(formatterDefaultModel);
+  useEffect(() => {
+    setSelectedModel(formatterDefaultModel);
+  }, [formatterDefaultModel]);
   const rowCount = sheet.rows.length;
   const sectionRef = useRef<HTMLElement | null>(null);
 
@@ -669,13 +715,15 @@ function SheetSection({
   const handleFormat = useCallback(async () => {
     setFormatError(null);
     try {
-      const state = await launchNotesFormatter(runId, sheet.sheet);
+      const state = await launchNotesFormatter(
+        runId, sheet.sheet, selectedModel || undefined,
+      );
       setFormatStatus(state);
       setExpanded(true);
     } catch (err) {
       setFormatError(err instanceof Error ? err.message : "Could not start formatter.");
     }
-  }, [runId, sheet.sheet]);
+  }, [runId, sheet.sheet, selectedModel]);
 
   const handleRevert = useCallback(async () => {
     if (!window.confirm(
@@ -761,6 +809,27 @@ function SheetSection({
         <span style={styles.sheetRowCount} aria-hidden="true">
           {rowCount} {rowCount === 1 ? "row" : "rows"}
         </span>
+        {canFormat && formatterModels.length > 0 && (
+          <select
+            style={styles.formatModelSelect}
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            disabled={isFormatting}
+            aria-label={`Formatter model for ${notesSheetDisplayName(sheet.sheet)}`}
+            data-testid="notes-format-model"
+          >
+            {/* Show the configured default even if it isn't in the list yet. */}
+            {selectedModel
+              && !formatterModels.some((m) => m.id === selectedModel) && (
+              <option value={selectedModel}>{selectedModel}</option>
+            )}
+            {formatterModels.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.display_name || m.id}
+              </option>
+            ))}
+          </select>
+        )}
         {canFormat && (
           <button
             type="button"
@@ -1992,6 +2061,17 @@ const styles = {
     ...ui.buttonGhost,
     ...ui.buttonSm,
     flexShrink: 0,
+  } as React.CSSProperties,
+  formatModelSelect: {
+    flexShrink: 0,
+    maxWidth: 180,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    padding: "3px 6px",
+    color: pwc.grey700,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: 4,
+    background: pwc.white,
   } as React.CSSProperties,
   formatSummary: {
     display: "flex",
