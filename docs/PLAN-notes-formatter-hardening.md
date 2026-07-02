@@ -1,6 +1,6 @@
 # Implementation Plan: Notes Formatter — Prototype → Production Hardening
 
-**Overall Progress:** `92%` — Phases 1-4 complete
+**Overall Progress:** `100%` — all phases complete (backend 2740 + web 838 green)
 **PRD Reference:** none — scoped via `/agent-skills:review` findings + hardening
 discussion on 2026-07-02. Builds on the uncommitted formatter prototype
 (CLAUDE.md gotcha #16, "Notes formatter agent (2026-07-01 prototype)").
@@ -200,14 +200,14 @@ the five code-review findings from 2026-07-02.
 
 ### Phase 5: Docs + Wrap-Up
 
-- [ ] 🟥 **Step 13: Documentation + full-suite gate**
-  - [ ] 🟥 Rewrite the CLAUDE.md gotcha #16 formatter paragraph: drop
+- [x] 🟩 **Step 13: Documentation + full-suite gate**
+  - [x] 🟩 Rewrite the CLAUDE.md gotcha #16 formatter paragraph: drop
     "prototype", document the production invariants (CAS skip semantics,
     snapshot/revert, interlocks, taxonomy, panel-only scope) and the full
     pinning-test list; gotcha #11 already updated in Step 4.
-  - [ ] 🟥 AGENTS.md "don't let extraction/reviewer agents rewrite formatting"
+  - [x] 🟩 AGENTS.md "don't let extraction/reviewer agents rewrite formatting"
     rule already landed with the prototype — confirm wording still holds.
-  - [ ] 🟥 Update the auto-memory `notes_wysiwyg_formatting` /
+  - [x] 🟩 Update the auto-memory `notes_wysiwyg_formatting` /
     formatter-related memory with the production status.
   - **Verify:** full `./venv/bin/python -m pytest tests/ -q` and
     `cd web && npx vitest run` green — the definition of done for the branch.
