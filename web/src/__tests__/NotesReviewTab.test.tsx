@@ -2180,6 +2180,30 @@ describe("NotesReviewTab — AI formatter", () => {
     vi.useRealTimers();
   });
 
+  test("a pass with skipped rows surfaces the skip note in the summary", async () => {
+    // The backend appends the skip note to the summary text (CAS write);
+    // the panel must surface it verbatim so the user knows why a row kept
+    // its manual edit instead of the new styling.
+    routedFetch({
+      status: (url) =>
+        url.includes("Notes-CI")
+          ? {
+              status: "done", sheet: "Notes-CI",
+              summary:
+                "Formatting applied. 1 row(s) skipped — edited during formatting.",
+              changed_rows: 1, skipped_rows: [12], error: null,
+            }
+          : { status: "idle", sheet: "other" },
+    });
+
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("notes-format-summary"),
+      ).toHaveTextContent("skipped — edited during formatting");
+    });
+  });
+
   test("Revert formatting confirms, calls the endpoint, and refetches cells", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const fetchMock = routedFetch({

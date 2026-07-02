@@ -312,6 +312,15 @@ async def revert_notes_formatter(run_id: int, body: _NotesFormatRevert):
                 detail="A formatter pass is running for this sheet; wait for "
                        "it to finish before reverting.",
             )
+        # Same interlock as launch: the notes reviewer writes these prose
+        # rows too, so a revert must not race a running reviewer pass.
+        review_task = repo.fetch_notes_review_task(conn, run_id)
+        if review_task and review_task.get("status") == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="A notes reviewer pass is running for this run; "
+                       "wait for it to finish before reverting.",
+            )
         snapshot = repo.fetch_notes_format_snapshots(conn, run_id, body.sheet)
         if not snapshot:
             raise HTTPException(
@@ -323,14 +332,20 @@ async def revert_notes_formatter(run_id: int, body: _NotesFormatRevert):
             for c in repo.list_notes_cells_for_run(conn, run_id)
             if c.sheet == body.sheet
         }
+        from notes.html_sanitize import sanitize_notes_html
+
         restored = 0
         for row, html in snapshot.items():
             cell = cells.get(row)
             if cell is None:
                 continue  # row deleted since the pass — nothing to restore onto
+            # Snapshots originate from already-sanitised DB rows, but every
+            # notes_cells write goes through the sanitiser (gotcha #16 flow)
+            # — defence-in-depth against a tampered snapshot row.
+            cleaned, _warnings = sanitize_notes_html(html)
             repo.upsert_notes_cell(
                 conn, run_id=run_id, sheet=body.sheet, row=row,
-                label=cell.label, html=html, evidence=cell.evidence,
+                label=cell.label, html=cleaned, evidence=cell.evidence,
                 source_pages=cell.source_pages,
             )
             restored += 1

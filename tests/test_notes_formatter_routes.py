@@ -259,6 +259,35 @@ def test_notes_formatter_revert_restores_pre_format_html(formatter_client):
     assert status["error"] is None
 
 
+def test_notes_formatter_token_totals_round_trip(formatter_client, monkeypatch):
+    """Token telemetry returned by the pass persists onto the v27 task row
+    and comes back through the status endpoint (Step 8 Verify)."""
+    client, run_id, server_module = formatter_client
+
+    async def fake_run_notes_formatter(**_kwargs):
+        return {
+            "ok": True, "summary": "Formatted.", "confidence": 0.9,
+            "changed_rows": 1, "skipped_rows": [],
+            "prompt_tokens": 1200, "completion_tokens": 345,
+            "cache_read_tokens": 800, "cache_write_tokens": 50,
+        }
+
+    import notes.formatting_agent as formatting_agent
+    monkeypatch.setattr(
+        formatting_agent, "run_notes_formatter", fake_run_notes_formatter,
+    )
+    r = client.post(
+        f"/api/runs/{run_id}/notes-format",
+        json={"sheet": "Notes-Listofnotes"},
+    )
+    assert r.status_code == 200
+    done = _poll_done(client, run_id, "Notes-Listofnotes")
+    assert done["prompt_tokens"] == 1200
+    assert done["completion_tokens"] == 345
+    assert done["cache_read_tokens"] == 800
+    assert done["cache_write_tokens"] == 50
+
+
 def test_notes_formatter_trace_endpoint_serves_and_guards(formatter_client):
     """The trace endpoint serves the on-disk JSON, 400s an unknown sheet
     (which also blocks traversal via the query param), 404s a missing file."""
@@ -309,3 +338,18 @@ def test_notes_formatter_revert_while_running_409s(formatter_client):
         f"/api/runs/{run_id}/notes-format/revert", json={"sheet": sheet},
     )
     assert r.status_code == 409
+
+
+def test_notes_formatter_revert_refused_while_notes_reviewer_running(formatter_client):
+    """Revert carries the same reviewer interlock as launch — both write the
+    sheet's prose rows."""
+    client, run_id, server_module = formatter_client
+    sheet = "Notes-Listofnotes"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.save_notes_format_snapshots(conn, run_id, sheet, {112: "<p>abc</p>"})
+        repo.claim_notes_review_task(conn, run_id, model="m")
+    r = client.post(
+        f"/api/runs/{run_id}/notes-format/revert", json={"sheet": sheet},
+    )
+    assert r.status_code == 409
+    assert "reviewer" in r.json()["detail"]
