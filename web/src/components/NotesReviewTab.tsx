@@ -71,6 +71,7 @@ import {
   fetchNotesCells,
   fetchNotesFormatStatus,
   launchNotesFormatter,
+  revertNotesFormatter,
   patchNotesCell,
   patchNotesFact,
   parseNumericInput,
@@ -676,18 +677,47 @@ function SheetSection({
     }
   }, [runId, sheet.sheet]);
 
+  const handleRevert = useCallback(async () => {
+    if (!window.confirm(
+      "Revert this sheet's formatting to the pre-format state?",
+    )) {
+      return;
+    }
+    setFormatError(null);
+    try {
+      await revertNotesFormatter(runId, sheet.sheet);
+      const state = await fetchNotesFormatStatus(runId, sheet.sheet);
+      setFormatStatus(state);
+      await onFormatted();
+    } catch (err) {
+      setFormatError(
+        err instanceof Error ? err.message : "Could not revert formatting.",
+      );
+    }
+  }, [onFormatted, runId, sheet.sheet]);
+
   const handleRowSaveStatus = useCallback((row: number, status: SaveStatus) => {
-    setRowSaveStatuses((prev) => (
-      prev[row] === status ? prev : { ...prev, [row]: status }
-    ));
+    // Only pending states are tracked; anything else PRUNES the row's entry.
+    // A CellRow withdraws itself on unmount (reports "idle") so a section
+    // collapse mid-edit can't wedge the Format button at "Save pending".
+    setRowSaveStatuses((prev) => {
+      const pending =
+        status === "dirty" || status === "saving" || status === "failed";
+      if (!pending) {
+        if (!(row in prev)) return prev;
+        const next = { ...prev };
+        delete next[row];
+        return next;
+      }
+      return prev[row] === status ? prev : { ...prev, [row]: status };
+    });
   }, []);
 
   const canFormat = (sheet.kind ?? "prose") === "prose";
-  const hasPendingRowSave = Object.values(rowSaveStatuses)
-    .some((status) => (
-      status === "dirty" || status === "saving" || status === "failed"
-    ));
+  const hasPendingRowSave = Object.keys(rowSaveStatuses).length > 0;
   const isFormatting = formatStatus?.status === "running";
+  const totalTokens =
+    (formatStatus?.prompt_tokens ?? 0) + (formatStatus?.completion_tokens ?? 0);
   const formatButtonLabel = hasPendingRowSave
     ? "Save pending"
     : isFormatting
@@ -759,13 +789,42 @@ function SheetSection({
           role={formatError || formatStatus?.error ? "alert" : "status"}
           data-testid="notes-format-summary"
         >
-          {formatError || formatStatus?.error || (
-            `${formatStatus?.summary || "Formatting complete."} ` +
-            `Changed ${formatStatus?.changed_rows ?? 0} row(s).` +
-            (typeof formatStatus?.confidence === "number"
-              ? ` Confidence ${(formatStatus.confidence * 100).toFixed(0)}%.`
-              : "")
+          <span style={styles.formatSummaryText}>
+            {formatError || formatStatus?.error || (
+              `${formatStatus?.summary || "Formatting complete."} ` +
+              `Changed ${formatStatus?.changed_rows ?? 0} row(s).` +
+              (typeof formatStatus?.confidence === "number"
+                ? ` Confidence ${(formatStatus.confidence * 100).toFixed(0)}%.`
+                : "") +
+              (totalTokens > 0
+                ? ` ~${totalTokens.toLocaleString()} tokens.`
+                : "")
+            )}
+          </span>
+          {formatStatus?.can_revert
+            && formatStatus.error_type !== "reverted"
+            && !formatError && (
+            <button
+              type="button"
+              className={uiClass.btnGhost}
+              style={styles.sheetFormatButton}
+              onClick={handleRevert}
+              data-testid="notes-format-revert"
+            >
+              Revert formatting
+            </button>
           )}
+        </div>
+      )}
+      {expanded && isFormatting && (
+        <div
+          style={styles.formattingBanner}
+          role="status"
+          data-testid="notes-format-running-banner"
+        >
+          Formatting in progress — edits you make now are preserved and
+          skipped by the formatter. Styling applies to the preview and
+          paste, not the Excel download.
         </div>
       )}
       {expanded && (
@@ -858,6 +917,16 @@ function CellRow({
   useEffect(() => {
     onSaveStatusChange?.(cell.row, status);
   }, [cell.row, onSaveStatusChange, status]);
+
+  useEffect(() => {
+    return () => {
+      // Withdraw this row's save-status entry on unmount (section collapse).
+      // Without this, a row unmounting while "dirty" leaves a stale entry
+      // that wedges the sheet's Format button at "Save pending" — the
+      // flush-on-unmount effect below saves the content anyway.
+      onSaveStatusChange?.(cell.row, "idle");
+    };
+  }, [cell.row, onSaveStatusChange]);
 
   useEffect(() => {
     // Flush any pending debounced save on unmount (peer-review [MEDIUM] #3).
@@ -1925,10 +1994,24 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   formatSummary: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
     padding: "7px 14px",
     borderTop: `1px solid ${pwc.grey200}`,
     background: pwc.white,
     fontSize: 12,
+  } as React.CSSProperties,
+  formatSummaryText: {
+    flex: 1,
+    minWidth: 0,
+  } as React.CSSProperties,
+  formattingBanner: {
+    padding: "7px 14px",
+    borderTop: `1px solid ${pwc.grey200}`,
+    background: pwc.grey100,
+    fontSize: 12,
+    color: pwc.grey700,
   } as React.CSSProperties,
   rowStack: {
     display: "flex",
