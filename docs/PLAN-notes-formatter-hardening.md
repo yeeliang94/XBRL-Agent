@@ -212,6 +212,30 @@ the five code-review findings from 2026-07-02.
   - **Verify:** full `./venv/bin/python -m pytest tests/ -q` and
     `cd web && npx vitest run` green — the definition of done for the branch.
 
+## Recorded Deviations (post-review, 2026-07-02)
+
+Findings from the two-axis branch review, either fixed or accepted:
+
+- **Step 7 trace fallback (accepted):** the trace is written after every
+  COMPLETED `agent.run` pass — a timeout/turn-budget raised during the FIRST
+  pass leaves no trace, because `agent.run` (unlike the coordinator's
+  `agent.iter`) exposes no partial message history on the raised exception.
+  Later-pass failures keep the completed passes' trace, which is the common
+  case. Honoring the clause exactly would mean migrating to `agent.iter` —
+  deferred. Token totals likewise persist 0 on raised-exception outcomes.
+- **Step 6 vocabulary (extended):** `precondition_failed` was added beyond
+  the spec's eight codes for the no-PDF / no-cells / missing-source-pages
+  launch failures — more precise than overloading `validation_failed`.
+- **Step 3 (partial by design):** `_screen_patch` collapses the parse /
+  confidence / sheet gates; the `apply_sheet_patch` try/except remains at
+  each call site because the three paths handle an apply failure
+  differently (repair / return / return-with-revised-context).
+- **Fixed post-review:** revert now re-runs `sanitize_notes_html` on
+  snapshot HTML (gotcha #16 flow) and carries the reviewer interlock;
+  token totals have a real persistence round-trip route test; the skipped-
+  rows summary note has a vitest; `notes_formatter_trace` re-exported from
+  server.py alongside its siblings.
+
 ## Rollback Plan
 
 If something goes badly wrong:

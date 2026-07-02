@@ -6473,7 +6473,8 @@ from api.notes import (  # noqa: E402,F401
     notes_cells_edited_count_endpoint, facts_edited_count_endpoint,
 )
 from api.notes_formatter import (  # noqa: E402,F401
-    launch_notes_formatter, notes_formatter_status, revert_notes_formatter,
+    launch_notes_formatter, notes_formatter_status, notes_formatter_trace,
+    revert_notes_formatter,
 )
 from api.files import (  # noqa: E402,F401
     pdf_info_endpoint, pdf_page_endpoint, download_filled_endpoint,
