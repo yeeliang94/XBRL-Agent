@@ -102,7 +102,18 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
             label = _label_at(ws, r)
             if not label:
                 continue
-            if not ("total" in label.lower() or label.startswith("*")):
+            lowered = label.lower()
+            # "net " covers the MFRS SOCF-Direct totals ("Net cash flows
+            # from (used in) …", "Net increase (decrease) …"), whose labels
+            # carry neither a "*" prefix nor the word "total" — pre-fix,
+            # the block silently skipped that whole sheet. Leaf rows like
+            # "Net repayment from joint ventures" also pass this label
+            # gate but are filtered right below: they have no formula.
+            if not (
+                "total" in lowered
+                or label.startswith("*")
+                or lowered.startswith("net ")
+            ):
                 continue
             formula = ws.cell(r, 2).value
             if not isinstance(formula, str) or not formula.startswith("="):

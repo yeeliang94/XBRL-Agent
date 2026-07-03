@@ -192,3 +192,25 @@ def test_sign_block_handles_sore_template_gracefully() -> None:
     # ±1*<cell> shape — that's a feature, not a failure.
     if block is not None:
         assert "SIGN CONVENTIONS" in block
+
+
+def test_socf_sign_block_fires_on_mfrs_direct_method() -> None:
+    """2026-07-03: MFRS SOCF-Direct total labels ("Net cash flows from
+    (used in) ...") carry neither a "*" prefix nor the word "total", so the
+    label gate silently skipped the whole sheet — the one SOCF variant whose
+    static prompt rule (payments = NEGATIVE) most needs the per-row override.
+    The gate now also accepts labels starting with "net "."""
+    path = REPO / "XBRL-template-MFRS" / "Company" / "08-SOCF-Direct.xlsx"
+    block = socf_sign_convention_block(path)
+    assert block is not None
+    # Operating rows are all weight +1 per the SSM linkbase: payments are
+    # entered as negative cash effects and the row is ADDED.
+    assert any(
+        "Payments to suppliers" in line and "ADDED" in line
+        for line in block.splitlines()
+    )
+    # Investing purchases are weight -1: entered positive, SUBTRACTED.
+    assert any(
+        "Purchase of property, plant and equipment" in line and "SUBTRACTED" in line
+        for line in block.splitlines()
+    )
