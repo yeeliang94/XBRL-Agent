@@ -1,0 +1,21 @@
+{
+  "sheets": {
+    "SOFP-Sub-CuNonCu": {
+      "label_column": "A",
+      "columns": {
+        "current_year": "B",
+        "prior_year": "C"
+      }
+    }
+  },
+  "writes": [
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Freehold land", "column_role": "current_year", "value": 1500000},
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Freehold land", "column_role": "prior_year", "value": 1500000},
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Long term leasehold land", "column_role": "current_year", "value": 820000},
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Building on freehold land", "column_role": "current_year", "value": 2340500},
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Motor vehicles", "column_role": "current_year", "value": 76250},
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Motor vehicles", "column_role": "prior_year", "value": 91500},
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Plant and equipment", "column_role": "current_year", "value": -125000},
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Office equipment, fixture and fittings", "column_role": "current_year", "value": 43975.5}
+  ]
+}
