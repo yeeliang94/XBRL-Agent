@@ -181,8 +181,14 @@ the calculation linkbase.
 
 **Do not hand-edit template formulas.** If a formula is wrong, regenerate
 from the linkbase and capture the before/after in `backup-originals/`.
-Historical incident (2026-04-07, +20-row SOFP offset bug) documented in
-`docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md`.
+`scripts/regenerate_mfrs_sofp_sopl_formulas.py` covers MFRS SOFP, SOPL,
+SOCI (both variants) and SOCF-Direct (2026-07-03: the hand-built SOCI/
+SOCF-Direct originals deviated from the calc linkbase — orphaned OCI
+components, added-instead-of-subtracted reclassification adjustments,
+inverted SOCF-Direct payment signs; pinned by
+`tests/test_template_formulas.py`). SOCF-Indirect and SOCIE remain
+hand-curated. Historical incident (2026-04-07, +20-row SOFP offset bug)
+documented in `docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md`.
 
 ### 4. `compare_results.py` vs current templates — row numbering differs
 

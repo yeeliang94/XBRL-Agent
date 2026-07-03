@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Regenerate MFRS SOFP/SOPL template formulas from the SSM linkbase.
+"""Regenerate MFRS SOFP/SOPL/SOCI/SOCF-Direct template formulas from the SSM linkbase.
 
-This intentionally touches only the MFRS SOFP/SOPL workbooks under
-``XBRL-template-MFRS/{Company,Group}``. It preserves existing workbook layout,
-styles, labels, and data-entry cells; only value-column formulas are cleared
-and re-emitted from the MFRS calculation/presentation linkbases.
+This intentionally touches only the workbooks listed in ``TEMPLATE_ROLES``
+under ``XBRL-template-MFRS/{Company,Group}``. It preserves existing workbook
+layout, styles, labels, and data-entry cells; only value-column formulas are
+cleared and re-emitted from the MFRS calculation/presentation linkbases.
+
+SOCI and SOCF-Direct were added 2026-07-03 after an audit found the
+hand-built originals deviated from the SSM calculation linkbase (missing
+rollups into Total OCI, reclassification adjustments added instead of
+subtracted, and a payments-entered-positive sign convention that
+contradicted both the SSM weights and the SOCF prompt). SOCF-Indirect
+already ties to the linkbase and is deliberately left out.
 """
 from __future__ import annotations
 
@@ -42,6 +49,15 @@ TEMPLATE_ROLES: dict[str, list[tuple[str, str]]] = {
         ("SOPL-Nature", "320000"),
         ("SOPL-Analysis-Nature", "320100"),
     ],
+    "05-SOCI-BeforeTax.xlsx": [
+        ("SOCI-BeforeOfTax", "420000"),
+    ],
+    "06-SOCI-NetOfTax.xlsx": [
+        ("SOCI-NetOfTax", "410000"),
+    ],
+    "08-SOCF-Direct.xlsx": [
+        ("SOCF-Direct", "510000"),
+    ],
 }
 
 PRE_TO_CALC_ROLE = {
@@ -53,6 +69,33 @@ PRE_TO_CALC_ROLE = {
     "310100": "300200",
     "320000": "300100",
     "320100": "300200",
+    "410000": "400100",
+    "420000": "400100",
+    "510000": "500100",
+}
+
+# Hand-built sheets whose body rows sit N rows below the presentation-walk
+# default (``_FIRST_BODY_ROW + idx``). Verified by label-by-label alignment
+# against the walk before these roles were added; every other sheet is 0.
+ROLE_ROW_OFFSET = {
+    "420000": 1,  # SOCI-BeforeOfTax body starts at row 4
+}
+
+# Concepts that must NOT be expanded through their calc children when they
+# have no visible row. On the Direct-method SOCF, the calc linkbase lists the
+# indirect-method subtotal ``CashFlowsFromUsedInOperations`` as a child of the
+# operating total; expanding it walks the INDIRECT reconciliation tree, where
+# the lease-payments concept carries weight -1 (an add-back) and cancels the
+# direct-method +1 arc — silently dropping the row from the emitted formula.
+ROLE_EXPANSION_EXCLUDE = {
+    "510000": {"ifrs-full_CashFlowsFromUsedInOperations"},
+}
+
+# Accounting identities the calc linkbase cannot express (cross-period
+# bridges), re-applied after linkbase emission. ``{c}`` is the value column.
+SUPPLEMENTAL_FORMULAS: dict[str, dict[str, dict[int, str]]] = {
+    # Cash and cash equivalents at end = beginning + net increase after FX.
+    "08-SOCF-Direct.xlsx": {"SOCF-Direct": {77: "=1*{c}76+1*{c}75"}},
 }
 
 
@@ -109,11 +152,13 @@ def expected_same_sheet_formulas(
     """Return presentation rows and {xlsx_row: [(child_row, weight), ...]}."""
     rows = taxonomy.walk_role(taxonomy._pre_file_for_role(role_number))
     calc_blocks = taxonomy.parse_calc_linkbase_grouped_for_pre_role(role_number)
+    row_offset = ROLE_ROW_OFFSET.get(role_number, 0)
+    expansion_exclude = ROLE_EXPANSION_EXCLUDE.get(role_number, set())
 
     concept_to_rows: dict[str, list[int]] = defaultdict(list)
     first_occurrence: dict[str, int] = {}
     for idx, (_depth, concept_id, _label, _is_abstract) in enumerate(rows):
-        xlsx_row = taxonomy._FIRST_BODY_ROW + idx
+        xlsx_row = taxonomy._FIRST_BODY_ROW + idx + row_offset
         concept_to_rows[concept_id].append(xlsx_row)
         first_occurrence.setdefault(concept_id, xlsx_row)
 
@@ -139,6 +184,8 @@ def expected_same_sheet_formulas(
         """
         if concept_id in first_occurrence:
             return [(first_occurrence[concept_id], weight)]
+        if concept_id in expansion_exclude:
+            return []
 
         seen = set() if seen is None else set(seen)
         if concept_id in seen:
@@ -255,6 +302,15 @@ def regenerate_workbook(path: Path, level: str) -> dict[str, int | str]:
         same_written += write_same_sheet_formulas(
             ws, sheet_expected[sheet_name], columns
         )
+        supplemental = SUPPLEMENTAL_FORMULAS.get(path.name, {}).get(sheet_name, {})
+        for row, template in supplemental.items():
+            for col in columns:
+                ws.cell(
+                    row=row,
+                    column=col_index(col),
+                    value=template.format(c=col),
+                )
+                same_written += 1
 
     if len(roles) == 2:
         face_sheet, _face_role = roles[0]

@@ -61,6 +61,12 @@ but used by some entities including FINCO.
 
 1. **Cash receipts are POSITIVE, payments are NEGATIVE.** This differs from the indirect
    method where adjustments have varying signs.
+   **Caveat (2026-07-03):** this blanket rule holds for the *operating* section (the SSM
+   linkbase weights every operating row +1), but several *investing/financing* rows are
+   SUBTRACTED by the template formula (e.g. "Purchase of property, plant and equipment"),
+   so those are entered as positive magnitudes. The per-row sign block injected into the
+   prompt from the live template formulas (`prompts/_sign_conventions.py`) is authoritative
+   row-by-row and overrides this rule wherever they disagree.
 
 2. **"Cash received from members"** maps to "Receipts from customers" — the template uses
    generic commercial terminology. Adapt entity-specific labels.
