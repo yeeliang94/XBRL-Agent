@@ -429,15 +429,48 @@ def run_fill(args) -> int:
             print(f"INPUT ERROR: {e}", file=sys.stderr)
         return 2
 
-    _, data, _ = load_workbook_entries(args.workbook)
+    report = fill_workbook(
+        args.workbook, doc,
+        output_path=None if args.dry_run else args.output,
+        strict=bool(getattr(args, "strict", False)),
+        force_recalc=bool(args.force_recalc),
+        dry_run=bool(args.dry_run),
+    )
+
+    if args.report:
+        with open(args.report, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, indent=2)
+    _print_summary(report)
+    degraded = report["status"] == "degraded"
+    return 1 if degraded else 0
+
+
+def fill_workbook(
+    workbook_path: str,
+    doc: dict,
+    output_path: str | None = None,
+    *,
+    strict: bool = False,
+    force_recalc: bool = False,
+    dry_run: bool = False,
+) -> dict:
+    """Patch ``workbook_path`` with ``doc``'s writes; return the run report.
+
+    The shared core of the CLI ``fill`` command and the server-side patch
+    endpoint — one patcher, no fork (docs/PLAN.md invariant). Assumes ``doc``
+    already passed :func:`validate_input`. When ``dry_run`` is False an
+    ``output_path`` is required; the patched zip is written there and every
+    write is read-back-verified.
+    """
+    _, data, _ = load_workbook_entries(workbook_path)
     sheet_paths = get_sheet_paths(data)
     sst = get_shared_strings(data)
     sheets_cfg = doc.get("sheets", {})
 
     report = {
-        "workbook": args.workbook,
-        "output": None if args.dry_run else args.output,
-        "dry_run": bool(args.dry_run),
+        "workbook": workbook_path,
+        "output": None if dry_run else output_path,
+        "dry_run": bool(dry_run),
         "written": [], "fuzzy_matched": [], "skipped_formula": [],
         "type_changed": [],
         "unresolved": [], "ambiguous": [], "mismatches": [], "errors": [],
@@ -448,7 +481,7 @@ def run_fill(args) -> int:
     # applying). CLI --strict OR a doc-level "strict": true (the exporter sets
     # this on machine-generated docs, where a non-exact label is a bug, not a
     # typo to forgive). Hand-authored operator runs default lenient.
-    strict = bool(getattr(args, "strict", False) or doc.get("strict"))
+    strict = bool(strict or doc.get("strict"))
     report["strict"] = strict
 
     label_maps = {}
@@ -519,7 +552,7 @@ def run_fill(args) -> int:
         report["written"].append(base)
         verify_targets.append((entry_path, addr, value_str))
 
-    if args.force_recalc:
+    if force_recalc:
         wb_xml, found = set_full_calc_on_load(
             data["xl/workbook.xml"].decode("utf-8"))
         report["force_recalc"] = {"requested": True, "calcPr_found": found}
@@ -530,21 +563,16 @@ def run_fill(args) -> int:
                 {"error": "no <calcPr> in workbook.xml; fullCalcOnLoad "
                           "not set"})
 
-    if not args.dry_run:
+    if not dry_run:
         replacements = {p: x.encode("utf-8") for p, x in patched_xml.items()}
-        write_patched_zip(args.workbook, args.output, replacements)
-        report["mismatches"] = verify_values(args.output, verify_targets)
+        write_patched_zip(workbook_path, output_path, replacements)
+        report["mismatches"] = verify_values(output_path, verify_targets)
 
     degraded = any(report[k] for k in
                    ("skipped_formula", "type_changed", "unresolved",
                     "ambiguous", "mismatches", "errors"))
     report["status"] = "degraded" if degraded else "ok"
-
-    if args.report:
-        with open(args.report, "w", encoding="utf-8") as fh:
-            json.dump(report, fh, indent=2)
-    _print_summary(report)
-    return 1 if degraded else 0
+    return report
 
 
 def _print_summary(report: dict):
