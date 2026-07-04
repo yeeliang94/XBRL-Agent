@@ -81,6 +81,11 @@ REJECTION_KINDS = (
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "notes_reviewer.md"
 
+# Max rows a single `read_note_cells` call may fetch. Bounds the worst-case
+# payload (each cell is capped at CELL_CHAR_LIMIT rendered chars) so the agent
+# can't pull a whole sheet into context in one shot.
+READ_CELLS_MAX_ROWS = 10
+
 # Every finding family `_build_context` emits (all keys except entry_count).
 # The server's skip gate (`_run_notes_reviewer_pass` n_items) and the packet
 # renderer both key off this tuple so a newly-added detector can never be
@@ -269,6 +274,33 @@ def _read_cell(db_path: str, run_id: int, sheet: str, row: int) -> Optional[dict
         return None
     return {"sheet": r["sheet"], "row": r["row"], "label": r["label"],
             "html": r["html"], "evidence": r["evidence"]}
+
+
+def _read_cells(
+    db_path: str, run_id: int, sheet: str, rows: list[int],
+) -> dict[int, dict]:
+    """Read several cells on one sheet in a single query. Returns a
+    ``{row: cell_dict}`` map; rows with no ``notes_cells`` row are absent."""
+    if not rows:
+        return {}
+    import sqlite3
+    placeholders = ",".join("?" for _ in rows)
+    with repo.db_session(db_path) as conn:
+        prior = conn.row_factory
+        conn.row_factory = sqlite3.Row
+        try:
+            found = conn.execute(
+                "SELECT sheet, row, label, html, evidence FROM notes_cells "
+                f"WHERE run_id = ? AND sheet = ? AND row IN ({placeholders})",
+                (run_id, sheet, *rows),
+            ).fetchall()
+        finally:
+            conn.row_factory = prior
+    return {
+        r["row"]: {"sheet": r["sheet"], "row": r["row"], "label": r["label"],
+                   "html": r["html"], "evidence": r["evidence"]}
+        for r in found
+    }
 
 
 def _read_provenance_refs(
@@ -869,15 +901,28 @@ def create_notes_reviewer_agent(
         return results
 
     @agent.tool
-    def read_note_cell(
-        ctx: RunContext[NotesReviewerDeps], sheet: str, row: int,
+    def read_note_cells(
+        ctx: RunContext[NotesReviewerDeps], sheet: str, rows: List[int],
     ) -> str:
-        """Read the current prose + evidence of a notes cell (or report empty)."""
-        cell = _read_cell(ctx.deps.db_path, ctx.deps.run_id, sheet, row)
-        if cell is None:
-            return f"{sheet} row {row} is empty (no notes_cells row)."
+        """Read the full prose + evidence of one OR several cells on a sheet in
+        a single call — always pass a list (a single cell is ``rows=[49]``).
+        Returns a JSON object keyed by row; empty rows report ``null``. Read
+        every row a finding touches in ONE call; the tool caps the batch and
+        tells you to split if you ask for too many."""
         import json as _json
-        return _json.dumps(cell, ensure_ascii=False)
+        # De-dup while preserving order so a repeated row doesn't eat the cap.
+        seen: set[int] = set()
+        deduped = [r for r in rows if not (r in seen or seen.add(r))]
+        if not deduped:
+            return "No rows requested — pass at least one row, e.g. rows=[49]."
+        if len(deduped) > READ_CELLS_MAX_ROWS:
+            return (
+                f"Too many rows ({len(deduped)}) — read at most "
+                f"{READ_CELLS_MAX_ROWS} per call. Split the set across calls."
+            )
+        found = _read_cells(ctx.deps.db_path, ctx.deps.run_id, sheet, deduped)
+        out = {str(r): found.get(r) for r in deduped}
+        return _json.dumps(out, ensure_ascii=False)
 
     @agent.tool
     def list_note_cells(ctx: RunContext[NotesReviewerDeps], sheet: str) -> str:
@@ -1000,7 +1045,7 @@ def create_notes_reviewer_agent(
             )
             return (
                 f"verify_findings could not run ({type(exc).__name__}). "
-                f"Re-read the cells you changed with read_note_cell / "
+                f"Re-read the cells you changed with read_note_cells / "
                 f"list_note_cells to judge whether your fixes hold."
             )
         return format_notes_verification(context, ctx.deps.original_finding_keys)

@@ -14,7 +14,7 @@ The original extraction prose is snapshotted before your first write, so a human
 
 === TOOLS ===
 
-Read: `view_pdf_pages`, `read_note_cell(sheet,row)`, `list_note_cells(sheet)`, `read_template_labels(sheet)` (the template's writable LEAF rows).
+Read: `view_pdf_pages`, `read_note_cells(sheet,rows)` (full prose + evidence for one OR several rows in ONE call — always pass a list, e.g. `rows=[49]` for one or `rows=[49,50,51]` for a finding spanning several; capped per call, so read every row a finding touches together instead of one at a time), `list_note_cells(sheet)`, `read_template_labels(sheet)` (the template's writable LEAF rows).
 
 Write (all grounded): `edit_note_cell`, `author_note_cell`, `move_note_cell`, `clear_note_cell`, `raise_flag`.
 
