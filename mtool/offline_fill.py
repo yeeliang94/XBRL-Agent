@@ -436,7 +436,8 @@ def run_fill(args) -> int:
         "workbook": args.workbook,
         "output": None if args.dry_run else args.output,
         "dry_run": bool(args.dry_run),
-        "written": [], "skipped_formula": [], "type_changed": [],
+        "written": [], "fuzzy_matched": [], "skipped_formula": [],
+        "type_changed": [],
         "unresolved": [], "ambiguous": [], "mismatches": [], "errors": [],
         "force_recalc": None,
     }
@@ -498,6 +499,8 @@ def run_fill(args) -> int:
         patched_xml[entry_path] = xml
         if action == "type_changed":
             report["type_changed"].append(base)
+        if base.get("ratio") is not None and base["ratio"] < 1.0:
+            report["fuzzy_matched"].append(base)
         report["written"].append(base)
         verify_targets.append((entry_path, addr, value_str))
 
@@ -533,6 +536,11 @@ def _print_summary(report: dict):
     print(f"status: {report['status']}"
           + (" (dry run)" if report["dry_run"] else ""))
     print(f"  written:         {len(report['written'])}")
+    print(f"  fuzzy_matched:   {len(report['fuzzy_matched'])}")
+    for e in report["fuzzy_matched"]:
+        print(f"    - {e['sheet']} {e['label']!r} -> "
+              f"{e['matched_label']!r} (similarity {e['ratio']}) "
+              f"REVIEW: verify this is the intended row")
     for key in ("skipped_formula", "type_changed", "unresolved",
                 "ambiguous", "mismatches", "errors"):
         entries = report[key]

@@ -200,7 +200,16 @@ def test_fuzzy_label_resolves_with_ratio(tmp_path, template):
     entry = report["written"][0]
     assert entry["matched_label"] == "Freehold land"
     assert entry["ratio"] < 1.0
+    assert report["fuzzy_matched"] == [entry]  # surfaced for operator review
     assert load_workbook(out)[SHEET]["B4"].value == 10
+
+
+def test_exact_match_is_not_flagged_fuzzy(tmp_path, template):
+    _, report, _ = run_fill(tmp_path, template, [
+        {"sheet": SHEET, "label": "freehold land",  # case-only difference
+         "column_role": "current_year", "value": 10},
+    ])
+    assert report["written"] and report["fuzzy_matched"] == []
 
 
 def test_unresolvable_label_is_reported_not_guessed(tmp_path, template):
