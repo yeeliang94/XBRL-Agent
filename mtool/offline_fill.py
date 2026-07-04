@@ -419,7 +419,9 @@ def validate_input(doc: dict) -> list:
 # ---------------------------------------------------------------- commands
 
 def run_fill(args) -> int:
-    with open(args.input, encoding="utf-8") as fh:
+    # utf-8-sig, not utf-8: PowerShell (the operator's shell on the mTool box)
+    # writes JSON with a UTF-8 BOM, which a plain utf-8 reader rejects.
+    with open(args.input, encoding="utf-8-sig") as fh:
         doc = json.load(fh)
     input_errors = validate_input(doc)
     if input_errors:
