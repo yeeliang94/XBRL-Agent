@@ -121,6 +121,11 @@ def build_fill_doc(
     excluded_not_disclosed = 0
     excluded_no_value = 0
     excluded_out_of_scope = 0
+    # Conflict-status facts still carry a value and ARE written (blanking a
+    # cell the operator can't see is worse than an unresolved one they can),
+    # but the count is surfaced so a conflicted figure never flows into a
+    # filing silently — the operator resolves it in the Values tab first.
+    conflict_writes = 0
     # De-dup: a concept surfacing on multiple physical coords (cross-sheet
     # alias) shares one uuid; keyed on (uuid, period, scope) so each fact is
     # emitted once.
@@ -146,6 +151,8 @@ def build_fill_doc(
         if key in seen:
             continue
         seen.add(key)
+        if r["value_status"] == "conflict":
+            conflict_writes += 1
 
         sheet = r["render_sheet"]
         writes.append({
@@ -167,6 +174,7 @@ def build_fill_doc(
         "sheets_covered": sorted(sheets),
         "counts": {
             "writes": len(writes),
+            "conflict_writes": conflict_writes,
             "excluded_matrix_socie": excluded_matrix,
             "excluded_not_disclosed": excluded_not_disclosed,
             "excluded_no_value": excluded_no_value,
