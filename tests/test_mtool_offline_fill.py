@@ -253,6 +253,21 @@ def test_input_validation_rejects_bad_values():
     assert any("not configured" in e for e in errors)
 
 
+def test_bom_prefixed_input_file_is_accepted(tmp_path, template):
+    """PowerShell writes JSON with a UTF-8 BOM; the loader must tolerate it."""
+    out = tmp_path / "filled.xlsx"
+    doc = {"sheets": {SHEET: {"label_column": "A",
+                              "columns": {"current_year": "B"}}},
+           "writes": [{"sheet": SHEET, "label": "Motor vehicles",
+                       "column_role": "current_year", "value": 7}]}
+    bom_input = tmp_path / "fill_bom.json"
+    bom_input.write_bytes(b"\xef\xbb\xbf" + json.dumps(doc).encode("utf-8"))
+    code = main(["fill", "--workbook", template, "--input", str(bom_input),
+                 "--output", str(out)])
+    assert code == 0
+    assert load_workbook(out)[SHEET]["B6"].value == 7
+
+
 def test_invalid_input_exits_2(tmp_path, template):
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"writes": [
