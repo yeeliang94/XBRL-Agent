@@ -141,3 +141,36 @@ def test_coverage_warnings_coexist_with_existing_warnings():
     assert "borderline fuzzy match" in joined
     # New skip warning also present.
     assert "Note 1 skipped" in joined
+
+
+def test_write_notes12_skips_side_log(tmp_path):
+    """`_write_notes12_skips` persists one {note_num, reason} per skipped entry
+    (across succeeded sub-agents) so the coverage checklist can mark them
+    `skipped` not `missing` (Codex review P2)."""
+    import json
+    from notes.coordinator import _write_notes12_skips
+
+    sub_result = ListOfNotesSubResult(
+        sub_agent_results=[
+            _sub_result_with_skip(1, "Corporate information — Sheet 10"),
+            _sub_result_uncovered([2]),  # no receipt → not a skip
+            _sub_result_with_skip(11, "Related party — Sheet 14"),
+        ],
+    )
+    _write_notes12_skips(str(tmp_path), sub_result)
+    data = json.loads((tmp_path / "notes12_skips.json").read_text())
+    assert data == [
+        {"note_num": 1, "reason": "Corporate information — Sheet 10"},
+        {"note_num": 11, "reason": "Related party — Sheet 14"},
+    ]
+
+
+def test_write_notes12_skips_empty_when_none(tmp_path):
+    """A run with no skips writes an empty list (overwrites stale skips on a
+    re-run) rather than leaving a missing file."""
+    import json
+    from notes.coordinator import _write_notes12_skips
+
+    _write_notes12_skips(str(tmp_path), ListOfNotesSubResult(
+        sub_agent_results=[_sub_result_uncovered([2])]))
+    assert json.loads((tmp_path / "notes12_skips.json").read_text()) == []

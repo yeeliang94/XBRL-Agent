@@ -172,6 +172,30 @@ def test_empty_inventory_is_loud_and_tips(db_path, tmp_path):
                for e in events)
 
 
+def test_skip_receipt_note_is_skipped_not_missing(db_path, tmp_path):
+    """A Sheet-12-skipped inventory note (notes12_skips.json side-log) lands
+    `skipped`, not `missing`, so it never tips the run (Codex review P2)."""
+    import json
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf", session_id="s",
+                                 output_dir=str(tmp_path))
+    _seed_inv(db_path, run_id, 4)  # in inventory, no placement
+    # The coordinator's fan-out wrote this at extraction time.
+    (tmp_path / "notes12_skips.json").write_text(
+        json.dumps([{"note_num": 4, "reason": "belongs on Sheet 10"}]),
+        encoding="utf-8")
+    q: asyncio.Queue = asyncio.Queue()
+    outcome = _run_pass(db_path, run_id, tmp_path,
+                        _scripted([[TextPart("done")]]), q)
+    cov = outcome["coverage"]
+    assert cov["unresolved"] == 0
+    from server import _notes_coverage_tips_status
+    assert _notes_coverage_tips_status(cov) is False
+    row = [r for r in _coverage_rows(db_path, run_id) if r["note_num"] == 4]
+    assert row and row[0]["status"] == "skipped"
+    assert row[0]["reason"] == "belongs on Sheet 10"
+
+
 def test_coverage_gate_off_persists_nothing(db_path, tmp_path, monkeypatch):
     monkeypatch.setenv("XBRL_NOTES_COVERAGE", "false")
     with repo.db_session(db_path) as conn:

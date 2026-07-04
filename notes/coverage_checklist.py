@@ -29,7 +29,9 @@ inputs.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 # Private-helper reuse is deliberate (same package): the checklist MUST
@@ -194,6 +196,24 @@ class Checklist:
             "counts": self.counts(),
             "unresolved": len(self.unresolved_rows()),
         }
+
+
+def load_notes12_skips(output_dir: Optional[str]) -> list[dict]:
+    """Read the Sheet-12 skip-receipt side-log (``notes12_skips.json``) the notes
+    coordinator wrote at fan-out time: ``[{"note_num", "reason"}]``. Best-effort
+    — a missing/unreadable file means "no skips" (an unplaced inventory note then
+    defaults to ``missing``). Shared by the server's coverage finalizer and the
+    reviewer's context so both agree on which notes were intentionally skipped."""
+    if not output_dir:
+        return []
+    try:
+        path = Path(output_dir) / "notes12_skips.json"
+        if not path.exists():
+            return []
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _suspected_gaps(present: list[int]) -> list[int]:

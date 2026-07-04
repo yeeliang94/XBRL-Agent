@@ -1750,11 +1750,13 @@ COVERAGE_META_NOTE = -1
 def _compute_notes_coverage_checklist(
     run_id: int, db_path: str, *,
     note_verdicts=None, subnote_verdicts=None, reviewer_added_notes=None,
+    skip_receipts=None,
 ):
     """Build the holistic coverage checklist for a run straight from the durable
     DB inputs (inventory × provenance), merging any reviewer verdicts. Mirrors
     the reviewer's ``_build_context`` but standalone so the construction-failure
-    path (no deps) can still persist a draft."""
+    path (no deps) can still persist a draft. ``skip_receipts`` marks
+    intentionally-skipped Sheet-12 notes `skipped` instead of `missing`."""
     from db import repository as repo
     from notes.detectors import load_provenance_entries
     from notes.coverage_checklist import build_draft_checklist
@@ -1764,6 +1766,7 @@ def _compute_notes_coverage_checklist(
     entries = load_provenance_entries(run_id, db_path)
     return build_draft_checklist(
         inventory_rows=inventory_rows, provenance_entries=entries,
+        skip_receipts=skip_receipts,
         note_verdicts=note_verdicts, subnote_verdicts=subnote_verdicts,
         reviewer_added_notes=reviewer_added_notes,
     )
@@ -1870,16 +1873,19 @@ async def _run_notes_reviewer_pass(
         if not _notes_coverage_enabled():
             return
         try:
+            from notes.coverage_checklist import load_notes12_skips
+            skips = load_notes12_skips(output_dir)
             d = _deps_box.get("deps")
             if d is not None:
                 checklist = _compute_notes_coverage_checklist(
-                    run_id, db_path,
+                    run_id, db_path, skip_receipts=skips,
                     note_verdicts=d.coverage_note_verdicts,
                     subnote_verdicts=d.coverage_subnote_verdicts,
                     reviewer_added_notes=d.authored_note_nums,
                 )
             else:
-                checklist = _compute_notes_coverage_checklist(run_id, db_path)
+                checklist = _compute_notes_coverage_checklist(
+                    run_id, db_path, skip_receipts=skips)
             summary = _persist_notes_coverage(
                 run_id, db_path, checklist, reviewed=reviewed)
             outcome["coverage"] = summary

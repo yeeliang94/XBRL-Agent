@@ -185,6 +185,26 @@ def test_author_flips_missing_to_placed_reviewer_added(db_path):
     assert row.reviewer_added is True
 
 
+def test_not_applicable_clears_coverage_gap_for_verify(db_path):
+    """After resolving a missing note as not_applicable, the detector
+    coverage_gaps must drop it so verify_findings doesn't re-report it open
+    (Codex review P2)."""
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 4, "Investment properties")
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="resolve_coverage_note", args={
+            "note_num": 4, "verdict": "not_applicable",
+            "reason": "no such asset", "source_pages": [19]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    ctx = ra.recompute_notes_findings(deps)
+    assert 4 not in ctx["coverage_gaps"]
+    # And the recompute's finding_keys carries no coverage_gap for note 4.
+    assert ("coverage_gap", 4) not in ra.finding_keys(ctx)
+
+
 def test_unresolved_missing_row_survives(db_path):
     run_id = _seed_run(db_path)
     _seed_inv(db_path, run_id, 4, "Investment properties")
