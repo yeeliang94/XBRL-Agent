@@ -36,6 +36,50 @@ router = APIRouter()
 _FILLABLE_STATUSES = {"completed", "completed_with_errors"}
 
 _MAX_TEMPLATE_BYTES = 25 * 1024 * 1024  # 25 MB — an mTool template is ~100s KB
+# Total UNCOMPRESSED size across all zip members. A zip bomb is small on disk
+# but expands hugely; an honest mTool template is a few MB decompressed.
+_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB
+_UPLOAD_CHUNK = 1024 * 1024  # 1 MB
+
+
+async def _read_capped(upload: UploadFile, cap: int) -> bytes:
+    """Read an UploadFile in chunks, aborting with 413 once it exceeds ``cap``.
+
+    Never materialises more than ``cap`` (+ one chunk) in memory — the guard
+    runs during the read, not after, so a lying/absent Content-Length can't
+    slip a huge body through."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(_UPLOAD_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > cap:
+            raise HTTPException(status_code=413, detail="Template too large.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _assert_zip_within_budget(path: str) -> None:
+    """Reject a workbook whose members decompress past the uncompressed budget.
+
+    Reads only central-directory metadata (``ZipInfo.file_size``) — no
+    decompression — so the check itself is cheap and safe against zip bombs."""
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path) as zf:
+            total = sum(info.file_size for info in zf.infolist())
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Upload is not a readable .xlsx workbook: {exc}") from exc
+    if total > _MAX_UNCOMPRESSED_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="Template decompresses to too large a size "
+                   f"({total} bytes); refusing to parse.")
 
 
 def _load_fillable_run(run_id: int):
@@ -115,11 +159,12 @@ async def patch_mtool_template(
             status_code=422,
             detail="Run has no fillable facts (nothing to write).")
 
-    raw = await template.read()
+    # Read in bounded chunks and abort the moment we exceed the cap, so an
+    # oversized upload never fully materialises in memory (Content-Length can
+    # be absent or lie — the chunk loop is the real guard).
+    raw = await _read_capped(template, _MAX_TEMPLATE_BYTES)
     if not raw:
         raise HTTPException(status_code=422, detail="Empty upload.")
-    if len(raw) > _MAX_TEMPLATE_BYTES:
-        raise HTTPException(status_code=413, detail="Template too large.")
 
     # Request-scoped temp dir under a shared staging area (unique mkdtemp
     # subdir per request). EVERYTHING after this point is wrapped so any raise
@@ -134,12 +179,19 @@ async def patch_mtool_template(
         src = tmp / "template.xlsx"
         src.write_bytes(raw)
 
+        # Zip-bomb guard: check the central-directory metadata (cheap — no
+        # decompression) and reject before load_workbook_entries expands every
+        # member into memory. A legitimate mTool template is well under this.
+        _assert_zip_within_budget(str(src))
+
         # Confirm it's a readable xlsx (zip) before anything else.
         try:
             from mtool.offline_fill import (
                 get_sheet_paths, load_workbook_entries)
             _, data, _ = load_workbook_entries(str(src))
             get_sheet_paths(data)
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422,

@@ -242,6 +242,29 @@ def test_no_temp_dirs_leak_across_error_and_success(client, tmp_path):
     assert leftovers == [], f"temp dirs leaked: {leftovers}"
 
 
+def test_oversized_upload_is_413(client, monkeypatch):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    import api.mtool as m
+    monkeypatch.setattr(m, "_MAX_TEMPLATE_BYTES", 1000)  # our template > 1 KB
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={})
+    assert resp.status_code == 413
+
+
+def test_zip_bomb_uncompressed_budget_is_413(client, monkeypatch):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    import api.mtool as m
+    monkeypatch.setattr(m, "_MAX_UNCOMPRESSED_BYTES", 100)  # tiny budget
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={})
+    assert resp.status_code == 413
+    assert "decompresses" in resp.json()["detail"]
+
+
 def test_temp_dir_cleaned_after_patch(client, tmp_path):
     tc, db, _ = client
     run_id = _make_run(db)
