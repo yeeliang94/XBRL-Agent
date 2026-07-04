@@ -37,6 +37,16 @@ interface ReportSummary {
   mismatches: { cell: string; expected: string; found: string | null }[];
 }
 
+// Server's low-confidence auto-detection payload (422 detail.detected).
+interface DetectedSheet {
+  label_column: string | null;
+  columns: Record<string, string>;
+  confidence: string;
+  notes: string[];
+}
+// The editable column map the user confirms/edits, sent back as column_map.
+type ColumnMap = Record<string, { label_column: string; columns: Record<string, string> }>;
+
 interface Props {
   runId: number;
   open: boolean;
@@ -97,6 +107,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<ReportSummary | null>(null);
   const [patchErr, setPatchErr] = useState<string | null>(null);
+  // Set when the server can't auto-detect the layout: an editable map the
+  // user confirms, then retries with. Without this the modal would dead-end
+  // on the documented low-confidence 422 (Codex P2).
+  const [columnMap, setColumnMap] = useState<ColumnMap | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -115,6 +129,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setFile(null);
     setReport(null);
     setPatchErr(null);
+    setColumnMap(null);
     fetch(`/api/runs/${runId}/mtool-fill`)
       .then(async (r) => {
         if (!r.ok) throw new Error((await r.json()).detail || `HTTP ${r.status}`);
@@ -135,19 +150,30 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       const form = new FormData();
       form.append("template", file);
       form.append("strict", "true");
+      if (columnMap) form.append("column_map", JSON.stringify(columnMap));
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/patch`, {
         method: "POST",
         body: form,
       });
       if (!resp.ok) {
-        let detail: string;
-        try {
-          const body = await resp.json();
-          detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-        } catch {
-          detail = `HTTP ${resp.status}`;
+        const body = await resp.json().catch(() => ({}));
+        const detail = body?.detail;
+        // Low-confidence auto-detection: the server hands back its best guess
+        // in detail.detected. Seed the editor so the user can confirm + retry.
+        if (detail && typeof detail === "object" && detail.detected) {
+          const seed: ColumnMap = {};
+          for (const [sheet, d] of Object.entries(detail.detected as Record<string, DetectedSheet>)) {
+            seed[sheet] = { label_column: d.label_column ?? "", columns: { ...d.columns } };
+          }
+          setColumnMap(seed);
+          setPatchErr(
+            "Couldn't confidently detect the column layout. Confirm the columns below and retry."
+          );
+          return;
         }
-        throw new Error(detail);
+        throw new Error(
+          typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `HTTP ${resp.status}`
+        );
       }
       const header = resp.headers.get("X-mTool-Report");
       if (header) setReport(JSON.parse(header) as ReportSummary);
@@ -222,13 +248,76 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           ref={fileRef}
           type="file"
           accept=".xlsx"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => {
+            setFile(e.target.files?.[0] ?? null);
+            setColumnMap(null); // a different template has a different layout
+          }}
           aria-label="mTool template file"
           style={{ fontSize: 13, marginBottom: pwc.space.md }}
         />
 
         {patchErr && (
           <div style={ui.alertError}>Fill failed: {patchErr}</div>
+        )}
+
+        {columnMap && (
+          <div
+            style={{
+              border: `1px solid ${pwc.grey300}`,
+              borderRadius: pwc.radius.md,
+              padding: pwc.space.md,
+              marginTop: pwc.space.md,
+              fontSize: 12,
+            }}
+            aria-label="Column layout editor"
+          >
+            <div style={{ fontWeight: pwc.weight.medium, marginBottom: pwc.space.sm }}>
+              Column layout — confirm which columns hold the labels and values
+            </div>
+            {Object.entries(columnMap).map(([sheet, cfg]) => (
+              <div key={sheet} style={{ marginBottom: pwc.space.sm }}>
+                <div style={{ color: pwc.grey700, marginBottom: 2 }}>{sheet}</div>
+                <label style={{ marginRight: pwc.space.md }}>
+                  Label col{" "}
+                  <input
+                    aria-label={`${sheet} label column`}
+                    value={cfg.label_column}
+                    onChange={(e) =>
+                      setColumnMap((m) =>
+                        m
+                          ? { ...m, [sheet]: { ...m[sheet], label_column: e.target.value.toUpperCase() } }
+                          : m
+                      )
+                    }
+                    style={{ width: 44, textTransform: "uppercase" }}
+                  />
+                </label>
+                {Object.keys(cfg.columns).map((role) => (
+                  <label key={role} style={{ marginRight: pwc.space.md }}>
+                    {role}{" "}
+                    <input
+                      aria-label={`${sheet} ${role} column`}
+                      value={cfg.columns[role]}
+                      onChange={(e) =>
+                        setColumnMap((m) =>
+                          m
+                            ? {
+                                ...m,
+                                [sheet]: {
+                                  ...m[sheet],
+                                  columns: { ...m[sheet].columns, [role]: e.target.value.toUpperCase() },
+                                },
+                              }
+                            : m
+                        )
+                      }
+                      style={{ width: 44, textTransform: "uppercase" }}
+                    />
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
         )}
 
         {report && (

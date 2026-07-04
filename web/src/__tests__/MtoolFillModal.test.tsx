@@ -85,6 +85,69 @@ describe("MtoolFillModal", () => {
     await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
   });
 
+  test("shows a column-map editor when auto-detection fails, then retries with it", async () => {
+    let patchCalls = 0;
+    mockFetch((url, init) => {
+      if (url.includes("/mtool-fill/patch")) {
+        patchCalls += 1;
+        // First attempt (no column_map) -> low-confidence 422 with detected.
+        const body = init?.body as FormData;
+        const hasMap = body?.get?.("column_map");
+        if (!hasMap) {
+          return new Response(
+            JSON.stringify({
+              detail: {
+                error: "column layout could not be auto-detected with confidence",
+                detected: {
+                  "SOFP-Sub-CuNonCu": {
+                    label_column: "D",
+                    columns: { current_year: "E", prior_year: "F" },
+                    confidence: "low",
+                    notes: [],
+                  },
+                },
+              },
+            }),
+            { status: 422 }
+          );
+        }
+        // Second attempt (with column_map) -> success.
+        return new Response(new Blob(["xlsx"]), {
+          status: 200,
+          headers: {
+            "X-mTool-Report": JSON.stringify({
+              status: "ok",
+              counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
+              unresolved: [],
+              skipped_formula: [],
+              mismatches: [],
+            }),
+          },
+        });
+      }
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
+
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    const input = screen.getByLabelText(/mtool template file/i);
+    fireEvent.change(input, { target: { files: [new File(["x"], "t.xlsx")] } });
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
+
+    // Editor appears seeded with the detected guess (label col D, values E/F).
+    await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
+    const labelCol = screen.getByLabelText(/label column/i) as HTMLInputElement;
+    expect(labelCol.value).toBe("D");
+    expect((screen.getByLabelText(/current_year column/i) as HTMLInputElement).value).toBe("E");
+
+    // Retry -> now includes column_map -> success.
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
+    await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
+    expect(patchCalls).toBe(2);
+  });
+
   test("surfaces a server error", async () => {
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch")) {
