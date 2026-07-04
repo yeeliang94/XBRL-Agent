@@ -313,6 +313,8 @@ export function RunDetailView({
   // spin up a dozen TipTap editors or fetch concept trees up front.
   // `initialTab` lets the /concepts/{id} alias open straight on Values.
   const [tab, setTab] = useState<RunTabKey>(initialTab);
+  // mTool fill modal (button, NOT a tab — gotcha #7).
+  const [mtoolOpen, setMtoolOpen] = useState(false);
 
   // Step 8/12 — clicking a failed cross-check drives the source-PDF pane to
   // the cited page(s) of the cell it targets. We resolve (target_sheet,
@@ -365,9 +367,7 @@ export function RunDetailView({
 
   const canDownload = !!detail.merged_workbook_path;
   // mTool fill needs a completed run (facts must be final) — same gate the
-  // backend enforces (api/mtool.py _FILLABLE_STATUSES). Button opens a modal
-  // (NOT a tab — gotcha #7).
-  const [mtoolOpen, setMtoolOpen] = useState(false);
+  // backend enforces (api/mtool.py _FILLABLE_STATUSES).
   const canFillMtool =
     detail.status === "completed" || detail.status === "completed_with_errors";
   // Legacy detection: rows created before the v2 schema never captured a

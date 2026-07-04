@@ -36,6 +36,7 @@ import re
 import sys
 import zipfile
 import xml.etree.ElementTree as ET
+from decimal import Decimal
 
 FUZZY_THRESHOLD = 0.90
 _TEXT_CELL_TYPES = {"s", "str", "inlineStr", "b", "e"}
@@ -71,7 +72,11 @@ def format_value(value) -> str:
             raise ValueError(f"value must be finite, got {value!r}")
         if value.is_integer():
             return str(int(value))
-        return repr(value)
+        # Plain fixed-point, never scientific notation. repr() gives the
+        # shortest round-trippable float; Decimal parses it exactly and
+        # format("f") expands it, so an extreme magnitude (e.g. 1e21) writes
+        # as digits, not "1e+21".
+        return format(Decimal(repr(value)), "f")
     return str(value)
 
 

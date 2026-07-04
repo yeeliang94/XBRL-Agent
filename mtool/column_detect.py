@@ -77,6 +77,8 @@ def _order_roles(roles) -> list[str]:
 def detect_column_map(
     template_path: str,
     doc: dict[str, Any],
+    *,
+    data: dict | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Propose a column map for every sheet in ``doc``.
 
@@ -84,8 +86,13 @@ def detect_column_map(
     "high"|"low", "notes": [...]}}``. A sheet not present in the template gets
     ``label_column=None`` and a note. The caller decides whether ``low``
     confidence is acceptable or should trigger an operator-supplied map.
+
+    ``data`` is an optional pre-loaded ``{entry_path: bytes}`` map (from
+    :func:`load_workbook_entries`); passing it lets a caller that already read
+    the zip avoid a redundant full re-read.
     """
-    _, data, _ = load_workbook_entries(template_path)
+    if data is None:
+        _, data, _ = load_workbook_entries(template_path)
     sheet_paths = get_sheet_paths(data)
     sst = get_shared_strings(data)
 
