@@ -12,6 +12,7 @@ import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types
 import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
 import { ValidatorTab } from "./ValidatorTab";
 import { ReviewTab } from "./ReviewTab";
+import { MtoolFillModal } from "./MtoolFillModal";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 import { NotesReviewTab } from "./NotesReviewTab";
@@ -363,6 +364,12 @@ export function RunDetailView({
   };
 
   const canDownload = !!detail.merged_workbook_path;
+  // mTool fill needs a completed run (facts must be final) — same gate the
+  // backend enforces (api/mtool.py _FILLABLE_STATUSES). Button opens a modal
+  // (NOT a tab — gotcha #7).
+  const [mtoolOpen, setMtoolOpen] = useState(false);
+  const canFillMtool =
+    detail.status === "completed" || detail.status === "completed_with_errors";
   // Legacy detection: rows created before the v2 schema never captured a
   // run_config, merged_workbook_path, or per-agent token counts. Rather
   // than leaving several sections mysteriously empty, tag the run so the
@@ -482,6 +489,20 @@ export function RunDetailView({
           )}
           <button
             type="button"
+            onClick={() => setMtoolOpen(true)}
+            disabled={!canFillMtool}
+            className={uiClass.btnGhost}
+            style={ui.buttonGhost}
+            title={
+              canFillMtool
+                ? "Fill an mTool template from this run's figures"
+                : "mTool fill needs a completed run"
+            }
+          >
+            Fill mTool template
+          </button>
+          <button
+            type="button"
             onClick={handleDelete}
             disabled={!canDelete}
             className={uiClass.btnDanger}
@@ -496,6 +517,8 @@ export function RunDetailView({
           </button>
         </div>
       </header>
+
+      <MtoolFillModal runId={detail.id} open={mtoolOpen} onClose={() => setMtoolOpen(false)} />
 
       {/* Tab bar — one shared navigation for the whole run, replacing the
           old long scroll of stacked sections + the disjointed /concepts jump. */}
