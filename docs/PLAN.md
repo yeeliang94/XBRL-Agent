@@ -1,6 +1,9 @@
 # Implementation Plan: mTool Fill Pipeline — Facts → Filled MBRS Template
 
-**Overall Progress:** `10%` (Phase 0 spike complete; Phases 1–6 to do)
+**Overall Progress:** `75%` — Phases 2, 4, 6 built & tested on Mac
+(exporter, strict mode, server endpoints, column detection, UI, docs). Phase 1
+(Windows recon answers) + Phase 3 sign/scale activation + Phase 5 Group/MPERS
+& SOCIE remain, all gated on Windows evidence or a later variant pass.
 **PRD Reference:** none — shaped in-session 2026-07-04/05. Context docs:
 `docs/PLAN-mtool-offline-patch-spike.md` (the proven spike),
 `docs/MTOOL-ZIP-RECON-BRIEF.md` (Windows recon questions), and the
@@ -83,7 +86,7 @@ the work; the delivery UX builds on it.
 
 ### Phase 2: The bridge — facts → fill instructions (Mac, pure Python)
 
-- [ ] 🟥 **Step 2: Exporter core** — new `mtool/exporter.py`:
+- [x] 🟩 **Step 2: Exporter core** — new `mtool/exporter.py`:
   `build_fill_doc(db, run_id) -> dict` (the fill-JSON shape the tool already
   consumes). Reads `run_concept_facts` joined to `concept_nodes` scoped to
   the run's template family (`{standard}-{level}-` prefix, gotcha #21);
@@ -93,16 +96,16 @@ the work; the delivery UX builds on it.
   `group_current_year`/`group_prior_year`); emits one write per fact with
   the concept's label. Sheets it can't handle (SOCIE) are excluded and
   **counted in the doc's metadata** — no silent truncation.
-  - [ ] 🟥 Emit a `meta` block: run id, standard/level, excluded sheets +
+  - [x] 🟩 Emit a `meta` block: run id, standard/level, excluded sheets +
     fact counts, generation timestamp — the operator's coverage receipt.
-  - [ ] 🟥 Unit tests with a hand-rolled DB fixture (pattern from
+  - [x] 🟩 Unit tests with a hand-rolled DB fixture (pattern from
     `tests/test_canonical_export.py`: `import_template` +
     `import_company_targets`): CY/PY routing, group scopes, COMPUTED
     excluded, alias deduped, SOCIE excluded-but-counted.
   - **Verify:** `./venv/bin/python -m pytest tests/test_mtool_exporter.py -q`
     green; fixture doc validates against `offline_fill.validate_input`.
 
-- [ ] 🟥 **Step 3: End-to-end dry run on a real run's data** — small harness
+- [x] 🟩 **Step 3: End-to-end dry run on a real run's data** — small harness
   (test or script) that takes an existing completed run in the local DB,
   builds the fill doc, and runs `offline_fill` against our own
   `XBRL-template-MFRS/Company/01-SOFP-CuNonCu.xlsx` (whose labels are the
@@ -112,7 +115,7 @@ the work; the delivery UX builds on it.
   - **Verify:** report shows `fuzzy_matched: 0`, `unresolved: 0` for the
     sample run; values in the patched workbook match the run's Values tab.
 
-- [ ] 🟥 **Step 4: Strict mode in the fill tool** — `--strict` flag (and
+- [x] 🟩 **Step 4: Strict mode in the fill tool** — `--strict` flag (and
   `strict: true` accepted in the input doc) so any fuzzy match is refused
   and reported (run `degraded`), not written. Default stays lenient for
   hand-authored operator runs; pipeline-generated docs always set it.
@@ -156,7 +159,7 @@ the work; the delivery UX builds on it.
   "Download fill instructions" button and Steps 10–11 drop.
   - **Verify:** decision recorded here with rationale.
 
-- [ ] 🟥 **Step 9: Fill-doc endpoint** — `GET /api/runs/{run_id}/mtool-fill`
+- [x] 🟩 **Step 9: Fill-doc endpoint** — `GET /api/runs/{run_id}/mtool-fill`
   (terminal runs only, 409 otherwise; auth middleware covers it
   automatically per gotcha #24). Returns the Step-2 doc as a download.
   Small "mTool" section on the run page (Overview tab; NOT a new
@@ -166,7 +169,7 @@ the work; the delivery UX builds on it.
     200 + valid doc on a completed run, 409 on running, 401 unauthenticated
     (opt-out test). UI button renders and downloads in the web tests.
 
-- [ ] 🟥 **Step 10: Server-side patch endpoint** —
+- [x] 🟩 **Step 10: Server-side patch endpoint** —
   `POST /api/runs/{run_id}/mtool-fill/patch`: multipart upload of the empty
   mTool template → server builds the doc, auto-builds the column map by
   reading the template's header rows (generalising `inspect`; falls back to
@@ -174,13 +177,13 @@ the work; the delivery UX builds on it.
   functions (strict mode), streams back the filled workbook + the JSON run
   report. Reject non-zip/oversize uploads; never persist the upload beyond
   the request (request-scoped temp dir + cleanup).
-  - [ ] 🟥 Column auto-detection unit tests against both observed layouts
+  - [x] 🟩 Column auto-detection unit tests against both observed layouts
     (ours A/B/C, real mTool D/E/F) + a Group 4-column fixture.
   - **Verify:** route tests: upload our own template fixture → 200, filled
     workbook opens (openpyxl), report clean; degraded report → still 200
     with `status: degraded` surfaced; running run → 409.
 
-- [ ] 🟥 **Step 11: Report UI** — render the returned run report next to the
+- [x] 🟩 **Step 11: Report UI** — render the returned run report next to the
   download: written / fuzzy (should be none) / unresolved / skipped-formula
   counts with row detail, mirroring the CLI summary. The operator must see
   "clean" before taking the file to mTool.
@@ -215,7 +218,7 @@ the work; the delivery UX builds on it.
   confirm no shared temp collisions).
   - **Verify:** a test per failure mode; none crash the endpoint (gotcha #20
     spirit: structured errors, never silent).
-- [ ] 🟥 **Step 16: CLAUDE.md + docs** — add the mTool pipeline gotcha
+- [x] 🟩 **Step 16: CLAUDE.md + docs** — add the mTool pipeline gotcha
   (mechanism, strict-mode rule, "one patcher, no fork" invariant, pointer to
   this plan); update the spike plan's status header; refresh memory.
   - **Verify:** docs reference real file paths; pinning tests named.

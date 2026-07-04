@@ -1562,6 +1562,62 @@ Pinned by `tests/test_coverage_checklist.py`,
 `tests/test_notes_detectors_splits.py`, `tests/test_db_schema_v28.py`, and the
 `NotesCoveragePanel` web tests.
 
+### 28. mTool fill pipeline — offline zip surgery, one patcher, no DB schema
+
+The `mtool/` package fills a run's figures into an SSM **mTool** MBRS template
+so the operator can Validate/Generate the XBRL inside mTool without hand-copying
+(docs/PLAN.md, docs/MTOOL-ZIP-RECON-BRIEF.md). Proven end-to-end (mTool accepts
+the patched workbook). The whole path is **Excel-free** — pure zip/XML surgery —
+so it runs server-side and in the cloud, unlike the shelved live-Excel COM route.
+
+Load-bearing invariants:
+
+- **`offline_fill.py` is a single stdlib-only file** (zipfile/re/ElementTree —
+  no openpyxl, no repo imports) because it ALSO travels to the enterprise
+  Windows box as one script. Do NOT add a third-party dep or a repo import to
+  it. Reading (label maps, verify) parses XML; **writing is targeted text
+  edits** — openpyxl load/save corrupts the mTool package and full
+  reserialization breaks namespaces (Phase-1 ground truth). Prefixed sheet XML
+  (`<x:sheetData>`) aborts loudly rather than risk mixed-namespace inserts.
+- **One patcher, no fork.** The server-side patch endpoint imports
+  `offline_fill.fill_workbook` — the SAME function the CLI runs. Never
+  reimplement patching in `api/`. A test asserts `offline_fill` imports with
+  no third-party deps.
+- **Exporter emits LEAF only** (`exporter.build_fill_doc`). ABSTRACT headers +
+  COMPUTED totals are excluded (mTool derives totals; the tool's formula guard
+  is the second line). SOCIE/MATRIX_CELL is deferred and **counted**, never
+  silently dropped. Scoped to the run's `{standard}-{level}-` family; deduped
+  by `concept_uuid` (aliases collapse). Reads `run_concept_facts` only.
+- **Values are emitted verbatim (scale=identity) by default.** The exporter's
+  `scale` argument and any per-row sign flips are **Windows-blocked**: do NOT
+  turn on a scale factor until the recon confirms whether mTool stores the full
+  unscaled value or the thousands figure (recon Task 3.6). A wrong scale
+  silently 1000×-inflates every figure. `denomination` is surfaced in the doc
+  meta so a human sees the stored unit.
+- **Semantic, not physical.** Writes carry a `column_role`
+  (current/prior year × company/group), NOT a column letter. mTool's real
+  layout (observed: labels col D, values E/F — different from ours) is resolved
+  at fill time via `exporter.apply_column_map` (fails loudly on a missing role)
+  or `column_detect.detect_column_map` (positional, returns confidence; the
+  endpoint refuses low-confidence auto-detection and asks for an explicit map).
+- **Machine-generated docs are `strict`** (`build_fill_doc` sets `strict:true`).
+  Strict refuses fuzzy label matches — for the pipeline a non-exact label is a
+  bug to surface, not a typo to forgive. Hand-authored operator runs stay
+  lenient; fuzzy hits are still reported (never silent).
+- **No DB schema change.** The feature is purely additive — endpoints are
+  stateless over existing tables; uploaded templates are request-scoped temp
+  files under `OUTPUT_DIR/_mtool_tmp`, cleaned via a `BackgroundTask`. The run
+  gate is `completed`/`completed_with_errors` (409 otherwise), mirroring the
+  eval from-run gate.
+- **UI is a button + modal, not a tab** (`MtoolFillModal`, launched from the
+  run-detail action row) — deliberately avoids adding a third `role="tab"`
+  (gotcha #7).
+
+Pinned by `tests/test_mtool_offline_fill.py`, `tests/test_mtool_exporter.py`,
+`tests/test_mtool_routes.py`, `tests/test_mtool_column_detect.py`, and the
+`MtoolFillModal` web tests. Full plan + phase status: `docs/PLAN.md`;
+operator guide: `mtool/README.md`.
+
 ## Testing
 
 ```bash
