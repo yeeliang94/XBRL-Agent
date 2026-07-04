@@ -191,6 +191,57 @@ def test_patch_no_facts_is_422(client):
     assert resp.status_code == 422
 
 
+def test_patch_malformed_column_map_is_422_not_500(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    # columns must be an object; a string where a dict belongs used to raise
+    # AttributeError deep in apply_column_map -> uncaught 500 + temp leak.
+    bad = json.dumps({"SOFP-Sub-CuNonCu": "B"})
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(),
+                   data={"column_map": bad})
+    assert resp.status_code == 422
+
+
+def test_patch_column_map_bad_json_is_422(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(),
+                   data={"column_map": "{not json"})
+    assert resp.status_code == 422
+
+
+def test_report_header_is_present_and_bounded(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={"strict": "true"})
+    assert resp.status_code == 200
+    header = resp.headers["X-mTool-Report"]
+    assert len(header.encode("utf-8")) <= 6000
+    parsed = json.loads(header)
+    assert "counts" in parsed and "truncated" in parsed
+
+
+def test_no_temp_dirs_leak_across_error_and_success(client, tmp_path):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    # An error path (malformed column_map) then a success path.
+    tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+            files=_upload_our_template(),
+            data={"column_map": json.dumps({"S": 1})})
+    tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+            files=_upload_our_template(), data={"strict": "true"})
+    staging = tmp_path / "_mtool_tmp"
+    leftovers = list(staging.glob("*")) if staging.exists() else []
+    assert leftovers == [], f"temp dirs leaked: {leftovers}"
+
+
 def test_temp_dir_cleaned_after_patch(client, tmp_path):
     tc, db, _ = client
     run_id = _make_run(db)

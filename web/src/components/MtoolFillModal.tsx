@@ -17,6 +17,7 @@ import { ui, uiClass } from "../lib/uiStyles";
 interface FillMeta {
   counts: {
     writes: number;
+    conflict_writes: number;
     excluded_matrix_socie: number;
     excluded_not_disclosed: number;
     excluded_out_of_scope: number;
@@ -206,6 +207,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               <div style={{ ...styles.statLine, color: pwc.grey700 }}>
                 Excluded: {c!.excluded_matrix_socie} SOCIE/matrix, {c!.excluded_not_disclosed}{" "}
                 not-disclosed, {c!.excluded_out_of_scope} out-of-scope
+              </div>
+            )}
+            {c!.conflict_writes > 0 && (
+              <div style={{ ...styles.statLine, color: pwc.orange700 }}>
+                ⚠ {c!.conflict_writes} value(s) still in conflict will be written — resolve
+                them in Review values first.
               </div>
             )}
           </div>

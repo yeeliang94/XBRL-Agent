@@ -101,7 +101,13 @@ async def patch_mtool_template(
     operator's template. When omitted we auto-detect it; if detection is
     low-confidence we refuse (422) and ask for an explicit map rather than
     risk mis-targeting. Streams back the filled ``.xlsx``; the run report is
-    returned in the ``X-mTool-Report`` header (and logged).
+    returned in the ``X-mTool-Report`` header (bounded — see
+    ``_bounded_report_header`` — and logged in full).
+
+    The uploaded template is written to a request-scoped temp dir under a
+    shared ``OUTPUT_DIR/_mtool_tmp`` staging area and is never persisted: the
+    whole body is wrapped so any error path cleans it up, and the success path
+    cleans it after streaming.
     """
     _, doc = _build_doc(run_id)
     if not doc["writes"]:
@@ -115,89 +121,135 @@ async def patch_mtool_template(
     if len(raw) > _MAX_TEMPLATE_BYTES:
         raise HTTPException(status_code=413, detail="Template too large.")
 
-    # Request-scoped temp dir under the run's output area; cleaned up after
-    # the response streams (never persisted).
+    # Request-scoped temp dir under a shared staging area (unique mkdtemp
+    # subdir per request). EVERYTHING after this point is wrapped so any raise
+    # — an HTTPException from a 422 gate OR an unexpected error from
+    # fill_workbook / the zip reader — cleans the temp dir before propagating.
+    # The success path returns a FileResponse whose BackgroundTask does the
+    # cleanup AFTER streaming, so the except never fires on success.
     work_root = Path(server.OUTPUT_DIR) / "_mtool_tmp"
     work_root.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(dir=work_root))
-    src = tmp / "template.xlsx"
-    src.write_bytes(raw)
-
-    # Confirm it's a readable xlsx (zip) before anything else.
     try:
-        from mtool.offline_fill import get_sheet_paths, load_workbook_entries
-        _, data, _ = load_workbook_entries(str(src))
-        get_sheet_paths(data)
-    except Exception as exc:  # noqa: BLE001
-        _cleanup(tmp)
-        raise HTTPException(
-            status_code=422,
-            detail=f"Upload is not a readable .xlsx workbook: {exc}") from exc
+        src = tmp / "template.xlsx"
+        src.write_bytes(raw)
 
-    # Resolve the column map: explicit wins; else auto-detect.
-    if column_map:
+        # Confirm it's a readable xlsx (zip) before anything else.
         try:
-            cmap = json.loads(column_map)
-        except json.JSONDecodeError as exc:
-            _cleanup(tmp)
+            from mtool.offline_fill import (
+                get_sheet_paths, load_workbook_entries)
+            _, data, _ = load_workbook_entries(str(src))
+            get_sheet_paths(data)
+        except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422,
-                detail=f"column_map is not valid JSON: {exc}") from exc
-    else:
-        detected = detect_column_map(str(src), doc)
-        if overall_confidence(detected) != "high":
-            _cleanup(tmp)
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": "column layout could not be auto-detected with "
-                             "confidence; supply an explicit column_map",
-                    "detected": detected,
-                })
-        cmap = {s: {"label_column": v["label_column"], "columns": v["columns"]}
-                for s, v in detected.items()}
+                detail=f"Upload is not a readable .xlsx workbook: {exc}"
+            ) from exc
 
-    try:
-        ready = apply_column_map(doc, cmap)
-    except ValueError as exc:
-        _cleanup(tmp)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Resolve the column map: explicit wins; else auto-detect.
+        if column_map:
+            try:
+                cmap = json.loads(column_map)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"column_map is not valid JSON: {exc}") from exc
+            _validate_cmap_shape(cmap)
+        else:
+            detected = detect_column_map(str(src), doc)
+            if overall_confidence(detected) != "high":
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "column layout could not be auto-detected "
+                                 "with confidence; supply an explicit "
+                                 "column_map",
+                        "detected": detected,
+                    })
+            cmap = {s: {"label_column": v["label_column"],
+                        "columns": v["columns"]}
+                    for s, v in detected.items()}
 
-    errors = validate_input(ready)
-    if errors:
+        try:
+            ready = apply_column_map(doc, cmap)
+        except (ValueError, AttributeError, TypeError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        errors = validate_input(ready)
+        if errors:
+            raise HTTPException(status_code=422,
+                                detail={"input_errors": errors})
+
+        out = tmp / "filled.xlsx"
+        report = fill_workbook(str(src), ready, str(out),
+                               strict=strict, force_recalc=force_recalc)
+
+        logger.info("mTool patch run %s: status=%s written=%d unresolved=%d",
+                    run_id, report["status"], len(report["written"]),
+                    len(report["unresolved"]))
+
+        filename = f"mtool_filled_run{run_id}.xlsx"
+        return FileResponse(
+            str(out),
+            media_type=("application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"),
+            filename=filename,
+            headers={"X-mTool-Report": _bounded_report_header(report)},
+            background=BackgroundTask(_cleanup, tmp),
+        )
+    except Exception:
         _cleanup(tmp)
+        raise
+
+
+def _validate_cmap_shape(cmap) -> None:
+    """Reject a structurally-wrong column_map with a 422 (not a 500).
+
+    Expected: ``{sheet: {"label_column": str, "columns": {role: col}}}``.
+    apply_column_map assumes this shape; a string/list where a dict belongs
+    would otherwise raise AttributeError deep inside → uncaught 500."""
+    if not isinstance(cmap, dict):
         raise HTTPException(status_code=422,
-                            detail={"input_errors": errors})
+                            detail="column_map must be a JSON object")
+    for sheet, cfg in cmap.items():
+        if not isinstance(cfg, dict):
+            raise HTTPException(
+                status_code=422,
+                detail=f"column_map[{sheet!r}] must be an object with "
+                       "'label_column' and 'columns'")
+        cols = cfg.get("columns")
+        if cols is not None and not isinstance(cols, dict):
+            raise HTTPException(
+                status_code=422,
+                detail=f"column_map[{sheet!r}].columns must be an object")
 
-    out = tmp / "filled.xlsx"
-    report = fill_workbook(str(src), ready, str(out),
-                           strict=strict, force_recalc=force_recalc)
 
-    logger.info("mTool patch run %s: status=%s written=%d unresolved=%d",
-                run_id, report["status"], len(report["written"]),
-                len(report["unresolved"]))
+# Row-detail lists are truncated in the header so a run with many unresolved
+# labels can't blow past proxy header limits (~8 KB) and get the whole response
+# rejected/truncated. Counts are always exact; a `truncated` flag tells the UI
+# detail was elided (full detail is in the server log).
+_HEADER_LIST_CAP = 20
+_HEADER_MAX_BYTES = 6000
 
-    # Compact report in a header (full detail is large); the frontend reads it
-    # to show the review panel. Keep only the summary + row-level lists.
-    header_report = json.dumps({
+
+def _bounded_report_header(report: dict) -> str:
+    detail_keys = ("unresolved", "skipped_formula", "mismatches")
+    counts = {k: len(report[k]) for k in (
+        "written", "fuzzy_matched", "skipped_formula", "type_changed",
+        "unresolved", "ambiguous", "mismatches", "errors")}
+    truncated = any(len(report[k]) > _HEADER_LIST_CAP for k in detail_keys)
+    payload = {
         "status": report["status"],
-        "counts": {k: len(report[k]) for k in (
-            "written", "fuzzy_matched", "skipped_formula", "type_changed",
-            "unresolved", "ambiguous", "mismatches", "errors")},
-        "unresolved": report["unresolved"],
-        "skipped_formula": report["skipped_formula"],
-        "mismatches": report["mismatches"],
-    })
-
-    filename = f"mtool_filled_run{run_id}.xlsx"
-    return FileResponse(
-        str(out),
-        media_type=("application/vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet"),
-        filename=filename,
-        headers={"X-mTool-Report": header_report},
-        background=BackgroundTask(_cleanup, tmp),
-    )
+        "counts": counts,
+        "truncated": truncated,
+        **{k: report[k][:_HEADER_LIST_CAP] for k in detail_keys},
+    }
+    encoded = json.dumps(payload)
+    if len(encoded.encode("utf-8")) <= _HEADER_MAX_BYTES:
+        return encoded
+    # Still too big (very long labels): drop the detail lists, keep counts.
+    return json.dumps({"status": report["status"], "counts": counts,
+                       "truncated": True})
 
 
 def _cleanup(path: Path) -> None:

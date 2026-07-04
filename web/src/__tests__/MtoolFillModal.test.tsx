@@ -59,7 +59,7 @@ describe("MtoolFillModal", () => {
       skipped_formula: [],
       mismatches: [],
     });
-    mockFetch((url, init) => {
+    mockFetch((url) => {
       if (url.includes("/mtool-fill/patch")) {
         return new Response(new Blob(["xlsxbytes"]), {
           status: 200,
