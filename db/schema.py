@@ -147,7 +147,13 @@ from pathlib import Path
 # v27 adds `notes_format_snapshots` (pre-format HTML per row — "Revert
 # formatting" restores from here) + taxonomy/token columns on
 # `notes_format_tasks` (docs/PLAN-notes-formatter-hardening.md).
-CURRENT_SCHEMA_VERSION = 27
+# v28 adds `notes_coverage_rows` — the durable per-run holistic notes coverage
+# checklist (docs/PLAN-notes-coverage-and-routing.md Phase 4). One row per
+# top-level note (subnote_ref NULL) plus optional per-sub-ref child rows; the
+# checklist is recomputed wholesale after the notes reviewer pass and rewritten
+# for the Coverage panel. Pure CREATE TABLE IF NOT EXISTS walk-forward (new
+# table, no ALTER). Pinned by tests/test_db_schema_v28.py.
+CURRENT_SCHEMA_VERSION = 28
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -918,6 +924,33 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         UNIQUE(run_id, sheet, row)
     )
     """,
+
+    # -----------------------------------------------------------------
+    # v28: durable notes coverage checklist (one row per top-level note,
+    # plus optional per-sub-ref child rows). Recomputed wholesale after the
+    # notes reviewer pass; `replace_notes_coverage_for_run` delete+inserts
+    # the whole set. `subnote_ref` NULL marks the top-level note row; the
+    # unique index coalesces NULL to '' so a top-level row and its children
+    # never collide. See docs/PLAN-notes-coverage-and-routing.md Phase 4.
+    # -----------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS notes_coverage_rows (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id          INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        note_num        INTEGER NOT NULL,
+        subnote_ref     TEXT,                -- NULL = top-level note row
+        status          TEXT NOT NULL,       -- placed|missing|skipped|suspected_gap (top);
+                                             -- cited|not_verified|verified|missing (sub)
+        reason          TEXT,
+        placements_json TEXT,                -- JSON list of {sheet,row,row_label,kind}
+        reviewer_added  INTEGER NOT NULL DEFAULT 0,
+        reviewer_verdict TEXT,               -- confirmed_absent|not_applicable (top rows)
+        title           TEXT,
+        page_lo         INTEGER,
+        page_hi         INTEGER,
+        updated_at      TEXT NOT NULL DEFAULT ''
+    )
+    """,
 )
 
 
@@ -966,6 +999,11 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_notes_format_tasks_run_id ON notes_format_tasks(run_id)",
     # v27: formatter snapshots fetched per (run, sheet) at revert time.
     "CREATE INDEX IF NOT EXISTS ix_notes_format_snapshots_run_id ON notes_format_snapshots(run_id)",
+    # v28: coverage rows are always read per-run; the unique index coalesces a
+    # NULL subnote_ref to '' so a top-level row and its children never collide.
+    "CREATE INDEX IF NOT EXISTS ix_notes_coverage_rows_run_id ON notes_coverage_rows(run_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_notes_coverage_rows "
+    "ON notes_coverage_rows(run_id, note_num, COALESCE(subnote_ref, ''))",
 )
 
 
@@ -2009,6 +2047,30 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (27,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v27→v28 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v27 → v28: add notes_coverage_rows. Pure CREATE TABLE IF NOT EXISTS
+        # (already run above), so this block only advances the marker. Same
+        # BEGIN IMMEDIATE + re-check discipline as the earlier pure-table steps.
+        if current_version is not None and current_version < 28:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 28:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (28,),
                     )
                 conn.commit()
             except Exception:

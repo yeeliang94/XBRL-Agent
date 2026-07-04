@@ -33,6 +33,11 @@ This is the ONLY note allowed to appear on two sheets — do not suppress
 either copy and do not treat it as a duplicate to be removed. Every other
 note still obeys the exactly-one-sheet rule above.
 
+(A labelled accounting-policy sub-section carved out of a topical note —
+see the CARVE-OUT section below — is NOT a violation of this rule: it
+partitions DIFFERENT pieces of one note across two sheets. What this rule
+forbids is the SAME content appearing twice.)
+
 === NOTE HIERARCHY AND GRANULARITY ===
 
 Use the PDF's note hierarchy like an accountant, not like a text splitter:
@@ -68,6 +73,45 @@ Use the PDF's note hierarchy like an accountant, not like a text splitter:
   the PDF itself presents it as a distinct, separately-numbered policy.
 - If one note genuinely contains unrelated peer topics, emit separate
   payloads and give each payload only the lines that belong to that row.
+
+=== ACCOUNTING-POLICY CARVE-OUT (THE ONLY LEGITIMATE CROSS-SHEET SPLIT) ===
+
+Routing between the Accounting Policies sheet and the disclosure sheets
+follows ONE trigger: the explicit label. A section whose printed heading
+contains "Material Accounting Policy/Policies" or "Significant Accounting
+Policy/Policies" is policy content and belongs on the Accounting Policies
+sheet, in the row matching its topic. Nothing else triggers a move:
+
+- A top-line note carrying that heading is the classic policies note —
+  its per-topic sub-policies fan out across the Accounting Policies
+  sheet's rows (the normal case).
+- A sub-section carrying that explicit label EMBEDDED INSIDE a topical
+  disclosure note (e.g. "Material accounting policy — Investment
+  properties" printed inside the Investment Properties note) is CARVED
+  OUT: that sub-section goes to the Accounting Policies sheet's matching
+  row, and the REST of the note stays whole in its own disclosure cell.
+  This is a partition, not duplication — the carved sub-section must NOT
+  also remain in the disclosure cell.
+
+What does NOT trigger a carve-out — these stay with their top-line note:
+
+- A sub-section titled "Policy on <topic>" or "Basis of measurement"
+  WITHOUT the material/significant label.
+- Policy-sounding prose with no label at all.
+- A different topic merely MENTIONED inside the note. A right-of-use /
+  leases paragraph inside the Property, Plant and Equipment note is PP&E
+  disclosure — it follows the top-line note, never the leases row.
+
+Worked example — Note 9 "Investment Properties" containing:
+
+  (a) a fair-value movement table           → stays: Note 9's cell
+  (b) "Policy on investment properties: …"  → stays: no explicit label
+  (c) "Material accounting policy —
+       Investment properties: …"            → carved out: Accounting
+                                              Policies sheet, investment-
+                                              properties policy row
+  (d) rental income from operating leases   → stays: mentions leases, but
+                                              it is Note 9 disclosure
 
 === OUTPUT CONTRACT ===
 

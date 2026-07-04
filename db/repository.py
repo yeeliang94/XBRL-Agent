@@ -1568,6 +1568,98 @@ def fetch_notes_inventory(
 
 
 # ---------------------------------------------------------------------------
+# notes_coverage_rows (v28) — durable holistic coverage checklist
+# ---------------------------------------------------------------------------
+#
+# One row per top-level note (subnote_ref NULL) plus optional per-sub-ref
+# child rows. The checklist is recomputed WHOLESALE (inventory × provenance ×
+# reviewer verdicts) at draft time and again after the reviewer pass, so the
+# writer replaces the whole run's rows in one transaction rather than diffing.
+
+
+def replace_notes_coverage_for_run(
+    conn: sqlite3.Connection, run_id: int, rows: list[dict],
+) -> None:
+    """Delete + re-insert the run's whole coverage checklist in one go.
+
+    ``rows`` is the flattened DB shape (top-level rows carry ``subnote_ref``
+    None; child rows carry the sub-ref string). ``placements`` may be a list —
+    it is JSON-encoded here. Caller commits (or relies on ``db_session``)."""
+    now = _now()
+    conn.execute("DELETE FROM notes_coverage_rows WHERE run_id = ?", (run_id,))
+    for r in rows:
+        placements = r.get("placements")
+        placements_json = (
+            r.get("placements_json")
+            if placements is None
+            else json.dumps(placements)
+        )
+        conn.execute(
+            "INSERT INTO notes_coverage_rows("
+            "run_id, note_num, subnote_ref, status, reason, placements_json, "
+            "reviewer_added, reviewer_verdict, title, page_lo, page_hi, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                int(r["note_num"]),
+                r.get("subnote_ref"),
+                str(r.get("status", "")),
+                r.get("reason") or None,
+                placements_json,
+                1 if r.get("reviewer_added") else 0,
+                r.get("reviewer_verdict") or None,
+                r.get("title") or None,
+                r.get("page_lo"),
+                r.get("page_hi"),
+                now,
+            ),
+        )
+
+
+def fetch_notes_coverage(
+    conn: sqlite3.Connection, run_id: int,
+) -> list[dict]:
+    """Return the run's coverage rows (top-level rows before their children,
+    each in note-number order). ``placements`` is decoded back to a list."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT note_num, subnote_ref, status, reason, placements_json, "
+            "reviewer_added, reviewer_verdict, title, page_lo, page_hi "
+            "FROM notes_coverage_rows WHERE run_id = ? "
+            # NULL subnote_ref (the top-level row) sorts before its children.
+            "ORDER BY note_num, (subnote_ref IS NOT NULL), subnote_ref",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    out: list[dict] = []
+    for r in rows:
+        try:
+            placements = (
+                json.loads(r["placements_json"]) if r["placements_json"] else []
+            )
+            if not isinstance(placements, list):
+                placements = []
+        except (TypeError, json.JSONDecodeError):
+            placements = []
+        out.append({
+            "note_num": r["note_num"],
+            "subnote_ref": r["subnote_ref"],
+            "status": r["status"],
+            "reason": r["reason"] or "",
+            "placements": placements,
+            "reviewer_added": bool(r["reviewer_added"]),
+            "reviewer_verdict": r["reviewer_verdict"],
+            "title": r["title"] or "",
+            "page_lo": r["page_lo"],
+            "page_hi": r["page_hi"],
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # notes_cell_tombstones (v25) — durable "this cell was emptied"
 # ---------------------------------------------------------------------------
 #

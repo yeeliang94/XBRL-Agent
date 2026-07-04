@@ -524,3 +524,100 @@ async def facts_edited_count_endpoint(run_id: int):
     finally:
         conn.close()
     return {"count": int(row[0]) if row else 0}
+
+
+@router.get("/api/runs/{run_id}/notes-coverage")
+async def notes_coverage_endpoint(run_id: int):
+    """The holistic notes coverage checklist for a run
+    (docs/PLAN-notes-coverage-and-routing.md Phase 7).
+
+    Returns the FINAL (post-reviewer) checklist: one entry per top-level note
+    with its status, placements, sub-ref detail, and reviewer overlay, plus a
+    summary and the banner state:
+
+      * ``reviewed`` — the notes reviewer pass completed; this is the final list.
+      * ``not_reviewed`` — the reviewer pass failed/crashed; draft shown.
+      * ``inventory_unavailable`` — scout inventory empty/failed (loud, never a
+        silent green).
+      * ``pre_feature`` — a legacy run with no coverage rows at all.
+
+    404 if the run does not exist.
+    """
+    from db import repository as repo
+    from server import COVERAGE_META_NOTE
+    from notes.coverage_checklist import row_is_unresolved
+
+    conn = server._open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        db_rows = repo.fetch_notes_coverage(conn, run_id)
+    finally:
+        conn.close()
+
+    # The banner meta row (note_num == COVERAGE_META_NOTE) carries the banner in
+    # its `status`; its absence means the feature never ran for this run.
+    banner = "pre_feature"
+    content = []
+    for r in db_rows:
+        if r["note_num"] == COVERAGE_META_NOTE:
+            banner = r["status"] or "pre_feature"
+        else:
+            content.append(r)
+
+    # Nest sub-ref child rows under their top-level parent (fetch orders the
+    # top-level row before its children within each note_num).
+    parents: dict[int, dict] = {}
+    order: list[int] = []
+    for r in content:
+        n = r["note_num"]
+        if r["subnote_ref"] is None:
+            parents[n] = {
+                "note_num": n,
+                "title": r["title"],
+                "status": r["status"],
+                "reason": r["reason"],
+                "placements": r["placements"],
+                "reviewer_added": r["reviewer_added"],
+                "reviewer_verdict": r["reviewer_verdict"],
+                "page_lo": r["page_lo"],
+                "page_hi": r["page_hi"],
+                "subnotes": [],
+            }
+            order.append(n)
+        else:
+            parents.setdefault(n, {
+                "note_num": n, "title": "", "status": "", "reason": "",
+                "placements": [], "reviewer_added": False,
+                "reviewer_verdict": None, "page_lo": None, "page_hi": None,
+                "subnotes": [],
+            })
+            if n not in order:
+                order.append(n)
+            parents[n]["subnotes"].append({
+                "subnote_ref": r["subnote_ref"],
+                "state": r["status"],
+                "reason": r["reason"],
+            })
+
+    rows = [parents[n] for n in order]
+
+    summary = {"placed": 0, "missing": 0, "skipped": 0, "suspected_gap": 0,
+               "total": len(rows), "unresolved": 0}
+    for row in rows:
+        if row["status"] in summary:
+            summary[row["status"]] += 1
+        if row_is_unresolved(
+            row["status"], row.get("reviewer_verdict"),
+            [s["state"] for s in row["subnotes"]],
+        ):
+            summary["unresolved"] += 1
+
+    return {
+        "run_id": run_id,
+        "banner": banner,
+        "inventory_available": banner != "inventory_unavailable",
+        "rows": rows,
+        "summary": summary,
+    }

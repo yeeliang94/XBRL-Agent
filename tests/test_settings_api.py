@@ -101,6 +101,26 @@ def test_auto_review_toggle_round_trips(tmp_path, monkeypatch):
     assert server._auto_review_enabled() is False
 
 
+def test_notes_coverage_toggle_round_trips(tmp_path, monkeypatch):
+    """The notes coverage checklist toggle persists to XBRL_NOTES_COVERAGE and
+    is reflected by GET /api/settings + /api/config (default ON, suite forces
+    OFF — delenv here to verify the true default)."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.delenv("XBRL_NOTES_COVERAGE", raising=False)
+
+    assert client.get("/api/settings").json()["notes_coverage"] is True
+    assert client.get("/api/config").json()["notes_coverage"] is True
+
+    resp = client.post("/api/settings", json={"notes_coverage": False})
+    assert resp.status_code == 200
+    assert "XBRL_NOTES_COVERAGE" in env_file.read_text()
+    from dotenv import load_dotenv
+    load_dotenv(env_file, override=True)
+    assert client.get("/api/settings").json()["notes_coverage"] is False
+    assert server._notes_coverage_enabled() is False
+
+
 def test_spot_check_toggle_and_mode_round_trip(tmp_path, monkeypatch):
     """Issue 1: the clean-run spot-check toggle + depth persist to
     XBRL_SPOT_CHECK / XBRL_SPOT_CHECK_MODE and are reflected by GET

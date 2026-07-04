@@ -411,3 +411,89 @@ def test_clean_run_fires_spot_check_when_enabled(full_pipeline_env, monkeypatch)
     assert status == "completed_with_errors", (
         f"failed spot-check must downgrade the run, got {status!r}"
     )
+
+
+def test_notes_coverage_checklist_e2e(tmp_path, monkeypatch):
+    """End-to-end (mocked model): the notes reviewer pass reconciles the scout
+    inventory against placements, auto-resolves a missing note by authoring it,
+    and persists a POST-REVIEWER checklist the coverage API then serves
+    (docs/PLAN-notes-coverage-and-routing.md Phase 8).
+    """
+    import asyncio
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    import notes.reviewer_agent as ra
+    import notes.detectors as det
+    from db import repository as repo
+    from db.schema import init_db
+
+    monkeypatch.setenv("XBRL_NOTES_COVERAGE", "true")
+    monkeypatch.setattr(ra, "count_pdf_pages", lambda _p: 60)
+    monkeypatch.setattr(det, "render_pages_to_png_bytes",
+                        lambda pdf_path, start, end, dpi=200: [b"png"])
+
+    db = tmp_path / "audit.sqlite"
+    init_db(db)
+    server.AUDIT_DB_PATH = db
+    server.OUTPUT_DIR = tmp_path
+    _S12 = "Notes-Listofnotes"
+    _PREFIX = "mfrs-company-"
+
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "x.pdf", session_id="s",
+                                 output_dir=str(tmp_path))
+        # Inventory: note 4 placed, note 5 MISSING (to be authored back).
+        # Adjacent numbers so there's no incidental suspected gap.
+        repo.upsert_notes_inventory(conn, run_id=run_id, note_num=4,
+                                    title="Property, plant & equipment",
+                                    page_lo=30, page_hi=31)
+        repo.upsert_notes_inventory(conn, run_id=run_id, note_num=5,
+                                    title="Investment properties",
+                                    page_lo=32, page_hi=33)
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_S12, row=20,
+                               label="PPE", html="<p>ppe</p>")
+        repo.upsert_notes_provenance(conn, run_id=run_id, sheet=_S12, row=20,
+                                     row_label="PPE", source_note_refs=["4"])
+        conn.execute(
+            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind) "
+            "VALUES (?, ?, ?, ?, ?, 'LEAF')",
+            ("n40", f"{_PREFIX}notes-listofnotes-v1", _S12, 40,
+             "Disclosure of investment properties"))
+
+    # Reviewer authors the missing note 5 into an empty leaf, grounded.
+    steps = [
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [32]})],
+        [ToolCallPart(tool_name="author_note_cell", args={
+            "sheet": _S12, "row": 40, "html": "<p>IP disclosure</p>",
+            "note_num": 5, "source_pages": [32], "evidence": "IP note"})],
+        [TextPart("done")],
+    ]
+    idx = {"i": 0}
+
+    def fn(messages, info):
+        i = idx["i"]; idx["i"] += 1
+        return ModelResponse(parts=steps[i]) if i < len(steps) else \
+            ModelResponse(parts=[TextPart("done")])
+
+    q: asyncio.Queue = asyncio.Queue()
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
+        model=FunctionModel(fn), output_dir=str(tmp_path),
+        merged_workbook_path=None, event_queue=q, sidecar_paths=[]))
+
+    # The reviewer resolved the missing note → coverage is clean, no tip.
+    assert outcome["coverage"]["banner"] == "reviewed"
+    assert outcome["coverage"]["unresolved"] == 0
+    assert server._notes_coverage_tips_status(outcome["coverage"]) is False
+
+    # The API serves the persisted POST-REVIEWER checklist.
+    client = TestClient(app)
+    body = client.get(f"/api/runs/{run_id}/notes-coverage").json()
+    assert body["banner"] == "reviewed"
+    rows = {r["note_num"]: r for r in body["rows"]}
+    assert rows[4]["status"] == "placed"
+    # Note 5 flipped missing → placed and is tagged reviewer-added.
+    assert rows[5]["status"] == "placed"
+    assert rows[5]["reviewer_added"] is True
