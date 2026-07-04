@@ -43,14 +43,23 @@ from notes_types import NOTES_REGISTRY
 from tools.pdf_viewer import count_pdf_pages
 from notes.detectors import (
     _render_single_page,
+    _subnote_key,
+    _top_note_nums,
     detect_cross_sheet_duplicates_by_ref,
     detect_cross_sheet_overlap_candidates,
     detect_same_sheet_row_collisions,
     detect_subnote_coverage_gaps,
     detect_title_format_issues,
+    detect_topline_splits,
     inventory_coverage_gaps,
     load_inventory_from_db,
     load_provenance_entries,
+)
+from notes.coverage_checklist import (
+    RESOLVED_VERDICTS,
+    SUBNOTE_MISSING,
+    SUBNOTE_VERIFIED,
+    build_draft_checklist,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,6 +80,17 @@ REJECTION_KINDS = (
 )
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "notes_reviewer.md"
+
+# Every finding family `_build_context` emits (all keys except entry_count).
+# The server's skip gate (`_run_notes_reviewer_pass` n_items) and the packet
+# renderer both key off this tuple so a newly-added detector can never be
+# counted by one and ignored by the other (Codex review 2026-07-04: the
+# topline_splits family was in the packet but not the skip gate, so a
+# split-only run skipped the reviewer entirely).
+FINDING_FAMILIES: tuple[str, ...] = (
+    "duplicates", "overlap_candidates", "coverage_gaps",
+    "row_collisions", "subnote_gaps", "topline_splits", "title_issues",
+)
 
 # Leading run of <h3> heading blocks — preserved verbatim across an edit so the
 # writer-owned headings (gotcha #16 / peer-review #6) are never dropped.
@@ -138,6 +158,14 @@ class NotesReviewerDeps:
         self.correction_log: list[dict] = []
         # Flags the reviewer raised (persisted to notes_review_flags in Phase 3).
         self.flags: list[dict] = []
+        # Coverage-checklist verdicts (docs/PLAN-notes-coverage-and-routing.md
+        # Phase 5). resolve_coverage_note / verify_subnote accumulate here; the
+        # final checklist (server) and verify_findings' recompute merge them.
+        self.coverage_note_verdicts: dict[int, dict] = {}
+        self.coverage_subnote_verdicts: dict[tuple[int, str], dict] = {}
+        # Note numbers the reviewer AUTHORED back into place (audit marker on
+        # the checklist row). Seeded by the author write path.
+        self.authored_note_nums: set[int] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +267,27 @@ def _read_cell(db_path: str, run_id: int, sheet: str, row: int) -> Optional[dict
             "html": r["html"], "evidence": r["evidence"]}
 
 
+def _read_provenance_refs(
+    db_path: str, run_id: int, sheet: str, row: int,
+) -> list[str]:
+    """The ``source_note_refs`` recorded for a (sheet,row) provenance entry, or
+    ``[]``. Used to undo an author's coverage marker when its cell is cleared."""
+    import json as _json
+    with repo.db_session(db_path) as conn:
+        r = conn.execute(
+            "SELECT source_note_refs FROM notes_cell_provenance "
+            "WHERE run_id = ? AND sheet = ? AND row = ?",
+            (run_id, sheet, row),
+        ).fetchone()
+    if not r or not r[0]:
+        return []
+    try:
+        refs = _json.loads(r[0])
+        return [str(x) for x in refs] if isinstance(refs, list) else []
+    except (TypeError, ValueError):
+        return []
+
+
 def _preserve_leading_headings(old_html: Optional[str], new_html: str) -> str:
     """Keep the existing leading ``<h3>`` heading run when an edit drops it.
 
@@ -273,20 +322,64 @@ def _ground_evidence(source_pages: List[int], evidence: Optional[str]) -> str:
 # Packet rendering (Step 8)
 # ---------------------------------------------------------------------------
 
+def count_open_items(context: dict) -> int:
+    """How many items the reviewer must act on: every detector-family finding
+    PLUS the coverage checklist's unresolved rows.
+
+    Load-bearing for the skip gate — a run whose ONLY problem is a suspected
+    numbering gap (no detector family fires, but the checklist has an
+    unresolved suspected-gap row) must still run the reviewer so it can hunt
+    the PDF and record ``confirmed_absent``. Missing notes are double-counted
+    (they are both a ``coverage_gaps`` family finding and an unresolved
+    checklist row) — harmless for a >0 gate.
+    """
+    n = sum(len(context.get(k) or []) for k in FINDING_FAMILIES)
+    checklist = context.get("coverage_checklist")
+    if checklist is not None:
+        n += len(checklist.unresolved_rows())
+    return n
+
+
 def build_notes_reviewer_packet(context: dict) -> str:
-    """Render the dynamic findings block from the five detector families.
+    """Render the dynamic findings block from the five detector families +
+    the coverage checklist.
 
     Only families with findings are rendered, so a clean run yields a short
     "nothing flagged" packet and the pass can exit fast.
     """
     dup = context.get("duplicates") or []
     overlap = context.get("overlap_candidates") or []
-    gaps = context.get("coverage_gaps") or []
     collisions = context.get("row_collisions") or []
     subnote = context.get("subnote_gaps") or []
+    splits = context.get("topline_splits") or []
     titles = context.get("title_issues") or []
+    checklist = context.get("coverage_checklist")
+    # Checklist supersedes the bare `coverage_gaps` note-number list — it
+    # carries titles, page ranges, and suspected numbering gaps.
+    missing_rows = suspected_rows = uncited_rows = []
+    if checklist is not None:
+        from notes.coverage_checklist import (
+            STATUS_MISSING, STATUS_SUSPECTED_GAP, SUBNOTE_NOT_VERIFIED,
+        )
+        missing_rows = [
+            r for r in checklist.rows
+            if r.status == STATUS_MISSING and r.is_unresolved()
+        ]
+        suspected_rows = [
+            r for r in checklist.rows
+            if r.status == STATUS_SUSPECTED_GAP and r.is_unresolved()
+        ]
+        uncited_rows = [
+            r for r in checklist.rows
+            if r.status not in (STATUS_MISSING, STATUS_SUSPECTED_GAP)
+            and any(s.state == SUBNOTE_NOT_VERIFIED for s in r.subnotes)
+        ]
+    else:
+        # Legacy fallback: no checklist (e.g. a hand-built context) — render
+        # the bare coverage-gap note numbers as before.
+        gaps = context.get("coverage_gaps") or []
 
-    if not any((dup, overlap, gaps, collisions, subnote, titles)):
+    if count_open_items(context) == 0:
         return (
             "=== NOTES REVIEW PACKET ===\n\nNo structural findings — the "
             "detectors flagged nothing. Do a brief grounded spot-check of one "
@@ -297,10 +390,16 @@ def build_notes_reviewer_packet(context: dict) -> str:
 
     if dup:
         out.append(
-            "\n[CROSS-SHEET DUPLICATION] same note on Sheet 11 (policies) AND "
-            "Sheet 12. Material accounting policies belong on Sheet 11; the "
-            "numbered disclosure belongs on Sheet 12. clear_note_cell the wrong "
-            "copy after confirming on the PDF."
+            "\n[CROSS-SHEET DUPLICATION] same note cited on Sheet 11 (policies) "
+            "AND Sheet 12. Two legitimate shapes exist — confirm on the PDF "
+            "before clearing anything: (1) a CARVE-OUT PARTITION: the Sheet-11 "
+            "cell holds ONLY an explicitly-labelled 'material/significant "
+            "accounting policy' sub-section of the note and the Sheet-12 cell "
+            "holds the REST of the disclosure — different content, correct "
+            "routing, leave both; (2) a genuine DUPLICATE: the same prose on "
+            "both sheets — material accounting policies belong on Sheet 11, "
+            "the numbered disclosure on Sheet 12; clear_note_cell the wrong "
+            "copy."
         )
         for d in dup:
             out.append(
@@ -320,6 +419,31 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 f"  • row {c['row']} {c['row_label']!r}: notes {c['note_nums']} "
                 f"(refs {c['source_note_refs']})"
             )
+    if splits:
+        out.append(
+            "\n[TOP-LINE SPLIT] one top-level note's content landed on ≥2 rows "
+            "of the List of Notes sheet. The routing rule: content follows its "
+            "top-line note, WHOLE — a sub-section is only split out when the "
+            "PDF presents materially different peer disclosures, and the only "
+            "cross-sheet carve-out is an explicitly-labelled 'material/"
+            "significant accounting policy' sub-section (belongs on Sheet 11). "
+            "View the note's pages: if the fragments are genuinely separate "
+            "peer disclosures, leave them; if content was split merely because "
+            "a topic is MENTIONED (e.g. right-of-use prose pulled out of the "
+            "PP&E note into a leases row), merge it back into the owning row "
+            "(edit_note_cell the owner, clear_note_cell the fragment); if a "
+            "fragment is an explicitly-labelled policy sub-section sitting on "
+            "a topical row, it belongs on Sheet 11 (move_note_cell). Unsure → "
+            "raise_flag, never delete a valid disclosure."
+        )
+        for s in splits:
+            rows_desc = ", ".join(
+                f"row {r['row']} {r['row_label']!r}" for r in s["rows"]
+            )
+            out.append(
+                f"  • note {s['note_num']} on {s['sheet']}: {rows_desc} "
+                f"(refs {s['source_note_refs']})"
+            )
     if subnote:
         out.append(
             "\n[SUB-NOTE COVERAGE] a note covered only partly at sub-reference "
@@ -332,13 +456,59 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 f"  • note {g['note_num']}: cited {g['cited_subnote_refs']}, "
                 f"MISSING {g['missing_subnote_refs']}"
             )
-    if gaps:
-        out.append(
-            "\n[COMPREHENSIVENESS] scout saw these notes but no content was "
-            f"written anywhere: {gaps}. View each note's pages; if a genuine "
-            "disclosure, author it into an empty LEAF row; if non-applicable, "
-            "leave it and note so in raise_flag."
-        )
+    if checklist is None:
+        # Legacy fallback path (no checklist in the context).
+        if gaps:
+            out.append(
+                "\n[COMPREHENSIVENESS] scout saw these notes but no content was "
+                f"written anywhere: {gaps}. View each note's pages; if a genuine "
+                "disclosure, author it into an empty LEAF row; if non-applicable, "
+                "leave it and note so in raise_flag."
+            )
+    else:
+        if missing_rows:
+            out.append(
+                "\n[COVERAGE — MISSING NOTES] scout saw these notes but no "
+                "content was written on ANY notes sheet. View each note's "
+                "page(s); if it is a genuine disclosure, author it into an empty "
+                "LEAF row (author_note_cell); if it genuinely does not apply to "
+                "this entity, call resolve_coverage_note(note_num, "
+                "'not_applicable', reason, source_pages). Do NOT leave a real "
+                "disclosure unfilled — an unresolved missing note fails the run."
+            )
+            for r in missing_rows:
+                span = (
+                    f" pp.{r.page_lo}-{r.page_hi}"
+                    if r.page_lo is not None else ""
+                )
+                out.append(f"  • note {r.note_num} {r.title!r}{span}")
+        if suspected_rows:
+            out.append(
+                "\n[COVERAGE — SUSPECTED GAP] the inventory's note numbering "
+                "skips these values — scout may have MISSED a note. Hunt the PDF "
+                "around each hole: if a real note exists, author it; if the PDF "
+                "genuinely skips that number, call resolve_coverage_note("
+                "note_num, 'confirmed_absent', reason, source_pages) to clear "
+                "the suspicion. An uninvestigated suspected gap fails the run."
+            )
+            for r in suspected_rows:
+                out.append(f"  • note {r.note_num}: {r.reason}")
+        if uncited_rows:
+            out.append(
+                "\n[COVERAGE — UNVERIFIED SUB-REFS] these placed notes were "
+                "cited only coarsely, so it's unproven every sub-section made "
+                "it in. If you have spare turns, view the note and call "
+                "verify_subnote(note_num, subnote_ref, 'verified'|'missing', "
+                "reason, source_pages) per sub-ref — 'missing' then needs an "
+                "author/edit. Unverified sub-refs warn only; they never fail "
+                "the run, so prioritise MISSING notes and SUSPECTED GAPS first."
+            )
+            for r in uncited_rows:
+                pending = [
+                    s.subnote_ref for s in r.subnotes
+                    if s.state == "not_verified"
+                ]
+                out.append(f"  • note {r.note_num} {r.title!r}: pending {pending}")
     if overlap:
         out.append(
             "\n[CONTENT OVERLAP] cross-sheet content similarity without matching "
@@ -369,13 +539,22 @@ def _build_context(
     *, run_id: int, db_path: str,
     inventory_subnotes: Optional[dict], inventory_note_nums: Optional[list],
     sidecar_paths: Optional[List[str]] = None,
+    note_verdicts: Optional[dict] = None,
+    subnote_verdicts: Optional[dict] = None,
+    reviewer_added_notes: Optional[set] = None,
 ) -> dict:
-    """Run all five detectors from the durable DB inputs.
+    """Run all five detectors + build the holistic coverage checklist from the
+    durable DB inputs.
 
     Prefer durable DB provenance; fall back to the on-disk ``*_payloads.json``
     sidecars ONLY when the DB carries no provenance for the run (peer-review #4:
     legacy pre-v23 runs, or a swallowed provenance-write failure). Without the
     fallback, structural findings would silently vanish for those runs.
+
+    ``coverage_checklist`` (Phase 5) is the reconciliation of the scout
+    inventory against every placement, with any reviewer verdicts merged. It is
+    the positive-form superset of ``coverage_gaps`` (which the detector families
+    still emit for ``verify_findings`` regression diffing).
     """
     from notes.detectors import load_sidecar_entries
 
@@ -395,13 +574,23 @@ def _build_context(
             for c in repo.list_notes_cells_for_run(conn, run_id)
             if c.sheet in PROSE_SHEETS
         ]
+        inventory_rows = repo.fetch_notes_inventory(conn, run_id)
+    checklist = build_draft_checklist(
+        inventory_rows=inventory_rows,
+        provenance_entries=entries,
+        note_verdicts=note_verdicts,
+        subnote_verdicts=subnote_verdicts,
+        reviewer_added_notes=reviewer_added_notes,
+    )
     return {
         "duplicates": detect_cross_sheet_duplicates_by_ref(entries),
         "overlap_candidates": detect_cross_sheet_overlap_candidates(entries),
         "coverage_gaps": inventory_coverage_gaps(inventory_note_nums or [], entries),
         "row_collisions": detect_same_sheet_row_collisions(entries),
         "subnote_gaps": detect_subnote_coverage_gaps(inventory_subnotes or {}, entries),
+        "topline_splits": detect_topline_splits(entries),
         "title_issues": detect_title_format_issues(cells),
+        "coverage_checklist": checklist,
         "entry_count": len(entries),
     }
 
@@ -424,6 +613,11 @@ def finding_keys(context: dict) -> set:
         keys.add(("collision", c.get("row"), tuple(c.get("note_nums") or [])))
     for g in context.get("subnote_gaps") or []:
         keys.add(("subnote_gap", g.get("note_num")))
+    for s in context.get("topline_splits") or []:
+        keys.add((
+            "topline_split", s.get("note_num"), s.get("sheet"),
+            tuple(r.get("row") for r in s.get("rows") or []),
+        ))
     for n in context.get("coverage_gaps") or []:
         keys.add(("coverage_gap", n))
     for o in context.get("overlap_candidates") or []:
@@ -503,6 +697,9 @@ def recompute_notes_findings(deps: "NotesReviewerDeps") -> dict:
         inventory_subnotes=deps.inventory_subnotes,
         inventory_note_nums=deps.inventory_note_nums,
         sidecar_paths=sidecars,
+        note_verdicts=deps.coverage_note_verdicts,
+        subnote_verdicts=deps.coverage_subnote_verdicts,
+        reviewer_added_notes=deps.authored_note_nums,
     )
 
 
@@ -773,6 +970,85 @@ def create_notes_reviewer_agent(
             )
         return format_notes_verification(context, ctx.deps.original_finding_keys)
 
+    # -------------------- coverage-checklist verdicts --------------------
+
+    @agent.tool
+    def resolve_coverage_note(
+        ctx: RunContext[NotesReviewerDeps],
+        note_num: int, verdict: str, reason: str, source_pages: List[int],
+    ) -> str:
+        """Resolve a MISSING / SUSPECTED-GAP coverage row without authoring content.
+
+        Use this ONLY after viewing the PDF page(s) that prove the note is not a
+        real omission:
+          * ``confirmed_absent`` — a suspected numbering gap is a PDF numbering
+            skip (there is no note with that number in the document);
+          * ``not_applicable`` — a note the inventory lists that genuinely does
+            not apply to this entity (nothing to disclose).
+        A resolved row stops tipping the run to completed_with_errors. If the
+        note DOES have a real disclosure, author it instead — never resolve it
+        away.
+        """
+        v = verdict.strip().lower()
+        if v not in RESOLVED_VERDICTS:
+            return (f"rejected: verdict must be one of {sorted(RESOLVED_VERDICTS)}. "
+                    "Author the note if it has a real disclosure.")
+        kind, msg = classify_notes_fix_guard(
+            action="resolve", source_pages=source_pages,
+            viewed_pages=ctx.deps.viewed_pages,
+        )
+        if msg is not None:
+            _tally(ctx.deps, kind or "ungrounded")
+            return msg
+        try:
+            key = int(note_num)
+        except (TypeError, ValueError):
+            return "rejected: note_num must be an integer."
+        ctx.deps.coverage_note_verdicts[key] = {
+            "verdict": v, "reason": (reason or "").strip(),
+            "source_pages": [p for p in source_pages if isinstance(p, int)],
+        }
+        return f"ok: note {key} resolved as {v}"
+
+    @agent.tool
+    def verify_subnote(
+        ctx: RunContext[NotesReviewerDeps],
+        note_num: int, subnote_ref: str, verdict: str, reason: str,
+        source_pages: List[int],
+    ) -> str:
+        """Record a content verdict for one sub-reference of a note.
+
+        For a note cited only coarsely (the writer cited the bare note number),
+        the checklist can't prove each sub-section landed. After viewing the PDF:
+          * ``verified`` — the sub-section's content IS present in the placed
+            cell (or is legitimately folded-in / not applicable);
+          * ``missing`` — the sub-section is genuinely absent. Then author/edit
+            it in; once its ref is cited the row flips to placed on recompute.
+        A ``missing`` sub-ref you cannot author back tips the run status.
+        """
+        v = verdict.strip().lower()
+        if v not in (SUBNOTE_VERIFIED, SUBNOTE_MISSING):
+            return (f"rejected: verdict must be '{SUBNOTE_VERIFIED}' or "
+                    f"'{SUBNOTE_MISSING}'.")
+        kind, msg = classify_notes_fix_guard(
+            action="verify", source_pages=source_pages,
+            viewed_pages=ctx.deps.viewed_pages,
+        )
+        if msg is not None:
+            _tally(ctx.deps, kind or "ungrounded")
+            return msg
+        try:
+            nn = int(note_num)
+        except (TypeError, ValueError):
+            return "rejected: note_num must be an integer."
+        ref = str(subnote_ref).strip()
+        if not ref:
+            return "rejected: subnote_ref is required."
+        ctx.deps.coverage_subnote_verdicts[(nn, _subnote_key(ref))] = {
+            "verdict": v, "reason": (reason or "").strip(),
+        }
+        return f"ok: note {nn} sub-ref {ref!r} marked {v}"
+
     # -------------------- shared write impls --------------------
 
     def _guard_and_target(
@@ -877,6 +1153,9 @@ def create_notes_reviewer_agent(
                         row_label=label,
                         source_note_refs=[str(int(note_num))],
                     )
+                    # Audit marker: this note was authored back into place by
+                    # the reviewer (shown on the final coverage checklist).
+                    ctx.deps.authored_note_nums.add(int(note_num))
             ctx.deps.writes_performed += 1
             ctx.deps.correction_log.append({
                 "op": action, "sheet": sheet, "row": row, "evidence": ev,
@@ -977,6 +1256,14 @@ def create_notes_reviewer_agent(
             if not _cell_is_occupied(ctx.deps.db_path, ctx.deps.run_id, sheet, row):
                 return f"rejected: {sheet} row {row} is already empty."
             _ensure_snapshot(ctx)
+            # If the reviewer authored this exact note earlier this pass and now
+            # clears it, drop the reviewer-added marker so the coverage row
+            # doesn't show an "authored" badge on a note it just reverted to
+            # missing (the DB provenance recompute already reverts the status).
+            cleared_prov = _read_provenance_refs(
+                ctx.deps.db_path, ctx.deps.run_id, sheet, row)
+            for n in _top_note_nums(cleared_prov):
+                ctx.deps.authored_note_nums.discard(n)
             with repo.db_session(ctx.deps.db_path) as conn:
                 conn.execute(
                     "DELETE FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",

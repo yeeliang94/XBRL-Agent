@@ -104,3 +104,27 @@ def _spot_check_off_by_default():
             os.environ.pop("XBRL_SPOT_CHECK", None)
         else:
             os.environ["XBRL_SPOT_CHECK"] = prior
+
+
+@pytest.fixture(autouse=True)
+def _notes_coverage_off_by_default():
+    """Default the notes coverage checklist (PLAN-notes-coverage-and-routing)
+    OFF for the suite.
+
+    Coverage runs inside the notes reviewer pass and can tip an otherwise-clean
+    mocked run to `completed_with_errors` (a missing inventory note / suspected
+    gap), which would perturb the deterministic full-pipeline count/status
+    tests. Coverage-specific tests opt IN with
+    `monkeypatch.setenv("XBRL_NOTES_COVERAGE", "true")`; the settings round-trip
+    test `delenv`s this to verify the true default is ON. Set via os.environ for
+    the same monkeypatch.undo() resilience as the fixtures above.
+    """
+    prior = os.environ.get("XBRL_NOTES_COVERAGE")
+    os.environ["XBRL_NOTES_COVERAGE"] = "false"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop("XBRL_NOTES_COVERAGE", None)
+        else:
+            os.environ["XBRL_NOTES_COVERAGE"] = prior

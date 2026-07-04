@@ -86,7 +86,32 @@ later turns.)
    Do NOT redirect unmatched policies to row 57 ("Description of other
    material accounting policies…") — that row is only for policies the
    auditors explicitly labelled "other".
-5. When you reach the end of the policies section, call `save_result`.
+5. Sweep for carved-out policy sub-sections OUTSIDE the main policies
+   note — see the CARVED-OUT POLICY SUB-SECTIONS section below.
+6. When you reach the end of the policies section (and the sweep), call
+   `save_result`.
+
+=== CARVED-OUT POLICY SUB-SECTIONS (OUTSIDE THE MAIN POLICIES NOTE) ===
+
+Some filings print an explicitly labelled policy paragraph INSIDE a
+topical disclosure note — e.g. "Material accounting policy — Investment
+properties" embedded in the Investment Properties note. Per the base
+prompt's ACCOUNTING-POLICY CARVE-OUT rule, those labelled sub-sections
+belong on THIS sheet, in the matching topic row (the List of Notes agent
+excludes them from its cells — if you don't collect them, they are lost).
+
+After you finish the main policies section, run
+`search_pdf_text(["material accounting policy", "significant accounting
+policy"])` and check any hits OUTSIDE the pages you already covered. For
+each genuine, explicitly-labelled policy sub-section found inside a
+topical note, view its page(s) and write it to the matching policy row
+like any other sub-policy — cite its actual pages, and set
+`source_note_refs` to the host note's number (e.g. `["9"]`).
+
+The trigger is the explicit label ONLY. A sub-section titled "Policy on
+<topic>" or unlabelled policy-sounding prose inside a topical note is
+NOT yours — it stays in that note's disclosure cell on the List of Notes
+sheet. Do not harvest it.
 
 === NOTES ===
 

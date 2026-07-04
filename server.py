@@ -1740,6 +1740,68 @@ async def _run_reviewer_pass(
     return outcome
 
 
+# Banner meta-row sentinel: one row per run with note_num = COVERAGE_META_NOTE
+# carries the checklist banner state in its `status` column. Lets the API tell
+# `inventory_unavailable` (feature ran, empty inventory → rows present but only
+# this marker) from `pre_feature` (feature never ran → no rows at all).
+COVERAGE_META_NOTE = -1
+
+
+def _compute_notes_coverage_checklist(
+    run_id: int, db_path: str, *,
+    note_verdicts=None, subnote_verdicts=None, reviewer_added_notes=None,
+):
+    """Build the holistic coverage checklist for a run straight from the durable
+    DB inputs (inventory × provenance), merging any reviewer verdicts. Mirrors
+    the reviewer's ``_build_context`` but standalone so the construction-failure
+    path (no deps) can still persist a draft."""
+    from db import repository as repo
+    from notes.detectors import load_provenance_entries
+    from notes.coverage_checklist import build_draft_checklist
+
+    with repo.db_session(db_path) as conn:
+        inventory_rows = repo.fetch_notes_inventory(conn, run_id)
+    entries = load_provenance_entries(run_id, db_path)
+    return build_draft_checklist(
+        inventory_rows=inventory_rows, provenance_entries=entries,
+        note_verdicts=note_verdicts, subnote_verdicts=subnote_verdicts,
+        reviewer_added_notes=reviewer_added_notes,
+    )
+
+
+def _persist_notes_coverage(run_id: int, db_path: str, checklist, *, reviewed: bool):
+    """Write the checklist to ``notes_coverage_rows`` (wholesale) + a banner
+    meta row, and return a summary dict. Best-effort; caller wraps."""
+    from db import repository as repo
+    from notes.coverage_checklist import checklist_to_db_rows
+
+    if not checklist.inventory_available:
+        banner = "inventory_unavailable"
+    else:
+        banner = "reviewed" if reviewed else "not_reviewed"
+    rows = [{"note_num": COVERAGE_META_NOTE, "subnote_ref": None, "status": banner}]
+    rows.extend(checklist_to_db_rows(checklist))
+    with repo.db_session(db_path) as conn:
+        repo.replace_notes_coverage_for_run(conn, run_id, rows)
+    return {
+        "banner": banner,
+        "inventory_available": checklist.inventory_available,
+        "unresolved": len(checklist.unresolved_rows()),
+        "counts": checklist.counts(),
+    }
+
+
+def _jsonsafe_reviewer_context(context: dict) -> dict:
+    """A JSON-serialisable shallow copy of a reviewer context: the detector
+    families are already plain dicts, but ``coverage_checklist`` is a Checklist
+    object (the outcome is serialised into ``notes_review_tasks``)."""
+    safe = dict(context)
+    cl = safe.get("coverage_checklist")
+    if cl is not None and hasattr(cl, "to_dict"):
+        safe["coverage_checklist"] = cl.to_dict()
+    return safe
+
+
 async def _run_notes_reviewer_pass(
     *,
     run_id: int,
@@ -1796,6 +1858,46 @@ async def _run_notes_reviewer_pass(
             "data": {**data, "agent_id": agent_id, "agent_role": agent_id},
         })
 
+    # Holstic coverage checklist (docs/PLAN-notes-coverage-and-routing.md
+    # Phase 6). `_deps_box` lets the finalizer read the reviewer's accumulated
+    # verdicts once construction succeeds; the construction-failure path builds
+    # the DRAFT straight from the DB (no verdicts) under a not_reviewed banner.
+    _deps_box: dict = {}
+
+    async def _finalize_coverage(reviewed: bool) -> None:
+        """Recompute + persist the coverage checklist and emit notes_coverage.
+        Gated on XBRL_NOTES_COVERAGE; best-effort (never fails the pass)."""
+        if not _notes_coverage_enabled():
+            return
+        try:
+            d = _deps_box.get("deps")
+            if d is not None:
+                checklist = _compute_notes_coverage_checklist(
+                    run_id, db_path,
+                    note_verdicts=d.coverage_note_verdicts,
+                    subnote_verdicts=d.coverage_subnote_verdicts,
+                    reviewer_added_notes=d.authored_note_nums,
+                )
+            else:
+                checklist = _compute_notes_coverage_checklist(run_id, db_path)
+            summary = _persist_notes_coverage(
+                run_id, db_path, checklist, reviewed=reviewed)
+            outcome["coverage"] = summary
+            await _emit("notes_coverage", {
+                "checklist": checklist.to_dict(), **summary})
+            # Loud empty-inventory contract (PRD success criterion 2 / gotcha
+            # #20): surface a structured warning instead of a silent green.
+            if summary["banner"] == "inventory_unavailable":
+                await _emit("error", {
+                    "type": "notes_inventory_unavailable",
+                    "message": "Notes inventory unavailable — coverage could "
+                               "not be checked.",
+                })
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to finalize notes coverage checklist for run %s",
+                run_id, exc_info=True)
+
     try:
         agent, deps, context = create_notes_reviewer_agent(
             run_id=run_id, db_path=db_path, pdf_path=pdf_path,
@@ -1808,21 +1910,29 @@ async def _run_notes_reviewer_pass(
     except Exception as e:  # noqa: BLE001
         logger.exception("Notes reviewer construction failed")
         outcome["error"] = f"agent construction failed: {e}"
+        # Construction failed → persist the DRAFT checklist under a
+        # not_reviewed banner (PRD Flow A error state) so the UI still shows
+        # coverage instead of nothing.
+        await _finalize_coverage(reviewed=False)
         await _emit("error", {"type": "notes_reviewer_exception",
                               "message": outcome["error"]})
         await _emit("complete", {"success": False, "error": outcome["error"]})
         _stamp_elapsed()
         return outcome
 
-    outcome["context"] = context
-    n_items = sum(len(context.get(k) or []) for k in (
-        "duplicates", "overlap_candidates", "coverage_gaps",
-        "row_collisions", "subnote_gaps", "title_issues",
-    ))
+    _deps_box["deps"] = deps
+    outcome["context"] = _jsonsafe_reviewer_context(context)
+    from notes.reviewer_agent import count_open_items
+    # count_open_items folds the coverage checklist's unresolved rows into the
+    # gate, so a run whose only problem is a suspected numbering gap still runs
+    # the reviewer (no detector family fires for that alone).
+    n_items = count_open_items(context)
 
     # Nothing flagged — skip the model entirely (latency + tokens). Emit a
-    # status + success so the tab flips terminal instead of stranding.
+    # status + success so the tab flips terminal instead of stranding. The
+    # draft checklist IS the final state here (nothing to resolve).
     if n_items == 0:
+        await _finalize_coverage(reviewed=True)
         await _emit("status", {"phase": "complete",
                                "message": "No notes findings to review — skipped."})
         await _emit("complete", {"success": True, "writes_performed": 0,
@@ -1837,6 +1947,7 @@ async def _run_notes_reviewer_pass(
     except Exception:  # noqa: BLE001
         logger.exception("Notes reviewer snapshot failed for run %s", run_id)
         outcome["error"] = "snapshot_failed"
+        await _finalize_coverage(reviewed=False)
         await _emit("error", {"type": "notes_reviewer_exception",
                               "message": "Notes reviewer snapshot failed."})
         await _emit("complete", {"success": False, "error": outcome["error"]})
@@ -1940,6 +2051,9 @@ async def _run_notes_reviewer_pass(
             )
         except OSError:
             logger.warning("Failed to write notes_reviewer_log.json", exc_info=True)
+        # FINAL checklist — the reviewer's verdicts + authored notes are now
+        # reflected; this post-reviewer state is what the human sees.
+        await _finalize_coverage(reviewed=True)
         await _emit("complete", {
             "success": True,
             "writes_performed": deps.writes_performed,
@@ -1950,6 +2064,11 @@ async def _run_notes_reviewer_pass(
         outcome["error"] = "cancelled"
         # Interrupted — append any raised flags, never delete prior open/answered.
         _persist_flags_and_refresh(replace_flags=False)
+        # Persist whatever coverage the (partial) pass reached under a
+        # not_reviewed banner so a Stop-All'd notes run still shows a checklist
+        # instead of falling back to pre_feature. Best-effort (swallows), so it
+        # cannot suppress the re-raise that finalizes the run as aborted.
+        await _finalize_coverage(reviewed=False)
         raise
     except (WallclockExceeded, _asyncio.TimeoutError):
         msg = (f"Notes reviewer exceeded wall-clock cap of {_wallclock_cap}s "
@@ -1958,6 +2077,9 @@ async def _run_notes_reviewer_pass(
         outcome["error"] = "notes_reviewer_wallclock_exceeded"
         outcome["writes_performed"] = deps.writes_performed
         _persist_flags_and_refresh(replace_flags=False)
+        # Reviewer ran but exhausted its budget — persist what it resolved as
+        # the FINAL state (any still-missing rows correctly tip run status).
+        await _finalize_coverage(reviewed=True)
         await _emit("error", {"type": "notes_reviewer_wallclock_exceeded", "message": msg})
         await _emit("complete", {"success": False,
                                  "error": "notes_reviewer_wallclock_exceeded",
@@ -1966,6 +2088,9 @@ async def _run_notes_reviewer_pass(
         logger.exception("Notes reviewer pass failed")
         outcome["error"] = str(e)
         _persist_flags_and_refresh(replace_flags=False)
+        # The pass crashed mid-way — persist what we have under a not_reviewed
+        # banner (PRD Flow A: reviewer pass fails → draft with banner).
+        await _finalize_coverage(reviewed=False)
         await _emit("error", {"type": "notes_reviewer_exception", "message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
 
@@ -2766,6 +2891,35 @@ def _notes_auto_review_enabled() -> bool:
     return os.environ.get("XBRL_NOTES_AUTO_REVIEW", "true").lower() == "true"
 
 
+def _notes_coverage_tips_status(coverage: Optional[dict]) -> bool:
+    """Whether a run's notes coverage summary tips it to
+    ``completed_with_errors`` (PRD Decision 3, docs/PLAN-notes-coverage-and-
+    routing.md Phase 6 Step 9).
+
+    Tips when there is at least one unresolved MISSING row / uninvestigated
+    SUSPECTED-GAP (``unresolved`` > 0) OR the notes inventory was unavailable.
+    A ``None`` summary (coverage didn't run) never tips; ``not_verified``
+    sub-refs are counted as advisory and never reach ``unresolved``."""
+    if not coverage:
+        return False
+    return bool(
+        coverage.get("unresolved", 0) > 0
+        or coverage.get("banner") == "inventory_unavailable"
+    )
+
+
+def _notes_coverage_enabled() -> bool:
+    """Whether the holistic notes coverage checklist runs
+    (docs/PLAN-notes-coverage-and-routing.md).
+
+    Controlled by ``XBRL_NOTES_COVERAGE`` (default ON), mirroring the
+    ``XBRL_SPOT_CHECK`` convention. When off, the reviewer pass skips building /
+    persisting the checklist and coverage never tips run status — a config-flip
+    rollback (Rollback Plan). Read fresh each call so a Settings toggle takes
+    effect without a restart."""
+    return os.environ.get("XBRL_NOTES_COVERAGE", "true").lower() == "true"
+
+
 def _spot_check_enabled() -> bool:
     """Whether a CLEAN run (all cross-checks passed, no open conflicts) still
     gets a grounded spot-check (issue 1, 2026-06-21).
@@ -2921,6 +3075,8 @@ def _load_extended_settings() -> dict:
         # Issue 1 (2026-06-21): clean-run spot-check toggle + depth. Default on/light.
         "spot_check": _spot_check_enabled(),
         "spot_check_mode": _spot_check_mode(),
+        # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
+        "notes_coverage": _notes_coverage_enabled(),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": _entity_memory_enabled(),
         # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md):
@@ -5827,6 +5983,18 @@ async def run_multi_agent_stream(
             correction_outcome and correction_outcome.get("error")
             and correction_outcome.get("error") != "reviewer_exhausted"
         )
+        # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md
+        # Phase 6 Step 9): after the reviewer pass, any unresolved MISSING row
+        # or uninvestigated SUSPECTED-GAP, or an unavailable notes inventory,
+        # tips an otherwise-clean run to completed_with_errors (PRD Decision 3).
+        # `not_verified` sub-refs warn only and never reach `unresolved`.
+        _coverage = (
+            validator_outcome.get("coverage")
+            if isinstance(validator_outcome, dict) else None
+        )
+        notes_coverage_unresolved = (
+            _notes_coverage_enabled() and _notes_coverage_tips_status(_coverage)
+        )
         if all_agents_ok and merge_result.success and correction_exhausted:
             overall_status = "correction_exhausted"
         elif canonical_reexport_failed:
@@ -5837,7 +6005,7 @@ async def run_multi_agent_stream(
         elif (all_agents_ok and merge_result.success and not any_check_failed
               and not cross_check_crashed and open_conflicts == 0
               and not any_agent_flagged and not validator_failed
-              and not reviewer_failed):
+              and not reviewer_failed and not notes_coverage_unresolved):
             # Peer-review fix (2026-04-27): a cross-check pass that
             # crashed produced an empty results list, so
             # ``any_check_failed`` is misleadingly False. Without the
@@ -5862,6 +6030,11 @@ async def run_multi_agent_stream(
             # Extraction/merge/cross-checks are clean, but the reviewer /
             # spot-check pass failed to run (peer-review HIGH, 2026-06-21) →
             # needs review, not a clean badge.
+            overall_status = "completed_with_errors"
+        elif all_agents_ok and merge_result.success and notes_coverage_unresolved:
+            # Everything else is clean, but the notes coverage checklist has an
+            # unresolved missing note / uninvestigated suspected gap, or the
+            # notes inventory was unavailable → needs review (PRD Decision 3).
             overall_status = "completed_with_errors"
         elif all_agents_ok and (any_check_failed or cross_check_crashed):
             overall_status = "completed_with_errors"

@@ -139,6 +139,28 @@ and a disclosure table into one cell on this sheet contaminates the
 filing and fails validation — even though the content would look
 "complete" in Excel.
 
+=== EMBEDDED POLICY SUB-SECTIONS: CARVE OUT ONLY THE LABELLED ONES ===
+
+A batch note sometimes embeds a sub-section explicitly labelled
+"Material accounting policy" / "Significant accounting policy" (e.g.
+"Material accounting policy — Investment properties" printed inside the
+Investment Properties note). That labelled sub-section belongs on the
+Accounting Policies sheet (Sheet {{CROSS_SHEET:accounting_policies}}) —
+EXCLUDE it from your payload for this sheet. Write the REST of the note
+to its disclosure row as normal; the note still counts as "written" in
+your coverage receipt.
+
+This carve-out applies ONLY to sub-sections carrying that explicit
+material/significant label. Everything else stays in the note's cell,
+whole:
+
+- A sub-section titled "Policy on <topic>" WITHOUT the label stays.
+- Unlabelled policy-sounding prose stays.
+- A different topic merely MENTIONED in the note stays — a right-of-use
+  / leases paragraph inside the Property, Plant and Equipment note is
+  PP&E disclosure; content follows its top-line note, never the
+  mentioned topic's row.
+
 === PROSE vs BARE NUMBERS ===
 
 Every row on this sheet expects disclosure content — prose, a

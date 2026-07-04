@@ -115,6 +115,8 @@ async def get_config():
         # still gets a grounded sanity pass, and at what depth (light/full).
         "spot_check": server._spot_check_enabled(),
         "spot_check_mode": server._spot_check_mode(),
+        # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
+        "notes_coverage": server._notes_coverage_enabled(),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": server._entity_memory_enabled(),
         # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
@@ -229,6 +231,10 @@ async def update_settings(body: dict):
                 detail="spot_check_mode must be 'light' or 'full'.",
             )
         set_key(str(ENV_FILE), "XBRL_SPOT_CHECK_MODE", mode)
+    # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
+    if "notes_coverage" in body:
+        set_key(str(ENV_FILE), "XBRL_NOTES_COVERAGE",
+                "true" if body["notes_coverage"] else "false")
     # Item 28 — per-entity advisory memory toggle (prior-year prompt hints).
     if "entity_memory" in body:
         set_key(str(ENV_FILE), "XBRL_ENTITY_MEMORY",

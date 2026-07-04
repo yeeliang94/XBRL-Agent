@@ -340,7 +340,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **25**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **28**). `init_db`
 reads the stored version and walks an old database up one version at a time
 through per-version `ALTER TABLE` blocks, so any older DB lands on the current
 schema without manual intervention. Each step is idempotent. Shipped steps:
@@ -471,6 +471,15 @@ schema without manual intervention. Each step is idempotent. Shipped steps:
   `INTEGER DEFAULT 0`, mirroring v15). A DB that never reached v26 gets the
   columns inline from the CREATE; a v26 DB gets the duplicate-column-tolerant
   ALTERs. Pinned by `tests/test_db_schema_v27.py`.
+- **v27 → v28:** adds `notes_coverage_rows` — the durable per-run holistic
+  notes coverage checklist (gotcha #27, docs/PLAN-notes-coverage-and-routing.md).
+  One row per top-level note (`subnote_ref` NULL) plus optional per-sub-ref
+  child rows; a banner sentinel row (`note_num = -1`) carries the checklist
+  banner state. Unique index coalesces a NULL `subnote_ref` to `''` so a
+  top-level row and its children never collide.
+  `replace_notes_coverage_for_run` rewrites the whole run's rows in one
+  transaction (the checklist is recomputed wholesale). Pure `CREATE TABLE IF
+  NOT EXISTS` walk-forward. Pinned by `tests/test_db_schema_v28.py`.
 
 SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
 entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
@@ -1494,6 +1503,57 @@ remains as an inert artifact because the migration chain replays every step
 (gotcha #11), but no code reads or writes it. The heavy deps it alone pulled in
 (`docling`, `torch`, `onnxruntime`, `rapidocr`, `easyocr`, `pypandoc_binary`,
 `python-docx`) and the `models/` weight bundle are gone.
+
+### 27. Notes coverage checklist — post-reviewer visibility + status tipping
+
+A holistic, human-visible **coverage checklist** reconciles every top-level
+note in the scout inventory against WHERE its content landed across ALL notes
+sheets (docs/PLAN-notes-coverage-and-routing.md). Two coupled hardenings: the
+checklist, and a **top-line routing rule** (notes stay whole; only
+explicitly-labelled material/significant accounting-policy sections carve out
+to the policies sheet — enforced by prompt tiers + `detect_topline_splits`).
+
+Load-bearing invariants:
+
+- **Pure builder, gotcha-#14-safe.** `notes/coverage_checklist.py::
+  build_draft_checklist(inventory_rows, provenance_entries, …)` keys ONLY on
+  integer note numbers + sub-ref STRINGS from `source_note_refs` provenance —
+  never content matching. Content judgement (is sub-section (b) really in the
+  cell?) is the reviewer's job. Statuses: `placed` / `missing` / `skipped` /
+  `suspected_gap` (INTERNAL numbering holes only — before-first / after-last is
+  the documented blind spot). An empty inventory yields
+  `inventory_available=False` (loud, never empty-but-green).
+- **The human sees the POST-reviewer checklist.** The draft is a reviewer
+  INPUT only. The notes reviewer auto-resolves every non-placed row via two
+  grounded tools (`resolve_coverage_note` → `confirmed_absent`/`not_applicable`;
+  `verify_subnote` → `verified`/`missing`) accumulated on `NotesReviewerDeps`;
+  the FINAL checklist merges those verdicts + reviewer-authored notes. The pass
+  recomputes + persists on EVERY exit path (`_finalize_coverage` in
+  `server._run_notes_reviewer_pass`): success → `reviewed`; crash/construction
+  failure → `not_reviewed` draft; empty inventory → `inventory_unavailable` +
+  a structured warning event. Manual re-review re-persists for free (same pass).
+- **Coverage tips run status.** An unresolved `missing` row / uninvestigated
+  `suspected_gap` / unavailable inventory tips the run to
+  `completed_with_errors` (`_notes_coverage_tips_status`, folded into the
+  overall-status block per gotcha #10 — never a second writer). `not_verified`
+  sub-refs warn only. The reviewer skip gate uses `count_open_items` (detector
+  families + unresolved checklist rows) so a suspected-gap-only run still runs.
+- **Persistence + API.** Durable in `notes_coverage_rows` (schema v28) — one
+  top-level row per note + per-sub-ref child rows + a `note_num = -1` banner
+  sentinel (distinguishes `inventory_unavailable` from `pre_feature`).
+  `GET /api/runs/{id}/notes-coverage` nests children under parents + derives the
+  summary. `web/src/components/NotesCoveragePanel.tsx` is a Notes-tab SECTION
+  (not a `role="tab"` — gotcha #7), placement chips dispatch a
+  `notes-coverage-focus` window event.
+- **Kill switch:** `XBRL_NOTES_COVERAGE` (default ON; `/api/settings` +
+  `/api/config`; suite default OFF in `tests/conftest.py`, like spot-check).
+  Rollback is a config flip — the table stays as an inert artifact.
+
+Pinned by `tests/test_coverage_checklist.py`,
+`tests/test_notes_reviewer_coverage.py`,
+`tests/test_notes_coverage_run_status.py`, `tests/test_notes_coverage_api.py`,
+`tests/test_notes_detectors_splits.py`, `tests/test_db_schema_v28.py`, and the
+`NotesCoveragePanel` web tests.
 
 ## Testing
 

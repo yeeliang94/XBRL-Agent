@@ -226,6 +226,70 @@ def detect_same_sheet_row_collisions(
     return collisions
 
 
+def detect_topline_splits(
+    entries: list[dict],
+    sheet_12: str = "Notes-Listofnotes",
+) -> list[dict]:
+    """Top-level notes whose content landed on ≥2 distinct rows of the List
+    of Notes sheet — top-line routing-rule candidates (PRD:
+    docs/PRD-notes-coverage-and-routing.md, Rule 1).
+
+    The confirmed business rule (2026-07-04): content follows its top-line
+    note, whole. A note fragmented across several fields (a right-of-use
+    paragraph pulled out of the PP&E note into the leases row) is the
+    "too eager to split" failure mode. But a single note MAY legitimately
+    feed several rows when the PDF presents materially different peer
+    disclosures (the combined financial-instruments note) — provenance
+    alone cannot tell the two apart, so this detector reports CANDIDATES
+    by note_num + coordinates only (gotcha-#14-safe) and the reviewer
+    judges each against the PDF.
+
+    Scoped to Sheet 12 ONLY (mirrors ``detect_same_sheet_row_collisions``):
+    it is the one sheet whose rows are per-topic disclosure concepts where
+    fragmentation is the failure mode. Every other sheet legitimately
+    multi-rows a single note — the policies sheet fans out per topic
+    (Direction 2) and hosts carve-outs (Direction 1), Corporate Information
+    splits the one corporate-info note across its field rows, and the
+    numeric sheets (13/14) populate several rows from one note by design.
+    Flagging those would put false positives in front of a reviewer that
+    only edits prose sheets.
+
+    Each result: ``{"note_num", "sheet", "rows": [{"row", "row_label"},
+    ...], "source_note_refs"}`` — one finding per note with the rows
+    sorted, so the reviewer sees the whole fragmentation at once instead
+    of pairwise noise.
+    """
+    # (note_num, sheet) -> {row -> row_label}, plus the refs seen.
+    placements: dict[tuple[int, str], dict[int, str]] = {}
+    refs_seen: dict[tuple[int, str], set[str]] = {}
+    for e in entries:
+        sheet = e.get("sheet") or ""
+        if sheet != sheet_12:
+            continue
+        row = e.get("row")
+        if row is None:
+            continue
+        refs = e.get("source_note_refs") or []
+        for n in _top_note_nums(refs):
+            key = (n, sheet)
+            placements.setdefault(key, {})[int(row)] = e.get("row_label") or ""
+            refs_seen.setdefault(key, set()).update(str(r) for r in refs)
+
+    splits: list[dict] = []
+    for (note_num, sheet), rows in placements.items():
+        if len(rows) < 2:
+            continue
+        splits.append({
+            "note_num": note_num,
+            "sheet": sheet,
+            "rows": [
+                {"row": r, "row_label": rows[r]} for r in sorted(rows)
+            ],
+            "source_note_refs": sorted(refs_seen.get((note_num, sheet), set())),
+        })
+    return sorted(splits, key=lambda s: (s["note_num"], s["sheet"]))
+
+
 def detect_subnote_coverage_gaps(
     inventory_subnotes: dict[int, list[str]],
     entries: list[dict],
