@@ -204,6 +204,47 @@ def test_fuzzy_label_resolves_with_ratio(tmp_path, template):
     assert load_workbook(out)[SHEET]["B4"].value == 10
 
 
+def test_strict_mode_refuses_fuzzy_match(tmp_path, template):
+    out = tmp_path / "filled.xlsx"
+    code = main(["fill", "--workbook", template,
+                 "--input", make_input(tmp_path, [
+                     {"sheet": SHEET, "label": "Freehod land",  # typo
+                      "column_role": "current_year", "value": 10}]),
+                 "--output", str(out), "--strict",
+                 "--report", str(tmp_path / "r.json")])
+    report = json.loads((tmp_path / "r.json").read_text())
+    assert code == 1
+    assert report["strict"] is True
+    assert not report["written"]
+    assert "strict mode" in report["unresolved"][0]["detail"]
+
+
+def test_strict_mode_still_allows_exact_match(tmp_path, template):
+    _, report, out = run_fill(tmp_path, template, [
+        {"sheet": SHEET, "label": "freehold land",  # exact after normalise
+         "column_role": "current_year", "value": 10},
+    ], extra_args=["--strict"])
+    assert report["written"] and report["fuzzy_matched"] == []
+    assert load_workbook(out)[SHEET]["B4"].value == 10
+
+
+def test_doc_level_strict_flag_is_honoured(tmp_path, template):
+    out = tmp_path / "filled.xlsx"
+    doc = {"strict": True,
+           "sheets": {SHEET: {"label_column": "A",
+                              "columns": {"current_year": "B"}}},
+           "writes": [{"sheet": SHEET, "label": "Freehod land",
+                       "column_role": "current_year", "value": 10}]}
+    inp = tmp_path / "fill.json"
+    inp.write_text(json.dumps(doc), encoding="utf-8")
+    code = main(["fill", "--workbook", template, "--input", str(inp),
+                 "--output", str(out), "--report", str(tmp_path / "r.json")])
+    report = json.loads((tmp_path / "r.json").read_text())
+    assert code == 1  # no --strict flag, but doc says strict
+    assert report["strict"] is True
+    assert not report["written"]
+
+
 def test_exact_match_is_not_flagged_fuzzy(tmp_path, template):
     _, report, _ = run_fill(tmp_path, template, [
         {"sheet": SHEET, "label": "freehold land",  # case-only difference

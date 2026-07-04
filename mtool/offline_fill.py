@@ -444,6 +444,13 @@ def run_fill(args) -> int:
         "force_recalc": None,
     }
 
+    # Strict mode refuses fuzzy matches (writes them to `unresolved` instead of
+    # applying). CLI --strict OR a doc-level "strict": true (the exporter sets
+    # this on machine-generated docs, where a non-exact label is a bug, not a
+    # typo to forgive). Hand-authored operator runs default lenient.
+    strict = bool(getattr(args, "strict", False) or doc.get("strict"))
+    report["strict"] = strict
+
     label_maps = {}
     patched_xml = {}
     verify_targets = []
@@ -475,6 +482,12 @@ def run_fill(args) -> int:
                 continue
             if res["status"] == "unresolved":
                 report["unresolved"].append({**base, **res})
+                continue
+            if strict and res["status"] == "resolved" and res["ratio"] < 1.0:
+                report["unresolved"].append({**base, **res,
+                    "detail": f"strict mode: fuzzy match "
+                              f"(similarity {res['ratio']}) refused; "
+                              f"would have matched {res['matched_label']!r}"})
                 continue
             col = sheets_cfg[sheet]["columns"][w["column_role"]]
             addr = f"{col}{res['row']}"
@@ -604,6 +617,8 @@ def main(argv=None) -> int:
     p_fill.add_argument("--report")
     p_fill.add_argument("--force-recalc", action="store_true",
                         dest="force_recalc")
+    p_fill.add_argument("--strict", action="store_true", dest="strict",
+                        help="refuse fuzzy label matches (report as unresolved)")
     p_fill.add_argument("--dry-run", action="store_true", dest="dry_run")
 
     args = parser.parse_args(argv)
