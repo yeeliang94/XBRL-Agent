@@ -1521,8 +1521,15 @@ Load-bearing invariants:
   never content matching. Content judgement (is sub-section (b) really in the
   cell?) is the reviewer's job. Statuses: `placed` / `missing` / `skipped` /
   `suspected_gap` (INTERNAL numbering holes only — before-first / after-last is
-  the documented blind spot). An empty inventory yields
-  `inventory_available=False` (loud, never empty-but-green).
+  the documented blind spot). `skipped` is sourced from the Sheet-12 skip
+  receipts the coordinator persists to `{output_dir}/notes12_skips.json` at
+  fan-out time (loaded by both the reviewer context and the server finalizer via
+  `coverage_checklist.load_notes12_skips`) — an intentionally-skipped note is
+  `skipped`, never `missing`, so it doesn't tip the run. An empty inventory yields
+  `inventory_available=False` (loud, never empty-but-green). A note the reviewer
+  resolves (`not_applicable`/`confirmed_absent`) or that was skipped is also
+  dropped from the raw `coverage_gaps` detector family so `verify_findings`
+  doesn't re-flag it as still-open.
 - **The human sees the POST-reviewer checklist.** The draft is a reviewer
   INPUT only. The notes reviewer auto-resolves every non-placed row via two
   grounded tools (`resolve_coverage_note` → `confirmed_absent`/`not_applicable`;

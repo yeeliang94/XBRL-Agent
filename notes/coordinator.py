@@ -913,6 +913,33 @@ def _build_single_sheet_warnings(outcome: _SingleAgentOutcome) -> list[str]:
     return warnings
 
 
+def _write_notes12_skips(output_dir: str, sub_result: Any) -> None:
+    """Write the run's Sheet-12 skip receipts to ``notes12_skips.json``.
+
+    One ``{"note_num", "reason"}`` entry per note a succeeded sub-agent
+    explicitly skipped (``action == "skipped"``). Overwrites wholesale so a
+    notes re-run clears stale skips. Consumed by the coverage checklist so an
+    intentional skip lands `skipped`, not `missing` (Codex review P2)."""
+    skips: list[dict[str, Any]] = []
+    for sub in getattr(sub_result, "sub_agent_results", None) or []:
+        if getattr(sub, "status", None) != "succeeded":
+            continue
+        coverage = getattr(sub, "coverage", None)
+        if coverage is None:
+            continue
+        for entry in getattr(coverage, "entries", None) or []:
+            if getattr(entry, "action", None) == "skipped":
+                skips.append({
+                    "note_num": int(entry.note_num),
+                    "reason": str(getattr(entry, "reason", "") or ""),
+                })
+    path = Path(output_dir) / "notes12_skips.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(skips, indent=2, ensure_ascii=False), encoding="utf-8",
+    )
+
+
 def _write_single_sheet_failure_log(
     output_dir: str,
     template_type: NotesTemplateType,
@@ -1064,6 +1091,18 @@ async def _run_list_of_notes_fanout(
             page_offset=page_offset,
             scout_context=scout_context,
         )
+
+        # Persist Sheet-12 skip receipts as a durable side-log so the notes
+        # coverage checklist (server._compute_notes_coverage_checklist) marks
+        # an INTENTIONALLY skipped note `skipped` (reason attached) instead of
+        # `missing` — a skipped note has no provenance, so inventory×provenance
+        # alone would flag it missing and wrongly tip the run to
+        # completed_with_errors. Read from output_dir by BOTH the auto and the
+        # manual reviewer passes. Best-effort — never fail the fan-out.
+        try:
+            _write_notes12_skips(output_dir, sub_result)
+        except Exception:  # noqa: BLE001
+            logger.debug("notes12 skips side-log write skipped", exc_info=True)
 
         # Total-failure guard: an empty aggregated payload list coming out
         # of a non-empty inventory means every sub-agent lost coverage.

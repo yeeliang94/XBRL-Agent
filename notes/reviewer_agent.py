@@ -166,6 +166,10 @@ class NotesReviewerDeps:
         # Note numbers the reviewer AUTHORED back into place (audit marker on
         # the checklist row). Seeded by the author write path.
         self.authored_note_nums: set[int] = set()
+        # Sheet-12 skip receipts ([{"note_num","reason"}]) — an intentionally
+        # skipped note is `skipped`, not `missing`, so it neither shows in the
+        # packet's MISSING block nor tips run status. Loaded by the factory.
+        self.skip_receipts: list[dict] = []
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +546,7 @@ def _build_context(
     note_verdicts: Optional[dict] = None,
     subnote_verdicts: Optional[dict] = None,
     reviewer_added_notes: Optional[set] = None,
+    skip_receipts: Optional[list] = None,
 ) -> dict:
     """Run all five detectors + build the holistic coverage checklist from the
     durable DB inputs.
@@ -553,8 +558,13 @@ def _build_context(
 
     ``coverage_checklist`` (Phase 5) is the reconciliation of the scout
     inventory against every placement, with any reviewer verdicts merged. It is
-    the positive-form superset of ``coverage_gaps`` (which the detector families
-    still emit for ``verify_findings`` regression diffing).
+    the positive-form superset of ``coverage_gaps``.
+
+    ``coverage_gaps`` (the detector family that feeds ``finding_keys`` /
+    ``verify_findings``) is filtered so a note the reviewer intentionally
+    SKIPPED (Sheet-12 receipt) or RESOLVED (``not_applicable``) no longer reads
+    as an open gap — otherwise ``verify_findings`` keeps reporting it open even
+    though the workflow resolved it without authoring provenance (Codex review).
     """
     from notes.detectors import load_sidecar_entries
 
@@ -578,14 +588,31 @@ def _build_context(
     checklist = build_draft_checklist(
         inventory_rows=inventory_rows,
         provenance_entries=entries,
+        skip_receipts=skip_receipts,
         note_verdicts=note_verdicts,
         subnote_verdicts=subnote_verdicts,
         reviewer_added_notes=reviewer_added_notes,
     )
+    # Notes the reviewer resolved without adding provenance (not_applicable /
+    # confirmed_absent) or that were intentionally skipped — drop them from the
+    # raw detector coverage_gaps so verify_findings doesn't re-flag them.
+    resolved_or_skipped = {
+        n for n, v in (note_verdicts or {}).items()
+        if str((v or {}).get("verdict", "")).strip().lower() in RESOLVED_VERDICTS
+    }
+    for s in skip_receipts or []:
+        try:
+            resolved_or_skipped.add(int(s["note_num"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    coverage_gaps = [
+        n for n in inventory_coverage_gaps(inventory_note_nums or [], entries)
+        if n not in resolved_or_skipped
+    ]
     return {
         "duplicates": detect_cross_sheet_duplicates_by_ref(entries),
         "overlap_candidates": detect_cross_sheet_overlap_candidates(entries),
-        "coverage_gaps": inventory_coverage_gaps(inventory_note_nums or [], entries),
+        "coverage_gaps": coverage_gaps,
         "row_collisions": detect_same_sheet_row_collisions(entries),
         "subnote_gaps": detect_subnote_coverage_gaps(inventory_subnotes or {}, entries),
         "topline_splits": detect_topline_splits(entries),
@@ -700,6 +727,7 @@ def recompute_notes_findings(deps: "NotesReviewerDeps") -> dict:
         note_verdicts=deps.coverage_note_verdicts,
         subnote_verdicts=deps.coverage_subnote_verdicts,
         reviewer_added_notes=deps.authored_note_nums,
+        skip_receipts=deps.skip_receipts,
     )
 
 
@@ -776,6 +804,12 @@ def create_notes_reviewer_agent(
         if _backfill_sidecar_provenance(run_id, db_path, sidecar_paths):
             deps.db_provenance_present = True
 
+    # Sheet-12 skip receipts (durable side-log the coordinator wrote at fan-out
+    # time) so an intentionally skipped note is `skipped`, not `missing`, in the
+    # packet + checklist. Kept on deps so verify_findings' recompute agrees.
+    from notes.coverage_checklist import load_notes12_skips
+    deps.skip_receipts = load_notes12_skips(output_dir)
+
     context = _build_context(
         run_id=run_id, db_path=db_path,
         inventory_subnotes=inventory_subnotes,
@@ -783,6 +817,7 @@ def create_notes_reviewer_agent(
         # After a successful backfill the DB is authoritative; only a run still
         # sidecar-only (backfill found nothing) needs the on-disk fallback.
         sidecar_paths=None if deps.db_provenance_present else sidecar_paths,
+        skip_receipts=deps.skip_receipts,
     )
     # Baseline for verify_findings regression detection (before any write).
     deps.original_finding_keys = finding_keys(context)
