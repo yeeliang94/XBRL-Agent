@@ -1,163 +1,233 @@
-# Implementation Plan: Notes Editor — Per-Side Border Control + Selection Persistence
+# Implementation Plan: mTool Fill Pipeline — Facts → Filled MBRS Template
 
-**Overall Progress:** `100%` — code complete, all automated tests green (frontend 814,
-sanitizer 41). Live in-app manual checks (the `Verify` steps that drive the running app)
-are left for the user to confirm; they were validated via the component/unit suite instead.
-**PRD Reference:** none — shaped via `/brainstorm` on 2026-06-29 (see Summary). Relates to
-CLAUDE.md gotcha #16 (notes editor v2, table-cell styling) and the
-`notes_wysiwyg_formatting` memory.
-**Last Updated:** 2026-06-29
+**Overall Progress:** `10%` (Phase 0 spike complete; Phases 1–6 to do)
+**PRD Reference:** none — shaped in-session 2026-07-04/05. Context docs:
+`docs/PLAN-mtool-offline-patch-spike.md` (the proven spike),
+`docs/MTOOL-ZIP-RECON-BRIEF.md` (Windows recon questions), and the
+`mtool_offline_patch_proven` memory.
+**Last Updated:** 2026-07-05
 
-> Replaces the previous (completed, 100%) PLAN.md for **Reviewer Self-Verify — Review
-> Follow-ups** — that work is done and preserved in git history (the same
-> replace-in-place convention this repo's PLAN.md slot uses; `docs/Archive/` is
-> read-only, so no copy is made there). **This work is unrelated to the current
-> `feat/reviewer-verify-followups` branch — start a fresh branch before coding
-> (see Pre-Implementation Checklist).**
+> Replaces the previous (completed, 100%) PLAN.md for **Notes Editor —
+> Per-Side Border Control + Selection Persistence** — that work is done and
+> preserved in git history (same replace-in-place convention).
 
 ## Summary
 
-The notes table editor can't give a cell independent per-side borders. Picking a colour
-repaints all four sides, the per-side buttons only toggle a side on/off, "off" leaves the
-default grey grid showing, and every formatting click drops the multi-cell selection so the
-user re-selects constantly. This plan rewires the border toolbar to a **two-step model**
-(pick a colour or the eraser → click the edge(s) to paint), makes "erase" use CSS `hidden`
-(which wins the collapsed shared-edge contest) instead of `none` (which loses to the
-neighbour's grey), and **preserves the multi-cell `CellSelection`** across the save-reconcile
-re-render. No backend/exporter changes — the data layer and sanitiser already support all of it.
+Turn the proven single-sheet offline-patch spike into the product feature the
+internal team asked for: the app takes a completed extraction run, generates
+mTool fill instructions from the canonical facts DB, patches the user's
+uploaded empty mTool template via the proven zip-surgery mechanism (no Excel,
+so it runs server-side and in the cloud), and returns one filled workbook the
+user opens in mTool to Validate/Generate. The bridge from `run_concept_facts`
+to fill instructions — including sign and scale translation — is the core of
+the work; the delivery UX builds on it.
 
 ## Key Decisions
 
-- **Erase with `hidden`, not `none`** — The table is `border-collapse: collapse`. In a
-  collapsed table the visible line between two cells is resolved from *both* cells' edges;
-  `border-style: none` has the **lowest** priority and always loses to the neighbour's default
-  grey line, so "no border" shows grey. `border-style: hidden` has the **highest** priority and
-  always wins, so the edge truly disappears. Sanitiser already accepts `hidden`
-  (`html_sanitize.py:98`) — no backend change.
-- **Two-step toolbar (select colour → apply to edge)** — replaces "swatch paints all four
-  sides". Selecting a colour (or the eraser) only sets the *active* colour; clicking
-  Top/Right/Bottom/Left/All paints that colour onto those edges, leaving the others untouched.
-  This is the single missing capability ("this colour, on this side, leave the rest") that
-  causes symptoms 1–3. The "All" button preserves the old one-click "whole grid one colour" flow.
-- **Restore `CellSelection`, not a text range, after reconcile** — the current restore uses
-  `setTextSelection` (`NotesReviewTab.tsx:929`), which can't represent a multi-cell selection.
-  Capture the `CellSelection` before `setContent` and rebuild it after, so the multi-cell
-  selection (and its visible highlight) survive the save.
-- **Scope: frontend + (verify-only) sanitiser** — `applyCellBorderSide` already preserves the
-  other three sides (`cellFormatting.ts:174`); the xlsx download is text-only
-  (`html_to_excel_text`), so borders never reach the workbook. Only the editor preview and the
-  clipboard paste render borders. No exporter, no DB, no schema work.
-- **Keep the existing 5-colour palette (+ an eraser); defer a free colour picker** — the
-  "finer control" the user asked for is delivered by per-side independence, not by more colours.
-  A free/custom colour picker is explicitly out of scope for this plan (possible follow-up).
+- **Mechanism: offline zip surgery** (`mtool/offline_fill.py`) — proven
+  end-to-end on the Windows box 2026-07-04 (mTool opened the patched file;
+  Validate + Generate accepted the injected values). The live-Excel COM route
+  is retired from this plan; do not re-litigate.
+- **Source of values: `run_concept_facts` only** — the canonical, reviewed
+  store. Never the scratch/merged xlsx (gotcha #21; sidesteps gotcha #4).
+- **LEAF / MATRIX_CELL facts only** — COMPUTED totals are derived by the
+  mTool template's own formulas. Mirrors the eval grader's rule (gotcha #23)
+  and the spike's formula guard.
+- **Variant knowledge lives in data, not code** — the fill tool stays
+  variant-neutral; the exporter + per-template column map carry
+  MFRS/MPERS × Company/Group. Validated by the real mTool layout differing
+  from ours (labels col D, values E/F) and being absorbed by config alone.
+- **Machine-generated instructions use exact label matching only** — fuzzy
+  is a hand-authoring convenience; in the pipeline a non-exact match is a
+  bug we want surfaced, not papered over (`--strict` at fill time).
+- **The fill tool stays a single stdlib-only file** — it still travels to
+  the Windows box for operator-driven runs; the server imports the same
+  module so there is exactly one patcher (no fork/drift).
+- **No DB schema change** — the exporter reads existing tables; delivery
+  endpoints are stateless over the run's facts. Keeps rollback trivial.
+- **SOCIE deferred** — matrix layout is its own problem on every axis;
+  excluded until the linear sheets are shipped.
 
 ## Pre-Implementation Checklist
 
-- [ ] 🟩 All questions from `/brainstorm` resolved — **done** (4 symptoms reproduced + root-caused)
-- [ ] 🟩 Confirm a fresh branch off `main` (e.g. `feat/notes-border-per-side`); do **not** build
-      this on `feat/reviewer-verify-followups`
-- [ ] 🟩 Stash / commit the two uncommitted reviewer files (`notes/reviewer_agent.py`,
-      `notes/validator_agent.py`) so they don't ride along on the new branch
-- [ ] 🟩 Confirm the two-step toolbar UX (Key Decision #2) — it intentionally changes how the
-      colour swatches behave, so the existing `NotesReviewTab` pinning tests will be updated in
-      the same commit (expected, per gotcha #7 "change a token and its pinning test together")
+- [x] 🟩 Spike proven (mTool accepts patched workbook end-to-end)
+- [ ] 🟥 Windows follow-up answers received (Phase 1 below) — **blocks
+  Phase 3 sign/scale, not Phases 2/4**
+- [ ] 🟥 No conflicting in-progress work: `main` is clean; the
+  `feat/skill-first-workflow-references` branch is unrelated. Start branch
+  `feat/mtool-fill-pipeline`.
 
 ## Tasks
 
-### Phase 1: Reliable erase + per-side recolor (fixes symptoms 1, 2, 3)
+### Phase 0: Spike (context — done)
 
-- [ ] 🟩 **Step 1: Add the `hidden`-erase primitive** — give the editor a value that truly
-      removes one edge in a collapsed table, replacing the grey-leaking `none`.
-  - [ ] 🟩 In `web/src/lib/cellFormatting.ts`, add `export const BORDER_HIDDEN = "hidden"`
-        (alongside `BORDER_NONE`), and a comment explaining the collapse-priority reason.
-  - [ ] 🟩 Decide the stored shape (`"hidden"` vs `"1px hidden #000000"`) — prefer bare
-        `"hidden"`; both validate, bare is cleanest and renders `border-<side>: hidden`.
-  - [ ] 🟩 Confirm (no change expected) the sanitiser keeps it: `_is_border_shorthand` accepts a
-        lone `hidden` token (`html_sanitize.py:145`, `_BORDER_STYLE_VALUES` at :98).
-  - **Verify:** Add/extend a unit test in `tests/test_notes_html_sanitize_css.py` asserting
-    `<td style="border-top: hidden">` survives sanitisation unchanged. Run
-    `./venv/bin/python -m pytest tests/test_notes_html_sanitize_css.py -v` → green.
+- [x] 🟩 **Step 0: Offline-patch spike** — stdlib-only zip-surgery filler,
+  label resolution + fuzzy reporting, formula guard, read-back verify, run
+  report, BOM tolerance; 35 pinning tests; proven in mTool on Windows.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_mtool_offline_fill.py -q`
+    → 35 passed. Windows operator confirmed Validate/Generate. ✅
 
-- [ ] 🟩 **Step 2: Rewire the border toolbar to two-step (select colour → apply to edge)** —
-      the core fix. In `web/src/components/NotesReviewTab.tsx` border controls (~lines 1380–1418):
-  - [ ] 🟩 Colour swatches set the active `borderColor` only — **remove** the
-        `applyCellBorderAll(...)` call on swatch click (line ~1411). Keep the selected-swatch
-        highlight (`aria-pressed`).
-  - [ ] 🟩 Add an **Eraser** choice to the colour row; selecting it sets the active colour to a
-        sentinel meaning "erase" (applies `BORDER_HIDDEN`).
-  - [ ] 🟩 Change per-side buttons (Top/Right/Bottom/Left) from toggle to **recolor**: each calls
-        `applyCellBorderSide(editor, side, eraserActive ? BORDER_HIDDEN : gridBorderValue(borderColor))`.
-        Delete the `sideIsOn(side) ? BORDER_NONE : …` toggle branch (line ~1387).
-  - [ ] 🟩 "All borders" applies the active colour (or `BORDER_HIDDEN`) to all four sides
-        (keep `applyCellBorderAll`); point the existing "No borders" button at `BORDER_HIDDEN`.
-  - [ ] 🟩 Keep the `.focus()` chain and `onMouseDown={preventDefault}` on every button (already
-        present — do not remove; they're load-bearing for selection per `cellFormatting.ts:143`).
-  - **Verify:** In the running app (`./start.sh`, open a notes cell, enter edit mode): select all
-    cells → White → All → grid goes white; select 2 cells → Black → Top → only the top edges turn
-    black, the other three stay white; pick Eraser → Right → the right edge disappears (no grey).
-    All three of the user's original symptoms gone.
+### Phase 1: Close the spike's open questions (Windows side, parallel track)
 
-- [ ] 🟩 **Step 3: Reflect per-side state in the toolbar** — so the controls show what the
-      focused cell actually has (the old `sideIsOn` boolean is now insufficient).
-  - [ ] 🟩 Update the per-side button's pressed/active styling to read the focused cell's
-        `border<Side>` attr via `currentCellAttrs(editor)` and show whether that side is painted
-        / erased / default. Keep it advisory (anchor cell only is acceptable for v1).
-  - **Verify:** Click into a cell with a known mix (top black, right hidden, rest white) → the
-    toolbar's per-side indicators match. `cd web && npx vitest run` cellFormatting/NotesReviewTab → green.
+- [ ] 🟥 **Step 1: Send the follow-up brief to the Windows agent** — append
+  to `docs/MTOOL-ZIP-RECON-BRIEF.md` a short addendum asking, against the
+  filing that just worked: (a) does the generated XBRL instance carry the
+  full unscaled value or the on-sheet (thousands) figure — paste the fact
+  element verbatim (recon Task 3.6); (b) did the negative test value survive
+  to the instance with the right sign; (c) were derived/total cells correct
+  without `--force-recalc`, and did the add-in behave with it on;
+  (d) `inspect` output (sheet list + one sheet's column layout) for an MPERS
+  and a Group template, to confirm sheet naming + the 4-column Group shape.
+  - **Verify:** addendum committed; answers received and recorded in the
+    addendum's answer block. Until then, Phase 3 steps stay blocked.
 
-### Phase 2: Selection persistence (fixes symptom 4)
+### Phase 2: The bridge — facts → fill instructions (Mac, pure Python)
 
-- [ ] 🟩 **Step 4: Preserve the multi-cell `CellSelection` across the save-reconcile** — stop the
-      formatting save from collapsing the selection.
-  - [ ] 🟩 In `NotesReviewTab.tsx` reconcile branch (~lines 919–933), before `setContent`, detect
-        `editor.state.selection instanceof CellSelection` (import `CellSelection` from
-        `@tiptap/pm/tables`). Capture its anchor/head cell positions.
-  - [ ] 🟩 After `setContent`, if a `CellSelection` was captured, rebuild it
-        (`CellSelection.create(doc, anchorPos, headPos)` mapped into the new doc) and dispatch it;
-        otherwise fall back to the existing `setTextSelection` for caret/text cases. Wrap in
-        try/catch (positions may be invalid after sanitisation — harmless, mirrors current code).
-  - [ ] 🟩 Sanity-check the prop-sync path (`:837`): confirm it does **not** fire on a normal
-        self-originated save (the `cell.html` prop is stable; only the internal refs change). If
-        it can fire, apply the same CellSelection-restore guard there.
-  - **Verify:** In the app, drag-select several cells, apply a border colour, and confirm the
-    multi-cell highlight **stays** after the save settles (watch the `.selectedCell` highlight;
-    no re-select needed). Repeat rapidly across several edges — selection persists each time.
+- [ ] 🟥 **Step 2: Exporter core** — new `mtool/exporter.py`:
+  `build_fill_doc(db, run_id) -> dict` (the fill-JSON shape the tool already
+  consumes). Reads `run_concept_facts` joined to `concept_nodes` scoped to
+  the run's template family (`{standard}-{level}-` prefix, gotcha #21);
+  filters to LEAF/MATRIX_CELL; dedups by `concept_uuid` (aliases never
+  emitted); maps `(period, entity_scope)` → `column_role`
+  (company: `current_year`/`prior_year`; group adds
+  `group_current_year`/`group_prior_year`); emits one write per fact with
+  the concept's label. Sheets it can't handle (SOCIE) are excluded and
+  **counted in the doc's metadata** — no silent truncation.
+  - [ ] 🟥 Emit a `meta` block: run id, standard/level, excluded sheets +
+    fact counts, generation timestamp — the operator's coverage receipt.
+  - [ ] 🟥 Unit tests with a hand-rolled DB fixture (pattern from
+    `tests/test_canonical_export.py`: `import_template` +
+    `import_company_targets`): CY/PY routing, group scopes, COMPUTED
+    excluded, alias deduped, SOCIE excluded-but-counted.
+  - **Verify:** `./venv/bin/python -m pytest tests/test_mtool_exporter.py -q`
+    green; fixture doc validates against `offline_fill.validate_input`.
 
-### Phase 3: Cross-surface verification + regression tests
+- [ ] 🟥 **Step 3: End-to-end dry run on a real run's data** — small harness
+  (test or script) that takes an existing completed run in the local DB,
+  builds the fill doc, and runs `offline_fill` against our own
+  `XBRL-template-MFRS/Company/01-SOFP-CuNonCu.xlsx` (whose labels are the
+  same taxonomy vocabulary). Every label must resolve **exactly** —
+  fuzzy hits or unresolved rows are exporter bugs (label drift) to fix here,
+  where they're cheap.
+  - **Verify:** report shows `fuzzy_matched: 0`, `unresolved: 0` for the
+    sample run; values in the patched workbook match the run's Values tab.
 
-- [ ] 🟩 **Step 5: Verify the clipboard paste honours `hidden` + per-side colours** — borders
-      only render in the editor and on paste; make sure paste matches.
-  - [ ] 🟩 Trace `decorateHtmlForClipboard` (`web/src/lib/clipboard.ts:214`): it already
-        preserves cell-owned `style="border…"` and suppresses the table-level `border="1"` when
-        cells own borders (line ~242). Confirm a `hidden`/per-side cell pastes as intended.
-  - [ ] 🟩 Confirm the xlsx **download** is unaffected (text-only via `html_to_excel_text`) — no
-        change expected; note it explicitly so a reviewer doesn't go looking.
-  - **Verify:** Copy a styled table from the editor, paste into Word/Excel/M-Tool: per-side colours
-    and erased edges render; download the workbook and confirm cell text is intact (borders absent
-    by design). Extend `web/src/__tests__/clipboard.test.ts` if a gap is found.
+- [ ] 🟥 **Step 4: Strict mode in the fill tool** — `--strict` flag (and
+  `strict: true` accepted in the input doc) so any fuzzy match is refused
+  and reported (run `degraded`), not written. Default stays lenient for
+  hand-authored operator runs; pipeline-generated docs always set it.
+  - **Verify:** new tests — same typo'd input passes lenient, degrades
+    strict; exporter output carries `strict: true`.
 
-- [ ] 🟩 **Step 6: Lock the behaviour with tests** — pin every changed seam.
-  - [ ] 🟩 Backend: `tests/test_notes_html_sanitize_css.py` — `hidden` border survives (from Step 1).
-  - [ ] 🟩 Frontend: cellFormatting test — per-side recolor preserves the other three sides;
-        eraser writes `hidden`; "All"/"No borders" behaviours.
-  - [ ] 🟩 Frontend: NotesReviewTab test — two-step toolbar (swatch selects, side applies);
-        update any existing assertions that expected swatch-applies-all (intentional change).
-  - [ ] 🟩 Frontend: a focused test for Step 4 — a `CellSelection` survives a reconcile
-        `setContent` (mock the patch response to differ canonically).
-  - **Verify:** `cd web && npx vitest run` (full) green; `./venv/bin/python -m pytest tests/ -q`
-    green. Update `docs/PLAN.md` progress markers as each step lands.
+### Phase 3: Sign & scale translation (blocked on Step 1 answers)
+
+- [ ] 🟥 **Step 5: Pin OUR value conventions** — write down (in
+  `mtool/exporter.py` docstring + tests) what unit and sign
+  `run_concept_facts` values carry, derived from the extraction prompts +
+  verifier (e.g. SOCIE dividends stored positive per ADR-002; SOCF signs per
+  the 2026-07-03 regeneration). This is reading + pinning, no behaviour.
+  - **Verify:** a test asserts the documented conventions against a fixture
+    run seeded with known-sign facts (dividends, payments).
+
+- [ ] 🟥 **Step 6: Translation layer** — `translate(value, concept, target)`
+  applied in the exporter: scale (units ↔ thousands per the Step-1 answer +
+  the mTool filing's rounding-level choice, carried as an exporter argument)
+  and per-row-family sign flips (table driven by the Step-1/recon evidence;
+  starts as identity where our conventions already match mTool's).
+  - [ ] 🟥 Loud failure mode: a concept with no translation rule in a
+    non-identity family → error in the doc's meta, never a guessed value.
+  - **Verify:** unit tests per rule; regenerated fill doc for the Windows
+    test filing reproduces the exact values the operator entered by hand.
+
+- [ ] 🟥 **Step 7: Second Windows acceptance run, machine-generated** — send
+  the Windows box a fill doc generated by Steps 2–6 from a real extraction
+  run (FINCO sample); operator patches a fresh mTool template, runs
+  Validate/Generate, and spot-checks the instance values against the PDF.
+  - **Verify:** operator reports Validate/Generate pass and values (incl. a
+    negative and a scaled figure) correct in the generated XBRL. **This is
+    the phase gate for the delivery UX.**
+
+### Phase 4: Delivery — server-side fill in the app
+
+- [ ] 🟥 **Step 8: Decide the delivery shape** (user decision, on Step-7
+  evidence): (a) server-side upload-template → download-filled (team's
+  stated wish, cloud-ready) vs (b) app exports the fill JSON + operator runs
+  the CLI locally. Steps 9–11 assume (a); if (b), Step 9 becomes a
+  "Download fill instructions" button and Steps 10–11 drop.
+  - **Verify:** decision recorded here with rationale.
+
+- [ ] 🟥 **Step 9: Fill-doc endpoint** — `GET /api/runs/{run_id}/mtool-fill`
+  (terminal runs only, 409 otherwise; auth middleware covers it
+  automatically per gotcha #24). Returns the Step-2 doc as a download.
+  Small "mTool" section on the run page (Overview tab; NOT a new
+  `role="tab"` — gotcha #7) with the download button + excluded-sheet
+  counts.
+  - **Verify:** `tests/test_mtool_routes.py` (TestClient, AUTH_MODE=dev):
+    200 + valid doc on a completed run, 409 on running, 401 unauthenticated
+    (opt-out test). UI button renders and downloads in the web tests.
+
+- [ ] 🟥 **Step 10: Server-side patch endpoint** —
+  `POST /api/runs/{run_id}/mtool-fill/patch`: multipart upload of the empty
+  mTool template → server builds the doc, auto-builds the column map by
+  reading the template's header rows (generalising `inspect`; falls back to
+  asking the user when ambiguous), patches via the SAME `offline_fill`
+  functions (strict mode), streams back the filled workbook + the JSON run
+  report. Reject non-zip/oversize uploads; never persist the upload beyond
+  the request (request-scoped temp dir + cleanup).
+  - [ ] 🟥 Column auto-detection unit tests against both observed layouts
+    (ours A/B/C, real mTool D/E/F) + a Group 4-column fixture.
+  - **Verify:** route tests: upload our own template fixture → 200, filled
+    workbook opens (openpyxl), report clean; degraded report → still 200
+    with `status: degraded` surfaced; running run → 409.
+
+- [ ] 🟥 **Step 11: Report UI** — render the returned run report next to the
+  download: written / fuzzy (should be none) / unresolved / skipped-formula
+  counts with row detail, mirroring the CLI summary. The operator must see
+  "clean" before taking the file to mTool.
+  - **Verify:** web test renders a degraded report fixture; manual check in
+    the running app with the FINCO run.
+
+### Phase 5: Coverage — all linear sheets, all variants
+
+- [ ] 🟥 **Step 12: All MFRS-Company linear sheets** — extend the exporter's
+  sheet map to SOFP/SOPL/SOCI/SOCF faces + sub-sheets + numeric notes
+  (13/14). Per-sheet Step-3-style exact-match dry runs against our
+  templates.
+  - **Verify:** dry-run harness reports 0 fuzzy / 0 unresolved across every
+    covered sheet for the sample run.
+- [ ] 🟥 **Step 13: Group + MPERS** — group column roles end-to-end (needs
+  the Step-1(d) layout answer) and the MPERS sheet map (SoRE included,
+  notes shifted 11–15 per gotcha #15).
+  - **Verify:** exporter tests for both axes; one Windows acceptance run on
+    a Group filing.
+- [ ] 🟥 **Step 14: SOCIE (own step, may split into its own plan)** — matrix
+  cells need `(row-label × column)` targeting; mTool's SOCIE shape is
+  unknown until inspected. Scope only after Step 13 ships.
+  - **Verify:** defined when scoped; until then the exporter keeps counting
+    SOCIE facts as excluded in the meta block.
+
+### Phase 6: Hardening
+
+- [ ] 🟥 **Step 15: Failure-mode sweep** — corrupted/wrong-variant template
+  upload (clear 422s), template whose sheets don't match the run's standard/
+  level, duplicate labels on a real mTool sheet (ambiguous → report),
+  oversized values, concurrent requests (patching is stateless/pure —
+  confirm no shared temp collisions).
+  - **Verify:** a test per failure mode; none crash the endpoint (gotcha #20
+    spirit: structured errors, never silent).
+- [ ] 🟥 **Step 16: CLAUDE.md + docs** — add the mTool pipeline gotcha
+  (mechanism, strict-mode rule, "one patcher, no fork" invariant, pointer to
+  this plan); update the spike plan's status header; refresh memory.
+  - **Verify:** docs reference real file paths; pinning tests named.
 
 ## Rollback Plan
 
-If something goes badly wrong:
-
-- All changes are confined to a fresh feature branch — `git checkout main` / delete the branch
-  reverts everything; nothing here touches `main`, the DB, schema, or the exporter.
-- No data migration and no persisted-format change: `hidden` is just another inline border value
-  the sanitiser already accepts. Cells styled before/after this change keep rendering; reverting
-  the frontend leaves any `hidden` values harmlessly parsed as a hidden edge (or re-style them).
-- If only Phase 2 (selection) misbehaves, it can be reverted independently of Phase 1 — they touch
-  different code (toolbar wiring vs. the reconcile effect) and are committed separately.
-- State to check on revert: open a previously-styled notes cell and confirm it still renders; run
-  the gotcha #16 pinning suite (`tests/test_notes_html_sanitize_css.py`, the `cellFormatting` /
-  `NotesReviewTab` / `clipboard` web tests) to confirm no regression.
+- The feature is **purely additive**: no DB migration, no existing-module
+  edits beyond registering routes. Rollback = revert the feature commits (or
+  simply don't expose the endpoints/UI section); extraction, review, and
+  export paths are untouched.
+- The fill tool file must stay importable-standalone — if a server-side
+  change breaks its stdlib-only property, that's a regression (keep a test
+  that `mtool/offline_fill.py` imports with no third-party deps).
+- State to check after rollback: none — endpoints are stateless over
+  existing tables; uploaded templates are request-scoped temp files.
