@@ -187,8 +187,21 @@ the presentation variant, and discover related note pages.
 "OrderOfLiquidity" if assets are listed by liquidity without current/non-current split.
 - **SOPL**: "Function" if expenses are by role (cost of sales, admin, distribution); \
 "Nature" if expenses are by type (raw materials, employee benefits, depreciation).
-- **SOCI**: "BeforeTax" if OCI items are shown gross with separate tax lines; \
-"NetOfTax" if OCI items are net of tax.
+- **SOCI** (Statement of Comprehensive Income): "BeforeTax" if OCI items are \
+shown gross with separate tax lines; "NetOfTax" if OCI items are net of tax. \
+SOCI is a REQUIRED statement in almost every Malaysian filing — treat it as \
+present by default, not optional. It is MOST OFTEN presented COMBINED with SOPL \
+on a single page titled "Statement of Profit or Loss and Other Comprehensive \
+Income" (the OCI section — profit for the year, then the OCI items — sits \
+directly below the P&L on that same page). In that combined case SOCI's \
+`face_page` is that SAME page as SOPL: map BOTH statements to it at HIGH \
+confidence. Do NOT omit SOCI or lower its confidence just because there is no \
+separately-titled "Statement of Comprehensive Income" page — the combined page \
+IS the SOCI. The two-statement layout (a separate SOCI page, usually right \
+after the SOPL page) also occurs; handle it the same way. Note that an entity \
+with zero OCI items still HAS a SOCI (it just shows profit = total \
+comprehensive income), so a short or OCI-free comprehensive-income section is \
+still a found SOCI.
 - **SOCF**: "Indirect" if it starts from profit before tax with adjustments; \
 "Direct" if it shows gross cash receipts/payments.
 - **SOCIE**: always "Default".
@@ -246,6 +259,12 @@ the presentation variant, and discover related note pages.
   offset (e.g., TOC says "page 42" but actual PDF page is 48).
 - Only look at pages near the TOC-stated page (±10 pages).
 - If a statement cannot be found, omit it from the infopack — do NOT guess.
+  BUT do not confuse "presented on the same page as another statement" with
+  "not found". In particular, SOCI is almost always present and is usually
+  combined with SOPL on one "…Profit or Loss and Other Comprehensive Income"
+  page — if you found that page you have found SOCI, so include it (pointing
+  at that page, HIGH confidence) rather than omitting it. Reserve omission for
+  a statement that genuinely does not appear anywhere in the filing.
 - Be efficient: view only the pages you need.
 - Never skip `discover_notes_inventory`. An empty notes_inventory makes
   Sheet-12 fail loud — always call the tool at least once.
