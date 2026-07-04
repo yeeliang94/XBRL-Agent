@@ -6614,6 +6614,7 @@ from api.notes import router as _notes_router
 from api.notes_formatter import router as _notes_formatter_router
 from api.files import router as _files_router
 from api.eval import router as _eval_router
+from api.mtool import router as _mtool_router
 from auth.routes import router as _auth_router
 
 app.include_router(_config_router)
@@ -6626,6 +6627,7 @@ app.include_router(_notes_router)
 app.include_router(_notes_formatter_router)
 app.include_router(_files_router)
 app.include_router(_eval_router)
+app.include_router(_mtool_router)
 app.include_router(_auth_router)
 
 # Re-export the moved handler functions as ``server.<name>`` so existing tests
