@@ -28,6 +28,32 @@ from mtool.offline_fill import (
 SHEET = "SOFP-Sub-CuNonCu"
 
 
+def test_offline_fill_imports_with_no_third_party_deps():
+    """The tool travels to Windows as one stdlib-only file (CLAUDE.md #28).
+
+    Import it in a subprocess with site-packages stripped from sys.path so a
+    stray `import openpyxl` (or any pip dep) fails loudly here, not on the box.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    tool = Path(__file__).resolve().parent.parent / "mtool" / "offline_fill.py"
+    code = (
+        "import sys; "
+        "sys.path = [p for p in sys.path if 'site-packages' not in p]; "
+        "import importlib.util; "
+        f"spec = importlib.util.spec_from_file_location('offline_fill', {str(tool)!r}); "
+        "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); "
+        "print('OK')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "OK" in result.stdout
+
+
 @pytest.fixture
 def template(tmp_path):
     """A small workbook mimicking the mTool sub-sheet shape."""
