@@ -256,3 +256,84 @@ def test_packet_renders_present_families_only():
 def test_packet_clean_run_is_short():
     packet = ra.build_notes_reviewer_packet({})
     assert "No structural findings" in packet
+
+
+def test_read_cells_batch_helper_single_query(db_path: Path) -> None:
+    run_id = _seed_run(db_path)
+    _seed_cell(db_path, run_id, 49, "<p>alpha</p>")
+    _seed_cell(db_path, run_id, 51, "<p>gamma</p>")
+    found = ra._read_cells(str(db_path), run_id, _S12, [49, 50, 51])
+    # 49 and 51 exist; 50 was never seeded so it's absent (not null-keyed here).
+    assert set(found) == {49, 51}
+    assert "alpha" in found[49]["html"] and "gamma" in found[51]["html"]
+    assert ra._read_cells(str(db_path), run_id, _S12, []) == {}
+
+
+def _tool_returns(result, tool_name: str) -> list[str]:
+    from pydantic_ai.messages import ToolReturnPart
+    return [
+        p.content for m in result.all_messages()
+        for p in getattr(m, "parts", [])
+        if isinstance(p, ToolReturnPart) and p.tool_name == tool_name
+    ]
+
+
+def test_read_note_cells_tool_returns_all_rows_in_one_call(db_path: Path) -> None:
+    import json as _json
+    run_id = _seed_run(db_path)
+    _seed_cell(db_path, run_id, 49, "<p>alpha</p>")
+    _seed_cell(db_path, run_id, 51, "<p>gamma</p>")
+    model = _scripted([
+        [ToolCallPart(tool_name="read_note_cells",
+                      args={"sheet": _S12, "rows": [49, 50, 51]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    result = agent.run_sync("go", deps=deps)
+    returns = _tool_returns(result, "read_note_cells")
+    assert len(returns) == 1  # one round-trip covered all three rows
+    payload = _json.loads(returns[0])
+    assert set(payload) == {"49", "50", "51"}
+    assert "alpha" in payload["49"]["html"]
+    assert "gamma" in payload["51"]["html"]
+    assert payload["50"] is None  # empty row reported as null, not omitted
+
+
+def test_read_note_cells_serves_a_single_row(db_path: Path) -> None:
+    # The plural tool is the ONLY read tool — a single cell is rows=[49].
+    import json as _json
+    run_id = _seed_run(db_path)
+    _seed_cell(db_path, run_id, 49, "<p>alpha</p>")
+    model = _scripted([
+        [ToolCallPart(tool_name="read_note_cells", args={"sheet": _S12, "rows": [49]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    result = agent.run_sync("go", deps=deps)
+    payload = _json.loads(_tool_returns(result, "read_note_cells")[0])
+    assert set(payload) == {"49"} and "alpha" in payload["49"]["html"]
+
+
+def test_read_note_cells_rejects_over_cap(db_path: Path) -> None:
+    run_id = _seed_run(db_path)
+    over = list(range(1, ra.READ_CELLS_MAX_ROWS + 2))  # cap + 1 distinct rows
+    model = _scripted([
+        [ToolCallPart(tool_name="read_note_cells", args={"sheet": _S12, "rows": over})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    result = agent.run_sync("go", deps=deps)
+    msg = _tool_returns(result, "read_note_cells")[0]
+    assert "Too many rows" in msg and str(len(over)) in msg
+
+
+def test_read_note_cells_dedups_so_repeats_dont_eat_the_cap(db_path: Path) -> None:
+    # cap+1 entries but only 2 distinct rows → allowed, not rejected.
+    import json as _json
+    run_id = _seed_run(db_path)
+    _seed_cell(db_path, run_id, 49, "<p>alpha</p>")
+    rows = [49, 51] * ra.READ_CELLS_MAX_ROWS
+    model = _scripted([
+        [ToolCallPart(tool_name="read_note_cells", args={"sheet": _S12, "rows": rows})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    result = agent.run_sync("go", deps=deps)
+    payload = _json.loads(_tool_returns(result, "read_note_cells")[0])
+    assert set(payload) == {"49", "51"}
