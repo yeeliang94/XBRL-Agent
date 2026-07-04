@@ -184,14 +184,13 @@ async def patch_mtool_template(
         # member into memory. A legitimate mTool template is well under this.
         _assert_zip_within_budget(str(src))
 
-        # Confirm it's a readable xlsx (zip) before anything else.
+        # Confirm it's a readable xlsx (zip) before anything else, and keep the
+        # loaded entries so the auto-detect path below doesn't re-read the zip.
         try:
             from mtool.offline_fill import (
                 get_sheet_paths, load_workbook_entries)
             _, data, _ = load_workbook_entries(str(src))
             get_sheet_paths(data)
-        except HTTPException:
-            raise
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422,
@@ -208,7 +207,7 @@ async def patch_mtool_template(
                     detail=f"column_map is not valid JSON: {exc}") from exc
             _validate_cmap_shape(cmap)
         else:
-            detected = detect_column_map(str(src), doc)
+            detected = detect_column_map(str(src), doc, data=data)
             if overall_confidence(detected) != "high":
                 raise HTTPException(
                     status_code=422,
