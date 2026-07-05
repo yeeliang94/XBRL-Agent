@@ -265,6 +265,69 @@ def test_zip_bomb_uncompressed_budget_is_413(client, monkeypatch):
     assert "decompresses" in resp.json()["detail"]
 
 
+def _add_note(db, run_id, sheet, row, label, html):
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO notes_cells(run_id, sheet, row, label, html, "
+            "updated_at) VALUES (?,?,?,?,?,?)",
+            (run_id, sheet, row, label, html, "2026-07-05T00:00:00Z"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_get_notes_fill_doc(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-Listofnotes", 17,
+              "Property, plant and equipment", "<h3>PPE</h3>")
+    resp = tc.get(f"/api/runs/{run_id}/mtool-notes-fill")
+    assert resp.status_code == 200, resp.text
+    doc = resp.json()
+    assert doc["meta"]["counts"]["notes"] == 1
+    assert doc["footnotes"][0]["label"] == "Property, plant and equipment"
+
+
+def test_get_notes_fill_doc_running_run_is_409(client):
+    tc, db, _ = client
+    run_id = _make_run(db, status="running")
+    assert tc.get(f"/api/runs/{run_id}/mtool-notes-fill").status_code == 409
+
+
+def test_patch_fill_notes_off_omits_notes_block(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(),
+                   data={"strict": "true", "fill_notes": "false"})
+    assert resp.status_code == 200, resp.text
+    report = json.loads(resp.headers["X-mTool-Report"])
+    assert "notes" not in report
+
+
+def test_patch_fill_notes_on_reports_notes_block(client):
+    """With notes present, the header carries a notes block. Our SOFP template
+    has no +FootnoteTexts sheet, so notes can't land — but the download must
+    still succeed (numbers filled) and surface the notes status gracefully."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    n = _seed_distinct_leaves(db, run_id)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={"strict": "true"})
+    assert resp.status_code == 200, resp.text
+    report = json.loads(resp.headers["X-mTool-Report"])
+    assert report["counts"]["written"] == n          # numbers still filled
+    assert "notes" in report                          # notes block present
+    assert report["notes"]["status"] == "degraded"    # no +FootnoteTexts here
+    # The returned bytes are still a valid workbook.
+    import openpyxl
+    openpyxl.load_workbook(io.BytesIO(resp.content))
+
+
 def test_temp_dir_cleaned_after_patch(client, tmp_path):
     tc, db, _ = client
     run_id = _make_run(db)
