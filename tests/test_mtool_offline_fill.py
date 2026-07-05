@@ -501,3 +501,118 @@ def test_inspect_dumps_labels_and_cell_kinds(template, capsys):
 
 def test_inspect_unknown_sheet_exits_2(template):
     assert main(["inspect", "--workbook", template, "--sheet", "Nope"]) == 2
+
+
+# ------------------------------------------------------------ footnotes (notes)
+
+from mtool.offline_fill import (  # noqa: E402
+    get_defined_names,
+    inspect_footnotes,
+    read_footnote_rows,
+    _parse_defined_ref,
+)
+
+
+@pytest.fixture
+def footnote_template(tmp_path):
+    """A workbook mimicking mTool's prose-note text-block storage: a visible
+    trigger cell backed by an ``fn_*`` defined name pointing at a hidden
+    ``+FootnoteTexts`` payload row (Windows recon 2026-07-05)."""
+    from openpyxl.workbook.defined_name import DefinedName
+
+    wb = Workbook()
+    vis = wb.active
+    vis.title = "Notes-Listofnotes"
+    vis["D132"] = "Property, plant and equipment"   # label lives left of trigger
+    vis["E132"] = "[Text block added]"              # the visible trigger
+    vis["D140"] = "Inventories"                     # backed but empty payload
+    vis["E140"] = "[Text block added]"
+
+    ci = wb.create_sheet("Notes-CI")
+    ci["D14"] = "Corporate information"             # NOT backed by any fn_*
+    ci["E14"] = ""
+
+    fn = wb.create_sheet("+FootnoteTexts")
+    fn["A14"] = "fn_14"
+    fn["B14"] = "Notes-Listofnotes"
+    fn["C14"] = ("<html><body><p>Existing PPE note with a "
+                 "<table></table></p></body></html>")
+    fn["A15"] = "fn_20"
+    fn["B15"] = "Notes-Listofnotes"
+    fn["C15"] = ""                                  # payload row present, empty
+    fn["A16"] = "fn_99"                             # orphan: no defined name
+    fn["B16"] = "Notes-Listofnotes"
+    fn["C16"] = "<html><body><p>orphan</p></body></html>"
+
+    wb.defined_names["fn_14"] = DefinedName(
+        "fn_14", attr_text="'Notes-Listofnotes'!$E$132")
+    wb.defined_names["fn_20"] = DefinedName(
+        "fn_20", attr_text="'Notes-Listofnotes'!$E$140")
+    path = tmp_path / "mtool_notes.xlsx"
+    wb.save(path)
+    return str(path)
+
+
+def test_parse_defined_ref():
+    assert _parse_defined_ref("'Notes-Listofnotes'!$E$132") == \
+        ("Notes-Listofnotes", "E132")
+    assert _parse_defined_ref("Notes-CI!E14") == ("Notes-CI", "E14")
+    assert _parse_defined_ref("'It''s a note'!$A$1") == ("It's a note", "A1")
+    assert _parse_defined_ref("'Sheet'!$A$1:$B$2") is None  # ranges rejected
+    assert _parse_defined_ref("no-bang") is None
+
+
+def test_get_defined_names_finds_fn_targets(footnote_template):
+    _, data, _ = load_workbook_entries(footnote_template)
+    names = get_defined_names(data, "fn_")
+    assert set(names) == {"fn_14", "fn_20"}
+    assert names["fn_14"] == {"sheet": "Notes-Listofnotes", "cell": "E132",
+                              "local_sheet_id": None}
+
+
+def test_read_footnote_rows_maps_payloads(footnote_template):
+    _, data, _ = load_workbook_entries(footnote_template)
+    sheet_paths = get_sheet_paths(data)
+    from mtool.offline_fill import get_shared_strings
+    fn_rows = read_footnote_rows(data, sheet_paths, get_shared_strings(data))
+    assert fn_rows["fn_14"]["payload_col"] == "C"
+    assert fn_rows["fn_14"]["payload_populated"] is True
+    assert fn_rows["fn_20"]["payload_populated"] is False  # present but empty
+    assert "fn_99" in fn_rows  # every A-keyed row, defined-name or not
+
+
+def test_inspect_footnotes_joins_labels_and_payloads(footnote_template):
+    _, data, _ = load_workbook_entries(footnote_template)
+    info = inspect_footnotes(data)
+    assert info["footnote_sheet"] == "+FootnoteTexts"
+    by_key = {t["key"]: t for t in info["targets"]}
+    # fn_14: backed, populated, and its visible-row label is discoverable.
+    assert by_key["fn_14"]["payload_populated"] is True
+    assert by_key["fn_14"]["row_text"]["D"] == "Property, plant and equipment"
+    # fn_20: backed row but empty payload (a target to fill).
+    assert by_key["fn_20"]["has_payload_row"] is True
+    assert by_key["fn_20"]["payload_populated"] is False
+    # fn_99 is an orphan payload row (no defined name) — surfaced, not a target.
+    assert "fn_99" not in by_key
+    assert info["orphan_payload_keys"] == ["fn_99"]
+
+
+def test_footnotes_command_reports_coverage(footnote_template, capsys):
+    assert main(["footnotes", "--workbook", footnote_template]) == 0
+    out = capsys.readouterr().out
+    assert "2 fn_* note target(s)" in out
+    assert "1 payload-populated" in out and "1 payload-empty" in out
+    assert "Property, plant and equipment" in out
+    assert "fn_99" in out  # orphan surfaced
+
+
+def test_footnotes_command_json(footnote_template, capsys):
+    assert main(["footnotes", "--workbook", footnote_template, "--json"]) == 0
+    info = json.loads(capsys.readouterr().out)
+    assert {t["key"] for t in info["targets"]} == {"fn_14", "fn_20"}
+
+
+def test_footnotes_command_empty_when_no_fn_targets(template, capsys):
+    """A plain sub-sheet workbook has no fn_* — reported, not crashed."""
+    assert main(["footnotes", "--workbook", template]) == 0
+    assert "no fn_* note targets" in capsys.readouterr().out

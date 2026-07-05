@@ -222,6 +222,163 @@ def resolve_row(label: str, label_map: dict) -> dict:
             "matched_label": hits[0][1], "ratio": round(best_ratio, 3)}
 
 
+# ------------------------------------------------------------- footnotes (notes)
+#
+# mTool stores prose-note *text blocks* NOT in the visible cell (which holds the
+# literal trigger "[Text block added]") but in a hidden "+FootnoteTexts" sheet,
+# keyed by a workbook defined name ``fn_N``:
+#
+#     <definedName name="fn_14">'Notes-Listofnotes'!$E$132</definedName>
+#     +FootnoteTexts!A14 = fn_14   B14 = <visible sheet>   C14 = XHTML payload
+#
+# So the visible cell -> fn_N -> +FootnoteTexts row -> payload is the chain a
+# notes filler walks. These readers are 100% programmatic (the fn_* live in the
+# file), so no manual dump is ever needed to discover a template's note targets.
+# Windows recon 2026-07-05 (mtool-notes-textblock-mechanism memory).
+
+_FOOTNOTE_SHEET_HINT = "FootnoteTexts"
+
+
+def _parse_defined_ref(ref: str):
+    """Parse a defined-name value like ``'Notes-Listofnotes'!$E$132`` ->
+    (sheet, cell). Handles single-quoted sheet names (with doubled ''
+    escaping) and absolute ``$`` refs. Returns None if it isn't a single-cell
+    reference on one sheet."""
+    ref = (ref or "").strip()
+    if "!" not in ref:
+        return None
+    sheet_part, cell_part = ref.rsplit("!", 1)
+    sheet_part = sheet_part.strip()
+    if sheet_part.startswith("'") and sheet_part.endswith("'"):
+        sheet_part = sheet_part[1:-1].replace("''", "'")
+    cell = cell_part.replace("$", "").strip()
+    try:
+        split_ref(cell)  # reject ranges / malformed refs
+    except ValueError:
+        return None
+    return sheet_part, cell
+
+
+def get_defined_names(data: dict, prefix: str = "fn_") -> dict:
+    """{name: {sheet, cell, local_sheet_id}} for every ``<definedName>`` whose
+    name starts with ``prefix`` and resolves to a single cell."""
+    wb = ET.fromstring(data["xl/workbook.xml"])
+    out = {}
+    for el in wb.iter():
+        if _local(el.tag) != "definedName":
+            continue
+        name = el.get("name") or ""
+        if prefix and not name.startswith(prefix):
+            continue
+        parsed = _parse_defined_ref(el.text or "")
+        if parsed:
+            out[name] = {"sheet": parsed[0], "cell": parsed[1],
+                         "local_sheet_id": el.get("localSheetId")}
+    return out
+
+
+def find_footnote_sheet(sheet_paths: dict) -> str | None:
+    """Locate the hidden note-body sheet (canonically ``+FootnoteTexts``);
+    tolerate a differing prefix by matching the ``FootnoteTexts`` stem."""
+    if "+FootnoteTexts" in sheet_paths:
+        return "+FootnoteTexts"
+    for name in sheet_paths:
+        if _FOOTNOTE_SHEET_HINT in name:
+            return name
+    return None
+
+
+def read_footnote_rows(data: dict, sheet_paths: dict, sst: list,
+                       footnote_sheet: str | None = None) -> dict:
+    """Map ``fn_N`` -> {row, payload_col, payload_text, payload_populated}
+    from the hidden footnote sheet. Column A holds the fn key; the payload is
+    column C (per the mTool convention), falling back to the first text cell
+    right of B."""
+    footnote_sheet = footnote_sheet or find_footnote_sheet(sheet_paths)
+    entry = sheet_paths.get(footnote_sheet) if footnote_sheet else None
+    if entry is None:
+        return {}
+    rows = read_sheet_cells(data[entry], sst)
+    out = {}
+    c_idx = col_to_idx("C")
+    b_idx = col_to_idx("B")
+    for row_num, cells in rows.items():
+        a = cells.get("A")
+        if not a or a[0] != "S" or not a[1].strip():
+            continue
+        key = a[1].strip()
+        payload_col = payload_text = None
+        c_cell = cells.get("C")
+        if c_cell and c_cell[0] == "S":
+            payload_col, payload_text = "C", c_cell[1]
+        else:
+            for col in sorted((c for c in cells if col_to_idx(c) > b_idx),
+                              key=col_to_idx):
+                kind, text = cells[col]
+                if kind == "S" and text.strip():
+                    payload_col, payload_text = col, text
+                    break
+        out[key] = {"row": row_num, "payload_col": payload_col,
+                    "payload_text": payload_text,
+                    "payload_populated": bool(payload_text
+                                              and payload_text.strip())}
+    return out
+
+
+def inspect_footnotes(data: dict) -> dict:
+    """Build the full note-target map for a workbook: every ``fn_*`` defined
+    name joined to its visible-row text (candidate label to match a canonical
+    note against) and its ``+FootnoteTexts`` payload state. Read-only.
+
+    Returns {footnote_sheet, targets: [...], orphan_payload_keys: [...]}.
+    Each target: {key, sheet, cell, row, row_text, payload_col, payload_row,
+    payload_populated, payload_len, has_payload_row}.
+    """
+    sheet_paths = get_sheet_paths(data)
+    sst = get_shared_strings(data)
+    defined = get_defined_names(data, "fn_")
+    footnote_sheet = find_footnote_sheet(sheet_paths)
+    fn_rows = read_footnote_rows(data, sheet_paths, sst, footnote_sheet)
+
+    row_text_cache: dict[str, dict] = {}
+    targets = []
+    for key in sorted(defined, key=lambda k: (defined[k]["sheet"],
+                                              int(re.sub(r"\D", "", k) or 0))):
+        d = defined[key]
+        sheet, cell = d["sheet"], d["cell"]
+        _, row_num = split_ref(cell)
+        entry = sheet_paths.get(sheet)
+        if entry is not None:
+            if sheet not in row_text_cache:
+                row_text_cache[sheet] = read_sheet_cells(data[entry], sst)
+            row_cells = row_text_cache[sheet].get(row_num, {})
+        else:
+            row_cells = {}
+        # Every text cell in the visible row — the label lives in one of these
+        # (mTool's observed layout puts labels left of the trigger cell); we
+        # surface all of them so the mapping's label column is chosen from data.
+        row_text = {col: txt for col, (kind, txt) in sorted(
+            row_cells.items(), key=lambda kv: col_to_idx(kv[0]))
+            if kind == "S" and txt.strip()}
+        fn = fn_rows.get(key)
+        targets.append({
+            "key": key,
+            "sheet": sheet,
+            "cell": cell,
+            "row": row_num,
+            "row_text": row_text,
+            "has_payload_row": fn is not None,
+            "payload_row": fn["row"] if fn else None,
+            "payload_col": fn["payload_col"] if fn else None,
+            "payload_populated": bool(fn and fn["payload_populated"]),
+            "payload_len": len(fn["payload_text"]) if fn and fn["payload_text"]
+            else 0,
+        })
+    orphans = sorted(set(fn_rows) - set(defined))
+    return {"footnote_sheet": footnote_sheet, "targets": targets,
+            "orphan_payload_keys": orphans}
+
+
 # ---------------------------------------------------------------- patching
 
 class PrefixedSheetError(Exception):
@@ -631,6 +788,50 @@ def run_inspect(args) -> int:
     return 0
 
 
+def run_footnotes(args) -> int:
+    """Dump every prose-note text-block target in a workbook, programmatically.
+
+    Answers, from the file alone: how many fn_* note targets exist (coverage),
+    where each visible-row label lives (so the canonical-note label matcher can
+    be configured), and which payloads are already backed vs empty/missing.
+    """
+    _, data, _ = load_workbook_entries(args.workbook)
+    info = inspect_footnotes(data)
+    if getattr(args, "json", False):
+        print(json.dumps(info, indent=2, ensure_ascii=False))
+        return 0
+
+    targets = info["targets"]
+    if not targets:
+        print("no fn_* note targets found (this template has no text-block "
+              "defined names — a fresh export may need text blocks added in "
+              "mTool first)")
+        return 0
+    populated = sum(1 for t in targets if t["payload_populated"])
+    empty = sum(1 for t in targets if t["has_payload_row"]
+                and not t["payload_populated"])
+    no_row = sum(1 for t in targets if not t["has_payload_row"])
+    print(f"footnote sheet: {info['footnote_sheet']}")
+    print(f"{len(targets)} fn_* note target(s) | {populated} payload-populated "
+          f"| {empty} payload-empty | {no_row} no-payload-row")
+    print("  key    | visible cell            | payload      | visible-row text")
+    for t in targets:
+        loc = f"{t['sheet']}!{t['cell']}"
+        if not t["has_payload_row"]:
+            payload = "MISSING"
+        elif t["payload_populated"]:
+            payload = f"{t['payload_col']}{t['payload_row']} [{t['payload_len']}c]"
+        else:
+            payload = f"{t['payload_col']}{t['payload_row']} [empty]"
+        row_text = "  ".join(f"{col}={txt[:40]!r}"
+                             for col, txt in t["row_text"].items()) or "(none)"
+        print(f"  {t['key']:<6} | {loc:<23} | {payload:<12} | {row_text}")
+    if info["orphan_payload_keys"]:
+        print(f"orphan +FootnoteTexts rows (no defined name): "
+              f"{info['orphan_payload_keys']}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="offline_fill",
@@ -642,6 +843,13 @@ def main(argv=None) -> int:
     p_inspect.add_argument("--workbook", required=True)
     p_inspect.add_argument("--sheet")
     p_inspect.add_argument("--label-column", default="A", dest="label_column")
+
+    p_fn = sub.add_parser(
+        "footnotes",
+        help="dump prose-note text-block targets (fn_* -> +FootnoteTexts)")
+    p_fn.add_argument("--workbook", required=True)
+    p_fn.add_argument("--json", action="store_true",
+                      help="emit the full target map as JSON")
 
     p_fill = sub.add_parser("fill", help="apply writes from an input file")
     p_fill.add_argument("--workbook", required=True)
@@ -657,6 +865,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == "inspect":
         return run_inspect(args)
+    if args.command == "footnotes":
+        return run_footnotes(args)
     if not args.dry_run and not args.output:
         parser.error("fill requires --output (or --dry-run)")
     if args.output and args.output == args.workbook:
