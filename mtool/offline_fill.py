@@ -942,7 +942,8 @@ def _create_footnote_slot(st: dict, sheet: str, cell: str, wrapped: str):
 
 
 def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None,
-                   *, dry_run: bool = False, create_missing: bool = False) -> dict:
+                   *, dry_run: bool = False, create_missing: bool = False,
+                   strict: bool = False) -> dict:
     """Fill prose-note text-blocks from ``doc``'s ``footnotes`` list. Assumes
     ``doc`` passed :func:`validate_notes_input`. Mirrors :func:`fill_workbook`
     (one patcher, no fork).
@@ -950,17 +951,26 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
     Default targets EXISTING popup-backed notes only. With ``create_missing``,
     a footnote item that gives an explicit visible ``sheet``+``cell`` with no
     ``fn_*`` gets a new native-shaped slot created for it (opt-in, fragile —
-    verify render in mTool). Label-targeted items never auto-create."""
+    verify render in mTool). Label-targeted items never auto-create.
+
+    ``strict`` (CLI ``--strict`` OR a doc-level ``"strict": true``, which the
+    notes exporter sets on machine-generated docs) refuses a non-exact label
+    match — a fuzzy/containment hit lands in ``unresolved`` instead of risking
+    the wrong text-block. Mirrors :func:`fill_workbook`'s strict mode."""
     _, data, _ = load_workbook_entries(workbook_path)
     sheet_paths = get_sheet_paths(data)
     sst = get_shared_strings(data)
     defined = get_defined_names(data, "fn_")
     footnote_sheet = find_footnote_sheet(sheet_paths)
 
+    # CLI --strict OR a doc-level "strict": true (the notes exporter sets this
+    # on machine-generated docs, where a non-exact label is a bug, not a typo).
+    strict = bool(strict or doc.get("strict"))
     report = {
         "workbook": workbook_path,
         "output": None if dry_run else output_path,
         "dry_run": bool(dry_run), "create_missing": bool(create_missing),
+        "strict": strict,
         "footnotes_written": [], "footnotes_created": [],
         "unresolved": [], "errors": [], "footnote_mismatches": [],
     }
@@ -1006,6 +1016,12 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
             res = resolve_footnote_by_label(it["label"], targets)
             if res["status"] != "resolved":
                 report["unresolved"].append({**base, **res})
+                continue
+            if strict and res.get("ratio", 1.0) < 1.0:
+                report["unresolved"].append({**base, **res, "detail":
+                    f"strict mode: non-exact label match "
+                    f"(similarity {res['ratio']}) refused; would have matched "
+                    f"{res.get('matched_label')!r}"})
                 continue
             key = res["key"]
             base.update(matched_label=res.get("matched_label"),
