@@ -221,6 +221,116 @@ describe("MtoolFillModal", () => {
     expect(screen.getByText(/1 unmatched, 2 failed read-back/)).toBeTruthy();
   });
 
+  test("offers a create-missing toggle and previews what would be created", async () => {
+    mockFetch((url, init) => {
+      if (url.includes("/notes-preview")) {
+        const body = init?.body as FormData;
+        const create = body?.get?.("create_missing_notes") === "true";
+        return new Response(
+          JSON.stringify({
+            notes_in_run: 2,
+            template_fn_slots: 0,
+            create_missing_notes: create,
+            will_fill_existing: [],
+            will_create: create
+              ? [{ label: "Corporate information", cell: "Notes-CI!E14", label_cell: "D14" }]
+              : [],
+            unresolved: create
+              ? []
+              : [{ label: "Corporate information", detail: "no fn_* label matched" }],
+            errors: [],
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+
+    // Toggle present and OFF by default.
+    const create = screen.getByLabelText(/create missing note slots/i) as HTMLInputElement;
+    expect(create.checked).toBe(false);
+    fireEvent.click(create);
+    expect(create.checked).toBe(true);
+
+    // Preview with create on -> the plan lists the slot that would be created.
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /preview notes/i }));
+    await waitFor(() => expect(screen.getByText(/1 will be created/i)).toBeTruthy());
+    expect(screen.getByText(/Corporate information → Notes-CI!E14/)).toBeTruthy();
+    // The template exposed zero existing slots — the "no popup yet" signal.
+    expect(screen.getByText(/exposes/i).textContent).toMatch(/0 existing note slot/i);
+  });
+
+  test("preview surfaces backend errors even with no unresolved notes", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes-preview"))
+        return new Response(
+          JSON.stringify({
+            notes_in_run: 1,
+            template_fn_slots: 0,
+            create_missing_notes: false,
+            will_fill_existing: [],
+            will_create: [],
+            unresolved: [],
+            errors: [{ detail: "workbook has no +FootnoteTexts sheet / sharedStrings.xml" }],
+          }),
+          { status: 200 }
+        );
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 1 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /preview notes/i }));
+    // The error is surfaced (not hidden behind a clean-looking plan).
+    await waitFor(() => expect(screen.getByText(/would degrade/i)).toBeTruthy());
+    expect(screen.getByText(/no \+FootnoteTexts sheet/i)).toBeTruthy();
+  });
+
+  test("changing the create-missing toggle invalidates a stale preview", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes-preview"))
+        return new Response(
+          JSON.stringify({
+            notes_in_run: 1,
+            template_fn_slots: 0,
+            create_missing_notes: false,
+            will_fill_existing: [],
+            will_create: [],
+            unresolved: [{ label: "Corporate information", detail: "no fn_* label matched" }],
+            errors: [],
+          }),
+          { status: 200 }
+        );
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 1 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /preview notes/i }));
+    await waitFor(() => expect(screen.getByLabelText(/notes preview/i)).toBeTruthy());
+    // Flipping the toggle must clear the now-stale plan.
+    fireEvent.click(screen.getByLabelText(/create missing note slots/i));
+    expect(screen.queryByLabelText(/notes preview/i)).toBeNull();
+  });
+
   test("surfaces a server error", async () => {
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch")) {

@@ -35,6 +35,17 @@ interface NotesReport {
   unresolved?: { label: string | null; detail?: string }[];
 }
 
+// Dry-run notes diagnostic (POST /mtool-fill/notes-preview).
+interface NotesPreview {
+  notes_in_run: number;
+  template_fn_slots: number;
+  create_missing_notes: boolean;
+  will_fill_existing: { label: string | null; key: string }[];
+  will_create: { label: string | null; cell: string | null; label_cell: string | null }[];
+  unresolved: { label: string | null; detail?: string }[];
+  errors: { detail?: string }[];
+}
+
 interface ReportSummary {
   status: string;
   numeric_status?: string;
@@ -112,6 +123,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [meta, setMeta] = useState<FillMeta | null>(null);
   const [notesCount, setNotesCount] = useState<number | null>(null);
   const [fillNotes, setFillNotes] = useState(true);
+  const [createMissingNotes, setCreateMissingNotes] = useState(false);
+  const [preview, setPreview] = useState<NotesPreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -141,6 +156,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setReport(null);
     setPatchErr(null);
     setColumnMap(null);
+    setPreview(null);
+    setPreviewErr(null);
     fetch(`/api/runs/${runId}/mtool-fill`)
       .then(async (r) => {
         if (!r.ok) throw new Error((await r.json()).detail || `HTTP ${r.status}`);
@@ -167,6 +184,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       form.append("template", file);
       form.append("strict", "true");
       form.append("fill_notes", fillNotes ? "true" : "false");
+      form.append("create_missing_notes", createMissingNotes ? "true" : "false");
       if (columnMap) form.append("column_map", JSON.stringify(columnMap));
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/patch`, {
         method: "POST",
@@ -218,6 +236,34 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       setPatchErr(String((e as Error).message || e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Dry-run diagnostic: what would fill / get created / stay unresolved, and
+  // how many fn_* slots the uploaded template exposes. Writes nothing.
+  const runPreview = async () => {
+    if (!file) return;
+    setPreviewBusy(true);
+    setPreviewErr(null);
+    setPreview(null);
+    try {
+      const form = new FormData();
+      form.append("template", file);
+      form.append("create_missing_notes", createMissingNotes ? "true" : "false");
+      const resp = await fetch(`/api/runs/${runId}/mtool-fill/notes-preview`, {
+        method: "POST",
+        body: form,
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const detail = (body as { detail?: unknown })?.detail;
+        throw new Error(typeof detail === "string" ? detail : `HTTP ${resp.status}`);
+      }
+      setPreview(body as NotesPreview);
+    } catch (e) {
+      setPreviewErr(String((e as Error).message || e));
+    } finally {
+      setPreviewBusy(false);
     }
   };
 
@@ -278,14 +324,44 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         )}
 
         {notesCount !== null && notesCount > 0 && (
-          <label style={{ ...styles.statLine, display: "flex", alignItems: "center", gap: 6, marginBottom: pwc.space.md }}>
+          <label style={{ ...styles.statLine, display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
             <input
               type="checkbox"
               checked={fillNotes}
-              onChange={(e) => setFillNotes(e.target.checked)}
+              onChange={(e) => {
+                setFillNotes(e.target.checked);
+                setPreview(null); // plan no longer reflects the toggles
+                setPreviewErr(null);
+              }}
               aria-label="Also fill notes"
             />
             Also fill prose notes
+          </label>
+        )}
+
+        {notesCount !== null && notesCount > 0 && fillNotes && (
+          <label
+            style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: 6, marginBottom: pwc.space.md }}
+          >
+            <input
+              type="checkbox"
+              checked={createMissingNotes}
+              onChange={(e) => {
+                setCreateMissingNotes(e.target.checked);
+                setPreview(null); // create-toggle changes the plan
+                setPreviewErr(null);
+              }}
+              aria-label="Create missing note slots"
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              Create missing note slots
+              <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
+                Build a new text-block for notes whose concept has no popup yet (col-D label →
+                col-E). Off by default — creation is less proven than filling existing slots;
+                Preview first and verify in mTool.
+              </span>
+            </span>
           </label>
         )}
 
@@ -296,10 +372,103 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           onChange={(e) => {
             setFile(e.target.files?.[0] ?? null);
             setColumnMap(null); // a different template has a different layout
+            setPreview(null); // a different template ⇒ a different plan
+            setPreviewErr(null);
           }}
           aria-label="mTool template file"
           style={{ fontSize: 13, marginBottom: pwc.space.md }}
         />
+
+        {notesCount !== null && notesCount > 0 && fillNotes && (
+          <div style={{ marginBottom: pwc.space.md }}>
+            <button
+              type="button"
+              onClick={runPreview}
+              disabled={!file || previewBusy}
+              className={uiClass.btnGhost}
+              style={{ ...ui.buttonGhost, fontSize: 12 }}
+            >
+              {previewBusy ? "Previewing…" : "Preview notes (no changes)"}
+            </button>
+            {previewErr && (
+              <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
+                Preview failed: {previewErr}
+              </div>
+            )}
+            {preview && (
+              <div
+                style={{
+                  // Warn-tint the panel when anything won't cleanly land
+                  // (unresolved notes OR a fill-level error like a template
+                  // with no +FootnoteTexts sheet) so a degraded preview never
+                  // reads as clean.
+                  border: `1px solid ${
+                    preview.unresolved.length > 0 || preview.errors.length > 0
+                      ? pwc.orange700
+                      : pwc.grey300
+                  }`,
+                  borderRadius: pwc.radius.md,
+                  padding: pwc.space.md,
+                  marginTop: pwc.space.sm,
+                  fontSize: 12,
+                }}
+                aria-label="Notes preview"
+              >
+                <div style={{ color: pwc.grey700, marginBottom: 4 }}>
+                  Template exposes <strong>{preview.template_fn_slots}</strong> existing note
+                  slot(s); this run has <strong>{preview.notes_in_run}</strong> prose note(s).
+                </div>
+                <div style={styles.statLine}>
+                  ✓ {preview.will_fill_existing.length} will fill an existing slot
+                </div>
+                <div style={styles.statLine}>
+                  {createMissingNotes ? "＋" : "○"} {preview.will_create.length} will be created
+                  {!createMissingNotes && preview.will_create.length === 0 && preview.unresolved.length > 0
+                    ? " (enable “Create missing note slots” above to create them)"
+                    : ""}
+                </div>
+                {preview.unresolved.length > 0 && (
+                  <div style={{ ...styles.statLine, color: pwc.orange700 }}>
+                    ⚠ {preview.unresolved.length} unresolved
+                  </div>
+                )}
+                {preview.errors.length > 0 && (
+                  <div style={{ ...styles.statLine, color: pwc.orange700 }}>
+                    ⚠ {preview.errors.length} error(s) — the notes fill would degrade
+                  </div>
+                )}
+                {preview.will_create.length > 0 && (
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
+                    {preview.will_create.slice(0, 8).map((w, i) => (
+                      <li key={i}>
+                        {w.label} → {w.cell}
+                      </li>
+                    ))}
+                    {preview.will_create.length > 8 && <li>… and {preview.will_create.length - 8} more</li>}
+                  </ul>
+                )}
+                {preview.unresolved.length > 0 && (
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
+                    {preview.unresolved.slice(0, 8).map((u, i) => (
+                      <li key={i}>
+                        {u.label}: {u.detail}
+                      </li>
+                    ))}
+                    {preview.unresolved.length > 8 && <li>… and {preview.unresolved.length - 8} more</li>}
+                  </ul>
+                )}
+                {preview.errors.length > 0 && (
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.orange700 }}>
+                    {preview.errors.slice(0, 4).map((e, i) => (
+                      <li key={i}>{e.detail ?? "error"}</li>
+                    ))}
+                    {preview.errors.length > 4 && <li>… and {preview.errors.length - 4} more</li>}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {patchErr && (
           <div style={ui.alertError}>Fill failed: {patchErr}</div>

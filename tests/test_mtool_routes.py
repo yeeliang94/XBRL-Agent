@@ -417,3 +417,49 @@ def test_temp_dir_cleaned_after_patch(client, tmp_path):
     leftovers = list((tmp_path / "_mtool_tmp").glob("*")) \
         if (tmp_path / "_mtool_tmp").exists() else []
     assert leftovers == []
+
+
+# ------------------------------------------------ notes preview (diagnostic)
+
+def test_notes_preview_reports_plan_and_slot_count(client):
+    """The dry-run diagnostic returns a per-note plan + the template's existing
+    fn_* slot count, and writes nothing. Our SOFP template has no fn_* slots,
+    so a seeded note lands in `unresolved` and template_fn_slots is 0 — the
+    signal that the concept isn't popup-backed."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/notes-preview",
+                   files=_upload_our_template(),
+                   data={"create_missing_notes": "false"})
+    assert resp.status_code == 200, resp.text
+    plan = resp.json()
+    assert plan["notes_in_run"] == 1
+    assert plan["template_fn_slots"] == 0
+    assert plan["will_fill_existing"] == [] and plan["will_create"] == []
+    # No +FootnoteTexts sheet -> the fill degrades with an error, not a per-note
+    # unresolved; either way nothing is planned to write.
+    assert plan["unresolved"] or plan["errors"]
+
+
+def test_notes_preview_running_run_is_409(client):
+    tc, db, _ = client
+    run_id = _make_run(db, status="running")
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/notes-preview",
+                   files=_upload_our_template())
+    assert resp.status_code == 409
+
+
+def test_patch_accepts_create_missing_notes_param(client):
+    """The create_missing_notes toggle is wired through the patch endpoint
+    (no 4xx/5xx from the extra form field); numeric fill is unaffected."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    n = _seed_distinct_leaves(db, run_id)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(),
+                   data={"strict": "true", "create_missing_notes": "true"})
+    assert resp.status_code == 200, resp.text
+    report = json.loads(resp.headers["X-mTool-Report"])
+    assert report["counts"]["written"] == n

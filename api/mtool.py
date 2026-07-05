@@ -163,6 +163,7 @@ async def patch_mtool_template(
     strict: bool = Form(default=True),
     force_recalc: bool = Form(default=False),
     fill_notes: bool = Form(default=True),
+    create_missing_notes: bool = Form(default=False),
 ):
     """Patch an uploaded empty mTool template from the run's facts.
 
@@ -263,10 +264,12 @@ async def patch_mtool_template(
         # Chain the prose-notes fill onto the numeric-filled workbook. Notes
         # touch disjoint zip parts (sharedStrings + +FootnoteTexts), so the
         # numeric edits are preserved. Same offline patcher, no fork.
-        # Notes fill targets EXISTING popup slots only via this bridge (the
-        # exporter emits label-only items; native-shaped slot CREATION needs an
-        # explicit visible sheet+cell, so it stays a CLI/explicit-cell op — not
-        # exposed here as a would-be no-op). Notes-doc-level strict is honored.
+        # Notes fill targets EXISTING popup slots by default; with
+        # ``create_missing_notes`` on, a note whose concept has no fn_* yet is
+        # created at the trigger cell discovered from its visible label
+        # (col-D label -> col-E trigger; fill_footnotes.create_missing). That
+        # path is fragile (mTool only renders a native-shaped slot), so it's
+        # opt-in. Notes-doc-level strict is honored.
         # Notes fill is best-effort (mirrors the CLI + notes-validator
         # fail-soft, gotcha #22). A validation failure or an unexpected raise
         # must NOT discard the already-good numeric fill: keep `final = out`
@@ -292,7 +295,8 @@ async def patch_mtool_template(
                     else:
                         notes_out = tmp / "filled_notes.xlsx"
                         notes_report = fill_footnotes(
-                            str(out), notes_doc, str(notes_out))
+                            str(out), notes_doc, str(notes_out),
+                            create_missing=create_missing_notes)
                         final = notes_out
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -304,13 +308,21 @@ async def patch_mtool_template(
 
         logger.info(
             "mTool patch run %s: numeric status=%s written=%d unresolved=%d; "
-            "notes status=%s written=%d created=%d unresolved=%d",
+            "notes status=%s written=%d created=%d unresolved=%d "
+            "(create_missing_notes=%s)",
             run_id, report["status"], len(report["written"]),
             len(report["unresolved"]),
             (notes_report or {}).get("status", "skipped"),
             len((notes_report or {}).get("footnotes_written", [])),
             len((notes_report or {}).get("footnotes_created", [])),
-            len((notes_report or {}).get("unresolved", [])))
+            len((notes_report or {}).get("unresolved", [])),
+            create_missing_notes)
+        # The per-note unresolved reasons are the actionable diagnostic (why a
+        # note didn't fill: no slot / strict mismatch). The header is bounded,
+        # so log them in full here for debugging.
+        for u in (notes_report or {}).get("unresolved", []):
+            logger.info("mTool notes unresolved run %s: label=%r detail=%r",
+                        run_id, u.get("label"), u.get("detail"))
 
         filename = f"mtool_filled_run{run_id}.xlsx"
         return FileResponse(
@@ -325,6 +337,85 @@ async def patch_mtool_template(
     except Exception:
         _cleanup(tmp)
         raise
+
+
+@router.post("/api/runs/{run_id}/mtool-fill/notes-preview")
+async def preview_mtool_notes(
+    run_id: int,
+    template: UploadFile = File(...),
+    create_missing_notes: bool = Form(default=False),
+):
+    """Dry-run the prose-notes fill against an uploaded template and return the
+    plan WITHOUT writing anything — the notes diagnostic the operator runs
+    before committing. For every note in the run it reports one of: fills an
+    existing ``fn_*`` slot, gets a new slot CREATED (only when
+    ``create_missing_notes`` is on), or stays unresolved (with the reason).
+
+    ``template_fn_slots`` (how many ``fn_*`` the uploaded template already
+    exposes) makes the two failure modes distinguishable: *few/zero slots* ->
+    the concepts aren't popup-backed yet (turn on create-missing or add the
+    text blocks in mTool); *many slots but notes still unresolved* -> the
+    labels differ from mTool's (a matching problem, not a missing-slot one).
+    """
+    _load_fillable_run(run_id)  # 404/409 gate, same as the patch endpoint
+    notes_doc = build_notes_fill_doc(server.AUDIT_DB_PATH, run_id)
+
+    raw = await _read_capped(template, _MAX_TEMPLATE_BYTES)
+    if not raw:
+        raise HTTPException(status_code=422, detail="Empty upload.")
+
+    work_root = Path(server.OUTPUT_DIR) / "_mtool_tmp"
+    work_root.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(dir=work_root))
+    try:
+        src = tmp / "template.xlsx"
+        src.write_bytes(raw)
+        _assert_zip_within_budget(str(src))
+
+        from mtool.offline_fill import (
+            get_sheet_paths, inspect_footnotes, load_workbook_entries)
+        try:
+            _, data, _ = load_workbook_entries(str(src))
+            get_sheet_paths(data)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=422,
+                detail=f"Upload is not a readable .xlsx workbook: {exc}"
+            ) from exc
+
+        existing_slots = len(inspect_footnotes(data)["targets"])
+        base = {
+            "notes_in_run": len(notes_doc["footnotes"]),
+            "template_fn_slots": existing_slots,
+            "create_missing_notes": create_missing_notes,
+            "counts": notes_doc["meta"]["counts"],
+        }
+        if not notes_doc["footnotes"]:
+            return JSONResponse({**base, "will_fill_existing": [],
+                                 "will_create": [], "unresolved": [],
+                                 "errors": []})
+
+        # dry_run: resolves + plans, writes nothing (output_path unused).
+        report = fill_footnotes(str(src), notes_doc, None, dry_run=True,
+                                create_missing=create_missing_notes)
+        created_keys = {c.get("key") for c in report["footnotes_created"]}
+        return JSONResponse({
+            **base,
+            "will_create": [
+                {"label": c.get("label"), "cell": c.get("visible_cell"),
+                 "label_cell": c.get("label_cell")}
+                for c in report["footnotes_created"]],
+            "will_fill_existing": [
+                {"label": w.get("label"), "key": w.get("key")}
+                for w in report["footnotes_written"]
+                if w.get("key") not in created_keys],
+            "unresolved": [
+                {"label": u.get("label"), "detail": u.get("detail")}
+                for u in report["unresolved"]],
+            "errors": report.get("errors", []),
+        })
+    finally:
+        _cleanup(tmp)
 
 
 _COLUMN_LETTER_RE = re.compile(r"[A-Z]{1,3}$")
