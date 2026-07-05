@@ -882,6 +882,33 @@ def test_fill_notes_by_label_resolves_and_writes(tmp_path, footnote_template):
     assert "Property, plant and equipment" in _payload_of(str(out), "fn_14")
 
 
+def test_fill_notes_strict_refuses_non_exact_label(tmp_path, footnote_template):
+    """A containment/fuzzy label hit is written lenient but REFUSED under strict
+    (doc-level), so a machine doc can't land prose in a near-miss text-block."""
+    item = {"label": "plant and equipment", "html": PPE_HTML}  # ~contains fn_14
+    # Lenient: resolves via containment to fn_14.
+    r1 = fill_footnotes(footnote_template, {"footnotes": [dict(item)]},
+                        output_path=str(tmp_path / "a.xlsx"))
+    assert r1["footnotes_written"] and r1["footnotes_written"][0]["key"] == "fn_14"
+    # Strict (doc-level, as the notes exporter sets): refused, not written.
+    r2 = fill_footnotes(footnote_template,
+                        {"footnotes": [dict(item)], "strict": True},
+                        output_path=str(tmp_path / "b.xlsx"))
+    assert r2["strict"] is True
+    assert not r2["footnotes_written"] and r2["unresolved"]
+    assert "strict" in r2["unresolved"][0]["detail"]
+
+
+def test_fill_notes_strict_still_allows_exact_label(tmp_path, footnote_template):
+    """Exact normalized-core match (decoration aside) survives strict."""
+    r = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"label": "Property, plant and equipment",
+                        "html": PPE_HTML}], "strict": True},
+        output_path=str(tmp_path / "c.xlsx"))
+    assert r["status"] == "ok" and r["footnotes_written"][0]["key"] == "fn_14"
+
+
 def test_fill_notes_by_label_unresolved_is_reported(tmp_path, footnote_template):
     out = tmp_path / "filled.xlsx"
     report = fill_footnotes(

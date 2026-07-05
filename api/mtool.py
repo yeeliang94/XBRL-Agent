@@ -152,7 +152,6 @@ async def patch_mtool_template(
     strict: bool = Form(default=True),
     force_recalc: bool = Form(default=False),
     fill_notes: bool = Form(default=True),
-    create_missing_notes: bool = Form(default=False),
 ):
     """Patch an uploaded empty mTool template from the run's facts.
 
@@ -253,6 +252,10 @@ async def patch_mtool_template(
         # Chain the prose-notes fill onto the numeric-filled workbook. Notes
         # touch disjoint zip parts (sharedStrings + +FootnoteTexts), so the
         # numeric edits are preserved. Same offline patcher, no fork.
+        # Notes fill targets EXISTING popup slots only via this bridge (the
+        # exporter emits label-only items; native-shaped slot CREATION needs an
+        # explicit visible sheet+cell, so it stays a CLI/explicit-cell op — not
+        # exposed here as a would-be no-op). Notes-doc-level strict is honored.
         final = out
         notes_report = None
         if fill_notes:
@@ -260,8 +263,7 @@ async def patch_mtool_template(
             if notes_doc["footnotes"] and not validate_notes_input(notes_doc):
                 notes_out = tmp / "filled_notes.xlsx"
                 notes_report = fill_footnotes(
-                    str(out), notes_doc, str(notes_out),
-                    create_missing=create_missing_notes)
+                    str(out), notes_doc, str(notes_out))
                 final = notes_out
 
         logger.info(
@@ -347,8 +349,15 @@ def _bounded_report_header(report: dict, notes_report: dict | None = None) -> st
         "unresolved", "ambiguous", "mismatches", "errors")}
     truncated = any(len(report[k]) > _HEADER_LIST_CAP for k in detail_keys)
     notes_block = _notes_report_block(notes_report)
+    # Top-level status is COMBINED: a degraded notes fill must not hide behind a
+    # green numeric status (the modal keys its "Clean / safe to Validate" banner
+    # off this). numeric_status keeps the two distinguishable for detail.
+    overall = report["status"]
+    if notes_block and notes_block["status"] != "ok":
+        overall = "degraded"
     payload = {
-        "status": report["status"],
+        "status": overall,
+        "numeric_status": report["status"],
         "counts": counts,
         "truncated": truncated,
         **({"notes": notes_block} if notes_block else {}),
@@ -358,7 +367,8 @@ def _bounded_report_header(report: dict, notes_report: dict | None = None) -> st
     if len(encoded.encode("utf-8")) <= _HEADER_MAX_BYTES:
         return encoded
     # Still too big (very long labels): drop the detail lists, keep counts.
-    slim = {"status": report["status"], "counts": counts, "truncated": True}
+    slim = {"status": overall, "numeric_status": report["status"],
+            "counts": counts, "truncated": True}
     if notes_block:
         slim["notes"] = {"status": notes_block["status"],
                          "counts": notes_block["counts"]}

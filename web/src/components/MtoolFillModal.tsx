@@ -37,6 +37,7 @@ interface NotesReport {
 
 interface ReportSummary {
   status: string;
+  numeric_status?: string;
   counts: Record<string, number>;
   unresolved: { sheet: string; label: string | null; detail?: string }[];
   skipped_formula: { sheet: string; cell?: string; label: string | null }[];
@@ -366,7 +367,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 ? `Clean — ${report.counts.written} values written. Safe to Validate in mTool.`
                 : `Degraded — review before Validate.`}
             </div>
-            {report.status !== "ok" && (
+            {(report.numeric_status ?? report.status) !== "ok" && (
               <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12 }}>
                 {report.counts.unresolved > 0 && (
                   <li>{report.counts.unresolved} label(s) unresolved (not written)</li>
@@ -387,6 +388,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                   `${report.notes.counts.written} filled`,
                   report.notes.counts.created > 0 && `${report.notes.counts.created} slot(s) created`,
                   report.notes.counts.unresolved > 0 && `${report.notes.counts.unresolved} unmatched`,
+                  report.notes.counts.mismatches > 0 && `${report.notes.counts.mismatches} failed read-back`,
                   report.notes.counts.errors > 0 && `${report.notes.counts.errors} error(s)`,
                 ]
                   .filter(Boolean)

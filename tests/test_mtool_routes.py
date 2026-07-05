@@ -323,6 +323,9 @@ def test_patch_fill_notes_on_reports_notes_block(client):
     assert report["counts"]["written"] == n          # numbers still filled
     assert "notes" in report                          # notes block present
     assert report["notes"]["status"] == "degraded"    # no +FootnoteTexts here
+    # Combined status must reflect the notes failure, NOT hide behind numeric ok.
+    assert report["status"] == "degraded"
+    assert report["numeric_status"] == "ok"
     # The returned bytes are still a valid workbook.
     import openpyxl
     openpyxl.load_workbook(io.BytesIO(resp.content))

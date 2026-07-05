@@ -24,9 +24,15 @@ writes sheet XML, notes write sharedStrings + `+FootnoteTexts`).
    `notes_cells` → `{footnotes:[{label, html, source_*}]}`. Tested.
 2. **Server** — `api/mtool.py`:
    - `GET /api/runs/{id}/mtool-notes-fill` → the notes doc (modal count).
-   - `POST /mtool-fill/patch` gains `fill_notes` (default true) +
-     `create_missing_notes` (default false). After the numeric fill, chain
-     `fill_footnotes`; merge a `notes` block into the report header.
+   - `POST /mtool-fill/patch` gains `fill_notes` (default true). After the
+     numeric fill, chain `fill_footnotes` (existing slots only via this bridge)
+     and merge a `notes` block into the report header. The header `status` is
+     COMBINED (a degraded notes fill can't hide behind a green numeric status);
+     `numeric_status` keeps the two distinguishable. Notes-doc `strict:true` is
+     honored so a non-exact label lands in `unresolved`, never a near-miss
+     text-block. Slot creation is NOT exposed here — the exporter emits
+     label-only items and creation needs an explicit visible cell, so it would
+     be a no-op; it stays a CLI/explicit-cell operation.
 3. **Frontend** — `MtoolFillModal.tsx`: show "N notes will be filled", an
    "Also fill notes" checkbox (default on), and notes results after fill.
 4. **Create-missing (opt-in, offline_fill core)** — `create_footnote_slot`:

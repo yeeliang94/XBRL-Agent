@@ -189,6 +189,38 @@ describe("MtoolFillModal", () => {
     expect(screen.getByText(/2 filled/)).toBeTruthy();
   });
 
+  test("shows Degraded (not Clean) when numbers are ok but notes fail", async () => {
+    const reportHeader = JSON.stringify({
+      status: "degraded",
+      numeric_status: "ok",
+      counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
+      unresolved: [],
+      skipped_formula: [],
+      mismatches: [],
+      notes: { status: "degraded", counts: { written: 0, created: 0, unresolved: 1, mismatches: 2, errors: 0 } },
+    });
+    mockFetch((url) => {
+      if (url.includes("/mtool-fill/patch"))
+        return new Response(new Blob(["x"]), { status: 200, headers: { "X-mTool-Report": reportHeader } });
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 3 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
+    // Banner reflects the notes failure, NOT a false "Clean".
+    await waitFor(() => expect(screen.getByText(/review before validate/i)).toBeTruthy());
+    expect(screen.queryByText(/safe to validate/i)).toBeNull();
+    // Notes failure detail incl. mismatches is surfaced.
+    expect(screen.getByText(/1 unmatched, 2 failed read-back/)).toBeTruthy();
+  });
+
   test("surfaces a server error", async () => {
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch")) {
