@@ -513,43 +513,121 @@ from mtool.offline_fill import (  # noqa: E402
 )
 
 
+def _esc(text):
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# Shared-string table, matching real mTool (openpyxl writes inline strings +
+# omits sharedStrings.xml, which the fn_* write path can't exercise).
+_FN_STRINGS = [
+    "Property, plant and equipment",                                 # 0
+    "[Text block added]",                                            # 1
+    "Inventories",                                                   # 2
+    "Corporate information",                                         # 3
+    "fn_14",                                                         # 4
+    "Notes-Listofnotes",                                            # 5
+    "<html><body><p>Existing PPE note with a <table></table>"        # 6
+    "</p></body></html>",
+    "fn_20",                                                         # 7
+    "fn_99",                                                         # 8
+    "<html><body><p>orphan</p></body></html>",                       # 9
+]
+
+_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def _ws(rows):
+    """A worksheet XML from {row: [(col, sst_index_or_None), ...]}."""
+    body = []
+    for r in sorted(rows):
+        cells = "".join(
+            f'<c r="{col}{r}"/>' if idx is None
+            else f'<c r="{col}{r}" t="s"><v>{idx}</v></c>'
+            for col, idx in rows[r])
+        body.append(f'<row r="{r}">{cells}</row>')
+    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<worksheet xmlns="{_NS_MAIN}"><sheetData>'
+            + "".join(body) + "</sheetData></worksheet>")
+
+
 @pytest.fixture
 def footnote_template(tmp_path):
-    """A workbook mimicking mTool's prose-note text-block storage: a visible
-    trigger cell backed by an ``fn_*`` defined name pointing at a hidden
-    ``+FootnoteTexts`` payload row (Windows recon 2026-07-05)."""
-    from openpyxl.workbook.defined_name import DefinedName
+    """A workbook faithfully mimicking mTool's prose-note text-block storage:
+    visible trigger cells backed by ``fn_*`` defined names pointing at hidden
+    ``+FootnoteTexts`` shared-string payload rows (Windows recon 2026-07-05).
+    Hand-built (not openpyxl) so it uses a real shared-strings table."""
+    sst = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           f'<sst xmlns="{_NS_MAIN}" count="{len(_FN_STRINGS)}" '
+           f'uniqueCount="{len(_FN_STRINGS)}">'
+           + "".join(f"<si><t>{_esc(s)}</t></si>" for s in _FN_STRINGS)
+           + "</sst>")
+    sheet1 = _ws({132: [("D", 0), ("E", 1)],      # Notes-Listofnotes: PPE
+                  140: [("D", 2), ("E", 1)]})      #   + Inventories (empty pay)
+    sheet2 = _ws({14: [("D", 3)]})                 # Notes-CI: no fn_* trigger
+    sheet3 = _ws({14: [("A", 4), ("B", 5), ("C", 6)],   # fn_14 populated
+                  15: [("A", 7), ("B", 5), ("C", None)],  # fn_20 empty payload
+                  16: [("A", 8), ("B", 5), ("C", 9)]})   # fn_99 orphan row
+    workbook = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<workbook xmlns="{_NS_MAIN}" xmlns:r="{_NS_R}"><sheets>'
+        '<sheet name="Notes-Listofnotes" sheetId="1" r:id="rId1"/>'
+        '<sheet name="Notes-CI" sheetId="2" r:id="rId2"/>'
+        '<sheet name="+FootnoteTexts" sheetId="3" r:id="rId3"/></sheets>'
+        '<definedNames>'
+        "<definedName name=\"fn_14\">'Notes-Listofnotes'!$E$132</definedName>"
+        "<definedName name=\"fn_20\">'Notes-Listofnotes'!$E$140</definedName>"
+        '</definedNames></workbook>')
+    wb_rels = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Relationships xmlns="http://schemas.openxmlformats.org/package/'
+        f'2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet2.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet3.xml"/>'
+        '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/sharedStrings" '
+        'Target="sharedStrings.xml"/></Relationships>')
+    content_types = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+        f'content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.'
+        'openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.'
+        'openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        + "".join(
+            f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.'
+            'spreadsheetml.worksheet+xml"/>' for i in (1, 2, 3))
+        + '<Override PartName="/xl/sharedStrings.xml" ContentType="application/'
+        'vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+        '</Types>')
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
+        '2006/relationships"><Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+        'relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '</Relationships>')
 
-    wb = Workbook()
-    vis = wb.active
-    vis.title = "Notes-Listofnotes"
-    vis["D132"] = "Property, plant and equipment"   # label lives left of trigger
-    vis["E132"] = "[Text block added]"              # the visible trigger
-    vis["D140"] = "Inventories"                     # backed but empty payload
-    vis["E140"] = "[Text block added]"
-
-    ci = wb.create_sheet("Notes-CI")
-    ci["D14"] = "Corporate information"             # NOT backed by any fn_*
-    ci["E14"] = ""
-
-    fn = wb.create_sheet("+FootnoteTexts")
-    fn["A14"] = "fn_14"
-    fn["B14"] = "Notes-Listofnotes"
-    fn["C14"] = ("<html><body><p>Existing PPE note with a "
-                 "<table></table></p></body></html>")
-    fn["A15"] = "fn_20"
-    fn["B15"] = "Notes-Listofnotes"
-    fn["C15"] = ""                                  # payload row present, empty
-    fn["A16"] = "fn_99"                             # orphan: no defined name
-    fn["B16"] = "Notes-Listofnotes"
-    fn["C16"] = "<html><body><p>orphan</p></body></html>"
-
-    wb.defined_names["fn_14"] = DefinedName(
-        "fn_14", attr_text="'Notes-Listofnotes'!$E$132")
-    wb.defined_names["fn_20"] = DefinedName(
-        "fn_20", attr_text="'Notes-Listofnotes'!$E$140")
     path = tmp_path / "mtool_notes.xlsx"
-    wb.save(path)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types)
+        z.writestr("_rels/.rels", root_rels)
+        z.writestr("xl/workbook.xml", workbook)
+        z.writestr("xl/_rels/workbook.xml.rels", wb_rels)
+        z.writestr("xl/sharedStrings.xml", sst)
+        z.writestr("xl/worksheets/sheet1.xml", sheet1)
+        z.writestr("xl/worksheets/sheet2.xml", sheet2)
+        z.writestr("xl/worksheets/sheet3.xml", sheet3)
     return str(path)
 
 
@@ -616,3 +694,212 @@ def test_footnotes_command_empty_when_no_fn_targets(template, capsys):
     """A plain sub-sheet workbook has no fn_* — reported, not crashed."""
     assert main(["footnotes", "--workbook", template]) == 0
     assert "no fn_* note targets" in capsys.readouterr().out
+
+
+# --------------------------------------------------- footnote (note) WRITING
+
+from mtool.offline_fill import (  # noqa: E402
+    append_shared_string,
+    fill_footnotes,
+    get_shared_strings,
+    replace_shared_string,
+    validate_notes_input,
+    wrap_footnote_html,
+)
+
+PPE_HTML = ('<h3>Property, plant and equipment</h3><p>Depreciated on a '
+            'straight-line basis.</p><table><tr><td>Total &amp; net</td>'
+            '<td>9,340</td></tr></table>')
+
+
+def _payload_of(path, key):
+    """Read back the +FootnoteTexts payload text for an fn_ key."""
+    from mtool.offline_fill import (get_sheet_paths, load_workbook_entries,
+                                    read_footnote_rows)
+    _, data, _ = load_workbook_entries(path)
+    sheet_paths = get_sheet_paths(data)
+    rows = read_footnote_rows(data, sheet_paths, get_shared_strings(data))
+    return rows[key]["payload_text"]
+
+
+def make_notes_input(tmp_path, footnotes):
+    path = tmp_path / "notes.json"
+    path.write_text(json.dumps({"footnotes": footnotes}), encoding="utf-8")
+    return str(path)
+
+
+def test_wrap_footnote_html_has_tx27_shell():
+    out = wrap_footnote_html("<p>x</p>")
+    assert "TX27_HTM 27.0.700.500" in out
+    assert 'xmlns="http://www.w3.org/1999/xhtml"' in out
+    assert "<p>x</p>" in out
+    assert "_x000D_" in out
+
+
+def test_fill_notes_replaces_populated_payload_in_place(tmp_path,
+                                                        footnote_template):
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"key": "fn_14", "html": PPE_HTML}]},
+        output_path=str(out))
+    assert report["status"] == "ok", report
+    assert len(report["footnotes_written"]) == 1
+    assert report["footnotes_written"][0]["action"] == "shared_string_replaced"
+    payload = _payload_of(str(out), "fn_14")
+    assert "Property, plant and equipment" in payload
+    assert "TX27_HTM" in payload           # wrapped
+    assert "Total &amp; net" in payload    # entity round-trips (not &amp;amp;)
+    assert "Existing PPE note" not in payload  # old content gone
+
+
+def test_fill_notes_appends_for_empty_payload(tmp_path, footnote_template):
+    """fn_20's payload cell (C15) is empty: append a shared string + repoint."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"key": "fn_20", "html": "<p>Inventories note</p>"}]},
+        output_path=str(out))
+    assert report["status"] == "ok", report
+    assert report["footnotes_written"][0]["action"] == "shared_string_appended"
+    assert "Inventories note" in _payload_of(str(out), "fn_20")
+
+
+def test_fill_notes_resolves_by_visible_cell(tmp_path, footnote_template):
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"sheet": "Notes-Listofnotes", "cell": "E132",
+                        "html": PPE_HTML}]},
+        output_path=str(out))
+    assert report["status"] == "ok", report
+    assert report["footnotes_written"][0]["key"] == "fn_14"
+
+
+def test_fill_notes_unresolved_when_no_fn_backs_cell(tmp_path,
+                                                     footnote_template):
+    """Notes-CI!E14 has no fn_* — V1 refuses, reports unresolved, no crash."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"sheet": "Notes-CI", "cell": "E14",
+                        "html": "<p>x</p>"}]},
+        output_path=str(out))
+    assert report["status"] == "degraded"
+    assert len(report["unresolved"]) == 1
+    assert not report["footnotes_written"]
+
+
+def test_fill_notes_other_zip_entries_byte_identical(tmp_path,
+                                                     footnote_template):
+    """An in-place payload replace touches ONLY sharedStrings.xml; every other
+    zip entry is copied verbatim (gotcha #28 discipline)."""
+    out = tmp_path / "filled.xlsx"
+    fill_footnotes(footnote_template,
+                   {"footnotes": [{"key": "fn_14", "html": PPE_HTML}]},
+                   output_path=str(out))
+    with zipfile.ZipFile(footnote_template) as zin, zipfile.ZipFile(out) as zo:
+        changed = {name for name in zin.namelist()
+                   if zin.read(name) != zo.read(name)}
+    assert changed == {"xl/sharedStrings.xml"}
+
+
+def test_fill_notes_dry_run_writes_nothing(tmp_path, footnote_template):
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"key": "fn_14", "html": PPE_HTML}]},
+        output_path=str(out), dry_run=True)
+    assert report["footnotes_written"] and not out.exists()
+
+
+def test_validate_notes_input():
+    assert validate_notes_input({"footnotes": []})
+    assert validate_notes_input({"footnotes": [{"key": "fn_1"}]})  # no html
+    assert validate_notes_input({"footnotes": [{"html": "x"}]})    # no target
+    assert not validate_notes_input(
+        {"footnotes": [{"key": "fn_1", "html": "<p>x</p>"}]})
+
+
+def test_shared_string_ops_roundtrip():
+    sst = ('<sst count="2" uniqueCount="2"><si><t>a</t></si>'
+           '<si><t>b</t></si></sst>')
+    out = replace_shared_string(sst, 0, "<p>x & y</p>")
+    assert "&lt;p&gt;x &amp; y&lt;/p&gt;" in out
+    out2, idx = append_shared_string(sst, "z")
+    assert idx == 2 and 'count="3"' in out2 and 'uniqueCount="3"' in out2
+
+
+def test_fill_notes_command_end_to_end(tmp_path, footnote_template, capsys):
+    out = tmp_path / "filled.xlsx"
+    report_path = tmp_path / "report.json"
+    code = main(["fill-notes", "--workbook", footnote_template,
+                 "--input", make_notes_input(
+                     tmp_path, [{"key": "fn_14", "html": PPE_HTML}]),
+                 "--output", str(out), "--report", str(report_path)])
+    assert code == 0
+    report = json.loads(report_path.read_text())
+    assert report["status"] == "ok"
+    assert "Property, plant and equipment" in _payload_of(str(out), "fn_14")
+
+
+def test_fill_notes_command_refuses_in_place(footnote_template):
+    with pytest.raises(SystemExit):
+        main(["fill-notes", "--workbook", footnote_template,
+              "--input", footnote_template, "--output", footnote_template])
+
+
+def test_resolve_footnote_by_label_is_decoration_tolerant():
+    from mtool.offline_fill import resolve_footnote_by_label
+    # A lightweight target list shaped like inspect_footnotes output.
+    targets = [
+        {"key": "fn_25", "row_text": {
+            "D": "*Disclosure of property, plant and equipment [text block]"}},
+        {"key": "fn_11", "row_text": {
+            "D": "*Disclosure of corporate information [text block]"}},
+    ]
+    res = resolve_footnote_by_label("Property, plant and equipment", targets)
+    assert res["status"] == "resolved" and res["key"] == "fn_25"
+    assert resolve_footnote_by_label("nonexistent note", targets)["status"] \
+        == "unresolved"
+
+
+def test_fill_notes_by_label_resolves_and_writes(tmp_path, footnote_template):
+    """Label targeting: no hand-picked key/cell — fill_footnotes matches the
+    visible-row label to the fn_* itself."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"label": "Property, plant and equipment",
+                        "html": PPE_HTML}]},
+        output_path=str(out))
+    assert report["status"] == "ok", report
+    assert report["footnotes_written"][0]["key"] == "fn_14"
+    assert "Property, plant and equipment" in _payload_of(str(out), "fn_14")
+
+
+def test_fill_notes_by_label_unresolved_is_reported(tmp_path, footnote_template):
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"label": "Deferred tax liabilities", "html": "<p>x</p>"}]},
+        output_path=str(out))
+    assert report["status"] == "degraded"
+    assert report["unresolved"] and not report["footnotes_written"]
+
+
+def test_cell_pattern_does_not_swallow_past_self_closing_cell():
+    """The recon guide's self-closing-cell hazard: patching a `<c/>` must not
+    consume following cells/rows up to the next `</c>`."""
+    from mtool.offline_fill import _cell_pattern, patch_shared_cell
+    xml = ('<worksheet><sheetData>'
+           '<row r="15"><c r="A15" t="s"><v>7</v></c><c r="C15"/></row>'
+           '<row r="16"><c r="A16" t="s"><v>8</v></c>'
+           '<c r="C16" t="s"><v>9</v></c></row>'
+           '</sheetData></worksheet>')
+    assert _cell_pattern("C15").search(xml).group(0) == '<c r="C15"/>'
+    out = patch_shared_cell(xml, "C15", 42)
+    assert '<c r="C15" t="s"><v>42</v></c>' in out
+    assert '<c r="A16" t="s"><v>8</v></c>' in out   # row 16 intact
+    assert '<c r="C16" t="s"><v>9</v></c>' in out
+    assert out.count("<row") == 2                    # rows not merged
