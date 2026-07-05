@@ -1033,3 +1033,4 @@ def test_cell_pattern_does_not_swallow_past_self_closing_cell():
     assert '<c r="A16" t="s"><v>8</v></c>' in out   # row 16 intact
     assert '<c r="C16" t="s"><v>9</v></c>' in out
     assert out.count("<row") == 2                    # rows not merged
+

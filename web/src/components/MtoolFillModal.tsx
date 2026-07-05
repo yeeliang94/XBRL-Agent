@@ -192,9 +192,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `HTTP ${resp.status}`
         );
       }
-      const header = resp.headers.get("X-mTool-Report");
-      if (header) setReport(JSON.parse(header) as ReportSummary);
-      // Trigger the filled-workbook download.
+      // Trigger the filled-workbook download FIRST — it's the payload the user
+      // came for. The report header is a nice-to-have summary.
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -204,6 +203,17 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      // Parse the report header AFTER the download so a malformed/clipped
+      // header (e.g. a proxy truncating it) can't turn a successful fill into a
+      // "Fill failed" error — treat a parse failure as "report unavailable".
+      const header = resp.headers.get("X-mTool-Report");
+      if (header) {
+        try {
+          setReport(JSON.parse(header) as ReportSummary);
+        } catch {
+          setReport(null);
+        }
+      }
     } catch (e) {
       setPatchErr(String((e as Error).message || e));
     } finally {

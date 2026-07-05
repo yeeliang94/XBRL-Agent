@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 from pathlib import Path
 
@@ -41,6 +42,10 @@ _MAX_TEMPLATE_BYTES = 25 * 1024 * 1024  # 25 MB — an mTool template is ~100s K
 # Total UNCOMPRESSED size across all zip members. A zip bomb is small on disk
 # but expands hugely; an honest mTool template is a few MB decompressed.
 _MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB
+# A directory bomb is small on disk with a huge member count; an honest mTool
+# template has a few dozen parts. Bound it so load_workbook_entries never
+# builds a pathological dict.
+_MAX_ZIP_MEMBERS = 5000
 _UPLOAD_CHUNK = 1024 * 1024  # 1 MB
 
 
@@ -72,11 +77,17 @@ def _assert_zip_within_budget(path: str) -> None:
 
     try:
         with zipfile.ZipFile(path) as zf:
-            total = sum(info.file_size for info in zf.infolist())
+            infos = zf.infolist()
+            total = sum(info.file_size for info in infos)
     except zipfile.BadZipFile as exc:
         raise HTTPException(
             status_code=422,
             detail=f"Upload is not a readable .xlsx workbook: {exc}") from exc
+    if len(infos) > _MAX_ZIP_MEMBERS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Template has too many zip members ({len(infos)}); "
+                   "refusing to parse.")
     if total > _MAX_UNCOMPRESSED_BYTES:
         raise HTTPException(
             status_code=413,
@@ -256,15 +267,40 @@ async def patch_mtool_template(
         # exporter emits label-only items; native-shaped slot CREATION needs an
         # explicit visible sheet+cell, so it stays a CLI/explicit-cell op — not
         # exposed here as a would-be no-op). Notes-doc-level strict is honored.
+        # Notes fill is best-effort (mirrors the CLI + notes-validator
+        # fail-soft, gotcha #22). A validation failure or an unexpected raise
+        # must NOT discard the already-good numeric fill: keep `final = out`
+        # (numeric-only) and report the notes side as `degraded` so the modal's
+        # combined status surfaces it instead of silently reporting "skipped".
         final = out
         notes_report = None
         if fill_notes:
-            notes_doc = build_notes_fill_doc(server.AUDIT_DB_PATH, run_id)
-            if notes_doc["footnotes"] and not validate_notes_input(notes_doc):
-                notes_out = tmp / "filled_notes.xlsx"
-                notes_report = fill_footnotes(
-                    str(out), notes_doc, str(notes_out))
-                final = notes_out
+            try:
+                notes_doc = build_notes_fill_doc(server.AUDIT_DB_PATH, run_id)
+                if notes_doc["footnotes"]:
+                    notes_errors = validate_notes_input(notes_doc)
+                    if notes_errors:
+                        # Machine-generated doc — this should never happen; if
+                        # it does, don't collapse it into "skipped".
+                        logger.warning(
+                            "mTool patch run %s: notes fill doc failed "
+                            "validation, skipping notes: %s",
+                            run_id, notes_errors)
+                        notes_report = {
+                            "status": "degraded",
+                            "errors": [{"detail": e} for e in notes_errors]}
+                    else:
+                        notes_out = tmp / "filled_notes.xlsx"
+                        notes_report = fill_footnotes(
+                            str(out), notes_doc, str(notes_out))
+                        final = notes_out
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "mTool patch run %s: notes fill raised, returning "
+                    "numeric-only workbook", run_id, exc_info=True)
+                notes_report = {"status": "degraded",
+                                "errors": [{"detail": str(exc)}]}
+                final = out
 
         logger.info(
             "mTool patch run %s: numeric status=%s written=%d unresolved=%d; "
@@ -291,12 +327,18 @@ async def patch_mtool_template(
         raise
 
 
+_COLUMN_LETTER_RE = re.compile(r"[A-Z]{1,3}$")
+
+
 def _validate_cmap_shape(cmap) -> None:
     """Reject a structurally-wrong column_map with a 422 (not a 500).
 
-    Expected: ``{sheet: {"label_column": str, "columns": {role: col}}}``.
-    apply_column_map assumes this shape; a string/list where a dict belongs
-    would otherwise raise AttributeError deep inside → uncaught 500."""
+    Expected: ``{sheet: {"label_column": str, "columns": {role: col}}}`` where
+    every column is an uppercase letter (``"D"``, ``"AA"``). apply_column_map
+    assumes this shape; a string/list where a dict belongs would otherwise
+    raise AttributeError deep inside → uncaught 500, and a non-letter column
+    (``"1"``/``"foo"``) would surface only as a buried per-write error rather
+    than a clean up-front rejection."""
     if not isinstance(cmap, dict):
         raise HTTPException(status_code=422,
                             detail="column_map must be a JSON object")
@@ -306,11 +348,26 @@ def _validate_cmap_shape(cmap) -> None:
                 status_code=422,
                 detail=f"column_map[{sheet!r}] must be an object with "
                        "'label_column' and 'columns'")
+        label_col = cfg.get("label_column")
+        if label_col is not None and not (
+                isinstance(label_col, str)
+                and _COLUMN_LETTER_RE.fullmatch(label_col)):
+            raise HTTPException(
+                status_code=422,
+                detail=f"column_map[{sheet!r}].label_column must be a column "
+                       "letter like 'D'")
         cols = cfg.get("columns")
         if cols is not None and not isinstance(cols, dict):
             raise HTTPException(
                 status_code=422,
                 detail=f"column_map[{sheet!r}].columns must be an object")
+        for role, col in (cols or {}).items():
+            if not (isinstance(col, str)
+                    and _COLUMN_LETTER_RE.fullmatch(col)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"column_map[{sheet!r}].columns[{role!r}] must be "
+                           "a column letter like 'E'")
 
 
 # Row-detail lists are truncated in the header so a run with many unresolved
