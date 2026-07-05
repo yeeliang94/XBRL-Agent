@@ -386,13 +386,23 @@ class PrefixedSheetError(Exception):
 
 
 def _cell_pattern(addr: str):
+    # Self-closing and paired cells are TWO distinct alternatives, NOT
+    # `(?:/>|>.*?</c>)` after a shared `[^>]*`: there, greedy `[^>]*` eats the
+    # `/` of a self-closing cell, the `/>` branch then fails, and `>.*?</c>`
+    # swallows across following cells/rows to the next `</c>` (the recon
+    # guide's self-closing-cell corruption). The lookahead asserts the ref
+    # inside the tag; `[^>]*/>` can't cross a `>`, so it stays minimal.
+    a = re.escape(addr)
     return re.compile(
-        r'<c\b[^>]*\br="%s"[^>]*(?:/>|>.*?</c>)' % re.escape(addr), re.DOTALL)
+        r'<c\b(?=[^>]*\br="%s")[^>]*/>'
+        r'|<c\b(?=[^>]*\br="%s")[^>]*>.*?</c>' % (a, a), re.DOTALL)
 
 
 def _row_pattern(row_num: int):
     return re.compile(
-        r'<row\b[^>]*\br="%d"[^>]*(?:/>|>.*?</row>)' % row_num, re.DOTALL)
+        r'<row\b(?=[^>]*\br="%d")[^>]*/>'
+        r'|<row\b(?=[^>]*\br="%d")[^>]*>.*?</row>' % (row_num, row_num),
+        re.DOTALL)
 
 
 def _attr(opening: str, name: str):
@@ -576,6 +586,333 @@ def validate_input(doc: dict) -> list:
             errors.append(f"{where}: 'value' must be a JSON number, "
                           f"got {value!r}")
     return errors
+
+
+# ------------------------------------------------------- footnote (note) writing
+#
+# The write half of the notes mechanism (readers above): drop our extracted
+# note HTML into a template's prose text-block, by replacing the hidden
+# +FootnoteTexts XHTML payload the fn_* points at. The visible "[Text block
+# added]" trigger cell is left untouched. V1 fills EXISTING popup-backed
+# targets only (must already have an fn_*); it never fabricates a new popup.
+
+# The mTool text-block wrapper (Windows recon 2026-07-05). Line breaks are
+# Excel's "_x000D_" carriage-return token + a literal newline, matching the
+# proven artifact so mTool's editor parses it identically.
+_FN_BODY_STYLE = ("font-family:'Arial';font-size:12pt;"
+                  "background-color:#FFFFFF;text-align:left;")
+_FN_CR = "_x000D_\n"
+
+
+def _xml_escape(text: str) -> str:
+    # & first, then < >. Storing an HTML string as XML text content: the reader
+    # unescapes exactly one level, so an existing HTML entity (&amp;) correctly
+    # survives as &amp;amp; on disk and reads back as &amp; — do NOT special-case.
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def wrap_footnote_html(fragment: str) -> str:
+    """Wrap an HTML fragment in mTool's TX27 XHTML text-block shell."""
+    return (
+        '<?xml version="1.0" ?>' + _FN_CR
+        + '<html xmlns="http://www.w3.org/1999/xhtml">' + _FN_CR
+        + "<head>" + _FN_CR
+        + '<meta content="TX27_HTM 27.0.700.500" name="GENERATOR" />' + _FN_CR
+        + "<title></title>" + _FN_CR
+        + "</head>" + _FN_CR
+        + '<body style="' + _FN_BODY_STYLE + '">' + _FN_CR
+        + fragment + _FN_CR
+        + "</body>" + _FN_CR
+        + "</html>"
+    )
+
+
+_SI_PATTERN = re.compile(r"<si\b[^>]*>.*?</si>|<si\b[^>]*/>", re.DOTALL)
+
+
+def replace_shared_string(sst_xml: str, index: int, raw_text: str) -> str:
+    """Replace the ``index``-th ``<si>`` in sharedStrings.xml in place. Safe
+    for note payloads: each payload is a unique blob referenced by one cell."""
+    matches = list(_SI_PATTERN.finditer(sst_xml))
+    if not 0 <= index < len(matches):
+        raise ValueError(f"shared-string index {index} out of range "
+                         f"({len(matches)} entries)")
+    m = matches[index]
+    new_si = ('<si><t xml:space="preserve">' + _xml_escape(raw_text)
+              + "</t></si>")
+    return sst_xml[:m.start()] + new_si + sst_xml[m.end():]
+
+
+def _bump_sst_counts(sst_xml: str, delta: int) -> str:
+    m = re.search(r"<sst\b[^>]*>", sst_xml)
+    if not m:
+        return sst_xml
+    tag = re.sub(r'\b(count|uniqueCount)="(\d+)"',
+                 lambda a: f'{a.group(1)}="{int(a.group(2)) + delta}"',
+                 m.group(0))
+    return sst_xml[:m.start()] + tag + sst_xml[m.end():]
+
+
+def append_shared_string(sst_xml: str, raw_text: str):
+    """Append a new ``<si>`` before ``</sst>`` and bump count/uniqueCount.
+    Returns (new_xml, new_index). Used when the payload cell is empty."""
+    matches = list(_SI_PATTERN.finditer(sst_xml))
+    new_index = len(matches)
+    new_si = ('<si><t xml:space="preserve">' + _xml_escape(raw_text)
+              + "</t></si>")
+    close = re.search(r"</sst>", sst_xml)
+    if not close:
+        raise ValueError("no </sst> in sharedStrings.xml")
+    out = sst_xml[:close.start()] + new_si + sst_xml[close.start():]
+    return _bump_sst_counts(out, +1), new_index
+
+
+def _cell_shared_index(sheet_xml: str, addr: str):
+    """The shared-string index a ``t="s"`` cell points at, or None."""
+    m = _cell_pattern(addr).search(sheet_xml)
+    if not m:
+        return None
+    cell = m.group(0)
+    opening = re.match(r"<c\b[^>]*?/?>", cell).group(0)
+    if _attr(opening, "t") != "s":
+        return None
+    v = re.search(r"<v\b[^>]*>(.*?)</v>", cell, re.DOTALL)
+    if not v:
+        return None
+    try:
+        return int(v.group(1))
+    except ValueError:
+        return None
+
+
+def _rebuild_shared_cell(addr: str, style, index: int) -> str:
+    s_part = f' s="{style}"' if style is not None else ""
+    return f'<c r="{addr}"{s_part} t="s"><v>{index}</v></c>'
+
+
+def patch_shared_cell(sheet_xml: str, addr: str, index: int):
+    """Point cell ``addr`` at shared-string ``index`` (``t="s"``), preserving
+    style. Mirrors patch_cell_in_sheet's surgery but writes a shared cell."""
+    if "<sheetData" not in sheet_xml:
+        if re.search(r"<\w+:sheetData\b", sheet_xml):
+            raise PrefixedSheetError(
+                "sheet XML uses a namespace prefix; refusing to patch")
+        raise ValueError("no <sheetData> element found in sheet XML")
+    col, row_num = split_ref(addr)
+    cell_m = _cell_pattern(addr).search(sheet_xml)
+    if cell_m:
+        cell_xml = cell_m.group(0)
+        if re.search(r"<f[ >/]", cell_xml):
+            raise ValueError(f"refusing to overwrite formula cell {addr}")
+        opening = re.match(r"<c\b[^>]*?/?>", cell_xml).group(0)
+        style = _attr(opening, "s")
+        new_cell = _rebuild_shared_cell(addr, style, index)
+        return sheet_xml[:cell_m.start()] + new_cell + sheet_xml[cell_m.end():]
+    new_cell = _rebuild_shared_cell(addr, None, index)
+    row_m = _row_pattern(row_num).search(sheet_xml)
+    if not row_m:
+        raise ValueError(f"no row {row_num} for footnote payload cell {addr}")
+    row_xml = row_m.group(0)
+    if row_xml.endswith("/>"):
+        new_row = row_xml[:-2] + f">{new_cell}</row>"
+    else:
+        insert_at = len(row_xml) - len("</row>")
+        target_idx = col_to_idx(col)
+        for m in re.finditer(r'<c\b[^>]*\br="([A-Z]{1,3})\d+"', row_xml):
+            if col_to_idx(m.group(1)) > target_idx:
+                insert_at = m.start()
+                break
+        new_row = row_xml[:insert_at] + new_cell + row_xml[insert_at:]
+    return sheet_xml[:row_m.start()] + new_row + sheet_xml[row_m.end():]
+
+
+def _norm_ws(text) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _footnote_label_core(text: str) -> str:
+    """Normalize a visible-row label and strip mTool taxonomy decoration so
+    'Property, plant and equipment' matches '*Disclosure of property, plant
+    and equipment [text block]'."""
+    core = normalize_label(text)
+    core = re.sub(r"^\*+\s*", "", core)
+    core = re.sub(r"^disclosure of\s+", "", core)
+    core = re.sub(r"\s*\[text\s*block\]$", "", core)
+    return core.strip()
+
+
+def resolve_footnote_by_label(label: str, targets: list) -> dict:
+    """Find the fn_* whose visible-row text matches ``label``. Reuses the
+    numeric path's fuzzy posture but is containment-aware (mTool labels wrap
+    the concept in 'Disclosure of … [text block]'). Returns
+    {status: resolved|ambiguous|unresolved, key?, matched_label?, ratio?}."""
+    want = _footnote_label_core(label)
+    scored = []
+    for t in targets:
+        best = 0.0
+        best_label = ""
+        for txt in t["row_text"].values():
+            core = _footnote_label_core(txt)
+            if not core:
+                continue
+            if want == core:
+                ratio = 1.0
+            elif want and (want in core or core in want):
+                ratio = 0.95
+            else:
+                ratio = difflib.SequenceMatcher(None, want, core).ratio()
+            if ratio > best:
+                best, best_label = ratio, txt
+        scored.append((best, t["key"], best_label))
+    scored.sort(key=lambda s: s[0], reverse=True)
+    if not scored or scored[0][0] < FUZZY_THRESHOLD:
+        return {"status": "unresolved",
+                "detail": f"no fn_* label matched {label!r}"}
+    if len(scored) > 1 and scored[1][0] == scored[0][0]:
+        tied = [k for r, k, _ in scored if r == scored[0][0]]
+        return {"status": "ambiguous",
+                "detail": f"label matches multiple fn_*: {tied}"}
+    return {"status": "resolved", "key": scored[0][1],
+            "matched_label": scored[0][2], "ratio": round(scored[0][0], 3)}
+
+
+def validate_notes_input(doc: dict) -> list:
+    errors = []
+    items = doc.get("footnotes")
+    if not isinstance(doc, dict) or not isinstance(items, list) or not items:
+        return ["input must be an object with a non-empty 'footnotes' list"]
+    for i, it in enumerate(items):
+        where = f"footnotes[{i}]"
+        if not isinstance(it, dict):
+            errors.append(f"{where}: must be an object")
+            continue
+        has_key = bool(it.get("key"))
+        has_label = bool(it.get("label"))
+        has_cell = bool(it.get("sheet")) and bool(it.get("cell"))
+        if not (has_key or has_label or has_cell):
+            errors.append(
+                f"{where}: need 'key', 'label', or both 'sheet' and 'cell'")
+        if not isinstance(it.get("html"), str) or not it["html"].strip():
+            errors.append(f"{where}: 'html' must be a non-empty string")
+    return errors
+
+
+def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None,
+                   *, dry_run: bool = False) -> dict:
+    """Fill prose-note text-blocks from ``doc``'s ``footnotes`` list. Assumes
+    ``doc`` passed :func:`validate_notes_input`. Mirrors :func:`fill_workbook`
+    (one patcher, no fork). Targets EXISTING popup-backed notes only."""
+    _, data, _ = load_workbook_entries(workbook_path)
+    sheet_paths = get_sheet_paths(data)
+    sst = get_shared_strings(data)
+    defined = get_defined_names(data, "fn_")
+    footnote_sheet = find_footnote_sheet(sheet_paths)
+
+    report = {
+        "workbook": workbook_path,
+        "output": None if dry_run else output_path,
+        "dry_run": bool(dry_run),
+        "footnotes_written": [], "unresolved": [], "errors": [],
+        "footnote_mismatches": [],
+    }
+    fn_entry = sheet_paths.get(footnote_sheet) if footnote_sheet else None
+    if fn_entry is None or "xl/sharedStrings.xml" not in data:
+        report["errors"].append(
+            {"error": "workbook has no +FootnoteTexts sheet / sharedStrings.xml"})
+        report["status"] = "degraded"
+        return report
+
+    cell_to_fn = {f"{d['sheet']}!{d['cell']}": k for k, d in defined.items()}
+    fn_rows = read_footnote_rows(data, sheet_paths, sst, footnote_sheet)
+    fn_sheet_xml = data[fn_entry].decode("utf-8")
+    sst_xml = data["xl/sharedStrings.xml"].decode("utf-8")
+    targets = None  # inspect_footnotes result, built lazily for label matches
+
+    resolved_html = {}
+    seen_keys = set()
+    for i, it in enumerate(doc["footnotes"]):
+        base = {"index": i, "sheet": it.get("sheet"), "cell": it.get("cell"),
+                "key": it.get("key"), "label": it.get("label")}
+        key = it.get("key")
+        if not key and it.get("label"):
+            if targets is None:
+                targets = inspect_footnotes(data)["targets"]
+            res = resolve_footnote_by_label(it["label"], targets)
+            if res["status"] != "resolved":
+                report["unresolved"].append({**base, **res})
+                continue
+            key = res["key"]
+            base.update(matched_label=res.get("matched_label"),
+                        ratio=res.get("ratio"))
+        elif not key:
+            vis = f"{it['sheet']}!{str(it['cell']).upper()}"
+            key = cell_to_fn.get(vis)
+            if not key:
+                report["unresolved"].append({**base, "detail":
+                    f"no fn_* backs {vis}; V1 fills existing popups only"})
+                continue
+        base["key"] = key
+        if key in seen_keys:
+            report["errors"].append({**base, "error":
+                f"duplicate footnote write to {key}"})
+            continue
+        fn = fn_rows.get(key)
+        if fn is None:
+            report["unresolved"].append({**base, "detail":
+                f"no {footnote_sheet} payload row for {key}"})
+            continue
+        seen_keys.add(key)
+        payload_addr = f"{fn['payload_col'] or 'C'}{fn['row']}"
+        wrapped = wrap_footnote_html(it["html"])
+        try:
+            existing = _cell_shared_index(fn_sheet_xml, payload_addr)
+            if existing is not None:
+                sst_xml = replace_shared_string(sst_xml, existing, wrapped)
+                action = "shared_string_replaced"
+            else:
+                sst_xml, new_index = append_shared_string(sst_xml, wrapped)
+                fn_sheet_xml = patch_shared_cell(
+                    fn_sheet_xml, payload_addr, new_index)
+                action = "shared_string_appended"
+        except (ValueError, PrefixedSheetError) as exc:
+            report["errors"].append({**base, "error": str(exc)})
+            continue
+        base.update(hidden_sheet=footnote_sheet, hidden_cell=payload_addr,
+                    action=action)
+        resolved_html[key] = it["html"]
+        report["footnotes_written"].append(base)
+
+    if not dry_run:
+        write_patched_zip(workbook_path, output_path, {
+            "xl/sharedStrings.xml": sst_xml.encode("utf-8"),
+            fn_entry: fn_sheet_xml.encode("utf-8"),
+        })
+        report["footnote_mismatches"] = _verify_footnotes(
+            output_path, footnote_sheet, report["footnotes_written"],
+            resolved_html)
+
+    degraded = any(report[k] for k in
+                   ("unresolved", "errors", "footnote_mismatches"))
+    report["status"] = "degraded" if degraded else "ok"
+    return report
+
+
+def _verify_footnotes(path: str, footnote_sheet: str, written: list,
+                      html_by_key: dict) -> list:
+    """Read back each written payload; a fragment that isn't present is a
+    mismatch. get_shared_strings unescapes, so the stored HTML round-trips."""
+    _, data, _ = load_workbook_entries(path)
+    sheet_paths = get_sheet_paths(data)
+    fn_rows = read_footnote_rows(data, sheet_paths,
+                                 get_shared_strings(data), footnote_sheet)
+    mismatches = []
+    for w in written:
+        fn = fn_rows.get(w["key"])
+        payload = fn["payload_text"] if fn else None
+        want = _norm_ws(html_by_key.get(w["key"]))
+        if not payload or (want and want not in _norm_ws(payload)):
+            mismatches.append({"key": w["key"], "found": bool(payload)})
+    return mismatches
 
 
 # ---------------------------------------------------------------- commands
@@ -788,6 +1125,34 @@ def run_inspect(args) -> int:
     return 0
 
 
+def run_fill_notes(args) -> int:
+    """Fill prose-note text-blocks from a JSON input (footnotes list)."""
+    with open(args.input, encoding="utf-8-sig") as fh:
+        doc = json.load(fh)
+    errors = validate_notes_input(doc)
+    if errors:
+        for e in errors:
+            print(f"INPUT ERROR: {e}", file=sys.stderr)
+        return 2
+    report = fill_footnotes(
+        args.workbook, doc,
+        output_path=None if args.dry_run else args.output,
+        dry_run=bool(args.dry_run))
+    if args.report:
+        with open(args.report, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, indent=2, ensure_ascii=False)
+    print(f"status: {report['status']}"
+          + (" (dry run)" if report["dry_run"] else ""))
+    print(f"  footnotes_written: {len(report['footnotes_written'])}")
+    for key in ("unresolved", "footnote_mismatches", "errors"):
+        entries = report[key]
+        print(f"  {key + ':':<19} {len(entries)}")
+        for e in entries:
+            print(f"    - {e.get('key') or e.get('cell') or ''} "
+                  f"{e.get('detail') or e.get('error') or e.get('found', '')}")
+    return 1 if report["status"] == "degraded" else 0
+
+
 def run_footnotes(args) -> int:
     """Dump every prose-note text-block target in a workbook, programmatically.
 
@@ -862,16 +1227,27 @@ def main(argv=None) -> int:
                         help="refuse fuzzy label matches (report as unresolved)")
     p_fill.add_argument("--dry-run", action="store_true", dest="dry_run")
 
+    p_notes = sub.add_parser(
+        "fill-notes",
+        help="fill prose-note text-blocks (HTML -> +FootnoteTexts payload)")
+    p_notes.add_argument("--workbook", required=True)
+    p_notes.add_argument("--input", required=True)
+    p_notes.add_argument("--output")
+    p_notes.add_argument("--report")
+    p_notes.add_argument("--dry-run", action="store_true", dest="dry_run")
+
     args = parser.parse_args(argv)
     if args.command == "inspect":
         return run_inspect(args)
     if args.command == "footnotes":
         return run_footnotes(args)
     if not args.dry_run and not args.output:
-        parser.error("fill requires --output (or --dry-run)")
+        parser.error(f"{args.command} requires --output (or --dry-run)")
     if args.output and args.output == args.workbook:
         parser.error("--output must differ from --workbook "
                      "(never patch the original in place)")
+    if args.command == "fill-notes":
+        return run_fill_notes(args)
     return run_fill(args)
 
 
