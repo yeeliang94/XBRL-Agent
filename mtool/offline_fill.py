@@ -517,6 +517,10 @@ def write_patched_zip(src_path: str, dst_path: str, replacements: dict):
             ni.external_attr = info.external_attr
             ni.internal_attr = info.internal_attr
             ni.create_system = info.create_system
+            # NB: flag_bits is deliberately NOT copied — zipfile.writestr
+            # recomputes it from the payload/name (it auto-sets bit 11 = UTF-8
+            # only when the name needs it), so an assignment here is overwritten.
+            # mTool part names are ASCII, so this reproduces them faithfully.
             zout.writestr(ni, payload)
 
 

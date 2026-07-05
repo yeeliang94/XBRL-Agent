@@ -265,6 +265,18 @@ def test_zip_bomb_uncompressed_budget_is_413(client, monkeypatch):
     assert "decompresses" in resp.json()["detail"]
 
 
+def test_directory_bomb_member_count_is_413(client, monkeypatch):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    import api.mtool as m
+    monkeypatch.setattr(m, "_MAX_ZIP_MEMBERS", 1)  # our template has > 1 part
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={})
+    assert resp.status_code == 413
+    assert "too many zip members" in resp.json()["detail"]
+
+
 def _add_note(db, run_id, sheet, row, label, html):
     conn = sqlite3.connect(str(db))
     try:
@@ -329,6 +341,69 @@ def test_patch_fill_notes_on_reports_notes_block(client):
     # The returned bytes are still a valid workbook.
     import openpyxl
     openpyxl.load_workbook(io.BytesIO(resp.content))
+
+
+def test_patch_notes_exception_preserves_numeric_fill(client, monkeypatch):
+    """A notes-fill raise must NOT discard the already-good numeric workbook.
+
+    Notes fill is best-effort (gotcha #22): on an unexpected exception the
+    numeric-only fill is still returned (200) with the notes side degraded."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    n = _seed_distinct_leaves(db, run_id)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    import api.mtool as m
+
+    def boom(*_a, **_k):
+        raise RuntimeError("notes patcher exploded")
+
+    monkeypatch.setattr(m, "fill_footnotes", boom)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={"strict": "true"})
+    assert resp.status_code == 200, resp.text
+    report = json.loads(resp.headers["X-mTool-Report"])
+    assert report["counts"]["written"] == n       # numbers survived the raise
+    assert report["notes"]["status"] == "degraded"
+    assert report["status"] == "degraded"
+    assert report["numeric_status"] == "ok"
+    import openpyxl
+    openpyxl.load_workbook(io.BytesIO(resp.content))  # still a valid workbook
+
+
+def test_patch_invalid_notes_doc_reports_degraded(client, monkeypatch):
+    """An invalid machine-generated notes doc is reported degraded, not
+    silently collapsed into "skipped"."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    n = _seed_distinct_leaves(db, run_id)
+    import api.mtool as m
+    # footnotes present but each missing 'html' -> validate_notes_input errors.
+    monkeypatch.setattr(
+        m, "build_notes_fill_doc",
+        lambda *_a, **_k: {"footnotes": [{"label": "PPE"}], "meta": {}})
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={"strict": "true"})
+    assert resp.status_code == 200, resp.text
+    report = json.loads(resp.headers["X-mTool-Report"])
+    assert report["counts"]["written"] == n
+    assert report["notes"]["status"] == "degraded"
+    assert report["status"] == "degraded"
+
+
+def test_patch_non_letter_column_map_is_422(client):
+    """A structurally-valid map with a non-letter column is rejected up front
+    (422), not surfaced only as a buried per-write error."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    doc = tc.get(f"/api/runs/{run_id}/mtool-fill").json()
+    sheet = doc["meta"]["sheets_covered"][0]
+    bad = json.dumps(
+        {sheet: {"label_column": "A", "columns": {"current_year": "1"}}})
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(),
+                   data={"column_map": bad})
+    assert resp.status_code == 422
 
 
 def test_temp_dir_cleaned_after_patch(client, tmp_path):
