@@ -29,12 +29,19 @@ interface FillMeta {
   denomination: string | null;
 }
 
+interface NotesReport {
+  status: string;
+  counts: { written: number; created: number; unresolved: number; mismatches: number; errors: number };
+  unresolved?: { label: string | null; detail?: string }[];
+}
+
 interface ReportSummary {
   status: string;
   counts: Record<string, number>;
   unresolved: { sheet: string; label: string | null; detail?: string }[];
   skipped_formula: { sheet: string; cell?: string; label: string | null }[];
   mismatches: { cell: string; expected: string; found: string | null }[];
+  notes?: NotesReport;
 }
 
 // Server's low-confidence auto-detection payload (422 detail.detected).
@@ -102,6 +109,8 @@ const styles = {
 
 export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [meta, setMeta] = useState<FillMeta | null>(null);
+  const [notesCount, setNotesCount] = useState<number | null>(null);
+  const [fillNotes, setFillNotes] = useState(true);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -125,6 +134,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     setMeta(null);
+    setNotesCount(null);
     setLoadErr(null);
     setFile(null);
     setReport(null);
@@ -137,6 +147,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       })
       .then((doc) => setMeta(doc.meta))
       .catch((e) => setLoadErr(String(e.message || e)));
+    // Notes count is best-effort — a load failure just hides the notes line.
+    fetch(`/api/runs/${runId}/mtool-notes-fill`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((doc) => setNotesCount(doc?.meta?.counts?.notes ?? null))
+      .catch(() => setNotesCount(null));
   }, [open, runId]);
 
   if (!open) return null;
@@ -150,6 +165,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       const form = new FormData();
       form.append("template", file);
       form.append("strict", "true");
+      form.append("fill_notes", fillNotes ? "true" : "false");
       if (columnMap) form.append("column_map", JSON.stringify(columnMap));
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/patch`, {
         method: "POST",
@@ -213,9 +229,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         <h2 style={styles.heading}>Fill mTool template</h2>
         <p style={styles.sub}>
           Upload the empty mTool template you generated in mTool. The app fills its
-          numeric leaf values from this run&apos;s reviewed figures and returns one
-          workbook you open in mTool to Validate &amp; Generate. Totals stay as
-          mTool&apos;s own formulas; SOCIE and notes prose are not filled this phase.
+          numeric leaf values <em>and</em> the prose notes from this run&apos;s reviewed
+          content, and returns one workbook you open in mTool to Validate &amp; Generate.
+          Totals stay as mTool&apos;s own formulas; SOCIE is not filled this phase.
         </p>
 
         {loadErr && (
@@ -241,7 +257,25 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 them in Review values first.
               </div>
             )}
+            {notesCount !== null && (
+              <div style={styles.statLine}>
+                <strong>{notesCount}</strong> prose note(s) will be filled into matching
+                text-blocks
+              </div>
+            )}
           </div>
+        )}
+
+        {notesCount !== null && notesCount > 0 && (
+          <label style={{ ...styles.statLine, display: "flex", alignItems: "center", gap: 6, marginBottom: pwc.space.md }}>
+            <input
+              type="checkbox"
+              checked={fillNotes}
+              onChange={(e) => setFillNotes(e.target.checked)}
+              aria-label="Also fill notes"
+            />
+            Also fill prose notes
+          </label>
         )}
 
         <input
@@ -345,6 +379,19 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 )}
                 {report.counts.errors > 0 && <li>{report.counts.errors} error(s)</li>}
               </ul>
+            )}
+            {report.notes && (
+              <div style={{ marginTop: 6, fontSize: 12 }}>
+                <strong>Notes: </strong>
+                {[
+                  `${report.notes.counts.written} filled`,
+                  report.notes.counts.created > 0 && `${report.notes.counts.created} slot(s) created`,
+                  report.notes.counts.unresolved > 0 && `${report.notes.counts.unresolved} unmatched`,
+                  report.notes.counts.errors > 0 && `${report.notes.counts.errors} error(s)`,
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
+              </div>
             )}
           </div>
         )}

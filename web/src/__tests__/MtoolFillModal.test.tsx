@@ -148,6 +148,47 @@ describe("MtoolFillModal", () => {
     expect(patchCalls).toBe(2);
   });
 
+  test("shows the notes count and an 'also fill notes' toggle", async () => {
+    mockFetch((url) => {
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    const toggle = screen.getByLabelText(/also fill notes/i) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+  });
+
+  test("reports notes results after a fill", async () => {
+    const reportHeader = JSON.stringify({
+      status: "ok",
+      counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
+      unresolved: [],
+      skipped_formula: [],
+      mismatches: [],
+      notes: { status: "ok", counts: { written: 2, created: 0, unresolved: 0, mismatches: 0, errors: 0 } },
+    });
+    mockFetch((url) => {
+      if (url.includes("/mtool-fill/patch"))
+        return new Response(new Blob(["x"]), { status: 200, headers: { "X-mTool-Report": reportHeader } });
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
+    await waitFor(() => expect(screen.getByText(/Notes:/)).toBeTruthy());
+    expect(screen.getByText(/2 filled/)).toBeTruthy();
+  });
+
   test("surfaces a server error", async () => {
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch")) {

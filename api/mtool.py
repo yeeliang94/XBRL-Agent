@@ -25,7 +25,9 @@ from starlette.background import BackgroundTask
 import server
 from mtool.column_detect import detect_column_map, overall_confidence
 from mtool.exporter import apply_column_map, build_fill_doc
-from mtool.offline_fill import fill_workbook, validate_input
+from mtool.notes_exporter import build_notes_fill_doc
+from mtool.offline_fill import (
+    fill_footnotes, fill_workbook, validate_input, validate_notes_input)
 
 logger = logging.getLogger("server")
 
@@ -131,6 +133,17 @@ def get_mtool_fill_doc(run_id: int):
     return JSONResponse(doc)
 
 
+@router.get("/api/runs/{run_id}/mtool-notes-fill")
+def get_mtool_notes_fill_doc(run_id: int):
+    """Return the prose-notes footnote fill document for a completed run.
+
+    The notes twin of ``/mtool-fill`` — one ``footnotes`` item per note
+    (``label`` + ``html``), resolved to the template's ``fn_*`` at patch time.
+    """
+    _load_fillable_run(run_id)  # gate: 404/409 like the numeric doc
+    return JSONResponse(build_notes_fill_doc(server.AUDIT_DB_PATH, run_id))
+
+
 @router.post("/api/runs/{run_id}/mtool-fill/patch")
 async def patch_mtool_template(
     run_id: int,
@@ -138,6 +151,8 @@ async def patch_mtool_template(
     column_map: str | None = Form(default=None),
     strict: bool = Form(default=True),
     force_recalc: bool = Form(default=False),
+    fill_notes: bool = Form(default=True),
+    create_missing_notes: bool = Form(default=False),
 ):
     """Patch an uploaded empty mTool template from the run's facts.
 
@@ -235,17 +250,38 @@ async def patch_mtool_template(
         report = fill_workbook(str(src), ready, str(out),
                                strict=strict, force_recalc=force_recalc)
 
-        logger.info("mTool patch run %s: status=%s written=%d unresolved=%d",
-                    run_id, report["status"], len(report["written"]),
-                    len(report["unresolved"]))
+        # Chain the prose-notes fill onto the numeric-filled workbook. Notes
+        # touch disjoint zip parts (sharedStrings + +FootnoteTexts), so the
+        # numeric edits are preserved. Same offline patcher, no fork.
+        final = out
+        notes_report = None
+        if fill_notes:
+            notes_doc = build_notes_fill_doc(server.AUDIT_DB_PATH, run_id)
+            if notes_doc["footnotes"] and not validate_notes_input(notes_doc):
+                notes_out = tmp / "filled_notes.xlsx"
+                notes_report = fill_footnotes(
+                    str(out), notes_doc, str(notes_out),
+                    create_missing=create_missing_notes)
+                final = notes_out
+
+        logger.info(
+            "mTool patch run %s: numeric status=%s written=%d unresolved=%d; "
+            "notes status=%s written=%d created=%d unresolved=%d",
+            run_id, report["status"], len(report["written"]),
+            len(report["unresolved"]),
+            (notes_report or {}).get("status", "skipped"),
+            len((notes_report or {}).get("footnotes_written", [])),
+            len((notes_report or {}).get("footnotes_created", [])),
+            len((notes_report or {}).get("unresolved", [])))
 
         filename = f"mtool_filled_run{run_id}.xlsx"
         return FileResponse(
-            str(out),
+            str(final),
             media_type=("application/vnd.openxmlformats-officedocument."
                         "spreadsheetml.sheet"),
             filename=filename,
-            headers={"X-mTool-Report": _bounded_report_header(report)},
+            headers={"X-mTool-Report": _bounded_report_header(report,
+                                                              notes_report)},
             background=BackgroundTask(_cleanup, tmp),
         )
     except Exception:
@@ -283,24 +319,50 @@ _HEADER_LIST_CAP = 20
 _HEADER_MAX_BYTES = 6000
 
 
-def _bounded_report_header(report: dict) -> str:
+def _notes_report_block(notes_report: dict | None) -> dict | None:
+    """Compact notes-fill summary for the response header. ``None`` when notes
+    weren't filled (fill_notes off, or the run has none)."""
+    if not notes_report:
+        return None
+    return {
+        "status": notes_report["status"],
+        "counts": {
+            "written": len(notes_report.get("footnotes_written", [])),
+            "created": len(notes_report.get("footnotes_created", [])),
+            "unresolved": len(notes_report.get("unresolved", [])),
+            "mismatches": len(notes_report.get("footnote_mismatches", [])),
+            "errors": len(notes_report.get("errors", [])),
+        },
+        "unresolved": [
+            {"label": e.get("label"), "detail": e.get("detail")}
+            for e in notes_report.get("unresolved", [])[:_HEADER_LIST_CAP]
+        ],
+    }
+
+
+def _bounded_report_header(report: dict, notes_report: dict | None = None) -> str:
     detail_keys = ("unresolved", "skipped_formula", "mismatches")
     counts = {k: len(report[k]) for k in (
         "written", "fuzzy_matched", "skipped_formula", "type_changed",
         "unresolved", "ambiguous", "mismatches", "errors")}
     truncated = any(len(report[k]) > _HEADER_LIST_CAP for k in detail_keys)
+    notes_block = _notes_report_block(notes_report)
     payload = {
         "status": report["status"],
         "counts": counts,
         "truncated": truncated,
+        **({"notes": notes_block} if notes_block else {}),
         **{k: report[k][:_HEADER_LIST_CAP] for k in detail_keys},
     }
     encoded = json.dumps(payload)
     if len(encoded.encode("utf-8")) <= _HEADER_MAX_BYTES:
         return encoded
     # Still too big (very long labels): drop the detail lists, keep counts.
-    return json.dumps({"status": report["status"], "counts": counts,
-                       "truncated": True})
+    slim = {"status": report["status"], "counts": counts, "truncated": True}
+    if notes_block:
+        slim["notes"] = {"status": notes_block["status"],
+                         "counts": notes_block["counts"]}
+    return json.dumps(slim)
 
 
 def _cleanup(path: Path) -> None:

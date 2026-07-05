@@ -797,11 +797,160 @@ def validate_notes_input(doc: dict) -> list:
     return errors
 
 
+# --- slot creation (opt-in) -------------------------------------------------
+# Creating a NEW popup-backed note (a concept with no fn_* at all) is the
+# fragile path: mTool only renders the popup if the new artifacts match its
+# native shape closely (Windows recon 2026-07-05 — a guided native-shaped
+# fn_37 rendered; an under-shaped one opened empty). So we CLONE the shape from
+# an existing native fn_* row rather than hardcode magic numbers, and allocate
+# every id from ONE evolving state so a batch never collides (the "race").
+# Off by default; the caller opts in per fill. NOT auto-triggered by a fuzzy
+# label (we don't know the visible cell then) — creation needs an explicit
+# visible sheet+cell target.
+
+_TEXT_BLOCK_MARKER = "[Text block added]"
+
+
+def _sheet_local_index(data: dict, sheet_name: str):
+    """0-based position of ``sheet_name`` in workbook sheet order — the
+    ``localSheetId`` a sheet-scoped defined name carries."""
+    wb = ET.fromstring(data["xl/workbook.xml"])
+    idx = 0
+    for el in wb.iter():
+        if _local(el.tag) == "sheet":
+            if el.get("name") == sheet_name:
+                return idx
+            idx += 1
+    return None
+
+
+def _find_donor_shape(fn_rows: dict, fn_sheet_xml: str) -> dict:
+    """Clone the row/payload-cell shape from an existing native fn_* row so a
+    created slot looks native. Falls back to the observed defaults."""
+    for key in sorted(fn_rows, key=lambda k: fn_rows[k]["row"]):
+        row = fn_rows[key]["row"]
+        rm = _row_pattern(row).search(fn_sheet_xml)
+        if not rm:
+            continue
+        opentag = re.match(r"<row\b[^>]*?>", rm.group(0)).group(0)
+        pstyle = None
+        cm = _cell_pattern(f"C{row}").search(fn_sheet_xml)
+        if cm:
+            copen = re.match(r"<c\b[^>]*?/?>", cm.group(0)).group(0)
+            pstyle = _attr(copen, "s")
+        return {"spans": _attr(opentag, "spans"), "ht": _attr(opentag, "ht"),
+                "custom_height": 'customHeight="1"' in opentag,
+                "payload_style": pstyle}
+    return {"spans": "1:7", "ht": "409.5", "custom_height": True,
+            "payload_style": None}
+
+
+def _ensure_shared_string(sst_xml: str, index_map: dict, text: str):
+    """Reuse an identical existing shared string, else append one. Returns
+    (sst_xml, index). ``index_map`` is updated with any append."""
+    if text in index_map:
+        return sst_xml, index_map[text]
+    sst_xml, idx = append_shared_string(sst_xml, text)
+    index_map[text] = idx
+    return sst_xml, idx
+
+
+def _footnote_row_xml(row_num: int, a_idx: int, b_idx: int, p_idx: int,
+                      donor: dict) -> str:
+    spans = f' spans="{donor["spans"]}"' if donor.get("spans") else ""
+    ht = ""
+    if donor.get("ht"):
+        ht = f' ht="{donor["ht"]}"' + (
+            ' customHeight="1"' if donor.get("custom_height") else "")
+    ps = f' s="{donor["payload_style"]}"' if donor.get("payload_style") else ""
+    return (f'<row r="{row_num}"{spans}{ht}>'
+            f'<c r="A{row_num}" t="s"><v>{a_idx}</v></c>'
+            f'<c r="B{row_num}" t="s"><v>{b_idx}</v></c>'
+            f'<c r="C{row_num}"{ps} t="s"><v>{p_idx}</v></c></row>')
+
+
+def _insert_row_ordered(sheet_xml: str, row_num: int, row_xml: str) -> str:
+    for m in re.finditer(r'<row\b[^>]*\br="(\d+)"', sheet_xml):
+        if int(m.group(1)) > row_num:
+            return sheet_xml[:m.start()] + row_xml + sheet_xml[m.start():]
+    close = re.search(r"</sheetData>", sheet_xml)
+    if close:
+        return sheet_xml[:close.start()] + row_xml + sheet_xml[close.start():]
+    empty = re.search(r"<sheetData\s*/>", sheet_xml)
+    if empty:
+        return (sheet_xml[:empty.start()] + f"<sheetData>{row_xml}</sheetData>"
+                + sheet_xml[empty.end():])
+    raise ValueError("no <sheetData> to insert footnote row into")
+
+
+def _bump_footnote_dimension(sheet_xml: str, row_num: int) -> str:
+    m = re.search(r'<dimension ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"', sheet_xml)
+    if not m or row_num <= int(m.group(4)):
+        return sheet_xml
+    new = f'<dimension ref="{m.group(1)}{m.group(2)}:{m.group(3)}{row_num}"'
+    return sheet_xml[:m.start()] + new + sheet_xml[m.end():]
+
+
+def _add_defined_name(workbook_xml: str, name: str, sheet: str, cell: str,
+                      local_index) -> str:
+    col, row_num = split_ref(cell)
+    sheet_ref = sheet.replace("'", "''")
+    ref = _xml_escape(f"'{sheet_ref}'!${col}${row_num}")
+    lsid = f' localSheetId="{local_index}"' if local_index is not None else ""
+    dn = f'<definedName name="{name}"{lsid}>{ref}</definedName>'
+    close = re.search(r"</definedNames>", workbook_xml)
+    if close:
+        return workbook_xml[:close.start()] + dn + workbook_xml[close.start():]
+    sheets = re.search(r"</sheets>", workbook_xml)
+    if not sheets:
+        raise ValueError("no </sheets> to anchor a <definedNames> block")
+    return (workbook_xml[:sheets.end()] + f"<definedNames>{dn}</definedNames>"
+            + workbook_xml[sheets.end():])
+
+
+def _alloc_fn_key(fn_used: set) -> str:
+    n = max((int(re.sub(r"\D", "", k) or 0) for k in fn_used), default=0) + 1
+    key = f"fn_{n}"
+    fn_used.add(key)
+    return key
+
+
+def _create_footnote_slot(st: dict, sheet: str, cell: str, wrapped: str):
+    """Create a native-shaped popup slot for a visible ``sheet!cell`` and write
+    ``wrapped`` as its payload. Mutates ``st`` (single evolving allocator).
+    Returns (new_fn_key, payload_addr)."""
+    vis_entry = st["sheet_paths"].get(sheet)
+    if vis_entry is None:
+        raise ValueError(f"visible sheet {sheet!r} not found for slot creation")
+    key = _alloc_fn_key(st["fn_used"])
+    row_num = st["next_row"]
+    st["next_row"] += 1
+    st["sst_xml"], a_idx = _ensure_shared_string(st["sst_xml"], st["sindex"], key)
+    st["sst_xml"], b_idx = _ensure_shared_string(st["sst_xml"], st["sindex"], sheet)
+    st["sst_xml"], trig_idx = _ensure_shared_string(
+        st["sst_xml"], st["sindex"], _TEXT_BLOCK_MARKER)
+    st["sst_xml"], p_idx = append_shared_string(st["sst_xml"], wrapped)
+    row_xml = _footnote_row_xml(row_num, a_idx, b_idx, p_idx, st["donor"])
+    st["fn_sheet_xml"] = _bump_footnote_dimension(
+        _insert_row_ordered(st["fn_sheet_xml"], row_num, row_xml), row_num)
+    vis_xml = st["visible"].get(vis_entry) or st["data"][vis_entry].decode("utf-8")
+    st["visible"][vis_entry] = patch_shared_cell(vis_xml, cell, trig_idx)
+    st["workbook_xml"] = _add_defined_name(
+        st["workbook_xml"], key, sheet, cell,
+        _sheet_local_index(st["data"], sheet))
+    return key, f"C{row_num}"
+
+
 def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None,
-                   *, dry_run: bool = False) -> dict:
+                   *, dry_run: bool = False, create_missing: bool = False) -> dict:
     """Fill prose-note text-blocks from ``doc``'s ``footnotes`` list. Assumes
     ``doc`` passed :func:`validate_notes_input`. Mirrors :func:`fill_workbook`
-    (one patcher, no fork). Targets EXISTING popup-backed notes only."""
+    (one patcher, no fork).
+
+    Default targets EXISTING popup-backed notes only. With ``create_missing``,
+    a footnote item that gives an explicit visible ``sheet``+``cell`` with no
+    ``fn_*`` gets a new native-shaped slot created for it (opt-in, fragile —
+    verify render in mTool). Label-targeted items never auto-create."""
     _, data, _ = load_workbook_entries(workbook_path)
     sheet_paths = get_sheet_paths(data)
     sst = get_shared_strings(data)
@@ -811,15 +960,19 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
     report = {
         "workbook": workbook_path,
         "output": None if dry_run else output_path,
-        "dry_run": bool(dry_run),
-        "footnotes_written": [], "unresolved": [], "errors": [],
-        "footnote_mismatches": [],
+        "dry_run": bool(dry_run), "create_missing": bool(create_missing),
+        "footnotes_written": [], "footnotes_created": [],
+        "unresolved": [], "errors": [], "footnote_mismatches": [],
     }
     fn_entry = sheet_paths.get(footnote_sheet) if footnote_sheet else None
     if fn_entry is None or "xl/sharedStrings.xml" not in data:
         report["errors"].append(
             {"error": "workbook has no +FootnoteTexts sheet / sharedStrings.xml"})
         report["status"] = "degraded"
+        # Still emit the output (a byte-copy) so a caller chaining this after
+        # another fill always has a downloadable file, even on this no-op path.
+        if not dry_run and output_path:
+            write_patched_zip(workbook_path, output_path, {})
         return report
 
     cell_to_fn = {f"{d['sheet']}!{d['cell']}": k for k, d in defined.items()}
@@ -828,11 +981,24 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
     sst_xml = data["xl/sharedStrings.xml"].decode("utf-8")
     targets = None  # inspect_footnotes result, built lazily for label matches
 
+    # Single evolving allocator state — every new fn#/row/sst-index is drawn
+    # from here so a batch of creates can never collide (the "race").
+    st = {
+        "data": data, "sheet_paths": sheet_paths,
+        "workbook_xml": data["xl/workbook.xml"].decode("utf-8"),
+        "fn_sheet_xml": fn_sheet_xml, "sst_xml": sst_xml,
+        "visible": {},  # entry_path -> patched xml (created triggers)
+        "sindex": {v: i for i, v in enumerate(sst)},  # first-seen value->index
+        "fn_used": set(defined), "next_row": _max_row(fn_sheet_xml) + 1,
+        "donor": _find_donor_shape(fn_rows, fn_sheet_xml),
+    }
+
     resolved_html = {}
     seen_keys = set()
     for i, it in enumerate(doc["footnotes"]):
         base = {"index": i, "sheet": it.get("sheet"), "cell": it.get("cell"),
                 "key": it.get("key"), "label": it.get("label")}
+        wrapped = wrap_footnote_html(it["html"])
         key = it.get("key")
         if not key and it.get("label"):
             if targets is None:
@@ -845,11 +1011,27 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
             base.update(matched_label=res.get("matched_label"),
                         ratio=res.get("ratio"))
         elif not key:
-            vis = f"{it['sheet']}!{str(it['cell']).upper()}"
+            cell = str(it["cell"]).upper()
+            vis = f"{it['sheet']}!{cell}"
             key = cell_to_fn.get(vis)
+            if not key and create_missing:
+                # No fn_* here: build a native-shaped slot at this visible cell.
+                try:
+                    key, payload_addr = _create_footnote_slot(
+                        st, it["sheet"], cell, wrapped)
+                except (ValueError, PrefixedSheetError) as exc:
+                    report["errors"].append({**base, "error": str(exc)})
+                    continue
+                base.update(key=key, hidden_sheet=footnote_sheet,
+                            hidden_cell=payload_addr, action="slot_created")
+                seen_keys.add(key)
+                resolved_html[key] = it["html"]
+                report["footnotes_created"].append(base)
+                report["footnotes_written"].append(base)
+                continue
             if not key:
                 report["unresolved"].append({**base, "detail":
-                    f"no fn_* backs {vis}; V1 fills existing popups only"})
+                    f"no fn_* backs {vis}; pass create_missing to create it"})
                 continue
         base["key"] = key
         if key in seen_keys:
@@ -863,16 +1045,17 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
             continue
         seen_keys.add(key)
         payload_addr = f"{fn['payload_col'] or 'C'}{fn['row']}"
-        wrapped = wrap_footnote_html(it["html"])
         try:
-            existing = _cell_shared_index(fn_sheet_xml, payload_addr)
+            existing = _cell_shared_index(st["fn_sheet_xml"], payload_addr)
             if existing is not None:
-                sst_xml = replace_shared_string(sst_xml, existing, wrapped)
+                st["sst_xml"] = replace_shared_string(
+                    st["sst_xml"], existing, wrapped)
                 action = "shared_string_replaced"
             else:
-                sst_xml, new_index = append_shared_string(sst_xml, wrapped)
-                fn_sheet_xml = patch_shared_cell(
-                    fn_sheet_xml, payload_addr, new_index)
+                st["sst_xml"], new_index = append_shared_string(
+                    st["sst_xml"], wrapped)
+                st["fn_sheet_xml"] = patch_shared_cell(
+                    st["fn_sheet_xml"], payload_addr, new_index)
                 action = "shared_string_appended"
         except (ValueError, PrefixedSheetError) as exc:
             report["errors"].append({**base, "error": str(exc)})
@@ -883,10 +1066,15 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
         report["footnotes_written"].append(base)
 
     if not dry_run:
-        write_patched_zip(workbook_path, output_path, {
-            "xl/sharedStrings.xml": sst_xml.encode("utf-8"),
-            fn_entry: fn_sheet_xml.encode("utf-8"),
-        })
+        replacements = {
+            "xl/sharedStrings.xml": st["sst_xml"].encode("utf-8"),
+            fn_entry: st["fn_sheet_xml"].encode("utf-8"),
+        }
+        if report["footnotes_created"]:
+            replacements["xl/workbook.xml"] = st["workbook_xml"].encode("utf-8")
+            for entry, xml in st["visible"].items():
+                replacements[entry] = xml.encode("utf-8")
+        write_patched_zip(workbook_path, output_path, replacements)
         report["footnote_mismatches"] = _verify_footnotes(
             output_path, footnote_sheet, report["footnotes_written"],
             resolved_html)
@@ -895,6 +1083,12 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
                    ("unresolved", "errors", "footnote_mismatches"))
     report["status"] = "degraded" if degraded else "ok"
     return report
+
+
+def _max_row(sheet_xml: str) -> int:
+    rows = [int(m.group(1))
+            for m in re.finditer(r'<row\b[^>]*\br="(\d+)"', sheet_xml)]
+    return max(rows) if rows else 0
 
 
 def _verify_footnotes(path: str, footnote_sheet: str, written: list,
@@ -1137,13 +1331,16 @@ def run_fill_notes(args) -> int:
     report = fill_footnotes(
         args.workbook, doc,
         output_path=None if args.dry_run else args.output,
-        dry_run=bool(args.dry_run))
+        dry_run=bool(args.dry_run),
+        create_missing=bool(getattr(args, "create_missing", False)))
     if args.report:
         with open(args.report, "w", encoding="utf-8") as fh:
             json.dump(report, fh, indent=2, ensure_ascii=False)
     print(f"status: {report['status']}"
           + (" (dry run)" if report["dry_run"] else ""))
-    print(f"  footnotes_written: {len(report['footnotes_written'])}")
+    print(f"  footnotes_written: {len(report['footnotes_written'])}"
+          + (f" ({len(report['footnotes_created'])} slot(s) created)"
+             if report.get("footnotes_created") else ""))
     for key in ("unresolved", "footnote_mismatches", "errors"):
         entries = report[key]
         print(f"  {key + ':':<19} {len(entries)}")
@@ -1235,6 +1432,10 @@ def main(argv=None) -> int:
     p_notes.add_argument("--output")
     p_notes.add_argument("--report")
     p_notes.add_argument("--dry-run", action="store_true", dest="dry_run")
+    p_notes.add_argument(
+        "--create-missing", action="store_true", dest="create_missing",
+        help="create a native-shaped popup slot for a footnote item whose "
+             "explicit sheet+cell has no fn_* (opt-in; verify render in mTool)")
 
     args = parser.parse_args(argv)
     if args.command == "inspect":

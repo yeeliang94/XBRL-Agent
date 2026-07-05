@@ -531,13 +531,14 @@ _FN_STRINGS = [
     "fn_20",                                                         # 7
     "fn_99",                                                         # 8
     "<html><body><p>orphan</p></body></html>",                       # 9
+    "Deferred taxation",                                             # 10
 ]
 
 _NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
-def _ws(rows):
+def _ws(rows, dimension=None):
     """A worksheet XML from {row: [(col, sst_index_or_None), ...]}."""
     body = []
     for r in sorted(rows):
@@ -546,8 +547,9 @@ def _ws(rows):
             else f'<c r="{col}{r}" t="s"><v>{idx}</v></c>'
             for col, idx in rows[r])
         body.append(f'<row r="{r}">{cells}</row>')
+    dim = f'<dimension ref="{dimension}"/>' if dimension else ""
     return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            f'<worksheet xmlns="{_NS_MAIN}"><sheetData>'
+            f'<worksheet xmlns="{_NS_MAIN}">{dim}<sheetData>'
             + "".join(body) + "</sheetData></worksheet>")
 
 
@@ -564,10 +566,12 @@ def footnote_template(tmp_path):
            + "</sst>")
     sheet1 = _ws({132: [("D", 0), ("E", 1)],      # Notes-Listofnotes: PPE
                   140: [("D", 2), ("E", 1)]})      #   + Inventories (empty pay)
-    sheet2 = _ws({14: [("D", 3)]})                 # Notes-CI: no fn_* trigger
+    sheet2 = _ws({14: [("D", 3)],                  # Notes-CI: no fn_* trigger
+                  20: [("D", 10)]})                #   a 2nd un-backed label row
     sheet3 = _ws({14: [("A", 4), ("B", 5), ("C", 6)],   # fn_14 populated
                   15: [("A", 7), ("B", 5), ("C", None)],  # fn_20 empty payload
-                  16: [("A", 8), ("B", 5), ("C", 9)]})   # fn_99 orphan row
+                  16: [("A", 8), ("B", 5), ("C", 9)]},    # fn_99 orphan row
+                 dimension="A1:G16")
     workbook = (
         f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<workbook xmlns="{_NS_MAIN}" xmlns:r="{_NS_R}"><sheets>'
@@ -886,6 +890,105 @@ def test_fill_notes_by_label_unresolved_is_reported(tmp_path, footnote_template)
         output_path=str(out))
     assert report["status"] == "degraded"
     assert report["unresolved"] and not report["footnotes_written"]
+
+
+# --------------------------------------------------- create-missing slots
+
+from mtool.offline_fill import (  # noqa: E402
+    get_defined_names,
+    get_sheet_paths,
+    read_sheet_cells,
+)
+
+
+def _visible_cell(path, sheet, addr):
+    from mtool.offline_fill import load_workbook_entries as _lwe
+    _, data, _ = _lwe(path)
+    sp = get_sheet_paths(data)
+    rows = read_sheet_cells(data[sp[sheet]], get_shared_strings(data))
+    col, row = addr[0], int(addr[1:])
+    return rows.get(row, {}).get(col)
+
+
+def test_create_missing_slot_end_to_end(tmp_path, footnote_template):
+    """Notes-CI!E14 has no fn_*; create_missing builds a native-shaped slot."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"sheet": "Notes-CI", "cell": "E14",
+                        "html": "<p>Deferred tax note</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert report["status"] == "ok", report
+    assert len(report["footnotes_created"]) == 1
+    created = report["footnotes_created"][0]
+    assert created["action"] == "slot_created"
+    key = created["key"]
+
+    from mtool.offline_fill import load_workbook_entries as _lwe
+    _, data, _ = _lwe(str(out))
+    # defined name added, pointing at the visible cell, sheet-scoped.
+    defined = get_defined_names(data, "fn_")
+    assert defined[key] == {"sheet": "Notes-CI", "cell": "E14",
+                            "local_sheet_id": "1"}  # 0-based sheet index
+    # visible trigger set to the marker; hidden payload holds the note.
+    assert _visible_cell(str(out), "Notes-CI", "E14") == ("S", "[Text block added]")
+    assert "Deferred tax note" in _payload_of(str(out), key)
+    # +FootnoteTexts dimension extended past the new row.
+    sp = get_sheet_paths(data)
+    fn_xml = data[sp["+FootnoteTexts"]].decode()
+    assert 'ref="A1:G17"' in fn_xml  # was A1:G16, new row 17
+
+
+def test_create_missing_batch_allocates_distinct_slots(tmp_path,
+                                                       footnote_template):
+    """Two creates in one pass get distinct fn_ AND distinct rows — the batch
+    allocation is drawn from one evolving state (no collision/race)."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [
+            {"sheet": "Notes-CI", "cell": "E14", "html": "<p>AAA</p>"},
+            {"sheet": "Notes-CI", "cell": "E20", "html": "<p>BBB</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert report["status"] == "ok", report
+    created = report["footnotes_created"]
+    assert len(created) == 2
+    keys = [c["key"] for c in created]
+    rows = [c["hidden_cell"] for c in created]
+    assert len(set(keys)) == 2, keys        # distinct fn_ numbers
+    assert len(set(rows)) == 2, rows        # distinct +FootnoteTexts rows
+    assert "AAA" in _payload_of(str(out), keys[0])
+    assert "BBB" in _payload_of(str(out), keys[1])
+    # both defined names present and read-back-consistent
+    from mtool.offline_fill import load_workbook_entries as _lwe
+    _, data, _ = _lwe(str(out))
+    defined = get_defined_names(data, "fn_")
+    assert set(keys) <= set(defined)
+
+
+def test_create_missing_off_by_default_reports_unresolved(tmp_path,
+                                                          footnote_template):
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"sheet": "Notes-CI", "cell": "E14", "html": "<p>x</p>"}]},
+        output_path=str(out))  # create_missing defaults False
+    assert report["status"] == "degraded"
+    assert report["unresolved"] and not report["footnotes_created"]
+    assert "create_missing" in report["unresolved"][0]["detail"]
+
+
+def test_create_missing_label_target_never_auto_creates(tmp_path,
+                                                        footnote_template):
+    """A fuzzy label with no match can't locate a visible cell → never creates,
+    even with create_missing on."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"label": "Totally unknown note", "html": "<p>x</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert report["status"] == "degraded"
+    assert report["unresolved"] and not report["footnotes_created"]
 
 
 def test_cell_pattern_does_not_swallow_past_self_closing_cell():
