@@ -1005,10 +1005,11 @@ def test_create_missing_off_by_default_reports_unresolved(tmp_path,
     assert "create_missing" in report["unresolved"][0]["detail"]
 
 
-def test_create_missing_label_target_never_auto_creates(tmp_path,
-                                                        footnote_template):
-    """A fuzzy label with no match can't locate a visible cell → never creates,
-    even with create_missing on."""
+def test_create_missing_label_with_no_visible_match_never_creates(
+        tmp_path, footnote_template):
+    """A label that matches NO existing fn_* AND no visible note-sheet label
+    can't locate a cell → stays unresolved, never guessed, even with
+    create_missing on."""
     out = tmp_path / "filled.xlsx"
     report = fill_footnotes(
         footnote_template,
@@ -1016,6 +1017,156 @@ def test_create_missing_label_target_never_auto_creates(tmp_path,
         output_path=str(out), create_missing=True)
     assert report["status"] == "degraded"
     assert report["unresolved"] and not report["footnotes_created"]
+
+
+def test_create_missing_by_label_finds_visible_cell_and_creates(
+        tmp_path, footnote_template):
+    """The automatic path: a note whose concept has no fn_* (Notes-CI
+    'Corporate information' at D14) is CREATED at the trigger cell one column
+    right of the visible label (E14) — no hand-picked cell."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"label": "Corporate information",
+                        "html": "<p>CI note body</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert report["status"] == "ok", report
+    assert len(report["footnotes_created"]) == 1
+    created = report["footnotes_created"][0]
+    assert created["action"] == "slot_created"
+    assert created["resolved_via"] == "label->cell"
+    assert created["visible_cell"] == "Notes-CI!E14"   # D14 label -> E14 trigger
+    assert created["label_cell"] == "D14"
+    key = created["key"]
+    # trigger set + payload landed + defined name points at the discovered cell
+    assert _visible_cell(str(out), "Notes-CI", "E14") == ("S", "[Text block added]")
+    assert "CI note body" in _payload_of(str(out), key)
+    from mtool.offline_fill import load_workbook_entries as _lwe
+    _, data, _ = _lwe(str(out))
+    assert get_defined_names(data, "fn_")[key]["cell"] == "E14"
+
+
+def test_create_missing_by_label_off_by_default_stays_unresolved(
+        tmp_path, footnote_template):
+    """Without create_missing, a label with no existing fn_* is unresolved
+    (the pre-existing behaviour) — creation is strictly opt-in."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"label": "Corporate information", "html": "<p>x</p>"}]},
+        output_path=str(out))  # create_missing defaults False
+    assert report["status"] == "degraded"
+    assert report["unresolved"] and not report["footnotes_created"]
+
+
+def test_create_missing_by_label_strict_refuses_non_exact_visible_label(
+        tmp_path, footnote_template):
+    """Under strict, a near-miss visible label (containment, ratio<1.0) is
+    refused rather than creating a slot at a merely-similar row."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"label": "Corporate info",  # ~contains 'Corporate information'
+                        "html": "<p>x</p>"}], "strict": True},
+        output_path=str(out), create_missing=True)
+    assert report["strict"] is True
+    assert not report["footnotes_created"]
+    assert report["unresolved"] and "strict" in report["unresolved"][0]["detail"]
+
+
+def test_resolve_label_to_note_cell_targets_column_right_of_label():
+    from mtool.offline_fill import resolve_label_to_note_cell
+    note_sheets = {
+        "Notes-CI": {"label_col": "D",
+                     "cells": {14: {"D": ("S", "Corporate information")}}},
+        "Notes-Listofnotes": {"label_col": "D",
+                              "cells": {25: {"D": ("S", "Inventories")}}}}
+    res = resolve_label_to_note_cell("Corporate information", note_sheets)
+    assert res["status"] == "resolved"
+    assert res["sheet"] == "Notes-CI" and res["cell"] == "E14"
+    assert res["label_cell"] == "D14"
+    assert resolve_label_to_note_cell("no such note", note_sheets)["status"] \
+        == "unresolved"
+
+
+def test_resolve_label_ignores_same_text_outside_the_label_column():
+    """Matching is confined to the sheet's label column. A duplicate of the
+    label text in another column (a section heading in col A, a stray col F
+    cell) must NOT win or force a false ambiguity — only the col-D label
+    counts, and the trigger is col E."""
+    from mtool.offline_fill import resolve_label_to_note_cell
+    note_sheets = {"Notes-CI": {"label_col": "D", "cells": {
+        3: {"A": ("S", "Corporate information")},    # a heading, NOT a label
+        14: {"D": ("S", "Corporate information"),    # the real label
+             "F": ("S", "Corporate information")},   # a stray duplicate
+    }}}
+    res = resolve_label_to_note_cell("Corporate information", note_sheets)
+    assert res["status"] == "resolved"
+    assert res["cell"] == "E14" and res["label_cell"] == "D14"
+
+
+def test_resolve_label_ambiguous_across_two_label_rows():
+    """The same label in the label column on two rows is genuinely ambiguous —
+    creating at one guessed row is worse than not creating."""
+    from mtool.offline_fill import resolve_label_to_note_cell
+    note_sheets = {"Notes-CI": {"label_col": "D", "cells": {
+        10: {"D": ("S", "Corporate information")},
+        20: {"D": ("S", "Corporate information")}}}}
+    assert resolve_label_to_note_cell(
+        "Corporate information", note_sheets)["status"] == "ambiguous"
+
+
+def test_note_label_column_derived_from_existing_trigger_and_density():
+    from mtool.offline_fill import _note_label_column
+    rows = {14: {"D": ("S", "Corporate information")},
+            15: {"D": ("S", "Deferred tax")}}
+    # With a known trigger col E, the label column is one to its left (D).
+    assert _note_label_column(rows, "E") == "D"
+    # Without a trigger, fall back to the densest shared-string column (D).
+    assert _note_label_column(rows, None) == "D"
+
+
+def test_create_missing_by_label_does_not_target_heading_in_wrong_column(
+        tmp_path, footnote_template):
+    """End-to-end: a label whose text also appears as a heading in column A of
+    a note sheet creates at the col-E trigger of the col-D label, never col B
+    of the heading. (Notes-CI D14 = 'Corporate information'.)"""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"label": "Corporate information",
+                        "html": "<p>x</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert report["status"] == "ok", report
+    assert report["footnotes_created"][0]["visible_cell"] == "Notes-CI!E14"
+
+
+def test_create_missing_duplicate_labels_do_not_double_create(
+        tmp_path, footnote_template):
+    """Two notes whose labels resolve to the SAME visible cell create ONE slot;
+    the second is reported as a duplicate, never a second fn_* on that cell."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [
+            {"label": "Corporate information", "html": "<p>first</p>"},
+            {"label": "Corporate information", "html": "<p>second</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert len(report["footnotes_created"]) == 1
+    assert report["errors"] and "duplicate" in report["errors"][0]["error"]
+    # Exactly one fn_* now anchors Notes-CI!E14.
+    from mtool.offline_fill import load_workbook_entries as _lwe
+    _, data, _ = _lwe(str(out))
+    anchored = [k for k, d in get_defined_names(data, "fn_").items()
+                if d["sheet"] == "Notes-CI" and d["cell"] == "E14"]
+    assert len(anchored) == 1, anchored
+
+
+def test_idx_to_col_roundtrips():
+    from mtool.offline_fill import col_to_idx, idx_to_col
+    for col in ("A", "E", "Z", "AA", "AZ", "BA"):
+        assert idx_to_col(col_to_idx(col)) == col
+    assert idx_to_col(col_to_idx("D") + 1) == "E"
 
 
 def test_cell_pattern_does_not_swallow_past_self_closing_cell():

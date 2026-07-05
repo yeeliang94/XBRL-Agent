@@ -57,6 +57,17 @@ def col_to_idx(letters: str) -> int:
     return idx
 
 
+def idx_to_col(idx: int) -> str:
+    """Inverse of :func:`col_to_idx` (1 -> 'A', 27 -> 'AA')."""
+    if idx < 1:
+        raise ValueError(f"column index must be >= 1, got {idx}")
+    letters = ""
+    while idx:
+        idx, rem = divmod(idx - 1, 26)
+        letters = chr(ord("A") + rem) + letters
+    return letters
+
+
 def split_ref(addr: str):
     m = re.fullmatch(r"([A-Z]{1,3})([1-9]\d*)", addr)
     if not m:
@@ -780,6 +791,133 @@ def resolve_footnote_by_label(label: str, targets: list) -> dict:
             "matched_label": scored[0][2], "ratio": round(scored[0][0], 3)}
 
 
+# A prose note whose concept has NO fn_* yet cannot be filled by the
+# label->fn_* path — there is nothing to match. mTool's own layout, however,
+# still carries the VISIBLE label (in a column to the LEFT of the trigger cell,
+# which holds "[Text block added]"); recon showed label col D, trigger col E.
+# So we can find the label in the visible sheet and CREATE a native-shaped slot
+# at the trigger cell one column to its right. This is the automatic twin of the
+# hand-guided fn_37 creation proven on Windows (2026-07-05): same
+# _create_footnote_slot, but the visible cell is discovered from the label
+# instead of being typed by an operator.
+def resolve_label_to_note_cell(label: str, note_sheets: dict) -> dict:
+    """Find the VISIBLE note (trigger) cell for a label that has no ``fn_*``.
+
+    ``note_sheets`` is ``{sheet: {"label_col": str|None, "cells": {row: {col:
+    (kind, text)}}}}`` for the candidate note sheets (see
+    :func:`_collect_note_sheet_cells`). Matching is CONFINED to each sheet's
+    single label column (``label_col``) so a heading or a duplicate of the label
+    text in some OTHER column can never win — the trigger is then, by
+    construction, exactly one column to the label's right (mTool's col-D-label /
+    col-E-trigger layout). Matching reuses :func:`_footnote_label_core` — the
+    exact posture of :func:`resolve_footnote_by_label` — so an existing-slot
+    miss and a create-target hit judge the label identically. Returns
+    ``{status, sheet?, cell?, label_cell?, matched_label?, ratio?, detail?}``;
+    ``cell`` is the trigger cell to create the slot at. A tie across DISTINCT
+    label rows is ``ambiguous`` (not created).
+    """
+    want = _footnote_label_core(label)
+    if not want:
+        return {"status": "unresolved", "detail": "empty label"}
+    scored = []
+    for sheet, info in note_sheets.items():
+        label_col = info.get("label_col")
+        if not label_col:
+            continue
+        trigger_col = idx_to_col(col_to_idx(label_col) + 1)
+        for row_num, cols in info["cells"].items():
+            cell = cols.get(label_col)
+            if cell is None:
+                continue
+            kind, txt = cell
+            if kind != "S" or not txt.strip():
+                continue
+            core = _footnote_label_core(txt)
+            if not core:
+                continue
+            if want == core:
+                ratio = 1.0
+            elif want in core or core in want:
+                ratio = 0.95
+            else:
+                ratio = difflib.SequenceMatcher(None, want, core).ratio()
+            scored.append((ratio, sheet, label_col, trigger_col, row_num, txt))
+    scored.sort(key=lambda s: s[0], reverse=True)
+    if not scored or scored[0][0] < FUZZY_THRESHOLD:
+        return {"status": "unresolved",
+                "detail": f"no visible note-sheet label matched {label!r}"}
+    # A tie ACROSS DISTINCT LABEL ROWS is ambiguous — creating in the wrong
+    # place is worse than not creating.
+    top = scored[0][0]
+    tied = {(s, lc, r) for ratio, s, lc, _tc, r, _ in scored if ratio == top}
+    if len(tied) > 1:
+        return {"status": "ambiguous",
+                "detail": f"label {label!r} matches multiple note cells: "
+                          f"{sorted(f'{s}!{lc}{r}' for s, lc, r in tied)}"}
+    _, sheet, label_col, trigger_col, row_num, matched = scored[0]
+    return {"status": "resolved", "sheet": sheet,
+            "cell": f"{trigger_col}{row_num}",
+            "label_cell": f"{label_col}{row_num}",
+            "matched_label": matched, "ratio": round(top, 3)}
+
+
+def _note_label_column(rows: dict, trigger_col: str | None) -> str | None:
+    """The single column that holds visible note labels on a sheet. Prefer one
+    column LEFT of the sheet's existing ``fn_*`` trigger column (mTool anchors
+    the trigger immediately right of the label); on a sheet with no ``fn_*``
+    yet, fall back to the densest shared-string column (labels are text; values
+    are numbers/blank) — the same signal ``column_detect`` uses. Ties break to
+    the leftmost."""
+    if trigger_col:
+        i = col_to_idx(trigger_col) - 1
+        if i >= 1:
+            return idx_to_col(i)
+    counts: dict = {}
+    for cols in rows.values():
+        for col, (kind, txt) in cols.items():
+            if kind == "S" and txt.strip():
+                counts[col] = counts.get(col, 0) + 1
+    if not counts:
+        return None
+    best = max(counts.values())
+    return min((c for c, n in counts.items() if n == best), key=col_to_idx)
+
+
+def _collect_note_sheet_cells(data: dict, sheet_paths: dict, sst: list,
+                              footnote_sheet: str | None,
+                              defined: dict) -> dict:
+    """Read the candidate note sheets — the sheets a new prose slot may be
+    created on — and resolve each one's label column. A sheet qualifies if its
+    name starts with ``Notes`` (mTool's convention: ``Notes-CI``,
+    ``Notes-Listofnotes``, …) OR already hosts an ``fn_*`` anchor. The hidden
+    ``+FootnoteTexts`` payload sheet is always excluded. Returns
+    ``{sheet: {"label_col": str|None, "cells": {row: {col: (kind, text)}}}}``.
+    """
+    fn_sheets = {d["sheet"] for d in defined.values()}
+    # Most common existing trigger column per sheet (fn_* anchor columns).
+    trig_cols: dict = {}
+    for d in defined.values():
+        try:
+            col, _ = split_ref(d["cell"])
+        except ValueError:
+            continue
+        trig_cols.setdefault(d["sheet"], {})
+        trig_cols[d["sheet"]][col] = trig_cols[d["sheet"]].get(col, 0) + 1
+    out: dict = {}
+    for sheet, entry in sheet_paths.items():
+        if sheet == footnote_sheet:
+            continue
+        if not (sheet.lower().startswith("notes") or sheet in fn_sheets):
+            continue
+        cells = read_sheet_cells(data[entry], sst)
+        cols_hist = trig_cols.get(sheet)
+        trigger_col = (max(cols_hist, key=lambda c: (cols_hist[c], -col_to_idx(c)))
+                       if cols_hist else None)
+        out[sheet] = {"label_col": _note_label_column(cells, trigger_col),
+                      "cells": cells}
+    return out
+
+
 def validate_notes_input(doc: dict) -> list:
     errors = []
     items = doc.get("footnotes")
@@ -953,14 +1091,24 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
     (one patcher, no fork).
 
     Default targets EXISTING popup-backed notes only. With ``create_missing``,
-    a footnote item that gives an explicit visible ``sheet``+``cell`` with no
-    ``fn_*`` gets a new native-shaped slot created for it (opt-in, fragile —
-    verify render in mTool). Label-targeted items never auto-create.
+    a note with no ``fn_*`` gets a new native-shaped slot created for it (opt-in,
+    fragile — verify render in mTool). Two create paths:
+
+    * an item that gives an explicit visible ``sheet``+``cell`` — the operator
+      typed the trigger cell; or
+    * a ``label``-targeted item whose label is found in a VISIBLE note sheet
+      (:func:`resolve_label_to_note_cell`) — the slot is created at the trigger
+      cell one column right of the matched label (mTool's col-D-label /
+      col-E-trigger layout). This is the automatic path the notes exporter
+      feeds. A label that matches no existing ``fn_*`` AND no visible note-sheet
+      label stays ``unresolved`` (never guessed).
 
     ``strict`` (CLI ``--strict`` OR a doc-level ``"strict": true``, which the
     notes exporter sets on machine-generated docs) refuses a non-exact label
     match — a fuzzy/containment hit lands in ``unresolved`` instead of risking
-    the wrong text-block. Mirrors :func:`fill_workbook`'s strict mode."""
+    the wrong text-block (applies to both the existing-slot match and the
+    create-by-label visible-label match). Mirrors :func:`fill_workbook`'s
+    strict mode."""
     _, data, _ = load_workbook_entries(workbook_path)
     sheet_paths = get_sheet_paths(data)
     sst = get_shared_strings(data)
@@ -994,6 +1142,7 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
     fn_sheet_xml = data[fn_entry].decode("utf-8")
     sst_xml = data["xl/sharedStrings.xml"].decode("utf-8")
     targets = None  # inspect_footnotes result, built lazily for label matches
+    note_cells = None  # visible note-sheet cells, built lazily for create-by-label
 
     # Single evolving allocator state — every new fn#/row/sst-index is drawn
     # from here so a batch of creates can never collide (the "race").
@@ -1018,18 +1167,71 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
             if targets is None:
                 targets = inspect_footnotes(data)["targets"]
             res = resolve_footnote_by_label(it["label"], targets)
-            if res["status"] != "resolved":
+            if res["status"] == "resolved":
+                if strict and res.get("ratio", 1.0) < 1.0:
+                    report["unresolved"].append({**base, **res, "detail":
+                        f"strict mode: non-exact label match "
+                        f"(similarity {res['ratio']}) refused; would have "
+                        f"matched {res.get('matched_label')!r}"})
+                    continue
+                key = res["key"]
+                base.update(matched_label=res.get("matched_label"),
+                            ratio=res.get("ratio"))
+            elif create_missing:
+                # No existing fn_* backs this note. Locate the label in the
+                # VISIBLE note sheets and create a native-shaped slot at the
+                # trigger cell (col D label -> col E trigger). One of three
+                # outcomes: create a new slot, fall through to fill an already-
+                # backed trigger cell, or report unresolved.
+                if note_cells is None:
+                    note_cells = _collect_note_sheet_cells(
+                        data, sheet_paths, sst, footnote_sheet, defined)
+                cres = resolve_label_to_note_cell(it["label"], note_cells)
+                if cres["status"] != "resolved":
+                    # Prefer the create-path detail (visible-label miss /
+                    # ambiguity) — it's the actionable one here.
+                    report["unresolved"].append({**base, **cres})
+                    continue
+                if strict and cres.get("ratio", 1.0) < 1.0:
+                    report["unresolved"].append({**base, **cres,
+                        "detail": "strict mode: non-exact visible-label match "
+                        f"(similarity {cres['ratio']}) refused; would have "
+                        f"created at {cres['sheet']}!{cres['cell']} from "
+                        f"{cres['matched_label']!r}"})
+                    continue
+                c_sheet, c_cell = cres["sheet"], cres["cell"]
+                key = cell_to_fn.get(f"{c_sheet}!{c_cell}")
+                if key:
+                    # The trigger cell already has an fn_* (its label just
+                    # didn't match) — fill it, don't duplicate; fall through.
+                    base.update(matched_label=cres["matched_label"],
+                                ratio=cres["ratio"], resolved_via="label->cell")
+                else:
+                    try:
+                        key, payload_addr = _create_footnote_slot(
+                            st, c_sheet, c_cell, wrapped)
+                    except (ValueError, PrefixedSheetError) as exc:
+                        report["errors"].append({**base, "error": str(exc)})
+                        continue
+                    base.update(key=key, action="slot_created",
+                                resolved_via="label->cell",
+                                visible_cell=f"{c_sheet}!{c_cell}",
+                                label_cell=cres["label_cell"],
+                                matched_label=cres["matched_label"],
+                                ratio=cres["ratio"], hidden_sheet=footnote_sheet,
+                                hidden_cell=payload_addr)
+                    # Register the new slot so a later item resolving to the
+                    # SAME visible cell (a duplicate label) hits the seen_keys
+                    # duplicate guard instead of minting a second fn_* here.
+                    cell_to_fn[f"{c_sheet}!{c_cell}"] = key
+                    seen_keys.add(key)
+                    resolved_html[key] = it["html"]
+                    report["footnotes_created"].append(base)
+                    report["footnotes_written"].append(base)
+                    continue
+            else:
                 report["unresolved"].append({**base, **res})
                 continue
-            if strict and res.get("ratio", 1.0) < 1.0:
-                report["unresolved"].append({**base, **res, "detail":
-                    f"strict mode: non-exact label match "
-                    f"(similarity {res['ratio']}) refused; would have matched "
-                    f"{res.get('matched_label')!r}"})
-                continue
-            key = res["key"]
-            base.update(matched_label=res.get("matched_label"),
-                        ratio=res.get("ratio"))
         elif not key:
             cell = str(it["cell"]).upper()
             vis = f"{it['sheet']}!{cell}"
@@ -1044,6 +1246,9 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
                     continue
                 base.update(key=key, hidden_sheet=footnote_sheet,
                             hidden_cell=payload_addr, action="slot_created")
+                # Register the new slot so a later explicit item for the SAME
+                # cell hits the seen_keys duplicate guard, not a second create.
+                cell_to_fn[vis] = key
                 seen_keys.add(key)
                 resolved_html[key] = it["html"]
                 report["footnotes_created"].append(base)
