@@ -164,6 +164,7 @@ async def patch_mtool_template(
     force_recalc: bool = Form(default=False),
     fill_notes: bool = Form(default=True),
     create_missing_notes: bool = Form(default=False),
+    notes_targets: str | None = Form(default=None),
 ):
     """Patch an uploaded empty mTool template from the run's facts.
 
@@ -280,6 +281,11 @@ async def patch_mtool_template(
         if fill_notes:
             try:
                 notes_doc = build_notes_fill_doc(server.AUDIT_DB_PATH, run_id)
+                # Operator-chosen placements for ambiguous/near-miss notes
+                # (the preview's decision UI). 422s on a malformed payload —
+                # a bad explicit target must fail loudly, not fall back to
+                # the label guess the operator just overrode.
+                _apply_notes_targets(notes_doc, notes_targets)
                 if notes_doc["footnotes"]:
                     notes_errors = validate_notes_input(notes_doc)
                     if notes_errors:
@@ -298,6 +304,11 @@ async def patch_mtool_template(
                             str(out), notes_doc, str(notes_out),
                             create_missing=create_missing_notes)
                         final = notes_out
+            except HTTPException:
+                # A malformed notes_targets is a caller error (422), not a
+                # best-effort degrade — the operator just overrode the label
+                # guess, so silently falling back to it would be worse.
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "mTool patch run %s: notes fill raised, returning "
@@ -344,6 +355,7 @@ async def preview_mtool_notes(
     run_id: int,
     template: UploadFile = File(...),
     create_missing_notes: bool = Form(default=False),
+    notes_targets: str | None = Form(default=None),
 ):
     """Dry-run the prose-notes fill against an uploaded template and return the
     plan WITHOUT writing anything — the notes diagnostic the operator runs
@@ -359,6 +371,9 @@ async def preview_mtool_notes(
     """
     _load_fillable_run(run_id)  # 404/409 gate, same as the patch endpoint
     notes_doc = build_notes_fill_doc(server.AUDIT_DB_PATH, run_id)
+    # Re-preview honours the operator's placements so the plan updates as
+    # decisions are made (same seam the patch endpoint applies).
+    _apply_notes_targets(notes_doc, notes_targets)
 
     raw = await _read_capped(template, _MAX_TEMPLATE_BYTES)
     if not raw:
@@ -402,20 +417,109 @@ async def preview_mtool_notes(
         return JSONResponse({
             **base,
             "will_create": [
-                {"label": c.get("label"), "cell": c.get("visible_cell"),
+                {"index": c.get("index"), "label": c.get("label"),
+                 "cell": c.get("visible_cell")
+                 or (f"{c.get('sheet')}!{c.get('cell')}"
+                     if c.get("sheet") and c.get("cell") else None),
                  "label_cell": c.get("label_cell")}
                 for c in report["footnotes_created"]],
             "will_fill_existing": [
-                {"label": w.get("label"), "key": w.get("key")}
+                {"index": w.get("index"), "label": w.get("label"),
+                 "key": w.get("key")}
                 for w in report["footnotes_written"]
                 if w.get("key") not in created_keys],
-            "unresolved": [
-                {"label": u.get("label"), "detail": u.get("detail")}
-                for u in report["unresolved"]],
+            # Full structured entries (reason code, candidates, near-miss
+            # suggestion) — the modal's decision UI is built on these.
+            "unresolved": [_unresolved_entry(u)
+                           for u in report["unresolved"]],
             "errors": report.get("errors", []),
         })
     finally:
         _cleanup(tmp)
+
+
+_CELL_REF_RE = re.compile(r"[A-Z]{1,3}\d+$")
+_FN_KEY_RE = re.compile(r"fn_\d+$")
+
+
+def _apply_notes_targets(notes_doc: dict, notes_targets: str | None) -> None:
+    """Apply operator-chosen placements to the machine-built notes doc.
+
+    ``notes_targets`` is a JSON object keyed by the note's INDEX in the doc's
+    ``footnotes`` list (the stable id the preview's unresolved entries carry):
+    ``{"3": {"key": "fn_12"}}`` pins a note to an existing slot;
+    ``{"5": {"sheet": "Notes-CI", "cell": "E14"}}`` pins it to an explicit
+    visible trigger cell (the create path). This is the notes twin of the
+    numeric ``column_map`` confirm-and-retry seam: the tool never guesses on
+    an ambiguous/near-miss label, so the human resolves it here instead of
+    dead-ending. An explicit cell replaces label matching for that item
+    (the label is dropped so the fill takes the explicit-cell path)."""
+    if not notes_targets:
+        return
+    try:
+        targets = json.loads(notes_targets)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"notes_targets is not valid JSON: {exc}") from exc
+    if not isinstance(targets, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="notes_targets must be a JSON object keyed by note index")
+    items = notes_doc.get("footnotes") or []
+    for raw_idx, tgt in targets.items():
+        try:
+            idx = int(raw_idx)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422,
+                detail=f"notes_targets key {raw_idx!r} is not a note index")
+        if not 0 <= idx < len(items):
+            raise HTTPException(
+                status_code=422,
+                detail=f"notes_targets index {idx} is out of range "
+                       f"(run has {len(items)} notes)")
+        if not isinstance(tgt, dict):
+            raise HTTPException(
+                status_code=422,
+                detail=f"notes_targets[{raw_idx}] must be an object")
+        item = items[idx]
+        key = tgt.get("key")
+        sheet, cell = tgt.get("sheet"), tgt.get("cell")
+        if key:
+            if not (isinstance(key, str) and _FN_KEY_RE.fullmatch(key)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"notes_targets[{raw_idx}].key must look like "
+                           "'fn_12'")
+            item["key"] = key
+        elif sheet and cell:
+            cell = str(cell).upper()
+            if not _CELL_REF_RE.fullmatch(cell):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"notes_targets[{raw_idx}].cell must be a cell "
+                           "reference like 'E14'")
+            item["sheet"], item["cell"] = str(sheet), cell
+            item.pop("label", None)
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail=f"notes_targets[{raw_idx}] needs 'key' or "
+                       "'sheet'+'cell'")
+
+
+# Structured fields passed through from a fill/preview unresolved entry to the
+# client — the guidance payload the modal's decision UI is built on (reason
+# code + pick-one candidates + the refused near-miss suggestion).
+_UNRESOLVED_PASSTHROUGH = (
+    "index", "label", "detail", "reason", "candidates",
+    "matched_label", "ratio", "key", "sheet", "cell", "label_cell")
+
+
+def _unresolved_entry(u: dict) -> dict:
+    return {k: u.get(k) for k in _UNRESOLVED_PASSTHROUGH
+            if u.get(k) is not None}
 
 
 _COLUMN_LETTER_RE = re.compile(r"[A-Z]{1,3}$")
