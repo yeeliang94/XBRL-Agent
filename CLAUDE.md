@@ -1604,6 +1604,25 @@ Load-bearing invariants:
   Strict refuses fuzzy label matches — for the pipeline a non-exact label is a
   bug to surface, not a typo to forgive. Hand-authored operator runs stay
   lenient; fuzzy hits are still reported (never silent).
+- **Created note slots REUSE the template's orphan `fn_` pool; the
+  `+FootnoteTexts` column-A key is the join key and MUST stay unique
+  (2026-07-05 Amgen "popup opens empty" incident).** mTool templates
+  pre-provision empty payload rows keyed `fn_N` in column A with no
+  `<definedName>` yet; mTool joins visible cell → payload by that column-A
+  string and reads the FIRST matching row, so a minted key that duplicates an
+  orphan row leaves the popup silently empty while the file stays valid — and
+  read-back "passes" because `read_footnote_rows` keys by A and keeps the
+  LAST row (the opposite of mTool). `_create_footnote_slot` drains
+  `_build_orphan_pool` first and only appends past exhaustion, with `fn_used`
+  seeded from defined names AND every column-A key.
+  `_detect_duplicate_fn_keys` (a raw row scan, deliberately NOT
+  `read_footnote_rows`) runs on every non-dry-run `fill_footnotes` output and
+  flags any duplicate into `report["errors"]` (→ `degraded`). Never
+  `replace_shared_string` an EMPTY payload cell — an empty `t="s"` cell can
+  point at a shared `""` `<si>` other cells reference (sharedStrings dedup);
+  append+patch instead. `report["fn_allocation"]` + per-created-slot
+  `slot_source` (`orphan_reused`/`row_appended`) are the debug trail. Pinned
+  by the orphan-pool tests in `tests/test_mtool_offline_fill.py`.
 - **No DB schema change.** The feature is purely additive — endpoints are
   stateless over existing tables; uploaded templates are request-scoped temp
   files under `OUTPUT_DIR/_mtool_tmp`, cleaned via a `BackgroundTask`. The run

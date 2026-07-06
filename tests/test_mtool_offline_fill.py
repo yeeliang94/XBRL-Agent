@@ -1107,13 +1107,52 @@ def test_resolve_label_ignores_same_text_outside_the_label_column():
 
 def test_resolve_label_ambiguous_across_two_label_rows():
     """The same label in the label column on two rows is genuinely ambiguous —
-    creating at one guessed row is worse than not creating."""
+    creating at one guessed row is worse than not creating. The tie is
+    returned as STRUCTURED candidates (label cell + trigger cell) so a UI can
+    offer it as a pick-one decision instead of a dead-end."""
     from mtool.offline_fill import resolve_label_to_note_cell
     note_sheets = {"Notes-CI": {"label_col": "D", "cells": {
         10: {"D": ("S", "Corporate information")},
         20: {"D": ("S", "Corporate information")}}}}
-    assert resolve_label_to_note_cell(
-        "Corporate information", note_sheets)["status"] == "ambiguous"
+    res = resolve_label_to_note_cell("Corporate information", note_sheets)
+    assert res["status"] == "ambiguous"
+    assert res["candidates"] == [
+        {"sheet": "Notes-CI", "label_cell": "D10", "cell": "E10",
+         "matched_label": "Corporate information"},
+        {"sheet": "Notes-CI", "label_cell": "D20", "cell": "E20",
+         "matched_label": "Corporate information"}]
+
+
+def test_unresolved_entries_carry_reason_codes(tmp_path, footnote_template):
+    """Every unresolved note carries a machine-readable ``reason`` (and, for
+    an ambiguous tie, structured candidates) — the decision-UI contract."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [
+            # No visible label anywhere -> no_match (create on).
+            {"label": "Totally unknown note", "html": "<p>x</p>"},
+            # Explicit un-backed cell with create OFF is exercised separately
+            # below; here the strict near-miss: 'Corporate info' ~ contains.
+            {"label": "Corporate info", "html": "<p>y</p>"}],
+         "strict": True},
+        output_path=str(out), create_missing=True)
+    by_label = {u["label"]: u for u in report["unresolved"]}
+    assert by_label["Totally unknown note"]["reason"] == "no_match"
+    near = by_label["Corporate info"]
+    assert near["reason"] == "strict_near_miss"
+    # The refused suggestion is structured (target cell + matched label) so
+    # the operator can accept it explicitly.
+    assert near["sheet"] == "Notes-CI" and near["cell"] == "E14"
+    assert near["matched_label"] == "Corporate information"
+
+    out2 = tmp_path / "filled2.xlsx"
+    report2 = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"sheet": "Notes-CI", "cell": "E14",
+                        "html": "<p>x</p>"}]},
+        output_path=str(out2))  # create_missing OFF -> no_slot
+    assert report2["unresolved"][0]["reason"] == "no_slot"
 
 
 def test_note_label_column_derived_from_existing_trigger_and_density():
@@ -1184,4 +1223,233 @@ def test_cell_pattern_does_not_swallow_past_self_closing_cell():
     assert '<c r="A16" t="s"><v>8</v></c>' in out   # row 16 intact
     assert '<c r="C16" t="s"><v>9</v></c>' in out
     assert out.count("<row") == 2                    # rows not merged
+
+
+# ------------------------------------- orphan fn_ pool (Amgen popup incident)
+
+def _write_fn_workbook(tmp_path, name, strings, sheets, defined_names):
+    """Minimal hand-built workbook builder for footnote tests: ``sheets`` is an
+    ordered list of (sheet_name, worksheet_xml); ``defined_names`` a list of
+    raw <definedName> XML strings. Mirrors the footnote_template fixture."""
+    sst = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           f'<sst xmlns="{_NS_MAIN}" count="{len(strings)}" '
+           f'uniqueCount="{len(strings)}">'
+           + "".join(f'<si><t xml:space="preserve">{_esc(s)}</t></si>'
+                     for s in strings) + "</sst>")
+    workbook = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<workbook xmlns="{_NS_MAIN}" xmlns:r="{_NS_R}"><sheets>'
+        + "".join(f'<sheet name="{n}" sheetId="{i+1}" r:id="rId{i+1}"/>'
+                  for i, (n, _) in enumerate(sheets))
+        + "</sheets><definedNames>" + "".join(defined_names)
+        + "</definedNames></workbook>")
+    ns_pkg = "http://schemas.openxmlformats.org/package"
+    ns_doc = "http://schemas.openxmlformats.org/officeDocument/2006"
+    wb_rels = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Relationships xmlns="{ns_pkg}/2006/relationships">'
+        + "".join(f'<Relationship Id="rId{i+1}" Type="{ns_doc}/relationships/'
+                  f'worksheet" Target="worksheets/sheet{i+1}.xml"/>'
+                  for i in range(len(sheets)))
+        + f'<Relationship Id="rId{len(sheets)+1}" Type="{ns_doc}/'
+          f'relationships/sharedStrings" Target="sharedStrings.xml"/>'
+          '</Relationships>')
+    content_types = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Types xmlns="{ns_pkg}/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.'
+        'openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.'
+        'openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        + "".join(
+            f'<Override PartName="/xl/worksheets/sheet{i+1}.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.'
+            'spreadsheetml.worksheet+xml"/>' for i in range(len(sheets)))
+        + '<Override PartName="/xl/sharedStrings.xml" ContentType="application/'
+        'vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+        '</Types>')
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Relationships xmlns="{ns_pkg}/2006/relationships">'
+        f'<Relationship Id="rId1" Type="{ns_doc}/relationships/'
+        'officeDocument" Target="xl/workbook.xml"/></Relationships>')
+    path = tmp_path / name
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types)
+        z.writestr("_rels/.rels", root_rels)
+        z.writestr("xl/workbook.xml", workbook)
+        z.writestr("xl/_rels/workbook.xml.rels", wb_rels)
+        z.writestr("xl/sharedStrings.xml", sst)
+        for i, (_, xml) in enumerate(sheets):
+            z.writestr(f"xl/worksheets/sheet{i+1}.xml", xml)
+    return str(path)
+
+
+_ORPHAN_STRINGS = [
+    "Corporate information",                              # 0 (fn_1's label)
+    "[Text block added]",                                 # 1
+    "Accrued expenses and other liabilities",             # 2
+    "Capital management",                                 # 3
+    "fn_1",                                               # 4
+    "Notes-Listofnotes",                                  # 5
+    "<html><body><p>existing CI note</p></body></html>",  # 6
+    "fn_5",                                               # 7
+    "fn_6",                                               # 8
+    "",                                                   # 9 shared empty <si>
+    "Deferred taxation",                                  # 10
+]
+
+
+@pytest.fixture
+def orphan_pool_template(tmp_path):
+    """Real mTool template shape (2026-07-05 Amgen recon): a pool of EMPTY
+    pre-provisioned ``+FootnoteTexts`` rows keyed ``fn_N`` in column A with NO
+    defined name yet — the free slots mTool assigns when an operator adds a
+    text block. fn_5's payload cell shares the "" <si> with a visible cell
+    (sharedStrings dedup) to pin the no-replace-on-empty invariant."""
+    visible = _ws({9: [("D", 0), ("E", 1)],       # fn_1's trigger row
+                   10: [("D", 2)],                 # label, no trigger yet
+                   11: [("D", 3)],                 # label, no trigger yet
+                   12: [("D", 10), ("F", 9)]})     # F12 shares the "" <si>
+    fn_sheet = _ws({1: [("A", 4), ("B", 5), ("C", 6)],   # fn_1 populated
+                    5: [("A", 7), ("B", 5), ("C", 9)],   # orphan: t="s" -> ""
+                    6: [("A", 8), ("B", 5), ("C", None)]},  # orphan: styled-empty
+                   dimension="A1:G6")
+    return _write_fn_workbook(
+        tmp_path, "orphan_pool.xlsx", _ORPHAN_STRINGS,
+        [("Notes-Listofnotes", visible), ("+FootnoteTexts", fn_sheet)],
+        ["<definedName name=\"fn_1\">'Notes-Listofnotes'!$E$9</definedName>"])
+
+
+def test_create_missing_reuses_pre_provisioned_orphan_rows(
+        tmp_path, orphan_pool_template):
+    """The Amgen fix: creates draw from the template's orphan fn_ pool (no new
+    rows, no duplicate column-A keys), and only append past exhaustion."""
+    from mtool.offline_fill import _detect_duplicate_fn_keys
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        orphan_pool_template,
+        {"footnotes": [
+            {"label": "Accrued expenses and other liabilities",
+             "html": "<p>accruals body</p>"},
+            {"label": "Capital management", "html": "<p>capman body</p>"},
+            {"label": "Deferred taxation", "html": "<p>dt body</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert report["status"] == "ok", report
+    created = report["footnotes_created"]
+    assert [c["key"] for c in created] == ["fn_5", "fn_6", "fn_7"]
+    # The two orphans are REUSED in place; the third (pool exhausted) appends.
+    assert [c["slot_source"] for c in created] == [
+        "orphan_reused", "orphan_reused", "row_appended"]
+    assert [c["hidden_cell"] for c in created] == ["C5", "C6", "C7"]
+    assert report["fn_allocation"] == {
+        "orphan_pool_initial": 2, "orphan_reused": 2, "row_appended": 1}
+    # The invariant itself: no duplicate column-A join keys in the output.
+    assert _detect_duplicate_fn_keys(str(out), "+FootnoteTexts") == []
+    # Defined names point at the trigger cells (col E, right of the labels).
+    _, data, _ = load_workbook_entries(str(out))
+    defined = get_defined_names(data, "fn_")
+    assert defined["fn_5"]["cell"] == "E10"
+    assert defined["fn_6"]["cell"] == "E11"
+    assert defined["fn_7"]["cell"] == "E12"
+    # Payloads read back from the reused rows.
+    assert "accruals body" in _payload_of(str(out), "fn_5")
+    assert "capman body" in _payload_of(str(out), "fn_6")
+    assert "dt body" in _payload_of(str(out), "fn_7")
+
+
+def test_orphan_reuse_never_rewrites_shared_empty_string(
+        tmp_path, orphan_pool_template):
+    """fn_5's empty payload cell points at the shared "" <si> that visible
+    F12 also references. Writing into the orphan must APPEND a fresh <si>,
+    never replace the shared one — replacing would rewrite every empty-string
+    cell in the workbook (same silent-corruption family as the incident)."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        orphan_pool_template,
+        {"footnotes": [{"label": "Accrued expenses and other liabilities",
+                        "html": "<p>accruals body</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert report["status"] == "ok", report
+    assert report["footnotes_created"][0]["key"] == "fn_5"
+    assert "accruals body" in _payload_of(str(out), "fn_5")
+    # The witness cell still reads "" — the shared <si> was left untouched.
+    assert _visible_cell(str(out), "Notes-Listofnotes", "F12") == ("S", "")
+
+
+def test_fallback_append_key_skips_orphan_a_keys(tmp_path, footnote_template):
+    """fn_used is seeded from EVERY +FootnoteTexts column-A key, not just
+    defined names: with fn_99 present as a populated orphan row, an appended
+    slot mints fn_100 — never a key that duplicates an existing row (the
+    pre-fix allocator minted from max(defined)+1 = fn_21...)."""
+    from mtool.offline_fill import _detect_duplicate_fn_keys
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"sheet": "Notes-CI", "cell": "E14",
+                        "html": "<p>Deferred tax note</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert report["status"] == "ok", report
+    created = report["footnotes_created"][0]
+    assert created["key"] == "fn_100"
+    assert created["slot_source"] == "row_appended"
+    assert _detect_duplicate_fn_keys(str(out), "+FootnoteTexts") == []
+
+
+def test_duplicate_fn_keys_detected_and_degrade_report(tmp_path):
+    """Defence-in-depth: a workbook that already carries duplicate column-A
+    fn_ keys (the exact broken shape the incident shipped) is flagged loudly
+    in the report — read_footnote_rows alone masks it (last row wins, while
+    mTool reads the first)."""
+    from mtool.offline_fill import _detect_duplicate_fn_keys
+    strings = ["Corporate information", "[Text block added]", "fn_1",
+               "Notes-Listofnotes",
+               "<html><body><p>old</p></body></html>"]
+    visible = _ws({9: [("D", 0), ("E", 1)]})
+    # Two rows share A="fn_1": the empty pre-provisioned row 1 (what mTool
+    # reads) and the populated appended row 7 (where the payload landed).
+    fn_sheet = _ws({1: [("A", 2), ("B", 3), ("C", None)],
+                    7: [("A", 2), ("B", 3), ("C", 4)]}, dimension="A1:G7")
+    path = _write_fn_workbook(
+        tmp_path, "dup_keys.xlsx", strings,
+        [("Notes-Listofnotes", visible), ("+FootnoteTexts", fn_sheet)],
+        ["<definedName name=\"fn_1\">'Notes-Listofnotes'!$E$9</definedName>"])
+    assert _detect_duplicate_fn_keys(path, "+FootnoteTexts") == [
+        {"key": "fn_1", "rows": [1, 7]}]
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        path, {"footnotes": [{"sheet": "Notes-Listofnotes", "cell": "E9",
+                              "html": "<p>new</p>"}]},
+        output_path=str(out))
+    assert report["status"] == "degraded"
+    assert any("duplicate +FootnoteTexts column-A key fn_1" in e["error"]
+               for e in report["errors"])
+
+
+def test_refill_of_patched_template_is_idempotent(
+        tmp_path, orphan_pool_template):
+    """Re-running the same doc onto the already-patched output takes the
+    existing-slot fill path (in-place replace) — no second create, no new
+    rows, still zero duplicate keys."""
+    from mtool.offline_fill import _detect_duplicate_fn_keys
+    doc = {"footnotes": [
+        {"label": "Accrued expenses and other liabilities",
+         "html": "<p>accruals body v2</p>"},
+        {"label": "Capital management", "html": "<p>capman body v2</p>"}]}
+    out1 = tmp_path / "filled1.xlsx"
+    r1 = fill_footnotes(orphan_pool_template, doc, output_path=str(out1),
+                        create_missing=True)
+    assert len(r1["footnotes_created"]) == 2
+    out2 = tmp_path / "filled2.xlsx"
+    r2 = fill_footnotes(str(out1), doc, output_path=str(out2),
+                        create_missing=True)
+    assert r2["status"] == "ok", r2
+    assert r2["footnotes_created"] == []          # slots now exist — filled
+    assert len(r2["footnotes_written"]) == 2
+    assert {w["action"] for w in r2["footnotes_written"]} == {
+        "shared_string_replaced"}
+    assert "accruals body v2" in _payload_of(str(out2), "fn_5")
+    assert "capman body v2" in _payload_of(str(out2), "fn_6")
+    assert _detect_duplicate_fn_keys(str(out2), "+FootnoteTexts") == []
 

@@ -785,8 +785,13 @@ def resolve_footnote_by_label(label: str, targets: list) -> dict:
                 "detail": f"no fn_* label matched {label!r}"}
     if len(scored) > 1 and scored[1][0] == scored[0][0]:
         tied = [k for r, k, _ in scored if r == scored[0][0]]
+        # Structured candidates so a UI can offer the tie as a pick-one choice
+        # (each entry is an existing fn_* slot the operator may assign).
         return {"status": "ambiguous",
-                "detail": f"label matches multiple fn_*: {tied}"}
+                "detail": f"label matches multiple fn_*: {tied}",
+                "candidates": [{"key": k, "matched_label": lbl}
+                               for r, k, lbl in scored
+                               if r == scored[0][0]]}
     return {"status": "resolved", "key": scored[0][1],
             "matched_label": scored[0][2], "ratio": round(scored[0][0], 3)}
 
@@ -851,9 +856,21 @@ def resolve_label_to_note_cell(label: str, note_sheets: dict) -> dict:
     top = scored[0][0]
     tied = {(s, lc, r) for ratio, s, lc, _tc, r, _ in scored if ratio == top}
     if len(tied) > 1:
+        # Structured candidates (label cell + the trigger cell a slot would be
+        # created at) so a UI can offer the tie as a pick-one choice instead of
+        # a dead-end refusal.
+        cands, seen = [], set()
+        for ratio, s, lc, tc, r, txt in scored:
+            if ratio != top or (s, lc, r) in seen:
+                continue
+            seen.add((s, lc, r))
+            cands.append({"sheet": s, "label_cell": f"{lc}{r}",
+                          "cell": f"{tc}{r}", "matched_label": txt})
+        cands.sort(key=lambda c: (c["sheet"], c["cell"]))
         return {"status": "ambiguous",
                 "detail": f"label {label!r} matches multiple note cells: "
-                          f"{sorted(f'{s}!{lc}{r}' for s, lc, r in tied)}"}
+                          f"{sorted(f'{s}!{lc}{r}' for s, lc, r in tied)}",
+                "candidates": cands}
     _, sheet, label_col, trigger_col, row_num, matched = scored[0]
     return {"status": "resolved", "sheet": sheet,
             "cell": f"{trigger_col}{row_num}",
@@ -1057,30 +1074,111 @@ def _alloc_fn_key(fn_used: set) -> str:
     return key
 
 
+def _build_orphan_pool(fn_sheet_cells: dict, defined: dict,
+                       fn_rows: dict) -> list:
+    """The pre-provisioned, reusable ``+FootnoteTexts`` rows — an ``fn_N``
+    present in column A but with NO defined name and NO payload yet. mTool
+    templates ship a pool of these empty rows and assign a text block by
+    reusing the next free one; the ``fn_N`` in column A is the join key mTool
+    uses to link a visible cell's defined name to its payload row. Sorted
+    ascending by fn number for deterministic allocation. Each entry:
+    ``{key, row, payload_col, sheet}``.
+
+    Reusing these instead of minting a fresh ``fn_N`` is the ONLY correct
+    behaviour when the template pre-provisions them: a minted key that already
+    exists as an orphan row creates a DUPLICATE column-A key, and mTool joins
+    to the FIRST matching row (the empty one) — so the popup opens blank
+    (2026-07-05 Amgen incident)."""
+    pool = []
+    b_idx = col_to_idx("B")
+    for key in sorted(fn_rows, key=lambda k: int(re.sub(r"\D", "", k) or 0)):
+        if key in defined or fn_rows[key]["payload_populated"]:
+            continue
+        row = fn_rows[key]["row"]
+        cells = fn_sheet_cells.get(row, {})
+        # Payload column read from the row itself, never assumed "C" — real
+        # templates park orphan payload cells in D/F/G too.
+        cand = sorted((c for c in cells if col_to_idx(c) > b_idx),
+                      key=col_to_idx)
+        b_cell = cells.get("B")
+        pool.append({
+            "key": key, "row": row,
+            "payload_col": cand[0] if cand else "C",
+            "sheet": b_cell[1] if b_cell and b_cell[0] == "S" else None,
+        })
+    return pool
+
+
+def _take_orphan(pool: list, sheet: str):
+    """Pop the best free orphan slot for ``sheet``: prefer one already
+    pre-provisioned for that sheet (column B matches), else the lowest-numbered
+    free slot. Returns None when the pool is exhausted."""
+    for i, orphan in enumerate(pool):
+        if orphan["sheet"] == sheet:
+            return pool.pop(i)
+    return pool.pop(0) if pool else None
+
+
 def _create_footnote_slot(st: dict, sheet: str, cell: str, wrapped: str):
-    """Create a native-shaped popup slot for a visible ``sheet!cell`` and write
-    ``wrapped`` as its payload. Mutates ``st`` (single evolving allocator).
-    Returns (new_fn_key, payload_addr)."""
+    """Wire a prose note (whose concept has no ``fn_*`` yet) to a native-shaped
+    popup slot and write ``wrapped`` as its payload. Mutates ``st`` (single
+    evolving allocator). Returns (fn_key, payload_addr, slot_source).
+
+    Prefers REUSING a pre-provisioned orphan ``+FootnoteTexts`` row — that is
+    how mTool itself assigns a text block, and it avoids the duplicate
+    column-A key that leaves the popup empty. Only when the orphan pool is
+    exhausted does it fall back to appending a brand-new native-shaped row
+    with a key guaranteed unused across defined names AND existing column-A
+    keys (``fn_used`` is seeded from both)."""
     vis_entry = st["sheet_paths"].get(sheet)
     if vis_entry is None:
         raise ValueError(f"visible sheet {sheet!r} not found for slot creation")
-    key = _alloc_fn_key(st["fn_used"])
-    row_num = st["next_row"]
-    st["next_row"] += 1
-    st["sst_xml"], a_idx = _ensure_shared_string(st["sst_xml"], st["sindex"], key)
-    st["sst_xml"], b_idx = _ensure_shared_string(st["sst_xml"], st["sindex"], sheet)
+
+    orphan = _take_orphan(st["orphan_pool"], sheet)
+    if orphan is not None:
+        key = orphan["key"]
+        row_num = orphan["row"]
+        payload_addr = f"{orphan['payload_col']}{row_num}"
+        source = "orphan_reused"
+        # The orphan's payload cell is empty by construction. NEVER
+        # replace_shared_string here: an empty t="s" cell points at a shared
+        # "" <si> that other cells across the workbook may reference
+        # (sharedStrings dedups), and replacing it would rewrite them all.
+        # Append a fresh unique <si> and repoint the cell (style preserved).
+        st["sst_xml"], p_idx = append_shared_string(st["sst_xml"], wrapped)
+        st["fn_sheet_xml"] = patch_shared_cell(
+            st["fn_sheet_xml"], payload_addr, p_idx)
+        # Column B names the visible sheet; correct it only if the reused
+        # orphan was pre-provisioned for a different sheet (or blank).
+        if orphan["sheet"] != sheet:
+            st["sst_xml"], b_idx = _ensure_shared_string(
+                st["sst_xml"], st["sindex"], sheet)
+            st["fn_sheet_xml"] = patch_shared_cell(
+                st["fn_sheet_xml"], f"B{row_num}", b_idx)
+    else:
+        key = _alloc_fn_key(st["fn_used"])
+        row_num = st["next_row"]
+        st["next_row"] += 1
+        payload_addr = f"C{row_num}"
+        source = "row_appended"
+        st["sst_xml"], a_idx = _ensure_shared_string(
+            st["sst_xml"], st["sindex"], key)
+        st["sst_xml"], b_idx = _ensure_shared_string(
+            st["sst_xml"], st["sindex"], sheet)
+        st["sst_xml"], p_idx = append_shared_string(st["sst_xml"], wrapped)
+        row_xml = _footnote_row_xml(row_num, a_idx, b_idx, p_idx, st["donor"])
+        st["fn_sheet_xml"] = _bump_footnote_dimension(
+            _insert_row_ordered(st["fn_sheet_xml"], row_num, row_xml), row_num)
+
+    # Common tail (both paths): visible trigger marker + defined name.
     st["sst_xml"], trig_idx = _ensure_shared_string(
         st["sst_xml"], st["sindex"], _TEXT_BLOCK_MARKER)
-    st["sst_xml"], p_idx = append_shared_string(st["sst_xml"], wrapped)
-    row_xml = _footnote_row_xml(row_num, a_idx, b_idx, p_idx, st["donor"])
-    st["fn_sheet_xml"] = _bump_footnote_dimension(
-        _insert_row_ordered(st["fn_sheet_xml"], row_num, row_xml), row_num)
     vis_xml = st["visible"].get(vis_entry) or st["data"][vis_entry].decode("utf-8")
     st["visible"][vis_entry] = patch_shared_cell(vis_xml, cell, trig_idx)
     st["workbook_xml"] = _add_defined_name(
         st["workbook_xml"], key, sheet, cell,
         _sheet_local_index(st["data"], sheet))
-    return key, f"C{row_num}"
+    return key, payload_addr, source
 
 
 def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None,
@@ -1139,6 +1237,7 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
 
     cell_to_fn = {f"{d['sheet']}!{d['cell']}": k for k, d in defined.items()}
     fn_rows = read_footnote_rows(data, sheet_paths, sst, footnote_sheet)
+    fn_sheet_cells = read_sheet_cells(data[fn_entry], sst)
     fn_sheet_xml = data[fn_entry].decode("utf-8")
     sst_xml = data["xl/sharedStrings.xml"].decode("utf-8")
     targets = None  # inspect_footnotes result, built lazily for label matches
@@ -1152,8 +1251,17 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
         "fn_sheet_xml": fn_sheet_xml, "sst_xml": sst_xml,
         "visible": {},  # entry_path -> patched xml (created triggers)
         "sindex": {v: i for i, v in enumerate(sst)},  # first-seen value->index
-        "fn_used": set(defined), "next_row": _max_row(fn_sheet_xml) + 1,
+        # Seed from EVERY fn_ key — defined names AND +FootnoteTexts column-A
+        # keys — so a fallback append can never mint a key that duplicates a
+        # pre-provisioned orphan row (the "popup opens empty" incident).
+        "fn_used": set(defined) | set(fn_rows),
+        "next_row": _max_row(fn_sheet_xml) + 1,
         "donor": _find_donor_shape(fn_rows, fn_sheet_xml),
+        "orphan_pool": _build_orphan_pool(fn_sheet_cells, defined, fn_rows),
+    }
+    report["fn_allocation"] = {
+        "orphan_pool_initial": len(st["orphan_pool"]),
+        "orphan_reused": 0, "row_appended": 0,
     }
 
     resolved_html = {}
@@ -1169,7 +1277,8 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
             res = resolve_footnote_by_label(it["label"], targets)
             if res["status"] == "resolved":
                 if strict and res.get("ratio", 1.0) < 1.0:
-                    report["unresolved"].append({**base, **res, "detail":
+                    report["unresolved"].append({**base, **res,
+                        "reason": "strict_near_miss", "detail":
                         f"strict mode: non-exact label match "
                         f"(similarity {res['ratio']}) refused; would have "
                         f"matched {res.get('matched_label')!r}"})
@@ -1190,10 +1299,14 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
                 if cres["status"] != "resolved":
                     # Prefer the create-path detail (visible-label miss /
                     # ambiguity) — it's the actionable one here.
-                    report["unresolved"].append({**base, **cres})
+                    report["unresolved"].append({**base, **cres,
+                        "reason": ("ambiguous"
+                                   if cres["status"] == "ambiguous"
+                                   else "no_match")})
                     continue
                 if strict and cres.get("ratio", 1.0) < 1.0:
                     report["unresolved"].append({**base, **cres,
+                        "reason": "strict_near_miss",
                         "detail": "strict mode: non-exact visible-label match "
                         f"(similarity {cres['ratio']}) refused; would have "
                         f"created at {cres['sheet']}!{cres['cell']} from "
@@ -1208,12 +1321,15 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
                                 ratio=cres["ratio"], resolved_via="label->cell")
                 else:
                     try:
-                        key, payload_addr = _create_footnote_slot(
+                        key, payload_addr, slot_source = _create_footnote_slot(
                             st, c_sheet, c_cell, wrapped)
                     except (ValueError, PrefixedSheetError) as exc:
                         report["errors"].append({**base, "error": str(exc)})
                         continue
+                    report["fn_allocation"][slot_source] = (
+                        report["fn_allocation"].get(slot_source, 0) + 1)
                     base.update(key=key, action="slot_created",
+                                slot_source=slot_source,
                                 resolved_via="label->cell",
                                 visible_cell=f"{c_sheet}!{c_cell}",
                                 label_cell=cres["label_cell"],
@@ -1230,7 +1346,9 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
                     report["footnotes_written"].append(base)
                     continue
             else:
-                report["unresolved"].append({**base, **res})
+                report["unresolved"].append({**base, **res,
+                    "reason": ("ambiguous" if res["status"] == "ambiguous"
+                               else "no_match")})
                 continue
         elif not key:
             cell = str(it["cell"]).upper()
@@ -1239,13 +1357,16 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
             if not key and create_missing:
                 # No fn_* here: build a native-shaped slot at this visible cell.
                 try:
-                    key, payload_addr = _create_footnote_slot(
+                    key, payload_addr, slot_source = _create_footnote_slot(
                         st, it["sheet"], cell, wrapped)
                 except (ValueError, PrefixedSheetError) as exc:
                     report["errors"].append({**base, "error": str(exc)})
                     continue
+                report["fn_allocation"][slot_source] = (
+                    report["fn_allocation"].get(slot_source, 0) + 1)
                 base.update(key=key, hidden_sheet=footnote_sheet,
-                            hidden_cell=payload_addr, action="slot_created")
+                            hidden_cell=payload_addr, action="slot_created",
+                            slot_source=slot_source)
                 # Register the new slot so a later explicit item for the SAME
                 # cell hits the seen_keys duplicate guard, not a second create.
                 cell_to_fn[vis] = key
@@ -1255,7 +1376,8 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
                 report["footnotes_written"].append(base)
                 continue
             if not key:
-                report["unresolved"].append({**base, "detail":
+                report["unresolved"].append({**base, "reason": "no_slot",
+                    "detail":
                     f"no fn_* backs {vis}; pass create_missing to create it"})
                 continue
         base["key"] = key
@@ -1265,14 +1387,20 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
             continue
         fn = fn_rows.get(key)
         if fn is None:
-            report["unresolved"].append({**base, "detail":
-                f"no {footnote_sheet} payload row for {key}"})
+            report["unresolved"].append({**base, "reason": "no_payload_row",
+                "detail": f"no {footnote_sheet} payload row for {key}"})
             continue
         seen_keys.add(key)
         payload_addr = f"{fn['payload_col'] or 'C'}{fn['row']}"
         try:
             existing = _cell_shared_index(st["fn_sheet_xml"], payload_addr)
-            if existing is not None:
+            # Replace in place ONLY for a non-empty payload <si> — a unique
+            # blob per the mTool convention. An EMPTY t="s" cell points at a
+            # shared "" <si> that sharedStrings dedup may bind to other cells
+            # workbook-wide; replacing it would rewrite them all. Append+patch
+            # is always safe for that case.
+            if existing is not None and (existing >= len(sst)
+                                         or sst[existing].strip()):
                 st["sst_xml"] = replace_shared_string(
                     st["sst_xml"], existing, wrapped)
                 action = "shared_string_replaced"
@@ -1303,6 +1431,16 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
         report["footnote_mismatches"] = _verify_footnotes(
             output_path, footnote_sheet, report["footnotes_written"],
             resolved_html)
+        # Read-back invariant: no duplicate column-A join keys. mTool joins on
+        # the FIRST matching row, so a duplicate silently strands the payload
+        # (the popup opens empty) while the file stays structurally valid —
+        # fail loudly here instead of silently inside mTool.
+        for dup in _detect_duplicate_fn_keys(output_path, footnote_sheet):
+            report["errors"].append({
+                "key": dup["key"], "rows": dup["rows"],
+                "error": f"duplicate +FootnoteTexts column-A key "
+                         f"{dup['key']} on rows {dup['rows']}; mTool reads "
+                         f"the FIRST match, so its popup would open empty"})
 
     degraded = any(report[k] for k in
                    ("unresolved", "errors", "footnote_mismatches"))
@@ -1314,6 +1452,29 @@ def _max_row(sheet_xml: str) -> int:
     rows = [int(m.group(1))
             for m in re.finditer(r'<row\b[^>]*\br="(\d+)"', sheet_xml)]
     return max(rows) if rows else 0
+
+
+def _detect_duplicate_fn_keys(path: str, footnote_sheet: str) -> list:
+    """``fn_*`` keys that appear on MORE THAN ONE ``+FootnoteTexts`` row.
+    mTool joins on the column-A key and reads the FIRST match, so a duplicate
+    silently strands the payload (2026-07-05 Amgen incident) — this is a
+    correctness invariant, not a warning. Deliberately a RAW row scan:
+    :func:`read_footnote_rows` keys by column A and keeps the LAST row, which
+    is exactly the masking that let the incident pass read-back verification.
+    Returns ``[{key, rows}, ...]`` sorted by key."""
+    _, data, _ = load_workbook_entries(path)
+    sheet_paths = get_sheet_paths(data)
+    entry = sheet_paths.get(footnote_sheet) if footnote_sheet else None
+    if entry is None:
+        return []
+    cells = read_sheet_cells(data[entry], get_shared_strings(data))
+    rows_by_key: dict = {}
+    for row_num in sorted(cells):
+        a = cells[row_num].get("A")
+        if a and a[0] == "S" and a[1].strip().startswith("fn_"):
+            rows_by_key.setdefault(a[1].strip(), []).append(row_num)
+    return [{"key": k, "rows": rows} for k, rows in sorted(rows_by_key.items())
+            if len(rows) > 1]
 
 
 def _verify_footnotes(path: str, footnote_sheet: str, written: list,
