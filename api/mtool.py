@@ -317,6 +317,17 @@ async def patch_mtool_template(
                         notes_report = fill_footnotes(
                             str(out), notes_doc, str(notes_out),
                             create_missing=create_missing_notes)
+                        # Surface the deterministic size signal: how many notes
+                        # were written FLAT because full formatting would have
+                        # blown Excel's cell limit (content kept, styling
+                        # sacrificed). Distinct from `oversize` unresolved
+                        # (skipped entirely). The agent/operator reads this to
+                        # know which notes need their styling simplified.
+                        _ncounts = notes_doc.get("meta", {}).get("counts", {})
+                        notes_report["formatting_dropped"] = _ncounts.get(
+                            "formatting_dropped", 0)
+                        notes_report["formatting_reduced"] = _ncounts.get(
+                            "formatting_reduced", 0)
                         final = notes_out
             except HTTPException:
                 # A malformed notes_targets is a caller error (422), not a
@@ -334,13 +345,14 @@ async def patch_mtool_template(
         logger.info(
             "mTool patch run %s: numeric status=%s written=%d unresolved=%d; "
             "notes status=%s written=%d created=%d unresolved=%d "
-            "(create_missing_notes=%s)",
+            "formatting_dropped=%d (create_missing_notes=%s)",
             run_id, report["status"], len(report["written"]),
             len(report["unresolved"]),
             (notes_report or {}).get("status", "skipped"),
             len((notes_report or {}).get("footnotes_written", [])),
             len((notes_report or {}).get("footnotes_created", [])),
             len((notes_report or {}).get("unresolved", [])),
+            (notes_report or {}).get("formatting_dropped", 0),
             create_missing_notes)
         # The per-note unresolved reasons are the actionable diagnostic (why a
         # note didn't fill: no slot / strict mismatch). The header is bounded,
@@ -649,6 +661,11 @@ def _notes_report_block(notes_report: dict | None) -> dict | None:
             "unresolved": len(notes_report.get("unresolved", [])),
             "mismatches": len(notes_report.get("footnote_mismatches", [])),
             "errors": len(notes_report.get("errors", [])),
+            # notes written flat because their styling exceeded Excel's cell
+            # limit (content kept). Distinct from `unresolved` oversize skips.
+            "formatting_dropped": notes_report.get("formatting_dropped", 0),
+            # notes kept most formatting but dropped cosmetic props to fit.
+            "formatting_reduced": notes_report.get("formatting_reduced", 0),
         },
         "unresolved": [
             {"label": e.get("label"), "detail": e.get("detail")}

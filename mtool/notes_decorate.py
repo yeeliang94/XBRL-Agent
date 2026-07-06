@@ -138,11 +138,16 @@ _TABLE_STYLE_KEEP_WIDTH = ("border-collapse: collapse; margin: 8px 0; "
                            "table-layout: fixed;")
 
 
-def _cell_style_base(o: NotesTableStyle) -> str:
+def _cell_style_base(o: NotesTableStyle, lite: bool = False) -> str:
     pad_v, pad_h = o.cell_padding_px
-    return (f"{_border_css(o)}padding: {pad_v}px {pad_h}px; "
-            "vertical-align: top; overflow-wrap: break-word; "
-            "word-break: break-word; " + _font_css(o))
+    base = f"{_border_css(o)}padding: {pad_v}px {pad_h}px; "
+    if not lite:
+        # Cosmetic-only props (vertical-align + wrapping). They add ~60 chars
+        # per cell but no formatting a reader would miss — dropped first when a
+        # note is close to Excel's cell-string limit (the "lite" tier).
+        base += ("vertical-align: top; overflow-wrap: break-word; "
+                 "word-break: break-word; ")
+    return base + _font_css(o)
 
 
 def _header_extra(o: NotesTableStyle) -> str:
@@ -358,7 +363,8 @@ def _cells(row: Tag) -> list[Tag]:
             if isinstance(c, Tag) and c.name in ("td", "th")]
 
 
-def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE) -> str:
+def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
+                        lite: bool = False) -> str:
     """Inject the mTool-render-proven inline styles into ``html`` and return the
     decorated fragment (wrapped in a font-bearing ``<div>`` so bare
     ``<strong>`` / loose text inherit the face). Pure — does not mutate input.
@@ -366,12 +372,17 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE) -> st
     Mirrors ``decorateHtmlForClipboard``: table borders/width, per-cell
     padding/font/border + numeric right-alignment, header fill/bold, paragraph
     and heading spacing. Persisted per-cell styles (a user's manual WYSIWYG
-    borders/fills) always win over the decorator defaults."""
+    borders/fills) always win over the decorator defaults.
+
+    ``lite`` drops cosmetic-only per-cell props (vertical-align + text
+    wrapping) to shrink the payload ~40% while keeping the formatting a reader
+    notices (borders, font, alignment, header fill). Used as the middle rung of
+    the exporter's full → lite → flat size-degradation ladder."""
     if not html:
         return html
     soup = BeautifulSoup(html, "html.parser")
 
-    cell_base = _cell_style_base(style)
+    cell_base = _cell_style_base(style, lite=lite)
     no_border = style.border_style == "none"
 
     for table in soup.find_all("table"):

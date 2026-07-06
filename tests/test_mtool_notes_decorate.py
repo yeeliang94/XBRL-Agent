@@ -183,6 +183,21 @@ def test_themed_border_colour_and_double_rule():
     assert "3px double #1f3864" in out.lower()
 
 
+def test_lite_tier_keeps_formatting_drops_cosmetics():
+    html = "<table><tbody><tr><td>x</td><td>1,234</td></tr></tbody></table>"
+    full = decorate_notes_html(html)
+    lite = decorate_notes_html(html, lite=True)
+    # lite keeps the formatting a reader notices...
+    assert "border: 1px solid" in lite
+    assert "text-align: right" in lite
+    assert "font-family: Arial" in lite
+    # ...but drops the cosmetic-only props, so it is strictly smaller.
+    assert "vertical-align: top" not in lite
+    assert "overflow-wrap" not in lite
+    assert "word-break" not in lite
+    assert len(lite) < len(full)
+
+
 def test_empty_html_passthrough():
     assert decorate_notes_html("") == ""
 
