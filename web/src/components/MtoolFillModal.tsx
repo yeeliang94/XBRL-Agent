@@ -35,16 +35,46 @@ interface NotesReport {
   unresolved?: { label: string | null; detail?: string }[];
 }
 
+// One place a flagged note could be assigned to (backend candidates entry):
+// either an existing text-block slot (key) or a visible cell a slot would be
+// created at (sheet+cell).
+interface NoteCandidate {
+  key?: string;
+  sheet?: string;
+  cell?: string;
+  label_cell?: string;
+  matched_label?: string;
+}
+
+// A note the fill refused to guess on. `reason` drives the guidance UI;
+// `index` is the stable id notes_targets decisions are keyed by.
+interface UnresolvedNote {
+  index?: number;
+  label: string | null;
+  detail?: string;
+  reason?: string; // ambiguous | strict_near_miss | no_match | no_slot | no_payload_row
+  candidates?: NoteCandidate[];
+  matched_label?: string;
+  ratio?: number;
+  key?: string;
+  sheet?: string;
+  cell?: string;
+}
+
 // Dry-run notes diagnostic (POST /mtool-fill/notes-preview).
 interface NotesPreview {
   notes_in_run: number;
   template_fn_slots: number;
   create_missing_notes: boolean;
-  will_fill_existing: { label: string | null; key: string }[];
-  will_create: { label: string | null; cell: string | null; label_cell: string | null }[];
-  unresolved: { label: string | null; detail?: string }[];
+  will_fill_existing: { index?: number; label: string | null; key: string }[];
+  will_create: { index?: number; label: string | null; cell: string | null; label_cell: string | null }[];
+  unresolved: UnresolvedNote[];
   errors: { detail?: string }[];
 }
+
+// The operator's placement decision for one flagged note, sent to the server
+// as notes_targets — pin to an existing slot (key) or an explicit cell.
+type NoteTarget = { key?: string; sheet?: string; cell?: string };
 
 interface ReportSummary {
   status: string;
@@ -117,7 +147,102 @@ const styles = {
     justifyContent: "flex-end",
     marginTop: pwc.space.xl,
   } as React.CSSProperties,
+  planSummary: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.md,
+    flexWrap: "wrap" as const,
+    margin: `${pwc.space.sm}px 0`,
+  } as React.CSSProperties,
+  planChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 12,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  noteCard: {
+    borderTop: `1px solid ${pwc.grey200}`,
+    padding: `${pwc.space.sm}px 0`,
+    fontSize: 12,
+  } as React.CSSProperties,
 };
+
+/** One group of the notes plan ("Ready to fill", "Needs your decision", …) —
+ * a collapsible section with a status dot + count so the three outcomes never
+ * blur into one undifferentiated list. */
+function PlanSection({
+  dotColor,
+  title,
+  count,
+  defaultOpen,
+  hint,
+  children,
+}: {
+  dotColor: string;
+  title: string;
+  count: number;
+  defaultOpen?: boolean;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  if (count === 0) return null;
+  return (
+    <details open={defaultOpen} style={{ marginTop: pwc.space.sm }}>
+      <summary
+        style={{
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: 13,
+          fontWeight: pwc.weight.medium,
+          color: pwc.grey900,
+        }}
+      >
+        <span style={ui.badgeDot(dotColor)} />
+        {title}
+        <span style={{ color: pwc.grey500, fontWeight: pwc.weight.regular }}>({count})</span>
+      </summary>
+      {hint && (
+        <div style={{ color: pwc.grey700, fontSize: 12, margin: "4px 0 0 15px" }}>{hint}</div>
+      )}
+      <div style={{ margin: "4px 0 2px 15px" }}>{children}</div>
+    </details>
+  );
+}
+
+/** Plain-language explanation of why a note wasn't placed automatically. */
+function unresolvedReasonText(u: UnresolvedNote): string {
+  switch (u.reason) {
+    case "ambiguous":
+      return "This title appears in more than one place in the template — choose where it should go.";
+    case "strict_near_miss":
+      return `Found a close (but not identical) match: “${u.matched_label ?? "?"}”. To avoid guessing, it wasn't filled automatically.`;
+    case "no_match":
+      return "No matching row was found in this template. It will be skipped — you can add the text block in mTool afterwards.";
+    case "no_slot":
+      return "This spot has no text-block yet. Turn on “Create missing note slots” above to add one.";
+    case "no_payload_row":
+      return "The template's text block for this note is missing its storage row — fill it manually in mTool.";
+    default:
+      return u.detail ?? "Couldn't be placed automatically.";
+  }
+}
+
+/** The near-miss suggestion as a notes_targets decision, if the entry carries
+ * one (existing slot key, or the visible cell a slot would be created at). */
+function suggestionTarget(u: UnresolvedNote): NoteTarget | null {
+  if (u.key) return { key: u.key };
+  if (u.sheet && u.cell) return { sheet: u.sheet, cell: u.cell };
+  return null;
+}
+
+/** Human-readable name for a candidate placement in the picker. */
+function candidateOptionLabel(c: NoteCandidate): string {
+  const where = c.key ? `existing block ${c.key}` : `${c.sheet} ${c.cell}`;
+  return c.matched_label ? `${where} — ${c.matched_label}` : where;
+}
 
 export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [meta, setMeta] = useState<FillMeta | null>(null);
@@ -127,6 +252,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [preview, setPreview] = useState<NotesPreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
+  // The operator's placement decisions for flagged notes, keyed by the note's
+  // index in the run's notes doc (the preview's stable id). Sent as
+  // notes_targets on both re-check and fill.
+  const [noteTargets, setNoteTargets] = useState<Record<number, NoteTarget>>({});
+  // Set when the server needs the column layout confirmed — a next step, not
+  // a failure, so it renders as guidance rather than a red error.
+  const [columnPrompt, setColumnPrompt] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -156,8 +288,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setReport(null);
     setPatchErr(null);
     setColumnMap(null);
+    setColumnPrompt(null);
     setPreview(null);
     setPreviewErr(null);
+    setNoteTargets({});
     fetch(`/api/runs/${runId}/mtool-fill`)
       .then(async (r) => {
         if (!r.ok) throw new Error((await r.json()).detail || `HTTP ${r.status}`);
@@ -174,10 +308,14 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
   if (!open) return null;
 
+  const notesTargetsPayload = () =>
+    Object.keys(noteTargets).length > 0 ? JSON.stringify(noteTargets) : null;
+
   const submit = async () => {
     if (!file) return;
     setBusy(true);
     setPatchErr(null);
+    setColumnPrompt(null);
     setReport(null);
     try {
       const form = new FormData();
@@ -186,6 +324,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       form.append("fill_notes", fillNotes ? "true" : "false");
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
       if (columnMap) form.append("column_map", JSON.stringify(columnMap));
+      const targets = fillNotes ? notesTargetsPayload() : null;
+      if (targets) form.append("notes_targets", targets);
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/patch`, {
         method: "POST",
         body: form,
@@ -195,14 +335,16 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         const detail = body?.detail;
         // Low-confidence auto-detection: the server hands back its best guess
         // in detail.detected. Seed the editor so the user can confirm + retry.
+        // This is a guided next step, not a failure — don't paint it red.
         if (detail && typeof detail === "object" && detail.detected) {
           const seed: ColumnMap = {};
           for (const [sheet, d] of Object.entries(detail.detected as Record<string, DetectedSheet>)) {
             seed[sheet] = { label_column: d.label_column ?? "", columns: { ...d.columns } };
           }
           setColumnMap(seed);
-          setPatchErr(
-            "Couldn't confidently detect the column layout. Confirm the columns below and retry."
+          setColumnPrompt(
+            "One more step — we couldn't tell for sure which columns hold your labels and figures. " +
+              "Check the columns below (we've pre-filled our best guess), then click Fill & download again."
           );
           return;
         }
@@ -240,7 +382,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   };
 
   // Dry-run diagnostic: what would fill / get created / stay unresolved, and
-  // how many fn_* slots the uploaded template exposes. Writes nothing.
+  // how many fn_* slots the uploaded template exposes. Writes nothing. Sends
+  // the operator's placement decisions so a re-check reflects them.
   const runPreview = async () => {
     if (!file) return;
     setPreviewBusy(true);
@@ -250,6 +393,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       const form = new FormData();
       form.append("template", file);
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
+      const targets = notesTargetsPayload();
+      if (targets) form.append("notes_targets", targets);
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/notes-preview`, {
         method: "POST",
         body: form,
@@ -285,10 +430,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       <div style={styles.modal}>
         <h2 style={styles.heading}>Fill mTool template</h2>
         <p style={styles.sub}>
-          Upload the empty mTool template you generated in mTool. The app fills its
-          numeric leaf values <em>and</em> the prose notes from this run&apos;s reviewed
-          content, and returns one workbook you open in mTool to Validate &amp; Generate.
-          Totals stay as mTool&apos;s own formulas; SOCIE is not filled this phase.
+          Upload the empty template you exported from mTool. We fill in this run&apos;s
+          figures and written notes and give you back one file, ready to open in mTool
+          for Validate &amp; Generate. Totals are left to mTool&apos;s own formulas; the
+          statement of changes in equity (SOCIE) isn&apos;t filled yet.
         </p>
 
         {loadErr && (
@@ -332,10 +477,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 setFillNotes(e.target.checked);
                 setPreview(null); // plan no longer reflects the toggles
                 setPreviewErr(null);
+                setNoteTargets({});
               }}
               aria-label="Also fill notes"
             />
-            Also fill prose notes
+            Also fill the written notes (accounting policies, disclosures)
           </label>
         )}
 
@@ -350,6 +496,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 setCreateMissingNotes(e.target.checked);
                 setPreview(null); // create-toggle changes the plan
                 setPreviewErr(null);
+                setNoteTargets({});
               }}
               aria-label="Create missing note slots"
               style={{ marginTop: 2 }}
@@ -357,9 +504,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             <span>
               Create missing note slots
               <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
-                Build a new text-block for notes whose concept has no popup yet (col-D label →
-                col-E). Off by default — creation is less proven than filling existing slots;
-                Preview first and verify in mTool.
+                If a note has no text-block in the template yet, add one next to its label.
+                Off by default — run “Check notes” first, and verify the result opens
+                correctly in mTool.
               </span>
             </span>
           </label>
@@ -372,8 +519,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           onChange={(e) => {
             setFile(e.target.files?.[0] ?? null);
             setColumnMap(null); // a different template has a different layout
+            setColumnPrompt(null);
             setPreview(null); // a different template ⇒ a different plan
             setPreviewErr(null);
+            setNoteTargets({}); // decisions were made against the old template
           }}
           aria-label="mTool template file"
           style={{ fontSize: 13, marginBottom: pwc.space.md }}
@@ -381,32 +530,29 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         {notesCount !== null && notesCount > 0 && fillNotes && (
           <div style={{ marginBottom: pwc.space.md }}>
-            <button
-              type="button"
-              onClick={runPreview}
-              disabled={!file || previewBusy}
-              className={uiClass.btnGhost}
-              style={{ ...ui.buttonGhost, fontSize: 12 }}
-            >
-              {previewBusy ? "Previewing…" : "Preview notes (no changes)"}
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={runPreview}
+                disabled={!file || previewBusy}
+                className={uiClass.btnGhost}
+                style={{ ...ui.buttonGhost, fontSize: 12 }}
+              >
+                {previewBusy ? "Checking…" : "Check notes against this template"}
+              </button>
+              <span style={{ color: pwc.grey500, fontSize: 12 }}>
+                Nothing is written — this only shows where each note would go.
+              </span>
+            </div>
             {previewErr && (
               <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
-                Preview failed: {previewErr}
+                Check failed: {previewErr}
               </div>
             )}
             {preview && (
               <div
                 style={{
-                  // Warn-tint the panel when anything won't cleanly land
-                  // (unresolved notes OR a fill-level error like a template
-                  // with no +FootnoteTexts sheet) so a degraded preview never
-                  // reads as clean.
-                  border: `1px solid ${
-                    preview.unresolved.length > 0 || preview.errors.length > 0
-                      ? pwc.orange700
-                      : pwc.grey300
-                  }`,
+                  border: `1px solid ${pwc.grey200}`,
                   borderRadius: pwc.radius.md,
                   padding: pwc.space.md,
                   marginTop: pwc.space.sm,
@@ -414,56 +560,159 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 }}
                 aria-label="Notes preview"
               >
-                <div style={{ color: pwc.grey700, marginBottom: 4 }}>
-                  Template exposes <strong>{preview.template_fn_slots}</strong> existing note
-                  slot(s); this run has <strong>{preview.notes_in_run}</strong> prose note(s).
+                <div style={{ color: pwc.grey700 }}>
+                  This template has <strong>{preview.template_fn_slots}</strong> note text-block(s)
+                  already set up; this run has <strong>{preview.notes_in_run}</strong> note(s) to place.
                 </div>
-                <div style={styles.statLine}>
-                  ✓ {preview.will_fill_existing.length} will fill an existing slot
+
+                {/* One glanceable summary row — the three outcomes at a glance. */}
+                <div style={styles.planSummary}>
+                  <span style={styles.planChip}>
+                    <span style={ui.badgeDot(pwc.success)} />
+                    {preview.will_fill_existing.length} ready to fill
+                  </span>
+                  <span style={styles.planChip}>
+                    <span style={ui.badgeDot(createMissingNotes ? pwc.info : pwc.grey500)} />
+                    {preview.will_create.length} will be added
+                  </span>
+                  <span style={{ ...styles.planChip, color: preview.unresolved.length ? pwc.warningText : pwc.grey900 }}>
+                    <span style={ui.badgeDot(preview.unresolved.length ? pwc.warning : pwc.grey500)} />
+                    {preview.unresolved.length} need your decision
+                  </span>
                 </div>
-                <div style={styles.statLine}>
-                  {createMissingNotes ? "＋" : "○"} {preview.will_create.length} will be created
-                  {!createMissingNotes && preview.will_create.length === 0 && preview.unresolved.length > 0
-                    ? " (enable “Create missing note slots” above to create them)"
-                    : ""}
-                </div>
-                {preview.unresolved.length > 0 && (
-                  <div style={{ ...styles.statLine, color: pwc.orange700 }}>
-                    ⚠ {preview.unresolved.length} unresolved
+
+                {preview.errors.length > 0 && (
+                  <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
+                    <div style={{ fontWeight: pwc.weight.medium }}>
+                      {preview.errors.length} problem(s) would stop the notes from landing:
+                    </div>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                      {preview.errors.slice(0, 4).map((e, i) => (
+                        <li key={i}>{e.detail ?? "error"}</li>
+                      ))}
+                      {preview.errors.length > 4 && <li>… and {preview.errors.length - 4} more</li>}
+                    </ul>
                   </div>
                 )}
-                {preview.errors.length > 0 && (
-                  <div style={{ ...styles.statLine, color: pwc.orange700 }}>
-                    ⚠ {preview.errors.length} error(s) — the notes fill would degrade
+
+                {/* Notes that need a human call — each with a plain-language
+                    reason and, where the tool found options, a picker. This is
+                    the notes twin of the numeric column-layout confirm step. */}
+                <PlanSection
+                  dotColor={pwc.warning}
+                  title="Needs your decision"
+                  count={preview.unresolved.length}
+                  defaultOpen
+                  hint="The tool never guesses. Place these yourself, or leave them to fill manually in mTool later."
+                >
+                  {preview.unresolved.map((u, i) => {
+                    const idx = u.index ?? -1;
+                    const chosen = idx >= 0 ? noteTargets[idx] : undefined;
+                    const suggestion = u.reason === "strict_near_miss" ? suggestionTarget(u) : null;
+                    return (
+                      <div key={i} style={styles.noteCard}>
+                        <div style={{ fontWeight: pwc.weight.medium, color: pwc.grey900 }}>{u.label}</div>
+                        <div style={{ color: pwc.grey700, margin: "2px 0 4px" }}>{unresolvedReasonText(u)}</div>
+                        {u.reason === "ambiguous" && (u.candidates?.length ?? 0) > 0 && idx >= 0 && (
+                          <select
+                            aria-label={`Choose where “${u.label}” goes`}
+                            value={chosen ? JSON.stringify(chosen) : ""}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setNoteTargets((t) => {
+                                const next = { ...t };
+                                if (v) next[idx] = JSON.parse(v) as NoteTarget;
+                                else delete next[idx];
+                                return next;
+                              });
+                            }}
+                            style={{ fontSize: 12, maxWidth: "100%" }}
+                          >
+                            <option value="">Skip for now (not filled)</option>
+                            {u.candidates!.map((cand, ci) => {
+                              const target: NoteTarget = cand.key
+                                ? { key: cand.key }
+                                : { sheet: cand.sheet, cell: cand.cell };
+                              return (
+                                <option key={ci} value={JSON.stringify(target)}>
+                                  Place at {candidateOptionLabel(cand)}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        )}
+                        {suggestion && idx >= 0 && (
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <input
+                              type="checkbox"
+                              checked={!!chosen}
+                              aria-label={`Use the close match for “${u.label}”`}
+                              onChange={(e) =>
+                                setNoteTargets((t) => {
+                                  const next = { ...t };
+                                  if (e.target.checked) next[idx] = suggestion;
+                                  else delete next[idx];
+                                  return next;
+                                })
+                              }
+                            />
+                            Use this match
+                          </label>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {Object.keys(noteTargets).length > 0 && (
+                    <div style={{ marginTop: pwc.space.sm, display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ color: pwc.grey700 }}>
+                        {Object.keys(noteTargets).length} placed — applied when you fill.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={runPreview}
+                        disabled={previewBusy}
+                        className={uiClass.btnGhost}
+                        style={{ ...ui.buttonGhost, fontSize: 12 }}
+                      >
+                        Re-check
+                      </button>
+                    </div>
+                  )}
+                </PlanSection>
+
+                <PlanSection
+                  dotColor={createMissingNotes ? pwc.info : pwc.grey500}
+                  title="Will be added"
+                  count={preview.will_create.length}
+                  hint="These notes have no text-block in the template yet — one is created next to each label."
+                >
+                  <ul style={{ margin: 0, paddingLeft: 18, color: pwc.grey700 }}>
+                    {preview.will_create.map((w, i) => (
+                      <li key={i}>
+                        {w.label ?? "(placed by you)"} → {w.cell}
+                      </li>
+                    ))}
+                  </ul>
+                </PlanSection>
+
+                <PlanSection
+                  dotColor={pwc.success}
+                  title="Ready to fill"
+                  count={preview.will_fill_existing.length}
+                  hint="These match a text-block that already exists in the template."
+                >
+                  <ul style={{ margin: 0, paddingLeft: 18, color: pwc.grey700 }}>
+                    {preview.will_fill_existing.map((w, i) => (
+                      <li key={i}>{w.label}</li>
+                    ))}
+                  </ul>
+                </PlanSection>
+
+                {!createMissingNotes && preview.unresolved.length > 0 && preview.will_create.length === 0 && (
+                  <div style={{ color: pwc.grey700, marginTop: pwc.space.sm }}>
+                    Tip: turning on “Create missing note slots” above lets the tool add text-blocks
+                    for notes the template doesn't have yet.
                   </div>
-                )}
-                {preview.will_create.length > 0 && (
-                  <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
-                    {preview.will_create.slice(0, 8).map((w, i) => (
-                      <li key={i}>
-                        {w.label} → {w.cell}
-                      </li>
-                    ))}
-                    {preview.will_create.length > 8 && <li>… and {preview.will_create.length - 8} more</li>}
-                  </ul>
-                )}
-                {preview.unresolved.length > 0 && (
-                  <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
-                    {preview.unresolved.slice(0, 8).map((u, i) => (
-                      <li key={i}>
-                        {u.label}: {u.detail}
-                      </li>
-                    ))}
-                    {preview.unresolved.length > 8 && <li>… and {preview.unresolved.length - 8} more</li>}
-                  </ul>
-                )}
-                {preview.errors.length > 0 && (
-                  <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.orange700 }}>
-                    {preview.errors.slice(0, 4).map((e, i) => (
-                      <li key={i}>{e.detail ?? "error"}</li>
-                    ))}
-                    {preview.errors.length > 4 && <li>… and {preview.errors.length - 4} more</li>}
-                  </ul>
                 )}
               </div>
             )}
@@ -472,6 +721,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         {patchErr && (
           <div style={ui.alertError}>Fill failed: {patchErr}</div>
+        )}
+        {columnPrompt && (
+          <div style={{ ...ui.alertWarning, marginTop: pwc.space.sm }}>{columnPrompt}</div>
         )}
 
         {columnMap && (
@@ -486,13 +738,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             aria-label="Column layout editor"
           >
             <div style={{ fontWeight: pwc.weight.medium, marginBottom: pwc.space.sm }}>
-              Column layout — confirm which columns hold the labels and values
+              Confirm the columns — which column holds the row labels, and which hold the figures
             </div>
             {Object.entries(columnMap).map(([sheet, cfg]) => (
               <div key={sheet} style={{ marginBottom: pwc.space.sm }}>
                 <div style={{ color: pwc.grey700, marginBottom: 2 }}>{sheet}</div>
                 <label style={{ marginRight: pwc.space.md }}>
-                  Label col{" "}
+                  Labels{" "}
                   <input
                     aria-label={`${sheet} label column`}
                     value={cfg.label_column}
@@ -508,7 +760,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 </label>
                 {Object.keys(cfg.columns).map((role) => (
                   <label key={role} style={{ marginRight: pwc.space.md }}>
-                    {role}{" "}
+                    {role.replace(/_/g, " ")}{" "}
                     <input
                       aria-label={`${sheet} ${role} column`}
                       value={cfg.columns[role]}

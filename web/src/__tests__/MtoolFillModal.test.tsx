@@ -261,11 +261,11 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /preview notes/i }));
-    await waitFor(() => expect(screen.getByText(/1 will be created/i)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
+    await waitFor(() => expect(screen.getByText(/1 will be added/i)).toBeTruthy());
     expect(screen.getByText(/Corporate information → Notes-CI!E14/)).toBeTruthy();
     // The template exposed zero existing slots — the "no popup yet" signal.
-    expect(screen.getByText(/exposes/i).textContent).toMatch(/0 existing note slot/i);
+    expect(screen.getByText(/this template has/i).textContent).toMatch(/0.*note text-block/i);
   });
 
   test("preview surfaces backend errors even with no unresolved notes", async () => {
@@ -293,9 +293,11 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /preview notes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
     // The error is surfaced (not hidden behind a clean-looking plan).
-    await waitFor(() => expect(screen.getByText(/would degrade/i)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText(/would stop the notes from landing/i)).toBeTruthy()
+    );
     expect(screen.getByText(/no \+FootnoteTexts sheet/i)).toBeTruthy();
   });
 
@@ -324,11 +326,174 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /preview notes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
     await waitFor(() => expect(screen.getByLabelText(/notes preview/i)).toBeTruthy());
     // Flipping the toggle must clear the now-stale plan.
     fireEvent.click(screen.getByLabelText(/create missing note slots/i));
     expect(screen.queryByLabelText(/notes preview/i)).toBeNull();
+  });
+
+  test("ambiguous note offers a placement picker and sends notes_targets on fill", async () => {
+    let patchBody: FormData | null = null;
+    mockFetch((url, init) => {
+      if (url.includes("/notes-preview")) {
+        return new Response(
+          JSON.stringify({
+            notes_in_run: 2,
+            template_fn_slots: 3,
+            create_missing_notes: true,
+            will_fill_existing: [{ index: 0, label: "Inventories", key: "fn_2" }],
+            will_create: [],
+            unresolved: [
+              {
+                index: 1,
+                label: "Disclosure of corporate information",
+                reason: "ambiguous",
+                detail: "label matches multiple note cells",
+                candidates: [
+                  { sheet: "Notes-CI", cell: "E11", label_cell: "D11", matched_label: "Corporate information" },
+                  { sheet: "Notes-CI", cell: "E12", label_cell: "D12", matched_label: "Corporate information" },
+                ],
+              },
+            ],
+            errors: [],
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/mtool-fill/patch")) {
+        patchBody = init?.body as FormData;
+        return new Response(new Blob(["x"]), {
+          status: 200,
+          headers: {
+            "X-mTool-Report": JSON.stringify({
+              status: "ok",
+              counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
+              unresolved: [],
+              skipped_formula: [],
+              mismatches: [],
+            }),
+          },
+        });
+      }
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    fireEvent.click(screen.getByLabelText(/create missing note slots/i));
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
+
+    // The flagged note renders with a plain-language reason + a picker.
+    await waitFor(() => expect(screen.getByText(/need your decision/i)).toBeTruthy());
+    expect(screen.getByText(/more than one place/i)).toBeTruthy();
+    const picker = screen.getByLabelText(/choose where/i) as HTMLSelectElement;
+    // Pick the second candidate (Notes-CI E12).
+    fireEvent.change(picker, {
+      target: { value: JSON.stringify({ sheet: "Notes-CI", cell: "E12" }) },
+    });
+    expect(screen.getByText(/1 placed/i)).toBeTruthy();
+
+    // Fill sends the decision as notes_targets keyed by the note index.
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
+    await waitFor(() => expect(patchBody).toBeTruthy());
+    const sent = JSON.parse(patchBody!.get("notes_targets") as string);
+    expect(sent).toEqual({ "1": { sheet: "Notes-CI", cell: "E12" } });
+  });
+
+  test("strict near-miss offers a 'Use this match' toggle that pins the slot key", async () => {
+    let previewCalls = 0;
+    let lastPreviewBody: FormData | null = null;
+    mockFetch((url, init) => {
+      if (url.includes("/notes-preview")) {
+        previewCalls += 1;
+        lastPreviewBody = init?.body as FormData;
+        return new Response(
+          JSON.stringify({
+            notes_in_run: 1,
+            template_fn_slots: 5,
+            create_missing_notes: false,
+            will_fill_existing: [],
+            will_create: [],
+            unresolved: [
+              {
+                index: 0,
+                label: "Disclosure of key management personnel compensation",
+                reason: "strict_near_miss",
+                detail: "strict mode: non-exact label match (similarity 0.95) refused",
+                matched_label: "Key management personnel",
+                ratio: 0.95,
+                key: "fn_9",
+              },
+            ],
+            errors: [],
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 1 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
+
+    // The near-miss surfaces the suggested match in plain language.
+    await waitFor(() => expect(screen.getByText(/close \(but not identical\) match/i)).toBeTruthy());
+    fireEvent.click(screen.getByLabelText(/use the close match/i));
+    expect(screen.getByText(/1 placed/i)).toBeTruthy();
+
+    // Re-check sends the pinned slot key so the plan updates.
+    fireEvent.click(screen.getByRole("button", { name: /re-check/i }));
+    await waitFor(() => expect(previewCalls).toBe(2));
+    const sent = JSON.parse(lastPreviewBody!.get("notes_targets") as string);
+    expect(sent).toEqual({ "0": { key: "fn_9" } });
+  });
+
+  test("column-layout confirmation renders as guidance, not a failure", async () => {
+    mockFetch((url) => {
+      if (url.includes("/mtool-fill/patch")) {
+        return new Response(
+          JSON.stringify({
+            detail: {
+              error: "column layout could not be auto-detected with confidence",
+              detected: {
+                "SOFP-Sub-CuNonCu": {
+                  label_column: "D",
+                  columns: { current_year: "E" },
+                  confidence: "low",
+                  notes: [],
+                },
+              },
+            },
+          }),
+          { status: 422 }
+        );
+      }
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
+    await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
+    // Guidance copy, and NOT the red "Fill failed" framing.
+    expect(screen.getByText(/one more step/i)).toBeTruthy();
+    expect(screen.queryByText(/fill failed/i)).toBeNull();
   });
 
   test("surfaces a server error", async () => {

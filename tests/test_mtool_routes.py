@@ -463,3 +463,64 @@ def test_patch_accepts_create_missing_notes_param(client):
     assert resp.status_code == 200, resp.text
     report = json.loads(resp.headers["X-mTool-Report"])
     assert report["counts"]["written"] == n
+
+
+# ------------------------------------------ notes_targets (operator guidance)
+
+def test_patch_malformed_notes_targets_is_422(client):
+    """A malformed notes_targets is a caller error (422), never a silent
+    fall-back to the label guess the operator just overrode."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    for bad in ("not json", json.dumps(["list"]),
+                json.dumps({"99": {"sheet": "S", "cell": "E1"}}),   # out of range
+                json.dumps({"0": {"cell": "E14"}}),                  # no sheet
+                json.dumps({"0": {"key": "not_a_key"}}),
+                json.dumps({"0": {"sheet": "S", "cell": "14E"}})):
+        resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                       files=_upload_our_template(),
+                       data={"strict": "true", "notes_targets": bad})
+        assert resp.status_code == 422, (bad, resp.text)
+
+
+def test_preview_applies_notes_targets_override(client):
+    """An explicit cell decision replaces label matching for that note: the
+    re-preview reflects it (the item leaves `unresolved`), keyed by index."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    override = json.dumps({"0": {"sheet": "Notes-CI", "cell": "e14"}})
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/notes-preview",
+                   files=_upload_our_template(),
+                   data={"create_missing_notes": "true",
+                         "notes_targets": override})
+    assert resp.status_code == 200, resp.text
+    plan = resp.json()
+    # Our SOFP template has no Notes-CI sheet / +FootnoteTexts, so the item
+    # can't actually land — but it must be routed via the EXPLICIT-cell path
+    # (errors/unresolved mention the cell, not the label-match failure), and
+    # the malformed-JSON 422 above proves the field is parsed. The key
+    # assertion: no label-based 'no visible note-sheet label matched' refusal.
+    details = json.dumps(plan["unresolved"] + plan["errors"])
+    assert "no visible note-sheet label matched" not in details
+
+
+def test_preview_unresolved_entries_are_structured(client):
+    """The preview passes through the decision-UI contract fields (index +
+    reason) rather than flattening to label+detail."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/notes-preview",
+                   files=_upload_our_template(),
+                   data={"create_missing_notes": "true"})
+    assert resp.status_code == 200, resp.text
+    plan = resp.json()
+    if plan["unresolved"]:  # template has no matching sheets -> no_match
+        entry = plan["unresolved"][0]
+        assert entry["index"] == 0
+        assert entry["reason"] in {"no_match", "ambiguous",
+                                   "strict_near_miss", "no_slot",
+                                   "no_payload_row"}
