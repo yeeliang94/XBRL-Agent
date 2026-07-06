@@ -364,6 +364,54 @@ async def patch_mtool_template(
         raise
 
 
+@router.post("/api/runs/{run_id}/mtool-fill/detect-columns")
+async def detect_mtool_columns(
+    run_id: int,
+    template: UploadFile = File(...),
+):
+    """Detect the uploaded template's column layout WITHOUT writing anything.
+
+    The pre-flight the modal runs the moment a template is chosen, so the
+    operator confirms the label/figure columns UP FRONT (alongside the notes
+    check) instead of discovering a low-confidence layout only after a failed
+    Fill (the old submit → 422 → confirm → retry loop). Returns the detected
+    map plus an overall ``confidence`` (``high`` = safe to fill as-is; anything
+    else = please confirm). The patch endpoint still auto-detects + 422s as a
+    defensive fallback for callers that skip this step.
+    """
+    run, doc = _build_doc(run_id)
+
+    raw = await _read_capped(template, _MAX_TEMPLATE_BYTES)
+    if not raw:
+        raise HTTPException(status_code=422, detail="Empty upload.")
+
+    work_root = Path(server.OUTPUT_DIR) / "_mtool_tmp"
+    work_root.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(dir=work_root))
+    try:
+        src = tmp / "template.xlsx"
+        src.write_bytes(raw)
+        _assert_zip_within_budget(str(src))
+
+        from mtool.offline_fill import get_sheet_paths, load_workbook_entries
+        try:
+            _, data, _ = load_workbook_entries(str(src))
+            get_sheet_paths(data)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=422,
+                detail=f"Upload is not a readable .xlsx workbook: {exc}"
+            ) from exc
+
+        detected = detect_column_map(str(src), doc, data=data)
+        return JSONResponse({
+            "detected": detected,
+            "confidence": overall_confidence(detected),
+        })
+    finally:
+        _cleanup(tmp)
+
+
 @router.post("/api/runs/{run_id}/mtool-fill/notes-preview")
 async def preview_mtool_notes(
     run_id: int,
