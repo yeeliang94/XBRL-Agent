@@ -307,6 +307,42 @@ def test_get_notes_fill_doc_running_run_is_409(client):
     assert tc.get(f"/api/runs/{run_id}/mtool-notes-fill").status_code == 409
 
 
+def test_notes_fill_doc_honours_per_run_theme(client):
+    """A per-run notes_table_style override reaches the mTool fill decoration,
+    so the payload matches the in-app editor / manual paste (not DEFAULT)."""
+    import json as _json
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-Listofnotes", 17,
+              "Property, plant and equipment",
+              "<table><tbody><tr><td>x</td></tr></tbody></table>")
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("UPDATE runs SET notes_table_style = ? WHERE id = ?",
+                     (_json.dumps({"borderStyle": "double",
+                                   "borderColor": "#1F3864"}), run_id))
+        conn.commit()
+    finally:
+        conn.close()
+    doc = tc.get(f"/api/runs/{run_id}/mtool-notes-fill").json()
+    html = doc["footnotes"][0]["html"].lower()
+    assert "3px double #1f3864" in html          # themed, not the #999 default
+    assert "1px solid #999" not in html
+
+
+def test_notes_fill_doc_falls_back_to_firm_default_theme(client, monkeypatch):
+    """No per-run override → the firm-wide XBRL_NOTES_TABLE_STYLE applies."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-Listofnotes", 17,
+              "Property, plant and equipment",
+              "<table><tbody><tr><td>x</td></tr></tbody></table>")
+    monkeypatch.setenv("XBRL_NOTES_TABLE_STYLE",
+                       '{"borderColor": "#abcdef"}')
+    doc = tc.get(f"/api/runs/{run_id}/mtool-notes-fill").json()
+    assert "1px solid #abcdef" in doc["footnotes"][0]["html"].lower()
+
+
 def test_patch_fill_notes_off_omits_notes_block(client):
     tc, db, _ = client
     run_id = _make_run(db)
