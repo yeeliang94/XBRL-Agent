@@ -128,6 +128,44 @@ def test_real_border_is_preserved_not_whited_out():
     assert "1px solid #ffffff" not in out.lower()
 
 
+def test_grouped_border_style_hidden_becomes_white():
+    # Chrome collapses uniform per-side hidden borders into the grouped
+    # `border-style: hidden` longhand (gotcha #16). It must still white out —
+    # the shorthand-only version missed this and left a grey TX line.
+    out = decorate_notes_html(
+        '<table><tbody><tr>'
+        '<td style="border-width: 1px; border-style: hidden; border-color: #000000">x</td>'
+        '</tr></tbody></table>')
+    assert "hidden" not in out
+    assert out.lower().count("1px solid #ffffff") == 4
+
+
+def test_mixed_grouped_border_style_whites_only_hidden_sides():
+    # A partly-erased grid: top/bottom solid, right/left hidden. Only the
+    # hidden sides go white; the visible rules are preserved.
+    out = decorate_notes_html(
+        '<table><tbody><tr>'
+        '<td style="border-width: 1px; border-style: solid hidden solid hidden; '
+        'border-color: #000000">x</td>'
+        '</tr></tbody></table>')
+    assert "hidden" not in out
+    assert "border-top: 1px solid #000000" in out
+    assert "border-bottom: 1px solid #000000" in out
+    assert out.lower().count("1px solid #ffffff") == 2
+
+
+def test_border_collapse_survives_whiteout():
+    # border-collapse / border-radius are NOT border-LINE props — they must
+    # never be dropped by the white-out even when a cell has a hidden border.
+    out = decorate_notes_html(
+        '<table style="border-collapse: collapse"><tbody><tr>'
+        '<td style="border: none; border-radius: 4px">x</td>'
+        '</tr></tbody></table>')
+    assert "border-collapse: collapse" in out
+    assert "border-radius: 4px" in out
+    assert "1px solid #ffffff" in out.lower()
+
+
 # --- options ----------------------------------------------------------------
 def test_no_border_option_suppresses_grid_but_keeps_padding():
     out = decorate_notes_html(

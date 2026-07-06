@@ -222,33 +222,126 @@ def _merge_cell_style(cell: Tag, addition: str) -> None:
 # by user observation (2026-07-06). This deliberately diverges from
 # clipboard.ts's shared lineage — but clipboard.ts feeds the SAME TX renderer on
 # manual paste, so it carries a matching translation (keep the two in step).
-_BORDER_SHORTHAND_PROPS = frozenset(
-    ("border", "border-top", "border-right", "border-bottom", "border-left"))
+# The border-LINE props resolveCellBorders consumes (NOT border-collapse /
+# border-radius / border-spacing — those must survive untouched). A cell can
+# reach here carrying any of the forms a browser's CSSOM serialiser collapses
+# per-side borders into on `editor.getHTML()` (gotcha #16): the `border`
+# shorthand, the grouped `border-width`/`border-style`/`border-color` longhands
+# (a partly-uniform grid or an erased `hidden` edge), or explicit `border-<side>`
+# longhands. We must handle all of them, mirroring
+# web/src/lib/cellFormatting.ts::resolveCellBorders — otherwise a grouped
+# `border-style: hidden` slips through and renders as the grey TX line.
+_BORDER_LINE_PROPS = frozenset((
+    "border", "border-width", "border-style", "border-color",
+    "border-top", "border-right", "border-bottom", "border-left"))
 _INVISIBLE_BORDER_TOKENS = frozenset(("hidden", "none"))
 _WHITE_BORDER = "1px solid #ffffff"
+_SIDE_ORDER = ("top", "right", "bottom", "left")
+
+
+def _split_css_tokens(value: str) -> list[str]:
+    """Whitespace-split a CSS value but keep ``rgb(...)`` / ``rgba(...)``
+    function args as one token (port of splitCssTokens in cellFormatting.ts)."""
+    tokens: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    for ch in value.strip():
+        if ch == "(":
+            depth += 1
+            cur.append(ch)
+        elif ch == ")":
+            depth -= 1
+            cur.append(ch)
+        elif ch.isspace() and depth == 0:
+            if cur:
+                tokens.append("".join(cur))
+                cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        tokens.append("".join(cur))
+    return tokens
+
+
+def _expand_positional(tokens: list[str]) -> list[str | None]:
+    """1–4 positional tokens → [top, right, bottom, left] (CSS box shorthand
+    order). Port of expandPositional in cellFormatting.ts."""
+    n = len(tokens)
+    if n == 1:
+        return [tokens[0]] * 4
+    if n == 2:
+        return [tokens[0], tokens[1], tokens[0], tokens[1]]
+    if n == 3:
+        return [tokens[0], tokens[1], tokens[2], tokens[1]]
+    if n >= 4:
+        return list(tokens[:4])
+    return [None, None, None, None]
+
+
+def _resolve_cell_borders(parsed: dict[str, str]) -> dict[str, str | None]:
+    """Per-side border value for each side, expanding the shorthand / grouped
+    longhand / per-side forms a browser collapses to. Port of
+    resolveCellBorders (cellFormatting.ts)."""
+    widths = (_expand_positional(_split_css_tokens(parsed["border-width"]))
+              if parsed.get("border-width") else None)
+    styles = (_expand_positional(_split_css_tokens(parsed["border-style"]))
+              if parsed.get("border-style") else None)
+    colors = (_expand_positional(_split_css_tokens(parsed["border-color"]))
+              if parsed.get("border-color") else None)
+    shorthand = parsed.get("border")
+    grouped = widths or styles or colors
+    out: dict[str, str | None] = {}
+    for i, side in enumerate(_SIDE_ORDER):
+        per = parsed.get(f"border-{side}")
+        if per:
+            out[side] = per                       # per-side longhand wins
+        elif grouped:
+            parts = [t for t in (
+                widths[i] if widths else None,
+                styles[i] if styles else None,
+                colors[i] if colors else None) if t]
+            out[side] = " ".join(parts) if parts else shorthand
+        else:
+            out[side] = shorthand
+    return out
+
+
+def _has_invisible_border_token(value: str) -> bool:
+    return any(t.lower() in _INVISIBLE_BORDER_TOKENS
+               for t in _split_css_tokens(value))
 
 
 def _whiteout_hidden_borders(el: Tag) -> None:
-    """Rewrite any hidden/none border shorthand on ``el`` to an explicit white
-    border so a formatter-cleared border reads as 'no line' in mTool. Only
-    touches borders explicitly set to hidden/none — the default grey grid on
-    unformatted tables is left alone. Mutates ``el`` in place."""
+    """Rewrite any border explicitly set to hidden/none — in ANY of the forms a
+    browser collapses per-side borders into — to an explicit white border so a
+    formatter-cleared / editor-erased border reads as 'no line' in mTool's TX
+    renderer (which draws hidden/none as a grey line). Untouched unless a
+    hidden/none token is actually present, so the default grey grid on
+    unformatted tables and every other border is left byte-for-byte alone.
+    Mutates ``el`` in place. Twin: clipboard.ts::_whiteoutHiddenBorders."""
     existing = el.get("style")
     if not existing:
         return
-    out: list[str] = []
-    changed = False
-    for decl in _decls(existing):
-        if _prop_of(decl) in _BORDER_SHORTHAND_PROPS and ":" in decl:
-            prop, value = decl.split(":", 1)
-            tokens = value.replace(",", " ").split()
-            if any(t.lower() in _INVISIBLE_BORDER_TOKENS for t in tokens):
-                out.append(f"{prop.strip()}: {_WHITE_BORDER}")
-                changed = True
-                continue
-        out.append(decl)
-    if changed:
-        el["style"] = "; ".join(out)
+    decls = _decls(existing)
+    parsed: dict[str, str] = {}
+    for d in decls:
+        if ":" in d:
+            p, v = d.split(":", 1)
+            parsed[p.strip().lower()] = v.strip()   # last declaration wins
+    if not any(prop in _BORDER_LINE_PROPS and _has_invisible_border_token(val)
+               for prop, val in parsed.items()):
+        return
+    sides = _resolve_cell_borders(parsed)
+    out: list[str] = [d for d in decls
+                      if _prop_of(d) not in _BORDER_LINE_PROPS]
+    for side in _SIDE_ORDER:
+        value = sides.get(side)
+        if not value:
+            continue
+        if _has_invisible_border_token(value):
+            value = _WHITE_BORDER
+        out.append(f"border-{side}: {value}")
+    el["style"] = "; ".join(out)
 
 
 def _has_persisted_indent(el: Tag) -> bool:

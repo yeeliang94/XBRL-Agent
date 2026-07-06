@@ -290,6 +290,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [detectBusy, setDetectBusy] = useState(false);
   const [detectErr, setDetectErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Monotonic token so a slow column-detect for template A can't land its
+  // result after the user has switched to template B (a stale columnMap would
+  // be sent as an explicit override and MIS-TARGET writes). Bumped on every
+  // file change; runDetect ignores its own response once superseded.
+  const detectSeq = useRef(0);
 
   useEffect(() => {
     if (!open) return;
@@ -436,6 +441,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // is chosen so the operator confirms columns alongside the notes check,
   // instead of hitting a post-submit 422. Writes nothing.
   const runDetect = async (f: File) => {
+    const seq = ++detectSeq.current;
+    const stale = () => seq !== detectSeq.current;
     setDetectBusy(true);
     setDetectErr(null);
     setColumnMap(null);
@@ -449,6 +456,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         body: form,
       });
       const body = await resp.json().catch(() => ({}));
+      if (stale()) return; // a newer file was chosen — drop this response
       if (!resp.ok) {
         const detail = (body as { detail?: unknown })?.detail;
         throw new Error(typeof detail === "string" ? detail : `HTTP ${resp.status}`);
@@ -457,9 +465,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       if (detected) setColumnMap(detectedToColumnMap(detected));
       setColumnConfidence((body as { confidence?: string }).confidence ?? null);
     } catch (e) {
+      if (stale()) return;
       setDetectErr(String((e as Error).message || e));
     } finally {
-      setDetectBusy(false);
+      if (!stale()) setDetectBusy(false);
     }
   };
 
@@ -568,10 +577,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           accept=".xlsx"
           onChange={(e) => {
             const f = e.target.files?.[0] ?? null;
+            detectSeq.current += 1; // invalidate any in-flight detect for the old file
             setFile(f);
             setColumnMap(null); // a different template has a different layout
             setColumnConfidence(null);
             setDetectErr(null);
+            setDetectBusy(false);
             setColumnPrompt(null);
             setPreview(null); // a different template ⇒ a different plan
             setPreviewErr(null);

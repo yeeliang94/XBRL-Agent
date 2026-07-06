@@ -55,6 +55,7 @@
 // Arial 10pt face (configurable) keeps the DB / sanitiser style-free while
 // landing the paste in the expected font.
 import { shouldRightAlignCell } from "./tableAlign";
+import { resolveCellBorders } from "./cellFormatting";
 import {
   DEFAULT_FORMAT_OPTIONS,
   type ClipboardFormatOptions,
@@ -333,46 +334,70 @@ function _styleFamily(prop: string): string {
   return prop;
 }
 
-const _BORDER_SHORTHAND_PROPS = new Set([
+// The border-LINE props resolveCellBorders consumes (NOT border-collapse /
+// border-radius — those must survive untouched). A cell can reach here in any
+// of the forms a browser collapses per-side borders into on getHTML()
+// (gotcha #16): the `border` shorthand, the grouped
+// `border-width`/`border-style`/`border-color` longhands, or explicit
+// `border-<side>` longhands — so we resolve via the SAME resolveCellBorders the
+// editor's parseHTML uses, not just the shorthand.
+const _BORDER_LINE_PROPS = new Set([
   "border",
+  "border-width",
+  "border-style",
+  "border-color",
   "border-top",
   "border-right",
   "border-bottom",
   "border-left",
 ]);
-const _INVISIBLE_BORDER_TOKENS = new Set(["hidden", "none"]);
+const _INVISIBLE_BORDER_RE = /\b(?:hidden|none)\b/i;
 const _WHITE_BORDER = "1px solid #ffffff";
 
-/** Rewrite any hidden/none border shorthand on ``el`` to an explicit white
- *  border so a formatter-cleared border reads as "no line" in M-Tool's TX
- *  renderer (which draws hidden/none as a grey line). Only touches borders
- *  explicitly set to hidden/none; the default grey grid is left alone.
+/** Rewrite any border explicitly set to hidden/none — in ANY of the forms a
+ *  browser collapses per-side borders into (shorthand, grouped longhands, or
+ *  per-side) — to an explicit white border so a formatter-cleared / editor-
+ *  erased border reads as "no line" in M-Tool's TX renderer (which draws
+ *  hidden/none as a grey line). Untouched unless a hidden/none token is present,
+ *  so the default grey grid and every other border is left alone.
  *  Backend twin: `mtool/notes_decorate.py::_whiteout_hidden_borders`. */
 function _whiteoutHiddenBorders(el: Element): void {
   const existing = el.getAttribute("style");
   if (!existing) return;
-  let changed = false;
-  const out = existing
+  const decls = existing
     .split(";")
     .map((s) => s.trim())
-    .filter(Boolean)
-    .map((decl) => {
-      const idx = decl.indexOf(":");
-      if (idx === -1) return decl;
-      const prop = decl.slice(0, idx).trim().toLowerCase();
-      if (!_BORDER_SHORTHAND_PROPS.has(prop)) return decl;
-      const tokens = decl
-        .slice(idx + 1)
-        .replace(/,/g, " ")
-        .split(/\s+/)
-        .filter(Boolean);
-      if (tokens.some((t) => _INVISIBLE_BORDER_TOKENS.has(t.toLowerCase()))) {
-        changed = true;
-        return `${prop}: ${_WHITE_BORDER}`;
-      }
-      return decl;
-    });
-  if (changed) el.setAttribute("style", out.join("; "));
+    .filter(Boolean);
+  const parsed: Record<string, string> = {};
+  for (const d of decls) {
+    const idx = d.indexOf(":");
+    if (idx === -1) continue;
+    parsed[d.slice(0, idx).trim().toLowerCase()] = d.slice(idx + 1).trim();
+  }
+  const triggered = Object.entries(parsed).some(
+    ([prop, val]) => _BORDER_LINE_PROPS.has(prop) && _INVISIBLE_BORDER_RE.test(val),
+  );
+  if (!triggered) return;
+
+  const resolved = resolveCellBorders(parsed);
+  const sides: Record<string, string | null> = {
+    top: resolved.borderTop,
+    right: resolved.borderRight,
+    bottom: resolved.borderBottom,
+    left: resolved.borderLeft,
+  };
+  const out = decls.filter((d) => {
+    const idx = d.indexOf(":");
+    const prop = (idx === -1 ? d : d.slice(0, idx)).trim().toLowerCase();
+    return !_BORDER_LINE_PROPS.has(prop);
+  });
+  for (const side of ["top", "right", "bottom", "left"] as const) {
+    let value = sides[side];
+    if (!value) continue;
+    if (_INVISIBLE_BORDER_RE.test(value)) value = _WHITE_BORDER;
+    out.push(`border-${side}: ${value}`);
+  }
+  el.setAttribute("style", out.join("; "));
 }
 
 /** Property-aware merge for a table CELL: persisted (WYSIWYG) declarations win.
