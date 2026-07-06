@@ -117,7 +117,10 @@ const styles = {
     borderRadius: pwc.radius.lg,
     boxShadow: pwc.shadow.modal,
     width: "100%",
-    maxWidth: 560,
+    // Responsive: fill most of the viewport up to a comfortable cap so the
+    // notes-preview cell references and column editor stop wrapping (they were
+    // cramped at the old fixed 560px).
+    maxWidth: "min(1040px, 92vw)",
     maxHeight: "85vh",
     overflowY: "auto" as const,
     padding: pwc.space.xl,
@@ -222,9 +225,9 @@ function unresolvedReasonText(u: UnresolvedNote): string {
     case "no_match":
       return "No matching row was found in this template. It will be skipped — you can add the text block in mTool afterwards.";
     case "no_slot":
-      return "This spot has no text-block yet. Turn on “Create missing note slots” above to add one.";
+      return "This note has no spot in the template yet. Turn on “Add missing note spots” above to add one.";
     case "no_payload_row":
-      return "The template's text block for this note is missing its storage row — fill it manually in mTool.";
+      return "The template is missing the hidden row this note is stored in — fill it manually in mTool.";
     default:
       return u.detail ?? "Couldn't be placed automatically.";
   }
@@ -240,8 +243,21 @@ function suggestionTarget(u: UnresolvedNote): NoteTarget | null {
 
 /** Human-readable name for a candidate placement in the picker. */
 function candidateOptionLabel(c: NoteCandidate): string {
-  const where = c.key ? `existing block ${c.key}` : `${c.sheet} ${c.cell}`;
+  const where = c.key ? `existing note spot ${c.key}` : `${c.sheet} ${c.cell}`;
   return c.matched_label ? `${where} — ${c.matched_label}` : where;
+}
+
+/** Turn the server's detected layout (per-sheet detection with confidence)
+ *  into the editable ColumnMap the user confirms and we send back. Shared by
+ *  the up-front detect pre-flight and the low-confidence 422 fallback. */
+function detectedToColumnMap(
+  detected: Record<string, DetectedSheet>,
+): ColumnMap {
+  const seed: ColumnMap = {};
+  for (const [sheet, d] of Object.entries(detected)) {
+    seed[sheet] = { label_column: d.label_column ?? "", columns: { ...d.columns } };
+  }
+  return seed;
 }
 
 export function MtoolFillModal({ runId, open, onClose }: Props) {
@@ -264,10 +280,15 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<ReportSummary | null>(null);
   const [patchErr, setPatchErr] = useState<string | null>(null);
-  // Set when the server can't auto-detect the layout: an editable map the
-  // user confirms, then retries with. Without this the modal would dead-end
-  // on the documented low-confidence 422 (Codex P2).
+  // The column layout — detected UP FRONT the moment a template is chosen
+  // (POST /mtool-fill/detect-columns) so the operator confirms columns
+  // alongside the notes check, not after a failed Fill. Editable; sent as
+  // column_map on Fill. The submit path still handles a low-confidence 422 as
+  // a defensive fallback for the rare case detection wasn't run.
   const [columnMap, setColumnMap] = useState<ColumnMap | null>(null);
+  const [columnConfidence, setColumnConfidence] = useState<string | null>(null);
+  const [detectBusy, setDetectBusy] = useState(false);
+  const [detectErr, setDetectErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -288,6 +309,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setReport(null);
     setPatchErr(null);
     setColumnMap(null);
+    setColumnConfidence(null);
+    setDetectErr(null);
     setColumnPrompt(null);
     setPreview(null);
     setPreviewErr(null);
@@ -337,11 +360,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         // in detail.detected. Seed the editor so the user can confirm + retry.
         // This is a guided next step, not a failure — don't paint it red.
         if (detail && typeof detail === "object" && detail.detected) {
-          const seed: ColumnMap = {};
-          for (const [sheet, d] of Object.entries(detail.detected as Record<string, DetectedSheet>)) {
-            seed[sheet] = { label_column: d.label_column ?? "", columns: { ...d.columns } };
-          }
-          setColumnMap(seed);
+          setColumnMap(detectedToColumnMap(detail.detected as Record<string, DetectedSheet>));
+          setColumnConfidence("low");
           setColumnPrompt(
             "One more step — we couldn't tell for sure which columns hold your labels and figures. " +
               "Check the columns below (we've pre-filled our best guess), then click Fill & download again."
@@ -412,6 +432,37 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     }
   };
 
+  // Up-front column pre-flight: detect the template's layout the moment a file
+  // is chosen so the operator confirms columns alongside the notes check,
+  // instead of hitting a post-submit 422. Writes nothing.
+  const runDetect = async (f: File) => {
+    setDetectBusy(true);
+    setDetectErr(null);
+    setColumnMap(null);
+    setColumnConfidence(null);
+    setColumnPrompt(null);
+    try {
+      const form = new FormData();
+      form.append("template", f);
+      const resp = await fetch(`/api/runs/${runId}/mtool-fill/detect-columns`, {
+        method: "POST",
+        body: form,
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const detail = (body as { detail?: unknown })?.detail;
+        throw new Error(typeof detail === "string" ? detail : `HTTP ${resp.status}`);
+      }
+      const detected = (body as { detected?: Record<string, DetectedSheet> }).detected;
+      if (detected) setColumnMap(detectedToColumnMap(detected));
+      setColumnConfidence((body as { confidence?: string }).confidence ?? null);
+    } catch (e) {
+      setDetectErr(String((e as Error).message || e));
+    } finally {
+      setDetectBusy(false);
+    }
+  };
+
   const c = meta?.counts;
   const totalExcluded = c
     ? c.excluded_matrix_socie + c.excluded_not_disclosed + c.excluded_out_of_scope + c.excluded_no_value
@@ -461,8 +512,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             )}
             {notesCount !== null && (
               <div style={styles.statLine}>
-                <strong>{notesCount}</strong> prose note(s) will be filled into matching
-                text-blocks
+                <strong>{notesCount}</strong> written note(s) will be filled in
               </div>
             )}
           </div>
@@ -498,13 +548,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 setPreviewErr(null);
                 setNoteTargets({});
               }}
-              aria-label="Create missing note slots"
+              aria-label="Add missing note spots"
               style={{ marginTop: 2 }}
             />
             <span>
-              Create missing note slots
+              Add missing note spots
               <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
-                If a note has no text-block in the template yet, add one next to its label.
+                If a note has no spot in the template yet, add one next to its label.
                 Off by default — run “Check notes” first, and verify the result opens
                 correctly in mTool.
               </span>
@@ -517,16 +567,31 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           type="file"
           accept=".xlsx"
           onChange={(e) => {
-            setFile(e.target.files?.[0] ?? null);
+            const f = e.target.files?.[0] ?? null;
+            setFile(f);
             setColumnMap(null); // a different template has a different layout
+            setColumnConfidence(null);
+            setDetectErr(null);
             setColumnPrompt(null);
             setPreview(null); // a different template ⇒ a different plan
             setPreviewErr(null);
             setNoteTargets({}); // decisions were made against the old template
+            if (f) runDetect(f); // confirm the column layout up front
           }}
           aria-label="mTool template file"
           style={{ fontSize: 13, marginBottom: pwc.space.md }}
         />
+
+        {detectBusy && (
+          <div style={{ ...styles.statLine, color: pwc.grey700 }}>
+            Checking the template's column layout…
+          </div>
+        )}
+        {detectErr && (
+          <div style={{ ...ui.alertError, marginBottom: pwc.space.md }}>
+            Couldn&apos;t read the template&apos;s columns: {detectErr}
+          </div>
+        )}
 
         {notesCount !== null && notesCount > 0 && fillNotes && (
           <div style={{ marginBottom: pwc.space.md }}>
@@ -561,7 +626,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 aria-label="Notes preview"
               >
                 <div style={{ color: pwc.grey700 }}>
-                  This template has <strong>{preview.template_fn_slots}</strong> note text-block(s)
+                  This template has <strong>{preview.template_fn_slots}</strong> note spot(s)
                   already set up; this run has <strong>{preview.notes_in_run}</strong> note(s) to place.
                 </div>
 
@@ -684,7 +749,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                   dotColor={createMissingNotes ? pwc.info : pwc.grey500}
                   title="Will be added"
                   count={preview.will_create.length}
-                  hint="These notes have no text-block in the template yet — one is created next to each label."
+                  hint="These notes have no spot in the template yet — one is created next to each label."
                 >
                   <ul style={{ margin: 0, paddingLeft: 18, color: pwc.grey700 }}>
                     {preview.will_create.map((w, i) => (
@@ -699,7 +764,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                   dotColor={pwc.success}
                   title="Ready to fill"
                   count={preview.will_fill_existing.length}
-                  hint="These match a text-block that already exists in the template."
+                  hint="These match a spot that already exists in the template."
                 >
                   <ul style={{ margin: 0, paddingLeft: 18, color: pwc.grey700 }}>
                     {preview.will_fill_existing.map((w, i) => (
@@ -710,7 +775,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
                 {!createMissingNotes && preview.unresolved.length > 0 && preview.will_create.length === 0 && (
                   <div style={{ color: pwc.grey700, marginTop: pwc.space.sm }}>
-                    Tip: turning on “Create missing note slots” above lets the tool add text-blocks
+                    Tip: turning on “Add missing note spots” above lets the tool add spots
                     for notes the template doesn't have yet.
                   </div>
                 )}
@@ -737,8 +802,15 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             }}
             aria-label="Column layout editor"
           >
-            <div style={{ fontWeight: pwc.weight.medium, marginBottom: pwc.space.sm }}>
-              Confirm the columns — which column holds the row labels, and which hold the figures
+            <div style={{ fontWeight: pwc.weight.medium, marginBottom: 2 }}>
+              {columnConfidence === "high"
+                ? "Columns detected — check they look right"
+                : "Confirm the columns"}
+            </div>
+            <div style={{ color: pwc.grey700, marginBottom: pwc.space.sm }}>
+              {columnConfidence === "high"
+                ? "We matched which column holds the row labels and which hold the figures. Adjust any that look wrong, then Fill & download."
+                : "Tell us which column holds the row labels, and which hold the figures (letters like D, E, F)."}
             </div>
             {Object.entries(columnMap).map(([sheet, cfg]) => (
               <div key={sheet} style={{ marginBottom: pwc.space.sm }}>

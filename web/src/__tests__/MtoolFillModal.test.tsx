@@ -156,7 +156,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
     const toggle = screen.getByLabelText(/also fill notes/i) as HTMLInputElement;
     expect(toggle.checked).toBe(true);
   });
@@ -249,10 +249,10 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
 
     // Toggle present and OFF by default.
-    const create = screen.getByLabelText(/create missing note slots/i) as HTMLInputElement;
+    const create = screen.getByLabelText(/add missing note spots/i) as HTMLInputElement;
     expect(create.checked).toBe(false);
     fireEvent.click(create);
     expect(create.checked).toBe(true);
@@ -265,7 +265,7 @@ describe("MtoolFillModal", () => {
     await waitFor(() => expect(screen.getByText(/1 will be added/i)).toBeTruthy());
     expect(screen.getByText(/Corporate information → Notes-CI!E14/)).toBeTruthy();
     // The template exposed zero existing slots — the "no popup yet" signal.
-    expect(screen.getByText(/this template has/i).textContent).toMatch(/0.*note text-block/i);
+    expect(screen.getByText(/this template has/i).textContent).toMatch(/0.*note spot/i);
   });
 
   test("preview surfaces backend errors even with no unresolved notes", async () => {
@@ -289,7 +289,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -322,14 +322,14 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
     fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
     await waitFor(() => expect(screen.getByLabelText(/notes preview/i)).toBeTruthy());
     // Flipping the toggle must clear the now-stale plan.
-    fireEvent.click(screen.getByLabelText(/create missing note slots/i));
+    fireEvent.click(screen.getByLabelText(/add missing note spots/i));
     expect(screen.queryByLabelText(/notes preview/i)).toBeNull();
   });
 
@@ -383,8 +383,8 @@ describe("MtoolFillModal", () => {
     });
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
-    fireEvent.click(screen.getByLabelText(/create missing note slots/i));
+    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
+    fireEvent.click(screen.getByLabelText(/add missing note spots/i));
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -443,7 +443,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/prose note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -494,6 +494,40 @@ describe("MtoolFillModal", () => {
     // Guidance copy, and NOT the red "Fill failed" framing.
     expect(screen.getByText(/one more step/i)).toBeTruthy();
     expect(screen.queryByText(/fill failed/i)).toBeNull();
+  });
+
+  test("detects columns up front on file choose and shows the layout to confirm", async () => {
+    mockFetch((url) => {
+      if (url.includes("/mtool-fill/detect-columns")) {
+        return new Response(
+          JSON.stringify({
+            confidence: "high",
+            detected: {
+              "SOFP-Sub-CuNonCu": {
+                label_column: "D",
+                columns: { current_year: "E", prior_year: "F" },
+                confidence: "high",
+                notes: [],
+              },
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    // Choosing a file alone (no Fill click) surfaces the column layout.
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
+    // High confidence → "detected, check" framing, seeded with the guess.
+    expect(screen.getByText(/columns detected/i)).toBeTruthy();
+    expect((screen.getByLabelText(/label column/i) as HTMLInputElement).value).toBe("D");
+    expect((screen.getByLabelText(/current_year column/i) as HTMLInputElement).value).toBe("E");
   });
 
   test("surfaces a server error", async () => {

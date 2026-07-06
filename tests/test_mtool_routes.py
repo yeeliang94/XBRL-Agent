@@ -162,6 +162,47 @@ def test_patch_auto_detects_column_map(client):
     assert report["counts"]["written"] >= 1
 
 
+def test_detect_columns_returns_map_and_confidence(client):
+    # The up-front pre-flight: detect the layout without writing, so the modal
+    # can show the column confirmation alongside the notes check.
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    resp = tc.post(
+        f"/api/runs/{run_id}/mtool-fill/detect-columns",
+        files=_upload_our_template(),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "detected" in body and isinstance(body["detected"], dict)
+    assert body["confidence"] in ("high", "low", "medium")
+    # Our own template auto-detects cleanly (same layout the patch path uses).
+    sheet = next(iter(body["detected"]))
+    assert "label_column" in body["detected"][sheet]
+    assert "columns" in body["detected"][sheet]
+
+
+def test_detect_columns_non_xlsx_is_422(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    resp = tc.post(
+        f"/api/runs/{run_id}/mtool-fill/detect-columns",
+        files={"template": ("junk.xlsx", b"not a zip",
+                            "application/vnd.openxmlformats-officedocument."
+                            "spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 422
+
+
+def test_detect_columns_running_run_is_409(client):
+    tc, db, _ = client
+    run_id = _make_run(db, status="running")
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/detect-columns",
+                   files=_upload_our_template())
+    assert resp.status_code == 409
+
+
 def test_patch_running_run_is_409(client):
     tc, db, _ = client
     run_id = _make_run(db, status="running")
