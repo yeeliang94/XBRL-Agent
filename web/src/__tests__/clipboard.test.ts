@@ -197,6 +197,29 @@ describe("copyHtmlAsRichText", () => {
     expect(out).toMatch(/style="color: red[^"]*border: 1px solid/);
   });
 
+  test("decorateHtmlForClipboard_translates_cleared_borders_to_white", () => {
+    // The AI formatter clears a border with per-side `1px hidden #000000`.
+    // M-Tool's TX renderer draws hidden as a grey line, so the decorator
+    // substitutes an invisible white border. Twin of the backend test in
+    // tests/test_mtool_notes_decorate.py.
+    const cleared =
+      "border-top: 1px hidden #000000; border-right: 1px hidden #000000; " +
+      "border-bottom: 1px hidden #000000; border-left: 1px hidden #000000";
+    const out = decorateHtmlForClipboard(
+      `<table><tr><td style="${cleared}">x</td></tr></table>`,
+    );
+    expect(out).not.toContain("hidden");
+    expect((out.toLowerCase().match(/1px solid #ffffff/g) || []).length).toBe(4);
+  });
+
+  test("decorateHtmlForClipboard_leaves_default_grey_grid_untouched", () => {
+    // The white-out only touches borders explicitly set to hidden/none — an
+    // unformatted table keeps the decorator's default grey grid.
+    const out = decorateHtmlForClipboard("<table><tr><td>x</td></tr></table>");
+    expect(out).toContain("1px solid #999");
+    expect(out.toLowerCase()).not.toContain("1px solid #ffffff");
+  });
+
   test("copyHtmlAsRichText_writes_decorated_html_to_clipboard", async () => {
     // End-to-end pin: the modern Clipboard API path must pass the
     // DECORATED html (with inline styles) into the text/html blob,

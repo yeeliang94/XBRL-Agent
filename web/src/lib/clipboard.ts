@@ -280,6 +280,16 @@ export function decorateHtmlForClipboard(
     });
   });
 
+  // A border the formatter explicitly cleared still reads as `hidden`/`none`.
+  // The manual paste feeds M-Tool's TX renderer, which surfaces a hidden/removed
+  // border as a visible grey line — so translate it to an explicit WHITE border
+  // that renders invisibly (same accommodation as the automated mTool-fill path
+  // in mtool/notes_decorate.py; keep the two in step). Only touches borders set
+  // to hidden/none — the default grey grid on unformatted tables is left alone.
+  for (const el of Array.from(tmp.querySelectorAll("td, th, table"))) {
+    _whiteoutHiddenBorders(el);
+  }
+
   // Prose: Arial + a bottom margin so non-table cells paste with a
   // consistent face and visible gaps between paragraphs.
   const paragraphStyle = _paragraphStyle(opts);
@@ -321,6 +331,48 @@ function _styleFamily(prop: string): string {
   if (prop === "border" || prop.startsWith("border-")) return "border";
   if (prop === "background" || prop.startsWith("background-")) return "background";
   return prop;
+}
+
+const _BORDER_SHORTHAND_PROPS = new Set([
+  "border",
+  "border-top",
+  "border-right",
+  "border-bottom",
+  "border-left",
+]);
+const _INVISIBLE_BORDER_TOKENS = new Set(["hidden", "none"]);
+const _WHITE_BORDER = "1px solid #ffffff";
+
+/** Rewrite any hidden/none border shorthand on ``el`` to an explicit white
+ *  border so a formatter-cleared border reads as "no line" in M-Tool's TX
+ *  renderer (which draws hidden/none as a grey line). Only touches borders
+ *  explicitly set to hidden/none; the default grey grid is left alone.
+ *  Backend twin: `mtool/notes_decorate.py::_whiteout_hidden_borders`. */
+function _whiteoutHiddenBorders(el: Element): void {
+  const existing = el.getAttribute("style");
+  if (!existing) return;
+  let changed = false;
+  const out = existing
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((decl) => {
+      const idx = decl.indexOf(":");
+      if (idx === -1) return decl;
+      const prop = decl.slice(0, idx).trim().toLowerCase();
+      if (!_BORDER_SHORTHAND_PROPS.has(prop)) return decl;
+      const tokens = decl
+        .slice(idx + 1)
+        .replace(/,/g, " ")
+        .split(/\s+/)
+        .filter(Boolean);
+      if (tokens.some((t) => _INVISIBLE_BORDER_TOKENS.has(t.toLowerCase()))) {
+        changed = true;
+        return `${prop}: ${_WHITE_BORDER}`;
+      }
+      return decl;
+    });
+  if (changed) el.setAttribute("style", out.join("; "));
 }
 
 /** Property-aware merge for a table CELL: persisted (WYSIWYG) declarations win.

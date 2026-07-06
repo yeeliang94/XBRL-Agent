@@ -95,10 +95,35 @@ other bucket is something to look at first:
 - `type_changed` — a text cell was rebuilt as numeric.
 - `mismatches` — a write failed read-back (investigate).
 
+## Notes formatting → mTool fidelity
+
+Prose notes are filled into mTool text-blocks with the styling you see in the
+app's Notes review panel, decorated on the way out by
+`mtool/notes_decorate.py` (the backend twin of the clipboard decorator). What
+survives into the mTool text-block:
+
+| Formatting | Ports into mTool? |
+|---|---|
+| Indentation (`margin-left`) | ✅ Yes |
+| Borders — including ones the AI formatter removed | ✅ Yes (removed borders are painted **white**, see below) |
+| Cell alignment you set explicitly (e.g. an "RM" caption) | ✅ Yes |
+| Fills / shading | ✅ Yes |
+| Bold / italic / underline | ✅ Yes |
+| Paragraph spacing | ⚠️ Follows the notes-table **theme**, not a per-note custom gap |
+| Column widths | ⚠️ Table-level explicit width kept; otherwise evenly distributed |
+| **Page breaks** | ❌ Not possible — a note is a single text-block (one cell); there is nothing to paginate inside it |
+
+**Why removed borders become white, not "hidden":** mTool's TX Text Control
+renderer does not honour CSS `border-style: hidden`/`none` — a removed border
+surfaces as a visible **grey** line. A **white** border renders invisibly
+against the white text-block background, so the decorator substitutes white for
+any border the formatter explicitly cleared. The default grey grid on an
+un-formatted table is left alone.
+
 ## Known limits (this phase)
 
-- **SOCIE (the equity matrix) and notes prose are not filled** — SOCIE facts
-  are counted as excluded; notes are out of scope.
+- **SOCIE (the equity matrix) is not filled** — SOCIE facts are counted as
+  excluded (notes prose IS filled — see *Notes formatting → mTool fidelity*).
 - **Sign/scale is identity by default** — the exporter emits DB values
   verbatim until the Windows recon confirms whether mTool wants the full
   unscaled value or the thousands figure (docs/MTOOL-ZIP-RECON-BRIEF.md

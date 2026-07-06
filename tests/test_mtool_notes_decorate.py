@@ -86,6 +86,48 @@ def test_persisted_cell_style_wins_over_decorator_defaults():
     assert "1px solid #999" not in out
 
 
+# --- hidden-border → white translation (mTool TX accommodation) -------------
+def test_formatter_cleared_border_becomes_white_not_hidden():
+    # The AI formatter clears a border with per-side `1px hidden #000000`
+    # (format_patch clear_border). mTool's TX renderer draws hidden as a grey
+    # line, so the decorator substitutes an invisible white border.
+    cleared = ("border-top: 1px hidden #000000; "
+               "border-right: 1px hidden #000000; "
+               "border-bottom: 1px hidden #000000; "
+               "border-left: 1px hidden #000000")
+    out = decorate_notes_html(
+        f'<table><tbody><tr><td style="{cleared}">x</td></tr></tbody></table>')
+    assert "hidden" not in out
+    assert out.lower().count("1px solid #ffffff") == 4
+
+
+def test_border_none_becomes_white():
+    out = decorate_notes_html(
+        '<table><tbody><tr>'
+        '<td style="border: none">x</td>'
+        '</tr></tbody></table>')
+    assert "border: none" not in out
+    assert "1px solid #ffffff" in out.lower()
+
+
+def test_default_grey_grid_is_not_whited_out():
+    # An unformatted table keeps the decorator's default grey grid — the
+    # white-out only touches borders explicitly set to hidden/none.
+    out = decorate_notes_html(
+        "<table><tbody><tr><td>x</td></tr></tbody></table>")
+    assert "1px solid #999" in out
+    assert "1px solid #ffffff" not in out.lower()
+
+
+def test_real_border_is_preserved_not_whited_out():
+    out = decorate_notes_html(
+        '<table><tbody><tr>'
+        '<td style="border-bottom: 3px double #000000">x</td>'
+        '</tr></tbody></table>')
+    assert "3px double #000000" in out
+    assert "1px solid #ffffff" not in out.lower()
+
+
 # --- options ----------------------------------------------------------------
 def test_no_border_option_suppresses_grid_but_keeps_padding():
     out = decorate_notes_html(
