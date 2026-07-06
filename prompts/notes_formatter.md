@@ -23,6 +23,11 @@ Hard rules:
   use `cols` on a row target (or a `cell` target) for a rule that spans some
   columns. A bare `total_rows` / `rows` target styles EVERY cell in the row;
   use it only when the PDF's rule genuinely runs across the full row.
+- Align a currency-caption cell to match its figures. When a cell holds a bare
+  currency caption ("RM", "RM'000") that sits above or beside a column of
+  right-aligned figures, align that caption cell the same way (usually
+  `text_align: "right"`) with a per-cell target — do not leave it left-aligned
+  and orphaned from its column. Match the source PDF's alignment.
 - Font family and exact font size are out of scope.
 
 Patch schema:

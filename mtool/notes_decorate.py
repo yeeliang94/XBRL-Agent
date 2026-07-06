@@ -211,6 +211,46 @@ def _merge_cell_style(cell: Tag, addition: str) -> None:
     cell["style"] = "; ".join(parts)
 
 
+# --- hidden-border → white translation (mTool TX renderer accommodation) ----
+# The AI formatter clears a border by emitting `border-<side>: 1px hidden
+# #000000` (notes/format_patch.py::clear_border). In a browser that reads as
+# "no line". mTool's TX Text Control does NOT honour `border-style: hidden` —
+# by the time the file is generated a hidden/removed border surfaces as a
+# VISIBLE grey line, whereas a WHITE border renders invisibly against the white
+# payload background (`_FN_BODY_STYLE`). So for the mTool path we substitute an
+# explicit white border for any border explicitly set to hidden/none. Confirmed
+# by user observation (2026-07-06). This deliberately diverges from
+# clipboard.ts's shared lineage — but clipboard.ts feeds the SAME TX renderer on
+# manual paste, so it carries a matching translation (keep the two in step).
+_BORDER_SHORTHAND_PROPS = frozenset(
+    ("border", "border-top", "border-right", "border-bottom", "border-left"))
+_INVISIBLE_BORDER_TOKENS = frozenset(("hidden", "none"))
+_WHITE_BORDER = "1px solid #ffffff"
+
+
+def _whiteout_hidden_borders(el: Tag) -> None:
+    """Rewrite any hidden/none border shorthand on ``el`` to an explicit white
+    border so a formatter-cleared border reads as 'no line' in mTool. Only
+    touches borders explicitly set to hidden/none — the default grey grid on
+    unformatted tables is left alone. Mutates ``el`` in place."""
+    existing = el.get("style")
+    if not existing:
+        return
+    out: list[str] = []
+    changed = False
+    for decl in _decls(existing):
+        if _prop_of(decl) in _BORDER_SHORTHAND_PROPS and ":" in decl:
+            prop, value = decl.split(":", 1)
+            tokens = value.replace(",", " ").split()
+            if any(t.lower() in _INVISIBLE_BORDER_TOKENS for t in tokens):
+                out.append(f"{prop.strip()}: {_WHITE_BORDER}")
+                changed = True
+                continue
+        out.append(decl)
+    if changed:
+        el["style"] = "; ".join(out)
+
+
 def _has_persisted_indent(el: Tag) -> bool:
     return any(_prop_of(d) == "margin-left" for d in _decls(el.get("style") or ""))
 
@@ -275,6 +315,12 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE) -> st
                 _merge_cell_style(cell, cell_base + _header_extra(style) + align)
             else:
                 _merge_cell_style(cell, cell_base + align)
+
+    # After merging, any border the formatter explicitly cleared still reads as
+    # `hidden`/`none`; translate those to white so they render invisibly in
+    # mTool's TX editor rather than surfacing as a grey line.
+    for el in soup.find_all(("td", "th", "table")):
+        _whiteout_hidden_borders(el)
 
     para_style = _paragraph_style(style)
     heading_style = _heading_style(style)

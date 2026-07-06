@@ -10,6 +10,18 @@ from notes.format_patch import FormatPatchError, apply_sheet_patch
 from notes.html_sanitize import sanitize_notes_html
 
 
+def test_prompt_instructs_currency_caption_alignment():
+    # The formatter must align a bare "RM"/"RM'000" caption cell to match its
+    # right-aligned figures rather than leaving it orphaned left. Pinned so the
+    # instruction can't be silently dropped from prompts/notes_formatter.md.
+    from pathlib import Path
+    prompt = (Path(__file__).resolve().parents[1]
+              / "prompts" / "notes_formatter.md").read_text(encoding="utf-8")
+    assert "currency-caption cell" in prompt
+    assert "RM'000" in prompt
+    assert "text_align" in prompt
+
+
 def test_formatter_request_budget_stays_below_pydantic_cap(monkeypatch):
     """The per-click request budget must stay under pydantic-ai's silent 50
     (gotcha #18), including operator overrides which are clamped."""
