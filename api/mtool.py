@@ -26,6 +26,7 @@ from starlette.background import BackgroundTask
 import server
 from mtool.column_detect import detect_column_map, overall_confidence
 from mtool.exporter import apply_column_map, build_fill_doc
+from mtool.notes_decorate import NotesTableStyle
 from mtool.notes_exporter import build_notes_fill_doc
 from mtool.offline_fill import (
     fill_footnotes, fill_workbook, validate_input, validate_notes_input)
@@ -123,6 +124,16 @@ def _load_fillable_run(run_id: int):
     )
 
 
+def _resolve_notes_style(run) -> NotesTableStyle:
+    """The effective notes-table style for a run's mTool fill: the per-run
+    override (``runs.notes_table_style``, a full snapshot — gotcha #16) wins,
+    else the firm-wide default (``XBRL_NOTES_TABLE_STYLE``), else the historic
+    baseline. Mirrors the frontend ``resolveTheme`` precedence so the mTool
+    paste matches the in-app editor preview and the manual Copy → paste."""
+    theme = getattr(run, "notes_table_style", None) or server._notes_table_style()
+    return NotesTableStyle.from_theme(theme)
+
+
 def _build_doc(run_id: int):
     run, standard, level, denom = _load_fillable_run(run_id)
     doc = build_fill_doc(
@@ -151,8 +162,9 @@ def get_mtool_notes_fill_doc(run_id: int):
     The notes twin of ``/mtool-fill`` — one ``footnotes`` item per note
     (``label`` + ``html``), resolved to the template's ``fn_*`` at patch time.
     """
-    _load_fillable_run(run_id)  # gate: 404/409 like the numeric doc
-    return JSONResponse(build_notes_fill_doc(server.AUDIT_DB_PATH, run_id))
+    run, *_ = _load_fillable_run(run_id)  # gate: 404/409 like the numeric doc
+    return JSONResponse(build_notes_fill_doc(
+        server.AUDIT_DB_PATH, run_id, style=_resolve_notes_style(run)))
 
 
 @router.post("/api/runs/{run_id}/mtool-fill/patch")
@@ -180,7 +192,7 @@ async def patch_mtool_template(
     whole body is wrapped so any error path cleans it up, and the success path
     cleans it after streaming.
     """
-    _, doc = _build_doc(run_id)
+    run, doc = _build_doc(run_id)
     if not doc["writes"]:
         raise HTTPException(
             status_code=422,
@@ -280,7 +292,9 @@ async def patch_mtool_template(
         notes_report = None
         if fill_notes:
             try:
-                notes_doc = build_notes_fill_doc(server.AUDIT_DB_PATH, run_id)
+                notes_doc = build_notes_fill_doc(
+                    server.AUDIT_DB_PATH, run_id,
+                    style=_resolve_notes_style(run))
                 # Operator-chosen placements for ambiguous/near-miss notes
                 # (the preview's decision UI). 422s on a malformed payload —
                 # a bad explicit target must fail loudly, not fall back to
@@ -369,8 +383,9 @@ async def preview_mtool_notes(
     text blocks in mTool); *many slots but notes still unresolved* -> the
     labels differ from mTool's (a matching problem, not a missing-slot one).
     """
-    _load_fillable_run(run_id)  # 404/409 gate, same as the patch endpoint
-    notes_doc = build_notes_fill_doc(server.AUDIT_DB_PATH, run_id)
+    run, *_ = _load_fillable_run(run_id)  # 404/409 gate, same as the patch endpoint
+    notes_doc = build_notes_fill_doc(
+        server.AUDIT_DB_PATH, run_id, style=_resolve_notes_style(run))
     # Re-preview honours the operator's placements so the plan updates as
     # decisions are made (same seam the patch endpoint applies).
     _apply_notes_targets(notes_doc, notes_targets)

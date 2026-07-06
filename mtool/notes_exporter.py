@@ -19,8 +19,14 @@ What this module owns:
   ``fill_footnotes`` resolves it to the template's ``fn_*`` at fill time
   (decoration-tolerant fuzzy match), so this stays layout-neutral — mirroring
   how the numeric exporter defers column resolution.
-* **No content transform.** The HTML is emitted verbatim; wrapping in the mTool
-  XHTML shell happens in the filler, not here.
+* **Render decoration, not content transform.** The note's words/structure are
+  unchanged, but the style-free DB HTML is run through
+  :func:`mtool.notes_decorate.decorate_notes_html` — the backend port of the
+  clipboard decorator — so mTool's TX27 text-block editor renders borders,
+  fills, fonts and numeric alignment instead of flat text. This is the SAME
+  styling the manual "Copy → paste into mTool" workflow has always applied;
+  the automated path previously skipped it and lost all formatting. Wrapping in
+  the mTool XHTML shell still happens in the filler, not here.
 """
 from __future__ import annotations
 
@@ -28,12 +34,16 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from mtool.notes_decorate import DEFAULT_STYLE, NotesTableStyle, decorate_notes_html
+
 
 def build_notes_fill_doc(
     db_path: str | Path,
     run_id: int,
     *,
     strict: bool = True,
+    style: NotesTableStyle = DEFAULT_STYLE,
+    decorate: bool = True,
 ) -> dict[str, Any]:
     """Build the ``footnotes`` fill document for a run's prose notes.
 
@@ -78,7 +88,11 @@ def build_notes_fill_doc(
             continue
         footnotes.append({
             "label": label,
-            "html": r["html"],
+            # Decorate the style-free DB HTML so mTool's TX27 editor renders
+            # the formatting (borders/fills/font/alignment) — see the module
+            # docstring. `decorate=False` keeps the raw HTML (tests / debug).
+            "html": decorate_notes_html(r["html"], style) if decorate
+            else r["html"],
             "source_sheet": r["sheet"],
             "source_row": r["row"],
         })

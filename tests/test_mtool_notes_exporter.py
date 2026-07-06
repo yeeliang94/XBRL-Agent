@@ -54,7 +54,9 @@ def test_notes_become_footnote_writes(notes_db):
               "Property, plant and equipment", "<h3>PPE</h3><p>policy</p>")
     _add_note(db, run_id, "Notes-CI", 12,
               "Corporate information", "<p>Acme Bhd is incorporated…</p>")
-    doc = build_notes_fill_doc(db, run_id)
+    # decorate=False isolates the bridge's row selection / labels / provenance
+    # from the (separately tested) render decoration.
+    doc = build_notes_fill_doc(db, run_id, decorate=False)
 
     assert doc["strict"] is True
     assert doc["meta"]["counts"]["notes"] == 2
@@ -65,6 +67,31 @@ def test_notes_become_footnote_writes(notes_db):
     assert ppe["html"] == "<h3>PPE</h3><p>policy</p>"
     assert ppe["source_sheet"] == "Notes-Listofnotes"
     assert ppe["source_row"] == 17
+
+
+def test_html_is_render_decorated_by_default(notes_db):
+    """By default the emitted HTML carries the mTool-render inline styles so
+    TX27 renders formatting instead of flat text (the reported bug)."""
+    db, run_id = notes_db
+    _add_note(db, run_id, "Notes-Listofnotes", 17,
+              "Property, plant and equipment",
+              "<p>policy</p><table><tbody><tr><td>Land</td><td>1,500</td>"
+              "</tr></tbody></table>")
+    doc = build_notes_fill_doc(db, run_id)
+    html = doc["footnotes"][0]["html"]
+    assert "font-family: Arial" in html          # face injected
+    assert "border: 1px solid" in html           # cell grid
+    assert "text-align: right" in html           # numeric cell aligned
+    # still valid fill-notes input after decoration
+    assert validate_notes_input(doc) == []
+
+
+def test_decorate_false_keeps_raw_html(notes_db):
+    db, run_id = notes_db
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information",
+              "<p>Acme</p>")
+    doc = build_notes_fill_doc(db, run_id, decorate=False)
+    assert doc["footnotes"][0]["html"] == "<p>Acme</p>"
 
 
 def test_empty_and_unlabelled_notes_are_skipped_not_emitted(notes_db):
