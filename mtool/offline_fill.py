@@ -670,19 +670,63 @@ def replace_shared_string(sst_xml: str, index: int, raw_text: str) -> str:
     return sst_xml[:m.start()] + new_si + sst_xml[m.end():]
 
 
-def _bump_sst_counts(sst_xml: str, delta: int) -> str:
+# Excel's sharedStrings header carries TWO counters that track DIFFERENT things
+# (ECMA-376 §18.4.9): `uniqueCount` = number of <si> entries in the table;
+# `count` = total number of t="s" cell references across ALL worksheets (a
+# string referenced from 3 cells counts once in uniqueCount, 3 times in count).
+# Conflating them (bumping both when appending an <si>, which adds a unique
+# string but NO reference) makes Excel "repair" the file — the sharedStrings
+# variant of the "String properties" corruption (Windows 2026-07-06, item 14).
+# So: `append_shared_string` maintains uniqueCount only, and the filler
+# RECOMPUTES both absolute counts from the final workbook before writing
+# (`_finalize_sst_counts`) — correct by construction across every path,
+# including the created-row path that adds 3 references at once.
+_TS_REF_PATTERN = re.compile(r'<c\b[^>]*?\bt="s"')
+
+
+def _bump_unique_count(sst_xml: str, delta: int) -> str:
+    """Bump ONLY uniqueCount (the <si> entry count). `count` (reference total)
+    is not touched here — appending an <si> adds no cell reference."""
     m = re.search(r"<sst\b[^>]*>", sst_xml)
     if not m:
         return sst_xml
-    tag = re.sub(r'\b(count|uniqueCount)="(\d+)"',
-                 lambda a: f'{a.group(1)}="{int(a.group(2)) + delta}"',
+    tag = re.sub(r'\buniqueCount="(\d+)"',
+                 lambda a: f'uniqueCount="{int(a.group(1)) + delta}"',
                  m.group(0))
     return sst_xml[:m.start()] + tag + sst_xml[m.end():]
 
 
+def _set_sst_count_attrs(sst_xml: str, count: int, unique: int) -> str:
+    """Write ABSOLUTE count / uniqueCount onto the <sst> tag (inserting either
+    attribute if absent). Used by the filler to reconcile the header with the
+    workbook's real string-reference total + <si> count at write time."""
+    m = re.search(r"<sst\b[^>]*?>", sst_xml)
+    if not m:
+        return sst_xml
+    tag = m.group(0)
+    for name, val in (("count", count), ("uniqueCount", unique)):
+        if re.search(rf'\b{name}="\d+"', tag):
+            tag = re.sub(rf'\b{name}="\d+"', f'{name}="{val}"', tag)
+        else:  # insert before the closing '>'
+            tag = tag[:-1].rstrip() + f' {name}="{val}">'
+    return sst_xml[:m.start()] + tag + sst_xml[m.end():]
+
+
+def _finalize_sst_counts(sst_xml: str, sheet_xmls) -> str:
+    """Reconcile the ``<sst>`` header with reality: ``uniqueCount`` = the ``<si>``
+    total, ``count`` = every ``t="s"`` reference across the given (final)
+    worksheet XMLs. Called once at write time so incremental bookkeeping across
+    the append / repoint / create paths can never leave the header inconsistent
+    (the Excel-repair trigger)."""
+    unique = sum(1 for _ in _SI_PATTERN.finditer(sst_xml))
+    refs = sum(len(_TS_REF_PATTERN.findall(xml)) for xml in sheet_xmls)
+    return _set_sst_count_attrs(sst_xml, refs, unique)
+
+
 def append_shared_string(sst_xml: str, raw_text: str):
-    """Append a new ``<si>`` before ``</sst>`` and bump count/uniqueCount.
-    Returns (new_xml, new_index). Used when the payload cell is empty."""
+    """Append a new ``<si>`` before ``</sst>`` and bump uniqueCount (NOT count —
+    a bare append adds no cell reference). Returns (new_xml, new_index). The
+    reference total is reconciled workbook-wide by `_finalize_sst_counts`."""
     matches = list(_SI_PATTERN.finditer(sst_xml))
     new_index = len(matches)
     new_si = ('<si><t xml:space="preserve">' + _xml_escape(raw_text)
@@ -691,7 +735,7 @@ def append_shared_string(sst_xml: str, raw_text: str):
     if not close:
         raise ValueError("no </sst> in sharedStrings.xml")
     out = sst_xml[:close.start()] + new_si + sst_xml[close.start():]
-    return _bump_sst_counts(out, +1), new_index
+    return _bump_unique_count(out, +1), new_index
 
 
 def _cell_shared_index(sheet_xml: str, addr: str):
@@ -1431,6 +1475,21 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
         report["footnotes_written"].append(base)
 
     if not dry_run:
+        # Reconcile the sharedStrings header with the workbook's real string
+        # references BEFORE writing, using the SAME final XML that gets written
+        # (modified visible sheets + fn sheet overlaid on the originals). This
+        # makes count/uniqueCount correct regardless of which fill path ran —
+        # the append/repoint/create bookkeeping can't drift the header.
+        final_sheets = []
+        for entry in set(sheet_paths.values()):
+            if entry in st["visible"]:
+                final_sheets.append(st["visible"][entry])
+            elif entry == fn_entry:
+                final_sheets.append(st["fn_sheet_xml"])
+            else:
+                final_sheets.append(st["data"][entry].decode("utf-8"))
+        st["sst_xml"] = _finalize_sst_counts(st["sst_xml"], final_sheets)
+
         replacements = {
             "xl/sharedStrings.xml": st["sst_xml"].encode("utf-8"),
             fn_entry: st["fn_sheet_xml"].encode("utf-8"),
