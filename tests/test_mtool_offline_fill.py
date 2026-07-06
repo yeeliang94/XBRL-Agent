@@ -777,6 +777,45 @@ def test_fill_notes_replaces_populated_payload_in_place(tmp_path,
     assert "Existing PPE note" not in payload  # old content gone
 
 
+def test_fill_notes_skips_payload_over_excel_char_limit(tmp_path,
+                                                        footnote_template):
+    """A note whose wrapped payload exceeds Excel's 32,767-char cell limit is
+    SKIPPED (never truncated) so the workbook opens without Excel's repair —
+    and flagged with reason 'oversize' + payload_chars. (Windows 2026-07-06
+    incident: heavy inline table styling inflated a ~1k-rendered note past 32k.)
+    """
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+    huge = "<p>" + ("x" * (EXCEL_CELL_CHAR_LIMIT + 5000)) + "</p>"
+    assert len(wrap_footnote_html(huge)) > EXCEL_CELL_CHAR_LIMIT
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"key": "fn_14", "html": huge}]},
+        output_path=str(out))
+    assert report["status"] == "degraded"
+    assert report["footnotes_written"] == []
+    over = [u for u in report["unresolved"] if u.get("reason") == "oversize"]
+    assert len(over) == 1
+    assert over[0]["payload_chars"] > EXCEL_CELL_CHAR_LIMIT
+    # workbook is still a readable zip and the old payload is untouched.
+    assert "x" * 100 not in _payload_of(str(out), "fn_14")
+
+
+def test_fill_notes_writes_note_at_exactly_the_limit(tmp_path,
+                                                     footnote_template):
+    """Boundary: a payload exactly AT the limit still writes (guard is strict >)."""
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+    shell = len(wrap_footnote_html(""))
+    body = "y" * (EXCEL_CELL_CHAR_LIMIT - shell)
+    assert len(wrap_footnote_html(body)) == EXCEL_CELL_CHAR_LIMIT
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template, {"footnotes": [{"key": "fn_14", "html": body}]},
+        output_path=str(out))
+    assert report["status"] == "ok", report
+    assert len(report["footnotes_written"]) == 1
+
+
 def test_fill_notes_appends_for_empty_payload(tmp_path, footnote_template):
     """fn_20's payload cell (C15) is empty: append a shared string + repoint."""
     out = tmp_path / "filled.xlsx"

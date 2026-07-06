@@ -94,6 +94,72 @@ def test_decorate_false_keeps_raw_html(notes_db):
     assert doc["footnotes"][0]["html"] == "<p>Acme</p>"
 
 
+def _wide_table(n_rows: int, n_cols: int = 10) -> str:
+    cells = "".join("<td>1,234</td>" for _ in range(n_cols))
+    return "<table><tbody>" + "".join(
+        f"<tr>{cells}</tr>" for _ in range(n_rows)) + "</tbody></table>"
+
+
+def test_near_limit_note_degrades_to_lite_tier(notes_db):
+    """Full decoration over the limit but the lighter 'lite' decoration fits:
+    the note keeps borders/font/alignment (cosmetic props dropped)."""
+    db, run_id = notes_db
+    _add_note(db, run_id, "Notes-Listofnotes", 17, "Movement table",
+              _wide_table(17))                        # measured -> lite
+    doc = build_notes_fill_doc(db, run_id)
+    fn = doc["footnotes"][0]
+    assert fn.get("format_tier") == "lite"
+    assert "formatting_dropped" not in fn
+    assert "border: 1px solid" in fn["html"]          # formatting KEPT
+    assert "vertical-align: top" not in fn["html"]    # cosmetics dropped
+    assert doc["meta"]["counts"]["formatting_reduced"] == 1
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+    assert len(wrap_footnote_html(fn["html"])) <= EXCEL_CELL_CHAR_LIMIT
+
+
+def test_oversize_note_degrades_to_flat_content(notes_db):
+    """Even lite is over the limit but raw fits: emit FLAT (content preserved,
+    flagged) rather than being skipped by the fill guard."""
+    db, run_id = notes_db
+    raw = _wide_table(26)                              # measured -> flat
+    _add_note(db, run_id, "Notes-Listofnotes", 17, "Big movement table", raw)
+    doc = build_notes_fill_doc(db, run_id)
+    fn = doc["footnotes"][0]
+    assert fn.get("format_tier") == "flat"
+    assert fn.get("formatting_dropped") is True
+    assert fn["html"] == raw                           # flat, undecorated
+    assert doc["meta"]["counts"]["formatting_dropped"] == 1
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+    assert len(wrap_footnote_html(fn["html"])) <= EXCEL_CELL_CHAR_LIMIT  # fits
+
+
+def test_too_big_even_flat_is_left_for_the_fill_guard(notes_db):
+    """A note too large even unstyled is emitted raw with no formatting flag —
+    the fill's hard guard skips + flags it as `oversize` (split the CONTENT)."""
+    db, run_id = notes_db
+    raw = _wide_table(240)                             # raw itself over limit
+    _add_note(db, run_id, "Notes-Listofnotes", 17, "Enormous table", raw)
+    doc = build_notes_fill_doc(db, run_id)
+    fn = doc["footnotes"][0]
+    assert "format_tier" not in fn                     # not a formatting issue
+    assert doc["meta"]["counts"]["formatting_dropped"] == 0
+    assert doc["meta"]["counts"]["formatting_reduced"] == 0
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+    assert len(wrap_footnote_html(fn["html"])) > EXCEL_CELL_CHAR_LIMIT  # guard skips
+
+
+def test_normal_note_stays_decorated(notes_db):
+    db, run_id = notes_db
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information",
+              "<table><tbody><tr><td>x</td></tr></tbody></table>")
+    doc = build_notes_fill_doc(db, run_id)
+    fn = doc["footnotes"][0]
+    assert "format_tier" not in fn
+    assert "border: 1px solid" in fn["html"]          # full decoration applied
+    assert doc["meta"]["counts"]["formatting_dropped"] == 0
+    assert doc["meta"]["counts"]["formatting_reduced"] == 0
+
+
 def test_empty_and_unlabelled_notes_are_skipped_not_emitted(notes_db):
     db, run_id = notes_db
     _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
@@ -102,7 +168,8 @@ def test_empty_and_unlabelled_notes_are_skipped_not_emitted(notes_db):
     doc = build_notes_fill_doc(db, run_id)
 
     assert doc["meta"]["counts"] == {
-        "notes": 1, "skipped_empty": 1, "skipped_no_label": 1}
+        "notes": 1, "skipped_empty": 1, "skipped_no_label": 1,
+        "formatting_reduced": 0, "formatting_dropped": 0}
     assert [f["label"] for f in doc["footnotes"]] == ["Corporate information"]
 
 

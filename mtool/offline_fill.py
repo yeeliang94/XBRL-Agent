@@ -618,6 +618,16 @@ _FN_BODY_STYLE = ("font-family:'Arial';font-size:12pt;"
                   "background-color:#FFFFFF;text-align:left;")
 _FN_CR = "_x000D_\n"
 
+# Excel's hard per-cell / shared-string ceiling. A stored string longer than
+# this makes Excel (and mTool, which opens the package in Excel) refuse the
+# file and "repair" it — truncating the string and corrupting the note. The
+# count is on the UNESCAPED character length, i.e. len(wrapped), NOT the
+# rendered text: a note that renders to ~1k chars can still blow past this once
+# its HTML source carries heavy inline table styling (Windows 2026-07-06
+# incident). We NEVER truncate (cutting XHTML mid-markup breaks the popup's
+# parse) — an over-limit payload is skipped and flagged instead.
+EXCEL_CELL_CHAR_LIMIT = 32_767
+
 
 # Characters that are ILLEGAL in XML 1.0 even when numeric-escaped: the C0
 # control range except tab/LF/CR, plus the two non-characters U+FFFE/U+FFFF. A
@@ -1326,6 +1336,19 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
         base = {"index": i, "sheet": it.get("sheet"), "cell": it.get("cell"),
                 "key": it.get("key"), "label": it.get("label")}
         wrapped = wrap_footnote_html(it["html"])
+        # Hard safety net (applies to EVERY caller — server, CLI, hand-authored
+        # docs): never emit a payload over Excel's cell-string ceiling, or the
+        # whole workbook gets "repaired" (truncated) on open. Skip + flag; do
+        # NOT truncate. The exporter degrades formatting first (below), so a
+        # note reaching this branch is genuinely too large even unstyled.
+        if len(wrapped) > EXCEL_CELL_CHAR_LIMIT:
+            report["unresolved"].append({**base, "reason": "oversize",
+                "payload_chars": len(wrapped),
+                "detail": (f"payload is {len(wrapped)} chars, over Excel's "
+                           f"{EXCEL_CELL_CHAR_LIMIT}-char cell limit; skipped to "
+                           "keep the workbook valid — simplify the note's "
+                           "formatting or split its table, then re-run")})
+            continue
         key = it.get("key")
         if not key and it.get("label"):
             if targets is None:
