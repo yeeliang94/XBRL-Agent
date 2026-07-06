@@ -31,6 +31,16 @@ session's general operating rules):
 - **The bar for "done" is the pinning test, not "looks right."** Almost every
   invariant below names a `tests/…` file that guards it. A change near an
   invariant is complete only when its pinning test passes — run it and cite it.
+- **Talk like a product person, not an engineer.** The primary operator is a
+  product manager who works with developers but does not read code fluently.
+  This is a standing request — don't wait to be asked to "explain further."
+  Default to plain language: lead with what something does or why it matters
+  before the mechanism, put a few plain words next to any unavoidable jargon
+  the first time it appears, spell out acronyms once, and keep code-level
+  detail out of explanations unless it's asked for. When a thing is genuinely
+  technical, give it a one-line plain-English gloss rather than assuming it
+  lands. This governs how you *communicate*; it does not lower the technical
+  precision of the code or of the invariants below.
 
 ## Quick Start
 
@@ -341,150 +351,36 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 ### 11. DB schema — version-stepped auto-migration on startup
 
 `db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **28**). `init_db`
-reads the stored version and walks an old database up one version at a time
-through per-version `ALTER TABLE` blocks, so any older DB lands on the current
-schema without manual intervention. Each step is idempotent. Shipped steps:
+reads the stored version and walks an old DB up **one version at a time**
+through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
+the current schema automatically. `db/schema.py` is the authoritative
+per-version detail; each step N is pinned by `tests/test_db_schema_vN.py`.
 
-- **v1 → v2:** adds the seven `runs` lifecycle fields; backfills `started_at`
-  from `created_at` (`_V2_MIGRATION_COLUMNS`).
-- **v2 → v3:** adds the `notes_cells` table — the canonical per-cell notes
-  store (see gotcha #16).
-- **v3 → v6:** canonical concept-model tables (v4), `concept_nodes.matrix_col`
-  (v5), `notes_cells.concept_uuid` (v6) — see gotcha #21.
-- **v6 → v7:** adds `cross_checks.target_sheet` / `target_row` (review-workspace
-  click-to-cell).
-- **v7 → v8:** adds the `run_agent_turns` per-turn telemetry metrics table +
-  four rollup columns on `run_agents` (`prompt_tokens`, `completion_tokens`,
-  `turn_count`, `tool_call_count`). Metrics only — verbatim per-iteration
-  request/response content stays in `{stmt}_conversation_trace.json` on disk
-  (hybrid storage; see docs/PLAN-run-page-and-telemetry.md and gotcha #6).
-  Pinned by `tests/test_db_schema_v8.py`.
-- **v8 → v9:** adds `concept_nodes.matrix_col_label` — hydrated from SOCIE
-  row-2 headers at template-import time. Nullable; existing concepts read
-  NULL until the startup bootstrap re-imports.
-- **v9 → v10:** adds `runs.orchestration` (`TEXT DEFAULT 'split'`) — originally
-  the monolith-experiment flag. The monolith experiment was deleted in the
-  first-principles rewrite (Phase 1); the column is RETAINED (always `'split'`
-  now) so the schema version and History read-back stay stable.
-- **v10 → v11:** adds the `concept_render_aliases` table — secondary render
-  coords for concepts that occupy more than one physical cell (face-sheet
-  rows whose value cross-rolls-up from a sub-sheet total). See the
-  cross-sheet rollup linkage note in gotcha #21. Pinned by
-  `tests/test_db_schema_v11.py`.
-- **v11 → v12:** adds two reviewer-agent tables (gotcha #21, reviewer pass):
-  `run_fact_snapshots` (the ORIGINAL extraction facts, backed up before the
-  reviewer writes — "Revert to original" restores from here) and
-  `reviewer_flags` (the narrow `stuck` / `disputes_prior` user-facing list).
-  Both are new tables → the step is a pure `CREATE TABLE IF NOT EXISTS`
-  walk-forward with no `_V12_MIGRATION_COLUMNS`. Pinned by
-  `tests/test_db_schema_v12.py`.
-- **v12 → v13:** adds the `run_review_tasks` table (rewrite Phase 5.3) — the
-  durable replacement for the in-process `_REVIEW_TASKS` dict in `server.py`
-  (gotcha #21). One row per run (`run_id` PK; a relaunch overwrites the
-  slot), so a finished manual re-review outcome survives a restart and a
-  poll can still fetch it. New table → a pure `CREATE TABLE IF NOT EXISTS`
-  walk-forward with no `_V13_MIGRATION_COLUMNS`. Startup
-  (`server._lifespan`) calls `repo.reconcile_stale_review_tasks` to retire
-  any row left `running` by a dead process into a terminal error. Pinned by
-  `tests/test_db_schema_v13.py`.
-- **v13 → v14:** adds `cross_checks.comparands_json` (reviewer holistic audit) —
-  the JSON list of values a check compared, so the reviewer gets concrete entry
-  points. Nullable `_V14_MIGRATION_COLUMNS`.
-- **v14 → v15:** adds cache-telemetry columns (`cache_read_tokens` /
-  `cache_write_tokens`) to `run_agents` + `run_agent_turns` (prompt-caching
-  measurement). All `INTEGER DEFAULT 0` (`_V15_MIGRATION_COLUMNS`).
-- **v15 → v16:** adds the four gold-standard-eval tables (`eval_benchmarks`,
-  `eval_benchmark_templates`, `gold_concept_facts`, `eval_scores`) PLUS one
-  nullable `runs.benchmark_id` column (`_V16_MIGRATION_COLUMNS`, FK →
-  eval_benchmarks ON DELETE SET NULL). Three pure `CREATE TABLE IF NOT EXISTS` +
-  one additive ALTER. `runs.benchmark_id` forward-references `eval_benchmarks`
-  (created later in the same CREATE loop); SQLite resolves FK targets lazily so
-  the forward ref is fine. Pinned by `tests/test_db_schema_v16.py`. See gotcha
-  #23 + docs/PLAN-eval-benchmark.md.
-- **v16 → v17:** adds the nullable failure-taxonomy column
-  `run_agents.error_type TEXT` (`_V17_MIGRATION_COLUMNS`,
-  PLAN-orchestration-hardening item 9). Vocabulary constants live next to
-  `AgentResult` in `coordinator.py` (`turn_timeout · iteration_capped ·
-  wallclock · token_budget_exceeded · projection_failed · save_gate_refused
-  · tool_exception · cancelled · no_write · transient_exhausted`); no CHECK
-  constraint on purpose
-  (same rationale as `runs.status`). Server persistence guarantees every
-  failed/cancelled agent row carries a non-null value
-  (`server._agent_row_error_type` derives one when the coordinator didn't
-  set it explicitly). Pinned by `tests/test_db_schema_v17.py`.
-- **v17 → v18:** adds the two auth tables (PLAN-azure-auth-deployment Phase 1) —
-  `auth_users` (the account list = the email allowlist; argon2id
-  `password_hash`, nullable for future SSO-only users; `disabled` flag) and
-  `auth_sessions` (server-side session store for the sliding 15-min idle
-  timeout; `ON DELETE CASCADE` from `auth_users`). Both are pure
-  `CREATE TABLE IF NOT EXISTS` walk-forward steps (new tables, no ALTER), so
-  the migration block only bumps the version marker. The `auth/` package owns
-  all access; accounts are provisioned with `python -m auth.manage`. Pinned by
-  `tests/test_db_schema_v18.py`.
-- **v18 → v19:** adds the `notes_nodes` table (prose notes registry, Track A of
-  PLAN-notes-template-registry) — pure `CREATE TABLE IF NOT EXISTS` walk-forward.
-  Pinned by `tests/test_db_schema_v19.py`.
-- **v19 → v20:** adds `auth_users.is_admin` (`_V20_MIGRATION_COLUMNS`,
-  `INTEGER NOT NULL DEFAULT 0`) — the admin role gating web user management
-  (gotcha #24, Settings → Users tab + `/api/admin/*`). One additive ALTER;
-  existing accounts walk forward as non-admins. Pinned by
-  `tests/test_db_schema_v20.py`.
-- **v20 → v21:** adds the `doc_conversions` table (formerly the scanned-PDF →
-  readable-document feature, now REMOVED — see gotcha #26). The table is RETAINED
-  as an inert artifact so the migration chain stays intact, but no code reads or
-  writes it. Pure `CREATE TABLE IF NOT EXISTS` walk-forward (new table, no ALTER).
-  Pinned by `tests/test_db_schema_v21.py`.
-- **v21 → v22:** adds the nullable `runs.notes_table_style TEXT` column (per-run
-  notes-table style override, gotcha #16 + docs/PLAN-notes-table-theme.md) —
-  `_V22_MIGRATION_COLUMNS`, one additive ALTER. NULL = the run inherits the
-  firm-default theme. Unlike `run_config_json` (draft-only editable), this is
-  editable on ANY run status via `PATCH /api/runs/{id}/notes_table_style`
-  because notes review happens after extraction. Pinned by
-  `tests/test_db_schema_v22.py`.
-- **v22 → v23:** adds the three notes-reviewer detector-input tables
-  (`notes_cell_provenance`, `run_notes_inventory`, `run_notes_cell_snapshots`)
-  plus the `run_notes_review_state` snapshot-taken marker (notes reviewer —
-  docs/PLAN.md). Pure `CREATE TABLE IF NOT EXISTS` walk-forward. Pinned by
-  `tests/test_db_schema_v23.py`.
-- **v23 → v24:** adds `notes_review_flags` (reviewer flags) + `notes_review_tasks`
-  (durable async re-review state, reconciled at startup). Pure
-  `CREATE TABLE IF NOT EXISTS` walk-forward. Pinned by
-  `tests/test_db_schema_v24.py`.
-- **v24 → v25:** adds `notes_cell_tombstones` — the durable "this notes cell was
-  emptied" record so the workbook overlay can BLANK a reviewer clear / move-out /
-  authored-then-reverted coordinate (the overlay is additive and cannot otherwise
-  represent a deletion). See gotcha #16 (overlay is authoritative for the notes
-  region). Pure `CREATE TABLE IF NOT EXISTS` walk-forward. Pinned by
-  `tests/test_db_schema_v25.py`.
-- **v25 → v26:** adds `notes_format_tasks` — the durable latest async notes
-  formatter pass per (run, sheet), claimed atomically (`ON CONFLICT … WHERE
-  status != 'running'`), reconciled at startup like the review tasks. Pure
-  `CREATE TABLE IF NOT EXISTS` walk-forward. Pinned by
-  `tests/test_db_schema_v26.py`. See gotcha #16 (notes formatter agent).
-- **v26 → v27:** adds `notes_format_snapshots` (pre-format HTML per row —
-  "Revert formatting" restores from here; one snapshot per sheet, overwritten
-  per pass) PLUS `_V27_MIGRATION_COLUMNS` on `notes_format_tasks`: the
-  failure-taxonomy code `error_type` (nullable, no CHECK — same rationale as
-  `runs.status`; vocabulary lives next to `FORMATTER_ERROR_TYPES` in
-  `notes/formatting_agent.py`) and per-pass token telemetry (`prompt_tokens` /
-  `completion_tokens` / `cache_read_tokens` / `cache_write_tokens`, all
-  `INTEGER DEFAULT 0`, mirroring v15). A DB that never reached v26 gets the
-  columns inline from the CREATE; a v26 DB gets the duplicate-column-tolerant
-  ALTERs. Pinned by `tests/test_db_schema_v27.py`.
-- **v27 → v28:** adds `notes_coverage_rows` — the durable per-run holistic
-  notes coverage checklist (gotcha #27, docs/PLAN-notes-coverage-and-routing.md).
-  One row per top-level note (`subnote_ref` NULL) plus optional per-sub-ref
-  child rows; a banner sentinel row (`note_num = -1`) carries the checklist
-  banner state. Unique index coalesces a NULL `subnote_ref` to `''` so a
-  top-level row and its children never collide.
-  `replace_notes_coverage_for_run` rewrites the whole run's rows in one
-  transaction (the checklist is recomputed wholesale). Pure `CREATE TABLE IF
-  NOT EXISTS` walk-forward. Pinned by `tests/test_db_schema_v28.py`.
+Two rules govern every step:
 
-SQLite `ALTER TABLE` cannot add `NOT NULL` columns without defaults — every
-entry in each `_Vn_MIGRATION_COLUMNS` tuple is nullable or has a safe default.
-The `status` column has no `CHECK` constraint on purpose: adding a new status
-value should not require a full-table migration.
+- SQLite can't add a `NOT NULL` column without a default, so every
+  `_Vn_MIGRATION_COLUMNS` entry is nullable or has a safe default.
+- The `runs.status` column has **no `CHECK` constraint on purpose** — a new
+  status value must not require a full-table migration (same for the
+  `error_type` columns).
+
+Two things are **retained but inert — do NOT "clean them up":**
+
+- **`runs.orchestration`** (v10, `TEXT DEFAULT 'split'`) — the monolith
+  experiment was deleted, but the column stays (always `'split'`) so the schema
+  version and History read-back stay stable.
+- **`doc_conversions`** table (v21) — the scanned-PDF feature was removed
+  (gotcha #26); the table stays as an inert artifact so the migration chain
+  replays intact. No code reads it.
+
+Recent tables/columns, each detailed in its linked gotcha: v11
+`concept_render_aliases` (#21) · v12–v13 reviewer tables `run_fact_snapshots`
+/ `reviewer_flags` / `run_review_tasks` (#21) · v16 gold-eval tables +
+`runs.benchmark_id` (#23) · v17 `run_agents.error_type` · v18 auth tables (#24)
+· v20 `auth_users.is_admin` (#24) · v22 `runs.notes_table_style` (#16) ·
+v23–v25 notes-reviewer tables + `notes_cell_tombstones` (#16, #27) · v26–v27
+notes-formatter `notes_format_tasks` / `notes_format_snapshots` (#16) · v28
+`notes_coverage_rows` (#27).
 
 ### 12. Filing level — Company vs Group
 
@@ -658,8 +554,8 @@ Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 
 ### 16. Notes cells are HTML; Excel download regenerates from the DB
 
-Notes agents emit **HTML** (not plaintext) into cells on sheets 10–14
-(MFRS) / 11–15 (MPERS). The payload flow is:
+Notes agents emit **HTML** (not plaintext) into cells on sheets 10–14 (MFRS) /
+11–15 (MPERS). Flow:
 
 ```
 agent HTML → sanitiser → notes_cells (DB, canonical) → overlay → xlsx stream
@@ -668,310 +564,124 @@ agent HTML → sanitiser → notes_cells (DB, canonical) → overlay → xlsx st
 
 Key invariants:
 
-- `notes_cells` (schema v3) is the source of truth. The on-disk xlsx is
-  a flattened snapshot; the download endpoint overlays the DB rows
-  onto a temp workbook at stream time via
-  `notes/persistence.overlay_notes_cells_into_workbook`.
-- **The overlay is AUTHORITATIVE for the notes prose region, not additive
-  (2026-06-24 fix).** It writes each surviving row's prose (col B) AND
-  evidence (`evidence_col_for(filing_level)`, D=Company / F=Group), then
-  BLANKS every coordinate the notes reviewer emptied — recorded in
-  `notes_cell_tombstones` (schema v25). Additive-only overlay could not
-  express a deletion, so a reviewer clear / move-out reintroduced the
-  merge-time prose on download (duplicate / stale) and reviewer evidence
-  never reached the export. `clear`/`move` add a tombstone, `author`/`edit`
-  remove it, and `revert` reconciles them (clears cleared-row tombstones,
-  re-tombstones authored rows). Callers MUST pass the run's `filing_level`
-  so evidence lands in the right column. **Rerun-safety:** a notes-agent
-  rerun (`persist_notes_cells`) drops the sheet's tombstones, and the overlay
-  additionally NEVER blanks a coord that has live prose — so a regenerated row
-  can't be wiped by a stale reviewer tombstone. Pinned by
+- **`notes_cells` (schema v3) is the source of truth.** The on-disk xlsx is a
+  flattened snapshot; the download endpoint overlays the DB rows onto a temp
+  workbook at stream time (`notes/persistence.overlay_notes_cells_into_workbook`).
+- **The overlay is AUTHORITATIVE for the prose region, not additive.** It writes
+  each surviving row's prose (col B) and evidence (`evidence_col_for(filing_level)`,
+  D=Company / F=Group), then BLANKS every coordinate the reviewer emptied
+  (recorded in `notes_cell_tombstones`, v25) — an additive-only overlay can't
+  express a deletion. `clear`/`move` add a tombstone, `author`/`edit` remove it,
+  `revert` reconciles. Callers MUST pass the run's `filing_level`. Rerun-safety:
+  a notes-agent rerun drops the sheet's tombstones, and the overlay never blanks
+  a coord that has live prose. Pinned by
   `tests/test_notes_reviewer_overlay_deletions.py`.
-- Cap is 30,000 **rendered** characters (`notes.html_to_text
-  .rendered_length`), not 30k of raw HTML. The sanitiser-and-writer
-  both enforce this; the server's PATCH endpoint returns 413 when
-  edited content exceeds it.
-- Agent re-run **clobbers** edits: the coordinator calls
-  `delete_notes_cells_for_run_sheet(run_id, sheet)` before writing a
-  fresh batch. The UI gates this with a confirm dialog fed by
-  `GET /api/runs/{run_id}/notes_cells/edited_count` (returns how many
-  rows have `updated_at > run.ended_at`).
-- HTML tag whitelist in `prompts/_notes_base.md` must match the
-  backend sanitiser's `ALLOWED_TAGS` in `notes/html_sanitize.py`. A
-  divergence silently strips legitimate markup the prompt invited.
-- **Styles are now a VALIDATED whitelist on table tags, not "always
-  stripped" (notes WYSIWYG, 2026-06-22, docs/PRD-notes-wysiwyg-formatting.md).**
-  `sanitize_notes_html` keeps a value-checked set of inline `style=`
-  declarations ONLY on `table/thead/tbody/tr/th/td`. The whitelist mirrors the
-  editor's controls — `background-color` + per-side
-  `border-top|right|bottom|left` — so no persisted style can be silently
-  dropped on a later re-save (`color`, `text-align`, `font-weight` are
-  intentionally NOT accepted on table cells; widen `_CSS_PROPERTY_VALIDATORS`
-  only when the editor gains a matching control). **Browser border-collapse
-  (2026-06-23 fix, real-Chrome incident):** the editor authors per-side
-  `border-<side>` longhands, but `editor.getHTML()` runs through the browser's
-  CSSOM serialiser which COLLAPSES four uniform per-side borders (a "Border
-  all") into the all-sides `border:` shorthand — and partly-uniform borders
-  into the `border-width`/`border-style`/`border-color` grouped longhands. So
-  those forms reach the sanitiser even though the editor never authors them;
-  `_CSS_PROPERTY_VALIDATORS` MUST accept them (`border` via
-  `_is_border_shorthand`, the groups via `_is_border_group` — each value still
-  shape-checked) or "Border all" is stripped on every save and the cell reverts
-  to the default grid. jsdom does NOT collapse (it keeps the longhands), so unit
-  tests miss this — pinned by `test_browser_collapsed_border_shorthand_survives_on_td`.
-  The editor's `StyledTableCell` parseHTML expands the collapsed forms back to
-  the four side attrs via `resolveCellBorders` (`cellFormatting.ts`) — the
-  `border:` shorthand AND the grouped `border-width`/`border-style`/`border-color`
-  longhands (1–4 positional tokens, rgb()-aware) — so a reloaded all-border /
-  mixed-colour / erased cell still renders (see the `hidden`-erase note below;
-  the old simple `border:`-only `fallback` dropped the grouped form and the cell
-  snapped back to the grid). The map shape-checks every value (rejects
-  `url()`, `expression()`, malformed border values, disallowed props). Off the
-  table, `style=` is still stripped wholesale, so this gotcha's "DB stays
-  style-free" rule holds for prose. "No fill" persists as an explicit reset
-  value (`background-color: transparent`), NOT attribute-absence (the editor
-  CSS would otherwise repaint the default grid + header fill). **Per-side
-  border control + `hidden`-erase (2026-06-29):** the border toolbar is
-  two-step — a colour swatch SELECTS the active paint (or the eraser); the
-  per-side / "All" buttons APPLY it, leaving the untouched sides intact
-  (`applyCellBorderSide` writes ONE side, so a cell can hold a different colour
-  per edge). Erasing an edge uses the `hidden` STYLE, NOT `none`: the table is
-  `border-collapse: collapse`, where `none` has the LOWEST conflict priority (a
-  neighbour's default grey grid line wins, so the edge still shows grey) and
-  `hidden` the HIGHEST (the edge truly disappears). `BORDER_HIDDEN` is the full
-  `1px hidden #000000` TRIPLET, not a bare `hidden`, on purpose: a bare `hidden`
-  collapses (via getHTML's CSSOM) to `border-style: hidden` + `border-color:
-  currentcolor`, and the sanitiser rejects `currentcolor` → the round-trip
-  churns and the edge can revert; an explicit colour collapses the same way a
-  solid border does and round-trips cleanly through `resolveCellBorders` + the
-  sanitiser (the `hidden` style still wins regardless of width/colour). So EVERY
-  border value the editor emits is a `<width> <style> <colour>` triplet —
-  Chrome only ever collapses to forms `resolveCellBorders` handles, never the
-  bare-style/`currentcolor`/`*-style` sub-longhand forms. `BORDER_NONE`
-  (`border: none`) is NO LONGER the toolbar's erase value — it remains only the
-  editor's own style-RESET (`resetCellToTheme` re-inherits the theme), a
-  separate concern from erasing a line. The save-reconcile AND parent-refetch
-  `setContent` now capture/restore the multi-cell `CellSelection`
-  (`captureSelection`/`restoreSelection` in `cellFormatting.ts`) so a formatting
-  save no longer collapses a drag-select. Pinned by the
-  `cellFormatting`/`NotesReviewTab` web tests +
-  `test_notes_html_sanitize_css.py`. (Verified in real Chrome: jsdom does NOT
-  reproduce the collapse, so the round-trip can only be confirmed in a browser.)
-  **Agents still emit style-free HTML** (the prompt forbids
-  it); styling is a human-only post-step in the editor. The decision to
-  hand-roll the CSS validator (no `bleach` dependency) is recorded in
-  docs/PLAN-notes-wysiwyg-formatting.md. On the style-bearing table tags,
-  *attributes* are also an explicit allowlist (`_TABLE_STRUCTURE_ATTRS` =
-  `colspan`/`rowspan`/`colwidth` + the validated `style=`), NOT the default
-  keep-what-isn't-blacklisted — anything else on a table tag is dropped +
-  surfaced. Off the table the default-keep branch still applies (e.g. `type`
-  on `<ol>`). Pinned by `tests/test_notes_html_sanitize_css.py`.
-- **Notes editor v2 (2026-06-23, docs/PRD-notes-editor-v2.md + PLAN-notes-editor-v2.md).**
-  The above table-cell mechanism was generalised into a **full rich-text +
-  table editor**. Key deltas to the v1 description above:
-  - **Tag-aware style gate.** The single "table tags only" gate became
-    `_STYLE_PROPS_BY_TAG`: each capability lands ONLY on the tag that produces
-    it — `background-color`/`border-*`/`text-align` on table tags, `color` on
-    `<span>` (TipTap Color), `background-color`+`color` on `<mark>` (Highlight),
-    `text-align` on `<p>`/`<h3>/`<li>` (TextAlign). `ALLOWED_CSS_PROPERTIES`
-    widened to add `color` + `text-align`; the value gate is unchanged (still
-    rejects `url()`/`expression()`/loose values). `ALLOWED_TAGS` gained the
-    human-only marks `u/s/sup/sub/mark/span` — a **superset** of the agent set
-    (agents still emit style-free HTML; the prompt lock-step is now
-    "agent-emittable ⊆ sanitiser-permitted", not equality).
-  - **Constrained colour palette is enforced at the TOOLBAR**
-    (`web/src/lib/notesPalette.ts`), NOT re-enforced in the sanitiser — the
-    sanitiser validates *safe colour values* only. This is deliberate: a colour
-    value isn't a security risk, and a cross-language palette list is the exact
-    brittleness v2 set out to remove.
-  - **Browser RGB border round-trip.** A browser may serialise a swatch as
-    `rgb(255, 255, 255)` (with spaces). `_is_border_shorthand` must treat that
-    complete function as one colour token before its width/style/colour
-    validation; naive whitespace splitting strips the valid four per-side
-    borders and exposes the editor's default grey grid. Pinned by
-    `tests/test_notes_html_sanitize_css.py` and
-    `tests/test_server_notes_cells_api.py`.
-  - **The sanitiser-warning UI panel was REMOVED** (it was developer-facing
-    noise; a paste from Excel/Word produced a wall of it). The backend still
-    sanitises and still returns `sanitizer_warnings` for logs — the UI just no
-    longer surfaces them. Dangerous markup is dropped silently + safely.
-  - **One docked two-tier toolbar** (`EditorToolbar`) replaced v1's separate
-    `FormatToolbar` + `TableFormatBar`: Tier 1 (Text · Colour · Paragraph)
-    always in edit mode; Tier 2 (Table: fill/borders/structure + merge/split/
-    header) only when the selection is in a table. The `table-format-bar`
-    testid is retained on Tier 2.
-  - **Drag-multi-select fixed at the root:** the `.selectedCell` highlight CSS
-    was missing (ProseMirror selects on drag but ships no visible highlight),
-    and the native `<input type=color>` fill blurred the editor and collapsed
-    the selection — both fixed. Merge/split + `colspan` round-trip through the
-    sanitiser (`_TABLE_STRUCTURE_ATTRS`) and the `html_to_excel_text` overlay
-    (a merged cell flattens once, no duplication).
-  - **Per-cell alignment, column width, indentation (2026-06-23 follow-up).**
-    Cell alignment is a `textAlign` field on the cell style model
-    (`cellFormatting.ts`), set across a `CellSelection` via `applyCellAlign` →
-    `text-align` on the `<td>` (distinct from the paragraph TextAlign mark and
-    the cosmetic `.is-numeric` runtime class). Column width = TipTap
-    `resizable: true`: widths serialise as a standard
-    `<colgroup><col style="width">` + `<table style="width">` + cell `colwidth`
-    attrs (paste-faithful), so the sanitiser now allows `<colgroup>`/`<col>`
-    and `width` **+ `min-width`** on `<table>`/`<col>` (length-validated, no
-    `calc()`). `min-width` is load-bearing: TipTap's resizable table emits it on
-    EVERY un-sized table/col, so omitting it would strip the editor's own output
-    and churn `setContent()` on every table save. The clipboard decorator
-    PRESERVES an explicit table `width` (a resized table) instead of forcing its
-    `width: 100%` overflow guard over it. Indentation is a custom extension
-    (`web/src/lib/notesIndent.ts`:
-    `Indent` + `indentBlocks`/`outdentBlocks`) adding an integer level rendered
-    as `margin-left` (em) on `<p>/<h3>`; the sanitiser allows `margin-left`
-    (positive em/px) on `<p>/<h3>/<li>` only. The clipboard decorator must
-    preserve that longhand: its paragraph/heading spacing uses a `margin:`
-    shorthand, which would otherwise reset `margin-left` in Word, so indented
-    blocks receive explicit top/right/bottom margins instead. **Still deferred:** native
-    xlsx-download styling (download stays a text overlay). Pinned by
-    `tests/test_notes_html_sanitize_css.py`, `tests/test_notes_html_to_text.py`,
-    `web` `cellFormatting`/`notesIndent`/`NotesReviewTab` tests.
-- **Notes formatter agent (2026-07-01, production-hardened 2026-07-02 —
-  docs/PLAN-notes-formatter-hardening.md).** Extraction and notes reviewer
-  agents still do NOT author styling as part of content extraction /
-  correction. The standalone formatter (`POST /api/runs/{id}/notes-format`,
-  per prose sheet, manual-only) is the only AI role allowed to apply
-  formatting: it returns constrained JSON style patches the backend applies
-  to existing `notes_cells.html`, rejected unless rendered text, numeric
-  tokens, and table geometry stay unchanged after `sanitize_notes_html`.
-  Border removal is an explicit `hidden` border operation so source-borderless
-  tables remain borderless. Styling reaches the Review panel + clipboard
-  paste ONLY — the xlsx download stays a text overlay (native xlsx styling
-  still deferred). Production invariants:
-  - **Write safety is compare-and-swap, not locking:** the final write is a
-    STATEMENT-ATOMIC conditional UPDATE (`cas_update_notes_cell_html`,
-    `WHERE html = <launch snapshot>`) under one `BEGIN IMMEDIATE`
-    transaction — there is no read-then-write window; a row edited mid-pass
-    (user PATCH, reviewer fix) or deleted (sheet regenerate) fails the WHERE
-    and is skipped, never clobbered, never resurrected. Skips surface as
-    `skipped_rows` + a summary note. The snapshot covers only rows actually
-    written, saved in the same transaction.
-  - **Safety is versioning (mirrors the reviewer):** every pass snapshots the
-    pre-format HTML into `notes_format_snapshots` (schema v27);
-    `POST /notes-format/revert` restores it (409 while a pass runs, 404 with
-    no snapshot) and marks the task `error_type='reverted'`. Revert is
-    CONTENT-GUARDED: each row passes `verify_format_only(snapshot, current)`
-    first, so a row whose content the user edited AFTER formatting is kept
-    (reported in `skipped_rows`) — revert undoes styling, never a newer
-    content edit. The whole revert runs under one `BEGIN IMMEDIATE`.
-  - **Interlocks are ATOMIC with the claim:** `claim_notes_format_task_guarded`
-    / `claim_notes_review_task_guarded` check the OTHER pass's task table and
-    claim their own slot inside one `BEGIN IMMEDIATE` transaction — a
-    check-then-claim in the endpoint would be a cross-table TOCTOU. Launch
-    also 409s on non-terminal runs. Both passes write notes_cells prose —
-    neither may start (or revert) over the other.
-  - **Bounded two ways:** wall-clock `XBRL_NOTES_FORMATTER_WALLCLOCK_S`
-    (default 300s) + cumulative per-click request budget
-    `XBRL_NOTES_FORMATTER_MAX_REQUESTS` (default 16, clamped ≤45 — below
-    pydantic-ai's silent request_limit=50 per gotcha #18) shared across the
-    up-to-four `agent.run` passes (initial · output-rejection retry ·
-    validation repair · self-check).
-  - **Observability:** structured `error_type` taxonomy on the task row
-    (`FORMATTER_ERROR_TYPES` in `notes/formatting_agent.py` — branch on
-    codes, not error prose) + cross-pass token telemetry (v27 columns); the
-    conversation trace is re-written after EVERY completed pass to
-    `{output_dir}/notes_format_{sheet}_conversation_trace.json` (gotcha #6
-    pattern — the trace survives a later pass's timeout), served by
-    `GET /notes-format/trace` with a sheet whitelist + under-output_dir
-    path guard.
-  - **Config:** `notes_formatter` is a first-class `_AGENT_ROLES` member
-    (Settings default model; launch falls back to the run's model);
-    confidence floor `XBRL_NOTES_FORMATTER_MIN_CONFIDENCE` (default 0.70,
-    validated + clamped to [0, 1]).
-  Numeric sheets (13/14) stay excluded (422). Pinned by
-  `tests/test_notes_format_patch.py`, `tests/test_notes_formatter_routes.py`,
-  `tests/test_db_schema_v26.py` / `_v27.py`, `tests/test_settings_api.py`,
-  and the `NotesReviewTab` "AI formatter" web tests.
-- Evidence column is **read-only** in the editor — it's the audit
-  trail. `PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}` ignores
-  any `evidence` key in the body.
-- **Heading-injection scope (2026-04-27 fix):** the writer auto-injects
-  `<h3>` lines from `parent_note` + optional `sub_note` structured
-  fields. The "Heading markup is writer-owned" rule is scoped strictly
-  to those two — in-prose `(a)/(b)/(i)/(ii)` sub-section labels (e.g.
-  Note 2.14 Employee benefits → "(a) Short term benefits", "(b)
-  Defined contribution plans") MUST be preserved verbatim by the agent
-  as `<p><strong>...</strong></p>` paragraph headers in the body. A
-  pre-fix prompt let agents over-generalise the writer-owned rule and
-  strip these labels, leaving an undifferentiated wall of policy
-  prose. Pinned by `tests/test_notes_prompt_phase1.py
-  ::test_notes_base_prompt_requires_in_prose_subsection_label_preservation`
-  and the worked-example test alongside it. Don't soften either rule
-  without updating both tests.
-- **Clipboard decoration (2026-04-27 fix):** `web/src/lib/clipboard.ts`
-  exports `decorateHtmlForClipboard` which injects inline `style=`
-  attributes (border, padding, right-align for numeric cells) into
-  every `<table>`/`<th>`/`<td>` *immediately before* the HTML hits
-  the clipboard. The DB / sanitiser remain style-free; only the
-  clipboard variant carries inline styling because external CSS does
-  not travel with paste targets like M-Tool, Word, or Outlook. Without
-  it, pasted tables collapse to bare borderless boxes with column
-  contents jammed together. Numeric-cell detection uses
-  `_NUMERIC_CELL_RE` which matches `1,595` / `(95)` / `-` / `1.5`
-  shapes — accountant-style. Spacing (margin, padding) mirrors
-  `web/src/components/NotesReviewTab.css` for layout parity with the
-  in-app editor preview. Border **colour** intentionally diverges —
-  editor uses `#d1d5db` (modern soft grey on the app's white surface);
-  clipboard uses `#999` because external editors render lighter
-  borders against off-white surfaces and the grid disappears. Update
-  both sides + this note if you change either colour. Pinned by
-  tests in `web/src/__tests__/clipboard.test.ts`.
-- **Configurable paste format (2026-06-22):** `decorateHtmlForClipboard`
-  is now option-driven — it takes a `ClipboardFormatOptions`
-  (`web/src/lib/clipboardFormat.ts`: `borderStyle` none/single/double,
-  `fontSizePt`, `cellPaddingPx`, `paragraphSpacingPx`)
-  defaulting to `DEFAULT_FORMAT_OPTIONS`. **Calling with the defaults
-  reproduces the previous hard-coded output byte-for-byte** — the
-  pinning tests above depend on that equivalence, so keep the defaults
-  pinned when editing.
-- **Notes-table style THEME (2026-06-23, docs/PLAN-notes-table-theme.md).** The
-  `ClipboardFormatOptions` shape was promoted to a full table-style **theme** and
-  is now the SHARED, SERVER-SIDE firm default (`XBRL_NOTES_TABLE_STYLE` JSON via
-  `/api/settings`, surfaced on `/api/config`) — it **replaced** the old
-  per-browser `localStorage` paste-format (so the firm shares one house style;
-  `loadGlobalFormat`/`saveGlobalFormat` remain only as a legacy fallback). Two
-  new optional fields — `borderColor`, `headerFill` (+ `headerBold`) — are
-  **absent in `DEFAULT_FORMAT_OPTIONS` so the byte-compat equivalence above still
-  holds**: only a customised theme changes output. The ONE resolved theme
-  (`resolveTheme(runOverride, firmDefault)`) drives BOTH surfaces, so preview ==
-  paste: the editor reads it as `--nt-*` CSS variables on the `.notes-review-tab`
-  root (`themeToCssVars`, `NotesReviewTab.css`); the clipboard reads
-  `opts.borderColor`/`headerFill` in `decorateHtmlForClipboard`. **This collapses
-  the deliberate editor-`#C9C9C9`-vs-clipboard-`#999` divergence noted below** —
-  intentional, since the firm value now unifies them (the historic per-surface
-  defaults still apply ONLY when the field is unset). A **per-run override** lives
-  on `runs.notes_table_style` (schema v22) and is editable post-run via the Notes
-  tab "Table style" picker (PATCH `/api/runs/{id}/notes_table_style`). Per-cell
-  manual styles still win over the theme; **"Reset cell to theme"**
-  (`resetCellToTheme`) nulls a cell's style attrs so it re-inherits the theme.
-  **Run-override is a SNAPSHOT, not a partial diff** (deliberate): the picker
-  persists the whole resolved theme for that run, so a later firm-default change
-  does NOT flow into an already-overridden run. This matches the "style THIS run"
-  mental model and is more predictable than silent per-field inheritance (the
-  numeric/style knobs have no "inherit" state anyway — only the colour swatches'
-  "Default" does). Saves debounce + clamp via `parseThemeOptions` before hitting
-  the server and revert to the last-confirmed value on failure, so a typed
-  out-of-range value never 400s and a failed save never strands an unsaved theme.
-  Validation (`parseThemeOptions` frontend / `_validate_notes_table_style`
-  backend) mirrors the sanitiser's colour rules. Pinned by
-  `tests/test_settings_api.py`, `test_run_notes_table_style.py`,
-  `test_db_schema_v22.py`, and the `clipboardFormat`/`clipboard`/`cellFormatting`/
-  `NotesReviewTab`/`SettingsModal` web tests.
-- **Totals double underline + single Copy.** The Notes toolbar has ONE Edit
-  surface; **Copy** reads the resolved theme at click time. A totals double
-  underline is saved document formatting (`border-bottom: 3px double`) applied
-  to the selected table row from that toolbar, not a transient copy override.
-- **Numeric notes '000 separator (2026-06-22):** the numeric Notes review
-  rows (`NumericCellRow`, sheets 13/14) display grouped (`1,595`) at rest
-  and raw while focused, mirroring the face-statement value inputs. The
-  formatter (`formatGroupedInput`) moved from `ConceptsPage` to the
-  shared `web/src/lib/numberFormat.ts` to avoid a circular import
-  (`ConceptsPage` imports `NotesReviewTab`); `ConceptsPage` re-exports it.
-  Display-only — stored values stay raw.
+- **Cap is 30,000 RENDERED chars** (`notes.html_to_text.rendered_length`), not
+  raw HTML; sanitiser + writer enforce it, and the PATCH endpoint returns 413
+  over the limit.
+- **Agent re-run CLOBBERS edits:** the coordinator calls
+  `delete_notes_cells_for_run_sheet(run_id, sheet)` before writing a fresh batch.
+  A confirm dialog gates this, fed by
+  `GET /api/runs/{run_id}/notes_cells/edited_count`.
+- **The HTML tag whitelist in `prompts/_notes_base.md` must match the sanitiser's
+  `ALLOWED_TAGS`** (`notes/html_sanitize.py`) — a divergence silently strips
+  markup the prompt invited.
+- **Inline `style=` is a VALIDATED whitelist on TABLE tags only** (notes WYSIWYG,
+  docs/PRD-notes-wysiwyg-formatting.md); off the table `style=` is stripped
+  wholesale, so **prose in the DB stays style-free**. The gate is tag-aware
+  (`_STYLE_PROPS_BY_TAG`): fill / per-side `border-*` / `text-align` on table
+  tags, `color` on `<span>`, `background-color`+`color` on `<mark>`,
+  `text-align`/`margin-left` (indent) on `<p>/<h3>/<li>`, `width`/`min-width` on
+  `<table>`/`<col>`. Every value is shape-checked (rejects `url()`,
+  `expression()`, malformed borders). Table-tag *attributes* are also an explicit
+  allowlist (`_TABLE_STRUCTURE_ATTRS`: `colspan`/`rowspan`/`colwidth` + validated
+  `style=`). Two browser-only traps the sanitiser MUST tolerate (jsdom doesn't
+  reproduce them — verifiable only in real Chrome): (1) the browser CSSOM
+  COLLAPSES four uniform per-side borders into the `border:` shorthand / grouped
+  `border-width|style|color` longhands, so `_is_border_shorthand` /
+  `_is_border_group` accept them and `resolveCellBorders` (`cellFormatting.ts`)
+  expands them back; (2) a swatch may serialise as `rgb(255, 255, 255)` with
+  spaces, so border parsing must treat the whole `rgb(...)` as one token. Erasing
+  an edge uses an explicit `1px hidden #000000` triplet (`BORDER_HIDDEN`), NOT
+  `none` — under `border-collapse` a neighbour's grid line out-prioritises `none`.
+  "No fill" persists as `background-color: transparent`, not attribute-absence.
+  Pinned by `tests/test_notes_html_sanitize_css.py` (incl.
+  `test_browser_collapsed_border_shorthand_survives_on_td`) +
+  `test_server_notes_cells_api.py`.
+- **Editor v2** (docs/PRD-notes-editor-v2.md) is a full rich-text + table editor:
+  `ALLOWED_TAGS` gained human-only marks `u/s/sup/sub/mark/span` — a **superset**
+  of the agent set (agents still emit style-free HTML, so the rule is
+  "agent-emittable ⊆ sanitiser-permitted"). The colour palette is enforced at the
+  TOOLBAR (`notesPalette.ts`), not the sanitiser (which only validates safe colour
+  values). The sanitiser-warning UI panel was removed (still logged in
+  `sanitizer_warnings`). One two-tier `EditorToolbar` (Tier 2 = table controls,
+  keeps the `table-format-bar` testid). Per-cell alignment (`applyCellAlign`),
+  column width (TipTap `resizable`, serialised as `<colgroup>`), merge/split, and
+  indentation (`notesIndent.ts`) all round-trip through the sanitiser + the
+  `html_to_excel_text` overlay. Pinned by the `cellFormatting`/`notesIndent`/
+  `NotesReviewTab` web tests + `tests/test_notes_html_sanitize_css.py`.
+- **Two AI styling paths (the `content` channel stays style-free either way):**
+  - **Formatting sidecar + house-style floor (DEFAULT, write-time,
+    docs/PLAN-notes-format-sidecar.md):** notes extraction agents emit an optional
+    `format_ops` field per payload (same constrained op vocabulary as
+    `notes/format_patch.py` — a structured channel, NOT inline styles in
+    `content`). `notes/writer.py::_style_cell_html` applies it through one gate,
+    `format_patch.apply_cell_operations` (ops → sanitiser → `verify_format_only`).
+    Fallback: **agent ops → deterministic house-style floor
+    (`notes/format_defaults.py::house_style_ops`, accountant convention; kill
+    switch `XBRL_NOTES_HOUSE_STYLE`, default ON) → theme.** Formatting NEVER
+    blocks a content write — invalid ops degrade to the floor. Multi-payload rows
+    (`_combine_payloads`) re-offset each payload's table indices; a non-table op
+    in a combined cell drops all ops for that cell. Pinned by
+    `tests/test_notes_format_sidecar.py`.
+  - **Notes formatter agent (manual REPAIR pass, `POST /api/runs/{id}/notes-format`,
+    per prose sheet):** the only AI role that authors styling on demand; returns
+    JSON style patches applied to `notes_cells.html`, rejected unless rendered
+    text, numeric tokens, and table geometry survive `sanitize_notes_html`.
+    Production invariants: writes are compare-and-swap
+    (`cas_update_notes_cell_html`, `WHERE html = launch-snapshot` under
+    `BEGIN IMMEDIATE` — a row edited/deleted mid-pass is skipped, never
+    clobbered); safety is versioning (`notes_format_snapshots` v27 +
+    `/notes-format/revert`, content-guarded so it undoes styling not a newer
+    edit); it atomically interlocks with the reviewer pass
+    (`claim_*_task_guarded`); bounded by `XBRL_NOTES_FORMATTER_WALLCLOCK_S` (300)
+    + `XBRL_NOTES_FORMATTER_MAX_REQUESTS` (16, ≤45 per gotcha #18); `error_type`
+    taxonomy (`FORMATTER_ERROR_TYPES`) + token telemetry + a re-written trace;
+    `notes_formatter` ∈ `_AGENT_ROLES` with `XBRL_NOTES_FORMATTER_MIN_CONFIDENCE`
+    (0.70). Numeric sheets (13/14) are excluded (422). Pinned by
+    `tests/test_notes_format_patch.py`, `test_notes_formatter_routes.py`,
+    `test_db_schema_v26.py`/`_v27.py`.
+  Styling reaches the Review panel + clipboard paste ONLY — the xlsx download
+  stays a text overlay (native xlsx styling still deferred).
+- **Evidence column is read-only in the editor** (audit trail); the PATCH
+  endpoint ignores any `evidence` key.
+- **Heading-injection scope:** the writer auto-injects `<h3>` from the
+  `parent_note` + `sub_note` structured fields ONLY. In-prose `(a)/(b)/(i)/(ii)`
+  sub-section labels MUST be preserved verbatim by the agent as
+  `<p><strong>…</strong></p>` — don't let the writer-owned-heading rule
+  over-generalise and flatten them. Pinned by `tests/test_notes_prompt_phase1.py`.
+- **Clipboard decoration:** `web/src/lib/clipboard.ts::decorateHtmlForClipboard`
+  injects inline `style=` (border, padding, right-align for numeric cells matched
+  by `_NUMERIC_CELL_RE`) at copy time only — the DB stays style-free, because
+  external CSS doesn't travel with a paste into M-Tool / Word / Outlook. It's
+  option-driven (`ClipboardFormatOptions`); **the defaults (`DEFAULT_FORMAT_OPTIONS`)
+  reproduce the old hard-coded output byte-for-byte** — keep that equivalence
+  when editing. Pinned by `web/src/__tests__/clipboard.test.ts`.
+- **Notes-table style THEME (docs/PLAN-notes-table-theme.md):**
+  `ClipboardFormatOptions` was promoted to a full table theme that is the shared,
+  server-side firm default (`XBRL_NOTES_TABLE_STYLE` via `/api/settings`). ONE
+  resolved theme (`resolveTheme(runOverride, firmDefault)`) drives BOTH the editor
+  (as `--nt-*` CSS vars) and the clipboard, so preview == paste. A per-run override
+  lives on `runs.notes_table_style` (v22, editable post-run via the Notes-tab
+  picker) and is a full SNAPSHOT, not a partial diff. Per-cell manual styles win
+  over the theme; "Reset cell to theme" (`resetCellToTheme`) re-inherits it. A
+  totals row's double underline (`border-bottom: 3px double`) is saved document
+  formatting, and Copy reads the resolved theme at click time. Pinned by
+  `tests/test_settings_api.py`, `test_run_notes_table_style.py`, and the
+  `clipboardFormat`/`clipboard`/`cellFormatting`/`NotesReviewTab` web tests.
+- **Numeric notes rows (sheets 13/14, `NumericCellRow`)** show grouped `1,595` at
+  rest, raw while focused (`formatGroupedInput` in `web/src/lib/numberFormat.ts`);
+  display-only, stored values stay raw.
 
 Full walkthrough: [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md).
 
@@ -994,7 +704,7 @@ catch-all "balancing amount" plugs):
   picks the leaf. Header detection is **row-based** — the legacy
   label-set form falsely marked any leaf with the same text as a header.
 - **No-residual-plug rule in `prompts/_base.md`, `prompts/sopl.md`, and
-  `prompts/correction.md`**: catch-all rows ("Other …",
+  `prompts/reviewer.md`**: catch-all rows ("Other …",
   "Miscellaneous …", "Administrative expenses") are for genuinely coarse
   entity disclosures only. Agents must NEVER plug a residual into them
   to balance verify_totals or run_cross_checks. If the breakdown can't
@@ -1101,220 +811,98 @@ Two paths used to swallow errors silently (2026-04-27 fix):
 
 The `concept_model/` subsystem (parser, importer, exporter, cell resolver,
 cascade recompute, group checks, facts API, versioning) plus the **reviewer
-agent** (`correction/reviewer_agent.py`, `prompts/reviewer.md`) is the
-**only extraction → review → export pipeline**. As of the first-principles
-rewrite (Phase 1.1) it is MANDATORY: the legacy direct-xlsx pipeline, the
-`XBRL_CANONICAL_MODE` opt-out, the legacy `correction/agent.py`, and the
-superseded `correction/canonical_agent.py` were all deleted. If the startup
-concept-tree bootstrap fails, a run now **fails fast** (`_CANONICAL_BOOTSTRAP_OK
-is False` → `_fail_run`) rather than degrading — there is no fallback. Every
-code path is fully wired:
+agent** (`correction/reviewer_agent.py`, `prompts/reviewer.md`) is the **only**
+extraction → review → export pipeline. It is MANDATORY (first-principles rewrite
+Phase 1.1): the legacy direct-xlsx pipeline, the `XBRL_CANONICAL_MODE` opt-out,
+`correction/agent.py`, and `correction/canonical_agent.py` were all deleted, and
+there is **no fallback** — if the startup concept-tree bootstrap fails, a run
+fails fast (`_CANONICAL_BOOTSTRAP_OK is False` → `_fail_run`). Fix the bootstrap
+(check logs, restart) rather than looking for an opt-out that no longer exists.
 
-- **Extraction (Phase B):** `coordinator.py` threads `run_id` + `db_path`
-  into the extraction tools so writes project into `run_concept_facts` as
-  they happen.
-- **Export (Phase C):** `_export_canonical_workbooks` (server.py) re-renders
-  each succeeded statement from `run_concept_facts` via
-  `concept_model/exporter.py::export_run_to_xlsx`, then merges. The download
-  reflects the authoritative DB facts, not the scratch xlsx the agent wrote.
-  Falls back to the agent workbook per-statement when an export applies
-  zero facts (peer-review finding 1).
-- **Review / correction (Phase D) — the REVIEWER pass:** the autonomous
-  canonical correction pass (`_run_canonical_correction_pass`) was
-  **replaced** by the reviewer (docs/Archive/PLAN-reviewer-agent.md,
-  `correction/reviewer_agent.py`, `prompts/reviewer.md`,
-  `server.py::_run_reviewer_pass`). The reviewer investigates the root cause
-  of failing cross-checks + open conflicts down the face→sub→PDF chain, applies
-  grounded fixes through the guarded `apply_fix` tool (a deterministic no-plug
-  guard refuses ungrounded writes + plugs into catch-all/abstract rows,
-  invariant #17), and raises only `stuck`/`disputes_prior` flags. Safety is
-  **versioning, not write-gating**: `_run_reviewer_pass` calls
-  `concept_model/versioning.py::snapshot_facts` ONCE (before any write) so
-  "Revert to original" (`revert_to_original`) can restore the original
-  extraction with one click. It then re-exports + re-merges so the download
-  and Concepts UI stay in sync (no xlsx split-brain). The pass emits the
-  `reviewing` pipeline stage. The legacy `correction.md` /
-  `_run_correction_pass` / `correction/agent.py` path and
-  `correction/canonical_agent.py` were deleted in rewrite Phase 1.1; the
-  reviewer-owned `load_open_conflicts` helper (formerly in canonical_agent)
-  now lives in `correction/reviewer_agent.py`.
-  - **Group / MPERS scoping (reviewer layer).** `concept_nodes` holds EVERY
-    imported standard×level (the bootstrap imports all four families), and
-    uuids are minted per `(template_id, sheet, row, label)` — so the SAME
-    `(sheet, row)` exists under MFRS/MPERS × Company/Group with different
-    uuids. The reviewer's `(sheet,row)` resolution (`_resolve_concept` /
-    `trace_cascade_source`) MUST therefore be scoped to the run's template
-    family via a `template_prefix` (`"{standard}-{level}-"`), mirroring how
-    `cell_resolver.resolve_cell` scopes by `template_id` — otherwise it
-    resolves an arbitrary template's concept. The reviewer pass threads
-    `filing_standard` (not just `filing_level`) into `ReviewerDeps` for this.
-    On Group filings both `entity_scope`s exist; the tools default to Company,
-    so the review packet surfaces each failing check's `[group]`/`[company]`
-    tag as an explicit `entity_scope='…'` hint and `prompts/reviewer.md`
-    requires the reviewer to honour it. The review diff resolves cells through
-    `concept_targets` (falling back to `render_*`) so Group/SOCIE coordinates
-    display correctly. Pinned by `tests/test_reviewer_tools.py`
-    (`test_resolve_concept_is_template_scoped`, `…surfaces_group_scope`) and
-    `tests/test_reviewer_versioning.py::test_diff_prefers_target_coord_over_render`.
-  - **Auto-trigger toggle:** the automatic reviewer launch is gated on
-    `XBRL_AUTO_REVIEW` (default on; Settings checkbox, surfaced via
-    `/api/settings` + `/api/config`). When off, a run with failures/conflicts
-    finishes without the reviewer and the user triggers it manually.
-  - **Clean-run spot-check (issue 1, 2026-06-21):** a run with NO failing
-    checks and NO open conflicts still gets a grounded sanity pass when
-    `XBRL_SPOT_CHECK` is on (default on; **independent** of `XBRL_AUTO_REVIEW`,
-    which only gates the failure path). It REUSES `_run_reviewer_pass` via a new
-    `spot_check` arg (`"light"`/`"full"`) — so snapshot → fix → re-export →
-    revert are unchanged — bypassing the `n_items == 0` early return.
-    `XBRL_SPOT_CHECK_MODE` picks depth: `light` (default) swaps to the tight
-    `prompts/spot_check.md` body + a 6/8-turn cap
-    (`compute_spot_check_turn_cap`); `full` reuses the holistic `reviewer.md`
-    body + the reviewer's base cap. Both render a SPOT-CHECK packet (no failing
-    checks to inline) via `render_reviewer_prompt(spot_check_mode=…)`. Both
-    settings round-trip through `/api/settings` + `/api/config` and the General
-    settings tab. **Run-status semantics (peer-review HIGH):** the spot-check
-    outcome carries a `spot_check` tag so a spot-check that merely EXHAUSTS its
-    tight cap does NOT flag a clean run `correction_exhausted` (it's advisory),
-    while a spot-check that genuinely FAILS to run (`reviewer_failed` — snapshot
-    / model-build / no-facts / tool error, excluding the soft
-    `reviewer_exhausted`) tips the run to `completed_with_errors` rather than
-    hiding a failed CORRECTION row under a green badge. The suite defaults the
-    toggle OFF (`tests/conftest.py`) so deterministic pipeline-count tests
-    aren't perturbed; opt in with `monkeypatch.setenv`. Pinned by
-    `tests/test_reviewer_pipeline.py`
-    (`test_spot_check_runs_on_clean_run`),
-    `tests/test_e2e.py::test_clean_run_fires_spot_check_when_enabled`,
-    `tests/test_reviewer_agent.py` (turn cap + body/packet swap), and
-    `tests/test_settings_api.py` (round-trip).
-  - **Reviewer model:** user-selectable. `XBRL_DEFAULT_MODELS["reviewer"]`
-    (Settings) sets the default for the automatic pass; the Review tab's model
-    dropdown sends a per-request `model` override to `/re-review`. Both fall
-    back to the run's extraction model when unset (`reviewer` is now a member
-    of `_AGENT_ROLES`).
-- **Frontend:** the **Review** tab (reviewer diff + flags + revert/re-review,
-  `web/src/components/ReviewTab.tsx`) and the Values tab (`RunDetailView.tsx`)
-  plus the `/concepts/{id}` alias are visible whenever `/api/config` reports
-  `canonical_mode: true`. Reviewer API: `GET /api/runs/{id}/review`,
-  `POST /api/runs/{id}/flags/{flag_id}/answer`, `POST /api/runs/{id}/re-review`,
-  `GET /api/runs/{id}/re-review/status`, `POST /api/runs/{id}/revert-to-original`.
-  - **Manual re-review is async (background thread + poll).** A pass can run
-    for minutes, so `POST /re-review` only *launches* it — on a dedicated
-    thread with its own event loop (`asyncio.run`), tracked in the **durable
-    `run_review_tasks` table** (schema v13, gotcha #11) keyed by run_id — and
-    returns `{ok, status:"running", model}` immediately. The Review tab polls
-    `GET /re-review/status` (`idle` | `running` | `done` + the finished
-    outcome) for the result. A dedicated thread (not a raw `asyncio.create_task`)
-    is deliberate: a detached create_task is cancelled when the request scope
-    tears down (and silently lost under TestClient), whereas the thread loop is
-    isolated from request teardown and keeps the model's async HTTP client
-    bound to the loop that uses it. A re-entrancy guard reports an in-flight
-    pass instead of double-launching one over the same run's facts.
-    - **Durable across restarts (rewrite Phase 5.3).** The pass state lives
-      in `run_review_tasks` (one row per run; relaunch overwrites it), not an
-      in-process dict, so a *finished* outcome survives a server restart and a
-      poll can still fetch it. `server._save_review_task` /
-      `repo.fetch_review_task` are the write/read helpers; the status endpoint
-      and re-entrancy guard both read the table. Because the daemon thread
-      dies with the process, `server._lifespan` calls
-      `repo.reconcile_stale_review_tasks` at startup to flip any row left
-      `running` by a crash into a terminal `done` error ("Server restarted
-      while the re-review was running.") so the poll resolves and a relaunch
-      isn't blocked. Pinned by `tests/test_db_schema_v13.py` (logic) +
-      `tests/test_reviewer_routes.py`
-      (`test_re_review_outcome_survives_simulated_restart`,
-      `test_stale_running_task_reconciled_at_startup`).
-      The launch's initial `running` write is **mandatory, not best-effort**
-      (peer-review MEDIUM): the re-entrancy guard reads that row, so a
-      swallowed launch-write would let a second POST start a duplicate pass
-      over the same facts. `re_review` writes `running` directly and returns
-      **503** if it fails (no thread started); only the terminal `done`
-      write goes through the swallowing `_save_review_task`. Pinned by
-      `test_re_review_launch_persist_failure_returns_503_and_no_thread`.
+- **Extraction:** `coordinator.py` threads `run_id` + `db_path` into the
+  extraction tools so writes project into `run_concept_facts` live.
+- **Export:** `_export_canonical_workbooks` (server.py) re-renders each succeeded
+  statement from `run_concept_facts` via
+  `concept_model/exporter.py::export_run_to_xlsx`, then merges — the download
+  reflects DB facts, not the scratch xlsx. Falls back to the agent workbook
+  per-statement when an export applies zero facts.
+- **Review — the REVIEWER pass** (`server.py::_run_reviewer_pass`): investigates
+  the root cause of failing cross-checks + open conflicts down the face→sub→PDF
+  chain, applies grounded fixes through the guarded `apply_fix` tool (a
+  deterministic no-plug guard refuses ungrounded writes and plugs into
+  catch-all/abstract rows — invariant #17), and raises only
+  `stuck`/`disputes_prior` flags. Safety is **versioning, not write-gating**:
+  `concept_model/versioning.py::snapshot_facts` runs ONCE before any write so
+  "Revert to original" (`revert_to_original`) restores the extraction in one
+  click; the pass then re-exports + re-merges (no xlsx split-brain) and emits the
+  `reviewing` stage.
+  - **Group / MPERS scoping.** `concept_nodes` holds every imported
+    standard×level and uuids are minted per `(template_id, sheet, row, label)`,
+    so the same `(sheet, row)` exists under each family with different uuids. The
+    reviewer's `(sheet,row)` resolution (`_resolve_concept` /
+    `trace_cascade_source`) MUST be scoped to the run's family via a
+    `template_prefix` (`"{standard}-{level}-"`) — so `ReviewerDeps` threads
+    `filing_standard`, not just `filing_level`. On Group filings both
+    `entity_scope`s exist (tools default to Company), so the packet surfaces each
+    check's `[group]`/`[company]` tag as an `entity_scope` hint the reviewer must
+    honour. Pinned by `tests/test_reviewer_tools.py`,
+    `tests/test_reviewer_versioning.py`.
+  - **Auto-trigger toggle `XBRL_AUTO_REVIEW`** (default on) gates the automatic
+    launch on the failure path; off = the user triggers it manually.
+  - **Clean-run spot-check `XBRL_SPOT_CHECK`** (default on, independent of
+    `XBRL_AUTO_REVIEW`): a run with no failing checks / open conflicts still gets
+    a grounded sanity pass, reusing `_run_reviewer_pass` via a `spot_check` arg.
+    `XBRL_SPOT_CHECK_MODE` picks depth — `light` (default, `prompts/spot_check.md`
+    + a 6/8-turn cap) or `full` (holistic `reviewer.md`). A spot-check that merely
+    exhausts its cap is advisory (doesn't flag a clean run), but one that FAILS to
+    run (`reviewer_failed`) tips the run to `completed_with_errors`. Suite default
+    OFF (`tests/conftest.py`). Pinned by `tests/test_reviewer_pipeline.py`,
+    `test_e2e.py`, `test_reviewer_agent.py`, `test_settings_api.py`.
+  - **Reviewer model** is user-selectable: `XBRL_DEFAULT_MODELS["reviewer"]`
+    (Settings) for the auto pass, a per-request `model` override from the Review
+    tab for `/re-review`; both fall back to the run's extraction model
+    (`reviewer` ∈ `_AGENT_ROLES`).
+- **Frontend:** the **Review** tab (`web/src/components/ReviewTab.tsx`) + Values
+  tab + `/concepts/{id}` alias show whenever `/api/config` reports
+  `canonical_mode: true`. Reviewer API: `GET /review`, `POST /flags/{id}/answer`,
+  `POST /re-review`, `GET /re-review/status`, `POST /revert-to-original`.
+  - **Manual re-review is async** (a pass runs minutes): `POST /re-review` only
+    LAUNCHES it on a dedicated thread with its own event loop, tracked in the
+    durable `run_review_tasks` table (v13) keyed by run_id, and returns
+    immediately; the Review tab polls `GET /re-review/status`. A dedicated thread
+    (not `asyncio.create_task`) survives request teardown. A re-entrancy guard
+    prevents a double-launch over the same facts, so the initial `running` write
+    is **mandatory** — `re_review` writes it directly and returns **503** if it
+    fails (no thread started); only the terminal `done` write is best-effort.
+    `server._lifespan` calls `repo.reconcile_stale_review_tasks` at startup to
+    retire rows left `running` by a crash. Pinned by
+    `tests/test_reviewer_routes.py`, `tests/test_db_schema_v13.py`.
 
-**Canonical mode cannot be disabled** (rewrite Phase 1.1). There is no
-opt-out flag and no legacy pipeline to fall back to. If the concept-tree
-bootstrap fails at startup, runs fail fast with a clear error instead of
-degrading — fix the bootstrap (check logs, restart) rather than reaching for
-a fallback that no longer exists. The Values tab, concept-tree review UI, and
-reviewer pass are always present.
+**Cross-sheet rollup linkage (schema v11, "render twice"):** a face row that
+pulls its value from a sub-sheet total via a cross-sheet formula
+(`='SOFP-Sub-CuNonCu'!Bn`) shares ONE `concept_uuid` with the sub-sheet `*Total`
+row. `concept_render_aliases` preserves the face render coord alongside the sub
+coord instead of dropping it at importer dedup. Consequences: the importer builds
+its `coord→uuid` edge map from the FULL concepts list (not the dedup'd set) so
+face COMPUTED rows still wire child edges; `cell_resolver` falls back to the alias
+table on a face-coord write; the concepts endpoint emits one extra `is_alias:true`
+view-row (read-only "(linked)" in `ConceptsPage.tsx`); and the **exporter never
+writes alias coords**, so the workbook's cross-sheet formula stays live and Excel
+recomputes. Pinned by `tests/test_db_schema_v11.py`,
+`tests/test_canonical_cross_sheet_rollup.py`, `tests/test_concepts_routes.py`.
 
-Plan / PRD docs (historical context, not API contracts):
-[docs/PLAN-canonical-concept-model.md](docs/PLAN-canonical-concept-model.md),
-[docs/PLAN-canonical-concept-model-phase1.md](docs/PLAN-canonical-concept-model-phase1.md),
-[docs/PRD-canonical-concept-model.html](docs/PRD-canonical-concept-model.html).
+**Fact → cell routing (exporter):** one `concept_targets` lookup per fact for
+every filing shape (the importer precomputes a target row per rendered dimension:
+`import_company_targets` = Company B=CY/C=PY, `import_group_targets` = Group
+B/C/D/E, SOCIE matrix inline). Result: CY→B, PY→C, Group facts dropped on a
+Company filing, and aliases are never targets (so formula cells stay live). An
+in-scope fact with no precomputed target RAISES (importer-bug signal). Tests that
+hand-roll a Company DB must call `import_company_targets(db, template_id)` after
+`import_template`. Pinned by `tests/test_canonical_export.py`,
+`tests/test_phase4_group.py`.
 
-**Cross-sheet rollup linkage (2026-05-28, schema v11, "render twice"):**
-Face statement rows that pull their value from a sub-sheet total via
-a cross-sheet formula (`='SOFP-Sub-CuNonCu'!Bn`) share ONE
-`concept_uuid` with the sub-sheet's `*Total` row. The parser already
-emits both nodes with that shared UUID; v11 adds
-`concept_render_aliases` so the face render coord is preserved
-alongside the sub coord, instead of being dropped during importer
-dedup.
-
-- **Importer (`concept_model/importer.py`):** demoted face entries
-  land in `concept_render_aliases`. Edge resolution now builds a
-  `coord→uuid` map from the FULL `concepts` list (not the dedup'd
-  `seen`), so face-sheet COMPUTED rows like *Total non-current
-  assets* still wire their child edges to PPE — pre-fix every
-  cross-sheet rolled-up child was silently dropped and cascade
-  understated every face total.
-- **Cell resolver (`concept_model/cell_resolver.py`):** an agent write
-  to a face coord falls back to the alias table on miss, preserving
-  the canonical UUID instead of silently skipping the write.
-- **Concepts endpoint (`concept_model/concepts_routes.py`
-  `/api/runs/{id}/concepts`):** emits ONE extra view-row per alias,
-  with `is_alias: true` and render coords swapped to the alias
-  location. Sorted into its face-sheet section so the Review/Values
-  page mirrors the workbook (one face row + one sub row, same
-  concept).
-- **Exporter (`concept_model/exporter.py`):** facts only route to the
-  primary `concept_nodes.render_*` coord. Alias coords are **never**
-  written — the workbook's cross-sheet formula stays live so Excel
-  recomputes the value. (Pre-existing code; pinned now by
-  `tests/test_canonical_cross_sheet_rollup.py::test_exporter_preserves_cross_sheet_formula_on_alias_coord`.)
-- **Frontend (`web/src/pages/ConceptsPage.tsx`):** `ConceptRow` carries
-  `is_alias?`. Alias rows render with an italic "(linked)" marker and
-  are never editable (the backend already drops `editable`, frontend
-  enforces it defensively). React keys are composite
-  (`${concept_uuid}@${sheet}:${row}:${col}`) so primary + alias don't
-  collide.
-
-Pinned by `tests/test_db_schema_v11.py`,
-`tests/test_canonical_cross_sheet_rollup.py` (5 tests),
-`tests/test_concepts_routes.py::test_get_concepts_emits_alias_rows_with_face_coords`,
-`web/src/__tests__/ConceptsPage.test.tsx::"alias view-rows render
-with (linked) marker and stay read-only"`.
-
-**PY columns in canonical download (2026-05-28):**
-Linear Company filings in `concept_model/exporter.py` previously
-dropped every fact that wasn't `(CY, Company)`, so the downloaded
-canonical xlsx had empty col C (PY) on every face statement even
-though `run_concept_facts` carried the PY data. Routing now mirrors
-`cell_resolver.resolve_cell`: CY → `render_col` (default B), PY → C,
-Group facts dropped (they only apply to Group filings, which use the
-`concept_targets` branch). Pinned by
-`tests/test_canonical_export.py::test_py_facts_export_to_col_c_on_linear_company`
-and `::test_group_facts_dropped_on_company_filing`.
-
-**Single-lookup routing (2026-05-30, rewrite Phase 6.1):**
-The exporter no longer carries the three-way `render_col`/PY=C routing
-fallback described above — it now does ONE `concept_targets` lookup per
-fact for every shape. The importer precomputes a target row for every
-dimension a filing renders: `import_company_targets` (Company B=CY/C=PY)
-mirrors `import_group_targets` (B/C/D/E); matrix (SOCIE) targets stay
-inline; `bootstrap._import_one` calls the company variant for non-group
-linear templates. The CY=B/PY=C *result* is unchanged (the PY-columns
-and Group-drop behaviour above still hold) — only the mechanism moved
-from an inline fallback to a precomputed table. **Aliases are still NOT
-targets** (both importers iterate `concept_nodes` primary coords only),
-so cross-sheet formula cells stay live. An in-scope fact with no
-precomputed target now RAISES (importer-bug signal) instead of silently
-falling back. Tests that hand-roll a Company DB must call
-`import_company_targets(db, template_id)` after `import_template` (as the
-Group fixtures already call `import_group_targets`). Pinned by the same
-`test_canonical_export.py` / `test_canonical_cross_sheet_rollup.py` /
-`test_phase4_group.py` suites.
+Plan/PRD docs (historical context): docs/PLAN-canonical-concept-model.md,
+docs/PLAN-canonical-concept-model-phase1.md.
 
 ### 22. Agent workbook tools must serialise + atomic-save shared files
 
@@ -1496,13 +1084,12 @@ no static-value export. Plan: docs/PLAN-orchestration-hardening (item 32).
 
 ### 26. Scanned-PDF → readable-document — REMOVED
 
-The `docconvert/` package + "Readable Doc" frontend page (a standalone, offline
-scanned-PDF → HTML/Word converter built on Docling) was **removed** — see
-docs/PLAN-deprecate-docconvert.md. The `doc_conversions` table (schema v21)
-remains as an inert artifact because the migration chain replays every step
-(gotcha #11), but no code reads or writes it. The heavy deps it alone pulled in
-(`docling`, `torch`, `onnxruntime`, `rapidocr`, `easyocr`, `pypandoc_binary`,
-`python-docx`) and the `models/` weight bundle are gone.
+The `docconvert/` package + "Readable Doc" page (an offline Docling-based
+scanned-PDF → HTML/Word converter) was removed (docs/PLAN-deprecate-docconvert.md),
+along with its heavy deps (`docling`, `torch`, `onnxruntime`, `rapidocr`,
+`easyocr`, `pypandoc_binary`, `python-docx`) and the `models/` weight bundle. The
+`doc_conversions` table (v21) stays as an inert artifact (gotcha #11); no code
+reads it.
 
 ### 27. Notes coverage checklist — post-reviewer visibility + status tipping
 
@@ -1564,78 +1151,58 @@ Pinned by `tests/test_coverage_checklist.py`,
 
 ### 28. mTool fill pipeline — offline zip surgery, one patcher, no DB schema
 
-The `mtool/` package fills a run's figures into an SSM **mTool** MBRS template
-so the operator can Validate/Generate the XBRL inside mTool without hand-copying
-(docs/PLAN.md, docs/MTOOL-ZIP-RECON-BRIEF.md). Proven end-to-end (mTool accepts
-the patched workbook). The whole path is **Excel-free** — pure zip/XML surgery —
-so it runs server-side and in the cloud, unlike the shelved live-Excel COM route.
+The `mtool/` package fills a run's figures into an SSM **mTool** MBRS template so
+the operator can Validate/Generate the XBRL inside mTool without hand-copying
+(docs/PLAN.md, docs/MTOOL-ZIP-RECON-BRIEF.md). Proven end-to-end. The whole path
+is **Excel-free** (pure zip/XML surgery), so it runs server-side and in the cloud.
 
 Load-bearing invariants:
 
-- **`offline_fill.py` is a single stdlib-only file** (zipfile/re/ElementTree —
-  no openpyxl, no repo imports) because it ALSO travels to the enterprise
-  Windows box as one script. Do NOT add a third-party dep or a repo import to
-  it. Reading (label maps, verify) parses XML; **writing is targeted text
-  edits** — openpyxl load/save corrupts the mTool package and full
-  reserialization breaks namespaces (Phase-1 ground truth). Prefixed sheet XML
-  (`<x:sheetData>`) aborts loudly rather than risk mixed-namespace inserts.
-- **One patcher, no fork.** The server-side patch endpoint imports
-  `offline_fill.fill_workbook` — the SAME function the CLI runs. Never
-  reimplement patching in `api/`. A test asserts `offline_fill` imports with
-  no third-party deps.
-- **Exporter emits LEAF only** (`exporter.build_fill_doc`). ABSTRACT headers +
-  COMPUTED totals are excluded (mTool derives totals; the tool's formula guard
-  is the second line). SOCIE/MATRIX_CELL is deferred and **counted**, never
-  silently dropped. Scoped to the run's `{standard}-{level}-` family; deduped
-  by `concept_uuid` (aliases collapse). Reads `run_concept_facts` only.
-- **Values are emitted verbatim (scale=identity) by default.** The exporter's
-  `scale` argument and any per-row sign flips are **Windows-blocked**: do NOT
-  turn on a scale factor until the recon confirms whether mTool stores the full
-  unscaled value or the thousands figure (recon Task 3.6). A wrong scale
-  silently 1000×-inflates every figure. `denomination` is surfaced in the doc
-  meta so a human sees the stored unit.
-- **Semantic, not physical.** Writes carry a `column_role`
-  (current/prior year × company/group), NOT a column letter. mTool's real
-  layout (observed: labels col D, values E/F — different from ours) is resolved
-  at fill time via `exporter.apply_column_map` (fails loudly on a missing role)
-  or `column_detect.detect_column_map` (positional, returns confidence; the
-  endpoint refuses low-confidence auto-detection and asks for an explicit map).
-- **Machine-generated docs are `strict`** (`build_fill_doc` sets `strict:true`).
-  Strict refuses fuzzy label matches — for the pipeline a non-exact label is a
-  bug to surface, not a typo to forgive. Hand-authored operator runs stay
-  lenient; fuzzy hits are still reported (never silent).
-- **Created note slots REUSE the template's orphan `fn_` pool; the
-  `+FootnoteTexts` column-A key is the join key and MUST stay unique
-  (2026-07-05 Amgen "popup opens empty" incident).** mTool templates
-  pre-provision empty payload rows keyed `fn_N` in column A with no
-  `<definedName>` yet; mTool joins visible cell → payload by that column-A
-  string and reads the FIRST matching row, so a minted key that duplicates an
-  orphan row leaves the popup silently empty while the file stays valid — and
-  read-back "passes" because `read_footnote_rows` keys by A and keeps the
-  LAST row (the opposite of mTool). `_create_footnote_slot` drains
-  `_build_orphan_pool` first and only appends past exhaustion, with `fn_used`
-  seeded from defined names AND every column-A key.
-  `_detect_duplicate_fn_keys` (a raw row scan, deliberately NOT
-  `read_footnote_rows`) runs on every non-dry-run `fill_footnotes` output and
-  flags any duplicate into `report["errors"]` (→ `degraded`). Never
-  `replace_shared_string` an EMPTY payload cell — an empty `t="s"` cell can
-  point at a shared `""` `<si>` other cells reference (sharedStrings dedup);
-  append+patch instead. `report["fn_allocation"]` + per-created-slot
-  `slot_source` (`orphan_reused`/`row_appended`) are the debug trail. Pinned
-  by the orphan-pool tests in `tests/test_mtool_offline_fill.py`.
-- **No DB schema change.** The feature is purely additive — endpoints are
-  stateless over existing tables; uploaded templates are request-scoped temp
-  files under `OUTPUT_DIR/_mtool_tmp`, cleaned via a `BackgroundTask`. The run
-  gate is `completed`/`completed_with_errors` (409 otherwise), mirroring the
-  eval from-run gate.
-- **UI is a button + modal, not a tab** (`MtoolFillModal`, launched from the
-  run-detail action row) — deliberately avoids adding a third `role="tab"`
-  (gotcha #7).
+- **`offline_fill.py` is a single stdlib-only file** (zipfile/re/ElementTree — no
+  openpyxl, no repo imports) because it also travels to the enterprise Windows box
+  as one script. Reading parses XML; **writing is targeted text edits** — openpyxl
+  load/save corrupts the mTool package and full reserialization breaks namespaces.
+  Prefixed sheet XML (`<x:sheetData>`) aborts loudly. Do NOT add a third-party dep
+  or repo import (a test asserts this).
+- **One patcher, no fork.** The server endpoint imports `offline_fill.fill_workbook`
+  — the SAME function the CLI runs. Never reimplement patching in `api/`.
+- **Exporter emits LEAF only** (`exporter.build_fill_doc`): ABSTRACT headers +
+  COMPUTED totals excluded (mTool derives totals). SOCIE/MATRIX_CELL is deferred
+  and **counted**, never silently dropped. Scoped to the run's `{standard}-{level}-`
+  family, deduped by `concept_uuid`, reads `run_concept_facts` only.
+- **Values emitted verbatim (scale=identity) by default.** The `scale` argument
+  and per-row sign flips are **Windows-blocked** until the recon confirms whether
+  mTool stores the unscaled or the thousands figure — a wrong scale silently
+  1000×-inflates every figure. `denomination` is surfaced in the doc meta.
+- **Semantic, not physical:** writes carry a `column_role` (CY/PY × company/group),
+  NOT a column letter. mTool's real layout (observed: labels col D, values E/F) is
+  resolved at fill time via `exporter.apply_column_map` (fails loudly on a missing
+  role) or `column_detect.detect_column_map` (positional + confidence; the endpoint
+  refuses low-confidence auto-detection and asks for an explicit map).
+- **Machine docs are `strict`** (`build_fill_doc` sets `strict:true`): a non-exact
+  label is a bug to surface, not a typo to forgive. Hand-authored operator runs
+  stay lenient; fuzzy hits are still reported.
+- **Created note slots REUSE the template's orphan `fn_` pool; the `+FootnoteTexts`
+  column-A key is the join key and MUST stay unique** (2026-07-05 Amgen empty-popup
+  incident). mTool joins visible cell → payload by that column-A string and reads
+  the FIRST match, so a minted key that duplicates a pre-provisioned orphan `fn_N`
+  row leaves the popup silently empty (and read-back misses it, because
+  `read_footnote_rows` keeps the LAST match — the opposite of mTool).
+  `_create_footnote_slot` drains `_build_orphan_pool` first and only appends past
+  exhaustion; `_detect_duplicate_fn_keys` (a raw row scan) flags any duplicate into
+  `report["errors"]`. Never `replace_shared_string` an EMPTY payload cell (it may
+  share a `""` `<si>`); append+patch instead. Pinned by the orphan-pool tests in
+  `tests/test_mtool_offline_fill.py`.
+- **No DB schema change** — endpoints are stateless over existing tables; uploaded
+  templates are request-scoped temp files under `OUTPUT_DIR/_mtool_tmp` (cleaned
+  via `BackgroundTask`). Run gate is `completed`/`completed_with_errors` (409
+  otherwise).
+- **UI is a button + modal (`MtoolFillModal`), not a tab** — avoids a third
+  `role="tab"` (gotcha #7).
 
-Pinned by `tests/test_mtool_offline_fill.py`, `tests/test_mtool_exporter.py`,
-`tests/test_mtool_routes.py`, `tests/test_mtool_column_detect.py`, and the
-`MtoolFillModal` web tests. Full plan + phase status: `docs/PLAN.md`;
-operator guide: `mtool/README.md`.
+Pinned by `tests/test_mtool_offline_fill.py`, `test_mtool_exporter.py`,
+`test_mtool_routes.py`, `test_mtool_column_detect.py`, and the `MtoolFillModal`
+web tests. Full plan: `docs/PLAN.md`; operator guide: `mtool/README.md`.
 
 ## Testing
 
