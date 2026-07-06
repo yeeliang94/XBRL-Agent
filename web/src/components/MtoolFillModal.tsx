@@ -223,7 +223,7 @@ function unresolvedReasonText(u: UnresolvedNote): string {
     case "strict_near_miss":
       return `Found a close (but not identical) match: “${u.matched_label ?? "?"}”. To avoid guessing, it wasn't filled automatically.`;
     case "no_match":
-      return "No matching row was found in this template. It will be skipped — you can add the text block in mTool afterwards.";
+      return "No matching row was found in this template. It will be skipped — you can add the note in mTool afterwards.";
     case "no_slot":
       return "This note has no spot in the template yet. Turn on “Add missing note spots” above to add one.";
     case "no_payload_row":
@@ -873,7 +873,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             {(report.numeric_status ?? report.status) !== "ok" && (
               <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12 }}>
                 {report.counts.unresolved > 0 && (
-                  <li>{report.counts.unresolved} label(s) unresolved (not written)</li>
+                  <li>{report.counts.unresolved} label(s) couldn&apos;t be placed (not written)</li>
                 )}
                 {report.counts.skipped_formula > 0 && (
                   <li>{report.counts.skipped_formula} formula cell(s) skipped</li>
@@ -889,8 +889,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 <strong>Notes: </strong>
                 {[
                   `${report.notes.counts.written} filled`,
-                  report.notes.counts.created > 0 && `${report.notes.counts.created} slot(s) created`,
-                  report.notes.counts.unresolved > 0 && `${report.notes.counts.unresolved} unmatched`,
+                  report.notes.counts.created > 0 && `${report.notes.counts.created} note spot(s) created`,
+                  report.notes.counts.unresolved > 0 && `${report.notes.counts.unresolved} not placed`,
                   report.notes.counts.mismatches > 0 && `${report.notes.counts.mismatches} failed read-back`,
                   report.notes.counts.errors > 0 && `${report.notes.counts.errors} error(s)`,
                 ]
