@@ -145,8 +145,32 @@ function _headerExtra(opts: ClipboardFormatOptions): string {
 function _paragraphStyle(opts: ClipboardFormatOptions): string {
   return _fontCss(opts) + ` margin: 0 0 ${opts.paragraphSpacingPx}px 0;`;
 }
+// Heading face: historically the body font + weight 600. The prose theme
+// fields (`headingSizePt` / `headingWeight`) override size/weight ONLY when
+// set — an un-themed copy stays byte-identical to the historic constant.
+function _headingFontCss(opts: ClipboardFormatOptions): string {
+  const size = opts.headingSizePt ?? opts.fontSizePt;
+  return `font-family: Arial, sans-serif; font-size: ${size}pt;`;
+}
 function _headingStyle(opts: ClipboardFormatOptions): string {
-  return _fontCss(opts) + " margin: 12px 0 6px 0; font-weight: 600;";
+  const weight = opts.headingWeight ?? 600;
+  return _headingFontCss(opts) + ` margin: 12px 0 6px 0; font-weight: ${weight};`;
+}
+// Themed <ul> bullet glyph. Empty when unset (byte-identical default); the
+// dash variant is a CSS string marker (single-quoted — the style attribute is
+// serialised with double quotes). Mirrors mtool/notes_decorate._list_marker_css.
+function _listMarkerCss(opts: ClipboardFormatOptions): string {
+  if (opts.listMarker === "dash") return " list-style-type: '– ';";
+  if (opts.listMarker === "disc" || opts.listMarker === "decimal") {
+    return ` list-style-type: ${opts.listMarker};`;
+  }
+  return "";
+}
+// The classic totals double rule — matches the sidecar floor
+// (notes/format_defaults.py) and the saved editor "totals double underline".
+const _TOTALS_RULE = " border-bottom: 3px double #000000;";
+function _isTotalsRow(row: Element): boolean {
+  return (row.textContent ?? "").toLowerCase().includes("total");
 }
 
 /** Does this block own its left margin through persisted editor indentation? */
@@ -265,18 +289,23 @@ export function decorateHtmlForClipboard(
     const cells = Array.from(row.children).filter(
       (c) => c.tagName === "TD" || c.tagName === "TH",
     );
+    // Themed totals convention: the amount cells of a "total" row get the
+    // double rule. Appended inside the same merged addition so a persisted
+    // per-cell border still wins (the merge skips the whole border family
+    // when the cell owns any border prop) — parity with notes_decorate.py.
+    const totalsRow = opts.totalsDoubleUnderline === true && _isTotalsRow(row);
     cells.forEach((cell, idx) => {
-      const align = shouldRightAlignCell(
+      const numeric = shouldRightAlignCell(
         cell.textContent ?? "",
         idx,
         cells.length,
-      )
-        ? " text-align: right;"
-        : " text-align: left;";
+      );
+      const align = numeric ? " text-align: right;" : " text-align: left;";
+      const extra = totalsRow && numeric ? _TOTALS_RULE : "";
       if (cell.tagName === "TH") {
-        _mergeCellStyle(cell, cellBase + _headerExtra(opts) + align);
+        _mergeCellStyle(cell, cellBase + _headerExtra(opts) + align + extra);
       } else {
-        _mergeCellStyle(cell, cellBase + align);
+        _mergeCellStyle(cell, cellBase + align + extra);
       }
     });
   });
@@ -312,8 +341,11 @@ export function decorateHtmlForClipboard(
         " margin-top: 12px; margin-right: 0; margin-bottom: 6px; font-weight: 600;",
     );
   }
+  const listMarkerCss = _listMarkerCss(opts);
   for (const list of Array.from(tmp.querySelectorAll("ul, ol, li"))) {
-    _mergeStyle(list, fontCss);
+    // The marker glyph applies to <ul> only — <ol> keeps its numbering and
+    // <li> inherits. Empty when un-themed (byte-identical output).
+    _mergeStyle(list, fontCss + (list.tagName === "UL" ? listMarkerCss : ""));
   }
 
   // Carry the font on the wrapping container too, so any element we did not

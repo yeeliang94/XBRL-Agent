@@ -59,7 +59,13 @@ class NotesTableStyle:
     reproduce the historic hard-coded clipboard styling (single 1px #999 grid,
     Arial 10pt, 4×8px padding, 8px paragraph gap) — the mTool-render-proven
     baseline. ``border_color`` / ``header_fill`` / ``header_bold`` mirror the
-    optional theme additions; ``None`` keeps the historic clipboard default."""
+    optional theme additions; ``None`` keeps the historic clipboard default.
+
+    Prose additions (handoff item 1): ``heading_size_pt`` / ``heading_weight``
+    drive the ``<h3>`` look, ``list_marker`` the ``<ul>`` bullet glyph, and
+    ``totals_double_underline`` the accountant totals-row convention. ALL
+    default to None/False so an un-customised theme emits byte-for-byte the
+    historic output (the pinning tests depend on that)."""
     border_style: str = "single"           # none | single | double
     font_size_pt: int = 10
     cell_padding_px: tuple[int, int] = (4, 8)   # (vertical, horizontal)
@@ -67,6 +73,10 @@ class NotesTableStyle:
     border_color: str | None = None
     header_fill: str | None = None
     header_bold: bool | None = None
+    heading_size_pt: int | None = None     # None → headings use font_size_pt
+    heading_weight: int | None = None      # None → historic 600
+    list_marker: str | None = None         # None | disc | dash | decimal
+    totals_double_underline: bool = False
 
     @classmethod
     def from_theme(cls, theme: dict | None) -> "NotesTableStyle":
@@ -103,6 +113,17 @@ class NotesTableStyle:
         header_bold = theme.get("headerBold")
         if not isinstance(header_bold, bool):
             header_bold = None
+
+        def _opt_num(key):
+            # Optional numeric field: None (not a fallback value) when absent
+            # or malformed, so "unset" keeps the historic per-surface default.
+            v = theme.get(key)
+            return v if isinstance(v, (int, float)) and not isinstance(v, bool) \
+                else None
+
+        list_marker = theme.get("listMarker")
+        if list_marker not in ("disc", "dash", "decimal"):
+            list_marker = None
         return cls(
             border_style=border_style,
             font_size_pt=_num("fontSizePt", d.font_size_pt),
@@ -111,6 +132,10 @@ class NotesTableStyle:
             border_color=_color("borderColor"),
             header_fill=_color("headerFill"),
             header_bold=header_bold,
+            heading_size_pt=_opt_num("headingSizePt"),
+            heading_weight=_opt_num("headingWeight"),
+            list_marker=list_marker,
+            totals_double_underline=theme.get("totalsDoubleUnderline") is True,
         )
 
 
@@ -162,8 +187,39 @@ def _paragraph_style(o: NotesTableStyle) -> str:
     return _font_css(o) + f" margin: 0 0 {o.paragraph_spacing_px}px 0;"
 
 
+def _heading_font_css(o: NotesTableStyle) -> str:
+    # Headings historically shared the body face + size; heading_size_pt
+    # overrides ONLY the size when the theme sets it, so the un-themed string
+    # stays byte-identical to _font_css.
+    size = o.heading_size_pt if o.heading_size_pt is not None else o.font_size_pt
+    return f"font-family: Arial, sans-serif; font-size: {size}pt;"
+
+
 def _heading_style(o: NotesTableStyle) -> str:
-    return _font_css(o) + " margin: 12px 0 6px 0; font-weight: 600;"
+    weight = o.heading_weight if o.heading_weight is not None else 600
+    return _heading_font_css(o) + f" margin: 12px 0 6px 0; font-weight: {weight};"
+
+
+def _list_marker_css(o: NotesTableStyle) -> str:
+    """Extra <ul> declaration for a themed bullet glyph. Empty when unset so
+    the un-themed output is unchanged (target keeps its default disc). The
+    dash variant uses a CSS string marker (single-quoted — the style attr is
+    serialised with double quotes)."""
+    if o.list_marker == "dash":
+        return " list-style-type: '– ';"
+    if o.list_marker in ("disc", "decimal"):
+        return f" list-style-type: {o.list_marker};"
+    return ""
+
+
+# The classic totals double rule — matches the sidecar floor's convention
+# (notes/format_defaults.py) and the editor toolbar's saved "totals double
+# underline" (3px double black).
+_TOTALS_RULE = " border-bottom: 3px double #000000;"
+
+
+def _is_totals_row(row: Tag) -> bool:
+    return "total" in row.get_text(" ", strip=True).lower()
 
 
 # --- style-merge helpers (port of clipboard.ts) -----------------------------
@@ -411,14 +467,20 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     # stay left while numeric value columns go right.
     for row in soup.find_all("tr"):
         cells = _cells(row)
+        # Themed totals convention: the amount cells of a "total" row get the
+        # double rule. Appended INSIDE the same merged addition so a persisted
+        # per-cell border (user WYSIWYG / sidecar ops) still wins — the merge
+        # skips the whole border family when the cell owns any border prop.
+        totals_row = style.totals_double_underline and _is_totals_row(row)
         for idx, cell in enumerate(cells):
-            align = (" text-align: right;"
-                     if should_right_align_cell(cell.get_text(), idx, len(cells))
-                     else " text-align: left;")
+            numeric = should_right_align_cell(cell.get_text(), idx, len(cells))
+            align = " text-align: right;" if numeric else " text-align: left;"
+            extra = _TOTALS_RULE if totals_row and numeric else ""
             if cell.name == "th":
-                _merge_cell_style(cell, cell_base + _header_extra(style) + align)
+                _merge_cell_style(
+                    cell, cell_base + _header_extra(style) + align + extra)
             else:
-                _merge_cell_style(cell, cell_base + align)
+                _merge_cell_style(cell, cell_base + align + extra)
 
     # After merging, any border the formatter explicitly cleared still reads as
     # `hidden`/`none`; translate those to white so they render invisibly in
@@ -441,8 +503,12 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                          "margin-bottom: 6px; font-weight: 600;")
         else:
             _merge_style(h, heading_style)
+    list_marker_css = _list_marker_css(style)
     for lst in soup.find_all(("ul", "ol", "li")):
-        _merge_style(lst, font_css)
+        # The marker glyph applies to <ul> only — <ol> keeps its numbering and
+        # <li> inherits. Empty when un-themed (byte-identical output).
+        extra = list_marker_css if lst.name == "ul" else ""
+        _merge_style(lst, font_css + extra)
 
     # Carry the font on a wrapping container so any element we did not style
     # (bare <strong>, <em>, loose text) still inherits the face.

@@ -233,3 +233,100 @@ def test_from_theme_drives_decorated_output():
         NotesTableStyle.from_theme({"borderStyle": "double",
                                     "borderColor": "#1F3864"}))
     assert "3px double #1f3864" in out.lower()
+
+
+# --- prose theme fields (house style item 1) --------------------------------
+def test_default_theme_emits_no_prose_theme_css():
+    # The un-customised default must stay byte-identical to the historic
+    # output: no list-style-type, heading at body size / weight 600, no
+    # totals rule.
+    out = decorate_notes_html(
+        "<h3>5 Revenue</h3><ul><li>x</li></ul>"
+        "<table><tbody><tr><td>Total</td><td>1,125</td></tr></tbody></table>")
+    assert "list-style-type" not in out
+    assert "3px double" not in out
+    assert re.search(r'<h3[^>]*style="[^"]*font-size: 10pt[^"]*font-weight: 600', out)
+
+
+def test_heading_size_and_weight_are_theme_driven():
+    style = NotesTableStyle(heading_size_pt=14, heading_weight=700)
+    out = decorate_notes_html("<h3>5 Revenue</h3><p>Body.</p>", style)
+    assert re.search(r'<h3[^>]*style="[^"]*font-size: 14pt', out)
+    assert re.search(r'<h3[^>]*style="[^"]*font-weight: 700', out)
+    # Body paragraphs keep the body size — the heading override is scoped.
+    assert re.search(r'<p[^>]*style="[^"]*font-size: 10pt', out)
+
+
+def test_list_marker_dash_lands_on_ul_only():
+    style = NotesTableStyle(list_marker="dash")
+    out = decorate_notes_html("<ul><li>a</li></ul><ol><li>b</li></ol>", style)
+    assert re.search(r"<ul[^>]*style=\"[^\"]*list-style-type: '– ;?'?", out) or \
+        "list-style-type: '– '" in out
+    # <ol> keeps its numbering — no marker override.
+    assert not re.search(r'<ol[^>]*style="[^"]*list-style-type', out)
+
+
+def test_list_marker_decimal():
+    style = NotesTableStyle(list_marker="decimal")
+    out = decorate_notes_html("<ul><li>a</li></ul>", style)
+    assert re.search(r'<ul[^>]*style="[^"]*list-style-type: decimal', out)
+
+
+def test_totals_double_underline_targets_amount_cells_only():
+    style = NotesTableStyle(totals_double_underline=True)
+    out = decorate_notes_html(
+        "<table><tbody>"
+        "<tr><td>Revenue</td><td>10,000</td></tr>"
+        "<tr><td>Total</td><td>19,500</td></tr>"
+        "</tbody></table>", style)
+    # The total row's amount cell carries the double rule…
+    assert re.search(
+        r'<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">19,500<', out)
+    # …but its label cell and the non-total row do not.
+    assert not re.search(
+        r'<td[^>]*style="[^"]*3px double[^"]*">Total<', out)
+    assert not re.search(
+        r'<td[^>]*style="[^"]*3px double[^"]*">10,000<', out)
+
+
+def test_totals_rule_respects_persisted_cell_border():
+    # A cell that already owns a border (user WYSIWYG / sidecar ops) keeps it —
+    # the merge skips the whole border family, totals rule included.
+    style = NotesTableStyle(totals_double_underline=True)
+    out = decorate_notes_html(
+        '<table><tbody><tr>'
+        '<td>Total</td>'
+        '<td style="border-bottom: 1px solid #185fa5">19,500</td>'
+        '</tr></tbody></table>', style)
+    assert "3px double" not in out
+    assert "border-bottom: 1px solid #185fa5" in out
+
+
+def test_from_theme_maps_prose_fields():
+    s = NotesTableStyle.from_theme({
+        "headingSizePt": 13,
+        "headingWeight": 700,
+        "listMarker": "dash",
+        "totalsDoubleUnderline": True,
+    })
+    assert s.heading_size_pt == 13
+    assert s.heading_weight == 700
+    assert s.list_marker == "dash"
+    assert s.totals_double_underline is True
+
+
+def test_from_theme_prose_fields_default_to_unset():
+    s = NotesTableStyle.from_theme({"fontSizePt": 12})
+    assert s.heading_size_pt is None
+    assert s.heading_weight is None
+    assert s.list_marker is None
+    assert s.totals_double_underline is False
+    # Malformed values are dropped, never crash the fill.
+    bad = NotesTableStyle.from_theme({
+        "headingSizePt": "big", "headingWeight": True,
+        "listMarker": "wingdings", "totalsDoubleUnderline": "yes",
+    })
+    assert bad.heading_size_pt is None
+    assert bad.heading_weight is None
+    assert bad.list_marker is None
+    assert bad.totals_double_underline is False

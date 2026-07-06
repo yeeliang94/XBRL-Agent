@@ -232,3 +232,40 @@ def test_notes_table_style_rejects_malformed(tmp_path, monkeypatch):
     ):
         resp = client.post("/api/settings", json={"notes_table_style": bad})
         assert resp.status_code == 400, bad
+
+
+def test_notes_table_style_prose_fields_round_trip(tmp_path, monkeypatch):
+    """The prose theme fields (house style item 1) persist and read back."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
+    from dotenv import load_dotenv
+
+    resp = client.post("/api/settings", json={
+        "notes_table_style": {
+            "headingSizePt": 13,
+            "headingWeight": 700,
+            "listMarker": "dash",
+            "totalsDoubleUnderline": True,
+        },
+    })
+    assert resp.status_code == 200
+    load_dotenv(env_file, override=True)
+    style = client.get("/api/settings").json()["notes_table_style"]
+    assert style["headingSizePt"] == 13
+    assert style["headingWeight"] == 700
+    assert style["listMarker"] == "dash"
+    assert style["totalsDoubleUnderline"] is True
+
+
+def test_notes_table_style_prose_fields_reject_malformed(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    for bad in (
+        {"headingSizePt": 99},              # out of range
+        {"headingWeight": 150},             # below 400
+        {"listMarker": "wingdings"},        # not an enum member
+        {"totalsDoubleUnderline": "yes"},   # not a boolean
+    ):
+        resp = client.post("/api/settings", json={"notes_table_style": bad})
+        assert resp.status_code == 400, bad
