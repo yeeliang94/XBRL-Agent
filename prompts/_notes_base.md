@@ -169,6 +169,10 @@ of payload objects. Each payload has these fields:
   `{"number": "(a)", …}`, never `{"number": "3a", …}` or
   `{"number": "3(a)", …}`. The parent number already appears once, in the
   parent heading — don't glue it onto the sub-label.
+- `format_ops` (list, optional): the table formatting you OBSERVE in the
+  PDF for this payload's tables, as structured operations — see the
+  FORMATTING OBSERVATION section below. Omit when the payload has no
+  tables or you are unsure; a standard house style applies instead.
 
 ### Heading markup is writer-owned (parent + sub_note headings only)
 
@@ -270,7 +274,9 @@ Everything else — `<script>`, `<style>`, `<img>`, event handlers like
 by the sanitiser before the payload is persisted. Do not rely on them.
 (The human reviewer can later add cell fill / borders in the editor and
 those validated styles DO persist — but YOU must still emit style-free
-HTML. Formatting is a human post-step, not part of your output.)
+HTML in `content`. To convey formatting you observe in the PDF, use the
+separate `format_ops` field — see FORMATTING OBSERVATION below — never
+inline styles in the content.)
 
 Short examples:
 
@@ -324,6 +330,55 @@ The writer renders the Note 5 example with one `<h3>` line
 (`<h3>5 Revenue</h3>`) before the body, and the Note 2.14 example with
 one (`<h3>2.14 Employee benefits</h3>`) followed by the body — including
 its `(a)` / `(b)` bold sub-headers — verbatim.
+
+=== FORMATTING OBSERVATION (format_ops) ===
+
+While a note's table is in front of you, you can SEE its visible
+formatting. Record that observation in the payload's optional
+`format_ops` field as structured operations. Rules:
+
+- **Content always comes first.** Never spend effort on formatting at the
+  expense of content coverage or fidelity. When unsure, omit `format_ops`
+  entirely — a standard house style is applied automatically.
+- **`content` stays style-free.** `format_ops` is the ONLY formatting
+  channel; the writer validates and applies it deterministically. If the
+  operations fail validation they are dropped (the house style applies)
+  — your content is never rejected because of formatting.
+- **Match the source, do not beautify.** Most AFS tables are borderless
+  with summation rules only — if the source shows no grid, clear the
+  borders. Apply a shaded fill only where the PDF actually shows one.
+- **Match each rule's EXTENT.** Summation rules usually underline ONLY
+  the amount column(s), not the label column — use `cols` on a
+  `total_rows` target for that. A bare `total_rows` styles every cell
+  of the row; use it only when the PDF's rule truly spans the full row.
+- `table` indices are zero-based within THIS payload's `content` — your
+  first table is `"table": 0` even if other payloads also have tables.
+
+Targets: `{"table": 0, "range": "all"}` · `{"table": 0, "range":
+"header"}` · `{"table": 0, "range": "total_rows", "cols": [2, 3]}` ·
+`{"table": 0, "range": "numeric_cells"}` · `{"table": 0, "cell":
+{"r": 1, "c": 2}}` (1-based) · `{"table": 0, "rows": [1, 4], "cols": [2]}`.
+
+Style keys: `border_top` / `border_right` / `border_bottom` /
+`border_left` (`{"width": "1px", "style": "solid", "color": "#000000"}`;
+`"style": "double"` with `"width": "3px"` for a double rule),
+`clear_border` (list of sides), `fill` (`"#f2f2f2"` or `"transparent"`),
+`text_align` (`"left"|"center"|"right"`), `bold`, `italic`, `underline`.
+
+Example — a borderless source table whose total row has a single rule
+above and double rule below the amount columns (columns 2-3):
+
+```json
+"format_ops": [
+  {"target": {"table": 0, "range": "all"},
+   "style": {"clear_border": ["top", "right", "bottom", "left"]}},
+  {"target": {"table": 0, "range": "total_rows", "cols": [2, 3]},
+   "style": {"border_top": {"width": "1px", "style": "solid", "color": "#000000"},
+             "border_bottom": {"width": "3px", "style": "double", "color": "#000000"}}},
+  {"target": {"table": 0, "range": "numeric_cells"},
+   "style": {"text_align": "right"}}
+]
+```
 
 === PAGE REQUESTS ===
 
