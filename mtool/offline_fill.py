@@ -619,10 +619,22 @@ _FN_BODY_STYLE = ("font-family:'Arial';font-size:12pt;"
 _FN_CR = "_x000D_\n"
 
 
+# Characters that are ILLEGAL in XML 1.0 even when numeric-escaped: the C0
+# control range except tab/LF/CR, plus the two non-characters U+FFFE/U+FFFF. A
+# PDF-extracted note can carry one (a stray vertical-tab, form-feed, NUL, etc.);
+# left in a shared string it makes xl/sharedStrings.xml unreadable, so Excel/
+# mTool "repair or remove the unreadable content" on open — the reported
+# "String properties from /xl/sharedStrings.xml" repair. XML has no legal way to
+# represent them, so the only fix is to drop them. Tab/LF/CR stay.
+_XML_ILLEGAL_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
 def _xml_escape(text: str) -> str:
-    # & first, then < >. Storing an HTML string as XML text content: the reader
-    # unescapes exactly one level, so an existing HTML entity (&amp;) correctly
-    # survives as &amp;amp; on disk and reads back as &amp; — do NOT special-case.
+    # Strip XML-illegal chars FIRST (they can't be escaped), then & < >. Storing
+    # an HTML string as XML text content: the reader unescapes exactly one level,
+    # so an existing HTML entity (&amp;) correctly survives as &amp;amp; on disk
+    # and reads back as &amp; — do NOT special-case.
+    text = _XML_ILLEGAL_RE.sub("", text)
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 

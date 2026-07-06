@@ -28,6 +28,26 @@ from mtool.offline_fill import (
 SHEET = "SOFP-Sub-CuNonCu"
 
 
+def test_xml_escape_strips_illegal_chars_and_stays_valid_xml():
+    # A PDF-extracted note payload carrying XML-illegal control chars (NUL,
+    # vertical tab, form feed, unit separator) would make xl/sharedStrings.xml
+    # unreadable → Excel's "String properties … repair or remove the unreadable
+    # content" on open. _xml_escape must drop them while keeping legal
+    # whitespace and escaping markup.
+    import xml.etree.ElementTree as ET
+
+    from mtool.offline_fill import _xml_escape
+
+    raw = "Lease\x00 note\x0b<b>&</b>\x0c end\x1f\tOK\nline"
+    esc = _xml_escape(raw)
+    for bad in ("\x00", "\x0b", "\x0c", "\x1f"):
+        assert bad not in esc, f"illegal {bad!r} survived"
+    assert "\t" in esc and "\n" in esc            # legal whitespace kept
+    assert "&amp;" in esc and "&lt;b&gt;" in esc  # markup escaped
+    # The exact property that was failing: the text round-trips as valid XML.
+    ET.fromstring(f'<t xml:space="preserve">{esc}</t>')
+
+
 def test_offline_fill_imports_with_no_third_party_deps():
     """The tool travels to Windows as one stdlib-only file (CLAUDE.md #28).
 
