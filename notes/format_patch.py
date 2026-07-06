@@ -111,6 +111,39 @@ def apply_sheet_patch(
     )
 
 
+def apply_cell_operations(html: str, operations: list[dict[str, Any]]) -> str:
+    """Apply ONE cell's formatting operations through the same gates as
+    :func:`apply_sheet_patch` — op application → sanitiser → format-only
+    verify — and return the styled HTML.
+
+    This is the write-time entry point for the extraction formatting
+    sidecar + house-style floor (docs/PLAN-notes-format-sidecar.md). The
+    sheet-level :func:`apply_sheet_patch` keeps its formatter-agent contract
+    (row map + change accounting) untouched; this single-cell wrapper exists
+    so BOTH the agent-observed ops and the deterministic floor flow through
+    exactly one styling code path.
+
+    Raises :class:`FormatPatchError` when the ops are malformed, target
+    elements that don't exist in ``html``, produce CSS the sanitiser
+    rejects, or change rendered content — the caller decides the fallback
+    (the notes writer drops to the house style, then to unstyled HTML;
+    formatting must never block a content write).
+    """
+    if not isinstance(operations, list) or not operations:
+        raise FormatPatchError("operations must be a non-empty list")
+    before = html or ""
+    after = _apply_operations(before, operations)
+    cleaned, warnings = sanitize_notes_html(after)
+    if warnings:
+        raise FormatPatchError(
+            f"sanitizer rejected formatting CSS: {warnings[0]}"
+        )
+    vr = verify_format_only(before, cleaned)
+    if not vr.ok:
+        raise FormatPatchError(vr.reason)
+    return cleaned
+
+
 def _canonical_for_compare(html: str) -> str:
     cleaned, _warnings = sanitize_notes_html(html or "")
     return cleaned

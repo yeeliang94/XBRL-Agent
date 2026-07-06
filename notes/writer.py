@@ -22,12 +22,15 @@ then SequenceMatcher fallback at 0.85 similarity.
 from __future__ import annotations
 
 import json
+import copy
 import logging
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
 
+from notes.format_defaults import house_style_enabled, house_style_ops
+from notes.format_patch import FormatPatchError, apply_cell_operations
 from notes.labels import normalize_label
 from notes.html_to_text import (
     html_to_excel_text,
@@ -186,6 +189,10 @@ def write_notes_workbook(
     sidecar_entries: list[dict] = []
     cells_written: list[dict] = []
     numeric_cells: list[dict] = []
+    # Styling-source tally for the per-sheet observability line (Step 8 of
+    # the sidecar plan): how many prose cells were styled from the agent's
+    # observation, the deterministic floor, or left unstyled.
+    style_counts: dict[str, int] = {"ops": 0, "floor": 0, "unstyled": 0}
     # Reverse map row→template label so cells_written can carry the
     # template's verbatim col-A text (what the editor shows as the row
     # header) rather than the agent's possibly-fuzzy request.
@@ -210,10 +217,21 @@ def write_notes_workbook(
                 html_for_db = truncate_with_footer(
                     combined.content, combined.source_pages,
                 )
+                # Formatting sidecar (docs/PLAN-notes-format-sidecar.md):
+                # style the DB html AFTER truncation, so ops targeting a
+                # truncated-away table fail cleanly into the floor. The
+                # xlsx write above stays unstyled — Excel cells hold
+                # flattened text; styling is a panel/paste concern.
+                row_label = row_to_label.get(row, combined.chosen_row_label)
+                html_for_db, style_source = _style_cell_html(
+                    html_for_db, combined.format_ops, row_label,
+                    sanitizer_warnings,
+                )
+                style_counts[style_source] += 1
                 cells_written.append({
                     "sheet": sheet_name,
                     "row": row,
-                    "label": row_to_label.get(row, combined.chosen_row_label),
+                    "label": row_label,
                     "html": html_for_db,
                     "evidence": combined.evidence or None,
                     "source_pages": aggregated_pages,
@@ -267,6 +285,16 @@ def write_notes_workbook(
                 "content_preview": preview,
             })
 
+    if cells_written:
+        # One line per sheet, not per cell — enough for an operator to see
+        # sidecar coverage (how often agents observe formatting vs falling
+        # to the floor) without drowning the log.
+        logger.info(
+            "Notes styling on %s: %d ops-styled, %d floor-styled, %d unstyled",
+            sheet_name, style_counts["ops"], style_counts["floor"],
+            style_counts["unstyled"],
+        )
+
     try:
         # Item 8 / gotcha #22: atomic save — old-or-new, never truncated.
         atomic_save_workbook(wb, output_path)
@@ -303,6 +331,44 @@ def write_notes_workbook(
         cells_written=cells_written,
         numeric_cells=numeric_cells,
     )
+
+
+def _style_cell_html(
+    html: str,
+    format_ops: Optional[list],
+    row_label: str,
+    warnings: list[str],
+) -> tuple[str, str]:
+    """Style one prose cell's HTML: agent ops → house-style floor → unstyled.
+
+    Returns ``(styled_html, source)`` where source is ``"ops"`` / ``"floor"``
+    / ``"unstyled"``. NEVER raises — formatting must not block a content
+    write (docs/PLAN-notes-format-sidecar.md). A dropped agent observation
+    is surfaced through the existing sanitiser-warnings channel (same
+    species of event: "the writer adjusted your styling"), so it reaches
+    NotesAgentResult.warnings and history like other write-time drops.
+    """
+    if format_ops:
+        try:
+            return apply_cell_operations(html, format_ops), "ops"
+        except FormatPatchError as exc:
+            warnings.append(
+                f"{row_label}: format_ops dropped ({exc}) — "
+                f"house style applied instead where enabled"
+            )
+    if house_style_enabled():
+        floor_ops = house_style_ops(html)
+        if floor_ops:
+            try:
+                return apply_cell_operations(html, floor_ops), "floor"
+            except FormatPatchError as exc:
+                # The floor is synthesized from the same HTML it styles, so
+                # a failure here is a bug worth logging — but still never a
+                # blocked write.
+                logger.warning(
+                    "house-style floor failed for %r: %s", row_label, exc,
+                )
+    return html, "unstyled"
 
 
 def _inject_headings(payload: NotesPayload) -> NotesPayload:
@@ -348,6 +414,9 @@ def _inject_headings(payload: NotesPayload) -> NotesPayload:
         source_note_refs=list(payload.source_note_refs),
         parent_note=payload.parent_note,
         sub_note=payload.sub_note,
+        # <h3> headings add no <table>s, so the ops' table indices stay
+        # valid across the prepend — safe to carry through unchanged.
+        format_ops=payload.format_ops,
     )
 
 
@@ -391,6 +460,9 @@ def _sanitize_payload(
         # would see None.
         parent_note=payload.parent_note,
         sub_note=payload.sub_note,
+        # The sanitiser never adds/removes <table>s (it strips attrs and
+        # disallowed tags), so the sidecar ops stay index-valid here too.
+        format_ops=payload.format_ops,
     )
 
 
@@ -680,7 +752,48 @@ def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
         # sub_note should match across them, so taking [0] is safe.
         parent_note=payloads[0].parent_note,
         sub_note=payloads[0].sub_note,
+        # Sidecar ops re-indexed against the concatenated content (the
+        # payload list here is already in the same sorted order the
+        # `contents` join used, so chunk offsets line up).
+        format_ops=_combine_format_ops(payloads),
     )
+
+
+def _combine_format_ops(
+    sorted_payloads: list[NotesPayload],
+) -> Optional[list]:
+    """Merge per-payload ``format_ops`` for a combined (multi-payload) cell.
+
+    Each payload's ops address tables by index LOCAL to its own content;
+    the combined cell concatenates contents in the caller's sorted order,
+    so every op's ``target.table`` is offset by the number of ``<table>``
+    elements in the chunks before it.
+
+    Any op WITHOUT an integer ``target.table`` (e.g. a ``blocks: all``
+    prose target) is ambiguous once chunks are concatenated — it would
+    style every chunk's blocks, not just its author's. In that case ALL
+    ops for the cell are dropped (return ``None``) so the house-style
+    floor applies uniformly instead of a half-observed mix.
+    """
+    ops_out: list = []
+    table_offset = 0
+    for p in sorted_payloads:
+        chunk = p.content.strip()
+        if not chunk:
+            continue  # mirrors the `contents` filter in _combine_payloads
+        if p.format_ops:
+            for op in p.format_ops:
+                target = op.get("target") if isinstance(op, dict) else None
+                tbl = target.get("table") if isinstance(target, dict) else None
+                if not isinstance(tbl, int) or isinstance(tbl, bool):
+                    return None  # ambiguous in a combined cell — floor wins
+                shifted = copy.deepcopy(op)
+                shifted["target"]["table"] = tbl + table_offset
+                ops_out.append(shifted)
+        # Sanitised content carries plain lowercase tags, so a string count
+        # is reliable here (no attributes on <table> from agents).
+        table_offset += chunk.lower().count("<table")
+    return ops_out or None
 
 
 # Canonical evidence-column map. Importers (e.g. notes/agent.py's prompt

@@ -1358,6 +1358,12 @@ def create_notes_agent(
                     source_note_refs=source_note_refs,
                     parent_note=parent_note,
                     sub_note=sub_note,
+                    # Formatting sidecar (docs/PLAN-notes-format-sidecar.md):
+                    # optional table-formatting observation. Shape errors
+                    # fall through NotesPayload's validator into the errors
+                    # list below; op-level problems degrade at write time to
+                    # the house-style floor, never a rejected payload.
+                    format_ops=raw.get("format_ops"),
                 ))
             except (KeyError, ValueError, TypeError, AttributeError) as e:
                 errors.append(f"Invalid payload {raw!r}: {e}")

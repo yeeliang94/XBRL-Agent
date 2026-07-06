@@ -15,9 +15,12 @@ writer is responsible for the markup. See `notes/writer.py`.
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 # Recognised keys for NotesPayload.numeric_values. Wrong keys used to fall
@@ -115,6 +118,15 @@ class NotesPayload:
     # writer (not the model) is what makes headings impossible to drift.
     parent_note: Optional[dict] = None
     sub_note: Optional[dict] = None
+    # Formatting sidecar (docs/PLAN-notes-format-sidecar.md): the table
+    # formatting the agent OBSERVED in the PDF for THIS payload's tables,
+    # as the constrained op vocabulary of notes/format_patch.py — never
+    # inline styles (content stays style-free, gotcha #16). Optional: a
+    # missing/empty value means "no observation" and the writer falls back
+    # to the deterministic house-style floor. Table indices are zero-based
+    # WITHIN this payload's own content; the writer re-offsets them when it
+    # concatenates payloads into one cell.
+    format_ops: Optional[list] = None
 
     def __post_init__(self) -> None:
         if not self.chosen_row_label or not self.chosen_row_label.strip():
@@ -151,3 +163,29 @@ class NotesPayload:
             self.numeric_values = {
                 k: _coerce_numeric(k, v) for k, v in self.numeric_values.items()
             }
+        if self.format_ops is not None:
+            # Lenient shape check only (list of op objects) — the full
+            # target/style validation happens in apply_cell_operations at
+            # write time, where a failure degrades to the house style
+            # rather than rejecting the payload. A structurally-wrong value
+            # is still a parse error (same path as other malformed fields).
+            if not isinstance(self.format_ops, list) or not all(
+                isinstance(op, dict) for op in self.format_ops
+            ):
+                raise ValueError(
+                    "format_ops must be a list of operation objects "
+                    "({'target': ..., 'style': ...})"
+                )
+            if not self.format_ops:
+                self.format_ops = None  # empty list == no observation
+            elif self.numeric_values:
+                # Numeric sheets (13/14) hold plain value cells, not HTML
+                # tables — formatting is out of scope there, mirroring the
+                # formatter endpoint's 422. Drop with a log, don't reject:
+                # the numeric content itself is fine.
+                logger.warning(
+                    "format_ops ignored on numeric payload %r — numeric "
+                    "sheets are out of formatting scope",
+                    self.chosen_row_label,
+                )
+                self.format_ops = None
