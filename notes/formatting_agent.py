@@ -23,6 +23,8 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 
 from agent_tracing import save_messages_trace
 from db import repository as repo
+from mtool.notes_decorate import NotesTableStyle
+from mtool.notes_exporter import _resolve_note_html
 from notes.format_patch import (
     FormatPatchError,
     apply_sheet_patch,
@@ -332,7 +334,13 @@ async def _run_notes_formatter_impl(
 
     rows_for_patch = {c.row: c.html for c in cells}
     page_set = sorted({p for c in cells for p in c.source_pages})
-    prompt = _build_user_prompt(sheet, cells, page_set)
+    # Handoff item 2: hand the agent the deterministic mTool size verdicts
+    # (lite / flat / oversize) for this sheet, computed with the run's
+    # resolved theme, so its judgement targets the right remedy per flag.
+    size_signals = collect_size_signals(
+        cells, _resolve_notes_table_theme(db_path, run_id),
+    )
+    prompt = _build_user_prompt(sheet, cells, page_set, size_signals)
 
     agent, deps = create_notes_formatter_agent(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
@@ -521,7 +529,82 @@ async def _run_notes_formatter_impl(
     }
 
 
-def _build_user_prompt(sheet: str, cells: list[Any], pages: list[int]) -> str:
+def collect_size_signals(
+    cells: list[Any], theme: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    """Deterministic mTool size signals for the formatter agent (handoff
+    item 2). Re-runs the SAME full → lite → flat → oversize ladder the mTool
+    exporter uses (:func:`mtool.notes_exporter._resolve_note_html`, sized
+    against Excel's 32,767-char cell limit with the run's resolved theme), so
+    the agent is HANDED the verdicts instead of re-deriving size math —
+    deterministic code owns what-fits, the agent owns what-to-do.
+
+    Returns one entry per flagged cell: ``{row, label, tier}`` with tier in
+    ``lite`` / ``flat`` / ``oversize``. Unflagged (``full``) cells are omitted
+    — they need no size attention.
+    """
+    style = NotesTableStyle.from_theme(theme)
+    signals: list[dict[str, Any]] = []
+    for c in cells:
+        try:
+            _html, tier = _resolve_note_html(c.html or "", style, True)
+        except Exception:  # noqa: BLE001 — signals are advisory; never block
+            logger.warning(
+                "size-signal computation failed for row %s", c.row, exc_info=True,
+            )
+            continue
+        if tier in ("lite", "flat", "oversize"):
+            signals.append({"row": c.row, "label": c.label, "tier": tier})
+    return signals
+
+
+# Remedy text per tier — the division of labour the prompt enforces: the
+# agent judges WHAT to simplify/split; it never re-derives WHETHER it fits.
+_TIER_REMEDY = {
+    "oversize": (
+        "SKIPPED by the mTool fill — too big even with no styling. Remedy: "
+        "the CONTENT must be split into smaller notes. You cannot fix this "
+        "with styling and must not try; describe the recommended split in "
+        "format_summary."
+    ),
+    "flat": (
+        "written with ALL styling dropped to fit. Remedy: SIMPLIFY the "
+        "styling — clear redundant manual formatting on its heaviest tables "
+        "and do not add new styling to this note; summarise what you "
+        "simplified in format_summary."
+    ),
+    "lite": (
+        "written with reduced (lite) formatting. No action required — do "
+        "not add styling weight to this note."
+    ),
+}
+
+
+def _size_signals_block(signals: list[dict[str, Any]]) -> str:
+    if not signals:
+        return ""
+    lines = [
+        "\n\nSIZE SIGNALS (deterministic — computed by code against Excel's "
+        "32,767-character cell limit; do NOT re-derive or dispute sizes):"
+    ]
+    for s in signals:
+        lines.append(
+            f"- row {s['row']} ({s['label']}): {s['tier'].upper()} — "
+            f"{_TIER_REMEDY[s['tier']]}"
+        )
+    counts = {t: sum(1 for s in signals if s["tier"] == t)
+              for t in ("lite", "flat", "oversize")}
+    lines.append(
+        f"Counts: formatting_reduced={counts['lite']}, "
+        f"formatting_dropped={counts['flat']}, oversize={counts['oversize']}."
+    )
+    return "\n".join(lines)
+
+
+def _build_user_prompt(
+    sheet: str, cells: list[Any], pages: list[int],
+    size_signals: Optional[list[dict[str, Any]]] = None,
+) -> str:
     compact_rows = [
         {
             "row": c.row, "label": c.label, "html": c.html,
@@ -532,7 +615,8 @@ def _build_user_prompt(sheet: str, cells: list[Any], pages: list[int]) -> str:
     ]
     return (
         f"Format sheet {sheet!r}. First call view_pdf_pages for these source "
-        f"pages: {pages}. Then return one JSON patch for this sheet only.\n\n"
+        f"pages: {pages}. Then return one JSON patch for this sheet only."
+        f"{_size_signals_block(size_signals or [])}\n\n"
         f"CURRENT CELLS:\n{json.dumps(compact_rows, ensure_ascii=False)}"
     )
 

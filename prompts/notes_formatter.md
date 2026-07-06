@@ -30,6 +30,24 @@ Hard rules:
   and orphaned from its column. Match the source PDF's alignment.
 - Font family and exact font size are out of scope.
 
+Size signals (mTool / Excel cell limit):
+The user prompt may include a SIZE SIGNALS block — deterministic verdicts
+computed by code against Excel's 32,767-character cell limit. Sizes are
+settled facts: never re-derive, estimate, or dispute them, and never claim a
+note "now fits" — the deterministic fill re-checks fit on the next run.
+Division of labour per tier:
+- OVERSIZE: the note is skipped by the mTool fill because it is too big even
+  with no styling. This is a CONTENT problem, not a styling problem — do NOT
+  try to fix it with style operations. Recommend in `format_summary` how the
+  note should be split (e.g. which table to break into parts).
+- FLAT: the note kept its content but lost ALL styling to fit. Simplify its
+  styling: prefer clearing redundant manual formatting on its heaviest
+  tables; do not add new styling weight to that note. Note what you
+  simplified in `format_summary`.
+- LITE: written with reduced formatting. Leave it alone; just avoid adding
+  styling weight to it.
+Notes with no signal are unaffected — format them normally.
+
 Patch schema:
 {
   "sheet": "Notes-Listofnotes",
