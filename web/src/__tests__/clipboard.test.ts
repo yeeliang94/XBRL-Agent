@@ -220,6 +220,27 @@ describe("copyHtmlAsRichText", () => {
     expect(out.toLowerCase()).not.toContain("1px solid #ffffff");
   });
 
+  test("decorateHtmlForClipboard_whites_out_grouped_border_style_hidden", () => {
+    // Chrome collapses uniform per-side hidden borders into the grouped
+    // `border-style: hidden` longhand (gotcha #16) — the shorthand-only
+    // white-out missed it, leaving a grey TX line on paste.
+    const out = decorateHtmlForClipboard(
+      '<table><tr><td style="border-width: 1px; border-style: hidden; border-color: #000000">x</td></tr></table>',
+    );
+    expect(out).not.toContain("hidden");
+    expect((out.toLowerCase().match(/1px solid #ffffff/g) || []).length).toBe(4);
+  });
+
+  test("decorateHtmlForClipboard_grouped_border_whites_only_hidden_sides", () => {
+    const out = decorateHtmlForClipboard(
+      '<table><tr><td style="border-width: 1px; border-style: solid hidden solid hidden; border-color: #000000">x</td></tr></table>',
+    );
+    expect(out).not.toContain("hidden");
+    expect(out).toContain("border-top: 1px solid #000000");
+    expect(out).toContain("border-bottom: 1px solid #000000");
+    expect((out.toLowerCase().match(/1px solid #ffffff/g) || []).length).toBe(2);
+  });
+
   test("copyHtmlAsRichText_writes_decorated_html_to_clipboard", async () => {
     // End-to-end pin: the modern Clipboard API path must pass the
     // DECORATED html (with inline styles) into the text/html blob,

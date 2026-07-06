@@ -530,6 +530,55 @@ describe("MtoolFillModal", () => {
     expect((screen.getByLabelText(/current_year column/i) as HTMLInputElement).value).toBe("E");
   });
 
+  test("ignores a stale column-detect response after the file changed", async () => {
+    // Pick template A then quickly template B; resolve B first, then the slow A.
+    // A's stale response must NOT overwrite B's column map (else Fill would send
+    // A's layout as an explicit override and mis-target B).
+    const deferreds: Array<() => void> = [];
+    let detectCall = 0;
+    mockFetch((url) => {
+      if (url.includes("/mtool-fill/detect-columns")) {
+        const which = detectCall++;
+        return new Promise<Response>((resolve) => {
+          deferreds[which] = () =>
+            resolve(
+              new Response(
+                JSON.stringify({
+                  confidence: "high",
+                  detected: {
+                    "SOFP-Sub-CuNonCu": {
+                      label_column: which === 0 ? "A" : "D",
+                      columns: { current_year: which === 0 ? "B" : "E" },
+                      confidence: "high",
+                      notes: [],
+                    },
+                  },
+                }),
+                { status: 200 }
+              )
+            );
+        });
+      }
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    const input = screen.getByLabelText(/mtool template file/i);
+    fireEvent.change(input, { target: { files: [new File(["a"], "a.xlsx")] } });
+    fireEvent.change(input, { target: { files: [new File(["b"], "b.xlsx")] } });
+    await waitFor(() => expect(deferreds[1]).toBeTruthy());
+
+    deferreds[1](); // resolve B (current)
+    await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
+    expect((screen.getByLabelText(/label column/i) as HTMLInputElement).value).toBe("D");
+
+    deferreds[0](); // resolve stale A
+    await new Promise((r) => setTimeout(r, 0));
+    // B's layout still stands — the stale response was dropped.
+    expect((screen.getByLabelText(/label column/i) as HTMLInputElement).value).toBe("D");
+  });
+
   test("surfaces a server error", async () => {
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch")) {
