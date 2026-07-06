@@ -851,7 +851,64 @@ def test_shared_string_ops_roundtrip():
     out = replace_shared_string(sst, 0, "<p>x & y</p>")
     assert "&lt;p&gt;x &amp; y&lt;/p&gt;" in out
     out2, idx = append_shared_string(sst, "z")
-    assert idx == 2 and 'count="3"' in out2 and 'uniqueCount="3"' in out2
+    # Appending an <si> adds a UNIQUE string but NO cell reference: uniqueCount
+    # rises (2 -> 3), `count` (the reference total) stays 2. Conflating them was
+    # the sharedStrings "String properties" corruption (Windows 2026-07-06).
+    assert idx == 2 and 'count="2"' in out2 and 'uniqueCount="3"' in out2
+
+
+def _assert_sst_consistent(path):
+    """The written sharedStrings header must match reality: uniqueCount = the
+    <si> count, count = every t="s" reference across all worksheets. A mismatch
+    is what makes Excel 'repair' (corrupt) the file on open."""
+    import re
+    import zipfile
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        sst = z.read("xl/sharedStrings.xml").decode("utf-8")
+        refs = sum(len(re.findall(r'<c\b[^>]*?\bt="s"',
+                                  z.read(n).decode("utf-8")))
+                   for n in names if n.startswith("xl/worksheets/")
+                   and n.endswith(".xml"))
+    si_count = len(re.findall(r"<si\b", sst))
+    hdr = re.search(r"<sst\b[^>]*>", sst).group(0)
+    declared_count = int(re.search(r'\bcount="(\d+)"', hdr).group(1))
+    declared_unique = int(re.search(r'\buniqueCount="(\d+)"', hdr).group(1))
+    assert declared_unique == si_count, (
+        f"uniqueCount={declared_unique} but {si_count} <si> present")
+    assert declared_count == refs, (
+        f"count={declared_count} but {refs} t=\"s\" references present")
+
+
+def test_fill_notes_keeps_sst_counts_consistent_on_append(tmp_path,
+                                                          footnote_template):
+    """Filling an empty payload cell (append <si> + repoint) leaves the header
+    exactly consistent — the repoint reuses the cell's reference, so `count`
+    must NOT rise for it."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"key": "fn_20", "html": "<p>Inventories note</p>"}]},
+        output_path=str(out))
+    assert report["status"] == "ok", report
+    _assert_sst_consistent(str(out))
+
+
+def test_create_missing_keeps_sst_counts_consistent(tmp_path,
+                                                    orphan_pool_template):
+    """The create path adds a new row (3 t=\"s\" refs) + a trigger + appended
+    <si> payloads. The header must still reconcile exactly."""
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        orphan_pool_template,
+        {"footnotes": [
+            {"label": "Accrued expenses and other liabilities",
+             "html": "<p>accruals</p>"},
+            {"label": "Capital management", "html": "<p>capman</p>"},
+            {"label": "Deferred taxation", "html": "<p>dt</p>"}]},
+        output_path=str(out), create_missing=True)
+    assert report["status"] == "ok", report
+    _assert_sst_consistent(str(out))
 
 
 def test_fill_notes_command_end_to_end(tmp_path, footnote_template, capsys):
