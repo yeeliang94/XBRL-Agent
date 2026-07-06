@@ -218,7 +218,7 @@ describe("MtoolFillModal", () => {
     await waitFor(() => expect(screen.getByText(/review before validate/i)).toBeTruthy());
     expect(screen.queryByText(/safe to validate/i)).toBeNull();
     // Notes failure detail incl. mismatches is surfaced.
-    expect(screen.getByText(/1 unmatched, 2 failed read-back/)).toBeTruthy();
+    expect(screen.getByText(/1 not placed, 2 failed read-back/)).toBeTruthy();
   });
 
   test("offers a create-missing toggle and previews what would be created", async () => {
