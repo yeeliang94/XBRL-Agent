@@ -79,4 +79,49 @@ describe("tagNumericCells", () => {
     tagNumericCells(root);
     expect(cells[1].classList.contains("is-numeric")).toBe(false);
   });
+
+  test("tags totals-row amount cells for the theme's double underline", () => {
+    const root = document.createElement("div");
+    root.innerHTML =
+      "<table>" +
+      "<tr><td>Revenue</td><td>10,000</td></tr>" +
+      "<tr><td>Total</td><td>19,500</td></tr>" +
+      "</table>";
+    tagNumericCells(root);
+    const rows = Array.from(root.querySelectorAll("tr"));
+    const nonTotal = Array.from(rows[0].children) as HTMLElement[];
+    const total = Array.from(rows[1].children) as HTMLElement[];
+    expect(total[1].classList.contains("is-totals-num")).toBe(true);
+    // Label cell and non-total rows are never tagged.
+    expect(total[0].classList.contains("is-totals-num")).toBe(false);
+    expect(nonTotal[1].classList.contains("is-totals-num")).toBe(false);
+  });
+
+  test("totals tag stands down when the cell owns ANY border side", () => {
+    // Preview/paste parity (peer-review MEDIUM): the clipboard/mTool merge
+    // skips the whole border FAMILY once a cell carries any border/border-*
+    // declaration — a persisted `border-top` (no border-bottom) must
+    // therefore also suppress the preview's totals underline, or the editor
+    // would show a rule the paste doesn't have.
+    const root = document.createElement("div");
+    root.innerHTML =
+      "<table><tr>" +
+      "<td>Total</td>" +
+      '<td style="border-top: 1px solid #185fa5">19,500</td>' +
+      '<td style="background-color: #f4f4f4">20,094</td>' +
+      "</tr></table>";
+    tagNumericCells(root);
+    const cells = Array.from(root.querySelectorAll("td")) as HTMLElement[];
+    // Owns border-top → whole border family is the cell's → no totals tag.
+    expect(cells[1].classList.contains("is-totals-num")).toBe(false);
+    // A non-border style (fill) does NOT own the border family → tagged.
+    expect(cells[2].classList.contains("is-totals-num")).toBe(true);
+    // Idempotency: a cell that GAINS a border loses the tag on re-run.
+    cells[2].setAttribute(
+      "style",
+      "background-color: #f4f4f4; border-bottom: 1px solid #000",
+    );
+    tagNumericCells(root);
+    expect(cells[2].classList.contains("is-totals-num")).toBe(false);
+  });
 });

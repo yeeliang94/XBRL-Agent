@@ -172,3 +172,70 @@ describe("clipboardFormat — theme colour fields (notes table theme)", () => {
     expect(loaded.headerBold).toBe(false);
   });
 });
+
+describe("clipboardFormat — prose theme fields (house style item 1)", () => {
+  test("parseThemeOptions attaches prose fields only when valid", () => {
+    const out = parseThemeOptions({
+      headingSizePt: 13,
+      headingWeight: 700,
+      listMarker: "dash",
+      totalsDoubleUnderline: true,
+    });
+    expect(out.headingSizePt).toBe(13);
+    expect(out.headingWeight).toBe(700);
+    expect(out.listMarker).toBe("dash");
+    expect(out.totalsDoubleUnderline).toBe(true);
+  });
+
+  test("parseThemeOptions drops malformed prose fields (default stays unset)", () => {
+    const out = parseThemeOptions({
+      headingSizePt: "big" as unknown as number,
+      headingWeight: NaN,
+      listMarker: "wingdings" as unknown as "disc",
+      totalsDoubleUnderline: "yes" as unknown as boolean,
+    });
+    expect(out.headingSizePt).toBeUndefined();
+    expect(out.headingWeight).toBeUndefined();
+    expect(out.listMarker).toBeUndefined();
+    expect(out.totalsDoubleUnderline).toBeUndefined();
+    // The un-customised default carries none of the prose fields at all —
+    // the byte-compat contract for every downstream surface.
+    const def = parseThemeOptions({});
+    expect("headingSizePt" in def).toBe(false);
+    expect("listMarker" in def).toBe(false);
+  });
+
+  test("themeToCssVars: default keeps the editor's historic heading + bullets", () => {
+    const vars = themeToCssVars(DEFAULT_FORMAT_OPTIONS);
+    expect(vars["--nt-heading-size"]).toBe("15px");
+    expect(vars["--nt-heading-weight"]).toBe("600");
+    expect(vars["--nt-list-marker"]).toBe("disc");
+    // Totals var only exists when the convention is ON.
+    expect(vars["--nt-totals-border"]).toBeUndefined();
+  });
+
+  test("themeToCssVars: customised prose fields drive the editor vars", () => {
+    const vars = themeToCssVars(
+      parseThemeOptions({
+        ...DEFAULT_FORMAT_OPTIONS,
+        headingSizePt: 12,
+        headingWeight: 700,
+        listMarker: "dash",
+        totalsDoubleUnderline: true,
+      }),
+    );
+    expect(vars["--nt-heading-size"]).toBe("16px"); // 12pt → 16px
+    expect(vars["--nt-heading-weight"]).toBe("700");
+    expect(vars["--nt-list-marker"]).toBe('"– "');
+    expect(vars["--nt-totals-border"]).toBe("3px double #000000");
+  });
+
+  test("resolveTheme: per-run override wins for prose fields too", () => {
+    const theme = resolveTheme(
+      { totalsDoubleUnderline: true },
+      { headingWeight: 700 },
+    );
+    expect(theme.totalsDoubleUnderline).toBe(true);
+    expect(theme.headingWeight).toBe(700);
+  });
+});

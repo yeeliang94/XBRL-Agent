@@ -15,6 +15,7 @@
 // back-compat but the firm default now lives on the server.)
 
 export type BorderStyle = "none" | "single" | "double";
+export type ListMarker = "disc" | "dash" | "decimal";
 
 export interface ClipboardFormatOptions {
   /** Grid-line style applied to every table cell. */
@@ -35,6 +36,16 @@ export interface ClipboardFormatOptions {
   headerFill?: string;
   /** Whether header cells render bold. Absent → true (the historic behaviour). */
   headerBold?: boolean;
+  /** Heading (`<h3>`) font size in points. Absent → each surface keeps its
+   *  historic default (editor 15px, clipboard/mTool the body size). */
+  headingSizePt?: number;
+  /** Heading font weight (400–800). Absent → the historic 600. */
+  headingWeight?: number;
+  /** `<ul>` bullet glyph. Absent → the target's default disc. */
+  listMarker?: ListMarker;
+  /** Accountant totals convention: 3px double rule under the amount cells of
+   *  "total" rows. Absent/false → no decoration (historic output). */
+  totalsDoubleUnderline?: boolean;
 }
 
 // Defaults reproduce the previously hard-coded clipboard styling EXACTLY
@@ -59,7 +70,9 @@ type GlobalFormat = ClipboardFormatOptions;
 const FONT_PT = { min: 6, max: 24 } as const;
 const PADDING_PX = { min: 0, max: 32 } as const;
 const PARA_PX = { min: 0, max: 48 } as const;
+const HEADING_WEIGHT = { min: 400, max: 800 } as const;
 const BORDER_STYLES: readonly BorderStyle[] = ["none", "single", "double"];
+const LIST_MARKERS: readonly ListMarker[] = ["disc", "dash", "decimal"];
 
 // Colour shape check mirrors the backend sanitiser's `_HEX_COLOR_RE` + the
 // `transparent` keyword (notes/html_sanitize.py). A stored / server-sent value
@@ -137,6 +150,20 @@ export function parseThemeOptions(
   const hf = validColor(p.headerFill);
   if (hf) out.headerFill = hf;
   if (typeof p.headerBold === "boolean") out.headerBold = p.headerBold;
+  // Prose theme fields (house style item 1): same only-attach-when-valid
+  // discipline, so an un-customised default keeps its historic shape.
+  if (typeof p.headingSizePt === "number" && Number.isFinite(p.headingSizePt)) {
+    out.headingSizePt = clampNum(p.headingSizePt, 10, FONT_PT);
+  }
+  if (typeof p.headingWeight === "number" && Number.isFinite(p.headingWeight)) {
+    out.headingWeight = clampNum(p.headingWeight, 600, HEADING_WEIGHT);
+  }
+  if (LIST_MARKERS.includes(p.listMarker as ListMarker)) {
+    out.listMarker = p.listMarker as ListMarker;
+  }
+  if (typeof p.totalsDoubleUnderline === "boolean") {
+    out.totalsDoubleUnderline = p.totalsDoubleUnderline;
+  }
   return out;
 }
 
@@ -174,7 +201,19 @@ export function themeToCssVars(theme: ClipboardFormatOptions): Record<string, st
   // pt → px for the on-screen preview. The default 10pt rounds to 13px, exactly
   // the editor's historic font size, so the default is unchanged.
   const fontPx = Math.round(theme.fontSizePt * 1.3333);
-  return {
+  // Heading size: pt → px like the body font. Absent keeps the editor's
+  // historic 15px (the clipboard keeps the body size — same per-surface
+  // historic-default split as borderColor).
+  const headingPx =
+    theme.headingSizePt !== undefined
+      ? `${Math.round(theme.headingSizePt * 1.3333)}px`
+      : "15px";
+  // Bullet glyph for `<ul>`: the dash variant is a CSS string marker.
+  const listMarker =
+    theme.listMarker === "dash"
+      ? '"– "'
+      : (theme.listMarker ?? "disc");
+  const vars: Record<string, string> = {
     "--nt-grid-border": gridBorder,
     "--nt-cell-padding": `${theme.cellPaddingPx[0]}px ${theme.cellPaddingPx[1]}px`,
     "--nt-cell-font-size": `${fontPx}px`,
@@ -184,7 +223,19 @@ export function themeToCssVars(theme: ClipboardFormatOptions): Record<string, st
     // spacing matches the clipboard paste (peer-review HIGH #1). Default 8px is
     // the editor's historic value, so an un-themed install is unchanged.
     "--nt-para-spacing": `${theme.paragraphSpacingPx}px`,
+    // Prose theme fields (house style item 1) — defaults mirror the editor's
+    // historic h3 (15px / 600) and browser-default disc bullets.
+    "--nt-heading-size": headingPx,
+    "--nt-heading-weight": `${theme.headingWeight ?? 600}`,
+    "--nt-list-marker": listMarker,
   };
+  // Totals double rule: the variable is only SET when the convention is on —
+  // the stylesheet's `.is-totals-num` rule falls back to the normal grid
+  // border when unset, so an un-themed editor looks exactly as before.
+  if (theme.totalsDoubleUnderline === true) {
+    vars["--nt-totals-border"] = "3px double #000000";
+  }
+  return vars;
 }
 
 /** Read the saved global default from localStorage, falling back to the
@@ -215,6 +266,12 @@ export function saveGlobalFormat(opts: ClipboardFormatOptions): void {
     ...(opts.borderColor ? { borderColor: opts.borderColor } : {}),
     ...(opts.headerFill ? { headerFill: opts.headerFill } : {}),
     ...(typeof opts.headerBold === "boolean" ? { headerBold: opts.headerBold } : {}),
+    ...(typeof opts.headingSizePt === "number" ? { headingSizePt: opts.headingSizePt } : {}),
+    ...(typeof opts.headingWeight === "number" ? { headingWeight: opts.headingWeight } : {}),
+    ...(opts.listMarker ? { listMarker: opts.listMarker } : {}),
+    ...(typeof opts.totalsDoubleUnderline === "boolean"
+      ? { totalsDoubleUnderline: opts.totalsDoubleUnderline }
+      : {}),
   };
   try {
     globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(toStore));

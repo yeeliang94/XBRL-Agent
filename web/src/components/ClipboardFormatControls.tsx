@@ -10,6 +10,7 @@ import { pwc } from "../lib/theme";
 import type {
   BorderStyle,
   ClipboardFormatOptions,
+  ListMarker,
 } from "../lib/clipboardFormat";
 
 // Border-colour swatches mirror the editor's per-cell border palette
@@ -235,6 +236,104 @@ export function ClipboardFormatControls({
             }
           />
         </div>
+      </div>
+
+      <div style={{ ...styles.row, marginTop: pwc.space.md }}>
+        <div style={styles.numberField}>
+          <label style={styles.label} htmlFor={`${idPrefix}-headsize`}>
+            Heading size (pt)
+          </label>
+          {/* Optional field: empty = "Default" (each surface keeps its
+              historic heading size). Cleared input patches to undefined. */}
+          <input
+            id={`${idPrefix}-headsize`}
+            type="number"
+            inputMode="numeric"
+            aria-label="Heading size in points"
+            placeholder="Default"
+            style={{ ...styles.control, ...styles.numberInput }}
+            value={value.headingSizePt ?? ""}
+            min={6}
+            max={24}
+            onChange={(e) => {
+              const raw = e.target.value.trim();
+              if (raw === "") {
+                patch({ headingSizePt: undefined });
+                return;
+              }
+              const n = Number(raw);
+              if (Number.isFinite(n)) patch({ headingSizePt: n });
+            }}
+            onBlur={() =>
+              value.headingSizePt !== undefined &&
+              patch({ headingSizePt: clampField(value.headingSizePt, 6, 24) })
+            }
+          />
+        </div>
+
+        <div style={styles.numberField}>
+          <label style={styles.label} htmlFor={`${idPrefix}-headweight`}>
+            Heading weight
+          </label>
+          <select
+            id={`${idPrefix}-headweight`}
+            aria-label="Heading weight"
+            style={{ ...styles.control, maxWidth: 160 }}
+            value={value.headingWeight ?? ""}
+            onChange={(e) =>
+              patch({
+                headingWeight:
+                  e.target.value === "" ? undefined : Number(e.target.value),
+              })
+            }
+          >
+            <option value="">Default (semi-bold)</option>
+            <option value="400">Normal</option>
+            <option value="600">Semi-bold</option>
+            <option value="700">Bold</option>
+          </select>
+        </div>
+
+        <div style={styles.numberField}>
+          <label style={styles.label} htmlFor={`${idPrefix}-listmarker`}>
+            Bullet marker
+          </label>
+          <select
+            id={`${idPrefix}-listmarker`}
+            aria-label="Bullet list marker"
+            style={{ ...styles.control, maxWidth: 160 }}
+            value={value.listMarker ?? ""}
+            onChange={(e) =>
+              patch({
+                listMarker:
+                  e.target.value === ""
+                    ? undefined
+                    : (e.target.value as ListMarker),
+              })
+            }
+          >
+            <option value="">Default (disc)</option>
+            <option value="disc">Disc •</option>
+            <option value="dash">Dash –</option>
+            <option value="decimal">Numbered</option>
+          </select>
+        </div>
+      </div>
+
+      <div style={{ ...styles.group, marginTop: pwc.space.md }}>
+        <label style={{ ...styles.label, display: "flex", alignItems: "center", gap: pwc.space.sm }}>
+          <input
+            type="checkbox"
+            aria-label="Totals row double underline"
+            checked={value.totalsDoubleUnderline === true}
+            onChange={(e) =>
+              patch({
+                totalsDoubleUnderline: e.target.checked ? true : undefined,
+              })
+            }
+          />
+          Totals row double underline
+        </label>
       </div>
 
       <div style={{ ...styles.row, marginTop: pwc.space.md }}>

@@ -28,6 +28,7 @@ router = APIRouter()
 # fails loudly (400) rather than landing broken CSS in .env.
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 _BORDER_STYLES = {"none", "single", "double"}
+_LIST_MARKERS = {"disc", "dash", "decimal"}
 
 
 def _valid_theme_color(value) -> bool:
@@ -56,6 +57,10 @@ def _validate_notes_table_style(raw) -> dict:
     for key, lo, hi in (
         ("fontSizePt", 6, 24),
         ("paragraphSpacingPx", 0, 48),
+        # Prose theme fields (notes house style, item 1). Optional — absent
+        # keeps each surface's historic default; validated only when present.
+        ("headingSizePt", 6, 24),
+        ("headingWeight", 400, 800),
     ):
         if key in raw:
             v = raw[key]
@@ -95,6 +100,20 @@ def _validate_notes_table_style(raw) -> dict:
                 detail="notes_table_style.headerBold must be a boolean.",
             )
         cleaned["headerBold"] = raw["headerBold"]
+    if "listMarker" in raw and raw["listMarker"] is not None:
+        if raw["listMarker"] not in _LIST_MARKERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"notes_table_style.listMarker must be one of {sorted(_LIST_MARKERS)}.",
+            )
+        cleaned["listMarker"] = raw["listMarker"]
+    if "totalsDoubleUnderline" in raw:
+        if not isinstance(raw["totalsDoubleUnderline"], bool):
+            raise HTTPException(
+                status_code=400,
+                detail="notes_table_style.totalsDoubleUnderline must be a boolean.",
+            )
+        cleaned["totalsDoubleUnderline"] = raw["totalsDoubleUnderline"]
     return cleaned
 
 

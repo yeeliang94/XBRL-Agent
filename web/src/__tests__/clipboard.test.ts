@@ -620,3 +620,63 @@ describe("decorateHtmlForClipboard — resized table widths", () => {
     expect(tableStyle).toContain("width: 100%");
   });
 });
+
+describe("decorateHtmlForClipboard — prose theme fields (house style item 1)", () => {
+  test("default options emit no prose theme css (byte-compat)", () => {
+    const out = decorateHtmlForClipboard(
+      "<h3>5 Revenue</h3><ul><li>x</li></ul>" +
+        "<table><tbody><tr><td>Total</td><td>1,125</td></tr></tbody></table>",
+    );
+    expect(out).not.toContain("list-style-type");
+    expect(out).not.toContain("3px double #000000");
+    expect(out).toMatch(/<h3[^>]*style="[^"]*font-size: 10pt[^"]*font-weight: 600/);
+  });
+
+  test("heading size and weight are theme-driven", () => {
+    const out = decorateHtmlForClipboard("<h3>5 Revenue</h3><p>Body.</p>", {
+      ...DEFAULT_FORMAT_OPTIONS,
+      headingSizePt: 14,
+      headingWeight: 700,
+    });
+    expect(out).toMatch(/<h3[^>]*style="[^"]*font-size: 14pt/);
+    expect(out).toMatch(/<h3[^>]*style="[^"]*font-weight: 700/);
+    // Body keeps the body size — the heading override is scoped.
+    expect(out).toMatch(/<p[^>]*style="[^"]*font-size: 10pt/);
+  });
+
+  test("list marker lands on <ul> only", () => {
+    const out = decorateHtmlForClipboard(
+      "<ul><li>a</li></ul><ol><li>b</li></ol>",
+      { ...DEFAULT_FORMAT_OPTIONS, listMarker: "dash" },
+    );
+    expect(out).toMatch(/<ul[^>]*style="[^"]*list-style-type: '– ';/);
+    expect(out).not.toMatch(/<ol[^>]*style="[^"]*list-style-type/);
+  });
+
+  test("totals double underline targets amount cells of total rows only", () => {
+    const out = decorateHtmlForClipboard(
+      "<table><tbody>" +
+        "<tr><td>Revenue</td><td>10,000</td></tr>" +
+        "<tr><td>Total</td><td>19,500</td></tr>" +
+        "</tbody></table>",
+      { ...DEFAULT_FORMAT_OPTIONS, totalsDoubleUnderline: true },
+    );
+    expect(out).toMatch(
+      /<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">19,500</,
+    );
+    expect(out).not.toMatch(/<td[^>]*style="[^"]*3px double[^"]*">Total</);
+    expect(out).not.toMatch(/<td[^>]*style="[^"]*3px double[^"]*">10,000</);
+  });
+
+  test("totals rule defers to a persisted per-cell border", () => {
+    const out = decorateHtmlForClipboard(
+      '<table><tbody><tr>' +
+        "<td>Total</td>" +
+        '<td style="border-bottom: 1px solid #185fa5">19,500</td>' +
+        "</tr></tbody></table>",
+      { ...DEFAULT_FORMAT_OPTIONS, totalsDoubleUnderline: true },
+    );
+    expect(out).not.toContain("3px double");
+    expect(out).toContain("border-bottom: 1px solid #185fa5");
+  });
+});

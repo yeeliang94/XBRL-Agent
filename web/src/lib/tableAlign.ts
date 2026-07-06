@@ -39,18 +39,45 @@ export function shouldRightAlignCell(
   return isNumericCellText(text);
 }
 
+/** Does the cell OWN its border through a persisted inline style? Mirrors the
+ *  clipboard/mTool merge rule (`_styleFamily` in clipboard.ts /
+ *  notes_decorate.py): any `border` / `border-*` declaration means the cell
+ *  decides its whole border family, and theme additions — the totals rule
+ *  included — must stand down. Without this the preview could draw a totals
+ *  double underline on a cell whose paste/fill output skips it (a cell with
+ *  e.g. a persisted `border-top` but no `border-bottom`). */
+function ownsBorderFamily(el: Element): boolean {
+  return (el.getAttribute("style") ?? "")
+    .split(";")
+    .some((decl) => {
+      const prop = decl.slice(0, decl.indexOf(":")).trim().toLowerCase();
+      return prop === "border" || prop.startsWith("border-");
+    });
+}
+
 /** Toggle `className` on every `<td>`/`<th>` under `root` so a CSS rule can
  *  right-align numeric cells in the review editor. Idempotent — safe to call
  *  after every editor update (numeric cells get the class, the rest have it
- *  removed). Walks row by row so the row-label column can be exempted. */
+ *  removed). Walks row by row so the row-label column can be exempted.
+ *
+ *  Also tags the numeric cells of "total" rows with `is-totals-num` so the
+ *  theme's totals-double-underline convention can render in the preview —
+ *  EXCEPT cells that own their border family (persisted WYSIWYG / sidecar
+ *  styles win, exactly as on the clipboard/mTool surfaces). The
+ *  `--nt-totals-border` CSS variable (set from the resolved theme only when
+ *  `totalsDoubleUnderline` is on) decides whether the rule is visible, so the
+ *  tagger needs no theme plumbing and an un-themed editor falls back to the
+ *  normal grid border (unchanged look). */
 export function tagNumericCells(
   root: ParentNode,
   className = "is-numeric",
+  totalsClassName = "is-totals-num",
 ): void {
   for (const row of Array.from(root.querySelectorAll("tr"))) {
     const cells = Array.from(row.children).filter(
       (c) => c.tagName === "TD" || c.tagName === "TH",
     );
+    const totalsRow = (row.textContent ?? "").toLowerCase().includes("total");
     cells.forEach((cell, idx) => {
       const right = shouldRightAlignCell(
         cell.textContent ?? "",
@@ -58,6 +85,10 @@ export function tagNumericCells(
         cells.length,
       );
       (cell as HTMLElement).classList.toggle(className, right);
+      (cell as HTMLElement).classList.toggle(
+        totalsClassName,
+        totalsRow && right && !ownsBorderFamily(cell),
+      );
     });
   }
 }

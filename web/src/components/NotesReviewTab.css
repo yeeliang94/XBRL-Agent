@@ -46,13 +46,22 @@
   padding: 0;
 }
 
+.notes-review-tab .tiptap ul {
+  /* Bullet glyph is theme-driven (--nt-list-marker); disc fallback = the
+     browser default, so an un-themed install is unchanged. */
+  list-style-type: var(--nt-list-marker, disc);
+}
+
 .notes-review-tab .tiptap li {
   margin: 2px 0;
 }
 
 .notes-review-tab .tiptap h3 {
-  font-size: 15px;
-  font-weight: 600;
+  /* Heading size/weight are theme-driven (--nt-heading-*) so the editor
+     preview matches the clipboard paste + mTool fill; the fallbacks are the
+     editor's historic values. */
+  font-size: var(--nt-heading-size, 15px);
+  font-weight: var(--nt-heading-weight, 600);
   margin: 12px 0 6px 0;
   color: #1A1A1A; /* grey900 heading */
 }
@@ -79,6 +88,17 @@
   /* The drag/multi-cell selection highlight below is drawn with an ::after
    * overlay, which needs a positioned ancestor to anchor against. */
   position: relative;
+}
+
+/* Totals-row double-underline convention (theme `totalsDoubleUnderline`).
+ * tagNumericCells tags the numeric cells of "total" rows with .is-totals-num
+ * unconditionally; the rule is only VISIBLE when the resolved theme sets
+ * --nt-totals-border (themeToCssVars) — otherwise the fallback chain lands on
+ * the normal grid border and the un-themed editor looks exactly as before.
+ * A per-cell inline style still wins (inline > class rule). */
+.notes-review-tab .tiptap td.is-totals-num,
+.notes-review-tab .tiptap th.is-totals-num {
+  border-bottom: var(--nt-totals-border, var(--nt-grid-border, 1px solid #C9C9C9));
 }
 
 /* ProseMirror tags every cell in a drag (multi-cell) selection with the
