@@ -167,12 +167,29 @@ def _cell_style_base(o: NotesTableStyle, lite: bool = False) -> str:
     pad_v, pad_h = o.cell_padding_px
     base = f"{_border_css(o)}padding: {pad_v}px {pad_h}px; "
     if not lite:
-        # Cosmetic-only props (vertical-align + wrapping). They add ~60 chars
-        # per cell but no formatting a reader would miss — dropped first when a
-        # note is close to Excel's cell-string limit (the "lite" tier).
-        base += ("vertical-align: top; overflow-wrap: break-word; "
-                 "word-break: break-word; ")
-    return base + _font_css(o)
+        # `vertical-align` does NOT inherit in CSS, so it must stay per-cell.
+        # The font + text-wrapping props (which DO inherit) are hoisted to the
+        # table element instead of repeated on every cell — see
+        # `_table_inherited_css`. Dropped entirely in the "lite" tier.
+        base += "vertical-align: top; "
+    return base
+
+
+def _table_inherited_css(o: NotesTableStyle, lite: bool = False) -> str:
+    """Uniform, INHERITABLE per-cell props declared ONCE on the ``<table>``
+    instead of on every ``<td>``/``<th>`` (Step 3 size hoist,
+    docs/PLAN-word-formatting-fidelity.md). font-family/font-size and
+    overflow-wrap/word-break all inherit into cells, so one table-level
+    declaration replaces ~90 chars/cell — measured to roughly triple the row
+    budget before a table busts Excel's 32,767-char cell limit (a ~25-row full
+    table becomes ~70+). The face is ALSO carried on the wrapping ``<div>`` and
+    (bordered) on the legacy ``cellpadding`` attribute, so this is belt-and-
+    braces for renderers that do inherit; the real-mTool TX27 render is the
+    operator gate that confirms the popup viewer honours the inheritance."""
+    css = _font_css(o)
+    if not lite:
+        css += " overflow-wrap: break-word; word-break: break-word;"
+    return css
 
 
 def _header_extra(o: NotesTableStyle) -> str:
@@ -440,10 +457,15 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     cell_base = _cell_style_base(style, lite=lite)
     no_border = style.border_style == "none"
 
+    table_inherited = _table_inherited_css(style, lite=lite)
     for table in soup.find_all("table"):
         _merge_style(table,
                      _TABLE_STYLE_KEEP_WIDTH if _table_has_explicit_width(table)
                      else _TABLE_STYLE)
+        # Font + wrapping hoisted here (inheritable) so cells don't each repeat
+        # ~90 chars of identical boilerplate — the size win that keeps large
+        # tables under Excel's cell limit.
+        _merge_style(table, table_inherited)
         # If any cell owns its own border, the cells decide the grid — a
         # table-level border="1" would redraw over a deliberately-borderless
         # cell. Suppress the legacy attribute then (as for "no border").
