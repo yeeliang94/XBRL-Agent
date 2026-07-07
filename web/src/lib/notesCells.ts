@@ -26,6 +26,12 @@ export interface NotesCell {
   source_pages: number[];
   updated_at: string;
   sanitizer_warnings?: string[];
+  // How this cell got its table styling (schema v29): "ops" = agent observed
+  // it at extraction, "floor" = deterministic house style, "unstyled" = plain,
+  // "formatter" = the manual notes formatter pass styled it. null on blank
+  // rows / reviewer-authored / legacy runs. Read-only signal so the operator
+  // can spot cells that want a formatter pass (only unstyled/floor get a chip).
+  style_source?: "ops" | "floor" | "unstyled" | "formatter" | null;
   // Prose registry identity (full-template projection) — present on rows that
   // came from notes_nodes; null on off-template/legacy filled rows.
   node_uuid?: string | null;

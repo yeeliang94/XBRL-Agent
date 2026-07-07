@@ -18,8 +18,14 @@ emits (the ``notes/format_patch.py`` vocabulary), consumed through the same
 mutates cell styling, and the floor can never express anything the
 sanitiser would reject.
 
-Kill switch: ``XBRL_NOTES_HOUSE_STYLE`` (default ON), read at call time so
-tests can toggle it — same pattern as ``XBRL_FACT_BASED_CHECKS``.
+Kill switch: ``XBRL_NOTES_HOUSE_STYLE`` (default OFF as of 2026-07-07), read
+at call time so tests can toggle it — same pattern as
+``XBRL_FACT_BASED_CHECKS``. Turned off by default because the floor *imposes*
+an accountant convention (notably a double-underline on any row whose text
+contains "total") rather than mirroring the source PDF, so it invented
+borders that weren't in the statement. With it off, a cell with no usable
+agent ``format_ops`` renders unstyled and the operator restyles on demand
+via the notes formatter agent. Set ``=1`` to restore the floor.
 """
 from __future__ import annotations
 
@@ -31,9 +37,9 @@ from bs4 import BeautifulSoup, Tag
 
 
 def house_style_enabled() -> bool:
-    """The floor's kill switch — default ON; ``0``/``false``/``off`` disable."""
-    raw = os.environ.get("XBRL_NOTES_HOUSE_STYLE", "1").strip().lower()
-    return raw not in ("0", "false", "off", "no")
+    """The floor's kill switch — default OFF; ``1``/``true``/``on`` enable."""
+    raw = os.environ.get("XBRL_NOTES_HOUSE_STYLE", "0").strip().lower()
+    return raw in ("1", "true", "on", "yes")
 
 
 # Python twin of NUMERIC_CELL_RE in web/src/lib/tableAlign.ts (the shared

@@ -75,10 +75,12 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
             "evidence": None,
             "source_pages": [],
             "updated_at": "",
+            # v29: styling provenance — null on a blank/unfilled row.
+            "style_source": None,
         }
 
     for c in conn.execute(
-        "SELECT row, label, html, evidence, source_pages, updated_at "
+        "SELECT row, label, html, evidence, source_pages, updated_at, style_source "
         "FROM notes_cells WHERE run_id = ? AND sheet = ?",
         (run_id, sheet),
     ).fetchall():
@@ -94,12 +96,14 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
                 "evidence": None,
                 "source_pages": [],
                 "updated_at": "",
+                "style_source": None,
             }
             by_row[c["row"]] = base
         base["html"] = c["html"]
         base["evidence"] = c["evidence"]
         base["source_pages"] = decode_source_pages(c["source_pages"])
         base["updated_at"] = c["updated_at"] or ""
+        base["style_source"] = c["style_source"]
 
     return [by_row[r] for r in sorted(by_row)]
 

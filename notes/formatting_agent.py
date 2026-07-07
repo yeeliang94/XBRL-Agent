@@ -501,6 +501,9 @@ async def _run_notes_formatter_impl(
             if repo.cas_update_notes_cell_html(
                 conn, run_id=run_id, sheet=sheet, row=row,
                 expected_html=rows_for_patch[row], new_html=html,
+                # This pass just styled the cell — stamp it so any stale
+                # "unstyled"/"floor" chip clears (schema v29).
+                style_source="formatter",
             ):
                 written_rows.append(row)
             else:

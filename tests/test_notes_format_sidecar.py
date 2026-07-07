@@ -174,11 +174,16 @@ class TestHouseStyleOps:
         assert align and align[0]["target"]["cols"] == [2]
 
     def test_kill_switch_reads_env_at_call_time(self, monkeypatch):
+        # Default is OFF as of 2026-07-07 — the floor imposed accountant
+        # convention (e.g. inventing a "total" double-underline) rather than
+        # mirroring the source, so it's now opt-in.
         monkeypatch.delenv("XBRL_NOTES_HOUSE_STYLE", raising=False)
+        assert house_style_enabled() is False
+        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "1")
         assert house_style_enabled() is True
         monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "0")
         assert house_style_enabled() is False
-        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "1")
+        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "on")
         assert house_style_enabled() is True
 
 
@@ -265,24 +270,58 @@ class TestWriterStyling:
         assert "text-align: right" not in html
         assert "10,000" in html  # content untouched
 
-    def test_invalid_ops_fall_to_floor_with_warning(self, tmp_path: Path):
+    def test_invalid_ops_surface_warning_and_dont_block(self, tmp_path: Path):
+        # Floor OFF (default): invalid ops are dropped, the cell renders
+        # UNSTYLED, and the drop surfaces through the warnings channel — a
+        # bad observation never rejects the content write.
         bad_ops = [
             {"target": {"table": 7, "range": "all"}, "style": {"bold": True}},
         ]
         result = _write(tmp_path, [_payload(format_ops=bad_ops)])
         assert result.success, result.errors
         html = result.cells_written[0]["html"]
-        # Floor styling applied (right-aligned amount columns)…
-        assert "text-align: right" in html
-        # …and the dropped observation surfaced through the warnings channel.
+        assert "style=" not in html  # no floor, so plain
         assert any("format_ops dropped" in w for w in result.sanitizer_warnings)
+        assert result.cells_written[0]["style_source"] == "unstyled"
 
-    def test_no_ops_gets_floor_styling(self, tmp_path: Path):
+    def test_invalid_ops_fall_to_floor_when_enabled(self, tmp_path: Path, monkeypatch):
+        # With the floor explicitly enabled it still catches invalid ops.
+        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "1")
+        bad_ops = [
+            {"target": {"table": 7, "range": "all"}, "style": {"bold": True}},
+        ]
+        result = _write(tmp_path, [_payload(format_ops=bad_ops)])
+        assert result.success, result.errors
+        html = result.cells_written[0]["html"]
+        assert "text-align: right" in html  # floor right-aligned amounts
+        assert any("format_ops dropped" in w for w in result.sanitizer_warnings)
+        assert result.cells_written[0]["style_source"] == "floor"
+
+    def test_no_ops_default_unstyled(self, tmp_path: Path):
+        # New default: no ops + floor off → plain, tagged "unstyled".
+        result = _write(tmp_path, [_payload()])
+        assert result.success, result.errors
+        cell = result.cells_written[0]
+        assert "style=" not in cell["html"]
+        assert cell["style_source"] == "unstyled"
+
+    def test_no_ops_gets_floor_styling_when_enabled(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "1")
         result = _write(tmp_path, [_payload()])
         assert result.success, result.errors
         html = result.cells_written[0]["html"]
         assert "text-align: right" in html
         assert "double" in html  # total-row summation rule
+        assert result.cells_written[0]["style_source"] == "floor"
+
+    def test_agent_ops_tagged_ops_style_source(self, tmp_path: Path):
+        ops = [
+            {"target": {"table": 0, "range": "numeric_cells"},
+             "style": {"text_align": "center"}},
+        ]
+        result = _write(tmp_path, [_payload(format_ops=ops)])
+        assert result.success, result.errors
+        assert result.cells_written[0]["style_source"] == "ops"
 
     def test_flag_off_leaves_html_unstyled(self, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "0")

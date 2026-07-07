@@ -354,6 +354,27 @@ def _ground_evidence(source_pages: List[int], evidence: Optional[str]) -> str:
     return f"{base} — {note}" if note else base
 
 
+def _summarize_batch(outcomes: List[str], ok_template: str) -> str:
+    """Honest summary for a batch tool: never claim ``ok:`` if any item was
+    rejected. Per-item helpers return either an ``"ok"-shaped`` string or one
+    starting with ``rejected:`` (a malformed ref/number). ``ok_template`` is a
+    format string with a single ``{ok}`` slot for the applied count.
+
+    All-applied → ``ok: <template> + per-item lines``. Any rejects → a
+    ``partial:`` header stating how many landed vs were rejected, so the agent
+    doesn't read a batch with a bad item as fully done.
+    """
+    rejected = [o for o in outcomes if o.startswith("rejected")]
+    applied = len(outcomes) - len(rejected)
+    body = "\n".join(outcomes)
+    if rejected:
+        return (
+            f"partial: {applied} applied, {len(rejected)} rejected "
+            f"(fix the rejected item(s) and retry them):\n{body}"
+        )
+    return f"ok: {ok_template.format(ok=applied)}:\n{body}"
+
+
 # ---------------------------------------------------------------------------
 # Packet rendering (Step 8)
 # ---------------------------------------------------------------------------
@@ -1010,6 +1031,32 @@ def create_notes_reviewer_agent(
         )
 
     @agent.tool
+    def clear_note_cells(
+        ctx: RunContext[NotesReviewerDeps],
+        sheet: str, rows: List[int],
+        source_pages: List[int], evidence: Optional[str] = None,
+    ) -> str:
+        """Delete SEVERAL duplicate / mis-placed prose cells on one sheet in ONE
+        call. Prefer this over calling clear_note_cell repeatedly — pass every
+        row you've decided to clear on ``sheet`` at once (e.g. ``rows=[110,112,
+        114]``). Each row is cleared independently under the same grounding +
+        snapshot guarantees as the singular tool; the summary reports each
+        row's outcome. ``source_pages`` grounds the whole batch (the pages
+        where you saw the duplication)."""
+        if not rows:
+            return "rejected: rows is required (pass a non-empty list of row numbers)."
+        outcomes = []
+        for row in rows:
+            outcomes.append(
+                f"row {row}: "
+                + _do_clear(
+                    ctx, sheet=sheet, row=int(row),
+                    source_pages=source_pages, evidence=evidence,
+                )
+            )
+        return f"batch clear on {sheet} ({len(rows)} row(s)):\n" + "\n".join(outcomes)
+
+    @agent.tool
     def raise_flag(
         ctx: RunContext[NotesReviewerDeps],
         kind: str, reason: str,
@@ -1052,6 +1099,22 @@ def create_notes_reviewer_agent(
 
     # -------------------- coverage-checklist verdicts --------------------
 
+    def _record_coverage_note(
+        ctx: RunContext[NotesReviewerDeps], *,
+        note_num: int, verdict: str, source_pages: List[int],
+        reason: str,
+    ) -> str:
+        """Accumulate one coverage-note verdict (shared by singular + batch)."""
+        try:
+            key = int(note_num)
+        except (TypeError, ValueError):
+            return f"rejected: note_num {note_num!r} must be an integer."
+        ctx.deps.coverage_note_verdicts[key] = {
+            "verdict": verdict, "reason": (reason or "").strip(),
+            "source_pages": [p for p in source_pages if isinstance(p, int)],
+        }
+        return f"note {key} resolved as {verdict}"
+
     @agent.tool
     def resolve_coverage_note(
         ctx: RunContext[NotesReviewerDeps],
@@ -1067,7 +1130,8 @@ def create_notes_reviewer_agent(
             not apply to this entity (nothing to disclose).
         A resolved row stops tipping the run to completed_with_errors. If the
         note DOES have a real disclosure, author it instead — never resolve it
-        away.
+        away. To resolve several notes with the SAME verdict at once, use
+        ``resolve_coverage_notes``.
         """
         v = verdict.strip().lower()
         if v not in RESOLVED_VERDICTS:
@@ -1080,15 +1144,63 @@ def create_notes_reviewer_agent(
         if msg is not None:
             _tally(ctx.deps, kind or "ungrounded")
             return msg
+        out = _record_coverage_note(
+            ctx, note_num=note_num, verdict=v, source_pages=source_pages,
+            reason=reason,
+        )
+        return "ok: " + out if not out.startswith("rejected") else out
+
+    @agent.tool
+    def resolve_coverage_notes(
+        ctx: RunContext[NotesReviewerDeps],
+        note_nums: List[int], verdict: str, reason: str, source_pages: List[int],
+    ) -> str:
+        """Resolve SEVERAL coverage rows sharing the SAME verdict in ONE call.
+
+        Same rules as ``resolve_coverage_note`` — every note in ``note_nums``
+        gets ``verdict`` (``confirmed_absent`` or ``not_applicable``) with the
+        shared ``reason`` + ``source_pages`` grounding. Prefer this over one
+        call per note when the PDF proves a cluster of notes absent/N-A. If a
+        note actually HAS a disclosure, author it instead — don't resolve it
+        away in the batch."""
+        v = verdict.strip().lower()
+        if v not in RESOLVED_VERDICTS:
+            return (f"rejected: verdict must be one of {sorted(RESOLVED_VERDICTS)}. "
+                    "Author any note that has a real disclosure.")
+        if not note_nums:
+            return "rejected: note_nums is required (pass a non-empty list)."
+        kind, msg = classify_notes_fix_guard(
+            action="resolve", source_pages=source_pages,
+            viewed_pages=ctx.deps.viewed_pages,
+        )
+        if msg is not None:
+            _tally(ctx.deps, kind or "ungrounded")
+            return msg
+        outcomes = [
+            _record_coverage_note(
+                ctx, note_num=n, verdict=v, source_pages=source_pages,
+                reason=reason,
+            )
+            for n in note_nums
+        ]
+        return _summarize_batch(outcomes, f"resolved {{ok}} note(s) as {v}")
+
+    def _record_subnote(
+        ctx: RunContext[NotesReviewerDeps], *,
+        note_num: int, subnote_ref: str, verdict: str, reason: str,
+    ) -> str:
+        """Accumulate one sub-note verdict (shared by singular + batch)."""
         try:
-            key = int(note_num)
+            nn = int(note_num)
         except (TypeError, ValueError):
-            return "rejected: note_num must be an integer."
-        ctx.deps.coverage_note_verdicts[key] = {
-            "verdict": v, "reason": (reason or "").strip(),
-            "source_pages": [p for p in source_pages if isinstance(p, int)],
+            return f"rejected: note_num {note_num!r} must be an integer."
+        ref = str(subnote_ref).strip()
+        if not ref:
+            return "rejected: subnote_ref is required."
+        ctx.deps.coverage_subnote_verdicts[(nn, _subnote_key(ref))] = {
+            "verdict": verdict, "reason": (reason or "").strip(),
         }
-        return f"ok: note {key} resolved as {v}"
+        return f"note {nn} sub-ref {ref!r} marked {verdict}"
 
     @agent.tool
     def verify_subnote(
@@ -1104,7 +1216,8 @@ def create_notes_reviewer_agent(
             cell (or is legitimately folded-in / not applicable);
           * ``missing`` — the sub-section is genuinely absent. Then author/edit
             it in; once its ref is cited the row flips to placed on recompute.
-        A ``missing`` sub-ref you cannot author back tips the run status.
+        A ``missing`` sub-ref you cannot author back tips the run status. To
+        record several sub-refs of ONE note at once, use ``verify_subnotes``.
         """
         v = verdict.strip().lower()
         if v not in (SUBNOTE_VERIFIED, SUBNOTE_MISSING):
@@ -1117,17 +1230,46 @@ def create_notes_reviewer_agent(
         if msg is not None:
             _tally(ctx.deps, kind or "ungrounded")
             return msg
-        try:
-            nn = int(note_num)
-        except (TypeError, ValueError):
-            return "rejected: note_num must be an integer."
-        ref = str(subnote_ref).strip()
-        if not ref:
-            return "rejected: subnote_ref is required."
-        ctx.deps.coverage_subnote_verdicts[(nn, _subnote_key(ref))] = {
-            "verdict": v, "reason": (reason or "").strip(),
-        }
-        return f"ok: note {nn} sub-ref {ref!r} marked {v}"
+        out = _record_subnote(
+            ctx, note_num=note_num, subnote_ref=subnote_ref, verdict=v,
+            reason=reason,
+        )
+        return "ok: " + out if not out.startswith("rejected") else out
+
+    @agent.tool
+    def verify_subnotes(
+        ctx: RunContext[NotesReviewerDeps],
+        note_num: int, subnote_refs: List[str], verdict: str, reason: str,
+        source_pages: List[int],
+    ) -> str:
+        """Record the SAME verdict for SEVERAL sub-references of ONE note in one
+        call. Prefer this over calling verify_subnote per ref — after viewing
+        the note's page(s), pass every sub-ref you judged the same way (e.g.
+        ``subnote_refs=['(a)','(b)','(c)']`` all ``verified``). Sub-refs you
+        judged ``missing`` still need an author/edit; verify those in a separate
+        call (or singular) so the missing ones are explicit."""
+        v = verdict.strip().lower()
+        if v not in (SUBNOTE_VERIFIED, SUBNOTE_MISSING):
+            return (f"rejected: verdict must be '{SUBNOTE_VERIFIED}' or "
+                    f"'{SUBNOTE_MISSING}'.")
+        if not subnote_refs:
+            return "rejected: subnote_refs is required (pass a non-empty list)."
+        kind, msg = classify_notes_fix_guard(
+            action="verify", source_pages=source_pages,
+            viewed_pages=ctx.deps.viewed_pages,
+        )
+        if msg is not None:
+            _tally(ctx.deps, kind or "ungrounded")
+            return msg
+        outcomes = [
+            _record_subnote(
+                ctx, note_num=note_num, subnote_ref=ref, verdict=v, reason=reason,
+            )
+            for ref in subnote_refs
+        ]
+        return _summarize_batch(
+            outcomes, f"recorded {{ok}} sub-ref verdict(s) for note {note_num} as {v}"
+        )
 
     # -------------------- shared write impls --------------------
 

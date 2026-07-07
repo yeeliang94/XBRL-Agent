@@ -277,3 +277,118 @@ def test_verify_subnote_requires_grounding(db_path):
     agent.run_sync("go", deps=deps)
     assert (9, "a") not in deps.coverage_subnote_verdicts
     assert deps.fix_rejections.get("ungrounded") == 1
+
+
+# --------------------------------------------------------------------------
+# Batch tools (2026-07-07) — fewer turns for the same work. Each batch tool
+# applies every item under the SAME grounding + snapshot guarantees as its
+# singular sibling, so the reviewer no longer burns one turn per row/ref.
+# --------------------------------------------------------------------------
+
+
+def test_verify_subnotes_batch_records_all_in_one_call(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, "Investment properties", subs=["(a)", "(b)", "(c)"])
+    _seed_prov(db_path, run_id, 48, ["9"])  # coarse cite → all not_verified
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="verify_subnotes", args={
+            "note_num": 9, "subnote_refs": ["(a)", "(b)", "(c)"],
+            "verdict": "verified", "reason": "all present", "source_pages": [19]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    # All three recorded from ONE tool call.
+    assert deps.coverage_subnote_verdicts[(9, "a")]["verdict"] == SUBNOTE_VERIFIED
+    assert deps.coverage_subnote_verdicts[(9, "b")]["verdict"] == SUBNOTE_VERIFIED
+    assert deps.coverage_subnote_verdicts[(9, "c")]["verdict"] == SUBNOTE_VERIFIED
+    cl = ra.recompute_notes_findings(deps)["coverage_checklist"]
+    states = {s.subnote_ref: s.state for s in _row(cl, 9).subnotes}
+    assert states == {"(a)": SUBNOTE_VERIFIED, "(b)": SUBNOTE_VERIFIED,
+                      "(c)": SUBNOTE_VERIFIED}
+
+
+def test_verify_subnotes_requires_grounding(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, subs=["(a)", "(b)"])
+    _seed_prov(db_path, run_id, 48, ["9"])
+    model = _scripted([
+        [ToolCallPart(tool_name="verify_subnotes", args={
+            "note_num": 9, "subnote_refs": ["(a)", "(b)"], "verdict": "verified",
+            "reason": "x", "source_pages": [19]})],  # never viewed page 19
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    assert (9, "a") not in deps.coverage_subnote_verdicts
+    assert (9, "b") not in deps.coverage_subnote_verdicts
+    assert deps.fix_rejections.get("ungrounded") == 1
+
+
+def _tool_return_texts(result, tool_name: str) -> list[str]:
+    """All ToolReturnPart contents for a given tool across the run's messages."""
+    out: list[str] = []
+    for msg in result.all_messages():
+        for part in getattr(msg, "parts", []):
+            if (getattr(part, "part_kind", "") == "tool-return"
+                    and getattr(part, "tool_name", "") == tool_name):
+                out.append(str(getattr(part, "content", "")))
+    return out
+
+
+def test_verify_subnotes_partial_failure_is_honest(db_path):
+    """A batch with one malformed ref records the valid ones but reports
+    'partial:', not a bare 'ok:', so the agent knows to retry the bad item."""
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, subs=["(a)", "(b)"])
+    _seed_prov(db_path, run_id, 48, ["9"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="verify_subnotes", args={
+            "note_num": 9, "subnote_refs": ["(a)", "   "],  # 2nd ref is blank
+            "verdict": "verified", "reason": "x", "source_pages": [19]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    result = agent.run_sync("go", deps=deps)
+    # The valid ref landed; the blank one did not.
+    assert (9, "a") in deps.coverage_subnote_verdicts
+    assert (9, "") not in deps.coverage_subnote_verdicts
+    # The tool reported a partial, not an unqualified success.
+    returns = _tool_return_texts(result, "verify_subnotes")
+    assert returns and returns[0].startswith("partial:")
+
+
+def test_resolve_coverage_notes_batch_resolves_all(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 4, "Note four")
+    _seed_inv(db_path, run_id, 5, "Note five")
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="resolve_coverage_notes", args={
+            "note_nums": [4, 5], "verdict": "not_applicable",
+            "reason": "neither applies", "source_pages": [19]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    assert deps.coverage_note_verdicts[4]["verdict"] == "not_applicable"
+    assert deps.coverage_note_verdicts[5]["verdict"] == "not_applicable"
+
+
+def test_clear_note_cells_batch_clears_all_rows(db_path):
+    run_id = _seed_run(db_path)
+    _seed_prov(db_path, run_id, 48, ["8"])
+    _seed_prov(db_path, run_id, 49, ["9"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="clear_note_cells", args={
+            "sheet": _S12, "rows": [48, 49], "source_pages": [19],
+            "evidence": "duplicates"})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    assert deps.writes_performed == 2
+    with repo.db_session(db_path) as conn:
+        left = conn.execute(
+            "SELECT COUNT(*) FROM notes_cells WHERE run_id = ? AND sheet = ? "
+            "AND row IN (48, 49)", (run_id, _S12),
+        ).fetchone()[0]
+    assert left == 0

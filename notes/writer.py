@@ -235,6 +235,11 @@ def write_notes_workbook(
                     "html": html_for_db,
                     "evidence": combined.evidence or None,
                     "source_pages": aggregated_pages,
+                    # How this cell got its styling: "ops" (agent observation),
+                    # "floor" (deterministic house style), or "unstyled" (plain).
+                    # Persisted to notes_cells.style_source so the operator can
+                    # see which cells need a manual formatter pass (schema v29).
+                    "style_source": style_source,
                 })
             else:
                 # Numeric rows: record each value cell (col B/C/D/E) so the
