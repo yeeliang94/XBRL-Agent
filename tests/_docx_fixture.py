@@ -80,3 +80,65 @@ def build_minimal_docx(path: Path) -> Path:
         z.writestr("word/styles.xml", _STYLES)
         z.writestr("word/document.xml", _document())
     return path
+
+
+# --- styled variant (Step 5 injection tests) --------------------------------
+def _styled_cell(text: str, *, borders: str = "", jc: str = "") -> str:
+    ppr = f"<w:pPr>{jc}</w:pPr>" if jc else ""
+    tc_pr = f"<w:tcPr>{borders}</w:tcPr>" if borders else ""
+    return f"<w:tc>{tc_pr}<w:p>{ppr}<w:r><w:t>{text}</w:t></w:r></w:p></w:tc>"
+
+
+def _styled_document() -> str:
+    right = '<w:jc w:val="right"/>'
+    top_single = ('<w:tcBorders>'
+                  '<w:top w:val="single" w:color="000000" w:sz="6"/>'
+                  '</w:tcBorders>')
+    bottom_double = ('<w:tcBorders>'
+                     '<w:top w:val="single" w:color="000000" w:sz="6"/>'
+                     '<w:bottom w:val="double" w:color="000000" w:sz="6"/>'
+                     '</w:tcBorders>')
+    table = (
+        "<w:tbl>"
+        # header row
+        "<w:tr>"
+        + _styled_cell("Cost")
+        + _styled_cell("Amount", jc=right)
+        + "</w:tr>"
+        # data row: amount right-aligned, top single rule
+        "<w:tr>"
+        + _styled_cell("Buildings")
+        + _styled_cell("1,595", borders=top_single, jc=right)
+        + "</w:tr>"
+        # total row: double bottom rule under the amount
+        "<w:tr>"
+        + _styled_cell("Total")
+        + _styled_cell("3,190", borders=bottom_double, jc=right)
+        + "</w:tr>"
+        "</w:tbl>"
+    )
+    body = "".join([
+        _para("4. PROPERTY, PLANT AND EQUIPMENT", heading=True),
+        _para("The movement in property, plant and equipment."),
+        table,
+    ])
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<w:document xmlns:w="{_W}"><w:body>{body}</w:body></w:document>'
+    )
+
+
+def build_styled_docx(path: Path) -> Path:
+    """A valid .docx whose note-4 table carries real visual styling: a
+    right-aligned amount column, a single top rule, and a double bottom rule on
+    the total row. Used to prove Step-5 style injection carries those into
+    source.html."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", _CONTENT_TYPES)
+        z.writestr("_rels/.rels", _ROOT_RELS)
+        z.writestr("word/_rels/document.xml.rels", _DOC_RELS)
+        z.writestr("word/styles.xml", _STYLES)
+        z.writestr("word/document.xml", _styled_document())
+    return path
