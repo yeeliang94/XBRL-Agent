@@ -83,7 +83,7 @@ describe("App — AgentTimeline integration", () => {
     // early-return that could turn the whole test into a no-op.
     const runButton = await waitFor(
       () => {
-        const btn = screen.queryByRole("button", { name: /run/i });
+        const btn = screen.queryByRole("button", { name: /start extraction/i });
         if (!btn) throw new Error("Run button not ready");
         return btn;
       },
@@ -194,7 +194,7 @@ describe("App — AgentTimeline integration", () => {
       fireEvent.change(fileInput, { target: { files: [file] } });
     });
     const runButton = await waitFor(() => {
-      const btn = screen.queryByRole("button", { name: /run/i });
+      const btn = screen.queryByRole("button", { name: /start extraction/i });
       if (!btn) throw new Error("Run button not ready");
       return btn;
     }, { timeout: 2000 });

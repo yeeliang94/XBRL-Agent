@@ -98,7 +98,7 @@ describe("VariantSelector", () => {
     const dot = container.querySelector("[data-testid='confidence-SOFP']") as HTMLElement;
     expect(dot).toBeInTheDocument();
     expect(dot.style.background).toBe("transparent");
-    expect(dot.title).toBe("Not yet detected");
+    expect(dot.title).toMatch(/not detected yet/i);
   });
 
   test("selected value reflects current selection", () => {

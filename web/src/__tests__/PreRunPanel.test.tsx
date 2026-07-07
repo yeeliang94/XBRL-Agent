@@ -51,8 +51,10 @@ describe("PreRunPanel", () => {
 
     // Wait for settings to load
     await waitFor(() => {
-      // Scout toggle + Scanned PDF + 5 statement checkboxes + 5 notes checkboxes = 12
-      expect(screen.getAllByRole("checkbox")).toHaveLength(12);
+      // Scout toggle + 5 statement checkboxes + 5 notes checkboxes = 11.
+      // (The scanned-PDF checkbox now lives behind the Advanced disclosure,
+      // Phase 3, so it isn't counted in the default view.)
+      expect(screen.getAllByRole("checkbox")).toHaveLength(11);
     });
   });
 
@@ -68,7 +70,7 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
   });
 
@@ -85,7 +87,7 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
     // Select variants for all statements
@@ -106,7 +108,7 @@ describe("PreRunPanel", () => {
     // SOCIE
     fireEvent.change(variantSelects[4], { target: { value: "Default" } });
 
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -130,13 +132,13 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getAllByRole("checkbox")).toHaveLength(12);
+      expect(screen.getAllByRole("checkbox")).toHaveLength(11);
     });
 
-    // Uncheck SOCIE. Layout: [scout, scanned, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5]
-    // → SOCIE is the 7th checkbox (index 6).
+    // Uncheck SOCIE. Layout (scanned-PDF now behind Advanced, Phase 3):
+    // [scout, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5] → SOCIE is index 5.
     const checkboxes = screen.getAllByRole("checkbox");
-    fireEvent.click(checkboxes[6]); // SOCIE
+    fireEvent.click(checkboxes[5]); // SOCIE
 
     // Select variants for remaining 4
     const variantSelects = screen.getAllByRole("combobox").filter(
@@ -154,7 +156,7 @@ describe("PreRunPanel", () => {
       fireEvent.change(variantSelects[3], { target: { value: "Indirect" } });
     }
 
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     if (onRun.mock.calls.length > 0) {
       const config = onRun.mock.calls[0][0];
@@ -193,12 +195,13 @@ describe("PreRunPanel", () => {
     }) as typeof fetch;
 
     try {
-      render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />);
+      render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} isAdmin />);
       await waitFor(() => {
-        expect(screen.getAllByRole("checkbox")).toHaveLength(12);
+        expect(screen.getAllByRole("checkbox")).toHaveLength(11);
       });
 
       // Toggle eval on → the benchmark dropdown loads + appears.
+      fireEvent.click(screen.getByTestId("advanced-toggle"));
       fireEvent.click(screen.getByTestId("eval-toggle"));
       const select = await screen.findByTestId("eval-benchmark-select");
       await waitFor(() => {
@@ -206,7 +209,7 @@ describe("PreRunPanel", () => {
       });
       fireEvent.change(select, { target: { value: "9" } });
 
-      fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+      fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
       expect(onRun).toHaveBeenCalled();
       expect(onRun.mock.calls[0][0].benchmark_id).toBe(9);
     } finally {
@@ -223,11 +226,12 @@ describe("PreRunPanel", () => {
       ok: true, status: 200, json: async () => ({ benchmarks: [] }),
     })) as unknown as typeof fetch;
     try {
-      render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />);
-      await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(12));
-      const runBtn = screen.getByRole("button", { name: /run extraction/i }) as HTMLButtonElement;
+      render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} isAdmin />);
+      await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(11));
+      const runBtn = screen.getByRole("button", { name: /start extraction/i }) as HTMLButtonElement;
       expect(runBtn.disabled).toBe(false); // statements selected, eval off
 
+      fireEvent.click(screen.getByTestId("advanced-toggle"));
       fireEvent.click(screen.getByTestId("eval-toggle"));
       await waitFor(() => expect(runBtn.disabled).toBe(true));
     } finally {
@@ -256,8 +260,9 @@ describe("PreRunPanel", () => {
       return { ok: false, status: 404, json: async () => ({}) } as Response;
     }) as typeof fetch;
     try {
-      render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} />);
-      await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(12));
+      render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={onRun} isAdmin />);
+      await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(11));
+      fireEvent.click(screen.getByTestId("advanced-toggle"));
       fireEvent.click(screen.getByTestId("eval-toggle"));
       const select = await screen.findByTestId("eval-benchmark-select");
       await waitFor(() =>
@@ -267,7 +272,7 @@ describe("PreRunPanel", () => {
       // Switch to MPERS → the mfrs/company benchmark is no longer a candidate,
       // so the stale selection is cleared and Run is blocked (no stale id sent).
       fireEvent.click(screen.getByRole("button", { name: "MPERS" }));
-      const runBtn = screen.getByRole("button", { name: /run extraction/i }) as HTMLButtonElement;
+      const runBtn = screen.getByRole("button", { name: /start extraction/i }) as HTMLButtonElement;
       await waitFor(() => expect(runBtn.disabled).toBe(true));
     } finally {
       globalThis.fetch = originalFetch;
@@ -470,9 +475,9 @@ describe("PreRunPanel", () => {
 
     // Statements all start enabled (makeAllEnabled).
     const checkboxesBefore = screen.getAllByRole("checkbox") as HTMLInputElement[];
-    // Layout: [scout, scanned, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5]
-    // → statement checkboxes are indices 2..6.
-    for (let i = 2; i <= 6; i++) expect(checkboxesBefore[i].checked).toBe(true);
+    // Layout (scanned behind Advanced): [scout, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5]
+    // → statement checkboxes are indices 1..5.
+    for (let i = 1; i <= 5; i++) expect(checkboxesBefore[i].checked).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
@@ -482,7 +487,7 @@ describe("PreRunPanel", () => {
       expect(screen.getByText(/didn't detect any statements/i)).toBeInTheDocument();
     });
     const checkboxesAfter = screen.getAllByRole("checkbox") as HTMLInputElement[];
-    for (let i = 2; i <= 6; i++) expect(checkboxesAfter[i].checked).toBe(true);
+    for (let i = 1; i <= 5; i++) expect(checkboxesAfter[i].checked).toBe(true);
 
     fetchSpy.mockRestore();
   });
@@ -561,7 +566,7 @@ describe("PreRunPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /group/i }));
 
     // Trigger a run
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ filing_level: "group" }),
@@ -576,10 +581,10 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ filing_level: "company" }),
@@ -621,7 +626,7 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
     // Enable Notes 10 and Notes 13
@@ -632,7 +637,7 @@ describe("PreRunPanel", () => {
       screen.getByRole("checkbox", { name: /issued capital \(note 13\)/i }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -649,13 +654,16 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
     // Enable Notes 11 only, then pick a non-default model for it.
     fireEvent.click(
       screen.getByRole("checkbox", { name: /accounting policies \(note 11\)/i }),
     );
+
+    // Per-note model pickers live behind the Advanced disclosure now (Phase 3).
+    fireEvent.click(screen.getByTestId("advanced-toggle"));
 
     // Notes model dropdowns use explicit aria-labels to stay unambiguous
     // against the five statement model dropdowns and five variant pickers.
@@ -664,7 +672,7 @@ describe("PreRunPanel", () => {
     }) as HTMLSelectElement;
     fireEvent.change(notes11ModelSelect, { target: { value: "claude-opus-4-6" } });
 
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     // notes_models must include the enabled template with the override, and
     // NOT include templates the user left unchecked (mirrors `models`).
@@ -681,10 +689,10 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ notes_to_run: [] }),
@@ -702,13 +710,13 @@ describe("PreRunPanel", () => {
       expect(screen.getAllByRole("checkbox").length).toBeGreaterThan(0);
     });
 
-    // Uncheck all 5 statement checkboxes. Layout after Scanned PDF shipped:
-    // [scout, scanned, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5] → indices 2..6.
+    // Uncheck all 5 statement checkboxes. Layout (scanned behind Advanced):
+    // [scout, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5] → indices 1..5.
     const checkboxes = screen.getAllByRole("checkbox");
-    for (let i = 2; i <= 6; i++) fireEvent.click(checkboxes[i]);
+    for (let i = 1; i <= 5; i++) fireEvent.click(checkboxes[i]);
 
     // With no face statements and no notes, Run must be disabled.
-    const runBtn = screen.getByRole("button", { name: /run extraction/i }) as HTMLButtonElement;
+    const runBtn = screen.getByRole("button", { name: /start extraction/i }) as HTMLButtonElement;
     expect(runBtn.disabled).toBe(true);
 
     // Enable a single notes checkbox → Run must re-enable.
@@ -931,7 +939,9 @@ describe("PreRunPanel", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
     });
-    const cb = screen.getByRole("checkbox", { name: /scanned pdf/i }) as HTMLInputElement;
+    // The scanned-image toggle lives behind the Advanced disclosure (Phase 3).
+    fireEvent.click(screen.getByTestId("advanced-toggle"));
+    const cb = screen.getByRole("checkbox", { name: /scanned image/i }) as HTMLInputElement;
     expect(cb.checked).toBe(false);
   });
 
@@ -961,10 +971,11 @@ describe("PreRunPanel", () => {
       <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
     );
     await waitFor(() => {
-      expect(screen.getByRole("checkbox", { name: /scanned pdf/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /auto-detect/i })).toBeInTheDocument();
     });
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /scanned pdf/i }));
+    // Open Advanced to reveal the scanned-image toggle (Phase 3).
+    fireEvent.click(screen.getByTestId("advanced-toggle"));
+    fireEvent.click(screen.getByRole("checkbox", { name: /scanned image/i }));
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
     await waitFor(() => {
@@ -1026,9 +1037,9 @@ describe("PreRunPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/inventory:\s*0\s*notes/i)).toBeInTheDocument();
+      expect(screen.getByText(/found\s*0\s*notes/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/enable.*scanned pdf/i)).toBeInTheDocument();
+    expect(screen.getByText(/scanned image/i)).toBeInTheDocument();
 
     fetchSpy.mockRestore();
   });
@@ -1071,9 +1082,9 @@ describe("PreRunPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/inventory:\s*2\s*notes/i)).toBeInTheDocument();
+      expect(screen.getByText(/found\s*2\s*notes/i)).toBeInTheDocument();
     });
-    expect(screen.queryByText(/enable.*scanned pdf/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/scanned image/i)).not.toBeInTheDocument();
 
     fetchSpy.mockRestore();
   });
@@ -1137,7 +1148,7 @@ describe("PreRunPanel", () => {
 
     // Click MPERS then Run.
     fireEvent.click(screen.getByRole("button", { name: /^MPERS$/ }));
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ filing_standard: "mpers" }),
@@ -1152,9 +1163,9 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ filing_standard: "mfrs" }),
@@ -1201,7 +1212,7 @@ describe("PreRunPanel", () => {
     await waitFor(() => {
       // Toggle state is reflected through the payload to keep the test
       // independent of style-based active-button detection.
-      fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+      fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
       expect(onRun).toHaveBeenCalledWith(
         expect.objectContaining({ filing_standard: "mpers" }),
       );
@@ -1251,7 +1262,7 @@ describe("PreRunPanel", () => {
 
     // Pin the payload shape too: running after the switch-back must send
     // SOCIE=Default (not blank), matching what the user sees.
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({
         filing_standard: "mfrs",
@@ -1330,7 +1341,7 @@ describe("PreRunPanel", () => {
     expect(socieSelect.value).toBe("");
 
     // Runtime payload must not carry the invalid SoRE variant.
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
     const payload = onRun.mock.calls[0][0];
     expect(payload.filing_standard).toBe("mfrs");
     expect(payload.variants.SOCIE).not.toBe("SoRE");
@@ -1368,12 +1379,12 @@ describe("PreRunPanel", () => {
 
     // Wait for settings to load (mount the panel).
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
     // Click Run; the emitted config must reflect everything the user
     // had before the refresh — no defaults snuck back in.
-    fireEvent.click(screen.getByRole("button", { name: /run extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 
     expect(onRun).toHaveBeenCalledTimes(1);
     const cfg = onRun.mock.calls[0][0];
@@ -1406,7 +1417,7 @@ describe("PreRunPanel", () => {
         // Wait for the initial load — auto-save's first-render skip
         // means we should NOT have any calls yet.
         await waitFor(() => {
-          expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+          expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
         });
         expect(onConfigChange).not.toHaveBeenCalled();
 
@@ -1444,7 +1455,7 @@ describe("PreRunPanel", () => {
           />,
         );
         await waitFor(() => {
-          expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+          expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
         });
         // Run the debounce timer past 500ms with no edits made
         vi.advanceTimersByTime(2000);
@@ -1468,7 +1479,7 @@ describe("PreRunPanel", () => {
         />,
       );
       await waitFor(() => {
-        expect(screen.getByRole("button", { name: /run extraction/i })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
       });
       // No assertions on calls; this test passes if mount + edits don't
       // throw despite the absent callback.

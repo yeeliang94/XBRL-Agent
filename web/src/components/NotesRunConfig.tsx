@@ -8,6 +8,9 @@ interface Props {
   availableModels: ModelEntry[];
   onToggleNote: (nt: NotesTemplateType, enabled: boolean) => void;
   onModelChange: (nt: NotesTemplateType, modelId: string) => void;
+  /** Show the per-note AI-model picker column. Defaults to true; the pre-run
+   *  panel passes false to keep model choices under Advanced (Phase 3). */
+  showModels?: boolean;
 }
 
 // Layout mirrors StatementRunConfig.tsx so the Notes section renders as a
@@ -74,6 +77,7 @@ export function NotesRunConfig({
   availableModels,
   onToggleNote,
   onModelChange,
+  showModels = true,
 }: Props) {
   return (
     <table style={styles.table} role="group" aria-label="Notes templates">
@@ -93,22 +97,24 @@ export function NotesRunConfig({
                   <span>{NOTES_TEMPLATE_LABELS[nt]}</span>
                 </label>
               </td>
-              <td style={styles.cell}>
-                <select
-                  role="combobox"
-                  value={modelOverrides[nt]}
-                  disabled={!isEnabled}
-                  onChange={(e) => onModelChange(nt, e.target.value)}
-                  style={isEnabled ? styles.select : styles.selectDisabled}
-                  aria-label={`Model for ${NOTES_TEMPLATE_LABELS[nt]}`}
-                >
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.display_name}
-                    </option>
-                  ))}
-                </select>
-              </td>
+              {showModels && (
+                <td style={styles.cell}>
+                  <select
+                    role="combobox"
+                    value={modelOverrides[nt]}
+                    disabled={!isEnabled}
+                    onChange={(e) => onModelChange(nt, e.target.value)}
+                    style={isEnabled ? styles.select : styles.selectDisabled}
+                    aria-label={`Model for ${NOTES_TEMPLATE_LABELS[nt]}`}
+                  >
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              )}
             </tr>
           );
         })}

@@ -688,6 +688,7 @@ export default function App() {
           <ExtractPage
             state={state}
             dispatch={dispatch}
+            isAdmin={Boolean(user?.is_admin)}
             handleUpload={handleUpload}
             handleMultiRun={handleMultiRun}
             handleAbortAll={handleAbortAll}

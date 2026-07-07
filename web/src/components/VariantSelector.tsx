@@ -9,6 +9,7 @@ import {
   STATEMENT_LABELS,
   variantsFor,
 } from "../lib/types";
+import { variantLabel } from "../lib/vocabulary";
 import { pwc } from "../lib/theme";
 
 interface Props {
@@ -87,6 +88,16 @@ const styles = {
     borderRadius: "50%",
     flexShrink: 0,
   } as React.CSSProperties,
+  legend: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap" as const,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey500,
+    marginBottom: pwc.space.xs,
+  } as React.CSSProperties,
 };
 
 export function VariantSelector({
@@ -98,6 +109,13 @@ export function VariantSelector({
   const enabledSet = new Set(enabledStatements);
   return (
     <div style={styles.container}>
+      {/* Legend so the confidence dots aren't tooltip-only. */}
+      <div style={styles.legend}>
+        <span style={{ ...styles.confidenceDot, background: pwc.success }} /> Confident
+        <span style={{ ...styles.confidenceDot, background: pwc.orange500, marginLeft: pwc.space.md }} /> Fairly sure
+        <span style={{ ...styles.confidenceDot, background: pwc.error, marginLeft: pwc.space.md }} /> Please check
+        <span style={{ ...styles.confidenceDot, background: pwc.grey300, marginLeft: pwc.space.md }} /> Not detected
+      </div>
       {STATEMENT_TYPES.map((stmt) => {
         const sel = selections[stmt];
         const variants = variantsFor(stmt, filingStandard);
@@ -119,10 +137,10 @@ export function VariantSelector({
               }
               style={isEnabled ? styles.select : styles.selectDisabled}
             >
-              <option value="">Select variant...</option>
+              <option value="">Select format…</option>
               {variants.map((v) => (
                 <option key={v} value={v}>
-                  {v}
+                  {variantLabel(v)}
                 </option>
               ))}
             </select>
@@ -130,9 +148,13 @@ export function VariantSelector({
               data-testid={`confidence-${stmt}`}
               title={
                 sel.confidence == null
-                  ? "Not yet detected"
+                  ? "Not detected yet — run the document pre-scan or pick a format"
                   : sel.variant
-                    ? `${sel.confidence} confidence`
+                    ? sel.confidence === "high"
+                      ? "Confident in this format — verify it matches the PDF"
+                      : sel.confidence === "medium"
+                        ? "Fairly sure of this format — please verify against the PDF"
+                        : "Low confidence — please check this format against the PDF"
                     : "Not detected"
               }
               style={{

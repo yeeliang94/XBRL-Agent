@@ -61,6 +61,9 @@ export interface ExtractPageProps {
   onResumeDraft?: (runId: number) => void;
   onOpenRun?: (runId: number) => void;
   onViewAllRuns?: () => void;
+  /** Whether the current user is an admin — gates admin-only pre-run controls
+   *  (eval/benchmark grading) inside the Advanced disclosure (Phase 3). */
+  isAdmin?: boolean;
 }
 
 export function ExtractPage({
@@ -76,6 +79,7 @@ export function ExtractPage({
   onResumeDraft,
   onOpenRun,
   onViewAllRuns,
+  isAdmin = false,
 }: ExtractPageProps) {
   // PLAN-persistent-draft-uploads.md (Phase C): when the URL is /run/{id}
   // (currentRunId is non-null on mount) and we have not yet loaded that
@@ -241,6 +245,7 @@ export function ExtractPage({
           onRun={handleMultiRun}
           initialConfig={draftConfig}
           onConfigChange={handleConfigChange}
+          isAdmin={isAdmin}
         />
       )}
 
