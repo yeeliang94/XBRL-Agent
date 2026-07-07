@@ -164,7 +164,7 @@ class NotesReviewerDeps:
         # Flags the reviewer raised (persisted to notes_review_flags in Phase 3).
         self.flags: list[dict] = []
         # Coverage-checklist verdicts (docs/PLAN-notes-coverage-and-routing.md
-        # Phase 5). resolve_coverage_note / verify_subnote accumulate here; the
+        # Phase 5). resolve_coverage_notes / verify_subnotes accumulate here; the
         # final checklist (server) and verify_findings' recompute merge them.
         self.coverage_note_verdicts: dict[int, dict] = {}
         self.coverage_subnote_verdicts: dict[tuple[int, str], dict] = {}
@@ -455,7 +455,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
             "holds the REST of the disclosure — different content, correct "
             "routing, leave both; (2) a genuine DUPLICATE: the same prose on "
             "both sheets — material accounting policies belong on Sheet 11, "
-            "the numbered disclosure on Sheet 12; clear_note_cell the wrong "
+            "the numbered disclosure on Sheet 12; clear_note_cells the wrong "
             "copy."
         )
         for d in dup:
@@ -488,7 +488,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
             "peer disclosures, leave them; if content was split merely because "
             "a topic is MENTIONED (e.g. right-of-use prose pulled out of the "
             "PP&E note into a leases row), merge it back into the owning row "
-            "(edit_note_cell the owner, clear_note_cell the fragment); if a "
+            "(edit_note_cell the owner, clear_note_cells the fragment); if a "
             "fragment is an explicitly-labelled policy sub-section sitting on "
             "a topical row, it belongs on Sheet 11 (move_note_cell). Unsure → "
             "raise_flag, never delete a valid disclosure."
@@ -529,7 +529,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 "content was written on ANY notes sheet. View each note's "
                 "page(s); if it is a genuine disclosure, author it into an empty "
                 "LEAF row (author_note_cell); if it genuinely does not apply to "
-                "this entity, call resolve_coverage_note(note_num, "
+                "this entity, call resolve_coverage_notes([note_num], "
                 "'not_applicable', reason, source_pages). Do NOT leave a real "
                 "disclosure unfilled — an unresolved missing note fails the run."
             )
@@ -544,8 +544,8 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 "\n[COVERAGE — SUSPECTED GAP] the inventory's note numbering "
                 "skips these values — scout may have MISSED a note. Hunt the PDF "
                 "around each hole: if a real note exists, author it; if the PDF "
-                "genuinely skips that number, call resolve_coverage_note("
-                "note_num, 'confirmed_absent', reason, source_pages) to clear "
+                "genuinely skips that number, call resolve_coverage_notes("
+                "[note_num], 'confirmed_absent', reason, source_pages) to clear "
                 "the suspicion. An uninvestigated suspected gap fails the run."
             )
             for r in suspected_rows:
@@ -555,8 +555,8 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 "\n[COVERAGE — UNVERIFIED SUB-REFS] these placed notes were "
                 "cited only coarsely, so it's unproven every sub-section made "
                 "it in. If you have spare turns, view the note and call "
-                "verify_subnote(note_num, subnote_ref, 'verified'|'missing', "
-                "reason, source_pages) per sub-ref — 'missing' then needs an "
+                "verify_subnotes(note_num, subnote_refs, 'verified'|'missing', "
+                "reason, source_pages) — 'missing' then needs an "
                 "author/edit. Unverified sub-refs warn only; they never fail "
                 "the run, so prioritise MISSING notes and SUSPECTED GAPS first."
             )
@@ -1020,29 +1020,17 @@ def create_notes_reviewer_agent(
         )
 
     @agent.tool
-    def clear_note_cell(
-        ctx: RunContext[NotesReviewerDeps],
-        sheet: str, row: int,
-        source_pages: List[int], evidence: Optional[str] = None,
-    ) -> str:
-        """Delete a duplicate / mis-placed prose cell (grounded)."""
-        return _do_clear(
-            ctx, sheet=sheet, row=row, source_pages=source_pages, evidence=evidence,
-        )
-
-    @agent.tool
     def clear_note_cells(
         ctx: RunContext[NotesReviewerDeps],
         sheet: str, rows: List[int],
         source_pages: List[int], evidence: Optional[str] = None,
     ) -> str:
-        """Delete SEVERAL duplicate / mis-placed prose cells on one sheet in ONE
-        call. Prefer this over calling clear_note_cell repeatedly — pass every
-        row you've decided to clear on ``sheet`` at once (e.g. ``rows=[110,112,
-        114]``). Each row is cleared independently under the same grounding +
-        snapshot guarantees as the singular tool; the summary reports each
-        row's outcome. ``source_pages`` grounds the whole batch (the pages
-        where you saw the duplication)."""
+        """Delete one OR several duplicate / mis-placed prose cells on one sheet
+        in a single call — always pass a list (a single cell is ``rows=[112]``,
+        several are ``rows=[110,112,114]``). Each row is cleared independently
+        under the same grounding + snapshot guarantees; the summary reports each
+        row's outcome. ``source_pages`` grounds the whole batch (the pages where
+        you saw the duplication)."""
         if not rows:
             return "rejected: rows is required (pass a non-empty list of row numbers)."
         outcomes = []
@@ -1116,53 +1104,22 @@ def create_notes_reviewer_agent(
         return f"note {key} resolved as {verdict}"
 
     @agent.tool
-    def resolve_coverage_note(
-        ctx: RunContext[NotesReviewerDeps],
-        note_num: int, verdict: str, reason: str, source_pages: List[int],
-    ) -> str:
-        """Resolve a MISSING / SUSPECTED-GAP coverage row without authoring content.
-
-        Use this ONLY after viewing the PDF page(s) that prove the note is not a
-        real omission:
-          * ``confirmed_absent`` — a suspected numbering gap is a PDF numbering
-            skip (there is no note with that number in the document);
-          * ``not_applicable`` — a note the inventory lists that genuinely does
-            not apply to this entity (nothing to disclose).
-        A resolved row stops tipping the run to completed_with_errors. If the
-        note DOES have a real disclosure, author it instead — never resolve it
-        away. To resolve several notes with the SAME verdict at once, use
-        ``resolve_coverage_notes``.
-        """
-        v = verdict.strip().lower()
-        if v not in RESOLVED_VERDICTS:
-            return (f"rejected: verdict must be one of {sorted(RESOLVED_VERDICTS)}. "
-                    "Author the note if it has a real disclosure.")
-        kind, msg = classify_notes_fix_guard(
-            action="resolve", source_pages=source_pages,
-            viewed_pages=ctx.deps.viewed_pages,
-        )
-        if msg is not None:
-            _tally(ctx.deps, kind or "ungrounded")
-            return msg
-        out = _record_coverage_note(
-            ctx, note_num=note_num, verdict=v, source_pages=source_pages,
-            reason=reason,
-        )
-        return "ok: " + out if not out.startswith("rejected") else out
-
-    @agent.tool
     def resolve_coverage_notes(
         ctx: RunContext[NotesReviewerDeps],
         note_nums: List[int], verdict: str, reason: str, source_pages: List[int],
     ) -> str:
-        """Resolve SEVERAL coverage rows sharing the SAME verdict in ONE call.
-
-        Same rules as ``resolve_coverage_note`` — every note in ``note_nums``
-        gets ``verdict`` (``confirmed_absent`` or ``not_applicable``) with the
-        shared ``reason`` + ``source_pages`` grounding. Prefer this over one
-        call per note when the PDF proves a cluster of notes absent/N-A. If a
-        note actually HAS a disclosure, author it instead — don't resolve it
-        away in the batch."""
+        """Resolve one OR several MISSING / SUSPECTED-GAP coverage rows sharing
+        the SAME verdict in ONE call — always pass a list (a single note is
+        ``note_nums=[13]``). Use this ONLY after viewing the PDF page(s) that
+        prove each note is not a real omission:
+          * ``confirmed_absent`` — a suspected numbering gap is a PDF numbering
+            skip (there is no note with that number in the document);
+          * ``not_applicable`` — a note the inventory lists that genuinely does
+            not apply to this entity (nothing to disclose).
+        The shared ``reason`` + ``source_pages`` ground the whole batch. A
+        resolved row stops tipping the run to completed_with_errors. If a note
+        actually HAS a real disclosure, author it instead — never resolve it
+        away."""
         v = verdict.strip().lower()
         if v not in RESOLVED_VERDICTS:
             return (f"rejected: verdict must be one of {sorted(RESOLVED_VERDICTS)}. "
@@ -1203,51 +1160,24 @@ def create_notes_reviewer_agent(
         return f"note {nn} sub-ref {ref!r} marked {verdict}"
 
     @agent.tool
-    def verify_subnote(
-        ctx: RunContext[NotesReviewerDeps],
-        note_num: int, subnote_ref: str, verdict: str, reason: str,
-        source_pages: List[int],
-    ) -> str:
-        """Record a content verdict for one sub-reference of a note.
-
-        For a note cited only coarsely (the writer cited the bare note number),
-        the checklist can't prove each sub-section landed. After viewing the PDF:
-          * ``verified`` — the sub-section's content IS present in the placed
-            cell (or is legitimately folded-in / not applicable);
-          * ``missing`` — the sub-section is genuinely absent. Then author/edit
-            it in; once its ref is cited the row flips to placed on recompute.
-        A ``missing`` sub-ref you cannot author back tips the run status. To
-        record several sub-refs of ONE note at once, use ``verify_subnotes``.
-        """
-        v = verdict.strip().lower()
-        if v not in (SUBNOTE_VERIFIED, SUBNOTE_MISSING):
-            return (f"rejected: verdict must be '{SUBNOTE_VERIFIED}' or "
-                    f"'{SUBNOTE_MISSING}'.")
-        kind, msg = classify_notes_fix_guard(
-            action="verify", source_pages=source_pages,
-            viewed_pages=ctx.deps.viewed_pages,
-        )
-        if msg is not None:
-            _tally(ctx.deps, kind or "ungrounded")
-            return msg
-        out = _record_subnote(
-            ctx, note_num=note_num, subnote_ref=subnote_ref, verdict=v,
-            reason=reason,
-        )
-        return "ok: " + out if not out.startswith("rejected") else out
-
-    @agent.tool
     def verify_subnotes(
         ctx: RunContext[NotesReviewerDeps],
         note_num: int, subnote_refs: List[str], verdict: str, reason: str,
         source_pages: List[int],
     ) -> str:
-        """Record the SAME verdict for SEVERAL sub-references of ONE note in one
-        call. Prefer this over calling verify_subnote per ref — after viewing
-        the note's page(s), pass every sub-ref you judged the same way (e.g.
-        ``subnote_refs=['(a)','(b)','(c)']`` all ``verified``). Sub-refs you
-        judged ``missing`` still need an author/edit; verify those in a separate
-        call (or singular) so the missing ones are explicit."""
+        """Record the SAME verdict for one OR several sub-references of ONE note
+        in one call — always pass a list (a single ref is ``subnote_refs=['(a)']``).
+
+        For a note cited only coarsely (the writer cited the bare note number),
+        the checklist can't prove each sub-section landed. After viewing the note's
+        page(s), pass every sub-ref you judged the same way (e.g.
+        ``subnote_refs=['(a)','(b)','(c)']``):
+          * ``verified`` — the sub-section's content IS present in the placed
+            cell (or is legitimately folded-in / not applicable);
+          * ``missing`` — the sub-section is genuinely absent. Then author/edit
+            it in; once its ref is cited the row flips to placed on recompute.
+        A ``missing`` sub-ref you cannot author back tips the run status; verify
+        ``missing`` ones in a separate call so they stay explicit."""
         v = verdict.strip().lower()
         if v not in (SUBNOTE_VERIFIED, SUBNOTE_MISSING):
             return (f"rejected: verdict must be '{SUBNOTE_VERIFIED}' or "

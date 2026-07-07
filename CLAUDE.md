@@ -1141,14 +1141,18 @@ Load-bearing invariants:
   doesn't re-flag it as still-open.
 - **The human sees the POST-reviewer checklist.** The draft is a reviewer
   INPUT only. The notes reviewer auto-resolves every non-placed row via two
-  grounded tools (`resolve_coverage_note` → `confirmed_absent`/`not_applicable`;
-  `verify_subnote` → `verified`/`missing`) accumulated on `NotesReviewerDeps`;
-  the FINAL checklist merges those verdicts + reviewer-authored notes. **Batch
-  variants (2026-07-07) cut turn count** — `resolve_coverage_notes` /
-  `verify_subnotes` / `clear_note_cells` apply a list in ONE tool call under the
-  same grounding + once-per-pass snapshot latch, so the reviewer stops burning
-  one turn per row/ref (which was timing the pass out against the 300s wallclock
-  — `notes_reviewer_wallclock_exceeded`). Pinned by
+  grounded tools (`resolve_coverage_notes` → `confirmed_absent`/`not_applicable`;
+  `verify_subnotes` → `verified`/`missing`) accumulated on `NotesReviewerDeps`;
+  the FINAL checklist merges those verdicts + reviewer-authored notes. **The
+  coverage + clear tools are list-only (`resolve_coverage_notes` /
+  `verify_subnotes` / `clear_note_cells`)** — each applies a list in ONE tool
+  call (a single item is a one-element list) under the same grounding +
+  once-per-pass snapshot latch, so the reviewer never burns one turn per row/ref
+  (which was timing the pass out against the 300s wallclock —
+  `notes_reviewer_wallclock_exceeded`). The 2026-07-07 change added the batch
+  forms; the singular `resolve_coverage_note` / `verify_subnote` /
+  `clear_note_cell` variants were removed 2026-07-07 (agent-tool consolidation)
+  since they had the identical activation scenario. Pinned by
   `tests/test_notes_reviewer_coverage.py`. The pass
   recomputes + persists on EVERY exit path (`_finalize_coverage` in
   `server._run_notes_reviewer_pass`): success → `reviewed`; crash/construction

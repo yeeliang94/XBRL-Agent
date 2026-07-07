@@ -3,11 +3,11 @@
 
 Drives the real reviewer agent with a scripted FunctionModel (mirrors
 tests/test_notes_reviewer_tools.py) and asserts:
-  - resolve_coverage_note / verify_subnote require PDF grounding;
+  - resolve_coverage_notes / verify_subnotes require PDF grounding;
   - a confirmed_absent verdict resolves a suspected numbering gap;
   - an authored missing note flips to placed (reviewer-added) on recompute;
   - an unresolved missing row survives;
-  - verify_subnote upgrades a not_verified sub-ref to verified / missing.
+  - verify_subnotes upgrades a not_verified sub-ref to verified / missing.
 """
 from __future__ import annotations
 
@@ -114,8 +114,8 @@ def test_resolve_coverage_note_requires_grounding(db_path):
     _seed_inv(db_path, run_id, 4, "Investment properties")
     # No view_pdf_pages → source_pages not grounded.
     model = _scripted([
-        [ToolCallPart(tool_name="resolve_coverage_note", args={
-            "note_num": 4, "verdict": "not_applicable",
+        [ToolCallPart(tool_name="resolve_coverage_notes", args={
+            "note_nums": [4], "verdict": "not_applicable",
             "reason": "no such asset", "source_pages": [19]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
@@ -129,8 +129,8 @@ def test_resolve_bad_verdict_rejected(db_path):
     _seed_inv(db_path, run_id, 4)
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="resolve_coverage_note", args={
-            "note_num": 4, "verdict": "placed", "reason": "x",
+        [ToolCallPart(tool_name="resolve_coverage_notes", args={
+            "note_nums": [4], "verdict": "placed", "reason": "x",
             "source_pages": [19]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
@@ -147,8 +147,8 @@ def test_confirmed_absent_resolves_suspected_gap(db_path):
     _seed_prov(db_path, run_id, 32, ["14"])
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="resolve_coverage_note", args={
-            "note_num": 13, "verdict": "confirmed_absent",
+        [ToolCallPart(tool_name="resolve_coverage_notes", args={
+            "note_nums": [13], "verdict": "confirmed_absent",
             "reason": "PDF numbering skips 13", "source_pages": [19]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
@@ -193,8 +193,8 @@ def test_not_applicable_clears_coverage_gap_for_verify(db_path):
     _seed_inv(db_path, run_id, 4, "Investment properties")
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="resolve_coverage_note", args={
-            "note_num": 4, "verdict": "not_applicable",
+        [ToolCallPart(tool_name="resolve_coverage_notes", args={
+            "note_nums": [4], "verdict": "not_applicable",
             "reason": "no such asset", "source_pages": [19]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
@@ -224,11 +224,11 @@ def test_verify_subnote_verified_and_missing(db_path):
     _seed_prov(db_path, run_id, 48, ["9"])
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="verify_subnote", args={
-            "note_num": 9, "subnote_ref": "(a)", "verdict": "verified",
+        [ToolCallPart(tool_name="verify_subnotes", args={
+            "note_num": 9, "subnote_refs": ["(a)"], "verdict": "verified",
             "reason": "present in cell", "source_pages": [19]})],
-        [ToolCallPart(tool_name="verify_subnote", args={
-            "note_num": 9, "subnote_ref": "(b)", "verdict": "missing",
+        [ToolCallPart(tool_name="verify_subnotes", args={
+            "note_num": 9, "subnote_refs": ["(b)"], "verdict": "missing",
             "reason": "absent", "source_pages": [19]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
@@ -252,8 +252,8 @@ def test_author_then_clear_drops_reviewer_added_marker(db_path):
         [ToolCallPart(tool_name="author_note_cell", args={
             "sheet": _S12, "row": 50, "html": "<p>ip prose</p>",
             "note_num": 4, "source_pages": [19], "evidence": "note"})],
-        [ToolCallPart(tool_name="clear_note_cell", args={
-            "sheet": _S12, "row": 50, "source_pages": [19], "evidence": "undo"})],
+        [ToolCallPart(tool_name="clear_note_cells", args={
+            "sheet": _S12, "rows": [50], "source_pages": [19], "evidence": "undo"})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -269,8 +269,8 @@ def test_verify_subnote_requires_grounding(db_path):
     _seed_inv(db_path, run_id, 9, subs=["(a)"])
     _seed_prov(db_path, run_id, 48, ["9"])
     model = _scripted([
-        [ToolCallPart(tool_name="verify_subnote", args={
-            "note_num": 9, "subnote_ref": "(a)", "verdict": "verified",
+        [ToolCallPart(tool_name="verify_subnotes", args={
+            "note_num": 9, "subnote_refs": ["(a)"], "verdict": "verified",
             "reason": "x", "source_pages": [19]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
