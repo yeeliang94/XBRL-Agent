@@ -1417,7 +1417,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       <hr style={styles.divider} />
 
-      {/* Run button — enabled when at least one face or notes template is selected. */}
+      {/* Run button — enabled when at least one face or notes template is
+          selected. When grading is on but no benchmark is picked, Run is
+          blocked; because that control lives inside Advanced, surface the
+          reason here too so a collapsed Advanced can't hide why Run is
+          disabled (code-review edge case). */}
+      {evalSelectionMissing && (
+        <p role="status" style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.orange700, margin: 0 }}>
+          Accuracy grading is on but no benchmark is picked — choose one under
+          Advanced settings, or turn grading off.
+        </p>
+      )}
       <button
         onClick={handleRun}
         disabled={!canRun}
