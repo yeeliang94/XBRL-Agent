@@ -172,9 +172,9 @@ def test_author_flips_missing_to_placed_reviewer_added(db_path):
 
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 50, "html": "<p>grounded prose</p>",
-            "note_num": 4, "source_pages": [19], "evidence": "IP note"})],
+            "note_num": 4, "source_pages": [19], "evidence": "IP note"}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -249,9 +249,9 @@ def test_author_then_clear_drops_reviewer_added_marker(db_path):
     _seed_inv(db_path, run_id, 4, "Investment properties")
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 50, "html": "<p>ip prose</p>",
-            "note_num": 4, "source_pages": [19], "evidence": "note"})],
+            "note_num": 4, "source_pages": [19], "evidence": "note"}]})],
         [ToolCallPart(tool_name="clear_note_cells", args={
             "sheet": _S12, "rows": [50], "source_pages": [19], "evidence": "undo"})],
     ])

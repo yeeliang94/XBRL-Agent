@@ -899,3 +899,171 @@ def test_apply_reviewer_fix_unscoped_still_writes_off_family(tmp_path):
         ),
     )
     assert out.startswith("ok"), out
+
+
+# ---------------------------------------------------------------------------
+# Batched write tools — apply_fixes / mark_not_disclosed take a LIST, validate
+# each item independently through the no-plug guard, report per item.
+# ---------------------------------------------------------------------------
+
+
+def _wired_agent(db, run_id):
+    from pydantic_ai.models.test import TestModel
+    from correction.reviewer_agent import create_reviewer_agent
+    return create_reviewer_agent(
+        model=TestModel(call_tools=[]), db_path=db, run_id=run_id)
+
+
+def test_apply_fixes_applies_each_item_independently(tmp_path):
+    """A 3-item batch where the MIDDLE item is an abstract-header plug: items 1
+    and 3 land, item 2 is refused by the no-plug guard, the summary is honest
+    (partial:), and writes_performed counts only the two that landed."""
+    from types import SimpleNamespace
+    from correction.reviewer_agent import ReviewerFixItem
+
+    db, run_id = _seed(tmp_path)
+    agent, deps = _wired_agent(db, run_id)
+    tool = _get_registered_tool(agent, "apply_fixes")
+
+    fixes = [
+        ReviewerFixItem(concept_uuid=LEAF1, value=30.0, reason="misread",
+                        evidence="page 12: Freehold land 30"),
+        # ABSTRACT section header — refused (gotcha #17).
+        ReviewerFixItem(concept_uuid=ABSTRACT, value=99.0, reason="x",
+                        evidence="page 12: header"),
+        ReviewerFixItem(concept_uuid=LEAF2, value=20.0, reason="misread",
+                        evidence="page 13: Buildings 20"),
+    ]
+    out = tool.function(SimpleNamespace(deps=deps), fixes)
+
+    assert out.startswith("partial:"), out
+    assert "2 applied, 1 rejected" in out
+    assert deps.writes_performed == 2
+    # every item is named in the per-item report
+    assert LEAF1 in out and LEAF2 in out and ABSTRACT in out
+
+    conn = sqlite3.connect(str(db))
+    try:
+        vals = dict(conn.execute(
+            "SELECT concept_uuid, value FROM run_concept_facts WHERE run_id=?",
+            (run_id,),
+        ).fetchall())
+    finally:
+        conn.close()
+    assert vals[LEAF1] == 30.0 and vals[LEAF2] == 20.0
+    assert ABSTRACT not in vals  # the refused plug never wrote
+
+
+def test_apply_fixes_all_grounded_returns_ok(tmp_path):
+    from types import SimpleNamespace
+    from correction.reviewer_agent import ReviewerFixItem
+
+    db, run_id = _seed(tmp_path)
+    agent, deps = _wired_agent(db, run_id)
+    tool = _get_registered_tool(agent, "apply_fixes")
+    out = tool.function(SimpleNamespace(deps=deps), [
+        ReviewerFixItem(concept_uuid=LEAF1, value=1.0, reason="r",
+                        evidence="page 1: land 1"),
+        ReviewerFixItem(concept_uuid=LEAF2, value=2.0, reason="r",
+                        evidence="page 1: buildings 2"),
+    ])
+    assert out.startswith("ok:"), out
+    assert "2 fix(es) applied" in out
+    assert deps.writes_performed == 2
+
+
+def test_apply_fixes_rejects_empty_list(tmp_path):
+    from types import SimpleNamespace
+    db, run_id = _seed(tmp_path)
+    agent, deps = _wired_agent(db, run_id)
+    tool = _get_registered_tool(agent, "apply_fixes")
+    out = tool.function(SimpleNamespace(deps=deps), [])
+    assert out.startswith("rejected"), out
+    assert deps.writes_performed == 0
+
+
+def test_apply_fixes_honours_per_item_period_and_scope(tmp_path):
+    """The batch threads each item's own period/entity_scope through (not a
+    single shared value) — a Group PY fix and a Company CY fix in one call."""
+    from types import SimpleNamespace
+    from correction.reviewer_agent import ReviewerFixItem
+
+    db, run_id = _seed(tmp_path)
+    agent, deps = _wired_agent(db, run_id)
+    tool = _get_registered_tool(agent, "apply_fixes")
+    out = tool.function(SimpleNamespace(deps=deps), [
+        ReviewerFixItem(concept_uuid=LEAF1, value=5.0, reason="r",
+                        evidence="page 1: land 5", period="PY",
+                        entity_scope="Group"),
+    ])
+    assert out.startswith("ok:"), out
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT period, entity_scope FROM run_concept_facts "
+            "WHERE run_id=? AND concept_uuid=?", (run_id, LEAF1),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("PY", "Group")
+
+
+def test_mark_not_disclosed_batch_clears_each_grounded_false_positive(tmp_path):
+    """A 2-item batch: one grounded clear lands, one ungrounded clear is
+    refused; per-item outcomes + writes_performed reflect exactly one write."""
+    from types import SimpleNamespace
+    from correction.reviewer_agent import ReviewerClearItem
+
+    db, run_id = _seed(tmp_path)
+    _wf(db, run_id, LEAF1, 5.0)
+    _wf(db, run_id, LEAF2, 7.0)
+    agent, deps = _wired_agent(db, run_id)
+    tool = _get_registered_tool(agent, "mark_not_disclosed")
+
+    out = tool.function(SimpleNamespace(deps=deps), [
+        ReviewerClearItem(concept_uuid=LEAF1, reason="absent",
+                          evidence="page 30: no such line"),
+        # ungrounded — refused
+        ReviewerClearItem(concept_uuid=LEAF2, reason="hunch", evidence=""),
+    ])
+    assert out.startswith("partial:"), out
+    assert "1 applied, 1 rejected" in out
+    assert deps.writes_performed == 1
+
+    conn = sqlite3.connect(str(db))
+    try:
+        status = dict(conn.execute(
+            "SELECT concept_uuid, value_status FROM run_concept_facts "
+            "WHERE run_id=?", (run_id,),
+        ).fetchall())
+    finally:
+        conn.close()
+    assert status[LEAF1] == "not_disclosed"
+    assert status[LEAF2] == "observed"  # the rejected clear never wrote
+
+
+def test_mark_not_disclosed_rejects_empty_list(tmp_path):
+    from types import SimpleNamespace
+    db, run_id = _seed(tmp_path)
+    agent, deps = _wired_agent(db, run_id)
+    tool = _get_registered_tool(agent, "mark_not_disclosed")
+    out = tool.function(SimpleNamespace(deps=deps), [])
+    assert out.startswith("rejected"), out
+    assert deps.writes_performed == 0
+
+
+def test_summarize_batch_counts_error_line_as_not_applied():
+    """An `error:` outcome (apply_reviewer_fix's exception path) must NOT be
+    bucketed as applied — only `ok`-prefixed lines count, matching the
+    writes_performed contract."""
+    from correction.reviewer_agent import _summarize_batch
+    out = _summarize_batch(
+        ["ok: wrote X  [uuidA CY/Company]",
+         "error: RuntimeError: boom  [uuidB CY/Company]"],
+        "{ok} fix(es) applied",
+    )
+    assert out.startswith("partial:")
+    assert "1 applied, 1 rejected" in out
+    # all-ok stays ok
+    out2 = _summarize_batch(["ok: a", "ok: b"], "{ok} fix(es) applied")
+    assert out2.startswith("ok: 2 fix(es) applied")

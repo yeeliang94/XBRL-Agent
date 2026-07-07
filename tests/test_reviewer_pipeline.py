@@ -79,10 +79,10 @@ def _fix_cash_scripted(messages, info: AgentInfo) -> ModelResponse:
             if part.part_kind == "tool-return":
                 return ModelResponse(parts=[TextPart("done")])
     return ModelResponse(parts=[ToolCallPart(
-        tool_name="apply_fix",
-        args={"concept_uuid": LEAF1, "value": 120.0,
-              "reason": "extraction misread 100; PDF shows 120",
-              "evidence": "page 12: Cash 120"})])
+        tool_name="apply_fixes",
+        args={"fixes": [{"concept_uuid": LEAF1, "value": 120.0,
+                         "reason": "extraction misread 100; PDF shows 120",
+                         "evidence": "page 12: Cash 120"}]})])
 
 
 @pytest.mark.asyncio
@@ -251,9 +251,9 @@ async def test_spot_check_runs_on_clean_run(tmp_path, mode):
 def _always_fix(messages, info: AgentInfo) -> ModelResponse:
     """Never finishes — always calls apply_fix, to drive the turn cap."""
     return ModelResponse(parts=[ToolCallPart(
-        tool_name="apply_fix",
-        args={"concept_uuid": LEAF1, "value": 120.0,
-              "reason": "fix", "evidence": "page 12: Cash 120"})])
+        tool_name="apply_fixes",
+        args={"fixes": [{"concept_uuid": LEAF1, "value": 120.0,
+                         "reason": "fix", "evidence": "page 12: Cash 120"}]})])
 
 
 @pytest.mark.asyncio

@@ -1331,7 +1331,7 @@ async def _run_reviewer_pass(
 
     The reviewer investigates the root cause of each failing cross-check /
     open conflict down the face → sub-sheet → PDF chain, applies grounded
-    fixes through the guarded ``apply_fix`` tool, and flags the cases it's
+    fixes through the guarded ``apply_fixes`` tool, and flags the cases it's
     stuck on or disputes. Safety is structural: we SNAPSHOT the original
     facts FIRST (the load-bearing reversibility invariant), so a misbehaving
     reviewer can always be reverted with one click — there is no write-gating.
@@ -1540,7 +1540,7 @@ async def _run_reviewer_pass(
             f"{'FULL holistic' if spot_mode == 'full' else 'LIGHT'} spot-check: "
             "start with list_facts, then verify the highest-value figures "
             "(face totals, largest line items, units, signs) against the PDF. "
-            "apply_fix ONLY what you can ground in the PDF; raise_flag anything "
+            "apply_fixes ONLY what you can ground in the PDF; raise_flag anything "
             f"suspicious you can't resolve. You have at most {max_turns} turns. "
             "If everything ties out, make no writes. Never plug a residual."
         )
@@ -1556,7 +1556,8 @@ async def _run_reviewer_pass(
             "Investigate every failing cross-check and open conflict in your "
             "REVIEW PACKET. Trace each failure DOWN to the leaf that's wrong "
             "(trace_cascade_source), ground the fix in the PDF, then "
-            "apply_fix. Flag only what you're stuck on or dispute. You have at "
+            "apply_fixes (batch independent fixes into one call). Flag only what "
+            "you're stuck on or dispute. You have at "
             f"most {max_turns} turns. Never plug a residual to force a balance."
         )
         await _emit("status", {

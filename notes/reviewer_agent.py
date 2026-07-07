@@ -29,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
+from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
@@ -376,6 +377,38 @@ def _summarize_batch(outcomes: List[str], ok_template: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Batched prose-write items (edit_note_cells / author_note_cells)
+# ---------------------------------------------------------------------------
+# The reviewer used to write one prose cell per turn. These list-shaped tools
+# carry several cells in ONE call; each item is grounded + written INDEPENDENTLY
+# through the same _do_write path (guard → sanitiser → snapshot latch), so one
+# rejected cell never blocks the others. source_pages / evidence are PER ITEM —
+# distinct cells (different notes) cite different PDF pages, unlike the shared
+# grounding of clear_note_cells (one duplication seen in one place).
+
+
+class NoteEditItem(BaseModel):
+    """One cell body-edit inside an ``edit_note_cells`` batch."""
+
+    sheet: str
+    row: int
+    html: str
+    source_pages: List[int]
+    evidence: Optional[str] = None
+
+
+class NoteAuthorItem(BaseModel):
+    """One empty-leaf authoring inside an ``author_note_cells`` batch."""
+
+    sheet: str
+    row: int
+    html: str
+    note_num: int
+    source_pages: List[int]
+    evidence: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # Packet rendering (Step 8)
 # ---------------------------------------------------------------------------
 
@@ -488,7 +521,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
             "peer disclosures, leave them; if content was split merely because "
             "a topic is MENTIONED (e.g. right-of-use prose pulled out of the "
             "PP&E note into a leases row), merge it back into the owning row "
-            "(edit_note_cell the owner, clear_note_cells the fragment); if a "
+            "(edit_note_cells the owner, clear_note_cells the fragment); if a "
             "fragment is an explicitly-labelled policy sub-section sitting on "
             "a topical row, it belongs on Sheet 11 (move_note_cell). Unsure → "
             "raise_flag, never delete a valid disclosure."
@@ -528,7 +561,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 "\n[COVERAGE — MISSING NOTES] scout saw these notes but no "
                 "content was written on ANY notes sheet. View each note's "
                 "page(s); if it is a genuine disclosure, author it into an empty "
-                "LEAF row (author_note_cell); if it genuinely does not apply to "
+                "LEAF row (author_note_cells); if it genuinely does not apply to "
                 "this entity, call resolve_coverage_notes([note_num], "
                 "'not_applicable', reason, source_pages). Do NOT leave a real "
                 "disclosure unfilled — an unresolved missing note fails the run."
@@ -983,28 +1016,50 @@ def create_notes_reviewer_agent(
             ctx.deps.snapshot_done = True
 
     @agent.tool
-    def edit_note_cell(
+    def edit_note_cells(
         ctx: RunContext[NotesReviewerDeps],
-        sheet: str, row: int, html: str,
-        source_pages: List[int], evidence: Optional[str] = None,
+        edits: List[NoteEditItem],
     ) -> str:
-        """Replace the BODY of an existing prose cell (headings preserved)."""
-        return _do_write(
-            ctx, action="edit", sheet=sheet, row=row, html=html,
-            source_pages=source_pages, evidence=evidence,
-        )
+        """Replace the BODY of one OR several existing prose cells in ONE call
+        (headings preserved) — always pass a list (a single edit is a
+        one-element list). Batch every body-edit a finding needs together
+        instead of one call per turn. Each item carries its OWN
+        ``source_pages`` (+ optional ``evidence``) because distinct cells cite
+        distinct PDF pages; each is grounded + written INDEPENDENTLY, and one
+        rejected item never blocks the others. Returns a per-item report."""
+        if not edits:
+            return "rejected: edits is required (pass a non-empty list)."
+        outcomes = [
+            _safe_do_write(
+                ctx, action="edit", sheet=e.sheet, row=e.row, html=e.html,
+                source_pages=e.source_pages, evidence=e.evidence,
+            )
+            for e in edits
+        ]
+        return _summarize_batch(outcomes, "edited {ok} cell(s)")
 
     @agent.tool
-    def author_note_cell(
+    def author_note_cells(
         ctx: RunContext[NotesReviewerDeps],
-        sheet: str, row: int, html: str, note_num: int,
-        source_pages: List[int], evidence: Optional[str] = None,
+        authored: List[NoteAuthorItem],
     ) -> str:
-        """Fill an EMPTY leaf row with grounded content for a known note."""
-        return _do_write(
-            ctx, action="author", sheet=sheet, row=row, html=html,
-            source_pages=source_pages, evidence=evidence, note_num=note_num,
-        )
+        """Fill one OR several EMPTY leaf rows with grounded content for known
+        notes in ONE call — always pass a list (a single authoring is a
+        one-element list). Each item carries its OWN ``note_num`` +
+        ``source_pages`` (+ optional ``evidence``); each is grounded + written
+        INDEPENDENTLY, and one rejected item never blocks the others. Returns a
+        per-item report."""
+        if not authored:
+            return "rejected: authored is required (pass a non-empty list)."
+        outcomes = [
+            _safe_do_write(
+                ctx, action="author", sheet=a.sheet, row=a.row, html=a.html,
+                source_pages=a.source_pages, evidence=a.evidence,
+                note_num=a.note_num,
+            )
+            for a in authored
+        ]
+        return _summarize_batch(outcomes, "authored {ok} cell(s)")
 
     @agent.tool
     def move_note_cell(
@@ -1270,7 +1325,7 @@ def create_notes_reviewer_agent(
                 existing = _read_cell(ctx.deps.db_path, ctx.deps.run_id, sheet, row)
                 if existing is None:
                     return (f"rejected: {sheet} row {row} has no existing cell to "
-                            f"edit — use author_note_cell for an empty row.")
+                            f"edit — use author_note_cells for an empty row.")
                 final_html = _preserve_leading_headings(existing.get("html"), html)
                 label = existing.get("label") or ""
             else:  # author
@@ -1313,6 +1368,24 @@ def create_notes_reviewer_agent(
                 "op": action, "sheet": sheet, "row": row, "evidence": ev,
             })
         return f"ok: {action} {sheet} row {row}"
+
+    def _safe_do_write(ctx: RunContext[NotesReviewerDeps], **kw) -> str:
+        """Per-item isolation for the batch write tools. An UNEXPECTED
+        exception in one item (a DB error mid-batch) must not abort its
+        siblings or lose the per-item report — it becomes a ``rejected:`` line
+        so the batch completes and the model sees exactly which cell failed.
+        Mirrors the reviewer's ``apply_reviewer_fix`` self-guard. Catches
+        ``Exception`` only, so Stop-All ``CancelledError`` still propagates."""
+        try:
+            return _do_write(ctx, **kw)
+        except Exception as exc:  # noqa: BLE001 — report, don't crash the batch
+            logger.warning(
+                "notes batch write failed for %s row %s: %s",
+                kw.get("sheet"), kw.get("row"), exc,
+            )
+            return (f"rejected: {kw.get('sheet')} row {kw.get('row')} hit an "
+                    f"unexpected error ({type(exc).__name__}); the other items "
+                    f"were unaffected — retry this one.")
 
     def _do_move(
         ctx: RunContext[NotesReviewerDeps], *,

@@ -36,10 +36,11 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, List, Literal, Optional, Sequence
 
 # Module-scope so pydantic-ai can resolve the RunContext annotation on the
 # tool wrappers (lazy eval looks in module globals).
+from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 
 from tools.calculator import calculator_batch_json as _calculator_impl
@@ -855,6 +856,70 @@ def _family_prefix(filing_standard: str, filing_level: str) -> str:
     return f"{(filing_standard or 'mfrs').lower()}-{(filing_level or 'company').lower()}-"
 
 
+# ---------------------------------------------------------------------------
+# Batched write tools (apply_fixes / mark_not_disclosed) — item models + summary
+# ---------------------------------------------------------------------------
+# The reviewer used to write one fix per turn (one @agent.tool call → one model
+# round-trip). Against the pass's tight turn + wall-clock caps that burns budget
+# it should spend investigating. These list-shaped tools carry many fixes in ONE
+# call; each item is validated INDEPENDENTLY through the same no-plug guard
+# (apply_reviewer_fix), so one rejected item never blocks its siblings. Mirrors
+# the notes-reviewer batch tools (clear_note_cells / resolve_coverage_notes).
+
+
+class ReviewerFixItem(BaseModel):
+    """One grounded value fix inside an ``apply_fixes`` batch.
+
+    Same fields the old single ``apply_fix`` took. ``evidence`` MUST cite the
+    PDF page + figure read (or ``arithmetic: <expr>`` for a pure
+    reconciliation); ungrounded writes and catch-all / abstract plugs are
+    refused per item (gotcha #17).
+    """
+
+    concept_uuid: str
+    value: float
+    reason: str
+    evidence: str
+    period: Literal["CY", "PY"] = "CY"
+    entity_scope: Literal["Company", "Group"] = "Company"
+    children_status: str = ""
+
+
+class ReviewerClearItem(BaseModel):
+    """One false-positive leaf to blank inside a ``mark_not_disclosed`` batch.
+
+    ``evidence`` MUST cite the page checked to confirm the line is absent.
+    """
+
+    concept_uuid: str
+    reason: str
+    evidence: str
+    period: Literal["CY", "PY"] = "CY"
+    entity_scope: Literal["Company", "Group"] = "Company"
+
+
+def _summarize_batch(outcomes: List[str], ok_template: str) -> str:
+    """Honest summary for a batch write tool: never claim ``ok:`` if any item
+    failed. Each per-item string is status-first — the raw
+    ``apply_reviewer_fix`` return (``ok: …`` / ``rejected: …`` / ``error: …``)
+    with the concept id appended. An item COUNTS AS APPLIED only when it starts
+    with ``ok`` — the SAME test ``writes_performed`` uses — so an ``error:``
+    outcome is reported as not-applied, never silently bucketed as success.
+    ``ok_template`` has a single ``{ok}`` slot for the applied count. All-applied
+    → ``ok: <template>`` + lines; any failures → a ``partial:`` header so the
+    agent re-investigates only the ones that didn't land.
+    """
+    applied = [o for o in outcomes if o.startswith("ok")]
+    failed = [o for o in outcomes if not o.startswith("ok")]
+    body = "\n".join(outcomes)
+    if failed:
+        return (
+            f"partial: {len(applied)} applied, {len(failed)} rejected "
+            f"(fix the rejected item(s) and retry them):\n{body}"
+        )
+    return f"ok: {ok_template.format(ok=len(applied))}:\n{body}"
+
+
 def render_reviewer_prompt(
     *,
     db_path: str | Path,
@@ -1089,7 +1154,7 @@ def _format_review_packet(
             "This is a GROUP filing — facts carry BOTH Group and Company "
             "scope. A failing check tagged [group] is about Group-scope facts; "
             "[company] is about Company-scope. Pass the matching `entity_scope` "
-            "to trace_cascade_source / apply_fix (the tools default to "
+            "to trace_cascade_source / apply_fixes (the tools default to "
             "Company)."
         )
     lines.append("")
@@ -1427,7 +1492,7 @@ def create_reviewer_agent(
     """Build the reviewer agent. Returns ``(agent, deps)``.
 
     Read tools: ``read_facts``, ``trace_cascade_source``, ``view_pdf_pages``,
-    ``calculator``. Write tools: ``apply_fix`` (guarded), ``raise_flag``.
+    ``calculator``. Write tools: ``apply_fixes`` (guarded), ``raise_flag``.
     The system prompt carries the review packet from
     :func:`render_reviewer_prompt`.
 
@@ -1585,7 +1650,7 @@ def create_reviewer_agent(
         ``entity_scope`` ('Group' | 'Company') to narrow to the right column.
         Returns up to 10 candidates with their sheet, row, label, current value,
         and concept_uuid — scoped to THIS run's template family. Verify the
-        right one in the PDF before apply_fix.
+        right one in the PDF before apply_fixes.
         """
         cands = find_candidate_rows(
             ctx.deps.db_path, ctx.deps.run_id,
@@ -1643,7 +1708,7 @@ def create_reviewer_agent(
         """View source PDF pages as images (read-only) to ground a fix.
 
         Pass page numbers, e.g. [12, 13]. Always cite the page you used in
-        the ``evidence`` arg of apply_fix — ungrounded writes are refused.
+        the ``evidence`` arg of apply_fixes — ungrounded writes are refused.
         """
         from pydantic_ai import BinaryContent
         from concurrent.futures import ThreadPoolExecutor
@@ -1686,7 +1751,7 @@ def create_reviewer_agent(
         call (e.g. ``["Total PPE", "amounts owing by directors"]``). Returns,
         per phrase, the PDF page numbers + a snippet of each case-insensitive
         hit. Use it to locate candidate pages fast, then view_pdf_pages to read
-        and confirm before apply_fix — a text hit is a pointer, not proof. On a
+        and confirm before apply_fixes — a text hit is a pointer, not proof. On a
         scanned PDF it says so explicitly.
         """
         from tools.pdf_search import search_pdf_text_json
@@ -1695,76 +1760,90 @@ def create_reviewer_agent(
         return search_pdf_text_json(ctx.deps.pdf_path, queries)
 
     @agent.tool
-    def apply_fix(
+    def apply_fixes(
         ctx: RunContext[ReviewerDeps],
-        concept_uuid: str,
-        value: float,
-        reason: str,
-        evidence: str,
-        period: str = "CY",
-        entity_scope: str = "Company",
-        children_status: str = "",
+        fixes: List[ReviewerFixItem],
     ) -> str:
-        """Write a grounded fix to a concept's value (the only write path).
+        """Write one OR several grounded value fixes in ONE call (the only
+        write path). ALWAYS pass a list — a single fix is a one-element list.
 
-        ``reason`` is a short why; ``evidence`` MUST cite the PDF page + the
-        figure you read (or 'arithmetic: <expr>' for a pure reconciliation).
-        Ungrounded writes and plugs into catch-all / abstract rows are
-        refused. For a total whose breakdown the source doesn't itemise,
-        pass children_status='aggregate_only'. Returns 'ok: …' or
-        'rejected: …' — read the rejection and re-investigate, never plug.
+        When you have already diagnosed several INDEPENDENT fixes, submit them
+        together here instead of one call per turn, then run verify_fixes once.
+        Each item's ``reason`` is a short why; its ``evidence`` MUST cite the
+        PDF page + the figure you read (or 'arithmetic: <expr>' for a pure
+        reconciliation). Every item is validated INDEPENDENTLY: ungrounded
+        writes and plugs into catch-all / abstract rows are refused per item,
+        and one rejected item never blocks the others. For a total whose
+        breakdown the source doesn't itemise, set children_status='aggregate_only'.
+        Returns a per-item 'ok: …' / 'rejected: …' report — re-investigate the
+        rejected ones, never plug.
         """
-        out = apply_reviewer_fix(
-            ctx.deps.db_path, ctx.deps.run_id,
-            FactWrite(
-                concept_uuid=concept_uuid, period=period,
-                entity_scope=entity_scope, value=value,
-                value_status="observed",
-                children_status=children_status or None,
-                source=reason, evidence=evidence or None, actor="reviewer",
-            ),
-            template_prefix=_family_prefix(
-                ctx.deps.filing_standard, ctx.deps.filing_level),
-            rejections=ctx.deps.rejections,
-        )
-        if out.startswith("ok"):
-            ctx.deps.writes_performed += 1
-        return out
+        if not fixes:
+            return ("rejected: fixes is required (pass a non-empty list; a "
+                    "single fix is a one-element list).")
+        outcomes: List[str] = []
+        for f in fixes:
+            out = apply_reviewer_fix(
+                ctx.deps.db_path, ctx.deps.run_id,
+                FactWrite(
+                    concept_uuid=f.concept_uuid, period=f.period,
+                    entity_scope=f.entity_scope, value=f.value,
+                    value_status="observed",
+                    children_status=f.children_status or None,
+                    source=f.reason, evidence=f.evidence or None,
+                    actor="reviewer",
+                ),
+                template_prefix=_family_prefix(
+                    ctx.deps.filing_standard, ctx.deps.filing_level),
+                rejections=ctx.deps.rejections,
+            )
+            if out.startswith("ok"):
+                ctx.deps.writes_performed += 1
+            outcomes.append(
+                f"{out}  [{f.concept_uuid} {f.period}/{f.entity_scope}]")
+        return _summarize_batch(outcomes, "{ok} fix(es) applied")
 
     @agent.tool
     def mark_not_disclosed(
         ctx: RunContext[ReviewerDeps],
-        concept_uuid: str,
-        reason: str,
-        evidence: str,
-        period: str = "CY",
-        entity_scope: str = "Company",
+        clears: List[ReviewerClearItem],
     ) -> str:
-        """Clear a leaf the source does NOT actually disclose (false positive).
+        """Clear one OR several leaves the source does NOT actually disclose
+        (false positives). ALWAYS pass a list — a single clear is a one-element
+        list.
 
-        Use when the extraction invented or mis-attached a figure the PDF
-        doesn't contain: this blanks the cell (value=None,
+        Use when the extraction invented, mis-attached, or DUPLICATED a figure
+        the PDF doesn't contain: this blanks each cell (value=None,
         value_status='not_disclosed') instead of forcing another number in.
-        Still grounded — ``evidence`` MUST cite the page you checked to
-        confirm the line is absent (e.g. 'page 30: no such line in the
-        disclosure'). Goes through the same no-plug guard as apply_fix.
-        Returns 'ok: …' or 'rejected: …'.
+        Still grounded — each item's ``evidence`` MUST cite the page you
+        checked to confirm the line is absent (e.g. 'page 30: no such line in
+        the disclosure'). Every item goes through the same no-plug guard as
+        apply_fixes, independently; one rejection never blocks the others.
+        Returns a per-item 'ok: …' / 'rejected: …' report.
         """
-        out = apply_reviewer_fix(
-            ctx.deps.db_path, ctx.deps.run_id,
-            FactWrite(
-                concept_uuid=concept_uuid, period=period,
-                entity_scope=entity_scope, value=None,
-                value_status="not_disclosed",
-                source=reason, evidence=evidence or None, actor="reviewer",
-            ),
-            template_prefix=_family_prefix(
-                ctx.deps.filing_standard, ctx.deps.filing_level),
-            rejections=ctx.deps.rejections,
-        )
-        if out.startswith("ok"):
-            ctx.deps.writes_performed += 1
-        return out
+        if not clears:
+            return ("rejected: clears is required (pass a non-empty list; a "
+                    "single clear is a one-element list).")
+        outcomes: List[str] = []
+        for c in clears:
+            out = apply_reviewer_fix(
+                ctx.deps.db_path, ctx.deps.run_id,
+                FactWrite(
+                    concept_uuid=c.concept_uuid, period=c.period,
+                    entity_scope=c.entity_scope, value=None,
+                    value_status="not_disclosed",
+                    source=c.reason, evidence=c.evidence or None,
+                    actor="reviewer",
+                ),
+                template_prefix=_family_prefix(
+                    ctx.deps.filing_standard, ctx.deps.filing_level),
+                rejections=ctx.deps.rejections,
+            )
+            if out.startswith("ok"):
+                ctx.deps.writes_performed += 1
+            outcomes.append(
+                f"{out}  [{c.concept_uuid} {c.period}/{c.entity_scope}]")
+        return _summarize_batch(outcomes, "{ok} cell(s) cleared")
 
     @agent.tool
     def raise_flag(

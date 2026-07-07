@@ -85,7 +85,7 @@ def test_factory_registers_read_and_write_tools(seeded):
     assert {"calculator", "lookup_definitions", "read_facts",
             "trace_cascade_source", "view_pdf_pages"} <= names
     # Write tools.
-    assert {"apply_fix", "mark_not_disclosed", "raise_flag"} <= names
+    assert {"apply_fixes", "mark_not_disclosed", "raise_flag"} <= names
 
 
 def test_prompt_carries_reviewer_doctrine(seeded):
@@ -174,10 +174,10 @@ def test_scripted_run_stages_grounded_fix_and_flag(seeded):
         if state["step"] == 0:
             state["step"] = 1
             return ModelResponse(parts=[ToolCallPart(
-                tool_name="apply_fix",
-                args={"concept_uuid": LEAF1, "value": 120.0,
-                      "reason": "misread 100 for 120",
-                      "evidence": "page 12: Cash 120"},
+                tool_name="apply_fixes",
+                args={"fixes": [{"concept_uuid": LEAF1, "value": 120.0,
+                                 "reason": "misread 100 for 120",
+                                 "evidence": "page 12: Cash 120"}]},
             )])
         if state["step"] == 1:
             state["step"] = 2
@@ -228,9 +228,9 @@ def test_ungrounded_fix_in_run_is_rejected_not_applied(seeded):
         if state["done"]:
             return ModelResponse(parts=[TextPart("done")])
         return ModelResponse(parts=[ToolCallPart(
-            tool_name="apply_fix",
-            args={"concept_uuid": LEAF1, "value": 999.0,
-                  "reason": "guess", "evidence": ""},
+            tool_name="apply_fixes",
+            args={"fixes": [{"concept_uuid": LEAF1, "value": 999.0,
+                             "reason": "guess", "evidence": ""}]},
         )])
 
     agent, deps = create_reviewer_agent(
@@ -238,7 +238,10 @@ def test_ungrounded_fix_in_run_is_rejected_not_applied(seeded):
     agent.run_sync("Review.", deps=deps)
 
     assert deps.writes_performed == 0
-    assert captured and captured[0].startswith("rejected")
+    # A single-item batch whose only fix is ungrounded reports it honestly:
+    # the summary is a partial with a per-item rejection, nothing applied.
+    assert captured and captured[0].startswith("partial:")
+    assert "rejected" in captured[0] and "0 applied, 1 rejected" in captured[0]
     # The original value is untouched.
     conn = sqlite3.connect(str(db))
     try:

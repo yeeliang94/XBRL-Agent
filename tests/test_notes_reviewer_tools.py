@@ -103,9 +103,9 @@ def test_author_into_empty_leaf_creates_cell(db_path: Path) -> None:
     _seed_inventory(db_path, run_id, 4)
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 50, "html": "<p>grounded prose</p>",
-            "note_num": 4, "source_pages": [19], "evidence": "fair value note"})],
+            "note_num": 4, "source_pages": [19], "evidence": "fair value note"}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -123,9 +123,9 @@ def test_author_into_abstract_row_refused(db_path: Path) -> None:
     _seed_inventory(db_path, run_id, 4)
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 51, "html": "<p>x</p>", "note_num": 4,
-            "source_pages": [19]})],
+            "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -140,9 +140,9 @@ def test_author_into_occupied_row_refused(db_path: Path) -> None:
     _seed_cell(db_path, run_id, 49, "<p>existing</p>")
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 49, "html": "<p>new</p>", "note_num": 4,
-            "source_pages": [19]})],
+            "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -156,9 +156,9 @@ def test_ungrounded_author_refused(db_path: Path) -> None:
     _seed_inventory(db_path, run_id, 4)
     # No view_pdf_pages first → source_pages not in viewed set.
     model = _scripted([
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 50, "html": "<p>x</p>", "note_num": 4,
-            "source_pages": [19]})],
+            "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -172,9 +172,9 @@ def test_edit_preserves_leading_heading(db_path: Path) -> None:
                "<h3>4 Investment property</h3><p>OLD body</p>")
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="edit_note_cell", args={
+        [ToolCallPart(tool_name="edit_note_cells", args={"edits": [{
             "sheet": _S12, "row": 49, "html": "<p>NEW body</p>",
-            "source_pages": [19]})],
+            "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -207,9 +207,9 @@ def test_edit_with_script_only_html_is_refused_not_destructive(db_path: Path) ->
     _seed_cell(db_path, run_id, 49, "<h3>4 X</h3><p>VALID body</p>")
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="edit_note_cell", args={
+        [ToolCallPart(tool_name="edit_note_cells", args={"edits": [{
             "sheet": _S12, "row": 49, "html": "<script>alert(1)</script>",
-            "source_pages": [19]})],
+            "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -337,3 +337,105 @@ def test_read_note_cells_dedups_so_repeats_dont_eat_the_cap(db_path: Path) -> No
     result = agent.run_sync("go", deps=deps)
     payload = _json.loads(_tool_returns(result, "read_note_cells")[0])
     assert set(payload) == {"49", "51"}
+
+
+# --------------------------------------------------------------------------
+# Batched prose writes — author_note_cells / edit_note_cells take a LIST and
+# apply each item independently (one rejected item never blocks the others).
+# --------------------------------------------------------------------------
+
+
+def test_author_note_cells_batch_applies_each_item_independently(db_path: Path) -> None:
+    """One batch authoring two cells: a LEAF lands, an ABSTRACT row is refused;
+    exactly one write happens and the per-item guard tally records the reject."""
+    run_id = _seed_run(db_path)
+    _seed_node(db_path, 50, "LEAF", "Disclosure of X")
+    _seed_node(db_path, 51, "ABSTRACT", "Section header")
+    _seed_inventory(db_path, run_id, 4)
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [
+            {"sheet": _S12, "row": 50, "html": "<p>grounded prose</p>",
+             "note_num": 4, "source_pages": [19], "evidence": "note X"},
+            {"sheet": _S12, "row": 51, "html": "<p>x</p>",
+             "note_num": 4, "source_pages": [19]},
+        ]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    cells = _cells(db_path, run_id)
+    assert 50 in cells and "grounded prose" in cells[50]  # leaf landed
+    assert 51 not in cells                                # abstract refused
+    assert deps.writes_performed == 1
+    assert deps.fix_rejections.get("not_leaf") == 1
+
+
+def test_edit_note_cells_batch_edits_multiple_bodies(db_path: Path) -> None:
+    """A two-item edit batch updates both bodies in one call, each preserving
+    its own leading heading."""
+    run_id = _seed_run(db_path)
+    _seed_cell(db_path, run_id, 49, "<h3>4 Investment property</h3><p>OLD a</p>")
+    _seed_cell(db_path, run_id, 50, "<h3>5 Inventories</h3><p>OLD b</p>")
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19, 20]})],
+        [ToolCallPart(tool_name="edit_note_cells", args={"edits": [
+            {"sheet": _S12, "row": 49, "html": "<p>NEW a</p>", "source_pages": [19]},
+            {"sheet": _S12, "row": 50, "html": "<p>NEW b</p>", "source_pages": [20]},
+        ]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    cells = _cells(db_path, run_id)
+    assert "<h3>4 Investment property</h3>" in cells[49] and "NEW a" in cells[49]
+    assert "<h3>5 Inventories</h3>" in cells[50] and "NEW b" in cells[50]
+    assert "OLD a" not in cells[49] and "OLD b" not in cells[50]
+    assert deps.writes_performed == 2
+
+
+def test_author_note_cells_rejects_empty_list(db_path: Path) -> None:
+    run_id = _seed_run(db_path)
+    model = _scripted([
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": []})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    assert deps.writes_performed == 0
+
+
+def test_author_note_cells_isolates_unexpected_error_per_item(db_path, monkeypatch):
+    """An UNEXPECTED exception on one item must not abort the sibling or lose
+    the report: the good cell still lands, the failing one becomes a rejected
+    line, and the batch tool returns normally (doesn't raise)."""
+    run_id = _seed_run(db_path)
+    _seed_node(db_path, 50, "LEAF", "Good")
+    _seed_node(db_path, 60, "LEAF", "Boom")
+    _seed_inventory(db_path, run_id, 4)
+
+    real_upsert = repo.upsert_notes_cell
+
+    def flaky_upsert(conn, *, run_id, sheet, row, label, html, evidence=None,
+                     source_pages=None, **kw):
+        if row == 60:
+            raise RuntimeError("simulated DB failure")
+        return real_upsert(conn, run_id=run_id, sheet=sheet, row=row,
+                           label=label, html=html, evidence=evidence,
+                           source_pages=source_pages, **kw)
+
+    monkeypatch.setattr(repo, "upsert_notes_cell", flaky_upsert)
+
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [
+            {"sheet": _S12, "row": 50, "html": "<p>good prose</p>",
+             "note_num": 4, "source_pages": [19]},
+            {"sheet": _S12, "row": 60, "html": "<p>boom prose</p>",
+             "note_num": 4, "source_pages": [19]},
+        ]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)  # must not raise
+
+    cells = _cells(db_path, run_id)
+    assert 50 in cells and "good prose" in cells[50]  # sibling still landed
+    assert 60 not in cells                            # failing item didn't write
+    assert deps.writes_performed == 1

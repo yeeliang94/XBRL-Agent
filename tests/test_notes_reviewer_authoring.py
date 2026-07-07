@@ -75,9 +75,9 @@ def test_author_without_viewing_pages_refused(db_path):
     with repo.db_session(db_path) as conn:
         repo.upsert_notes_inventory(conn, run_id=run_id, note_num=4)
     agent, deps, _ = _agent(db_path, run_id, [
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 50, "html": "<p>x</p>", "note_num": 4,
-            "source_pages": [19]})],
+            "source_pages": [19]}]})],
     ])
     agent.run_sync("go", deps=deps)
     assert 50 not in _cells(db_path, run_id)
@@ -92,9 +92,9 @@ def test_author_for_note_scout_never_saw_refused(db_path):
         repo.upsert_notes_inventory(conn, run_id=run_id, note_num=4)
     agent, deps, _ = _agent(db_path, run_id, [
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 50, "html": "<p>x</p>", "note_num": 99,
-            "source_pages": [19]})],
+            "source_pages": [19]}]})],
     ])
     agent.run_sync("go", deps=deps)
     assert 50 not in _cells(db_path, run_id)
@@ -108,9 +108,9 @@ def test_grounded_author_accepted_and_revertible(db_path):
         repo.upsert_notes_inventory(conn, run_id=run_id, note_num=4)
     agent, deps, _ = _agent(db_path, run_id, [
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 50, "html": "<p>grounded</p>", "note_num": 4,
-            "source_pages": [19], "evidence": "note 4"})],
+            "source_pages": [19], "evidence": "note 4"}]})],
     ])
     agent.run_sync("go", deps=deps)
     assert "grounded" in _cells(db_path, run_id)[50]
@@ -131,9 +131,9 @@ def test_author_only_grounds_on_viewed_subset(db_path):
         repo.upsert_notes_inventory(conn, run_id=run_id, note_num=4)
     agent, deps, _ = _agent(db_path, run_id, [
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 50, "html": "<p>x</p>", "note_num": 4,
-            "source_pages": [19, 20]})],  # 20 was never viewed
+            "source_pages": [19, 20]}]})],  # 20 was never viewed
     ])
     agent.run_sync("go", deps=deps)
     assert 50 not in _cells(db_path, run_id)

@@ -853,7 +853,7 @@ fails fast (`_CANONICAL_BOOTSTRAP_OK is False` → `_fail_run`). Fix the bootstr
   per-statement when an export applies zero facts.
 - **Review — the REVIEWER pass** (`server.py::_run_reviewer_pass`): investigates
   the root cause of failing cross-checks + open conflicts down the face→sub→PDF
-  chain, applies grounded fixes through the guarded `apply_fix` tool (a
+  chain, applies grounded fixes through the guarded `apply_fixes` tool (a
   deterministic no-plug guard refuses ungrounded writes and plugs into
   catch-all/abstract rows — invariant #17), and raises only
   `stuck`/`disputes_prior` flags. Safety is **versioning, not write-gating**:
