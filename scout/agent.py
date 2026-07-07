@@ -1241,10 +1241,13 @@ def create_scout_agent(
         face_text: str,
         notes_start_page: Optional[int] = None,
     ) -> str:
-        """Find note pages referenced by a statement's face page.
+        """Locate the PDF pages that ONE statement's face page cites.
 
-        Pass the text from the statement's face page.  Returns a list of
-        estimated PDF page numbers where the referenced notes are located.
+        Use this per statement, when you have that statement's face text and
+        want the pages its "Note X" references point to. This is NOT the
+        notes-section inventory — for the full walk of every note in the Notes
+        section (numbers, titles, page ranges), use ``discover_notes_inventory``.
+        Returns a JSON list of estimated PDF page numbers.
 
         Args:
             face_text: Text from the statement's face page (contains "Note X" references).
@@ -1263,11 +1266,13 @@ def create_scout_agent(
         ctx: RunContext[ScoutDeps],
         notes_start_page: int,
     ) -> str:
-        """Walk the notes section of the PDF and return a structured inventory.
+        """Walk the WHOLE notes section once and return a structured inventory.
 
-        Call this AFTER you've identified the notes section's starting page
-        (usually via the TOC). Returns a JSON list of entries, one per note,
-        with its number, title, and inclusive page range.
+        This is the full notes-section catalogue (one entry per top-level note:
+        number, title, inclusive page range, sub-notes) — distinct from
+        ``discover_notes``, which only maps ONE statement's face-page citations
+        to pages. Call this ONCE per run, AFTER you've identified the notes
+        section's starting page (usually via the TOC).
 
         For text-based PDFs this is deterministic and fast (PyMuPDF regex).
         For scanned PDFs the fast path returns nothing and this tool
