@@ -783,9 +783,10 @@ defence-in-depth on top of the dynamic turn cap and the 180s per-turn
 timeout. It catches the slow-LLM scenario where many quick-but-not-
 quick-enough turns add up past 5 minutes total without either of the
 finer-grained guards firing. Override via `XBRL_CORRECTION_WALLCLOCK_S`
-(positive seconds; 0 disables). Same constant exists for
-`NOTES_VALIDATOR_WALLCLOCK_TIMEOUT` but the validator pass hasn't
-been wrapped with the in-loop check yet — that's a follow-up.
+(positive seconds; 0 disables). `NOTES_VALIDATOR_WALLCLOCK_TIMEOUT`
+(legacy name) is the same defence for the notes-reviewer pass — the pass
+inherited the old validator's constants and pseudo-agent id when it
+replaced it (gotcha #22).
 
 ### 19. Pipeline-stage + cross-check progress events
 
@@ -938,25 +939,22 @@ mid-save it reads a truncated zip → `EOFError` (Windows incident,
 2026-05-29). Any agent tool that loads + saves the **same** workbook path is
 exposed.
 
-The notes post-validator (`notes/validator_agent.py`) — whose `read_cell`
-and `rewrite_cell` both target `merged_workbook_path` — is fixed with two
-coupled defences: a per-run `NotesValidatorAgentDeps.io_lock`
-(`threading.Lock`) wrapping every load/save, and `_atomic_save_workbook`
-(tempfile + `os.replace`, atomic on Windows + POSIX) so even an un-locked
-reader sees old-or-new, never partial. The validator's `EOFError` was
-caught at `server.py` (`"Notes validator run failed"`), so it failed soft
-(no dedup) rather than crashing the run. Pinned by
-`tests/test_notes_validator_agent.py::TestWorkbookIoRaceSafety`.
+The race was first hit + fixed on the notes post-validator (a
+load+save-in-place agent, since **deleted** — its cross-sheet
+reconciliation job moved to the notes reviewer, which writes only the DB,
+never the xlsx, so it can't reproduce this). The fix pattern — a per-run
+`threading.Lock` io_lock around every load/save plus a tempfile +
+`os.replace` atomic save (atomic on Windows + POSIX) so even an un-locked
+reader sees old-or-new, never partial — is the shape now shared everywhere.
 
 **Closed everywhere (2026-06-12, PLAN-orchestration-hardening item 8):** the
-helper was promoted to `utils/workbook_io.py::atomic_save_workbook` (the
-validator keeps a `_atomic_save_workbook` re-export alias for its
-import/test contract) and every live-path saver now routes through it —
-`tools/fill_workbook.py`, `concept_model/exporter.py`, `notes/writer.py`,
-`workbook_merger.py` (`tools/recalc.py` and `notes/persistence.py` already
-used tmp+replace shapes). Pinned by `tests/test_workbook_io_atomic.py`.
-If you add a NEW tool that writes a workbook another tool reads, use the
-shared helper — never a bare in-place `wb.save(path)`.
+helper was promoted to `utils/workbook_io.py::atomic_save_workbook` and
+every live-path saver now routes through it — `tools/fill_workbook.py`,
+`concept_model/exporter.py`, `notes/writer.py`, `workbook_merger.py`
+(`tools/recalc.py` and `notes/persistence.py` already used tmp+replace
+shapes). Pinned by `tests/test_workbook_io_atomic.py`. If you add a NEW
+tool that writes a workbook another tool reads, use the shared helper —
+never a bare in-place `wb.save(path)`.
 
 ### 23. Gold-standard eval — gold is facts, scoped by template SET
 

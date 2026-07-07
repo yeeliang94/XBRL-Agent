@@ -70,7 +70,7 @@ def test_provenance_and_inventory_round_trip(db_path: Path) -> None:
 def test_detectors_identical_from_db_vs_sidecars(db_path: Path) -> None:
     """Step 2 contract: findings computed from DB provenance must equal those
     computed from the sidecar dicts."""
-    from notes.validator_agent import (
+    from notes.detectors import (
         detect_same_sheet_row_collisions,
         detect_subnote_coverage_gaps,
         load_inventory_from_db,
@@ -133,18 +133,22 @@ def test_reviewer_factory_falls_back_to_sidecars_when_no_db_provenance(
 
 
 def test_view_pdf_pages_records_only_valid_rendered_pages(
-    tmp_path: Path, monkeypatch,
+    db_path: Path, tmp_path: Path, monkeypatch,
 ) -> None:
     """Step 4: driving the real view_pdf_pages tool records exactly the
     rendered (valid) pages — never an out-of-range request (99 of a 6-page PDF).
+    Pinned on the live notes reviewer (the validator that once carried this tool
+    was deleted; the reviewer's view_pdf_pages is the grounding source now).
     """
-    import notes.validator_agent as va
-    import notes.detectors as det  # _render_single_page (PDF render) lives here now
+    import notes.reviewer_agent as ra
+    import notes.detectors as det  # _render_single_page (PDF render) lives here
+    from notes.reviewer_agent import create_notes_reviewer_agent
     from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
 
+    run_id = _seed_run(db_path)
     # 6-page PDF; page 99 is invalid and must NOT enter viewed_pages.
-    monkeypatch.setattr(va, "count_pdf_pages", lambda _p: 6)
+    monkeypatch.setattr(ra, "count_pdf_pages", lambda _p: 6)
     monkeypatch.setattr(
         det, "render_pages_to_png_bytes",
         lambda pdf_path, start, end, dpi=200: [b"png"],
@@ -160,11 +164,11 @@ def test_view_pdf_pages_records_only_valid_rendered_pages(
             )])
         return ModelResponse(parts=[TextPart("done")])
 
-    agent, deps, _ctx = va.create_notes_validator_agent(
-        merged_workbook_path=str(tmp_path / "m.xlsx"),
-        pdf_path=str(tmp_path / "x.pdf"),
-        sidecar_paths=[], filing_level="company", filing_standard="mfrs",
+    agent, deps, _ctx = create_notes_reviewer_agent(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
         model=FunctionModel(script), output_dir=str(tmp_path),
+        sidecar_paths=[],
     )
     agent.run_sync("go", deps=deps)
     assert deps.viewed_pages == {3, 5}

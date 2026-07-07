@@ -29,7 +29,6 @@ _NOTES_PROMPT_FILES = (
     "notes_issued_capital.md",
     "notes_listofnotes.md",
     "notes_related_party.md",
-    "notes_validator.md",
 )
 
 

@@ -6,10 +6,10 @@ raise ``EOFError`` (gotcha #22, 2026-05-29 Windows incident). Every live
 code path that saves a workbook another tool may read must go through
 ``atomic_save_workbook`` instead of ``wb.save(path)``.
 
-The helper was born in ``notes/validator_agent.py`` (which keeps a
-re-export alias for its import/test contract) and is promoted here so the
-other savers — ``tools/fill_workbook.py``, ``concept_model/exporter.py``,
-``notes/writer.py``, ``workbook_merger.py`` — share one mechanism.
+The helper originated as a private tempfile+``os.replace`` shape in the
+notes post-validator; it was promoted here (item 8) so every saver —
+``tools/fill_workbook.py``, ``concept_model/exporter.py``,
+``notes/writer.py``, ``workbook_merger.py`` — shares one mechanism.
 """
 from __future__ import annotations
 

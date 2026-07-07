@@ -27,13 +27,6 @@ def _make_template(tmp_path, label: str = "Revenue") -> str:
 
 
 class TestSharedHelper:
-    def test_validator_alias_is_the_shared_helper(self):
-        """The notes validator's import/test contract is a re-export of the
-        promoted helper — one mechanism, zero forks."""
-        from notes.validator_agent import _atomic_save_workbook
-
-        assert _atomic_save_workbook is atomic_save_workbook
-
     def test_failed_save_leaves_old_file_intact(self, tmp_path):
         """Mid-save interrupt simulation: a workbook whose save() blows up
         must not clobber or truncate the existing file."""
