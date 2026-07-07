@@ -1,6 +1,14 @@
 # Implementation Plan: Agent & Tool Consolidation
 
-**Overall Progress:** `0%`
+**Status:** Phases 1–3 shipped 🟩 (branch `chore/agent-tool-consolidation`).
+Phase 4 **deferred** 🟥 by decision (2026-07-07): the JSON-string tools already
+return actionable, self-correcting parse errors (the tool-design skill's primary
+concern), and converting `write_notes` would trade away its tested per-item
+batch tolerance while needing a live extraction run to validate the new schema —
+not available in the implementation environment. Revisit Phase 4 when a live
+smoke test can confirm a real model emits valid typed calls.
+
+**Overall Progress:** `75%` (Phases 1–3 of 4; Phase 4 deferred)
 **PRD Reference:** none — scope is the 2026-07-07 multi-agent architecture & tool-design review
 (chat report; findings A1, T1–T4 of that review). Finding A2 (house-style floor
 sunset) is **already done** — `notes/format_defaults.py` was deleted in commit
