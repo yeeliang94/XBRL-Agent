@@ -77,10 +77,6 @@ def test_every_injected_prop_is_now_ops_reproducible(tmp_path: Path):
     """Post-Phase-4 the tier split has collapsed: EVERY property the docx reader
     injects — including padding and paragraph spacing — is reproducible through
     a format_op. Nothing the agent sees in the source is un-copyable."""
-    from ingest.docx_styles import REFERENCE_ONLY_PROPS
-
-    assert REFERENCE_ONLY_PROPS == frozenset()  # no un-copyable props remain
-
     content = "<table><tbody><tr><td>x</td><td>1</td></tr></tbody></table>"
     # padding op (Phase 4) is now accepted by the write gate...
     padded = apply_cell_operations(

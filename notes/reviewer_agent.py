@@ -1092,7 +1092,7 @@ def create_notes_reviewer_agent(
         note_num: int, verdict: str, source_pages: List[int],
         reason: str,
     ) -> str:
-        """Accumulate one coverage-note verdict (shared by singular + batch)."""
+        """Accumulate one coverage-note verdict (per-item helper for the batch tool)."""
         try:
             key = int(note_num)
         except (TypeError, ValueError):
@@ -1146,7 +1146,7 @@ def create_notes_reviewer_agent(
         ctx: RunContext[NotesReviewerDeps], *,
         note_num: int, subnote_ref: str, verdict: str, reason: str,
     ) -> str:
-        """Accumulate one sub-note verdict (shared by singular + batch)."""
+        """Accumulate one sub-note verdict (per-item helper for the batch tool)."""
         try:
             nn = int(note_num)
         except (TypeError, ValueError):
