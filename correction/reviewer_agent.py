@@ -702,7 +702,7 @@ def apply_reviewer_fix(
                 f"rejected: concept {fact.concept_uuid!r} belongs to template "
                 f"{concept['template_id']!r}, not this run's family "
                 f"({template_prefix!r}). Trace the failing cell in THIS run "
-                f"with trace_cascade_source_tool to get the right concept_uuid."
+                f"with trace_cascade_source to get the right concept_uuid."
             )
 
         # Deterministic guard NEXT — invariant #17 + grounding. Use the
@@ -900,7 +900,7 @@ def render_reviewer_prompt(
         fact_summary = ""
     # Phase 4: pre-compute the cascade trace for each failing check's target
     # cell and inline it in the packet. The reviewer's biggest budget sink is
-    # rediscovering — via 2-3 trace_cascade_source_tool round-trips — what the
+    # rediscovering — via 2-3 trace_cascade_source round-trips — what the
     # server already knows (the children feeding a failing total + their signed
     # sum). Computing it once here lets the reviewer go straight to the PDF /
     # the fix. Best-effort and per-check guarded: a trace failure yields "".
@@ -1089,7 +1089,7 @@ def _format_review_packet(
             "This is a GROUP filing — facts carry BOTH Group and Company "
             "scope. A failing check tagged [group] is about Group-scope facts; "
             "[company] is about Company-scope. Pass the matching `entity_scope` "
-            "to trace_cascade_source_tool / apply_fix (the tools default to "
+            "to trace_cascade_source / apply_fix (the tools default to "
             "Company)."
         )
     lines.append("")
@@ -1128,7 +1128,7 @@ def _format_review_packet(
             if trace_text:
                 lines.append(
                     "    cascade trace (pre-computed — the children feeding "
-                    "this total; no need to call trace_cascade_source_tool for "
+                    "this total; no need to call trace_cascade_source for "
                     "the cell named above):"
                 )
                 for tl in trace_text.splitlines():
@@ -1580,7 +1580,7 @@ def create_reviewer_agent(
         """Reverse-lookup: given a figure (and optional label), which rows is it?
 
         Use when you've read a number in the PDF and need to know where it
-        belongs — the inverse of trace_cascade_source_tool. Matches the run's
+        belongs — the inverse of trace_cascade_source. Matches the run's
         facts by value (±1) and/or a fuzzy label match. On a GROUP filing pass
         ``entity_scope`` ('Group' | 'Company') to narrow to the right column.
         Returns up to 10 candidates with their sheet, row, label, current value,

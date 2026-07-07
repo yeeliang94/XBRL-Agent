@@ -1555,7 +1555,7 @@ async def _run_reviewer_pass(
         prompt = (
             "Investigate every failing cross-check and open conflict in your "
             "REVIEW PACKET. Trace each failure DOWN to the leaf that's wrong "
-            "(trace_cascade_source_tool), ground the fix in the PDF, then "
+            "(trace_cascade_source), ground the fix in the PDF, then "
             "apply_fix. Flag only what you're stuck on or dispute. You have at "
             f"most {max_turns} turns. Never plug a residual to force a balance."
         )
