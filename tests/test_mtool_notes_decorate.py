@@ -237,6 +237,19 @@ def test_size_hoist_lets_a_previously_flat_table_fit_full():
     assert len(full) <= EXCEL_CELL_CHAR_LIMIT
 
 
+def test_decorator_does_not_double_pad_a_source_padded_cell():
+    """Phase 4: a cell carrying agent-mirrored padding keeps ITS padding — the
+    decorator must not append its own on top (which would both look wrong and
+    re-inflate the mTool payload the Step-3 hoist slimmed)."""
+    out = decorate_notes_html(
+        '<table><tr><td style="padding: 2px 3px">x</td></tr></table>')
+    assert "padding: 2px 3px" in out
+    assert "padding: 4px 8px" not in out   # decorator default suppressed
+    # exactly one CSS padding declaration (the cell's own); the table's
+    # `cellpadding=` attribute is not a CSS declaration.
+    assert out.count("padding:") == 1
+
+
 def test_empty_html_passthrough():
     assert decorate_notes_html("") == ""
 

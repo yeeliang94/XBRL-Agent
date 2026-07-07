@@ -27,11 +27,14 @@ def test_block_present_and_shaped_when_available():
     assert "read_source_note" in block
     assert "format_ops" in block  # styling goes through the sidecar channel
     assert "PDF wins" in block  # source is a reference, PDF is ground truth
-    # Step 7: the block now tells the agent to COPY real styling, not infer it,
-    # and lists the reference-only props it must ignore until Phase 4.
+    # Step 7 + Phase 4: the block tells the agent to COPY real styling (not
+    # infer it), now INCLUDING padding + paragraph spacing (Phase 4 plumbed them
+    # through the write path, so the old ignore-list is gone).
     assert "COPY the styling" in block
     assert "do not invent" in block.lower()
-    assert "padding" in block and "margin-top" in block  # the ignore-list
+    assert "padding" in block  # copied via the padding op
+    assert "space_before" in block or "space_after" in block
+    assert "IGNORE these source properties" not in block  # ignore-list removed
 
 
 def test_render_notes_prompt_gates_on_flag():

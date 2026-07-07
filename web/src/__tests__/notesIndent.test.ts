@@ -116,4 +116,46 @@ describe("notesIndent", () => {
     expect(firstParaIndent(bigPx)).toBe(MAX_INDENT_LEVEL);
     bigPx.destroy();
   });
+
+  // --- Phase 4: paragraph before/after spacing round-trip -------------------
+  function firstParaAttrs(editor: Editor): Record<string, unknown> {
+    let attrs: Record<string, unknown> = {};
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "paragraph") {
+        attrs = node.attrs as Record<string, unknown>;
+        return false;
+      }
+      return true;
+    });
+    return attrs;
+  }
+
+  it("preserves margin-top/margin-bottom (Word-source spacing) on reload", () => {
+    const editor = makeEditor(
+      '<p style="margin-top: 6px; margin-bottom: 13px">x</p>',
+    );
+    const attrs = firstParaAttrs(editor);
+    expect(attrs.spaceBefore).toBe("6px");
+    expect(attrs.spaceAfter).toBe("13px");
+    const html = editor.getHTML();
+    expect(html).toContain("margin-top: 6px");
+    expect(html).toContain("margin-bottom: 13px");
+    editor.destroy();
+  });
+
+  it("renders spacing alongside indent without clobbering either", () => {
+    const editor = makeEditor(
+      `<p style="margin-left: ${INDENT_STEP_EM}em; margin-bottom: 8px">x</p>`,
+    );
+    const html = editor.getHTML();
+    expect(html).toContain(`margin-left: ${INDENT_STEP_EM}em`);
+    expect(html).toContain("margin-bottom: 8px");
+    editor.destroy();
+  });
+
+  it("ignores a junk / oversized spacing value (no-churn contract)", () => {
+    const editor = makeEditor('<p style="margin-top: 9999px">x</p>');
+    expect(firstParaAttrs(editor).spaceBefore).toBeNull();
+    editor.destroy();
+  });
 });

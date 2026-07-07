@@ -1,6 +1,6 @@
 # Implementation Plan: Word-Upload Formatting Fidelity (A + C)
 
-**Overall Progress:** `35%` (Phase 1 complete; Phase 2 in progress)
+**Overall Progress:** `90%` (Phases 1-4 code complete; operator/browser gates outstanding — Steps 9 + 12 real-Chrome)
 **PRD Reference:** none yet — shaped in the 2026-07-07 brainstorm session (run-66 Windows
 experiment analysis). Background: docs/PLAN-word-input.md (Phase 2 built the
 style-free sidecar this plan enriches), docs/PLAN-notes-format-sidecar.md.
@@ -126,7 +126,7 @@ shading, and bold/italic actually survive into what the agent reads and mirrors.
 
 ### Phase 2: Carry real Word styles into the sidecar (Approach A)
 
-- [ ] 🟥 **Step 4: Build the docx style reader (maximal capture)** — new module
+- [x] 🟩 **Step 4: Build the docx style reader (maximal capture)** — new module
   `ingest/docx_styles.py`, stdlib-only (zipfile + ElementTree). For each table
   in `word/document.xml`, in document order, extract per-cell: effective borders
   (single/double/none + colour, resolving table-level defaults, the referenced
@@ -143,7 +143,7 @@ shading, and bold/italic actually survive into what the agent reads and mirrors.
     has the expected borders/alignments/padding/indentation per cell (new
     `tests/test_docx_styles.py`).
 
-- [ ] 🟥 **Step 5: Inject styles into `source.html` (everything captured)** — in
+- [x] 🟩 **Step 5: Inject styles into `source.html` (everything captured)** — in
   `ingest/docx_html.py::extract_docx_html`, after mammoth converts, match the
   Nth extracted style map to the Nth `<table>` in mammoth's output (mammoth
   preserves document order) and write ALL captured styles as inline `style=`
@@ -164,14 +164,14 @@ shading, and bold/italic actually survive into what the agent reads and mirrors.
     (sanitiser-accepted today) vs Tier-2 (reference-only until Phase 4), so the
     two vocabularies can't silently drift. Existing tests still pass.
 
-- [ ] 🟥 **Step 6: Confirm styles survive the per-note slicing** —
+- [x] 🟩 **Step 6: Confirm styles survive the per-note slicing** —
   `notes/source_snippets.py` slices `source.html` verbatim, so styles should ride
   along for free; pin that so a future "cleanup" can't silently strip them.
   - **Verify:** `tests/test_notes_source_snippets.py` gains a case: a styled
     table inside Note 4's chunk keeps its `style=` attributes and stays under
     the snippet cap accounting.
 
-- [ ] 🟥 **Step 7: Update the agent's instruction from "infer" to "copy"** —
+- [x] 🟩 **Step 7: Update the agent's instruction from "infer" to "copy"** —
   rewrite `_render_source_html_block` in `notes/agent.py`: the source HTML now
   carries the real styles; translate each styled element into the matching
   `format_ops` (border sides, alignment, fills, indent) *faithfully* — copy
@@ -185,7 +185,7 @@ shading, and bold/italic actually survive into what the agent reads and mirrors.
 
 ### Phase 3: Prove it
 
-- [ ] 🟥 **Step 8: End-to-end fixture test** — upload path (`tests/test_upload_docx.py`
+- [x] 🟩 **Step 8: End-to-end fixture test** — upload path (`tests/test_upload_docx.py`
   shape): styled .docx in → `source.html` with styles out → `read_note_snippet`
   returns the styled chunk → a hand-written `format_ops` translation of those
   styles passes `apply_cell_operations` cleanly (proving the vocabulary the agent
@@ -208,7 +208,7 @@ shading, and bold/italic actually survive into what the agent reads and mirrors.
 ### Phase 4: Write-side Tier 2 — padding & spacing through all four gates
 *(gated on Step 9: only if Tier-1 fidelity is visibly insufficient)*
 
-- [ ] 🟥 **Step 10: Widen the sanitiser whitelist** — add `padding` (table tags)
+- [x] 🟩 **Step 10: Widen the sanitiser whitelist** — add `padding` (table tags)
   and `margin`/`margin-top`/`margin-bottom` (block tags) to
   `notes/html_sanitize.py::_STYLE_PROPS_BY_TAG` with shape-checked validators
   (px/em magnitudes only — same rigour as the border validators; reject anything
@@ -216,7 +216,7 @@ shading, and bold/italic actually survive into what the agent reads and mirrors.
   - **Verify:** `tests/test_notes_html_sanitize_css.py` extended — accepted
     shapes round-trip, hostile values (`url()`, huge magnitudes, calc()) rejected.
 
-- [ ] 🟥 **Step 11: Widen the format_ops vocabulary** — add the matching style
+- [x] 🟩 **Step 11: Widen the format_ops vocabulary** — add the matching style
   keys to `notes/format_patch.py` (validators mirroring Step 10) so agents can
   emit them; update the ops documentation in the prompt + tool docstring and
   REMOVE the Step-7 ignore-list entries for these properties.
@@ -224,7 +224,7 @@ shading, and bold/italic actually survive into what the agent reads and mirrors.
     extended; a padding op applied via `apply_cell_operations` survives
     sanitise + format-only verify.
 
-- [ ] 🟥 **Step 12: Editor round-trip** — teach the TipTap cell/paragraph models
+- [x] 🟩 **Step 12: Editor round-trip** — teach the TipTap cell/paragraph models
   (`web/src/lib/cellFormatting.ts` + editor config) to PRESERVE the new
   properties on edit, or they vanish the first time a user touches the cell.
   Includes the real-browser check (jsdom does not reproduce browser CSSOM
@@ -232,7 +232,7 @@ shading, and bold/italic actually survive into what the agent reads and mirrors.
   - **Verify:** web tests for load→edit→save preserving padding/margin; manual
     real-Chrome round-trip recorded in the PR.
 
-- [ ] 🟥 **Step 13: Export weight re-measure** — re-run the Step-3 size
+- [x] 🟩 **Step 13: Export weight re-measure** — re-run the Step-3 size
   measurement with Tier-2 styles present; confirm the ladder tiers for the
   run-66 tables haven't regressed materially (more notes landing flat/oversize).
   - **Verify:** before/after tier counts in the PR description.

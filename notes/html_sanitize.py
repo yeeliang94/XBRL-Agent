@@ -213,6 +213,14 @@ def _is_color(value: str) -> bool:
 _WIDTH_LENGTH_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:px|%)|auto)$")
 # An indent length: positive `em`/`px` only (paragraph margin-left).
 _INDENT_LENGTH_RE = re.compile(r"^\d+(?:\.\d+)?(?:em|px)$")
+# Cell padding: 1-4 positive `px` tokens (`4px`, `4px 8px`, …) — the CSS box
+# shorthand. Bounded shapes only; no `%`, `calc()`, `url()`, negatives. Word's
+# w:tcMar -> px lands here (Phase 4). (notes source-formatting fidelity.)
+_PADDING_LENGTH_RE = re.compile(
+    r"^(?:0|\d+(?:\.\d+)?px)(?:\s+(?:0|\d+(?:\.\d+)?px)){0,3}$")
+# Vertical block spacing: a single non-negative `px`/`em` (paragraph
+# margin-top / margin-bottom from Word's w:spacing before/after).
+_SPACING_LENGTH_RE = re.compile(r"^(?:0|\d+(?:\.\d+)?(?:em|px))$")
 
 
 def _build_css_property_validators() -> dict[str, "callable"]:
@@ -237,6 +245,12 @@ def _build_css_property_validators() -> dict[str, "callable"]:
         "width": lambda v: bool(_WIDTH_LENGTH_RE.match(v)),
         "min-width": lambda v: bool(_WIDTH_LENGTH_RE.match(v)),
         "margin-left": lambda v: bool(_INDENT_LENGTH_RE.match(v)),
+        # Phase 4 (Word-formatting fidelity): cell padding on table tags,
+        # paragraph before/after spacing on block tags. Shape-checked to bounded
+        # px/em so a source-mirrored value can't smuggle calc()/url().
+        "padding": lambda v: bool(_PADDING_LENGTH_RE.match(v)),
+        "margin-top": lambda v: bool(_SPACING_LENGTH_RE.match(v)),
+        "margin-bottom": lambda v: bool(_SPACING_LENGTH_RE.match(v)),
     }
     # Per-side border shorthands (border-top/right/bottom/left) — the exact set
     # the Format bar emits as it sets each side individually.
@@ -279,8 +293,14 @@ _TABLE_STYLE_PROPS: frozenset[str] = frozenset({
     # borders into on `getHTML()` (see `_build_css_property_validators`).
     "border", "border-width", "border-style", "border-color",
     "text-align",
+    # Phase 4: cell padding mirrored from the Word source (w:tcMar).
+    "padding",
 })
-_BLOCK_STYLE_PROPS: frozenset[str] = frozenset({"text-align", "margin-left"})
+_BLOCK_STYLE_PROPS: frozenset[str] = frozenset({
+    "text-align", "margin-left",
+    # Phase 4: paragraph before/after spacing mirrored from Word (w:spacing).
+    "margin-top", "margin-bottom",
+})
 _STYLE_PROPS_BY_TAG: dict[str, frozenset[str]] = {
     **{tag: _TABLE_STYLE_PROPS for tag in _TABLE_TAGS},
     # The table element additionally carries its overall width when resized,
