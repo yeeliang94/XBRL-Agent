@@ -123,16 +123,15 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
 
   const handleFile = useCallback(
     async (file: File) => {
-      // Extension + MIME check — belt-and-braces: the backend filter catches
-      // mismatches too, but rejecting here saves an upload round-trip.
-      // Some browsers leave file.type empty on drag-and-drop, so the empty
-      // string is treated as "unknown" and the extension check carries us.
-      if (!file.name.toLowerCase().endsWith(".pdf")) {
-        setError("Only PDF files are accepted.");
-        return;
-      }
-      if (file.type && file.type !== "application/pdf") {
-        setError("Only PDF files are accepted.");
+      // Extension check — belt-and-braces: the backend filter catches
+      // mismatches too, but rejecting here saves an upload round-trip. A Word
+      // (.docx) file is converted to PDF server-side (PLAN-word-input.md).
+      // Browsers report .docx MIME inconsistently (empty / octet-stream / the
+      // long OOXML string), so we gate on the extension and let the server —
+      // which re-validates and actually converts — be the source of truth.
+      const lower = file.name.toLowerCase();
+      if (!lower.endsWith(".pdf") && !lower.endsWith(".docx")) {
+        setError("Only PDF or Word (.docx) files are accepted.");
         return;
       }
       // Client-side size cap — matches the backend request-body limit.
@@ -181,7 +180,7 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
           onDragOver={(e) => e.preventDefault()}
           style={styles.dropZone}
         >
-          <p style={styles.dropText}>Drop a PDF here or click the button below</p>
+          <p style={styles.dropText}>Drop a PDF or Word (.docx) file here or click the button below</p>
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
@@ -189,23 +188,25 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
             className={uiClass.btnPrimary}
             style={disabled ? styles.chooseButtonDisabled : styles.chooseButton}
           >
-            Choose PDF
+            Choose file
           </button>
           <input
             ref={inputRef}
             type="file"
-            accept=".pdf"
+            accept=".pdf,.docx"
             onChange={handleChange}
             disabled={disabled}
             style={{ display: "none" }}
-            aria-label="Upload PDF"
+            aria-label="Upload document"
           />
           {uploading && <p style={styles.uploading}>Uploading...</p>}
         </div>
       ) : (
         <div style={styles.fileRow}>
           <div style={styles.fileInfo}>
-            <div style={styles.fileIcon}>PDF</div>
+            <div style={styles.fileIcon}>
+              {filename.toLowerCase().endsWith(".docx") ? "DOC" : "PDF"}
+            </div>
             <span style={styles.fileName}>{filename}</span>
           </div>
 

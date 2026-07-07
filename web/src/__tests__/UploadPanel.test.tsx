@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { UploadPanel } from "../components/UploadPanel";
 
 const noop = vi.fn().mockResolvedValue({ session_id: "s1", filename: "test.pdf" });
@@ -59,9 +59,36 @@ describe("UploadPanel — P1 enhancements", () => {
         startTime={null}
       />,
     );
-    const button = screen.getByRole("button", { name: /choose pdf/i });
+    const button = screen.getByRole("button", { name: /choose file/i });
     // jsdom converts hex #FD5108 to rgb
     expect(button.style.backgroundColor).toBe("rgb(253, 81, 8)");
+  });
+
+  test("accepts a .docx file (converted server-side) and calls onUpload", async () => {
+    const onUpload = vi.fn().mockResolvedValue({ session_id: "s1", filename: "fs.docx" });
+    render(
+      <UploadPanel onUpload={onUpload} isRunning={false} filename={null} startTime={null} />,
+    );
+    const input = screen.getByLabelText(/upload document/i) as HTMLInputElement;
+    expect(input.getAttribute("accept")).toBe(".pdf,.docx");
+    const docx = new File(["x"], "fs.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    fireEvent.change(input, { target: { files: [docx] } });
+    await waitFor(() => expect(onUpload).toHaveBeenCalledWith(docx));
+    expect(screen.queryByText(/only pdf/i)).not.toBeInTheDocument();
+  });
+
+  test("rejects an .xlsx file client-side without calling onUpload", () => {
+    const onUpload = vi.fn();
+    render(
+      <UploadPanel onUpload={onUpload} isRunning={false} filename={null} startTime={null} />,
+    );
+    const input = screen.getByLabelText(/upload document/i) as HTMLInputElement;
+    const xlsx = new File(["x"], "book.xlsx", { type: "application/octet-stream" });
+    fireEvent.change(input, { target: { files: [xlsx] } });
+    expect(onUpload).not.toHaveBeenCalled();
+    expect(screen.getByText(/only pdf or word/i)).toBeInTheDocument();
   });
 
   test("drag-drop zone uses grey50 background with grey200 dashed border", () => {
