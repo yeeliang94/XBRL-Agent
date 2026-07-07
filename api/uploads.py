@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import uuid
 from typing import Optional
 
@@ -52,9 +53,15 @@ def _scout_attempt_is_current(session_id: str, gen: int) -> bool:
 
 @router.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    # Validate file type
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+    # Validate file type. We accept PDF and Microsoft Word (.docx) — a Word
+    # file is converted to a text PDF below so the whole page-based pipeline
+    # runs unchanged (PLAN-word-input.md). Everything else is rejected.
+    name = (file.filename or "").lower()
+    is_docx = name.endswith(".docx")
+    if not (name.endswith(".pdf") or is_docx):
+        raise HTTPException(
+            status_code=400, detail="Only PDF or Word (.docx) files are accepted."
+        )
 
     # Create session directory up front — we stream the upload straight to
     # disk so the full file never lives in memory (peer-review I13). A
@@ -62,7 +69,10 @@ async def upload_pdf(file: UploadFile = File(...)):
     session_id = str(uuid.uuid4())
     session_dir = server.OUTPUT_DIR / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
-    target = session_dir / "uploaded.pdf"
+    # A Word upload lands as uploaded.docx and is converted to uploaded.pdf
+    # below; a PDF lands as uploaded.pdf directly. The pipeline always reads
+    # uploaded.pdf, so nothing downstream learns a new path.
+    target = session_dir / ("uploaded.docx" if is_docx else "uploaded.pdf")
 
     _CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB reads
     total_bytes = 0
@@ -75,7 +85,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                 total_bytes += len(chunk)
                 if total_bytes > server.MAX_UPLOAD_SIZE:
                     # Drain was already interrupted — discard the partial
-                    # file so a half-written PDF doesn't linger.
+                    # file so a half-written upload doesn't linger.
                     out.close()
                     try:
                         target.unlink()
@@ -98,6 +108,28 @@ async def upload_pdf(file: UploadFile = File(...)):
         except OSError:
             pass
         raise
+
+    # Word → PDF "convert at the door" (PLAN-word-input.md Phase 1). Both files
+    # are kept: uploaded.docx (formatting source for the notes side-channel) +
+    # uploaded.pdf (canonical for extraction, viewer, and citations). A
+    # conversion failure is a 422 with a plain-language, operator-actionable
+    # message — never a crash — and tears down the whole session dir so no
+    # half-usable run is left behind.
+    if is_docx:
+        from ingest.word_convert import WordConversionError, convert_docx_to_pdf
+        from ingest.docx_html import write_source_html
+
+        try:
+            await asyncio.to_thread(
+                convert_docx_to_pdf, target, session_dir / "uploaded.pdf"
+            )
+        except WordConversionError as exc:
+            logger.warning("docx conversion failed for %s: %s", file.filename, exc)
+            shutil.rmtree(session_dir, ignore_errors=True)
+            raise HTTPException(status_code=422, detail=exc.user_message)
+        # Best-effort: extract the Word body as source.html for the notes
+        # source-formatting channel (Phase 2). Never blocks the upload.
+        await asyncio.to_thread(write_source_html, target, session_dir)
 
     # Persist the ORIGINAL filename as a sidecar so History can show a
     # meaningful name later. The file on disk is always "uploaded.pdf" to

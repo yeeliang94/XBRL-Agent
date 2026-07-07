@@ -475,6 +475,34 @@ def _render_column_rules(filing_level: str) -> str:
     )
 
 
+def _render_source_html_block(available: bool) -> Optional[str]:
+    """Instruction block for runs that carry a Word source.html sidecar.
+
+    Returns None when unavailable so PDF-only prompts are unchanged. Keeps the
+    content channel style-free (gotcha #16): styling is mirrored via
+    ``format_ops``, never inline styles in ``content``.
+    """
+    if not available:
+        return None
+    return (
+        "=== SOURCE DOCUMENT FORMATTING (Word upload) ===\n"
+        "This filing was uploaded as a Microsoft Word document, so the ORIGINAL "
+        "source formatting is available. Before writing each note, call "
+        "`read_source_note(note_num)` to fetch that note's source HTML.\n"
+        "- MIRROR the source's table structure and layout: same columns, same "
+        "row order, same groupings. Copy the table rather than rebuilding it "
+        "from memory.\n"
+        "- Reflect the source's visual styling (column alignment, bold totals, "
+        "underlines) through the `format_ops` field — NOT as inline styles in "
+        "`content`. Your `content` HTML stays style-free, exactly as always.\n"
+        "- The source is a REFERENCE, not ground truth: verify every number "
+        "against the PDF pages before writing. If the source and the PDF "
+        "disagree, the PDF wins.\n"
+        "- If `read_source_note` returns nothing for a note, read the PDF as "
+        "usual."
+    )
+
+
 def render_notes_prompt(
     template_type: NotesTemplateType,
     filing_level: str,
@@ -484,8 +512,15 @@ def render_notes_prompt(
     filing_standard: str = "mfrs",
     label_catalog: Optional[list[str]] = None,
     scout_context: Optional[dict] = None,
+    source_html_available: bool = False,
 ) -> str:
     """Compose the system prompt for a notes agent.
+
+    ``source_html_available`` — True when this run was uploaded as a .docx and
+    an extracted ``source.html`` sidecar exists, so the ``read_source_note``
+    tool is registered. When True a block is appended telling the agent to
+    mirror the source formatting (PLAN-word-input.md Phase 2). Rendered in code,
+    like the scout-context block, so PDF-only runs are byte-identical to before.
 
     ``page_hints`` is a sorted unique list of PDF pages the face-statement
     scout already identified as note-bearing. When the inventory is empty
@@ -575,6 +610,11 @@ def render_notes_prompt(
     overlay_block = _render_mpers_overlay(filing_standard)
     if overlay_block is not None:
         parts.append(overlay_block)
+    # Word-source formatting channel (PLAN-word-input.md Phase 2). Only present
+    # when a source.html sidecar exists; PDF runs render exactly as before.
+    source_block = _render_source_html_block(source_html_available)
+    if source_block is not None:
+        parts.append(source_block)
     # Phase 3: seed the template's row labels inline so agents aren't
     # guessing from training-prior vocabulary. Emitted AFTER the
     # per-template specific section (which describes the task) and
@@ -623,6 +663,11 @@ class NotesDeps:
     # notes prompts if the smoke run surfaces label mismatches.
     filing_standard: str = "mfrs"
     inventory: list[NoteInventoryEntry] = field(default_factory=list)
+    # Absolute path to the extracted Word source HTML (source.html) for this
+    # run, when the upload was a .docx; None on PDF uploads. Powers the
+    # read_source_note tool (PLAN-word-input.md Phase 2). Set by
+    # create_notes_agent from the PDF's parent dir.
+    source_html_path: Optional[str] = None
     # Mutable runtime state
     template_fields: list[TemplateField] = field(default_factory=list)
     pdf_page_count: int = 0
@@ -1143,6 +1188,16 @@ def create_notes_agent(
             template_type.value, entry.sheet_name, template_path_str,
         )
 
+    # Word-source formatting channel (PLAN-word-input.md Phase 2). When this run
+    # was uploaded as a .docx, a source.html sidecar sits next to uploaded.pdf;
+    # probe once at factory time (cheap stat) to decide whether to register the
+    # read_source_note tool and render its prompt block. PDF runs are untouched.
+    from notes.source_snippets import has_source_html, source_html_path_for
+    source_html_available = has_source_html(pdf_path)
+    source_html_path = (
+        str(source_html_path_for(pdf_path)) if source_html_available else None
+    )
+
     deps = NotesDeps(
         pdf_path=pdf_path,
         template_path=template_path_str,
@@ -1154,6 +1209,7 @@ def create_notes_agent(
         filing_level=filing_level,
         filing_standard=filing_standard,
         inventory=list(inventory),
+        source_html_path=source_html_path,
         filled_filename=filled_filename,
         # Pre-populate the batch list here so the tool-registration
         # check below sees it at factory time. The sub-coordinator also
@@ -1172,6 +1228,7 @@ def create_notes_agent(
         filing_standard=filing_standard,
         label_catalog=label_catalog,
         scout_context=scout_context,
+        source_html_available=source_html_available,
     )
     # Fix B (2026-06-20): notes agents expose the same search_pdf_text tool, so
     # on a fully-scanned PDF they'd waste a turn on a guaranteed-empty search —
@@ -1260,6 +1317,34 @@ def create_notes_agent(
                 continue
             lines.append(f"  row {f.row:>3}: {f.value}")
         return f"Sheet: {ctx.deps.sheet_name}\nLabels (col A):\n" + "\n".join(lines)
+
+    # Word-source formatting channel (PLAN-word-input.md Phase 2). Registered
+    # ONLY when a source.html sidecar exists for this run — PDF-only runs never
+    # see this tool (graceful degradation, like empty scout hints, gotcha #13).
+    if source_html_available:
+        @agent.tool
+        async def read_source_note(ctx: RunContext[NotesDeps], note_num: int) -> str:
+            """Fetch the ORIGINAL Word-source HTML for note ``note_num``.
+
+            Use it to MIRROR the source's table structure/layout and reflect its
+            styling via `format_ops`. Returns a "read the PDF instead" message
+            when the note isn't found in the source. The source is a REFERENCE —
+            verify every number against the PDF pages before writing.
+            """
+            from notes.source_snippets import read_note_snippet
+
+            snippet = await asyncio.to_thread(
+                read_note_snippet, ctx.deps.pdf_path, note_num,
+            )
+            if not snippet:
+                return (
+                    f"No source formatting found for note {note_num}. "
+                    "Read the relevant PDF pages instead."
+                )
+            return (
+                f"Source HTML for note {note_num} (mirror its structure; "
+                f"verify numbers against the PDF):\n{snippet}"
+            )
 
     @agent.tool
     async def view_pdf_pages(

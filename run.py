@@ -52,6 +52,29 @@ def _next_run_dir(base_dir: str) -> str:
     return str(run_dir)
 
 
+def _stage_input_document(src_path: str, session_dir: Path) -> None:
+    """Place the caller's input into ``session_dir`` as ``uploaded.pdf``.
+
+    A PDF is copied directly. A .docx is converted to a text PDF at the door
+    (PLAN-word-input.md), keeping BOTH files — uploaded.docx (formatting source
+    for the notes side-channel) and uploaded.pdf (canonical for the pipeline).
+    Conversion errors propagate (a CLI run should fail loudly); the source-HTML
+    extraction is best-effort and never raises.
+    """
+    import shutil
+
+    if str(src_path).lower().endswith(".docx"):
+        from ingest.word_convert import convert_docx_to_pdf
+        from ingest.docx_html import write_source_html
+
+        docx_dest = session_dir / "uploaded.docx"
+        shutil.copyfile(src_path, docx_dest)
+        convert_docx_to_pdf(docx_dest, session_dir / "uploaded.pdf")
+        write_source_html(docx_dest, session_dir)
+    else:
+        shutil.copyfile(src_path, session_dir / "uploaded.pdf")
+
+
 def run_agent(
     pdf_path: str,
     template_path: Optional[str] = None,
@@ -105,8 +128,8 @@ def run_agent(
     notes = set(notes or set())
 
     # The pipeline's coordinator resolves the source PDF as
-    # ``session_dir/uploaded.pdf``; copy the caller's PDF into place.
-    shutil.copyfile(pdf_path, session_dir / "uploaded.pdf")
+    # ``session_dir/uploaded.pdf``; stage the caller's input into place.
+    _stage_input_document(pdf_path, session_dir)
 
     load_dotenv(ENV_FILE, override=True)
     proxy_url = os.environ.get("LLM_PROXY_URL", "")

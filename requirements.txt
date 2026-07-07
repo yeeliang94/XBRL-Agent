@@ -24,3 +24,11 @@ truststore>=0.9.0
 # argon2id is the modern memory-hard KDF — never store a fast/plain hash for
 # the email+password login. Cookie signing uses stdlib hmac (no extra dep).
 argon2-cffi>=23.1.0
+# Word (.docx) input (PLAN-word-input.md). mammoth is a small pure-Python
+# .docx→HTML extractor for the notes source-formatting side-channel
+# (deliberately NOT the removed docling/torch stack). docx2pdf drives the
+# installed Microsoft Word to convert .docx→PDF on the Windows box; it is
+# Windows-only (marker below) — on Mac/Linux/cloud the converter is LibreOffice
+# (`soffice`), a system package, not a pip dependency.
+mammoth>=1.6.0
+docx2pdf>=0.1.8 ; sys_platform == "win32"
