@@ -112,7 +112,66 @@ def extract_docx_html(src: str | Path) -> str:
     # mammoth surfaces non-fatal messages (unmapped styles etc.); log at debug.
     for msg in getattr(result, "messages", []) or []:
         logger.debug("mammoth: %s", msg)
-    return _IMG_TAG_RE.sub("", result.value or "")
+    html = _IMG_TAG_RE.sub("", result.value or "")
+    # Enrich mammoth's style-free tables with the real Word styling mammoth
+    # discards (borders/alignment/fills). Best-effort — never raises (Step 5).
+    return _inject_source_styles(html, src)
+
+
+def _inject_source_styles(html: str, src: Path) -> str:
+    """Overlay the docx's real table styling onto mammoth's semantic HTML.
+
+    mammoth emits tables in document order with no visual styling; we read the
+    matching per-cell styles from the docx XML (ingest.docx_styles) and write
+    them as inline ``style=`` attributes on each cell. ``source.html`` is a
+    never-sanitised REFERENCE, so it may carry the full captured vocabulary; the
+    notes agent is told which properties it may actually apply on write (Step 7).
+
+    Positional matching is deliberately conservative: injection only proceeds
+    when mammoth's table count equals the docx's, and a table is styled only
+    when its row/cell counts line up exactly. Any mismatch (nested tables,
+    merged cells mammoth reshapes) leaves that table bare — a stripped skeleton
+    is the pre-Step-5 behaviour, never a mis-styled one. Any failure returns the
+    un-injected HTML."""
+    try:
+        from bs4 import BeautifulSoup
+
+        from ingest.docx_styles import cell_css, extract_style_maps
+
+        maps = extract_style_maps(src)
+        if not maps.tables:
+            return html
+        soup = BeautifulSoup(html, "html.parser")
+        tables = soup.find_all("table")
+        if len(tables) != len(maps.tables):
+            logger.info(
+                "source-style injection: mammoth produced %d tables but docx "
+                "has %d; skipping injection for %s (structure mismatch)",
+                len(tables), len(maps.tables), src)
+            return html
+        styled = 0
+        for tbl_el, tbl_style in zip(tables, maps.tables):
+            rows = tbl_el.find_all("tr")
+            if len(rows) != len(tbl_style):
+                continue
+            row_ok = all(
+                len(r.find_all(["td", "th"])) == len(rs)
+                for r, rs in zip(rows, tbl_style))
+            if not row_ok:
+                continue
+            for row_el, row_style in zip(rows, tbl_style):
+                cells = row_el.find_all(["td", "th"])
+                for cell_el, cstyle in zip(cells, row_style):
+                    css = cell_css(cstyle)
+                    if css:
+                        cell_el["style"] = css
+            styled += 1
+        logger.info("source-style injection: styled %d/%d tables for %s",
+                    styled, len(tables), src)
+        return str(soup)
+    except Exception:  # noqa: BLE001 — best-effort; a bare skeleton beats a crash
+        logger.warning("source-style injection failed for %s", src, exc_info=True)
+        return html
 
 
 def write_source_html(src: str | Path, session_dir: str | Path) -> Path | None:

@@ -33,6 +33,26 @@ def test_extracts_only_the_requested_note():
     assert "REVENUE" not in snip  # note 5 excluded (stops at next heading)
 
 
+def test_injected_cell_styles_survive_the_slice():
+    """Step 6: source.html now carries real Word styling on table cells
+    (ingest.docx_html injection). The slicer returns note content verbatim, so
+    those style= attributes must ride along into the per-note chunk — otherwise
+    the agent is back to copying a bare skeleton."""
+    styled = (
+        "<h1>4. PROPERTY, PLANT AND EQUIPMENT</h1>"
+        "<p>Movement in PPE.</p>"
+        '<table><tr>'
+        '<td style="text-align: right">Buildings</td>'
+        '<td style="border-bottom: 3px double #000000; text-align: right">'
+        "1,595</td></tr></table>"
+        "<h1>5. REVENUE</h1><p>Revenue.</p>"
+    )
+    snip = ss.extract_note_snippet(styled, 4)
+    assert "3px double #000000" in snip
+    assert "text-align: right" in snip
+    assert len(snip) <= ss._SNIPPET_CHAR_CAP
+
+
 def test_nested_table_captured_whole():
     # Malaysian FS notes use merged cells → mammoth emits nested <table>. The
     # snippet must capture the OUTER table whole, not truncate at the inner

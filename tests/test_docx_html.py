@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ingest import docx_html
-from tests._docx_fixture import build_minimal_docx
+from tests._docx_fixture import build_minimal_docx, build_styled_docx
 
 mammoth = pytest.importorskip("mammoth")
 
@@ -76,6 +76,63 @@ def test_write_source_html_caps_output_size(tmp_path: Path, monkeypatch):
     out = docx_html.write_source_html(src, session)
     assert out is not None
     assert len(out.read_text(encoding="utf-8")) <= 20
+
+
+# --- Step 5: source-style injection -----------------------------------------
+def test_injection_carries_word_table_styling_into_html(tmp_path: Path):
+    """mammoth strips visual styling; Step-5 injection puts the real Word
+    borders/alignment/double-rule back onto the cells so the agent can COPY
+    them instead of inferring from a bare skeleton."""
+    src = build_styled_docx(tmp_path / "styled.docx")
+    html = docx_html.extract_docx_html(src)
+    # right-aligned amount column
+    assert "text-align: right" in html
+    # the total row's double rule survived
+    assert "3px double #000000" in html
+    # a single top rule survived
+    assert "1px solid #000000" in html
+
+
+def test_injected_props_are_all_sanitiser_acceptable_or_reference_only(
+    tmp_path: Path,
+):
+    """Every property injected onto a cell must be Tier-1 (sanitiser-accepted on
+    write) or an explicitly documented reference-only prop — never a silent
+    third category that would be stripped on write with no plan to support it."""
+    import re
+
+    from ingest.docx_styles import REFERENCE_ONLY_PROPS, TIER1_CELL_PROPS
+
+    src = build_styled_docx(tmp_path / "styled.docx")
+    html = docx_html.extract_docx_html(src)
+    known = TIER1_CELL_PROPS | REFERENCE_ONLY_PROPS
+    for style_attr in re.findall(r'<td[^>]*style="([^"]*)"', html):
+        for decl in style_attr.split(";"):
+            decl = decl.strip()
+            if not decl:
+                continue
+            prop = decl.split(":", 1)[0].strip()
+            assert prop in known, f"unexpected injected prop {prop!r}"
+
+
+def test_injection_is_best_effort_on_table_count_mismatch(tmp_path: Path,
+                                                          monkeypatch):
+    """If mammoth's table count doesn't match the docx reader's, injection is
+    skipped entirely (a bare skeleton, never a mis-aligned style) — and the
+    HTML still comes back."""
+    src = build_styled_docx(tmp_path / "styled.docx")
+
+    def _fake_maps(_src):
+        from ingest.docx_styles import DocxStyleMaps
+        # Claim TWO tables when the doc has one → count mismatch.
+        m = DocxStyleMaps()
+        m.tables = [[[]], [[]]]
+        return m
+
+    monkeypatch.setattr("ingest.docx_styles.extract_style_maps", _fake_maps)
+    html = docx_html.extract_docx_html(src)
+    assert "<table" in html.lower()          # HTML still returned
+    assert "3px double" not in html          # no styling injected
 
 
 def test_embedded_images_are_stripped():
