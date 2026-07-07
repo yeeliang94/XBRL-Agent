@@ -156,6 +156,40 @@ def test_soffice_command_builder_moves_output(tmp_path: Path, monkeypatch):
     assert dest.exists()
 
 
+def test_word_com_timeout_raises(tmp_path: Path, monkeypatch):
+    """The Windows path runs in a child process so a hung Word COM call is
+    killed and surfaced as a WordConversionError, not an infinite hang."""
+    def _timeout_run(cmd, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(word_convert.subprocess, "run", _timeout_run)
+    with pytest.raises(WordConversionError) as ei:
+        word_convert._convert_with_word_com(tmp_path / "in.docx", tmp_path / "out.pdf")
+    assert "timed out" in str(ei.value).lower()
+
+
+def test_word_com_missing_module_gives_clean_message(tmp_path: Path, monkeypatch):
+    def _fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(
+            cmd, 1, "", "ModuleNotFoundError: No module named 'docx2pdf'"
+        )
+
+    monkeypatch.setattr(word_convert.subprocess, "run", _fake_run)
+    with pytest.raises(WordConversionError) as ei:
+        word_convert._convert_with_word_com(tmp_path / "in.docx", tmp_path / "out.pdf")
+    assert "Word isn't available" in ei.value.user_message
+
+
+def test_word_com_success_no_raise(tmp_path: Path, monkeypatch):
+    def _ok_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(word_convert.subprocess, "run", _ok_run)
+    # _convert_with_word_com doesn't itself verify output (the outer
+    # convert_docx_to_pdf does); a clean child exit must not raise.
+    word_convert._convert_with_word_com(tmp_path / "in.docx", tmp_path / "out.pdf")
+
+
 def test_soffice_nonzero_exit_raises(tmp_path: Path, monkeypatch):
     src = _write(tmp_path / "in.docx")
 
