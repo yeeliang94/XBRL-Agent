@@ -3,23 +3,32 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { TopNav } from "../components/TopNav";
 
 describe("TopNav", () => {
-  test("renders Extract, History and Template buttons", () => {
+  test("renders Extract + History for everyone; Field labels only for admins", () => {
     render(<TopNav view="extract" onViewChange={() => {}} />);
     expect(screen.getByRole("tab", { name: /extract/i })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /history/i })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: /template/i })).toBeTruthy();
+    // Field labels is admin-only — hidden for a non-admin.
+    expect(screen.queryByRole("tab", { name: /field labels/i })).toBeNull();
   });
 
-  test("clicking Template fires onViewChange with 'concepts'", () => {
+  test("admin sees the Field labels tab, which fires onViewChange('concepts')", () => {
     const onViewChange = vi.fn();
-    render(<TopNav view="extract" onViewChange={onViewChange} />);
-    fireEvent.click(screen.getByRole("tab", { name: /template/i }));
+    render(<TopNav view="extract" onViewChange={onViewChange} isAdmin />);
+    fireEvent.click(screen.getByRole("tab", { name: /field labels/i }));
     expect(onViewChange).toHaveBeenCalledWith("concepts");
   });
 
-  test("hides Template tab when showConcepts=false", () => {
-    render(<TopNav view="extract" onViewChange={() => {}} showConcepts={false} />);
-    expect(screen.queryByRole("tab", { name: /template/i })).toBeNull();
+  test("Benchmarks is admin-only", () => {
+    const { rerender } = render(<TopNav view="extract" onViewChange={() => {}} />);
+    expect(screen.queryByRole("tab", { name: /benchmarks/i })).toBeNull();
+    rerender(<TopNav view="extract" onViewChange={() => {}} isAdmin />);
+    expect(screen.getByRole("tab", { name: /benchmarks/i })).toBeTruthy();
+  });
+
+  test("hides admin surfaces when showConcepts=false even for an admin", () => {
+    render(<TopNav view="extract" onViewChange={() => {}} showConcepts={false} isAdmin />);
+    expect(screen.queryByRole("tab", { name: /field labels/i })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /benchmarks/i })).toBeNull();
     expect(screen.getByRole("tab", { name: /extract/i })).toBeTruthy();
   });
 

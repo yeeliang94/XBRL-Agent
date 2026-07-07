@@ -387,7 +387,10 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
 
   return (
     <div style={styles.container}>
-      <PageHeader title="History" />
+      <PageHeader
+        title="History"
+        description="Every extraction you've run — open one to review its figures, notes and checks, or download the Excel."
+      />
       <HistoryFilters value={filters} onChange={setFilters} />
       <HistoryList
         runs={visibleRuns}

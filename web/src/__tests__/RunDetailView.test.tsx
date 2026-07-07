@@ -120,18 +120,18 @@ describe("RunDetailView", () => {
     expect(screen.getAllByText(/completed/i).length).toBeGreaterThan(0);
   });
 
-  test("Review values is gated on canonical mode (peer-review F6)", () => {
-    // Default (canonical disabled) → no Review-values action and no Values
-    // tab, matching TopNav/Results gating.
+  test("Figures tab is gated on canonical mode (peer-review F6)", () => {
+    // Default (canonical disabled) → no Figures tab, matching TopNav/Results
+    // gating. (The old duplicate "Review values" header button was removed in
+    // Phase 2 — the Figures tab is the single door.)
     const { rerender } = render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
-    expect(screen.queryByText("Review values")).toBeNull();
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
-    expect(within(tablist).queryByRole("tab", { name: /^values$/i })).toBeNull();
+    expect(within(tablist).queryByRole("tab", { name: /^figures$/i })).toBeNull();
 
-    // Canonical enabled → Review-values action + a Values tab appear. The
-    // values now open in-place as a tab (no /concepts page jump).
+    // Canonical enabled → a Figures tab appears. The values open in-place as a
+    // tab (no /concepts page jump).
     rerender(
       <RunDetailView
         detail={makeDetail()}
@@ -140,9 +140,8 @@ describe("RunDetailView", () => {
         canonicalEnabled
       />,
     );
-    expect(screen.getByText("Review values")).toBeTruthy();
     const tablist2 = screen.getByRole("tablist", { name: /run detail sections/i });
-    expect(within(tablist2).getByRole("tab", { name: /^values$/i })).toBeTruthy();
+    expect(within(tablist2).getByRole("tab", { name: /^figures$/i })).toBeTruthy();
   });
 
   test("Review tab is gated on canonical mode (docs/Archive/PLAN-reviewer-agent.md)", () => {
@@ -151,7 +150,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
-    expect(within(tablist).queryByRole("tab", { name: /^review$/i })).toBeNull();
+    expect(within(tablist).queryByRole("tab", { name: /^ai review$/i })).toBeNull();
 
     // Canonical on → Review tab appears, scoped to the run-detail tablist so
     // it never collides with the Notes-12 sub-tab bar (gotcha #7).
@@ -164,7 +163,7 @@ describe("RunDetailView", () => {
       />,
     );
     const tablist2 = screen.getByRole("tablist", { name: /run detail sections/i });
-    expect(within(tablist2).getByRole("tab", { name: /^review$/i })).toBeTruthy();
+    expect(within(tablist2).getByRole("tab", { name: /^ai review$/i })).toBeTruthy();
   });
 
   test("renders run config: statements, variants, models, scout flag", () => {
@@ -186,7 +185,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
     // The agents section should list both SOFP (completed) and SOPL (failed)
-    clickRunTab(/^agents$/i);
+    clickRunTab(/^activity$/i);
     const agentsSection = screen.getByTestId("run-detail-agents");
     expect(agentsSection.textContent).toContain("SOFP");
     expect(agentsSection.textContent).toContain("SOPL");
@@ -213,7 +212,7 @@ describe("RunDetailView", () => {
         onDelete={vi.fn()}
       />,
     );
-    clickRunTab(/agents/i);
+    clickRunTab(/activity/i);
     const badges = screen.getAllByTestId("agent-error-type");
     expect(badges).toHaveLength(1); // only the failed agent carries it
     expect(badges[0].textContent).toBe("token budget exceeded");
@@ -227,7 +226,7 @@ describe("RunDetailView", () => {
         onDelete={vi.fn()}
       />,
     );
-    clickRunTab(/agents/i);
+    clickRunTab(/activity/i);
     expect(screen.queryAllByTestId("agent-error-type")).toHaveLength(0);
   });
 
@@ -351,7 +350,7 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    clickRunTab(/^agents$/i);
+    clickRunTab(/^activity$/i);
     const agentsSection = screen.getByTestId("run-detail-agents");
     // Friendly label appears
     expect(agentsSection.textContent?.toLowerCase()).toContain("completed");
@@ -448,7 +447,7 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    clickRunTab(/^agents$/i);
+    clickRunTab(/^activity$/i);
     const agentsSection = screen.getByTestId("run-detail-agents");
     expect(agentsSection.textContent).toContain("gemini-3-flash-preview");
     expect(agentsSection.textContent).not.toContain("GoogleModel(");
@@ -464,7 +463,7 @@ describe("RunDetailView", () => {
     );
     // Agent cards default to collapsed — expand each before asserting on
     // timeline contents so the tool rows are mounted.
-    clickRunTab(/^agents$/i);
+    clickRunTab(/^activity$/i);
     const agentCards = container.querySelectorAll("[data-testid='run-detail-agent']");
     expect(agentCards.length).toBe(2);
     agentCards.forEach((card) => {
@@ -487,7 +486,7 @@ describe("RunDetailView", () => {
     );
     // Expand the (default-collapsed) card so the timeline empty-state
     // copy is rendered.
-    clickRunTab(/^agents$/i);
+    clickRunTab(/^activity$/i);
     const toggle = container
       .querySelector("[data-testid='run-detail-agent']")
       ?.querySelector("button");
@@ -510,8 +509,8 @@ describe("RunDetailView", () => {
       />,
     );
     expect(screen.getByText(/legacy run/i)).toBeTruthy();
-    clickRunTab(/^agents$/i);
-    expect(screen.getByText(/No agents were recorded/i)).toBeTruthy();
+    clickRunTab(/^activity$/i);
+    expect(screen.getByText(/Nothing was recorded for this run yet/i)).toBeTruthy();
   });
 
   // PLAN §4 D.3: history detail renders notes agents alongside face
@@ -537,9 +536,10 @@ describe("RunDetailView", () => {
       ],
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
-    clickRunTab(/^agents$/i);
-    expect(screen.getByText("Notes 10: Corp Info")).toBeTruthy();
-    expect(screen.getByText("Notes 12: List of Notes")).toBeTruthy();
+    clickRunTab(/^activity$/i);
+    const agentList = screen.getByTestId("run-detail-agent-list");
+    expect(within(agentList).getByText("Notes 10: Corp Info")).toBeTruthy();
+    expect(within(agentList).getByText("Notes 12: List of Notes")).toBeTruthy();
     // Ensure the raw enum isn't leaking through anywhere.
     expect(screen.queryByText("NOTES_CORP_INFO")).toBeNull();
   });
@@ -650,7 +650,7 @@ describe("RunDetailView", () => {
     );
     // Expand the (default-collapsed) agent card so the sub-tab bar
     // and timeline mount.
-    clickRunTab(/^agents$/i);
+    clickRunTab(/^activity$/i);
     const toggle = container
       .querySelector("[data-testid='run-detail-agent']")
       ?.querySelector("button");
@@ -694,7 +694,7 @@ describe("RunDetailView", () => {
     // Expand the agent card so we're actually testing "sub-tab bar
     // absent after mount" and not just "body not rendered because
     // collapsed".
-    clickRunTab(/^agents$/i);
+    clickRunTab(/^activity$/i);
     const toggle = container
       .querySelector("[data-testid='run-detail-agent']")
       ?.querySelector("button");
@@ -722,8 +722,8 @@ describe("RunDetailView", () => {
     render(
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
-    clickRunTab(/^agents$/i);
-    expect(screen.getByText("Correction")).toBeTruthy();
+    clickRunTab(/^activity$/i);
+    expect(within(screen.getByTestId("run-detail-agent-list")).getByText("Correction")).toBeTruthy();
   });
 
   test("history_detail_renders_notes_validator_agent", () => {
@@ -743,8 +743,8 @@ describe("RunDetailView", () => {
     render(
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
-    clickRunTab(/^agents$/i);
-    expect(screen.getByText("Notes Validator")).toBeTruthy();
+    clickRunTab(/^activity$/i);
+    expect(within(screen.getByTestId("run-detail-agent-list")).getByText("Notes Validator")).toBeTruthy();
   });
 
   test("Telemetry tab renders per-turn metrics from the agent payload", () => {
@@ -773,7 +773,7 @@ describe("RunDetailView", () => {
       ],
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
-    clickRunTab(/^telemetry$/i);
+    clickRunTab(/^activity$/i);
     const panel = screen.getByTestId("run-detail-telemetry");
     // Tool name from a turn row is shown, proving the per-turn table rendered.
     expect(within(panel).getByText("read_template")).toBeTruthy();
@@ -820,7 +820,7 @@ describe("RunDetailView", () => {
         />,
       );
       const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
-      const valuesTab = within(tablist).getByRole("tab", { name: /^values$/i });
+      const valuesTab = within(tablist).getByRole("tab", { name: /^figures$/i });
       expect(valuesTab.getAttribute("aria-selected")).toBe("true");
     } finally {
       globalThis.fetch = originalFetch;
@@ -844,7 +844,7 @@ describe("RunDetailView", () => {
     expect(within(panel).getByText("Run configuration")).toBeTruthy();
     // No Values tab exists (canonical off), so none can be selected.
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
-    expect(within(tablist).queryByRole("tab", { name: /^values$/i })).toBeNull();
+    expect(within(tablist).queryByRole("tab", { name: /^figures$/i })).toBeNull();
     // Overview tab is the active one.
     expect(
       within(tablist).getByRole("tab", { name: /^overview$/i }).getAttribute("aria-selected"),
@@ -857,7 +857,7 @@ describe("RunDetailView", () => {
     const overviewTab = within(tablist).getByRole("tab", { name: /^overview$/i });
     // ArrowRight from Overview selects + focuses Agents.
     fireEvent.keyDown(overviewTab, { key: "ArrowRight" });
-    const agentsTab = within(tablist).getByRole("tab", { name: /^agents$/i });
+    const agentsTab = within(tablist).getByRole("tab", { name: /^activity$/i });
     expect(agentsTab.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("run-detail-agents")).toBeTruthy();
   });

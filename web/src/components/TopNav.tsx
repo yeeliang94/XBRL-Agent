@@ -12,27 +12,34 @@ import type { AppView } from "../lib/appReducer";
 export interface TopNavProps {
   view: AppView;
   onViewChange: (view: AppView) => void;
-  // Canonical mode gate: hide the Concepts tab when the backend isn't
-  // running in canonical mode (peer-review finding 5). Defaults to true so
-  // callers that don't yet know the flag keep showing it.
+  // Canonical mode gate: hide the admin/power-user surfaces when the backend
+  // isn't running in canonical mode (peer-review finding 5). Defaults to true
+  // so callers that don't yet know the flag keep showing them.
   showConcepts?: boolean;
+  // "Field labels" (concepts landing) and "Benchmarks" are power-user/admin
+  // surfaces the everyday auditor never needs — gate them on admin so the
+  // primary nav stays to Extract + History for most users (Phase 2).
+  isAdmin?: boolean;
 }
 
-const ITEMS: { id: AppView; label: string }[] = [
+const ITEMS: { id: AppView; label: string; adminOnly?: boolean }[] = [
   { id: "extract", label: "Extract" },
   { id: "history", label: "History" },
-  { id: "concepts", label: "Template" },
-  // Gold-standard eval (v16): the benchmark library. Gated behind the same
-  // canonical-mode flag as Template (eval is built on the canonical store).
-  { id: "benchmarks", label: "Benchmarks" },
+  // The concept-label editor: renamed from "Template" (which an auditor read
+  // as the MBRS Excel template) to "Field labels", and admin-only.
+  { id: "concepts", label: "Field labels", adminOnly: true },
+  // Gold-standard eval (v16): the benchmark library — an internal QA feature,
+  // so admin-only too.
+  { id: "benchmarks", label: "Benchmarks", adminOnly: true },
 ];
 
-export function TopNav({ view, onViewChange, showConcepts = true }: TopNavProps) {
-  // Both the Template (concepts) and Benchmarks tabs are canonical-mode
-  // surfaces, so they share the same gate.
-  const items = showConcepts
-    ? ITEMS
-    : ITEMS.filter((i) => i.id !== "concepts" && i.id !== "benchmarks");
+export function TopNav({ view, onViewChange, showConcepts = true, isAdmin = false }: TopNavProps) {
+  // Both the Field-labels (concepts) and Benchmarks tabs are canonical-mode
+  // surfaces AND admin-only, so they share both gates.
+  const items = ITEMS.filter((i) => {
+    if (i.adminOnly && (!showConcepts || !isAdmin)) return false;
+    return true;
+  });
   return (
     <nav style={styles.nav} role="tablist" aria-label="Main navigation">
       {items.map((item) => {

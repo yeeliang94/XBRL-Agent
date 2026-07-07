@@ -202,7 +202,10 @@ export function ExtractPage({
   );
   return (
     <>
-      <PageHeader title="Extract" />
+      <PageHeader
+        title="Extract"
+        description="Upload a financial statement (PDF or Word) and the AI fills it into the SSM MBRS template for you to review."
+      />
 
       {/* Upload + Run. In the empty landing state the upload card sits in
           the left column of HomeHero, with the "home base" (recent runs +

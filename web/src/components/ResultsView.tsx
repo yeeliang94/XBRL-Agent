@@ -286,26 +286,22 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
       {runId != null && (onViewConcepts || onOpenRunDetail) && (
         <div style={styles.reviewActionBar}>
           <span style={styles.reviewActionCopy}>
-            Review the extracted facts, source evidence, overrides, and reconciliation items before downloading the final workbook.
+            Check the figures against your source document before you file. The run
+            report opens on the Figures tab, with the notes and cross-checks alongside.
           </span>
           <div style={styles.reviewActionGroup}>
-            {onOpenRunDetail && (
+            {/* One review door (Phase 2): the run report is the single entry
+                point; its Figures tab replaces the old separate "Review
+                extracted values" button. */}
+            {(onOpenRunDetail || onViewConcepts) && (
               <button
-                onClick={() => onOpenRunDetail(runId)}
-                className={uiClass.btnSecondary}
-                style={styles.reviewActionSecondary}
-                title="Overview, cross-checks, agents, and telemetry for this run"
-              >
-                Open full run report
-              </button>
-            )}
-            {onViewConcepts && (
-              <button
-                onClick={() => onViewConcepts(runId)}
+                onClick={() =>
+                  onOpenRunDetail ? onOpenRunDetail(runId) : onViewConcepts?.(runId)
+                }
                 className={uiClass.btnPrimary}
                 style={styles.reviewActionButton}
               >
-                Review extracted values
+                Open run report
               </button>
             )}
           </div>

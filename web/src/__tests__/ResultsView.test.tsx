@@ -57,14 +57,14 @@ describe("ResultsView — P4", () => {
         onViewConcepts={onViewConcepts}
       />,
     );
-    const btn = screen.getByRole("button", { name: /review extracted values/i });
+    const btn = screen.getByRole("button", { name: /open run report/i });
     fireEvent.click(btn);
     expect(onViewConcepts).toHaveBeenCalledWith(42);
   });
 
   test("no review button when runId is null", () => {
     renderResults();
-    expect(screen.queryByRole("button", { name: /review extracted values/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /open run report/i })).toBeNull();
   });
 
   // B + C (2026-06-21): the results screen must lead into the FULL run report
@@ -84,7 +84,7 @@ describe("ResultsView — P4", () => {
         onOpenRunDetail={onOpenRunDetail}
       />,
     );
-    const btn = screen.getByRole("button", { name: /open full run report/i });
+    const btn = screen.getByRole("button", { name: /open run report/i });
     fireEvent.click(btn);
     expect(onOpenRunDetail).toHaveBeenCalledWith(42);
   });
@@ -101,7 +101,7 @@ describe("ResultsView — P4", () => {
         onOpenRunDetail={vi.fn()}
       />,
     );
-    expect(screen.queryByRole("button", { name: /open full run report/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /open run report/i })).toBeNull();
   });
 
   test("shows a reconciliation prompt when openConflicts > 0", () => {
