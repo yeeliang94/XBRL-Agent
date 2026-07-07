@@ -349,38 +349,57 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
 // --- Summary Tab ---
 
 function SummaryTab({ complete, runStartTime }: { complete: CompleteData; runStartTime: number | null }) {
-  const cards = [
-    { label: "Total Tokens", value: complete.total_tokens.toLocaleString() },
-    { label: "Est. Cost", value: `$${complete.cost.toFixed(4)}` },
-    { label: "Elapsed", value: formatElapsed(runStartTime) },
-  ];
-
   return (
     <div>
+      {/* Lead with what the user cares about — did it finish, and how long
+          did it take. Token/cost internals move into an "AI usage" expander
+          (Phase 4). */}
       <div style={styles.cardGrid}>
-        {cards.map((c) => (
-          <div key={c.label} style={styles.card}>
-            <div style={styles.cardLabel}>{c.label}</div>
-            <div style={styles.cardValue}>{c.value}</div>
-          </div>
-        ))}
         <div style={styles.card}>
           <div style={styles.cardLabel}>Status</div>
           <div>
             {complete.success ? (
               <span style={styles.successBadge}>
                 <span aria-hidden="true" style={ui.badgeDot(pwc.success)} />
-                Success
+                Done
               </span>
             ) : (
               <span style={styles.failBadge}>
                 <span aria-hidden="true" style={ui.badgeDot(pwc.error)} />
-                Failed
+                Didn't finish
               </span>
             )}
           </div>
         </div>
+        <div style={styles.card}>
+          <div style={styles.cardLabel}>Time taken</div>
+          <div style={styles.cardValue}>{formatElapsed(runStartTime)}</div>
+        </div>
       </div>
+
+      <details style={{ marginTop: pwc.space.lg }}>
+        <summary
+          style={{
+            cursor: "pointer",
+            fontFamily: pwc.fontHeading,
+            fontSize: 13,
+            fontWeight: pwc.weight.medium,
+            color: pwc.grey700,
+          }}
+        >
+          AI usage
+        </summary>
+        <div style={{ ...styles.cardGrid, marginTop: pwc.space.md }}>
+          <div style={styles.card}>
+            <div style={styles.cardLabel}>Total tokens</div>
+            <div style={styles.cardValue}>{complete.total_tokens.toLocaleString()}</div>
+          </div>
+          <div style={styles.card}>
+            <div style={styles.cardLabel}>Estimated cost</div>
+            <div style={styles.cardValue}>${complete.cost.toFixed(4)}</div>
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
@@ -501,48 +520,75 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
         </div>
       )}
 
-      {/* Primary action — merged workbook */}
+      {/* Primary action — the one file the user files. One consistent name
+          ("Download filled Excel"), no emoji (Phase 4). */}
       <div style={styles.downloadSection}>
         <button
           className={uiClass.btnPrimary}
           onClick={() => handleDownload("filled.xlsx")}
           style={styles.downloadPrimary}
         >
-          <span>📊</span>
-          Download Merged Excel
+          Download filled Excel
         </button>
       </div>
 
-      {/* Per-statement downloads grouped by statement */}
-      {hasMulti ? (
+      {/* Per-statement Excel files (the other artifacts a user might file). */}
+      {hasMulti &&
         statementsCompleted.map((stmt) => (
           <div key={stmt} style={styles.downloadSection}>
             <div style={styles.downloadSectionLabel}>{stmt}</div>
             <div style={styles.downloadRow}>
               <button onClick={() => handleDownload(`${stmt}_filled.xlsx`)} className={uiClass.btnSecondary} style={styles.downloadButton}>
-                <span>📊</span> Excel
-              </button>
-              <button onClick={() => handleDownload(`${stmt}_result.json`)} className={uiClass.btnSecondary} style={styles.downloadButton}>
-                <span>📄</span> JSON
-              </button>
-              <button onClick={() => handleDownload(`${stmt}_conversation_trace.json`)} className={uiClass.btnSecondary} style={styles.downloadButton}>
-                <span>🔍</span> Trace
+                Excel
               </button>
             </div>
           </div>
-        ))
-      ) : (
-        <div style={styles.downloadSection}>
-          <div style={styles.downloadRow}>
-            <button onClick={() => handleDownload("result.json")} className={uiClass.btnSecondary} style={styles.downloadButton}>
-              <span>📄</span> Download JSON
-            </button>
-            <button onClick={() => handleDownload("conversation_trace.json")} className={uiClass.btnSecondary} style={styles.downloadButton}>
-              <span>🔍</span> Download Trace
-            </button>
-          </div>
+        ))}
+
+      {/* Diagnostics — the developer artifacts (raw JSON + the AI conversation
+          log), tucked into a collapsed disclosure so they don't sit next to
+          the file the user actually files (Phase 4). */}
+      <details style={{ marginTop: pwc.space.md }}>
+        <summary
+          style={{
+            cursor: "pointer",
+            fontFamily: pwc.fontHeading,
+            fontSize: 13,
+            fontWeight: pwc.weight.medium,
+            color: pwc.grey700,
+          }}
+        >
+          Diagnostics
+        </summary>
+        <div style={{ marginTop: pwc.space.sm }}>
+          {hasMulti ? (
+            statementsCompleted.map((stmt) => (
+              <div key={stmt} style={styles.downloadSection}>
+                <div style={styles.downloadSectionLabel}>{stmt}</div>
+                <div style={styles.downloadRow}>
+                  <button onClick={() => handleDownload(`${stmt}_result.json`)} className={uiClass.btnSecondary} style={styles.downloadButton}>
+                    Raw data (JSON)
+                  </button>
+                  <button onClick={() => handleDownload(`${stmt}_conversation_trace.json`)} className={uiClass.btnSecondary} style={styles.downloadButton}>
+                    AI conversation log
+                  </button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div style={styles.downloadSection}>
+              <div style={styles.downloadRow}>
+                <button onClick={() => handleDownload("result.json")} className={uiClass.btnSecondary} style={styles.downloadButton}>
+                  Raw data (JSON)
+                </button>
+                <button onClick={() => handleDownload("conversation_trace.json")} className={uiClass.btnSecondary} style={styles.downloadButton}>
+                  AI conversation log
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </details>
     </div>
   );
 }

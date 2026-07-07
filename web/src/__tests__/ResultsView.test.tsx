@@ -131,12 +131,14 @@ describe("ResultsView — P4", () => {
     expect(screen.getByText(/\$0\.0035/)).toBeInTheDocument(); // cost
   });
 
-  test("Summary tab shows total tokens, cost, elapsed time, success badge", () => {
+  test("Summary tab shows time taken, done status, and AI-usage detail", () => {
     renderResults();
+    // Token/cost live inside the collapsed "AI usage" details (still in the DOM).
     expect(screen.getByText(/5,000/)).toBeInTheDocument();
     expect(screen.getByText(/\$0\.0035/)).toBeInTheDocument();
     expect(screen.getByText(/02:00/)).toBeInTheDocument(); // ~120s elapsed
-    expect(screen.getByText(/Success/i)).toBeInTheDocument();
+    // Status now reads in plain English ("Done" instead of "Success").
+    expect(screen.getByText(/Done/i)).toBeInTheDocument();
   });
 
   test("Data Preview tab renders table with field name + value columns", async () => {
@@ -167,12 +169,14 @@ describe("ResultsView — P4", () => {
     });
   });
 
-  test("Downloads tab shows 3 download buttons (Excel, JSON, Trace)", () => {
+  test("Downloads tab shows the filled Excel + diagnostics (raw JSON, AI log)", () => {
     renderResults();
     fireEvent.click(screen.getByRole("button", { name: /downloads/i }));
-    expect(screen.getByText(/Download Merged Excel/)).toBeInTheDocument();
-    expect(screen.getByText(/Download JSON/)).toBeInTheDocument();
-    expect(screen.getByText(/Download Trace/)).toBeInTheDocument();
+    // One consistently-named primary download; the developer artifacts moved
+    // under the "Diagnostics" disclosure with plain-English labels (Phase 4).
+    expect(screen.getByText(/Download filled Excel/)).toBeInTheDocument();
+    expect(screen.getByText(/Raw data \(JSON\)/)).toBeInTheDocument();
+    expect(screen.getByText(/AI conversation log/)).toBeInTheDocument();
   });
 
   test("tab switching preserves data (no re-fetch on tab switch)", async () => {

@@ -270,13 +270,16 @@ export function ExtractPage({
         && state.isRunning && (
         <div role="status" data-testid="pipeline-stage-label" style={styles.pipelineStageBox}>
           <span style={styles.pipelineStageDot} />
-          {state.pipelineStage === "merging" && "Merging per-statement workbooks…"}
-          {state.pipelineStage === "cross_checking" && "Running cross-checks…"}
-          {state.pipelineStage === "correcting" && "Correction agent investigating failed cross-checks…"}
-          {state.pipelineStage === "reviewing" && "Reviewer investigating the root cause of failed cross-checks…"}
-          {state.pipelineStage === "re_checking" && "Re-running cross-checks against the corrected workbook…"}
-          {state.pipelineStage === "reviewing_notes" && "Notes reviewer fixing prose-notes findings…"}
-          {state.pipelineStage === "validating_notes" && "Validating notes templates…"}
+          {state.pipelineStage === "merging" && "Combining the statements into one Excel file…"}
+          {state.pipelineStage === "cross_checking" && "Running the cross-checks…"}
+          {state.pipelineStage === "correcting" && "AI review: re-checking flagged figures against the PDF…"}
+          {state.pipelineStage === "reviewing" && "AI review: tracing flagged figures back to the PDF…"}
+          {state.pipelineStage === "re_checking" && "Re-running the cross-checks after the AI review…"}
+          {state.pipelineStage === "reviewing_notes" && "AI review: checking the notes against the PDF…"}
+          {state.pipelineStage === "validating_notes" && "Checking the notes templates…"}
+          <span style={styles.pipelineStageHint}>
+            This can take a few minutes — you can leave this page open.
+          </span>
         </div>
       )}
 
@@ -791,6 +794,11 @@ const styles = {
     fontSize: 13,
     color: pwc.grey700,
     marginTop: pwc.space.sm,
+  } as const,
+  pipelineStageHint: {
+    marginLeft: "auto",
+    color: pwc.grey500,
+    fontSize: 12,
   } as const,
   pipelineStageDot: {
     width: 8,

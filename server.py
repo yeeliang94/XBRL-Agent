@@ -1547,8 +1547,8 @@ async def _run_reviewer_pass(
         await _emit("status", {
             "phase": "started",
             "message": (
-                f"Spot-check ({spot_mode}) started — all cross-checks passed; "
-                f"sanity-checking high-value figures; turn budget {max_turns}."
+                "AI review: all cross-checks passed — doing a quick sanity check "
+                "of the key figures against the PDF."
             ),
         })
     else:
@@ -1563,8 +1563,8 @@ async def _run_reviewer_pass(
         await _emit("status", {
             "phase": "started",
             "message": (
-                f"Reviewer started for {len(failed_payload)} failing check(s) + "
-                f"{len(conflicts or [])} conflict(s); turn budget {max_turns}."
+                f"AI review started: tracing {len(failed_payload)} failed check(s) "
+                f"and {len(conflicts or [])} conflict(s) back to the PDF."
             ),
         })
 
@@ -1965,7 +1965,7 @@ async def _run_notes_reviewer_pass(
     max_turns = compute_reviewer_turn_cap(filing_level=filing_level, n_items=n_items)
     await _emit("status", {
         "phase": "started",
-        "message": f"Notes reviewer started for {n_items} finding(s); turn budget {max_turns}.",
+        "message": f"AI review of the notes started: checking {n_items} item(s) against the PDF.",
     })
 
     prompt = (
