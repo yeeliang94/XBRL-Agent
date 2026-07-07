@@ -40,6 +40,25 @@ logger = logging.getLogger("server")
 _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _SIDES = ("top", "right", "bottom", "left")
 
+# Self-defending decompression ceilings (mirrors ingest.docx_html). The primary
+# caller runs docx_html._guard_docx_size first, but extract_style_maps is public
+# and reads document.xml + styles.xml directly, so it guards itself too — a
+# per-part cap that never decompresses a byte before the check.
+_MAX_PART_BYTES = 100 * 1024 * 1024        # document.xml / styles.xml each
+_MAX_TOTAL_BYTES = 300 * 1024 * 1024       # whole archive
+
+
+def _guard_part_sizes(zf: zipfile.ZipFile) -> None:
+    """Refuse extraction if the archive (or a part we read) decompresses past
+    the ceilings — a zip-bomb guard reading only declared uncompressed sizes."""
+    infos = zf.infolist()
+    if sum(i.file_size for i in infos) > _MAX_TOTAL_BYTES:
+        raise RuntimeError("docx decompresses past the archive ceiling")
+    for i in infos:
+        if i.filename in ("word/document.xml", "word/styles.xml") \
+                and i.file_size > _MAX_PART_BYTES:
+            raise RuntimeError(f"docx part {i.filename} exceeds the size cap")
+
 
 def _q(tag: str) -> str:
     """Qualify a bare wordprocessingml tag with the ``w:`` namespace URI."""
@@ -276,6 +295,7 @@ def extract_style_maps(src: str | Path) -> DocxStyleMaps:
     input — callers wanting best-effort should guard (see ingest.docx_html)."""
     src = Path(src)
     with zipfile.ZipFile(src) as zf:
+        _guard_part_sizes(zf)
         style_borders = _load_table_style_borders(zf)
         try:
             doc_xml = zf.read("word/document.xml")

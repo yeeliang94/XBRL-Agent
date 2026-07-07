@@ -106,6 +106,26 @@ def test_direct_cell_border_overrides_table_style():
     assert "border-bottom: 3px double #000000" in css  # cell wins
 
 
+def test_extract_style_maps_is_self_defending_against_zip_bomb(monkeypatch):
+    """extract_style_maps guards its own decompression (reviewer follow-up): a
+    part over the ceiling is refused even without the upstream docx_html guard."""
+    import ingest.docx_styles as mod
+    body = f"<w:tbl><w:tr>{_cell()}</w:tr></w:tbl>"
+    path = _bytes_docx(body)
+    monkeypatch.setattr(mod, "_MAX_PART_BYTES", 10)
+    with pytest.raises(RuntimeError):
+        mod.extract_style_maps(path)
+
+
+def test_padding_grammar_is_single_sourced_from_the_sanitiser():
+    """The op-gate padding/spacing regexes ARE the sanitiser's (imported, not
+    copied), so they can't drift (reviewer's top follow-up)."""
+    from notes import format_patch
+    from notes import html_sanitize
+    assert format_patch.PADDING_RE is html_sanitize._PADDING_LENGTH_RE
+    assert format_patch.SPACING_RE is html_sanitize._SPACING_LENGTH_RE
+
+
 def test_nil_border_emits_nothing():
     cell = _cell(
         '<w:tcBorders><w:top w:val="nil"/><w:bottom w:val="nil"/>'
