@@ -171,6 +171,22 @@ export default function App() {
     checkAuth();
   }, [checkAuth]);
 
+  // Client-side guard for the admin-only surfaces (Benchmarks + the bare
+  // "Field labels" concepts landing). The server enforces admin on those APIs
+  // too — this just keeps a non-admin who types the URL from landing on a
+  // dead/forbidden page by bouncing them to Extract. A `/concepts/{id}` run
+  // page (selectedRunId set) is the everyday Figures view and stays open.
+  useEffect(() => {
+    if (!user || user.is_admin) return;
+    const onAdminOnly =
+      state.view === "benchmarks" ||
+      (state.view === "concepts" && state.selectedRunId == null);
+    if (onAdminOnly) {
+      dispatch({ type: "SET_VIEW", payload: "extract" });
+      dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
+    }
+  }, [user, state.view, state.selectedRunId]);
+
   // Any 401 mid-use (broadcast by apiFetch) means the session expired ⇒ show
   // the login page.
   useEffect(() => {

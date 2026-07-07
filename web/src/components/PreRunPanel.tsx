@@ -400,7 +400,11 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   }, [evalBenchmarkId, evalCandidates, benchmarks.length]);
   // Eval is opt-in but, once on, the user must pick a benchmark — block Run
   // with a dangling toggle so they don't start a run that silently won't grade.
-  const evalSelectionMissing = evalEnabled && evalBenchmarkId == null;
+  // Gated on isAdmin: grading is an admin-only control, so a non-admin who
+  // resumes a draft that inherited evalEnabled can neither see nor fix it —
+  // never block their Run on a hidden control (code-review MEDIUM). Their run
+  // simply isn't graded (see buildCurrentConfig's benchmark_id).
+  const evalSelectionMissing = isAdmin && evalEnabled && evalBenchmarkId == null;
 
   const [variantSelections, setVariantSelections] = useState(
     () => _seedVariantSelections(initialConfig),
@@ -929,14 +933,16 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       denomination,
       notes_to_run,
       notes_models,
-      // Gold-standard eval (v16): attach the benchmark only when the toggle is
-      // on AND one is selected; otherwise null keeps this a normal run.
-      benchmark_id: evalEnabled ? evalBenchmarkId : null,
+      // Gold-standard eval (v16): attach the benchmark only for an admin with
+      // the toggle on AND one selected; otherwise null keeps this a normal run.
+      // A non-admin never sends a benchmark_id even if a resumed draft carried
+      // evalEnabled (grading is admin-only — code-review MEDIUM).
+      benchmark_id: isAdmin && evalEnabled ? evalBenchmarkId : null,
     };
   }, [
     statementsEnabled, variantSelections, modelOverrides, infopack,
     scoutEnabled, filingLevel, filingStandard, denomination, notesEnabled,
-    notesModelOverrides, evalEnabled, evalBenchmarkId,
+    notesModelOverrides, evalEnabled, evalBenchmarkId, isAdmin,
   ]);
 
   const handleRun = useCallback(() => {

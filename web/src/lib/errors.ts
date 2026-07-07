@@ -54,6 +54,29 @@ function fieldName(loc: unknown[] | undefined): string | null {
   return last.charAt(0).toUpperCase() + last.slice(1).replace(/_/g, " ");
 }
 
+/** Turn one array entry (string, pydantic-ish object, or anything) into a
+ *  readable line — never "[object Object]". Prefers common message fields;
+ *  falls back to a compact JSON dump only when there's nothing better. */
+function entryToString(x: unknown): string {
+  if (typeof x === "string") return x.trim();
+  if (typeof x === "object" && x !== null) {
+    const o = x as Record<string, unknown>;
+    for (const key of ["detail", "msg", "message", "error"]) {
+      const v = o[key];
+      if (typeof v === "string" && v.trim()) {
+        const name = fieldName(o.loc as unknown[] | undefined);
+        return name ? `${name}: ${v.trim()}` : v.trim();
+      }
+    }
+    try {
+      return JSON.stringify(x);
+    } catch {
+      return "";
+    }
+  }
+  return String(x);
+}
+
 /**
  * Pull a readable string out of a JSON error body, whatever shape it takes:
  *   - `{detail: "..."}`                      → the string
@@ -88,7 +111,7 @@ export function extractErrorDetail(body: unknown): string | null {
     const d = detail as Record<string, unknown>;
     const arr = d.input_errors ?? d.errors;
     if (Array.isArray(arr) && arr.length) {
-      return arr.map((x) => (typeof x === "string" ? x : String(x))).join("\n");
+      return arr.map(entryToString).filter(Boolean).join("\n");
     }
     if (typeof d.error === "string" && d.error.trim()) return d.error.trim();
   }
