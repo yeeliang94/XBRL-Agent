@@ -464,9 +464,9 @@ def test_notes_coverage_checklist_e2e(tmp_path, monkeypatch):
     # Reviewer authors the missing note 5 into an empty leaf, grounded.
     steps = [
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [32]})],
-        [ToolCallPart(tool_name="author_note_cell", args={
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
             "sheet": _S12, "row": 40, "html": "<p>IP disclosure</p>",
-            "note_num": 5, "source_pages": [32], "evidence": "IP note"})],
+            "note_num": 5, "source_pages": [32], "evidence": "IP note"}]})],
         [TextPart("done")],
     ]
     idx = {"i": 0}

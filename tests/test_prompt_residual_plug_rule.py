@@ -102,3 +102,40 @@ def test_reviewer_prompt_forbids_residual_plug():
         "reviewer.md must name 'catch-all' explicitly so the agent "
         "knows which kind of row this rule refers to"
     )
+
+
+def test_reviewer_prompt_advertises_batched_write_tools():
+    """The reviewer write tools are list-shaped (apply_fixes / mark_not_disclosed
+    take a batch) to save turns against the pass's tight turn + wall-clock caps.
+    The prompt must advertise the plural, list-taking form AND explicitly tell
+    the agent to batch independent fixes into one call — otherwise the model
+    defaults to one fix per turn (the behaviour this change removes). It must
+    NOT still advertise a single-value `apply_fix(concept_uuid, value, …)`
+    signature. See correction/reviewer_agent.py apply_fixes / mark_not_disclosed."""
+    text = (_PROMPTS / "reviewer.md").read_text(encoding="utf-8")
+    lower = text.lower()
+    # The list-shaped signature is advertised.
+    assert "apply_fixes([{" in text, (
+        "reviewer.md must advertise the list-shaped apply_fixes signature"
+    )
+    # Explicit batch-habit guidance is present.
+    assert "one `apply_fixes` call" in text or "batch independent" in lower, (
+        "reviewer.md must tell the agent to batch independent fixes into one "
+        "apply_fixes call, then verify_fixes once"
+    )
+    # The old single-value signature is gone (a bare `apply_fix(` with a
+    # value arg — the plural form uses `apply_fixes([{`).
+    assert "apply_fix(concept_uuid, value" not in text, (
+        "reviewer.md still advertises the removed single-value apply_fix "
+        "signature — update it to the batched apply_fixes form"
+    )
+
+
+def test_spot_check_prompt_uses_batched_write_tools():
+    """spot_check.md is the LIGHT clean-run sanity prompt; it names the same
+    write tools and must use the batched form too."""
+    text = (_PROMPTS / "spot_check.md").read_text(encoding="utf-8")
+    assert "apply_fixes([{" in text, (
+        "spot_check.md must advertise the list-shaped apply_fixes signature"
+    )
+    assert "apply_fix(concept_uuid, value" not in text

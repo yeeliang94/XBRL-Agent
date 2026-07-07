@@ -181,9 +181,9 @@ def _patch_for_rereview(srv, monkeypatch):
                 if part.part_kind == "tool-return":
                     return ModelResponse(parts=[TextPart("done")])
         return ModelResponse(parts=[ToolCallPart(
-            tool_name="apply_fix",
-            args={"concept_uuid": LEAF1, "value": 130.0,
-                  "reason": "re-review fix", "evidence": "p12"})])
+            tool_name="apply_fixes",
+            args={"fixes": [{"concept_uuid": LEAF1, "value": 130.0,
+                             "reason": "re-review fix", "evidence": "p12"}]})])
 
     monkeypatch.setattr(srv, "_create_proxy_model",
                         lambda *a, **k: FunctionModel(_fix_scripted))
