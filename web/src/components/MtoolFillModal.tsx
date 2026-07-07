@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 
@@ -326,7 +327,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         return r.json();
       })
       .then((doc) => setMeta(doc.meta))
-      .catch((e) => setLoadErr(String(e.message || e)));
+      .catch((e) => setLoadErr(userMessage(e)));
     // Notes count is best-effort — a load failure just hides the notes line.
     fetch(`/api/runs/${runId}/mtool-notes-fill`)
       .then((r) => (r.ok ? r.json() : null))
@@ -400,7 +401,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         }
       }
     } catch (e) {
-      setPatchErr(String((e as Error).message || e));
+      setPatchErr(userMessage(e));
     } finally {
       setBusy(false);
     }
@@ -431,7 +432,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       }
       setPreview(body as NotesPreview);
     } catch (e) {
-      setPreviewErr(String((e as Error).message || e));
+      setPreviewErr(userMessage(e));
     } finally {
       setPreviewBusy(false);
     }
@@ -466,7 +467,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       setColumnConfidence((body as { confidence?: string }).confidence ?? null);
     } catch (e) {
       if (stale()) return;
-      setDetectErr(String((e as Error).message || e));
+      setDetectErr(userMessage(e));
     } finally {
       if (!stale()) setDetectBusy(false);
     }

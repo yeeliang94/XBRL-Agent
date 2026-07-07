@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { userMessage } from "../lib/errors";
 import type {
   StatementType,
   VariantSelection,
@@ -512,7 +513,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       })
       .catch((err) => {
         if (!cancelled) {
-          setLoadError(err instanceof Error ? err.message : "Failed to load settings");
+          setLoadError(userMessage(err));
           setLoading(false);
         }
       });
@@ -813,7 +814,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       }
     } catch (err) {
       if (!cancelled) {
-        const msg = err instanceof Error ? err.message : "Auto-detect failed";
+        const msg = userMessage(err);
         // AbortError is expected when we cancel — don't show it to the user
         if (err instanceof DOMException && err.name === "AbortError") return;
         setScoutError(msg);
@@ -860,7 +861,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     setScoutModelSaveError(null);
     const p: Promise<unknown> = updateSettings({ default_models: { scout: modelId } })
       .catch((err) => {
-        const msg = err instanceof Error ? err.message : "Failed to persist scout model selection";
+        const msg = userMessage(err);
         setScoutModelSaveError(msg);
         // Re-throw so awaiters (handleAutoDetect) see the failure and can
         // decide whether to proceed. We still start the scout run — running

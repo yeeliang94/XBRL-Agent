@@ -1,4 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { ApiError, userMessage } from "../lib/errors";
+import { coverageStatusLabel, subNoteStateLabel } from "../lib/vocabulary";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
@@ -64,12 +66,9 @@ interface Props {
 
 const RESOLVED_VERDICTS = new Set(["confirmed_absent", "not_applicable"]);
 
-const STATUS_LABEL: Record<CoverageRow["status"], string> = {
-  placed: "Placed",
-  missing: "Missing",
-  skipped: "Skipped",
-  suspected_gap: "Suspected gap",
-};
+// Status → label now comes from the shared vocabulary (suspected_gap →
+// "Possible gap"); the local alias keeps the call sites terse.
+const STATUS_LABEL = coverageStatusLabel;
 
 const KIND_TAG: Record<Placement["kind"], string> = {
   primary: "",
@@ -103,11 +102,11 @@ export function NotesCoveragePanel({ runId }: Props) {
       setError(null);
       try {
         const r = await fetch(`/api/runs/${runId}/notes-coverage`, { signal });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) throw ApiError.fromResponse(r.status, null);
         setData(await r.json());
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
-        setError(e instanceof Error ? e.message : "Failed to load coverage");
+        setError(userMessage(e));
       } finally {
         if (!signal?.aborted) setLoading(false);
       }
@@ -221,7 +220,7 @@ export function NotesCoveragePanel({ runId }: Props) {
                         data-testid={`coverage-status-${row.status}`}
                       >
                         <span aria-hidden="true" style={ui.badgeDot(statusColor(row))} />
-                        {STATUS_LABEL[row.status]}
+                        {STATUS_LABEL(row.status)}
                       </span>
                       {row.reason && <div style={styles.reason}>{row.reason}</div>}
                     </td>
@@ -266,7 +265,7 @@ export function NotesCoveragePanel({ runId }: Props) {
                                       : pwc.successText,
                               }}
                             >
-                              {sub.state}
+                              {subNoteStateLabel(sub.state)}
                             </span>
                             {sub.reason && <span style={styles.dim}>{sub.reason}</span>}
                           </div>

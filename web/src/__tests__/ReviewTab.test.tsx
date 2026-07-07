@@ -104,9 +104,9 @@ describe("ReviewTab", () => {
     expect(screen.getByText("100")).toBeTruthy();
     expect(screen.getByText("120")).toBeTruthy();
     expect(screen.getByText("misread 100 for 120")).toBeTruthy();
-    // Flag.
+    // Flag. The kind renders in plain English (vocabulary map), not the raw enum.
     expect(screen.getByText(/cannot reconcile receivables/i)).toBeTruthy();
-    expect(screen.getByText(/stuck/i)).toBeTruthy();
+    expect(screen.getByText(/couldn't resolve/i)).toBeTruthy();
   });
 
   test("Re-review posts guidance + the selected model to /re-review", async () => {

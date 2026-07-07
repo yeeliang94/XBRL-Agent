@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { userMessage } from "../lib/errors";
 import type { CompleteData } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -249,7 +250,7 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
       setResultData(data);
       setFetched(true);
     } catch (e) {
-      setPreviewError(e instanceof Error ? e.message : "Failed to load data");
+      setPreviewError(userMessage(e));
     } finally {
       setPreviewLoading(false);
     }
@@ -490,7 +491,7 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
       // revoke but other engines occasionally cancel the download.
       setTimeout(() => URL.revokeObjectURL(a.href), 100);
     } catch (e) {
-      setError(`Failed to download ${filename}: ${e instanceof Error ? e.message : "network error"}`);
+      setError(`Failed to download ${filename}: ${userMessage(e)}`);
     }
   };
 

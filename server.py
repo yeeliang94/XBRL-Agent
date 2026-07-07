@@ -4255,7 +4255,11 @@ async def run_multi_agent_stream(
             if _safe_mark_finished(db_conn, run_id, "failed"):
                 terminal_status = "failed"
             if client_connected:
-                yield {"event": "error", "data": {"message": f"Stream error: {e}", "bucket": ERROR_BUCKET_FATAL}}
+                yield {"event": "error", "data": {
+                    "message": "The extraction stopped unexpectedly. Please try starting it again.",
+                    "traceback": f"{type(e).__name__}: {e}",
+                    "bucket": ERROR_BUCKET_FATAL,
+                }}
             return
 
         # Await the coordinator task to get CoordinatorResult for post-processing
@@ -4292,7 +4296,11 @@ async def run_multi_agent_stream(
             if _safe_mark_finished(db_conn, run_id, "failed"):
                 terminal_status = "failed"
             if client_connected:
-                yield {"event": "error", "data": {"message": f"Coordinator error: {e}", "bucket": ERROR_BUCKET_FATAL}}
+                yield {"event": "error", "data": {
+                    "message": "The extraction stopped unexpectedly. Please try starting it again.",
+                    "traceback": f"{type(e).__name__}: {e}",
+                    "bucket": ERROR_BUCKET_FATAL,
+                }}
             return
 
         # Canonical mode (Phase B7): now that every extraction agent has
@@ -4524,7 +4532,12 @@ async def run_multi_agent_stream(
             err_msg = "; ".join(merge_result.errors) or "unknown merge error"
             _enqueue_system_error({
                 "type": "merge_failed",
-                "message": f"Workbook merge failed: {err_msg}",
+                "message": (
+                    "We couldn't assemble the final Excel file from the extracted "
+                    "statements. The individual statements may still be available "
+                    "to download."
+                ),
+                "traceback": err_msg,
                 "errors": list(merge_result.errors),
             })
             # Drain the event we just pushed.

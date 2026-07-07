@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
@@ -110,7 +111,7 @@ export function UsersTab() {
     try {
       setUsers(await adminListUsers());
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load users.");
+      setError(userMessage(e));
     }
   }, []);
 
@@ -125,7 +126,7 @@ export function UsersTab() {
       await fn();
       await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Action failed.");
+      setError(userMessage(e));
     } finally {
       setBusy(false);
     }

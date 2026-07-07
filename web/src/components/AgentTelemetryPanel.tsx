@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { fetchAgentTrace } from "../lib/api";
@@ -66,7 +67,7 @@ function TraceViewer({ runId, statement }: { runId: number; statement: string })
       setState("loaded");
     } catch (e) {
       if (!mounted.current) return;
-      setError(e instanceof Error ? e.message : "Failed to load trace");
+      setError(userMessage(e));
       setState("error");
     }
   };

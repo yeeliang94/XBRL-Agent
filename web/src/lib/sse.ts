@@ -1,4 +1,15 @@
 import { type SSEEvent, type SSEEventType, type RunConfigPayload } from "./types";
+import { ApiError } from "./errors";
+
+/** Read a non-OK response's JSON body (if any) and return the friendly
+ *  ApiError message — shared by the three SSE openers below. */
+async function sseErrorMessage(response: Response): Promise<string> {
+  let body: unknown = null;
+  try {
+    body = await response.json();
+  } catch { /* no JSON body */ }
+  return ApiError.fromResponse(response.status, body).message;
+}
 
 // Event types the multi-agent run endpoint can emit. Used by
 // `createMultiAgentSSE` to filter raw frames down to the typed union
@@ -164,18 +175,13 @@ export function createMultiAgentSSE(
       });
 
       if (!response.ok) {
-        let detail = `Request failed (${response.status})`;
-        try {
-          const body = await response.json();
-          detail = body.detail || body.message || detail;
-        } catch { /* no JSON body */ }
-        onError(detail);
+        onError(await sseErrorMessage(response));
         return;
       }
 
       const reader = response.body?.getReader();
       if (!reader) {
-        onError("No response stream");
+        onError("We couldn't open the connection to follow the run. Please try again.");
         return;
       }
 
@@ -196,7 +202,7 @@ export function createMultiAgentSSE(
       onDone();
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        onError((err as Error).message || "SSE connection lost");
+        onError("The connection to the run was lost. Please check your network and try again.");
       }
     }
   })();
@@ -231,18 +237,13 @@ export function createMultiAgentSSEByRunId(
       });
 
       if (!response.ok) {
-        let detail = `Request failed (${response.status})`;
-        try {
-          const body = await response.json();
-          detail = body.detail || body.message || detail;
-        } catch { /* no JSON body */ }
-        onError(detail);
+        onError(await sseErrorMessage(response));
         return;
       }
 
       const reader = response.body?.getReader();
       if (!reader) {
-        onError("No response stream");
+        onError("We couldn't open the connection to follow the run. Please try again.");
         return;
       }
 
@@ -263,7 +264,7 @@ export function createMultiAgentSSEByRunId(
       onDone();
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        onError((err as Error).message || "SSE connection lost");
+        onError("The connection to the run was lost. Please check your network and try again.");
       }
     }
   })();
@@ -286,11 +287,10 @@ export async function patchRunConfig(
     body: JSON.stringify(config),
   });
   if (!response.ok) {
-    let detail = `PATCH /api/runs/${runId} failed (${response.status})`;
+    let body: unknown = null;
     try {
-      const body = await response.json();
-      detail = body.detail || body.message || detail;
+      body = await response.json();
     } catch { /* no JSON body */ }
-    throw new Error(detail);
+    throw ApiError.fromResponse(response.status, body);
   }
 }

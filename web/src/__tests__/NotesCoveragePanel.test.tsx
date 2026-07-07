@@ -98,8 +98,9 @@ describe("NotesCoveragePanel", () => {
     await waitFor(() => screen.getByTestId("coverage-subnotes-1"));
     const detail = screen.getByTestId("coverage-subnotes-1");
     expect(detail.textContent).toContain("(a)");
-    expect(detail.textContent).toContain("cited");
-    expect(detail.textContent).toContain("not_verified");
+    // Sub-note states render in plain English (vocabulary map), not raw enums.
+    expect(detail.textContent).toContain("Mentioned");
+    expect(detail.textContent).toContain("Not checked");
   });
 
   test("placement click dispatches a focus event", async () => {

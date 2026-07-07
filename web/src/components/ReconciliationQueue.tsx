@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 
@@ -60,7 +61,7 @@ export function ReconciliationQueue({
     (signal?: AbortSignal) => {
       fetch(`/api/runs/${runId}/conflicts`, { signal })
         .then((r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          if (!r.ok) throw ApiError.fromResponse(r.status, null);
           return r.json();
         })
         .then((data) => {
@@ -72,7 +73,7 @@ export function ReconciliationQueue({
         })
         .catch((err) => {
           if (err?.name === "AbortError") return;
-          setLoadError(String(err));
+          setLoadError(userMessage(err));
         });
     },
     [runId]
@@ -101,7 +102,7 @@ export function ReconciliationQueue({
         setActionError(null);
         setConflicts((prev) => prev.filter((c) => c.id !== id));
       } catch (err) {
-        setActionError(`Resolve failed: ${String(err)}`);
+        setActionError(`Resolve failed: ${userMessage(err)}`);
       }
     },
     []

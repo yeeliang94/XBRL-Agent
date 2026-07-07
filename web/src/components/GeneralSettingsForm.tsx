@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { userMessage } from "../lib/errors";
 import type { SettingsResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -219,7 +220,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setEntityMemory(s.entity_memory !== false);
       })
       .catch((e) => {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load settings");
+        if (!cancelled) setLoadError(userMessage(e));
       });
     return () => { cancelled = true; };
   }, [getSettings]);
@@ -263,7 +264,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         savedToastTimerRef.current = null;
       }, 2000);
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Failed to save settings");
+      setLoadError(userMessage(e));
     } finally {
       setSaving(false);
     }
@@ -292,7 +293,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } catch (e) {
       setTestResult({
         status: "error",
-        message: e instanceof Error ? e.message : "Connection failed",
+        message: userMessage(e),
       });
     } finally {
       setTesting(false);

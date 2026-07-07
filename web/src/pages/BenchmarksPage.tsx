@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, deleteBenchmark } from "../lib/api";
@@ -34,7 +35,7 @@ export function BenchmarksPage({ selectedId, onSelectBenchmark }: BenchmarksPage
         if (!cancelled) setBenchmarks(bs);
       })
       .catch((e) => {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setLoadError(userMessage(e));
       });
     return () => {
       cancelled = true;
@@ -244,7 +245,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
           onCreated();
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(userMessage(err));
       } finally {
         setBusy(false);
       }

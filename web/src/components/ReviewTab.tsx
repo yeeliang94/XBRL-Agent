@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import type { ModelEntry } from "../lib/types";
+import { ApiError, userMessage } from "../lib/errors";
+import { flagKindLabel, humanize } from "../lib/vocabulary";
 
 /**
  * Review tab (docs/Archive/PLAN-reviewer-agent.md, Step 16).
@@ -89,12 +91,11 @@ function fmt(v: number | null): string {
  * banner should show them rather than a status code.
  */
 async function errorDetail(r: Response): Promise<string> {
+  let body: unknown = null;
   try {
-    const body = await r.json();
-    return body.detail || body.message || `HTTP ${r.status}`;
-  } catch {
-    return `HTTP ${r.status}`;
-  }
+    body = await r.json();
+  } catch { /* no JSON body */ }
+  return ApiError.fromResponse(r.status, body).message;
 }
 
 /**
@@ -107,7 +108,7 @@ async function pollReReviewStatus(runId: number): Promise<ReReviewOutcome> {
   const MAX_POLLS = 600; // ~15 min at 1.5s
   for (let i = 0; i < MAX_POLLS; i++) {
     const r = await fetch(`/api/runs/${runId}/re-review/status`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) throw ApiError.fromResponse(r.status, null);
     const s = await r.json();
     if (s.status === "done") return s as ReReviewOutcome;
     // "idle" right after a successful launch means the process restarted
@@ -171,7 +172,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       setData(await r.json());
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
-      setError(e instanceof Error ? e.message : "Failed to load review");
+      setError(userMessage(e));
     } finally {
       // Don't flip the spinner off for an aborted (superseded) request.
       if (!signal?.aborted) setLoading(false);
@@ -235,7 +236,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       }
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Re-review failed");
+      setActionError(userMessage(e));
     } finally {
       setBusy(null);
     }
@@ -263,7 +264,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       }
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Revert failed");
+      setActionError(userMessage(e));
     } finally {
       setBusy(null);
     }
@@ -282,7 +283,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       if (!r.ok) throw new Error(await errorDetail(r));
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Answer failed");
+      setActionError(userMessage(e));
     }
   };
 
@@ -395,9 +396,9 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
                       f.category === "disputes_prior" ? pwc.error : pwc.warning,
                     )}
                   />
-                  {f.category === "disputes_prior" ? "Disputes prior" : "Stuck"}
+                  {flagKindLabel(f.category)}
                 </span>
-                <span style={styles.dim}>{f.status}</span>
+                <span style={styles.dim}>{humanize(f.status)}</span>
                 {f.target_sheet && f.target_row != null && onSelectTarget && (
                   <button
                     type="button"

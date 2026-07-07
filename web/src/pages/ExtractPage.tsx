@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunConfigPayload } from "../lib/types";
+import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import type { AppState, AppAction } from "../lib/appReducer";
 import { notesTabLabel, agentSubAgentSummary } from "../lib/appReducer";
@@ -385,15 +386,21 @@ export function ExtractPage({
         </div>
       )}
 
-      {/* Error display */}
+      {/* Error display. The headline is a plain sentence; the raw traceback is
+          tucked into a collapsed "Technical details" disclosure so a
+          non-technical user sees what happened, not a Python stack trace. */}
       {state.hasError && state.error && (
         <div style={styles.errorBox}>
-          <h3 style={styles.errorTitle}>Extraction Error</h3>
-          <p style={styles.errorMessage}>{state.error.message}</p>
+          <h3 style={styles.errorTitle}>Extraction couldn't finish</h3>
+          <p style={styles.errorMessage}>{userMessage(new Error(state.error.message))}</p>
+          <p style={{ ...styles.errorMessage, color: pwc.grey700, fontSize: 14 }}>
+            You can try starting the extraction again. If it keeps failing, share
+            the technical details below with your support contact.
+          </p>
           {state.error.traceback && (
             <details style={{ marginTop: pwc.space.sm }}>
-              <summary style={{ color: pwc.error, fontSize: 13, cursor: "pointer" }}>
-                Show traceback
+              <summary style={{ color: pwc.grey700, fontSize: 13, cursor: "pointer" }}>
+                Technical details (for support)
               </summary>
               <pre style={styles.errorTraceback}>{state.error.traceback}</pre>
             </details>
