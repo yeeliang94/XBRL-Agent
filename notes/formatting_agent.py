@@ -571,14 +571,16 @@ _TIER_REMEDY = {
         "format_summary."
     ),
     "flat": (
-        "written with ALL styling dropped to fit. Remedy: SIMPLIFY the "
-        "styling — clear redundant manual formatting on its heaviest tables "
-        "and do not add new styling to this note; summarise what you "
-        "simplified in format_summary."
+        "will export to the mTool copy with ALL styling dropped so it fits "
+        "Excel's cell limit. This degradation is AUTOMATIC and applies ONLY "
+        "to the mTool export — the editor/review copy keeps full formatting. "
+        "Do NOT remove styling from the note to compensate; match the source "
+        "PDF exactly as you would for any other note."
     ),
     "lite": (
-        "written with reduced (lite) formatting. No action required — do "
-        "not add styling weight to this note."
+        "will export to the mTool copy with reduced (lite) styling. AUTOMATIC "
+        "and mTool-only — the editor/review copy is unchanged. No action "
+        "required; do NOT remove styling from the note."
     ),
 }
 

@@ -51,7 +51,10 @@ def test_table_gets_borders_font_and_legacy_attrs():
     assert re.search(r'<table[^>]*cellpadding="4"', out)
     assert re.search(r'<td[^>]*style="[^"]*border: 1px solid', out)
     assert re.search(r'<td[^>]*style="[^"]*padding: 4px 8px', out)
-    assert re.search(r'<td[^>]*style="[^"]*font-family: Arial[^"]*font-size: 10pt', out)
+    # Font is HOISTED to the table (inheritable) rather than repeated on every
+    # cell — the Step-3 size hoist. Cells no longer carry font-family.
+    assert re.search(r'<table[^>]*style="[^"]*font-family: Arial[^"]*font-size: 10pt', out)
+    assert not re.search(r'<td[^>]*style="[^"]*font-family', out)
 
 
 def test_header_cells_get_fill_and_bold():
@@ -196,6 +199,42 @@ def test_lite_tier_keeps_formatting_drops_cosmetics():
     assert "overflow-wrap" not in lite
     assert "word-break" not in lite
     assert len(lite) < len(full)
+
+
+def test_inheritable_props_hoisted_to_table_not_repeated_per_cell():
+    """Step-3 size hoist (docs/PLAN-word-formatting-fidelity.md): font +
+    text-wrapping are declared ONCE on the table (they inherit) rather than on
+    every cell, so a big table's per-cell styling stays under Excel's cell
+    limit. Cells keep only the non-inheritable props (border/padding/align/
+    vertical-align)."""
+    html = ("<table><tbody>"
+            + "".join("<tr><td>Item</td><td>1,234</td></tr>" for _ in range(3))
+            + "</tbody></table>")
+    out = decorate_notes_html(html)
+    # font + wrap live on the table, once
+    assert re.search(r'<table[^>]*style="[^"]*font-family: Arial', out)
+    assert re.search(r'<table[^>]*style="[^"]*overflow-wrap: break-word', out)
+    # ...and NOT on any cell
+    assert not re.search(r'<td[^>]*style="[^"]*font-family', out)
+    assert not re.search(r'<td[^>]*style="[^"]*overflow-wrap', out)
+    # cells keep the non-inheritable props
+    assert re.search(r'<td[^>]*style="[^"]*vertical-align: top', out)
+    assert re.search(r'<td[^>]*style="[^"]*border: 1px solid', out)
+
+
+def test_size_hoist_lets_a_previously_flat_table_fit_full():
+    """Concrete run-66 win: a realistic 40-row, 6-col disclosure table that
+    landed FLAT under the old per-cell styling now fits FULL under Excel's
+    32,767-char cell limit."""
+    from mtool.offline_fill import wrap_footnote_html, EXCEL_CELL_CHAR_LIMIT
+    header = "<tr>" + "".join(f"<th>Col{c}</th>" for c in range(6)) + "</tr>"
+    body = "".join(
+        "<tr><td>Property, plant and equipment item</td>"
+        + "".join("<td>1,234,567</td>" for _ in range(5)) + "</tr>"
+        for _ in range(40))
+    html = f"<p><strong>4. PPE</strong></p><table>{header}{body}</table>"
+    full = wrap_footnote_html(decorate_notes_html(html))
+    assert len(full) <= EXCEL_CELL_CHAR_LIMIT
 
 
 def test_empty_html_passthrough():

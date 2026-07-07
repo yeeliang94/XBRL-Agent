@@ -102,10 +102,15 @@ def _wide_table(n_rows: int, n_cols: int = 10) -> str:
 
 def test_near_limit_note_degrades_to_lite_tier(notes_db):
     """Full decoration over the limit but the lighter 'lite' decoration fits:
-    the note keeps borders/font/alignment (cosmetic props dropped)."""
+    the note keeps borders/font/alignment (cosmetic props dropped).
+
+    Fixture width bumped to 40 cols after the Step-3 style hoist
+    (docs/PLAN-word-formatting-fidelity.md): hoisting font/wrap off every cell
+    shrank the full tier so much that a 10-col table jumps straight full->flat;
+    the lite window only opens on very wide tables now."""
     db, run_id = notes_db
     _add_note(db, run_id, "Notes-Listofnotes", 17, "Movement table",
-              _wide_table(17))                        # measured -> lite
+              _wide_table(9, 40))                     # measured -> lite
     doc = build_notes_fill_doc(db, run_id)
     fn = doc["footnotes"][0]
     assert fn.get("format_tier") == "lite"
@@ -121,7 +126,7 @@ def test_oversize_note_degrades_to_flat_content(notes_db):
     """Even lite is over the limit but raw fits: emit FLAT (content preserved,
     flagged) rather than being skipped by the fill guard."""
     db, run_id = notes_db
-    raw = _wide_table(26)                              # measured -> flat
+    raw = _wide_table(15, 40)                           # measured -> flat
     _add_note(db, run_id, "Notes-Listofnotes", 17, "Big movement table", raw)
     doc = build_notes_fill_doc(db, run_id)
     fn = doc["footnotes"][0]

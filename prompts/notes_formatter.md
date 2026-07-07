@@ -40,12 +40,13 @@ Division of labour per tier:
   with no styling. This is a CONTENT problem, not a styling problem — do NOT
   try to fix it with style operations. Recommend in `format_summary` how the
   note should be split (e.g. which table to break into parts).
-- FLAT: the note kept its content but lost ALL styling to fit. Simplify its
-  styling: prefer clearing redundant manual formatting on its heaviest
-  tables; do not add new styling weight to that note. Note what you
-  simplified in `format_summary`.
-- LITE: written with reduced formatting. Leave it alone; just avoid adding
-  styling weight to it.
+- FLAT: the note will export to the mTool copy with ALL styling dropped so it
+  fits Excel's cell limit. This degradation is AUTOMATIC and applies ONLY to
+  the mTool export — the editor/review copy keeps full formatting. Do NOT strip
+  styling from the note to compensate; format it to match the source PDF
+  exactly as you would any other note.
+- LITE: the note will export to the mTool copy with reduced formatting,
+  automatically. Leave it alone; do not remove styling to compensate.
 Notes with no signal are unaffected — format them normally.
 
 Patch schema:

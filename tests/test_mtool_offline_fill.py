@@ -797,6 +797,9 @@ def test_fill_notes_skips_payload_over_excel_char_limit(tmp_path,
     over = [u for u in report["unresolved"] if u.get("reason") == "oversize"]
     assert len(over) == 1
     assert over[0]["payload_chars"] > EXCEL_CELL_CHAR_LIMIT
+    # Every report entry now carries the exporter's size tier (traceability by
+    # label — Step 2); None here since this hand-built doc set no tier.
+    assert "format_tier" in over[0]
     # workbook is still a readable zip and the old payload is untouched.
     assert "x" * 100 not in _payload_of(str(out), "fn_14")
 

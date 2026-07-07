@@ -93,9 +93,12 @@ class TestPromptRendering:
         assert "row 20" in prompt
         assert "split" in prompt.lower()
         assert "cannot fix this with styling" in prompt.lower()
-        # Flat row → simplify-styling remedy.
+        # Flat row → informational, mTool-only degradation: the note must KEEP
+        # its styling (editor fidelity), the export drops it automatically.
         assert "row 30" in prompt
-        assert "SIMPLIFY the styling" in prompt
+        assert "remove styling from the note" in prompt
+        assert "AUTOMATIC" in prompt
+        assert "SIMPLIFY the styling" not in prompt
         # The deterministic counts ride along.
         assert "formatting_dropped=1" in prompt
         assert "oversize=1" in prompt

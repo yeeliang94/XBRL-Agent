@@ -1334,7 +1334,11 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
     seen_keys = set()
     for i, it in enumerate(doc["footnotes"]):
         base = {"index": i, "sheet": it.get("sheet"), "cell": it.get("cell"),
-                "key": it.get("key"), "label": it.get("label")}
+                "key": it.get("key"), "label": it.get("label"),
+                # Size tier from the exporter (full/lite/flat) so a degraded
+                # note is traceable BY LABEL in the report, not just via the
+                # aggregate meta counts. None for untagged (full/raw) notes.
+                "format_tier": it.get("format_tier")}
         wrapped = wrap_footnote_html(it["html"])
         # Hard safety net (applies to EVERY caller — server, CLI, hand-authored
         # docs): never emit a payload over Excel's cell-string ceiling, or the
