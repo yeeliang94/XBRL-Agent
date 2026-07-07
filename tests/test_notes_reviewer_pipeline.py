@@ -117,6 +117,60 @@ def test_reviewer_pass_runs_snapshots_and_persists_flags(db_path: Path, tmp_path
     assert any(e["event"] == "complete" and e["data"].get("success") for e in events)
 
 
+def test_reviewer_pass_construction_failure_surfaces_error(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    """A construction failure in the notes reviewer pass must fail SOFT.
+
+    Successor contract to the deleted validator test
+    (`test_notes_validator_construction_failure_emits_bucketed_error`): when
+    `create_notes_reviewer_agent` raises, the pass must record the error on the
+    outcome AND surface a bucketed `notes_reviewer_exception` SSE error plus a
+    failure-`complete` (so the Notes tab terminates) — never swallow it silently.
+    """
+    import server
+    import notes.reviewer_agent as ra_mod
+
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(
+            conn, "x.pdf", session_id="s", output_dir=str(tmp_path))
+        # A real Sheet-12 collision (row 49 = notes 4 + 20) so the pass gets
+        # past the skip gate and actually reaches agent construction.
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_S12, row=49,
+                               label="Disclosure of fair value information",
+                               html="<p>fair value</p>")
+    persist_notes_review_inputs(
+        db_path=str(db_path), run_id=run_id,
+        sidecar_entries=[{
+            "sheet": _S12, "row": 49,
+            "row_label": "Disclosure of fair value information",
+            "source_note_refs": ["4.1", "20.7"], "content_preview": "fv"}],
+        inventory=[{"note_num": 4, "subnote_refs": []},
+                   {"note_num": 20, "subnote_refs": []}],
+    )
+
+    def _boom(*a, **k):
+        raise RuntimeError("template not found")
+    monkeypatch.setattr(ra_mod, "create_notes_reviewer_agent", _boom)
+
+    q: asyncio.Queue = asyncio.Queue()
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
+        model=FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("x")])),
+        output_dir=str(tmp_path), merged_workbook_path=None, event_queue=q,
+        sidecar_paths=[],
+    ))
+
+    assert outcome["error"] and "construction failed" in outcome["error"]
+    by_kind = {e["event"]: e["data"] for e in _drain(q)}
+    assert "error" in by_kind, "construction failure must emit an SSE error"
+    assert by_kind["error"]["type"] == "notes_reviewer_exception"
+    assert by_kind["error"]["bucket"] == "recoverable"
+    assert "complete" in by_kind, "construction failure must emit a complete"
+    assert by_kind["complete"]["success"] is False
+
+
 def test_reviewer_pass_skips_when_no_findings(db_path: Path, tmp_path):
     import server
 
