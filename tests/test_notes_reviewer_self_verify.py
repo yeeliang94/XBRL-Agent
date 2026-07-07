@@ -333,8 +333,8 @@ def test_clear_tool_deletes_provenance_and_tool_is_registered(db_path: Path):
 
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [1]})],
-        [ToolCallPart(tool_name="clear_note_cell", args={
-            "sheet": _S11, "row": 42, "source_pages": [1],
+        [ToolCallPart(tool_name="clear_note_cells", args={
+            "sheet": _S11, "rows": [42], "source_pages": [1],
             "evidence": "page 1: duplicate of Sheet 12"})],
     ])
     agent, deps, _ctx0 = ra.create_notes_reviewer_agent(
