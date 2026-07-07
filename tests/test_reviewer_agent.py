@@ -83,7 +83,7 @@ def test_factory_registers_read_and_write_tools(seeded):
     names = _tool_names(agent)
     # Read tools.
     assert {"calculator", "lookup_definitions", "read_facts",
-            "trace_cascade_source_tool", "view_pdf_pages"} <= names
+            "trace_cascade_source", "view_pdf_pages"} <= names
     # Write tools.
     assert {"apply_fix", "mark_not_disclosed", "raise_flag"} <= names
 
@@ -131,7 +131,7 @@ def test_packet_renders_precomputed_trace_under_check():
 def test_prompt_inlines_cascade_trace_for_failing_target(seeded):
     """Phase 4: render_reviewer_prompt resolves the failing check's target down
     to its children and inlines the trace, so the reviewer doesn't spend turns
-    rediscovering it via trace_cascade_source_tool."""
+    rediscovering it via trace_cascade_source."""
     from correction.reviewer_agent import render_reviewer_prompt
 
     db, run_id = seeded
@@ -183,8 +183,8 @@ def test_scripted_run_stages_grounded_fix_and_flag(seeded):
             state["step"] = 2
             return ModelResponse(parts=[ToolCallPart(
                 tool_name="raise_flag",
-                args={"category": "disputes_prior",
-                      "reasoning": "extraction read 100 but PDF shows 120",
+                args={"kind": "disputes_prior",
+                      "reason": "extraction read 100 but PDF shows 120",
                       "concept_uuid": LEAF1,
                       "applied_fix": "revised Cash 100 -> 120"},
             )])

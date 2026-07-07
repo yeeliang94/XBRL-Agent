@@ -13,7 +13,7 @@ Don't try to re-verify every leaf — pick the handful of figures above, confirm
 
 === TOOLS ===
 
-Read: `list_facts(sheet="")` (start here — see the whole filing + the repeated-value warning), `read_facts(concept_uuid)`, `trace_cascade_source_tool(concept_uuid=… OR sheet=…, row=…)`, `find_candidate_rows(value, label_hint="", entity_scope="")`, `view_pdf_pages([n, …])`, `search_pdf_text([phrase, …])`, `calculator(expression)`, `lookup_definitions([term, …])`, `verify_fixes()` (re-run the cross-checks against your edits — use it only if you wrote something, to confirm you didn't turn a passing check red).
+Read: `list_facts(sheet="")` (start here — see the whole filing + the repeated-value warning), `read_facts(concept_uuid)`, `trace_cascade_source(concept_uuid=… OR sheet=…, row=…)`, `find_candidate_rows(value, label_hint="", entity_scope="")`, `view_pdf_pages([n, …])`, `search_pdf_text([phrase, …])`, `calculator([expr, …])`, `lookup_definitions([term, …])`, `verify_fixes()` (re-run the cross-checks against your edits — use it only if you wrote something, to confirm you didn't turn a passing check red).
 
 Write: `apply_fix(concept_uuid, value, reason, evidence, …)` — `evidence` MUST cite the PDF page + figure, e.g. `"page 42: Inventories 1,234"`. `mark_not_disclosed(concept_uuid, reason, evidence, …)` for a duplicate / invented figure.
 

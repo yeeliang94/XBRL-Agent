@@ -37,7 +37,7 @@ from notes_types import (
 from scout.notes_discoverer import NoteInventoryEntry
 from token_tracker import TokenReport
 from tools import page_cache
-from tools.calculator import calculator_result_json as _calculator_impl
+from tools.calculator import calculator_batch_json as _calculator_impl
 from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from tools.template_reader import TemplateField, read_template as _read_template_impl
@@ -1338,19 +1338,18 @@ def create_notes_agent(
     # --- Tools ---
 
     @agent.tool
-    def calculator(ctx: RunContext[NotesDeps], expression: str) -> str:
+    def calculator(ctx: RunContext[NotesDeps], expressions: List[str]) -> str:
         """Evaluate arithmetic exactly.
 
         Use this when building numeric schedules (movement tables,
         opening/additions/closing roll-forwards, maturity analyses) so
-        column totals tie. Supports numbers, parentheses, unary signs,
-        and + - * /. Use explicit negatives such as -123; accounting
-        parentheses are treated as ordinary grouping.
+        column totals tie. Pass a LIST of expressions — e.g.
+        ``["1595+2809", "100-95"]`` — evaluated together in one turn. Each
+        supports numbers, parentheses, unary signs, and + - * /. Use explicit
+        negatives such as -123; accounting parentheses are ordinary grouping.
+        Returns one result (or per-item error) per expression, in order.
         """
-        # Single-expression by design: only the extraction agent batches
-        # (Plan D) because it runs many subtotal/reconciliation checks per
-        # turn. Notes arithmetic is sparse, so the simpler signature stays.
-        return _calculator_impl(expression)
+        return _calculator_impl(expressions)
 
     @agent.tool
     def lookup_definitions(ctx: RunContext[NotesDeps], queries: List[str]) -> str:

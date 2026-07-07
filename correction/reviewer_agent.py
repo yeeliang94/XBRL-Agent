@@ -42,7 +42,7 @@ from typing import Any, Optional, Sequence
 # tool wrappers (lazy eval looks in module globals).
 from pydantic_ai import Agent, RunContext
 
-from tools.calculator import calculator_result_json as _calculator_impl
+from tools.calculator import calculator_batch_json as _calculator_impl
 from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
 
 
@@ -1482,15 +1482,16 @@ def create_reviewer_agent(
     )
 
     @agent.tool
-    def calculator(ctx: RunContext[ReviewerDeps], expression: str) -> str:
+    def calculator(ctx: RunContext[ReviewerDeps], expressions: list[str]) -> str:
         """Evaluate arithmetic exactly before writing a corrected fact.
 
-        Supports numbers, parentheses, unary signs, and + - * /.
+        Pass a LIST of expressions — e.g. ``["1595+2809", "100-95"]`` — and they
+        are all evaluated in one turn; don't call this once per check. Each
+        supports numbers, parentheses, unary signs, and + - * /. Use explicit
+        negatives such as -123; accounting parentheses are ordinary grouping.
+        Returns one result (or per-item error) per expression, in order.
         """
-        # Single-expression by design: only the extraction agent batches
-        # (Plan D), which runs many checks per turn. The reviewer verifies one
-        # fix at a time, so the simpler signature stays.
-        return _calculator_impl(expression)
+        return _calculator_impl(expressions)
 
     @agent.tool
     def lookup_definitions(ctx: RunContext[ReviewerDeps], queries: list[str]) -> str:
@@ -1609,7 +1610,7 @@ def create_reviewer_agent(
             )
         return "\n".join(lines)
 
-    @agent.tool
+    @agent.tool(name="trace_cascade_source")
     def trace_cascade_source_tool(
         ctx: RunContext[ReviewerDeps],
         concept_uuid: str = "",
@@ -1768,24 +1769,24 @@ def create_reviewer_agent(
     @agent.tool
     def raise_flag(
         ctx: RunContext[ReviewerDeps],
-        category: str,
-        reasoning: str,
+        kind: str,
+        reason: str,
         concept_uuid: str = "",
         target_sheet: str = "",
         target_row: int = 0,
         pdf_page: int = 0,
         applied_fix: str = "",
     ) -> str:
-        """Flag a case for the human. Use SPARINGLY — only two categories.
+        """Flag a case for the human. Use SPARINGLY — only two kinds.
 
-        category='stuck' when you cannot reconcile or ground a figure;
-        category='disputes_prior' when you believe an earlier agent erred
+        kind='stuck' when you cannot reconcile or ground a figure;
+        kind='disputes_prior' when you believe an earlier agent erred
         (set applied_fix if you also changed the value). Grounded fixes you
         ARE confident in need no flag — they appear in the diff.
         """
         out = raise_reviewer_flag(
             ctx.deps.db_path, ctx.deps.run_id,
-            category=category, reasoning=reasoning,
+            category=kind, reasoning=reason,
             concept_uuid=concept_uuid or None,
             target_sheet=target_sheet or None,
             target_row=target_row or None,
