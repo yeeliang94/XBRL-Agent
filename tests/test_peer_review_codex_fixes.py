@@ -1,263 +1,28 @@
-"""Regression tests for the four peer-review findings on the post-merge
-pseudo-agents (correction + notes validator).
+"""Regression tests for the peer-review findings on the post-merge passes.
 
-Findings:
-    1. P1 — correction iter didn't enforce CORRECTION_TURN_TIMEOUT.
-    2. P1 — notes validator iter didn't enforce any per-turn timeout.
-    3. P2 — correction's run_cross_checks tool hardcoded set(StatementType),
-       inventing fake missing-sheet failures on partial runs.
-    4. P2 — validator prompt body used "Sheet 11"/"Sheet 12" instead of
-       the real openpyxl tab names the rewrite tool requires.
+Two of the original four findings concerned the notes *validator* pass, which
+has since been deleted (its cross-sheet reconciliation job moved to the notes
+reviewer). What survives here are the per-turn-timeout constant guards:
+
+    1. correction/reviewer pass — CORRECTION_TURN_TIMEOUT.
+    2. notes reviewer pass — NOTES_VALIDATOR_TURN_TIMEOUT (the constant kept its
+       legacy name; the live notes-reviewer pass reuses it as its per-turn cap).
+
+Both guard against a future edit setting the timeout to a few seconds (which
+would kill healthy runs) or removing it entirely.
 """
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import patch
-
-import pytest
-from pydantic_ai.models.test import TestModel
-
-from cross_checks.framework import CrossCheckResult
-from statement_types import StatementType
-
-
-# ---------------------------------------------------------------------------
-# Shared stall/yield async iterables — mirror the pattern in
-# tests/test_notes_turn_timeout.py so the fixes are verified against the
-# same contract the notes coordinator uses.
-# ---------------------------------------------------------------------------
-
-
-class _SlowIterable:
-    """Blocks forever on __anext__ — simulates a stalled LLM turn."""
-
-    def __init__(self) -> None:
-        self.cancelled = False
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        try:
-            await asyncio.sleep(3600)
-        except asyncio.CancelledError:
-            self.cancelled = True
-            raise
-        raise AssertionError("unreachable")
-
-
-class _FakeAgentRun:
-    """Stand-in for the object yielded by ``agent.iter(...)``."""
-
-    def __init__(self, iterable):
-        self._iterable = iterable
-        self.ctx = object()
-
-    def __aiter__(self):
-        return self._iterable
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *a):
-        return False
-
-
-class _FakeAgent:
-    def __init__(self, iterable):
-        self._iterable = iterable
-
-    def iter(self, *a, **kw):
-        return _FakeAgentRun(self._iterable)
-
-
-# ---------------------------------------------------------------------------
-# Finding 1 — correction iter enforces CORRECTION_TURN_TIMEOUT.
-# ---------------------------------------------------------------------------
-
 
 def test_correction_turn_timeout_constant_is_reasonable():
-    """Sanity guard — prevents a future edit from setting the timeout to
-    3 seconds (would kill healthy runs) or removing it entirely."""
     from server import CORRECTION_TURN_TIMEOUT
 
     assert isinstance(CORRECTION_TURN_TIMEOUT, (int, float))
     assert 30 <= CORRECTION_TURN_TIMEOUT <= 600
 
 
-# ---------------------------------------------------------------------------
-# Finding 2 — notes validator iter enforces NOTES_VALIDATOR_TURN_TIMEOUT.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_notes_validator_times_out_when_turn_stalls(tmp_path, monkeypatch):
-    """Same contract as the correction pass — a stalled validator turn
-    must not hang the outer run past ``NOTES_VALIDATOR_TURN_TIMEOUT``."""
-    from server import _run_notes_validator_pass, NOTES_VALIDATOR_AGENT_ID
-    import notes.validator_agent as validator_mod
-    import server as server_mod
-
-    slow = _SlowIterable()
-
-    def _fake_create(*args, **kwargs):
-        class _Deps:
-            writes_performed = 0
-            correction_log: list = []
-        # `context` must trip the "have candidates" branch so the agent
-        # actually gets invoked (otherwise the short-circuit at the top of
-        # _run_notes_validator_pass returns before reaching the iter loop).
-        context = {
-            "duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}],
-            "overlap_candidates": [],
-            "entry_count": 0,
-        }
-        return _FakeAgent(slow), _Deps(), context
-
-    monkeypatch.setattr(
-        validator_mod, "create_notes_validator_agent", _fake_create,
-    )
-    monkeypatch.setattr(server_mod, "NOTES_VALIDATOR_TURN_TIMEOUT", 0.05)
-
-    # Touch the gate keys so the trigger condition is satisfied.
-    notes_outputs = {
-        "ACC_POLICIES": str(tmp_path / "sheet11.xlsx"),
-        "LIST_OF_NOTES": str(tmp_path / "sheet12.xlsx"),
-    }
-    queue: asyncio.Queue = asyncio.Queue()
-
-    outcome = await asyncio.wait_for(
-        _run_notes_validator_pass(
-            merged_workbook_path=str(tmp_path / "merged.xlsx"),
-            pdf_path=str(tmp_path / "x.pdf"),
-            notes_template_outputs=notes_outputs,
-            filing_level="company",
-            filing_standard="mfrs",
-            model=TestModel(),
-            output_dir=str(tmp_path),
-            event_queue=queue,
-        ),
-        timeout=5.0,
-    )
-
-    assert outcome["invoked"] is True
-    assert outcome["error"] is not None
-    assert "stalled" in outcome["error"].lower()
-    assert slow.cancelled
-
-    events = []
-    while not queue.empty():
-        events.append(queue.get_nowait())
-    kinds = {e["event"] for e in events}
-    assert "error" in kinds
-    assert "complete" in kinds
-    for e in events:
-        assert e["data"]["agent_id"] == NOTES_VALIDATOR_AGENT_ID
-
-
-@pytest.mark.asyncio
-async def test_notes_validator_construction_failure_emits_bucketed_error(
-    tmp_path, monkeypatch
-):
-    """Peer-review HIGH: when create_notes_validator_agent raises, the pass
-    used to set outcome["error"] and return SILENTLY — no SSE error, no
-    complete — leaving the Notes Validator tab stranded. It must now surface a
-    recoverable-bucketed error AND a failure-complete so the tab terminates."""
-    from server import _run_notes_validator_pass, NOTES_VALIDATOR_AGENT_ID
-    import notes.validator_agent as validator_mod
-
-    def _boom_create(*args, **kwargs):
-        raise RuntimeError("template not found")
-
-    monkeypatch.setattr(validator_mod, "create_notes_validator_agent", _boom_create)
-
-    notes_outputs = {
-        "ACC_POLICIES": str(tmp_path / "sheet11.xlsx"),
-        "LIST_OF_NOTES": str(tmp_path / "sheet12.xlsx"),
-    }
-    queue: asyncio.Queue = asyncio.Queue()
-
-    outcome = await _run_notes_validator_pass(
-        merged_workbook_path=str(tmp_path / "merged.xlsx"),
-        pdf_path=str(tmp_path / "x.pdf"),
-        notes_template_outputs=notes_outputs,
-        filing_level="company",
-        filing_standard="mfrs",
-        model=TestModel(),
-        output_dir=str(tmp_path),
-        event_queue=queue,
-    )
-
-    assert outcome["error"] is not None
-    assert "construction failed" in outcome["error"]
-
-    events = []
-    while not queue.empty():
-        events.append(queue.get_nowait())
-    by_kind = {e["event"]: e["data"] for e in events}
-    assert "error" in by_kind, "construction failure must emit an SSE error"
-    assert "complete" in by_kind, "construction failure must emit a complete"
-    # The error is a recoverable-bucketed, typed, agent-scoped event.
-    assert by_kind["error"]["bucket"] == "recoverable"
-    assert by_kind["error"]["type"] == "notes_validator_exception"
-    assert by_kind["error"]["agent_id"] == NOTES_VALIDATOR_AGENT_ID
-    assert by_kind["complete"]["success"] is False
-
-
-def test_notes_validator_turn_timeout_constant_is_reasonable():
+def test_notes_reviewer_turn_timeout_constant_is_reasonable():
     from server import NOTES_VALIDATOR_TURN_TIMEOUT
 
     assert isinstance(NOTES_VALIDATOR_TURN_TIMEOUT, (int, float))
     assert 30 <= NOTES_VALIDATOR_TURN_TIMEOUT <= 600
-
-
-# ---------------------------------------------------------------------------
-# Finding 4 — validator prompt body surfaces real tab names.
-# ---------------------------------------------------------------------------
-
-
-def test_validator_prompt_body_mentions_real_tab_names_on_empty_candidates():
-    """Even when there are no candidates, the worksheet-name reference
-    block must still be emitted — operators reading the prompt (or the
-    agent on a future turn) need the mapping."""
-    from notes.validator_agent import build_validator_prompt_body
-
-    body = build_validator_prompt_body(
-        duplicates=[],
-        overlap_candidates=[],
-        filing_level="company",
-        filing_standard="mfrs",
-    )
-    assert "Notes-SummaryofAccPol" in body
-    assert "Notes-Listofnotes" in body
-
-
-def test_validator_prompt_body_includes_tab_name_per_candidate():
-    """Each candidate line must include the real tab name alongside
-    'Sheet 11' / 'Sheet 12' so the agent has no prompt-visible reason
-    to guess the wrong sheet argument on its first tool call."""
-    from notes.validator_agent import build_validator_prompt_body
-
-    duplicates = [{
-        "note_ref": "12",
-        "sheet_11": {"row": 5, "content_preview": "Income taxes"},
-        "sheet_12": {"row": 44, "content_preview": "Income tax expense..."},
-    }]
-    overlap = [{
-        "score": 0.62,
-        "sheet_11": {"row": 6, "content_preview": "Revenue..."},
-        "sheet_12": {"row": 45, "content_preview": "Revenue recognition..."},
-    }]
-
-    body = build_validator_prompt_body(
-        duplicates=duplicates,
-        overlap_candidates=overlap,
-        filing_level="group",
-        filing_standard="mpers",
-    )
-    # Must mention the actual tab names both in the header and at least
-    # once per candidate section (the agent reads line by line).
-    assert body.count("Notes-SummaryofAccPol") >= 3
-    assert body.count("Notes-Listofnotes") >= 3
-    # The "pass this verbatim" hint must land in the closing instruction.
-    assert "verbatim" in body.lower()

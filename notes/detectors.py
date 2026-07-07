@@ -2,14 +2,10 @@
 
 These pure functions (cross-sheet duplication, content overlap, same-sheet row
 collisions, sub-note coverage gaps, title/format issues, inventory coverage
-gaps) and their input loaders (sidecar / DB-provenance / scout-inventory) were
-extracted out of ``notes/validator_agent.py`` so the live notes **reviewer**
-(``notes/reviewer_agent.py``) no longer imports anything from that dead-but-green
-module. The validator is slated for deletion; keeping the shared surface here
-means the reviewer keeps working after that deletion (docs/PLAN.md Step 1).
-
-``validator_agent.py`` re-exports these names so its own remaining code and its
-pinning tests keep their import surface unchanged until it is removed.
+gaps) and their input loaders (sidecar / DB-provenance / scout-inventory) are
+the detector surface the live notes **reviewer** (``notes/reviewer_agent.py``)
+computes its findings from. They were extracted here from the old notes
+validator (since deleted) so the reviewer imports from a neutral home.
 
 gotcha #14: every detector reports a candidate by PROVENANCE (note refs /
 coordinates), never by matching a note's CONTENT to a row — the agent judges
