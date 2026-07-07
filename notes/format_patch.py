@@ -15,6 +15,11 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 
 from notes.format_verify import verify_format_only
 from notes.html_sanitize import sanitize_notes_html
+# Single-source the Phase-4 padding/spacing grammars from the sanitiser (the
+# authoritative gate; every patch is re-sanitised after apply) so the op
+# pre-check here can never drift from what the sanitiser accepts.
+from notes.html_sanitize import _PADDING_LENGTH_RE as PADDING_RE
+from notes.html_sanitize import _SPACING_LENGTH_RE as SPACING_RE
 
 
 SIDES = ("top", "right", "bottom", "left")
@@ -40,11 +45,8 @@ THEME_COLOURS = {
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 WIDTH_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:px|%)|auto)$")
 INDENT_RE = re.compile(r"^\d+(?:\.\d+)?(?:em|px)$")
-# Phase 4 (Word-formatting fidelity): cell padding (1-4 px tokens) + block
-# before/after spacing (single px/em). Same bounded shapes the sanitiser gates.
-PADDING_RE = re.compile(
-    r"^(?:0|\d+(?:\.\d+)?px)(?:\s+(?:0|\d+(?:\.\d+)?px)){0,3}$")
-SPACING_RE = re.compile(r"^(?:0|\d+(?:\.\d+)?(?:em|px))$")
+# PADDING_RE / SPACING_RE are imported from notes.html_sanitize (top of file) —
+# single-sourced so the op gate and the sanitiser gate can't diverge.
 
 
 class FormatPatchError(ValueError):
