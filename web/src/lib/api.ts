@@ -11,22 +11,24 @@ import type {
   AgentTraceJson,
 } from "./types";
 import type { ClipboardFormatOptions } from "./clipboardFormat";
+import { ApiError } from "./errors";
 
-// Shared fetch helper — parses JSON error bodies for useful messages.
-// A 401 anywhere means the session expired mid-use: broadcast it so the app
-// shell can drop back to the login page (the "any 401 ⇒ show login" rule).
+// Shared fetch helper — turns a non-OK response into an `ApiError` carrying a
+// plain-English message (safe to render) plus the raw detail for a "Technical
+// details" disclosure. A 401 anywhere means the session expired mid-use:
+// broadcast it so the app shell can drop back to the login page (the "any
+// 401 ⇒ show login" rule).
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   if (!res.ok) {
     if (res.status === 401) {
       window.dispatchEvent(new CustomEvent("auth:unauthorized"));
     }
-    let detail = `Request failed (${res.status})`;
+    let body: unknown = null;
     try {
-      const body = await res.json();
-      detail = body.detail || body.message || detail;
+      body = await res.json();
     } catch { /* no JSON body */ }
-    throw new Error(detail);
+    throw ApiError.fromResponse(res.status, body);
   }
   return res.json();
 }
@@ -66,7 +68,7 @@ export type LoginResult =
 export async function getAuthMe(): Promise<AuthMe | null> {
   const res = await fetch("/api/auth/me");
   if (res.status === 401) return null;
-  if (!res.ok) throw new Error(`auth check failed (${res.status})`);
+  if (!res.ok) throw ApiError.fromResponse(res.status, null);
   return res.json();
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
@@ -41,7 +42,7 @@ export function TemplateSettingsPage() {
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/templates", { signal: controller.signal })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((r) => (r.ok ? r.json() : Promise.reject(ApiError.fromResponse(r.status, null))))
       .then((data) => {
         const list: TemplateRow[] = data.templates || [];
         setTemplates(list);
@@ -50,7 +51,7 @@ export function TemplateSettingsPage() {
       })
       .catch((err) => {
         if (err?.name !== "AbortError") {
-          setError(String(err));
+          setError(userMessage(err));
           setLoading(false);
         }
       });
@@ -62,10 +63,10 @@ export function TemplateSettingsPage() {
     if (!activeTemplate) return;
     const controller = new AbortController();
     fetch(`/api/templates/${activeTemplate}/concepts`, { signal: controller.signal })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((r) => (r.ok ? r.json() : Promise.reject(ApiError.fromResponse(r.status, null))))
       .then((data) => setConcepts(data.concepts || []))
       .catch((err) => {
-        if (err?.name !== "AbortError") setError(String(err));
+        if (err?.name !== "AbortError") setError(userMessage(err));
       });
     return () => controller.abort();
   }, [activeTemplate]);
@@ -90,7 +91,7 @@ export function TemplateSettingsPage() {
           )
         );
       } catch (err) {
-        setError(`Rename failed: ${String(err)}`);
+        setError(`Rename failed: ${userMessage(err)}`);
       }
     },
     []

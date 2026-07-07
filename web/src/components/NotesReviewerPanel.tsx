@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import type { ModelEntry } from "../lib/types";
+import { ApiError, userMessage } from "../lib/errors";
+import { flagKindLabel, humanize } from "../lib/vocabulary";
 
 /**
  * Notes Reviewer panel (docs/PLAN.md — Notes Reviewer, Phase 4).
@@ -55,12 +57,11 @@ interface Props {
 }
 
 async function errorDetail(r: Response): Promise<string> {
+  let body: unknown = null;
   try {
-    const b = await r.json();
-    return b.detail || b.message || `HTTP ${r.status}`;
-  } catch {
-    return `HTTP ${r.status}`;
-  }
+    body = await r.json();
+  } catch { /* no JSON body */ }
+  return ApiError.fromResponse(r.status, body).message;
 }
 
 /** Poll the background pass until it finishes (it reads the PDF, can take minutes). */
@@ -68,7 +69,7 @@ async function pollStatus(runId: number): Promise<ReReviewOutcome> {
   const MAX = 600; // ~15 min at 1.5s
   for (let i = 0; i < MAX; i++) {
     const r = await fetch(`/api/runs/${runId}/notes-review/status`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) throw ApiError.fromResponse(r.status, null);
     const s = await r.json();
     if (s.status === "done") return s as ReReviewOutcome;
     if (s.status === "idle") return { ok: true, invoked: false };
@@ -130,7 +131,7 @@ export function NotesReviewerPanel({ runId }: Props) {
         setData(await r.json());
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
-        setError(e instanceof Error ? e.message : "Failed to load notes review");
+        setError(userMessage(e));
       } finally {
         if (!signal?.aborted) setLoading(false);
       }
@@ -174,7 +175,7 @@ export function NotesReviewerPanel({ runId }: Props) {
       }
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Re-review failed");
+      setActionError(userMessage(e));
     } finally {
       setBusy(null);
     }
@@ -198,7 +199,7 @@ export function NotesReviewerPanel({ runId }: Props) {
       if (!r.ok) throw new Error(await errorDetail(r));
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Revert failed");
+      setActionError(userMessage(e));
     } finally {
       setBusy(null);
     }
@@ -217,7 +218,7 @@ export function NotesReviewerPanel({ runId }: Props) {
       if (!r.ok) throw new Error(await errorDetail(r));
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Answer failed");
+      setActionError(userMessage(e));
     }
   };
 
@@ -349,9 +350,9 @@ export function NotesReviewerPanel({ runId }: Props) {
                   <div style={styles.flagHead}>
                     <span style={styles.kindChip}>
                       <span aria-hidden="true" style={ui.badgeDot(pwc.warning)} />
-                      {f.kind}
+                      {flagKindLabel(f.kind)}
                     </span>
-                    <span style={styles.dim}>{f.status}</span>
+                    <span style={styles.dim}>{humanize(f.status)}</span>
                     {f.sheet && f.row != null && (
                       <span style={styles.dim}>
                         {f.sheet} row {f.row}

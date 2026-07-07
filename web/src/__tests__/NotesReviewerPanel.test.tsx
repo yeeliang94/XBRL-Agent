@@ -82,7 +82,8 @@ describe("NotesReviewerPanel", () => {
     expect(screen.getByText("Disclosure of financial instruments")).toBeTruthy();
     expect(screen.getByText("Authored")).toBeTruthy();
     expect(screen.getByText(/two fair-value notes/i)).toBeTruthy();
-    expect(screen.getByText("needs_human")).toBeTruthy();
+    // Flag kind renders in plain English (vocabulary map), not the raw enum.
+    expect(screen.getByText(/needs your review/i)).toBeTruthy();
   });
 
   test("Re-review posts the selected model to /notes-review/re-review", async () => {

@@ -1,4 +1,5 @@
 import { pwc } from "./theme";
+import { humanize } from "./vocabulary";
 
 // ---------------------------------------------------------------------------
 // Shared status normalization for History list / detail / filters.
@@ -68,7 +69,9 @@ const AGENT_STATUS_MAP: Record<string, RunStatusDisplay> = {
 /** Look up a run-level status. Unknown values get a clearly-labeled fallback
  *  rather than the raw enum string so users never see internal jargon. */
 export function runStatusDisplay(status: string): RunStatusDisplay {
-  return RUN_STATUS_MAP[status] ?? { ...FALLBACK, label: status || "Unknown" };
+  // Unmapped values are humanised (underscores → spaces, sentence case) so a
+  // future backend status never reaches the badge as a raw enum.
+  return RUN_STATUS_MAP[status] ?? { ...FALLBACK, label: status ? humanize(status) : "Unknown" };
 }
 
 /** Look up a per-agent status. Falls through to runStatusDisplay so any
@@ -77,7 +80,7 @@ export function agentStatusDisplay(status: string): RunStatusDisplay {
   return (
     AGENT_STATUS_MAP[status] ??
     RUN_STATUS_MAP[status] ??
-    { ...FALLBACK, label: status || "Unknown" }
+    { ...FALLBACK, label: status ? humanize(status) : "Unknown" }
   );
 }
 

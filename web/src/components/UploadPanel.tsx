@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { userMessage } from "../lib/errors";
 import type { UploadResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -144,7 +145,7 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
       try {
         await onUpload(file);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Upload failed");
+        setError(userMessage(e));
       } finally {
         setUploading(false);
       }

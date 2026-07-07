@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
@@ -232,7 +233,7 @@ export function ConceptsPage({
       : `/api/runs/${effectiveId}/concepts`;
     fetch(url, { signal: controller.signal })
       .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) throw ApiError.fromResponse(r.status, null);
         return r.json();
       })
       .then((data) => {
@@ -243,7 +244,7 @@ export function ConceptsPage({
       .catch((err) => {
         // AbortError is expected on cleanup — don't surface it.
         if (err?.name === "AbortError") return;
-        setLoadError(String(err));
+        setLoadError(userMessage(err));
       });
     return () => {
       controller.abort();

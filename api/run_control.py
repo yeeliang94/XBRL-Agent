@@ -69,7 +69,7 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest, request:
         if not api_key:
             raise HTTPException(
                 status_code=400,
-                detail="GEMINI_API_KEY (Mac) or GOOGLE_API_KEY (Windows proxy) must be set. Check Settings.",
+                detail="The AI service isn't set up yet. Ask an administrator to add the API key under Settings before starting a run.",
             )
 
         # Watch this user's auth session so the stream closes if it idles out
@@ -146,8 +146,8 @@ async def start_run_endpoint(run_id: int, request: Request):
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Run is not a draft (current status: {run.status}). "
-                "Only drafts can be started."
+                "This upload can't be started because it isn't waiting to run. "
+                "Refresh the page to see its current state."
             ),
         )
 
@@ -204,8 +204,8 @@ async def start_run_endpoint(run_id: int, request: Request):
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Run is not a draft (state changed during the request). "
-                "Only drafts can be started."
+                "This upload can't be started — its state just changed. "
+                "Refresh the page and try again."
             ),
         )
 
@@ -221,8 +221,8 @@ async def start_run_endpoint(run_id: int, request: Request):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "GEMINI_API_KEY (Mac) or GOOGLE_API_KEY (Windows proxy) "
-                    "must be set. Check Settings."
+                    "The AI service isn't set up yet. Ask an administrator to "
+                    "add the API key under Settings before starting a run."
                 ),
             )
 
@@ -357,7 +357,7 @@ async def rerun_notes(run_id: int, request: Request):
     if not session_id:
         raise HTTPException(
             status_code=400,
-            detail=f"Run {run_id} has no session_id — legacy row can't be rerun.",
+            detail="This run is too old to regenerate. Please start a new extraction instead.",
         )
 
     if session_id in server.active_runs:
@@ -391,11 +391,14 @@ async def rerun_notes(run_id: int, request: Request):
             notes_to_run=list(notes_to_run),
             notes_models=config.get("notes_models") or {},
         )
-    except Exception as e:
+    except Exception:
         # Malformed stored config — surface rather than crash mid-stream.
         raise HTTPException(
             status_code=400,
-            detail=f"Stored run config is malformed: {e}",
+            detail=(
+                "This run's saved settings couldn't be read, so notes can't be "
+                "regenerated. Please start a new extraction instead."
+            ),
         )
 
     load_dotenv(server.ENV_FILE, override=True)

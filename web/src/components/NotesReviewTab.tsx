@@ -21,6 +21,7 @@ import {
   useCallback,
   useMemo,
 } from "react";
+import { userMessage } from "../lib/errors";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
 import { StarterKit } from "@tiptap/starter-kit";
@@ -721,7 +722,7 @@ function SheetSection({
       setFormatStatus(state);
       setExpanded(true);
     } catch (err) {
-      setFormatError(err instanceof Error ? err.message : "Could not start formatter.");
+      setFormatError(userMessage(err));
     }
   }, [runId, sheet.sheet, selectedModel]);
 
@@ -739,7 +740,7 @@ function SheetSection({
       await onFormatted();
     } catch (err) {
       setFormatError(
-        err instanceof Error ? err.message : "Could not revert formatting.",
+        userMessage(err),
       );
     }
   }, [onFormatted, runId, sheet.sheet]);

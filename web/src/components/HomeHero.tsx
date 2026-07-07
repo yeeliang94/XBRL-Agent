@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { fetchHomeStats, fetchRecentRuns } from "../lib/api";
 import type { HomeStats } from "../lib/api";
@@ -70,7 +71,7 @@ export function HomeHero({
         if (cancelled) return;
         // Quiet degradation: keep whatever we had, flag the error so the
         // children show placeholders. Never blocks the upload card.
-        setError(err instanceof Error ? err.message : "Failed to load home data");
+        setError(userMessage(err));
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);

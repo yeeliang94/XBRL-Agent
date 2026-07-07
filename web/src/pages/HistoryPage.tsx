@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
@@ -126,7 +127,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : "Failed to load run history";
+        const msg = userMessage(err);
         setError(msg);
         setRuns([]);
         setTotal(0);
@@ -165,7 +166,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
       if (filtersKeyRef.current !== snapshotFiltersKey) {
         return;
       }
-      const msg = err instanceof Error ? err.message : "Failed to load more runs";
+      const msg = userMessage(err);
       // Dedicated pagination-error state — the page-level `error` would
       // blank the already-loaded rows via HistoryList's error early-return.
       setLoadMoreError(msg);
@@ -191,7 +192,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : "Failed to load run detail";
+        const msg = userMessage(err);
         setDetailError(msg);
         setDetail(null);
       })
@@ -218,7 +219,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
       setSelectedId(null);
       setRefetchKey((k) => k + 1);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Delete failed";
+      const msg = userMessage(err);
       setDetailError(msg);
     }
   }, [setSelectedId]);

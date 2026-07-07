@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { changePassword } from "../lib/api";
@@ -95,7 +96,7 @@ export function AccountTab() {
       setNext("");
       setConfirm("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to change password.");
+      setError(userMessage(e));
     } finally {
       setSaving(false);
     }
