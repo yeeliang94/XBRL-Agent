@@ -146,6 +146,20 @@ def test_alignment_and_fill_mapping():
     assert "background-color: #d9d9d9" in css
 
 
+def test_empty_paragraphs_are_skipped_to_stay_aligned_with_mammoth():
+    """mammoth drops text-less spacer paragraphs; the reader must too, or every
+    spacer shifts the positional match and the injection pass bails (the FINCO
+    incident: 234 body paragraphs vs 225 mammoth blocks == 9 empty spacers)."""
+    body = (
+        "<w:p><w:r><w:t>Real one</w:t></w:r></w:p>"
+        "<w:p></w:p>"                                   # empty spacer -> skipped
+        '<w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>Real two</w:t></w:r></w:p>'
+    )
+    maps = extract_style_maps(_bytes_docx(body))
+    assert len(maps.paragraphs) == 2                    # the empty one is gone
+    assert para_css(maps.paragraphs[1]) == "text-align: right"
+
+
 def test_paragraph_alignment_indent_and_spacing():
     body = (
         "<w:p><w:pPr>"

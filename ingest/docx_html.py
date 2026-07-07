@@ -118,56 +118,88 @@ def extract_docx_html(src: str | Path) -> str:
     return _inject_source_styles(html, src)
 
 
+_PARA_BLOCK_TAGS = ("p", "h1", "h2", "h3", "h4", "h5", "h6")
+
+
+def _inject_table_styles(soup, table_maps) -> None:
+    """Best-effort per-cell table styling. Injection proceeds only when mammoth's
+    table count equals the docx's, and a table is styled only when its row/cell
+    counts line up exactly — any mismatch (nested tables, merged cells mammoth
+    reshapes) leaves that table bare. A stripped skeleton beats a mis-styled
+    one. Mutates ``soup`` in place."""
+    from ingest.docx_styles import cell_css
+
+    tables = soup.find_all("table")
+    if not table_maps or len(tables) != len(table_maps):
+        if table_maps:
+            logger.info(
+                "source-style injection: mammoth produced %d tables but docx "
+                "has %d; skipping table injection (structure mismatch)",
+                len(tables), len(table_maps))
+        return
+    for tbl_el, tbl_style in zip(tables, table_maps):
+        rows = tbl_el.find_all("tr")
+        if len(rows) != len(tbl_style):
+            continue
+        if not all(len(r.find_all(["td", "th"])) == len(rs)
+                   for r, rs in zip(rows, tbl_style)):
+            continue
+        for row_el, row_style in zip(rows, tbl_style):
+            for cell_el, cstyle in zip(row_el.find_all(["td", "th"]), row_style):
+                css = cell_css(cstyle)
+                if css:
+                    cell_el["style"] = css
+
+
+def _inject_paragraph_styles(soup, para_maps) -> None:
+    """Best-effort paragraph styling (alignment / indent / spacing) on mammoth's
+    top-level ``<p>``/``<h1..6>`` blocks, matched positionally to the docx's
+    body-level paragraphs. Injection proceeds ONLY when the counts line up
+    exactly; a top-level list (whose items collapse into ``<li>`` under a shared
+    ``<ul>``, so they don't appear as top-level blocks) or a dropped empty
+    paragraph makes the counts diverge and skips the whole pass — never a
+    mis-aligned style. Mutates ``soup`` in place."""
+    from ingest.docx_styles import para_css
+
+    if not para_maps:
+        return
+    blocks = [el for el in soup.children
+              if getattr(el, "name", None) in _PARA_BLOCK_TAGS]
+    if len(blocks) != len(para_maps):
+        logger.info(
+            "source-style injection: %d top-level blocks vs %d docx paragraphs; "
+            "skipping paragraph injection (structure mismatch — likely a list)",
+            len(blocks), len(para_maps))
+        return
+    for block_el, pstyle in zip(blocks, para_maps):
+        css = para_css(pstyle)
+        if css:
+            block_el["style"] = css
+
+
 def _inject_source_styles(html: str, src: Path) -> str:
-    """Overlay the docx's real table styling onto mammoth's semantic HTML.
+    """Overlay the docx's real styling onto mammoth's semantic HTML.
 
-    mammoth emits tables in document order with no visual styling; we read the
-    matching per-cell styles from the docx XML (ingest.docx_styles) and write
-    them as inline ``style=`` attributes on each cell. ``source.html`` is a
-    never-sanitised REFERENCE, so it may carry the full captured vocabulary; the
-    notes agent is told which properties it may actually apply on write (Step 7).
+    mammoth emits document-order structure with no visual styling; we read the
+    matching styles from the docx XML (ingest.docx_styles) and write them as
+    inline ``style=`` attributes — per-cell on tables AND per-block on top-level
+    paragraphs/headings. ``source.html`` is a never-sanitised REFERENCE, so it
+    carries the full captured vocabulary the notes agent is told to copy (Step 7).
 
-    Positional matching is deliberately conservative: injection only proceeds
-    when mammoth's table count equals the docx's, and a table is styled only
-    when its row/cell counts line up exactly. Any mismatch (nested tables,
-    merged cells mammoth reshapes) leaves that table bare — a stripped skeleton
-    is the pre-Step-5 behaviour, never a mis-styled one. Any failure returns the
-    un-injected HTML."""
+    Table and paragraph injection are INDEPENDENT best-effort passes: a structure
+    mismatch in one (e.g. a list breaking the paragraph count) still lets the
+    other run. Any failure returns the un-injected HTML."""
     try:
         from bs4 import BeautifulSoup
 
-        from ingest.docx_styles import cell_css, extract_style_maps
+        from ingest.docx_styles import extract_style_maps
 
         maps = extract_style_maps(src)
-        if not maps.tables:
+        if not maps.tables and not maps.paragraphs:
             return html
         soup = BeautifulSoup(html, "html.parser")
-        tables = soup.find_all("table")
-        if len(tables) != len(maps.tables):
-            logger.info(
-                "source-style injection: mammoth produced %d tables but docx "
-                "has %d; skipping injection for %s (structure mismatch)",
-                len(tables), len(maps.tables), src)
-            return html
-        styled = 0
-        for tbl_el, tbl_style in zip(tables, maps.tables):
-            rows = tbl_el.find_all("tr")
-            if len(rows) != len(tbl_style):
-                continue
-            row_ok = all(
-                len(r.find_all(["td", "th"])) == len(rs)
-                for r, rs in zip(rows, tbl_style))
-            if not row_ok:
-                continue
-            for row_el, row_style in zip(rows, tbl_style):
-                cells = row_el.find_all(["td", "th"])
-                for cell_el, cstyle in zip(cells, row_style):
-                    css = cell_css(cstyle)
-                    if css:
-                        cell_el["style"] = css
-            styled += 1
-        logger.info("source-style injection: styled %d/%d tables for %s",
-                    styled, len(tables), src)
+        _inject_table_styles(soup, maps.tables)
+        _inject_paragraph_styles(soup, maps.paragraphs)
         return str(soup)
     except Exception:  # noqa: BLE001 — best-effort; a bare skeleton beats a crash
         logger.warning("source-style injection failed for %s", src, exc_info=True)
