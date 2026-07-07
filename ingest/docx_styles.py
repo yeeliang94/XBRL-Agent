@@ -21,14 +21,15 @@ from the referenced ``w:tblStyle`` in ``styles.xml``.
 The output is a plain data structure. ``cell_css`` / ``para_css`` translate a
 resolved style into the sanitiser-whitelisted CSS vocabulary
 (``notes/html_sanitize.py``) so the injected ``source.html`` only ever carries
-properties the notes pipeline can actually round-trip. Properties outside that
-whitelist (padding, spacing) are emitted too — ``source.html`` is a
-never-sanitised REFERENCE — but flagged as "reference-only" so a future gate
-(Phase 4) knows which ones the agent may not yet apply.
+properties the notes pipeline can actually round-trip. Since Phase 4 that
+vocabulary includes cell padding and paragraph before/after spacing, so every
+property the reader emits is write-accepted (the drift guard in
+``tests/test_docx_styles.py`` pins the two vocabularies together).
 """
 from __future__ import annotations
 
 import logging
+import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -154,29 +155,19 @@ def _read_tc_margins(tc_pr: Optional[ET.Element]) -> dict[str, int]:
     return out
 
 
-def _first_para_props(tc: ET.Element) -> tuple[Optional[str], Optional[int]]:
-    """Horizontal alignment + left indent of a cell's FIRST paragraph — the
-    cell's effective text alignment for our purposes. Returns (align, indent)."""
+def _first_para_align(tc: ET.Element) -> Optional[str]:
+    """Horizontal alignment of a cell's FIRST paragraph — the cell's effective
+    text alignment for our purposes."""
     p = tc.find(_q("p"))
     if p is None:
-        return None, None
+        return None
     ppr = p.find(_q("pPr"))
     if ppr is None:
-        return None, None
-    align = None
+        return None
     jc = ppr.find(_q("jc"))
     if jc is not None:
-        align = _attr(jc, "val")
-    indent = None
-    ind = ppr.find(_q("ind"))
-    if ind is not None:
-        raw = _attr(ind, "left") or _attr(ind, "start")
-        if raw is not None:
-            try:
-                indent = int(raw)
-            except ValueError:
-                indent = None
-    return align, indent
+        return _attr(jc, "val")
+    return None
 
 
 # --- table-style (styles.xml) inheritance -----------------------------------
@@ -245,7 +236,7 @@ def _extract_cell_style(
             f = _attr(shd, "fill")
             if f and f.lower() not in ("auto", "ffffff"):
                 fill = f
-    align, _indent = _first_para_props(tc)
+    align = _first_para_align(tc)
     return CellStyle(
         borders={s: borders.get(s) for s in _SIDES},
         align=align,
@@ -347,11 +338,19 @@ def _border_px(size_eighths: int) -> str:
     return "3px"
 
 
+_HEX6_RE = re.compile(r"[0-9a-fA-F]{6}")
+
+
 def _css_color(word_color: str) -> str:
     if not word_color or word_color.lower() == "auto":
         return "#000000"
     c = word_color.lstrip("#")
-    if len(c) == 6:
+    # Validate the DIGITS, not just the length: a 6-char but non-hex Word attr
+    # (crafted or malformed) must not pass through as `#}x{;a!` and break out of
+    # the CSS declaration. source.html is a reference-only channel today, but the
+    # emitter defends itself so the docstring invariant ("only round-trippable
+    # properties") holds regardless of any downstream gate.
+    if _HEX6_RE.fullmatch(c):
         return f"#{c.lower()}"
     return "#000000"
 
@@ -372,13 +371,12 @@ _ALIGN_MAP = {"center": "center", "right": "right", "both": "justify",
               "left": "left", "start": "left", "end": "right"}
 
 
-def cell_css(style: CellStyle, *, include_reference_only: bool = True) -> str:
+def cell_css(style: CellStyle) -> str:
     """Sanitiser-whitelisted CSS for a table cell, from its resolved style.
 
     Since Phase 4 every property the reader emits — per-side borders, text-align,
     background-color, AND padding — is write-accepted by the notes sanitiser, so
-    all are emitted. ``include_reference_only`` is retained (defaulting True) for
-    API stability; it now only gates padding, which no caller disables."""
+    all are emitted."""
     decls: list[str] = []
     for side in _SIDES:
         v = _edge_css(style.borders.get(side))
@@ -388,7 +386,7 @@ def cell_css(style: CellStyle, *, include_reference_only: bool = True) -> str:
         decls.append(f"text-align: {_ALIGN_MAP[style.align]}")
     if style.fill:
         decls.append(f"background-color: {_css_color(style.fill)}")
-    if include_reference_only and style.pad_twips:
+    if style.pad_twips:
         # twips -> px (1px ~= 15 twips at 96dpi; twips are 1/20 pt).
         pv = style.pad_twips.get("top", 0) / 15.0
         ph = style.pad_twips.get("left", style.pad_twips.get("right", 0)) / 15.0
@@ -397,30 +395,26 @@ def cell_css(style: CellStyle, *, include_reference_only: bool = True) -> str:
     return "; ".join(decls)
 
 
-def para_css(style: ParaStyle, *, include_reference_only: bool = True) -> str:
+def para_css(style: ParaStyle) -> str:
     """Sanitiser-whitelisted CSS for a block (<p>/<h3>/<li>): text-align,
     margin-left (indent), and — since Phase 4 — margin-top/bottom (before/after
-    spacing), all write-accepted. ``include_reference_only`` (default True) is
-    retained for API stability."""
+    spacing), all write-accepted."""
     decls: list[str] = []
     if style.align and style.align in _ALIGN_MAP:
         decls.append(f"text-align: {_ALIGN_MAP[style.align]}")
     if style.indent_left_twips:
         decls.append(f"margin-left: {round(style.indent_left_twips / 15.0)}px")
-    if include_reference_only:
-        if style.space_before_twips:
-            decls.append(f"margin-top: {round(style.space_before_twips / 15.0)}px")
-        if style.space_after_twips:
-            decls.append(
-                f"margin-bottom: {round(style.space_after_twips / 15.0)}px")
+    if style.space_before_twips:
+        decls.append(f"margin-top: {round(style.space_before_twips / 15.0)}px")
+    if style.space_after_twips:
+        decls.append(f"margin-bottom: {round(style.space_after_twips / 15.0)}px")
     return "; ".join(decls)
 
 
-# The properties cell_css / para_css emit, all now write-accepted by the notes
-# sanitiser (Phase 4 promoted padding + block spacing from reference-only to
-# Tier-1). Kept next to the emitters so the drift-guard test asserts the two
-# vocabularies stay in lock-step. REFERENCE_ONLY_PROPS is retained but EMPTY:
-# nothing the reader emits is reference-only anymore.
+# The properties cell_css / para_css emit, all write-accepted by the notes
+# sanitiser (Phase 4 promoted padding + block spacing to Tier-1). Kept next to
+# the emitters so the drift-guard test asserts the two vocabularies stay in
+# lock-step.
 TIER1_CELL_PROPS = frozenset({
     "border-top", "border-right", "border-bottom", "border-left",
     "text-align", "background-color", "padding",
@@ -428,4 +422,3 @@ TIER1_CELL_PROPS = frozenset({
 TIER1_BLOCK_PROPS = frozenset({
     "text-align", "margin-left", "margin-top", "margin-bottom",
 })
-REFERENCE_ONLY_PROPS: frozenset[str] = frozenset()

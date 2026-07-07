@@ -214,13 +214,16 @@ _WIDTH_LENGTH_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:px|%)|auto)$")
 # An indent length: positive `em`/`px` only (paragraph margin-left).
 _INDENT_LENGTH_RE = re.compile(r"^\d+(?:\.\d+)?(?:em|px)$")
 # Cell padding: 1-4 positive `px` tokens (`4px`, `4px 8px`, …) — the CSS box
-# shorthand. Bounded shapes only; no `%`, `calc()`, `url()`, negatives. Word's
-# w:tcMar -> px lands here (Phase 4). (notes source-formatting fidelity.)
+# shorthand. Bounded shapes only; no `%`, `calc()`, `url()`, negatives. Magnitude
+# is capped at 3 integer digits (<=999px) so a source-mirrored or crafted op
+# can't smuggle an absurd value the frontend (clamped to 200px) would reject.
+# Word's w:tcMar -> px lands here (Phase 4). (notes source-formatting fidelity.)
 _PADDING_LENGTH_RE = re.compile(
-    r"^(?:0|\d+(?:\.\d+)?px)(?:\s+(?:0|\d+(?:\.\d+)?px)){0,3}$")
+    r"^(?:0|\d{1,3}(?:\.\d+)?px)(?:\s+(?:0|\d{1,3}(?:\.\d+)?px)){0,3}$")
 # Vertical block spacing: a single non-negative `px`/`em` (paragraph
-# margin-top / margin-bottom from Word's w:spacing before/after).
-_SPACING_LENGTH_RE = re.compile(r"^(?:0|\d+(?:\.\d+)?(?:em|px))$")
+# margin-top / margin-bottom from Word's w:spacing before/after), same <=999
+# integer-digit magnitude cap.
+_SPACING_LENGTH_RE = re.compile(r"^(?:0|\d{1,3}(?:\.\d+)?(?:em|px))$")
 
 
 def _build_css_property_validators() -> dict[str, "callable"]:

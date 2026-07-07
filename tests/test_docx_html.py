@@ -111,19 +111,18 @@ def test_injection_carries_standalone_paragraph_styling(tmp_path: Path):
     assert "margin-top" in style and "margin-bottom" in style
 
 
-def test_injected_props_are_all_sanitiser_acceptable_or_reference_only(
+def test_injected_props_are_all_sanitiser_acceptable(
     tmp_path: Path,
 ):
     """Every property injected onto a cell must be Tier-1 (sanitiser-accepted on
-    write) or an explicitly documented reference-only prop — never a silent
-    third category that would be stripped on write with no plan to support it."""
+    write) — never a silent category that would be stripped on write."""
     import re
 
-    from ingest.docx_styles import REFERENCE_ONLY_PROPS, TIER1_CELL_PROPS
+    from ingest.docx_styles import TIER1_CELL_PROPS
 
     src = build_styled_docx(tmp_path / "styled.docx")
     html = docx_html.extract_docx_html(src)
-    known = TIER1_CELL_PROPS | REFERENCE_ONLY_PROPS
+    known = TIER1_CELL_PROPS
     for style_attr in re.findall(r'<td[^>]*style="([^"]*)"', html):
         for decl in style_attr.split(";"):
             decl = decl.strip()

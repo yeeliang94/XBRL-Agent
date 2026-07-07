@@ -89,7 +89,11 @@ with a pinning test run as its gate. No database schema changes anywhere.
         `tests/test_notes_review_provenance.py` — first confirming each deleted
         case's *behaviour* (provenance, crash-handling) is covered by the
         reviewer-pass equivalents; port any that aren't
-  - **Verify:** `grep -rn "validator" server.py` returns nothing;
+  - **Verify:** `grep -rn "validator_agent" server.py` returns nothing.
+        (Note: the `NOTES_VALIDATOR_*` timeout constants + pseudo-agent id are
+        DELIBERATELY retained — the live notes-reviewer pass inherited them per
+        gotcha #22, so a bare `grep "validator"` still matches and MUST NOT be
+        "cleaned up".)
         `./venv/bin/python -m pytest tests/test_peer_review_codex_fixes.py tests/test_notes_review_provenance.py tests/test_notes_reviewer_coverage.py -q` passes
 
 - [ ] 🟥 **Step 3: Delete the agent file and update the docs that anchor to it**

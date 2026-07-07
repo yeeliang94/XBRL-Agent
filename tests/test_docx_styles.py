@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from ingest.docx_styles import (
-    REFERENCE_ONLY_PROPS,
     TIER1_BLOCK_PROPS,
     TIER1_CELL_PROPS,
     cell_css,
@@ -23,7 +22,7 @@ from ingest.docx_styles import (
     para_css,
 )
 
-FINCO = Path(__file__).resolve().parents[1] / "FINCO-Audited-Financial-Statement-2021.docx"
+FINCO = Path(__file__).resolve().parents[1] / "data" / "FINCO-Audited-Financial-Statement-2021.docx"
 
 _W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 
@@ -146,6 +145,22 @@ def test_alignment_and_fill_mapping():
     assert "background-color: #d9d9d9" in css
 
 
+def test_malformed_six_char_color_falls_back_not_passed_through():
+    """A 6-char but non-hex Word colour must NOT be emitted verbatim (which would
+    break out of the CSS declaration in source.html) — the emitter validates the
+    hex digits and falls back to #000000. Guards the docstring invariant."""
+    cell = _cell(
+        borders_xml='<w:tcBorders><w:top w:val="single" w:sz="8" '
+                    'w:color="}x{;a!"/></w:tcBorders>',
+        tc_extra='<w:shd w:fill="}x{;a!"/>')
+    body = f"<w:tbl><w:tr>{cell}</w:tr></w:tbl>"
+    maps = extract_style_maps(_bytes_docx(body))
+    css = cell_css(maps.tables[0][0][0])
+    assert "}" not in css and ";a!" not in css  # no metacharacters leaked
+    assert "background-color: #000000" in css
+    assert "border-top: 1px solid #000000" in css
+
+
 def test_empty_paragraphs_are_skipped_to_stay_aligned_with_mammoth():
     """mammoth drops text-less spacer paragraphs; the reader must too, or every
     spacer shifts the positional match and the injection pass bails (the FINCO
@@ -180,7 +195,7 @@ def test_emitted_props_match_the_sanitiser_whitelist():
     """Every property the reader emits must be one the notes sanitiser accepts
     on a table/block tag — otherwise an injected style would be silently stripped
     on write. Since Phase 4 that includes padding (cells) and margin-top/bottom
-    (blocks), so REFERENCE_ONLY_PROPS is now empty."""
+    (blocks), so every emitted property is write-accepted."""
     from notes.html_sanitize import _STYLE_PROPS_BY_TAG
 
     td_props = _STYLE_PROPS_BY_TAG["td"]
@@ -191,8 +206,6 @@ def test_emitted_props_match_the_sanitiser_whitelist():
     # Every block prop (incl. margin-top/bottom) is accepted on <p>.
     assert TIER1_BLOCK_PROPS <= block_props
     assert {"margin-top", "margin-bottom"} <= block_props
-    # Nothing is reference-only anymore (Phase 4 plumbed padding + spacing).
-    assert REFERENCE_ONLY_PROPS == frozenset()
 
 
 # convenience: build a bytes-docx and hand extract_style_maps a path-like

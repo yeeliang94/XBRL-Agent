@@ -56,7 +56,7 @@ SUBNOTE_NOT_VERIFIED = "not_verified"
 SUBNOTE_VERIFIED = "verified"
 SUBNOTE_MISSING = "missing"
 
-# Reviewer verdicts on a top-level row (Phase 5 `resolve_coverage_note`).
+# Reviewer verdicts on a top-level row (from the `resolve_coverage_notes` tool).
 # Both RESOLVE a non-placed row so it no longer tips run status: a suspected
 # gap the reviewer confirmed is a PDF numbering skip, or a missing note the
 # reviewer judged genuinely not applicable to this entity.
@@ -249,10 +249,10 @@ def build_draft_checklist(
     accumulated verdicts are merged in:
 
     - ``note_verdicts`` — ``{note_num: {"verdict", "reason"}}`` from
-      ``resolve_coverage_note``; a resolving verdict clears the run-status tip
+      ``resolve_coverage_notes``; a resolving verdict clears the run-status tip
       on a missing / suspected-gap row.
     - ``subnote_verdicts`` — ``{(note_num, subnote_key): {"verdict", "reason"}}``
-      from ``verify_subnote``; upgrades a ``not_verified`` sub-ref to
+      from ``verify_subnotes``; upgrades a ``not_verified`` sub-ref to
       ``verified`` / ``missing``. Keys use the same ``_subnote_key`` coercion
       as the builder's citation reconciliation, so ``(a)`` and ``a`` collapse.
     - ``reviewer_added_notes`` — note numbers the reviewer authored back into
@@ -361,7 +361,7 @@ def build_draft_checklist(
 
 
 def _apply_note_verdict(row: CoverageRow, verdict: Optional[dict]) -> None:
-    """Overlay a ``resolve_coverage_note`` verdict onto a top-level row.
+    """Overlay a ``resolve_coverage_notes`` verdict onto a top-level row.
 
     A resolving verdict (``confirmed_absent`` / ``not_applicable``) is recorded
     on the row so ``is_unresolved`` stops tipping run status; the reviewer's
