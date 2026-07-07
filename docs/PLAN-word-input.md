@@ -1,9 +1,10 @@
 # Implementation Plan: Word (.docx) Input — Convert at the Door + Notes Source-Formatting Side-Channel
 
 **Overall Progress:** `~75%` — all code + tests landed on Mac (Phases 1 & 2 +
-the Phase 0 spike script). Remaining: the real-run validation gates (Steps 6,
-10) and Windows enablement (Step 11), which need the enterprise box + real
-client .docx fixtures — operator/hardware, not code.
+the Phase 0 spike *script*). Remaining, all operator/hardware not code: the
+Phase 0 spike RUNS (Step 1 — needs LibreOffice on Mac + the Windows box), the
+real-run validation gates (Steps 6, 10 — need real client .docx fixtures), and
+Windows enablement (Step 11).
 **PRD Reference:** none yet — scope agreed in the 2026-07-07 brainstorm session
 (goals: notes-formatting fidelity + extraction accuracy vs poor scans;
 Windows required; Excel input explicitly deferred to a future plan)
@@ -70,35 +71,35 @@ than reconstructed from guesswork.
 
 ### Phase 0: Feasibility Spikes (no product code)
 
-- [x] 🟩 **Step 1: Converter spike script** — Prove docx→PDF conversion works on both platforms before building on it.
-  - [ ] 🟥 Standalone script (`scripts/spike_docx_to_pdf.py`): try `soffice --headless --convert-to pdf` (Mac), fall back to `docx2pdf` (Windows/Word COM); print which converter ran and the output path
-  - [ ] 🟥 Run on Mac against a sample `.docx`; confirm the output PDF has a text layer (`tools/pdf_search.pdf_has_text_layer` returns True) and page text looks sane
+- [ ] 🟨 **Step 1: Converter spike script** — Prove docx→PDF conversion works on both platforms before building on it. *(Script written; the actual spike RUNS are still pending — no LibreOffice on this Mac dev box, no Windows box here.)*
+  - [x] 🟩 Standalone script (`scripts/spike_docx_to_pdf.py`): try `soffice --headless --convert-to pdf` (Mac), fall back to `docx2pdf` (Windows/Word COM); print which converter ran and the output path
+  - [ ] 🟥 Run on Mac against a sample `.docx`; confirm the output PDF has a text layer (`tools/pdf_search.pdf_has_text_layer` returns True) and page text looks sane — **needs LibreOffice installed (`brew install --cask libreoffice`)**
   - [ ] 🟥 Run on the **enterprise Windows box** (operator-assisted); note Word version, any COM popups/flakiness, conversion time for a ~100-page document
   - **Verify:** Both platforms produce a PDF you can open that contains selectable text (not images). If Windows fails: documented fallback is "operator saves-as-PDF in Word and uploads the PDF; Phase 2 still accepts the .docx as a formatting companion" — record the outcome in this plan before proceeding.
 
 ### Phase 1: Convert at the Door (extraction accuracy + convenience)
 
 - [x] 🟩 **Step 2: Conversion module** — One small, testable function the server and CLI both call.
-  - [ ] 🟥 New `ingest/word_convert.py`: `convert_docx_to_pdf(src: Path, dest: Path)` with platform-appropriate converter selection and a typed `WordConversionError` carrying a plain-language message
-  - [ ] 🟥 Add `docx2pdf` to `requirements.txt` (Windows-only import guard, like other platform-specific code); document the LibreOffice expectation for Mac in the module docstring + README
-  - [ ] 🟥 Unit tests (`tests/test_word_convert.py`): happy path auto-skips when no converter is installed (same pattern as `test_pdf_viewer.py`); error path (corrupt/missing file → `WordConversionError`) always runs
+  - [x] 🟩 New `ingest/word_convert.py`: `convert_docx_to_pdf(src: Path, dest: Path)` with platform-appropriate converter selection and a typed `WordConversionError` carrying a plain-language message
+  - [x] 🟩 Add `docx2pdf` to `requirements.txt` (Windows-only import guard, like other platform-specific code); document the LibreOffice expectation for Mac in the module docstring + README
+  - [x] 🟩 Unit tests (`tests/test_word_convert.py`): happy path auto-skips when no converter is installed (same pattern as `test_pdf_viewer.py`); error path (corrupt/missing file → `WordConversionError`) always runs
   - **Verify:** `./venv/bin/python -m pytest tests/test_word_convert.py -v` passes on Mac; calling the function on the sample docx yields a text-layer PDF.
 
 - [x] 🟩 **Step 3: Upload endpoint accepts .docx** — The web door opens.
-  - [ ] 🟥 [api/uploads.py:56](../api/uploads.py): extend validation to `.pdf` OR `.docx`; stream a docx to `session_dir/uploaded.docx` (same 100 MB cap + partial-file cleanup)
-  - [ ] 🟥 After streaming: call `convert_docx_to_pdf` → `session_dir/uploaded.pdf`; on `WordConversionError` return **422** with the plain-language message ("We couldn't convert this Word file — open it in Word, Save As PDF, and upload that instead") and clean up the session dir
-  - [ ] 🟥 Unchanged: `original_filename.txt` sidecar, draft `runs` row (`pdf_filename` = original name incl. `.docx` — History shows what the user uploaded), response shape
-  - [ ] 🟥 Tests (`tests/test_upload_docx.py`): monkeypatch the converter (no real Word/LibreOffice in CI) — accepted docx creates both files + draft row; conversion failure → 422 + no orphan session dir; `.xlsx`/other extensions still rejected 400
+  - [x] 🟩 [api/uploads.py:56](../api/uploads.py): extend validation to `.pdf` OR `.docx`; stream a docx to `session_dir/uploaded.docx` (same 100 MB cap + partial-file cleanup)
+  - [x] 🟩 After streaming: call `convert_docx_to_pdf` → `session_dir/uploaded.pdf`; on `WordConversionError` return **422** with the plain-language message ("We couldn't convert this Word file — open it in Word, Save As PDF, and upload that instead") and clean up the session dir
+  - [x] 🟩 Unchanged: `original_filename.txt` sidecar, draft `runs` row (`pdf_filename` = original name incl. `.docx` — History shows what the user uploaded), response shape
+  - [x] 🟩 Tests (`tests/test_upload_docx.py`): monkeypatch the converter (no real Word/LibreOffice in CI) — accepted docx creates both files + draft row; conversion failure → 422 + no orphan session dir; `.xlsx`/other extensions still rejected 400
   - **Verify:** pytest passes; manual check — upload a real `.docx` via the running web UI, see both `uploaded.docx` and `uploaded.pdf` in the session dir, and the draft appears in History with the Word filename.
 
 - [x] 🟩 **Step 4: CLI accepts .docx** — Parity for `run.py`.
-  - [ ] 🟥 In `run.py`'s session setup: if the input path ends `.docx`, copy it to `uploaded.docx` and convert to `uploaded.pdf` (reuse Step 2's function); PDF inputs unchanged
-  - [ ] 🟥 Test: monkeypatched-converter unit test asserting both files land in the session dir
+  - [x] 🟩 In `run.py`'s session setup: if the input path ends `.docx`, copy it to `uploaded.docx` and convert to `uploaded.pdf` (reuse Step 2's function); PDF inputs unchanged
+  - [x] 🟩 Test: monkeypatched-converter unit test asserting both files land in the session dir
   - **Verify:** `python3 run.py data/sample.docx --statements SOFP` starts a run whose scout reads real text (log shows the text path, not the vision fallback).
 
 - [x] 🟩 **Step 5: Frontend upload accepts .docx** — Close the loop in the UI.
-  - [ ] 🟥 `web/src/components/UploadPanel.tsx` (~line 130): accept `.docx` extension + its MIME type (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`); update the drop-zone copy ("PDF or Word document"); surface the 422 conversion-failure message verbatim
-  - [ ] 🟥 Web test: docx accepted, `.xlsx` rejected client-side, 422 message rendered
+  - [x] 🟩 `web/src/components/UploadPanel.tsx` (~line 130): accept `.docx` extension + its MIME type (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`); update the drop-zone copy ("PDF or Word document"); surface the 422 conversion-failure message verbatim
+  - [x] 🟩 Web test: docx accepted, `.xlsx` rejected client-side, 422 message rendered
   - **Verify:** `cd web && npx vitest run` passes; drag a `.docx` into the running UI and reach the pre-run panel.
 
 - [ ] 🟥 **Step 6: End-to-end validation run (Mac)** — The Phase 1 payoff, measured.
@@ -110,19 +111,19 @@ than reconstructed from guesswork.
 ### Phase 2: Notes Source-Formatting Side-Channel (the formatting prize)
 
 - [x] 🟩 **Step 7: HTML extraction sidecar** — Capture the Word file's real formatting once, at upload.
-  - [ ] 🟥 New `ingest/docx_html.py`: `extract_docx_html(src) -> str` using `mammoth` (add to `requirements.txt`); write `session_dir/source.html` at upload/CLI time, **best-effort** — an extraction failure logs a warning and never blocks the upload (formatting is a bonus, not a dependency)
-  - [ ] 🟥 Unit tests: tables/headings survive extraction on the fixture docx; corrupt file → no sidecar, no exception escaping
+  - [x] 🟩 New `ingest/docx_html.py`: `extract_docx_html(src) -> str` using `mammoth` (add to `requirements.txt`); write `session_dir/source.html` at upload/CLI time, **best-effort** — an extraction failure logs a warning and never blocks the upload (formatting is a bonus, not a dependency)
+  - [x] 🟩 Unit tests: tables/headings survive extraction on the fixture docx; corrupt file → no sidecar, no exception escaping
   - **Verify:** pytest passes; after uploading the sample docx, `source.html` exists and opening it in a browser shows recognisable notes tables.
 
 - [x] 🟩 **Step 8: `read_source_note` agent tool** — Let a notes agent fetch the source HTML for its note.
-  - [ ] 🟥 New `notes/source_snippets.py`: locate "Note N" heading boundaries in `source.html` and return the chunk for a note number (navigation only — mirrors the existing `discover_note_pages` regex approach; size-capped, e.g. 60 KB, with a "truncated" marker)
-  - [ ] 🟥 Register `read_source_note(note_num)` on notes agents + Sheet-12 sub-agents **only when `source.html` exists**; PDF-only runs see no new tool (graceful degradation, like empty scout hints)
-  - [ ] 🟥 Tests: chunk boundaries on fixture HTML; tool absent without sidecar; cap enforced
+  - [x] 🟩 New `notes/source_snippets.py`: locate "Note N" heading boundaries in `source.html` and return the chunk for a note number (navigation only — mirrors the existing `discover_note_pages` regex approach; size-capped, e.g. 60 KB, with a "truncated" marker)
+  - [x] 🟩 Register `read_source_note(note_num)` on notes agents + Sheet-12 sub-agents **only when `source.html` exists**; PDF-only runs see no new tool (graceful degradation, like empty scout hints)
+  - [x] 🟩 Tests: chunk boundaries on fixture HTML; tool absent without sidecar; cap enforced
   - **Verify:** `./venv/bin/python -m pytest tests/test_notes_source_snippets.py -v` passes; a mocked notes agent run shows the tool listed only on the docx-sourced run.
 
 - [x] 🟩 **Step 9: Prompt overlay** — Tell agents to mirror, not invent.
-  - [ ] 🟥 Conditional block in `prompts/_notes_base.md` (rendered only when the tool is available, same pattern as scout-context blocks): call `read_source_note` before writing a note; copy table structure/column layout verbatim into `content`; mirror the source's styling (alignment, bold totals, underlines) via `format_ops` — and keep emitting **style-free content HTML** (the agent-emittable ⊆ sanitiser-permitted rule is untouched)
-  - [ ] 🟥 Pinning test: block renders on docx runs, absent on PDF runs (`tests/test_notes_prompt_source_block.py`)
+  - [x] 🟩 Conditional block in `prompts/_notes_base.md` (rendered only when the tool is available, same pattern as scout-context blocks): call `read_source_note` before writing a note; copy table structure/column layout verbatim into `content`; mirror the source's styling (alignment, bold totals, underlines) via `format_ops` — and keep emitting **style-free content HTML** (the agent-emittable ⊆ sanitiser-permitted rule is untouched)
+  - [x] 🟩 Pinning test: block renders on docx runs, absent on PDF runs (`tests/test_notes_prompt_source_block.py`)
   - **Verify:** pytest passes; rendered prompt inspected by eye for a docx run vs a PDF run.
 
 - [ ] 🟥 **Step 10: Validation run + formatting metric** — Prove the prize, with numbers.

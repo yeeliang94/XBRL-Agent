@@ -39,8 +39,15 @@ logger = logging.getLogger("server")
 # Wall-clock ceiling for a single conversion. A ~100-page statement converts in
 # a few seconds with either backend; anything past this is a hung Word COM /
 # LibreOffice process, and we'd rather fail with a clear message than block the
-# upload request indefinitely.
+# upload request indefinitely. BOTH backends honour this: LibreOffice via
+# subprocess.run(timeout=), Word COM by running docx2pdf in a child process we
+# can kill (an in-process COM call can't be interrupted — a modal dialog /
+# protected-view prompt would otherwise hang the request forever).
 _CONVERT_TIMEOUT_S = 180
+
+# Run inside a fresh child interpreter so a hung Word COM call can be killed on
+# timeout. argv: [-c, snippet, src, dest] → sys.argv[1]=src, [2]=dest.
+_WORD_COM_SNIPPET = "import sys; from docx2pdf import convert; convert(sys.argv[1], sys.argv[2])"
 
 _SOFFICE_CANDIDATES = (
     "soffice",
@@ -147,24 +154,43 @@ def _convert_with_soffice(src: Path, dest: Path, soffice: str) -> None:
 def _convert_with_word_com(src: Path, dest: Path) -> None:
     """Convert via the installed Microsoft Word (Windows) using ``docx2pdf``.
 
-    Imported lazily so the module loads on machines without ``docx2pdf`` (Mac
-    dev, CI). A missing module or a Word automation error both surface as a
+    Runs in a CHILD interpreter so the conversion honours ``_CONVERT_TIMEOUT_S``
+    — an in-process ``docx2pdf.convert`` (a COM call) can't be interrupted, so a
+    Word modal / protected-view prompt / corrupt file would hang the request
+    indefinitely. ``subprocess.run(timeout=)`` kills the child on timeout. A
+    missing module or a Word automation error both surface as a
     :class:`WordConversionError`.
     """
+    cmd = [sys.executable, "-c", _WORD_COM_SNIPPET, str(src), str(dest)]
     try:
-        from docx2pdf import convert  # type: ignore
-    except Exception as exc:  # noqa: BLE001 — ImportError or COM-init error
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_CONVERT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run has already killed the child by this point.
         raise WordConversionError(
-            f"docx2pdf/Word unavailable: {exc}",
-            user_message=(
-                "Microsoft Word isn't available to convert this file on the "
-                "server. " + _FALLBACK_HINT
-            ),
+            f"Word conversion timed out after {_CONVERT_TIMEOUT_S}s — Word may be "
+            f"blocked on a dialog, protected view, or a corrupt file: {exc}"
         ) from exc
-    try:
-        convert(str(src), str(dest))
-    except Exception as exc:  # noqa: BLE001 — COM automation raises broadly
-        raise WordConversionError(f"Word conversion failed: {exc}") from exc
+    except OSError as exc:
+        raise WordConversionError(f"Could not launch the Word conversion helper: {exc}") from exc
+
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        # Distinguish "Word/docx2pdf isn't installed" (clean operator message)
+        # from an actual conversion failure.
+        if "docx2pdf" in err and ("No module named" in err or "ImportError" in err):
+            raise WordConversionError(
+                f"docx2pdf/Word unavailable: {err[:300]}",
+                user_message=(
+                    "Microsoft Word isn't available to convert this file on the "
+                    "server. " + _FALLBACK_HINT
+                ),
+            )
+        raise WordConversionError(f"Word conversion failed: {err[:500]}")
 
 
 def _run_conversion(src: Path, dest: Path) -> None:

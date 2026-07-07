@@ -25,14 +25,27 @@ from ingest.docx_html import SOURCE_HTML_NAME
 _SNIPPET_CHAR_CAP = 60_000
 _TRUNCATION_MARKER = "\n<!-- [truncated — read the remaining pages in the PDF] -->"
 
-# A block whose text begins a note: optional "NOTE", then the number, then a
-# separator (dot, paren, dash, colon, or whitespace). Anchored to the block
-# start so "at 4.5% interest" mid-paragraph doesn't false-trigger. Mirrors
-# scout.notes_discoverer._NOTE_REF_RE in spirit (loose, LLM verifies).
-_NOTE_HEADING_RE = re.compile(
+# A block whose text begins a note. Two forms, gated on whether the block is a
+# heading element:
+#   - STRICT (prose blocks): optional "NOTE", the number, then PUNCTUATION
+#     (. ) - :) then text. Requiring punctuation stops a prose paragraph that
+#     opens with a bare number ("12 months ended 31 December 2024") from being
+#     mistaken for a note boundary.
+#   - LOOSE (heading tags <h1>-<h6>): the same, but a whitespace separator is
+#     also allowed, so a Word-styled heading like "4 Property, plant and
+#     equipment" (number, space, text — no punctuation) is found. Headings are
+#     trustworthy, so the looser rule is safe there.
+# Both anchored to the block start so "at 4.5% interest" mid-paragraph never
+# triggers. Loose (LLM verifies) — mirrors scout.notes_discoverer._NOTE_REF_RE.
+_NOTE_HEADING_STRICT_RE = re.compile(
     r"^\s*(?:note\s+)?(\d{1,3})\s*[\.\)\-:]\s*\S",
     re.IGNORECASE,
 )
+_NOTE_HEADING_LOOSE_RE = re.compile(
+    r"^\s*(?:note\s+)?(\d{1,3})[\.\)\-:\s]+\S",
+    re.IGNORECASE,
+)
+_HEADING_TAG_RE = re.compile(r"^\s*<h[1-6]\b", re.IGNORECASE)
 
 # Top-level block tags mammoth emits. We split on these to find note
 # boundaries; anything else rides inside its block. A regex can't balance
@@ -92,8 +105,18 @@ def _block_text(block_html: str) -> str:
 
 
 def _heading_note_num(block_html: str) -> Optional[int]:
-    """The note number a block starts, or None if it isn't a note heading."""
-    m = _NOTE_HEADING_RE.match(_block_text(block_html))
+    """The note number a block starts, or None if it isn't a note heading.
+
+    Heading tags (<h1>-<h6>) use the looser rule (a bare-whitespace separator
+    after the number is allowed); other blocks require punctuation so prose that
+    opens with a number isn't read as a boundary.
+    """
+    pat = (
+        _NOTE_HEADING_LOOSE_RE
+        if _HEADING_TAG_RE.match(block_html)
+        else _NOTE_HEADING_STRICT_RE
+    )
+    m = pat.match(_block_text(block_html))
     return int(m.group(1)) if m else None
 
 

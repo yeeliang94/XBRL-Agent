@@ -72,6 +72,39 @@ def test_note_heading_word_form():
     assert "Other" not in snip
 
 
+def test_whitespace_only_heading_in_heading_tag():
+    # Word-styled headings often have no punctuation: "4 Property, plant...".
+    # mammoth renders them as <h1>, where the looser rule applies.
+    html = (
+        "<h1>4 PROPERTY, PLANT AND EQUIPMENT</h1><p>PPE detail.</p>"
+        "<h1>5 REVENUE</h1><p>Revenue detail.</p>"
+    )
+    snip = ss.extract_note_snippet(html, 4)
+    assert "PROPERTY" in snip and "PPE detail." in snip
+    assert "REVENUE" not in snip  # bounded by the note-5 heading
+
+
+def test_prose_paragraph_starting_with_number_is_not_a_boundary():
+    # A <p> (not a heading) that opens with a bare number must NOT be read as a
+    # note heading — otherwise "12 months ended..." inside note 4 would split it.
+    assert ss._heading_note_num("<p>12 months ended 31 December 2024.</p>") is None
+    # But the same number as a styled heading IS a boundary.
+    assert ss._heading_note_num("<h2>12 Income tax</h2>") == 12
+    # Punctuated prose headings still work (e.g. bolded "4. Revenue" as <p>).
+    assert ss._heading_note_num("<p>4. Revenue</p>") == 4
+
+
+def test_prose_number_start_does_not_split_a_note():
+    html = (
+        "<h1>4 LEASES</h1>"
+        "<p>12 months of lease payments were made during the year.</p>"
+        "<h1>5 REVENUE</h1><p>x</p>"
+    )
+    snip = ss.extract_note_snippet(html, 4)
+    assert "12 months of lease payments" in snip  # prose stayed inside note 4
+    assert "REVENUE" not in snip
+
+
 def test_mid_paragraph_number_does_not_false_trigger():
     # "4.5%" inside prose must not be read as the start of note 4.
     html = "<p>Interest accrues at 4.5% per annum on the facility.</p>"
