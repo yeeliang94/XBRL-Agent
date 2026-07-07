@@ -92,6 +92,8 @@ Style keys:
 - italic: true
 - underline: true
 - indent: "1em"
+- padding: "4px 8px" (a table cell's inner spacing)
+- space_before / space_after: "6px" (a paragraph's spacing above / below)
 - table_width: "100%" (only with target {"table": 0, "range": "table"})
 
 Examples:

@@ -46,6 +46,10 @@ const STYLE_PROPS: ReadonlyArray<{ attr: string; css: string; fallback?: string 
   // last in the canonical order; the backend sanitiser allows `text-align` on
   // table cells (notes/html_sanitize.py `_STYLE_PROPS_BY_TAG`).
   { attr: "textAlign", css: "text-align" },
+  // Cell padding mirrored from a Word source (Phase 4). Parsed + preserved on
+  // edit so a source-styled cell keeps its inner spacing across a re-save; the
+  // backend sanitiser allows `padding` on table cells in lock-step.
+  { attr: "padding", css: "padding" },
 ];
 
 export type BorderSide = "Top" | "Right" | "Bottom" | "Left";

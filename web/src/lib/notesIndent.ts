@@ -14,6 +14,36 @@ export const INDENT_STEP_EM = 2;
 export const MAX_INDENT_LEVEL = 8;
 const INDENT_TYPES = ["paragraph", "heading", "listItem"];
 
+// Phase 4 (Word-formatting fidelity): preserve a paragraph's before/after
+// spacing (margin-top/margin-bottom) mirrored from a Word source. Unlike indent
+// (a quantised level), these are raw lengths, so we parse + re-render the value
+// verbatim. Bounded to a sane px/em so a junk value can't render off-screen; a
+// non-matching value renders nothing (keeps the no-churn contract).
+const MAX_SPACING_PX = 200;
+function parseSpacing(raw: string): string | null {
+  const v = (raw || "").trim().toLowerCase();
+  const m = /^(\d+(?:\.\d+)?)(px|em)$/.exec(v);
+  if (!m) return null;
+  const num = parseFloat(m[1]);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  const px = m[2] === "em" ? num * 16 : num;
+  if (px > MAX_SPACING_PX) return null;
+  return `${num}${m[2]}`;
+}
+function spacingAttribute(cssProp: "margin-top" | "margin-bottom") {
+  const domProp = cssProp === "margin-top" ? "marginTop" : "marginBottom";
+  return {
+    default: null as string | null,
+    parseHTML: (el: HTMLElement) =>
+      parseSpacing((el.style as CSSStyleDeclaration)[domProp] || ""),
+    renderHTML: (attrs: Record<string, unknown>) => {
+      const key = cssProp === "margin-top" ? "spaceBefore" : "spaceAfter";
+      const v = attrs[key];
+      return typeof v === "string" && v ? { style: `${cssProp}: ${v}` } : {};
+    },
+  };
+}
+
 export const Indent = Extension.create({
   name: "notesIndent",
   addGlobalAttributes() {
@@ -49,6 +79,11 @@ export const Indent = Extension.create({
                 : {};
             },
           },
+          // margin-top / margin-bottom preserved verbatim (Phase 4). TipTap's
+          // mergeAttributes concatenates the `style` these contribute with the
+          // indent's margin-left, so all three round-trip together.
+          spaceBefore: spacingAttribute("margin-top"),
+          spaceAfter: spacingAttribute("margin-bottom"),
         },
       },
     ];

@@ -388,7 +388,10 @@ Style keys: `border_top` / `border_right` / `border_bottom` /
 `border_left` (`{"width": "1px", "style": "solid", "color": "#000000"}`;
 `"style": "double"` with `"width": "3px"` for a double rule),
 `clear_border` (list of sides), `fill` (`"#f2f2f2"` or `"transparent"`),
-`text_align` (`"left"|"center"|"right"`), `bold`, `italic`, `underline`.
+`text_align` (`"left"|"center"|"right"`), `indent` (`"1em"`),
+`padding` (a cell's inner spacing, e.g. `"4px 8px"`),
+`space_before` / `space_after` (a paragraph's spacing above/below, e.g.
+`"6px"`), `bold`, `italic`, `underline`.
 
 Example — a borderless source table whose total row has a single rule
 above and double rule below the amount columns (columns 2-3):

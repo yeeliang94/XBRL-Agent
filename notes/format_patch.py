@@ -40,6 +40,11 @@ THEME_COLOURS = {
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 WIDTH_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:px|%)|auto)$")
 INDENT_RE = re.compile(r"^\d+(?:\.\d+)?(?:em|px)$")
+# Phase 4 (Word-formatting fidelity): cell padding (1-4 px tokens) + block
+# before/after spacing (single px/em). Same bounded shapes the sanitiser gates.
+PADDING_RE = re.compile(
+    r"^(?:0|\d+(?:\.\d+)?px)(?:\s+(?:0|\d+(?:\.\d+)?px)){0,3}$")
+SPACING_RE = re.compile(r"^(?:0|\d+(?:\.\d+)?(?:em|px))$")
 
 
 class FormatPatchError(ValueError):
@@ -515,6 +520,21 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
             if not isinstance(value, str) or not INDENT_RE.match(value):
                 raise FormatPatchError("invalid indent")
             current["margin-left"] = value
+        elif key == "padding":
+            # Cell padding mirrored from the Word source (w:tcMar). Applies to a
+            # table cell; the sanitiser's tag-aware gate keeps it off non-table
+            # tags (Phase 4).
+            if not isinstance(value, str) or not PADDING_RE.match(value):
+                raise FormatPatchError("invalid padding")
+            current["padding"] = value
+        elif key == "space_before":
+            if not isinstance(value, str) or not SPACING_RE.match(value):
+                raise FormatPatchError("invalid space_before")
+            current["margin-top"] = value
+        elif key == "space_after":
+            if not isinstance(value, str) or not SPACING_RE.match(value):
+                raise FormatPatchError("invalid space_after")
+            current["margin-bottom"] = value
         elif key == "table_width":
             if el.name != "table":
                 raise FormatPatchError("table_width can target only table")

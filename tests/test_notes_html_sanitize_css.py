@@ -49,7 +49,49 @@ def test_allowed_css_properties_is_exactly_the_editor_set() -> None:
         "width",        # column width on <table>/<col> (resizable table)
         "min-width",    # TipTap's always-emitted layout width on <table>/<col>
         "margin-left",  # paragraph indent
+        # Phase 4 (Word-formatting fidelity): cell padding + paragraph before/
+        # after spacing mirrored from a Word source.
+        "padding",
+        "margin-top",
+        "margin-bottom",
     })
+
+
+# --- Phase 4: padding + block spacing --------------------------------------
+
+def test_cell_padding_survives_on_td() -> None:
+    out = _clean('<table><tr><td style="padding: 4px 8px">x</td></tr></table>')
+    assert "padding: 4px 8px" in out.lower()
+
+
+def test_block_spacing_survives_on_paragraph() -> None:
+    out = _clean('<p style="margin-top: 6px; margin-bottom: 13px">x</p>')
+    assert "margin-top: 6px" in out.lower()
+    assert "margin-bottom: 13px" in out.lower()
+
+
+def test_padding_rejected_on_block_and_spacing_rejected_on_cell() -> None:
+    # Tag-aware gate: padding is a table-tag prop, block spacing is a block-tag
+    # prop — each is stripped off the wrong tag family.
+    p = _clean('<p style="padding: 4px 8px">x</p>')
+    assert "padding" not in p.lower()
+    td = _clean('<table><tr><td style="margin-top: 6px">x</td></tr></table>')
+    assert "margin-top" not in td.lower()
+
+
+def test_malformed_padding_and_spacing_rejected() -> None:
+    for bad in (
+        '<table><tr><td style="padding: 4px 8px 2px 1px 9px">x</td></tr></table>',
+        '<table><tr><td style="padding: -4px">x</td></tr></table>',
+        '<table><tr><td style="padding: 4%">x</td></tr></table>',
+        '<table><tr><td style="padding: calc(1px + 2px)">x</td></tr></table>',
+        '<p style="margin-top: -6px">x</p>',
+        '<p style="margin-bottom: 6vh">x</p>',
+    ):
+        cleaned, warnings = sanitize_notes_html(bad)
+        assert "padding" not in cleaned.lower()
+        assert "margin-top" not in cleaned.lower()
+        assert "margin-bottom" not in cleaned.lower()
 
 
 # --- whitelisted styles survive on table cells -----------------------------

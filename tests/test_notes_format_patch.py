@@ -387,6 +387,37 @@ def test_blocks_all_excludes_paragraphs_inside_tables():
     assert '<td><p>In cell</p></td>' in out.rows[1]
 
 
+# --- Phase 4: padding + paragraph spacing ops -------------------------------
+
+def test_cell_padding_op_applies():
+    html = "<table><tr><td>x</td><td>1</td></tr></table>"
+    patch = {"cells": [{"row": 1, "operations": [
+        {"target": {"table": 0, "cell": {"r": 1, "c": 1}},
+         "style": {"padding": "4px 8px"}}]}]}
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    assert "padding: 4px 8px" in out
+
+
+def test_paragraph_spacing_ops_apply():
+    html = "<p>Intro</p>"
+    patch = {"cells": [{"row": 1, "operations": [
+        {"target": {"blocks": "all"},
+         "style": {"space_before": "6px", "space_after": "13px"}}]}]}
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    assert "margin-top: 6px" in out
+    assert "margin-bottom: 13px" in out
+
+
+def test_malformed_padding_and_spacing_are_rejected():
+    html = "<table><tr><td>x</td></tr></table>"
+    for style in ({"padding": "4vh"}, {"padding": "1px 2px 3px 4px 5px"},
+                  {"space_before": "-6px"}, {"space_after": "6%"}):
+        patch = {"cells": [{"row": 1, "operations": [
+            {"target": {"table": 0, "cell": {"r": 1, "c": 1}}, "style": style}]}]}
+        with pytest.raises(FormatPatchError):
+            apply_sheet_patch({1: html}, patch)
+
+
 # ---------------------------------------------------------------------------
 # Write-time compare-and-swap: run_notes_formatter must never clobber a row
 # edited during the pass, and must never resurrect a row a regenerate deleted.

@@ -241,6 +241,20 @@ describe("styled cell extension round-trip (real editor)", () => {
     editor.destroy();
   });
 
+  it("parses + re-emits cell padding (Phase 4 Word-source fidelity)", () => {
+    const editor = makeEditor(
+      '<table><tbody><tr>' +
+        '<td style="padding: 4px 8px; text-align: right">1,595</td>' +
+        "</tr></tbody></table>",
+    );
+    const attrs = firstCellAttrs(editor);
+    expect(attrs.padding).toBe("4px 8px");
+    expect(attrs.textAlign).toBe("right");
+    // buildCellStyle re-emits it (canonical order: align then padding).
+    expect(buildCellStyle(attrs)).toBe("text-align: right; padding: 4px 8px");
+    editor.destroy();
+  });
+
   it("expands a browser-collapsed `border` shorthand to all four sides", () => {
     // Real Chrome serialises four uniform per-side borders (a "Border all")
     // as the `border:` shorthand on getHTML(). The sanitiser stores that, so
