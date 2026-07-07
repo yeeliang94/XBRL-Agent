@@ -127,6 +127,22 @@ async def upload_pdf(file: UploadFile = File(...)):
             logger.warning("docx conversion failed for %s: %s", file.filename, exc)
             shutil.rmtree(session_dir, ignore_errors=True)
             raise HTTPException(status_code=422, detail=exc.user_message)
+        except Exception:
+            # Invariant (gotcha #29): a conversion failure is a 422, never a
+            # crash. convert_docx_to_pdf wraps its own failures in
+            # WordConversionError, but an unexpected error (a converter bug, an
+            # OS-level fault) must not escape as a 500 that orphans the session
+            # dir. Tear down and return the same operator-actionable 422.
+            logger.exception("Unexpected docx conversion error for %s", file.filename)
+            shutil.rmtree(session_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "We couldn't convert this Word file to PDF. Open the file "
+                    "in Microsoft Word, choose File → Save As → PDF, and upload "
+                    "that PDF instead."
+                ),
+            )
         # Best-effort: extract the Word body as source.html for the notes
         # source-formatting channel (Phase 2). Never blocks the upload.
         await asyncio.to_thread(write_source_html, target, session_dir)

@@ -212,9 +212,8 @@ def _list_marker_css(o: NotesTableStyle) -> str:
     return ""
 
 
-# The classic totals double rule — matches the sidecar floor's convention
-# (notes/format_defaults.py) and the editor toolbar's saved "totals double
-# underline" (3px double black).
+# The classic totals double rule — matches the editor toolbar's saved
+# "totals double underline" (3px double black).
 _TOTALS_RULE = " border-bottom: 3px double #000000;"
 
 

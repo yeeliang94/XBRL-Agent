@@ -70,6 +70,28 @@ def test_upload_docx_conversion_failure_returns_422(tmp_path, monkeypatch):
     assert not any(output_dir.iterdir())
 
 
+def test_upload_docx_unexpected_error_also_422_and_torn_down(tmp_path, monkeypatch):
+    # Gotcha #29: a conversion failure is a 422, NEVER a crash. An UNEXPECTED
+    # exception (not WordConversionError) must still become a 422 and tear down
+    # the session dir — not escape as a 500 that orphans uploaded.docx.
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    monkeypatch.setattr(server, "OUTPUT_DIR", output_dir)
+
+    def _kaboom(src, dest):
+        raise RuntimeError("converter bug, not a WordConversionError")
+
+    monkeypatch.setattr(word_convert, "_run_conversion", _kaboom)
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("x.docx", io.BytesIO(_docx_bytes(tmp_path)), _DOCX_MIME)},
+    )
+    assert resp.status_code == 422
+    assert "PDF" in resp.json()["detail"]
+    assert not any(output_dir.iterdir())  # no orphaned session dir
+
+
 def test_upload_still_rejects_non_pdf_non_docx(tmp_path, monkeypatch):
     output_dir = tmp_path / "output"
     output_dir.mkdir()

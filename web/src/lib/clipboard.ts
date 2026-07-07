@@ -166,8 +166,8 @@ function _listMarkerCss(opts: ClipboardFormatOptions): string {
   }
   return "";
 }
-// The classic totals double rule — matches the sidecar floor
-// (notes/format_defaults.py) and the saved editor "totals double underline".
+// The classic totals double rule — matches the saved editor
+// "totals double underline" (3px double black).
 const _TOTALS_RULE = " border-bottom: 3px double #000000;";
 function _isTotalsRow(row: Element): boolean {
   return (row.textContent ?? "").toLowerCase().includes("total");

@@ -29,7 +29,6 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
 
-from notes.format_defaults import house_style_enabled, house_style_ops
 from notes.format_patch import FormatPatchError, apply_cell_operations
 from notes.labels import normalize_label
 from notes.html_to_text import (
@@ -191,8 +190,8 @@ def write_notes_workbook(
     numeric_cells: list[dict] = []
     # Styling-source tally for the per-sheet observability line (Step 8 of
     # the sidecar plan): how many prose cells were styled from the agent's
-    # observation, the deterministic floor, or left unstyled.
-    style_counts: dict[str, int] = {"ops": 0, "floor": 0, "unstyled": 0}
+    # observation vs left unstyled.
+    style_counts: dict[str, int] = {"ops": 0, "unstyled": 0}
     # Reverse map row→template label so cells_written can carry the
     # template's verbatim col-A text (what the editor shows as the row
     # header) rather than the agent's possibly-fuzzy request.
@@ -219,7 +218,7 @@ def write_notes_workbook(
                 )
                 # Formatting sidecar (docs/PLAN-notes-format-sidecar.md):
                 # style the DB html AFTER truncation, so ops targeting a
-                # truncated-away table fail cleanly into the floor. The
+                # truncated-away table fail cleanly to plain. The
                 # xlsx write above stays unstyled — Excel cells hold
                 # flattened text; styling is a panel/paste concern.
                 row_label = row_to_label.get(row, combined.chosen_row_label)
@@ -235,8 +234,8 @@ def write_notes_workbook(
                     "html": html_for_db,
                     "evidence": combined.evidence or None,
                     "source_pages": aggregated_pages,
-                    # How this cell got its styling: "ops" (agent observation),
-                    # "floor" (deterministic house style), or "unstyled" (plain).
+                    # How this cell got its styling: "ops" (agent observation)
+                    # or "unstyled" (plain; legacy rows may also say "floor").
                     # Persisted to notes_cells.style_source so the operator can
                     # see which cells need a manual formatter pass (schema v29).
                     "style_source": style_source,
@@ -292,12 +291,11 @@ def write_notes_workbook(
 
     if cells_written:
         # One line per sheet, not per cell — enough for an operator to see
-        # sidecar coverage (how often agents observe formatting vs falling
-        # to the floor) without drowning the log.
+        # sidecar coverage (how often agents observe formatting vs leaving
+        # cells plain) without drowning the log.
         logger.info(
-            "Notes styling on %s: %d ops-styled, %d floor-styled, %d unstyled",
-            sheet_name, style_counts["ops"], style_counts["floor"],
-            style_counts["unstyled"],
+            "Notes styling on %s: %d ops-styled, %d unstyled",
+            sheet_name, style_counts["ops"], style_counts["unstyled"],
         )
 
     try:
@@ -344,14 +342,22 @@ def _style_cell_html(
     row_label: str,
     warnings: list[str],
 ) -> tuple[str, str]:
-    """Style one prose cell's HTML: agent ops → house-style floor → unstyled.
+    """Style one prose cell's HTML: agent ops → unstyled.
 
-    Returns ``(styled_html, source)`` where source is ``"ops"`` / ``"floor"``
-    / ``"unstyled"``. NEVER raises — formatting must not block a content
+    Returns ``(styled_html, source)`` where source is ``"ops"`` /
+    ``"unstyled"``. NEVER raises — formatting must not block a content
     write (docs/PLAN-notes-format-sidecar.md). A dropped agent observation
     is surfaced through the existing sanitiser-warnings channel (same
     species of event: "the writer adjusted your styling"), so it reaches
     NotesAgentResult.warnings and history like other write-time drops.
+
+    The deterministic house-style floor that used to sit between "ops" and
+    "unstyled" was removed (2026-07-07): it *imposed* an accountant
+    convention (notably a double-underline on any "total"-text row) rather
+    than mirroring the source PDF. A cell with no usable agent observation
+    now always renders plain (``"unstyled"``) and the operator restyles on
+    demand via the notes formatter agent. Legacy DB rows may still carry
+    ``style_source = "floor"`` from runs before the removal.
     """
     if format_ops:
         try:
@@ -359,20 +365,8 @@ def _style_cell_html(
         except FormatPatchError as exc:
             warnings.append(
                 f"{row_label}: format_ops dropped ({exc}) — "
-                f"house style applied instead where enabled"
+                f"cell renders plain"
             )
-    if house_style_enabled():
-        floor_ops = house_style_ops(html)
-        if floor_ops:
-            try:
-                return apply_cell_operations(html, floor_ops), "floor"
-            except FormatPatchError as exc:
-                # The floor is synthesized from the same HTML it styles, so
-                # a failure here is a bug worth logging — but still never a
-                # blocked write.
-                logger.warning(
-                    "house-style floor failed for %r: %s", row_label, exc,
-                )
     return html, "unstyled"
 
 
@@ -777,8 +771,8 @@ def _combine_format_ops(
     Any op WITHOUT an integer ``target.table`` (e.g. a ``blocks: all``
     prose target) is ambiguous once chunks are concatenated — it would
     style every chunk's blocks, not just its author's. In that case ALL
-    ops for the cell are dropped (return ``None``) so the house-style
-    floor applies uniformly instead of a half-observed mix.
+    ops for the cell are dropped (return ``None``) so the cell renders
+    plain instead of a half-observed mix.
     """
     ops_out: list = []
     table_offset = 0
@@ -791,7 +785,7 @@ def _combine_format_ops(
                 target = op.get("target") if isinstance(op, dict) else None
                 tbl = target.get("table") if isinstance(target, dict) else None
                 if not isinstance(tbl, int) or isinstance(tbl, bool):
-                    return None  # ambiguous in a combined cell — floor wins
+                    return None  # ambiguous in a combined cell — render plain
                 shifted = copy.deepcopy(op)
                 shifted["target"]["table"] = tbl + table_offset
                 ops_out.append(shifted)

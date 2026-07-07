@@ -1,10 +1,16 @@
-"""Formatting sidecar + house-style floor (docs/PLAN-notes-format-sidecar.md).
+"""Formatting sidecar (docs/PLAN-notes-format-sidecar.md).
 
 Phase 1: the deterministic foundation — `apply_cell_operations` (the single
-per-cell styling gate) and `house_style_ops` (the zero-LLM accountant-
-convention floor).
+per-cell styling gate).
 Phase 2/3: `format_ops` on NotesPayload, the write_notes parse, and the
-writer's ops → floor → unstyled fallback chain.
+writer's ops → unstyled fallback chain.
+
+The deterministic house-style floor that used to sit between "ops" and
+"unstyled" was REMOVED (2026-07-07) — it imposed an accountant convention
+(inventing total-row double-underlines) instead of mirroring the source
+PDF. A cell with no usable agent observation now always renders plain;
+the notes formatter agent is the on-demand restyle path. Legacy DB rows
+may still carry ``style_source = "floor"``.
 """
 from __future__ import annotations
 
@@ -13,10 +19,6 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-from notes.format_defaults import (
-    house_style_enabled,
-    house_style_ops,
-)
 from notes.format_patch import FormatPatchError, apply_cell_operations
 from notes.payload import NotesPayload
 
@@ -99,92 +101,16 @@ class TestApplyCellOperations:
 
 
 # ---------------------------------------------------------------------------
-# house_style_ops — the deterministic floor
+# Floor removal — the module must stay gone
 # ---------------------------------------------------------------------------
 
 
-class TestHouseStyleOps:
-    def test_prose_only_returns_no_ops(self):
-        assert house_style_ops(PROSE_HTML) == []
-        assert house_style_ops("") == []
-
-    def test_disclosure_table_gets_accountant_convention(self):
-        ops = house_style_ops(TABLE_HTML)
-        # 1. borderless + no fills across the table
-        assert ops[0]["target"] == {"table": 0, "range": "all"}
-        assert ops[0]["style"]["clear_border"] == [
-            "top", "right", "bottom", "left",
-        ]
-        assert ops[0]["style"]["fill"] == "transparent"
-        # 2. amount columns (2, 3) right-aligned — label column exempt
-        align = ops[1]
-        assert align["target"]["cols"] == [2, 3]
-        assert align["target"]["rows"] == [1, 2, 3, 4, 5]
-        assert align["style"] == {"text_align": "right"}
-        # 3. summation rules under the amount columns of the total row only
-        total = ops[2]
-        assert total["target"]["range"] == "total_rows"
-        assert total["target"]["cols"] == [2, 3]
-        assert total["style"]["border_top"]["style"] == "solid"
-        assert total["style"]["border_bottom"]["style"] == "double"
-
-    def test_no_total_row_emits_no_summation_op(self):
-        html = (
-            "<table>"
-            "<tr><td>Revenue</td><td>10,000</td></tr>"
-            "<tr><td>Cost</td><td>(4,000)</td></tr>"
-            "</table>"
-        )
-        ops = house_style_ops(html)
-        assert len(ops) == 2  # clear + align, no total_rows op
-        assert all(op["target"].get("range") != "total_rows" for op in ops)
-
-    def test_text_only_table_gets_borderless_but_no_alignment(self):
-        html = (
-            "<table>"
-            "<tr><td>Director</td><td>Alice Tan</td></tr>"
-            "<tr><td>Secretary</td><td>Bob Lim</td></tr>"
-            "</table>"
-        )
-        ops = house_style_ops(html)
-        assert len(ops) == 1
-        assert ops[0]["style"]["clear_border"]
-
-    def test_floor_ops_pass_the_apply_gate(self):
-        # The floor must never synthesize something apply_cell_operations
-        # rejects — that would silently strand cells unstyled.
-        styled = apply_cell_operations(
-            PROSE_HTML + TABLE_HTML, house_style_ops(PROSE_HTML + TABLE_HTML)
-        )
-        assert "text-align: right" in styled
-        assert "double" in styled
-        assert "Revenue is recognised" in styled
-
-    def test_label_column_exempt_even_when_numeric_looking(self):
-        # A year label in column 1 must not drag the label column into the
-        # amount set (mirrors shouldRightAlignCell's index-0 exemption).
-        html = (
-            "<table>"
-            "<tr><td>2024</td><td>10,000</td></tr>"
-            "<tr><td>2023</td><td>9,500</td></tr>"
-            "</table>"
-        )
-        ops = house_style_ops(html)
-        align = [op for op in ops if op["style"].get("text_align")]
-        assert align and align[0]["target"]["cols"] == [2]
-
-    def test_kill_switch_reads_env_at_call_time(self, monkeypatch):
-        # Default is OFF as of 2026-07-07 — the floor imposed accountant
-        # convention (e.g. inventing a "total" double-underline) rather than
-        # mirroring the source, so it's now opt-in.
-        monkeypatch.delenv("XBRL_NOTES_HOUSE_STYLE", raising=False)
-        assert house_style_enabled() is False
-        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "1")
-        assert house_style_enabled() is True
-        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "0")
-        assert house_style_enabled() is False
-        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "on")
-        assert house_style_enabled() is True
+def test_house_style_floor_module_removed():
+    """The floor was removed 2026-07-07 (it invented borders the source
+    didn't show). Reintroducing the module without revisiting that
+    decision should fail loudly here."""
+    with pytest.raises(ImportError):
+        import notes.format_defaults  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +158,7 @@ class TestPayloadFormatOps:
 
 
 # ---------------------------------------------------------------------------
-# Writer integration — Phase 3: ops → floor → unstyled at cell finalisation
+# Writer integration — Phase 3: ops → unstyled at cell finalisation
 # ---------------------------------------------------------------------------
 
 from notes.writer import _combine_format_ops, write_notes_workbook  # noqa: E402
@@ -264,55 +190,41 @@ class TestWriterStyling:
         result = _write(tmp_path, [_payload(format_ops=ops)])
         assert result.success, result.errors
         html = result.cells_written[0]["html"]
-        # The agent's observation won (centre) — the floor would have said
-        # right — proving ops take precedence over the house style.
+        # The agent's observation is applied verbatim — nothing rewrites it.
         assert "text-align: center" in html
         assert "text-align: right" not in html
         assert "10,000" in html  # content untouched
 
     def test_invalid_ops_surface_warning_and_dont_block(self, tmp_path: Path):
-        # Floor OFF (default): invalid ops are dropped, the cell renders
-        # UNSTYLED, and the drop surfaces through the warnings channel — a
-        # bad observation never rejects the content write.
+        # Invalid ops are dropped, the cell renders UNSTYLED, and the drop
+        # surfaces through the warnings channel — a bad observation never
+        # rejects the content write.
         bad_ops = [
             {"target": {"table": 7, "range": "all"}, "style": {"bold": True}},
         ]
         result = _write(tmp_path, [_payload(format_ops=bad_ops)])
         assert result.success, result.errors
         html = result.cells_written[0]["html"]
-        assert "style=" not in html  # no floor, so plain
+        assert "style=" not in html  # dropped → plain
         assert any("format_ops dropped" in w for w in result.sanitizer_warnings)
         assert result.cells_written[0]["style_source"] == "unstyled"
 
-    def test_invalid_ops_fall_to_floor_when_enabled(self, tmp_path: Path, monkeypatch):
-        # With the floor explicitly enabled it still catches invalid ops.
-        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "1")
-        bad_ops = [
-            {"target": {"table": 7, "range": "all"}, "style": {"bold": True}},
-        ]
-        result = _write(tmp_path, [_payload(format_ops=bad_ops)])
-        assert result.success, result.errors
-        html = result.cells_written[0]["html"]
-        assert "text-align: right" in html  # floor right-aligned amounts
-        assert any("format_ops dropped" in w for w in result.sanitizer_warnings)
-        assert result.cells_written[0]["style_source"] == "floor"
-
     def test_no_ops_default_unstyled(self, tmp_path: Path):
-        # New default: no ops + floor off → plain, tagged "unstyled".
+        # No ops → plain, tagged "unstyled". No floor exists to fall to.
         result = _write(tmp_path, [_payload()])
         assert result.success, result.errors
         cell = result.cells_written[0]
         assert "style=" not in cell["html"]
         assert cell["style_source"] == "unstyled"
 
-    def test_no_ops_gets_floor_styling_when_enabled(self, tmp_path: Path, monkeypatch):
+    def test_legacy_house_style_env_has_no_effect(self, tmp_path: Path, monkeypatch):
+        # The old XBRL_NOTES_HOUSE_STYLE kill switch is dead: setting it
+        # must NOT resurrect floor styling (the module is deleted).
         monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "1")
         result = _write(tmp_path, [_payload()])
         assert result.success, result.errors
-        html = result.cells_written[0]["html"]
-        assert "text-align: right" in html
-        assert "double" in html  # total-row summation rule
-        assert result.cells_written[0]["style_source"] == "floor"
+        assert "style=" not in result.cells_written[0]["html"]
+        assert result.cells_written[0]["style_source"] == "unstyled"
 
     def test_agent_ops_tagged_ops_style_source(self, tmp_path: Path):
         ops = [
@@ -322,12 +234,6 @@ class TestWriterStyling:
         result = _write(tmp_path, [_payload(format_ops=ops)])
         assert result.success, result.errors
         assert result.cells_written[0]["style_source"] == "ops"
-
-    def test_flag_off_leaves_html_unstyled(self, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("XBRL_NOTES_HOUSE_STYLE", "0")
-        result = _write(tmp_path, [_payload()])
-        assert result.success, result.errors
-        assert "style=" not in result.cells_written[0]["html"]
 
     def test_xlsx_cell_stays_flattened_text(self, tmp_path: Path):
         # Styling is a DB/panel concern — the workbook cell holds the
@@ -376,7 +282,7 @@ class TestCombineFormatOps:
         centre_pos = html.index("text-align: center")
         assert fill_pos < a_cell < centre_pos < b_cell
 
-    def test_ambiguous_ops_drop_to_floor_for_whole_cell(self):
+    def test_ambiguous_ops_drop_for_whole_cell(self):
         blocks_op = [{"target": {"blocks": "all"}, "style": {"bold": True}}]
         table_op = [
             {"target": {"table": 0, "range": "all"}, "style": {"bold": True}},
@@ -392,7 +298,7 @@ class TestCombineFormatOps:
             format_ops=table_op,
         )
         # A blocks target can't be attributed to one chunk once contents
-        # are concatenated — all ops drop, floor takes the whole cell.
+        # are concatenated — all ops drop, the cell renders plain.
         assert _combine_format_ops([a, b]) is None
 
     def test_single_payload_keeps_its_ops_verbatim(self):
@@ -424,6 +330,21 @@ class TestPromptContract:
         # The extent rule — the single most common formatting mistake —
         # must survive any base-prompt edit.
         assert "EXTENT" in prompt
+
+    def test_prompt_expects_observation_for_visible_tables(self):
+        # 2026-07-07 rebalance: with the floor removed, the prompt must
+        # carry the counterweight ("recording a visible table's formatting
+        # is EXPECTED") or cautious models omit format_ops on every payload
+        # and whole runs land 100% unstyled (the run-63 Windows incident).
+        base = (
+            Path(__file__).resolve().parents[1]
+            / "prompts" / "_notes_base.md"
+        ).read_text(encoding="utf-8")
+        flat = " ".join(base.split())  # collapse line-wraps before matching
+        assert "EXPECTED, not extra credit" in flat
+        # The old blanket escape hatch must stay narrowed to genuine
+        # unreadability, not free-floating "when unsure".
+        assert "cannot make out" in flat
 
     def test_style_free_content_rule_still_present(self):
         # Gotcha #16's invariant: content HTML stays style-free; the
@@ -473,11 +394,8 @@ def _get_tool_function(agent, name: str):
     raise AssertionError(f"tool {name!r} not found on agent")
 
 
-def test_write_notes_tool_threads_format_ops_into_payload(tmp_path: Path):
-    """The agent-tool boundary: a payloads_json carrying format_ops must
-    reach the constructed NotesPayload (sink mode captures the payload
-    object before any workbook write)."""
-    from notes.agent import _ensure_label_index, create_notes_agent
+def _make_sink_agent(tmp_path: Path):
+    from notes.agent import create_notes_agent
 
     pdf_path = tmp_path / "fake.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n")
@@ -491,6 +409,16 @@ def test_write_notes_tool_threads_format_ops_into_payload(tmp_path: Path):
         batch_note_nums=[1],
     )
     deps.payload_sink = []  # sub-agent mode: capture instead of writing
+    return agent, deps
+
+
+def test_write_notes_tool_threads_format_ops_into_payload(tmp_path: Path):
+    """The agent-tool boundary: a payloads_json carrying format_ops must
+    reach the constructed NotesPayload (sink mode captures the payload
+    object before any workbook write)."""
+    from notes.agent import _ensure_label_index
+
+    agent, deps = _make_sink_agent(tmp_path)
     # Pick a real, exactly-resolvable row label from the live template so
     # the sink's label pre-validation accepts the payload.
     label = _ensure_label_index(deps)[0].original
@@ -509,6 +437,72 @@ def test_write_notes_tool_threads_format_ops_into_payload(tmp_path: Path):
     msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), payloads_json))
     assert "Collected 1 payload" in msg, msg
     assert deps.payload_sink[0].format_ops == ops
+
+
+class TestUnstyledTableNudge:
+    """The write-time feedback loop (2026-07-07, run-63 fix): a write whose
+    table content arrives with no format_ops gets a gentle nudge appended
+    to the tool return, so the agent can rewrite the rows with its
+    observation while the pages are still in front of it. The nudge never
+    changes the message PREFIX ("Collected N payload(s)" / "Wrote N
+    row(s)") — the history processors' write-boundary regexes anchor on
+    it (test_history_processors)."""
+
+    def test_sink_write_nudges_on_unstyled_table(self, tmp_path: Path):
+        from notes.agent import _ensure_label_index
+
+        agent, deps = _make_sink_agent(tmp_path)
+        label = _ensure_label_index(deps)[0].original
+        payloads_json = json.dumps({"payloads": [{
+            "chosen_row_label": label,
+            "content": "<p>Body.</p><table><tr><td>1,000</td></tr></table>",
+            "evidence": "Page 3, Note 1",
+            "source_pages": [3],
+            "parent_note": {"number": "1", "title": "Test"},
+        }]})
+        write_notes = _get_tool_function(agent, "write_notes")
+        msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), payloads_json))
+        assert msg.startswith("Collected 1 payload")
+        assert "without format_ops" in msg
+        assert "truly plain" in msg  # the no-invention escape hatch
+
+    def test_sink_write_no_nudge_for_prose_or_styled(self, tmp_path: Path):
+        from notes.agent import _ensure_label_index
+
+        agent, deps = _make_sink_agent(tmp_path)
+        labels = [e.original for e in _ensure_label_index(deps)[:2]]
+        ops = [{"target": {"table": 0, "range": "all"}, "style": {"bold": True}}]
+        payloads_json = json.dumps({"payloads": [
+            {   # prose only — no table, no nudge
+                "chosen_row_label": labels[0],
+                "content": "<p>Prose only.</p>",
+                "evidence": "Page 3, Note 1",
+                "source_pages": [3],
+                "parent_note": {"number": "1", "title": "Test"},
+            },
+            {   # table WITH ops — observed, no nudge
+                "chosen_row_label": labels[1],
+                "content": "<table><tr><td>1,000</td></tr></table>",
+                "evidence": "Page 4, Note 2",
+                "source_pages": [4],
+                "parent_note": {"number": "2", "title": "Test"},
+                "format_ops": ops,
+            },
+        ]})
+        write_notes = _get_tool_function(agent, "write_notes")
+        msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), payloads_json))
+        assert "without format_ops" not in msg
+
+    def test_workbook_write_nudges_on_unstyled_table(self, tmp_path: Path):
+        # Same nudge on the direct (non-fanout) write path, driven by the
+        # writer's per-cell style_source verdicts.
+        from notes.agent import format_unstyled_table_nudge
+
+        nudge = format_unstyled_table_nudge(2)
+        assert "2 table cell(s)" in nudge
+        assert "without format_ops" in nudge
+        assert "truly plain" in nudge
+        assert format_unstyled_table_nudge(0) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -566,3 +560,122 @@ def test_styled_html_lands_in_notes_cells_and_flattens_clean(tmp_path: Path):
     flat = html_to_excel_text(stored)
     assert "style=" not in flat
     assert "10,000" in flat
+
+
+class TestSinkResendSupersede:
+    """The nudge invites "re-send the SAME content plus format_ops". In sink
+    mode a plain re-send used to CONCATENATE at the final write
+    (_combine_payloads), duplicating the content — so an identical re-send
+    must replace the earlier sink entry. Comparison is by RESOLVED template
+    row, not raw label (peer-review fix): acceptance is fuzzy, so the first
+    send may ride a fuzzy-but-accepted label and the retry the exact one."""
+
+    TABLE = "<p>Body.</p><table><tr><td>1,000</td><td>2,000</td></tr></table>"
+
+    def _payload_json(self, label: str, ops=None) -> str:
+        entry = {
+            "chosen_row_label": label,
+            "content": self.TABLE,
+            "evidence": "Page 3, Note 1",
+            "source_pages": [3],
+            "parent_note": {"number": "1", "title": "Test"},
+        }
+        if ops is not None:
+            entry["format_ops"] = ops
+        return json.dumps({"payloads": [entry]})
+
+    def test_fuzzy_then_exact_resend_supersedes(self, tmp_path: Path):
+        from notes.agent import _ensure_label_index
+        from notes.writer import _resolve_row
+
+        agent, deps = _make_sink_agent(tmp_path)
+        entries = _ensure_label_index(deps)
+        # The longest template label, minus its last two characters: fuzzy
+        # (not exact after normalization) but comfortably above the 0.85
+        # acceptance threshold, and it best-matches its own source row.
+        exact = max((e.original for e in entries), key=len)
+        fuzzy = exact[:-2]
+        resolved = _resolve_row(entries, fuzzy)
+        assert resolved is not None and resolved[2] < 1.0, (
+            "test premise: label must be accepted fuzzily, not exactly"
+        )
+
+        write_notes = _get_tool_function(agent, "write_notes")
+        msg1 = asyncio.run(
+            write_notes(SimpleNamespace(deps=deps), self._payload_json(fuzzy))
+        )
+        assert "Collected 1 payload" in msg1
+        assert "without format_ops" in msg1  # the nudge that triggers a resend
+
+        ops = [{"target": {"table": 0, "range": "numeric_cells"},
+                "style": {"text_align": "right"}}]
+        msg2 = asyncio.run(
+            write_notes(SimpleNamespace(deps=deps), self._payload_json(exact, ops))
+        )
+        assert "Collected 1 payload" in msg2
+        # Same row + identical content → superseded, never duplicated.
+        assert len(deps.payload_sink) == 1
+        assert deps.payload_sink[0].format_ops == ops
+        assert deps.payload_sink[0].chosen_row_label == exact
+
+    def test_whitespace_drifted_resend_still_supersedes(self, tmp_path: Path):
+        # The nudge asks a MODEL to re-send the same content plus format_ops;
+        # models drift on whitespace / attribute order when reproducing HTML.
+        # Comparison is on normalized RENDERED text, so a near-identical resend
+        # still supersedes instead of falling through to combine (which would
+        # duplicate the note). Regression guard for the run-63 follow-up.
+        from notes.agent import _ensure_label_index
+
+        agent, deps = _make_sink_agent(tmp_path)
+        label = _ensure_label_index(deps)[0].original
+        write_notes = _get_tool_function(agent, "write_notes")
+
+        first = json.dumps({"payloads": [{
+            "chosen_row_label": label,
+            "content": "<p>Body.</p><table><tr><td>1,000</td></tr></table>",
+            "evidence": "Page 3, Note 1",
+            "source_pages": [3],
+            "parent_note": {"number": "1", "title": "Test"},
+        }]})
+        # Same rendered content, but reindented / attribute-reordered / extra
+        # whitespace — what a model resend realistically looks like.
+        drifted = json.dumps({"payloads": [{
+            "chosen_row_label": label,
+            "content": "<p>Body.</p>\n<table >\n  <tr><td>1,000</td></tr>\n</table>",
+            "evidence": "Page 3, Note 1",
+            "source_pages": [3],
+            "parent_note": {"number": "1", "title": "Test"},
+            "format_ops": [{"target": {"table": 0, "range": "numeric_cells"},
+                            "style": {"text_align": "right"}}],
+        }]})
+        asyncio.run(write_notes(SimpleNamespace(deps=deps), first))
+        asyncio.run(write_notes(SimpleNamespace(deps=deps), drifted))
+        # Superseded, not duplicated — the drifted resend replaced the first.
+        assert len(deps.payload_sink) == 1
+        assert deps.payload_sink[0].format_ops  # the resend's ops won
+
+    def test_different_content_same_row_still_combines(self, tmp_path: Path):
+        from notes.agent import _ensure_label_index
+
+        agent, deps = _make_sink_agent(tmp_path)
+        label = _ensure_label_index(deps)[0].original
+        write_notes = _get_tool_function(agent, "write_notes")
+
+        first = json.dumps({"payloads": [{
+            "chosen_row_label": label,
+            "content": "<p>Part one.</p>",
+            "evidence": "Page 3, Note 1",
+            "source_pages": [3],
+            "parent_note": {"number": "1", "title": "Test"},
+        }]})
+        second = json.dumps({"payloads": [{
+            "chosen_row_label": label,
+            "content": "<p>Part two.</p>",
+            "evidence": "Page 4, Note 1",
+            "source_pages": [4],
+            "parent_note": {"number": "1", "title": "Test"},
+        }]})
+        asyncio.run(write_notes(SimpleNamespace(deps=deps), first))
+        asyncio.run(write_notes(SimpleNamespace(deps=deps), second))
+        # Distinct content on one row keeps the combine semantics.
+        assert len(deps.payload_sink) == 2

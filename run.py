@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Set
@@ -61,8 +62,6 @@ def _stage_input_document(src_path: str, session_dir: Path) -> None:
     Conversion errors propagate (a CLI run should fail loudly); the source-HTML
     extraction is best-effort and never raises.
     """
-    import shutil
-
     if str(src_path).lower().endswith(".docx"):
         from ingest.word_convert import convert_docx_to_pdf
         from ingest.docx_html import write_source_html
@@ -111,7 +110,6 @@ def run_agent(
         notes: optional set of NotesTemplateType to fill in parallel with the
             face-statement extraction.
     """
-    import shutil
     import uuid
 
     import server
