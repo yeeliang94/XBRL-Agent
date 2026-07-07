@@ -842,3 +842,137 @@ class TestFanOutCancellationIsSafeAgainstQueueTeardown:
         # a non-cancelled Exception path instead of a cancelled result.
         assert result.status == "cancelled"
         assert result.error == "Cancelled by user"
+
+
+class TestSubTracePrefix:
+    """Sub-agent trace filenames must be Windows-safe: live ids are shaped
+    "notes:LIST_OF_NOTES:sub0" and colons are forbidden in Windows
+    filenames — an unsanitized prefix silently drops the trace (the save
+    helper is best-effort) on the platform run-63 made diagnosable."""
+
+    def test_live_shaped_id_yields_clean_prefix(self):
+        from notes.listofnotes_subcoordinator import _sub_trace_prefix
+
+        prefix = _sub_trace_prefix("notes:LIST_OF_NOTES:sub0", 0)
+        assert prefix == "NOTES_LIST_OF_NOTES_sub0"
+        for ch in '<>:"/\\|?*':
+            assert ch not in prefix
+
+    def test_retry_attempt_suffix(self):
+        from notes.listofnotes_subcoordinator import _sub_trace_prefix
+
+        assert (
+            _sub_trace_prefix("notes:LIST_OF_NOTES:sub2", 1)
+            == "NOTES_LIST_OF_NOTES_sub2_retry1"
+        )
+
+    def test_bare_id_passes_through(self):
+        from notes.listofnotes_subcoordinator import _sub_trace_prefix
+
+        assert _sub_trace_prefix("sub3", 0) == "NOTES_LIST_OF_NOTES_sub3"
+
+
+class TestSubAgentSavesTrace:
+    """The fan-out must PERSIST a conversation trace per sub-agent on every
+    exit path — success AND failure — so a List-of-Notes defect (run-63) is
+    diagnosable after the fact. Drives the real _invoke_sub_agent_once with a
+    fake agent whose .iter() yields a working async context so the finally
+    block runs; the trace file must land on disk either way."""
+
+    def _fake_factory_and_run(self, tmp_path, raise_exc=None):
+        from notes.agent import NotesDeps
+        from notes_types import NotesTemplateType as NT
+        from token_tracker import TokenReport
+
+        class _Usage:
+            request_tokens = 0
+            response_tokens = 0
+            total_tokens = 0
+
+        class _State:
+            def __init__(self):
+                self.message_history = [
+                    type("M", (), {"__dict__": {}})()  # one trivial message
+                ]
+
+        class _Ctx:
+            def __init__(self):
+                self.state = _State()
+
+        class _AgentRun:
+            def __init__(self):
+                self.ctx = _Ctx()
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if raise_exc is not None:
+                    raise raise_exc
+                raise StopAsyncIteration
+
+            def usage(self):
+                return _Usage()
+
+        class _CtxMgr:
+            async def __aenter__(self):
+                return _AgentRun()
+
+            async def __aexit__(self, *exc):
+                return False
+
+        class _FakeAgent:
+            def iter(self, *_a, **_kw):
+                return _CtxMgr()
+
+        def _factory(**kwargs):
+            deps = NotesDeps(
+                pdf_path=kwargs["pdf_path"],
+                template_path="x",
+                model=kwargs["model"],
+                output_dir=kwargs["output_dir"],
+                token_report=TokenReport(),
+                template_type=NT.LIST_OF_NOTES,
+                sheet_name="Notes-Listofnotes",
+                filing_level=kwargs["filing_level"],
+            )
+            deps.coverage_receipt = None
+            return _FakeAgent(), deps
+
+        return _factory
+
+    def _drive(self, tmp_path, factory):
+        import asyncio
+
+        async def _run():
+            from notes.listofnotes_subcoordinator import _invoke_sub_agent_once
+
+            await _invoke_sub_agent_once(
+                sub_agent_id="notes:LIST_OF_NOTES:sub0",
+                batch=_make_inventory(2),
+                pdf_path=str(tmp_path / "x.pdf"),
+                filing_level="company",
+                model="test",
+                output_dir=str(tmp_path),
+            )
+
+        with patch(
+            "notes.listofnotes_subcoordinator.create_notes_agent",
+            side_effect=factory,
+        ):
+            asyncio.run(_run())
+
+    def test_trace_saved_on_success(self, tmp_path: Path):
+        factory = self._fake_factory_and_run(tmp_path)
+        self._drive(tmp_path, factory)
+        assert (tmp_path / "NOTES_LIST_OF_NOTES_sub0_conversation_trace.json").exists()
+
+    def test_trace_saved_on_failure(self, tmp_path: Path):
+        factory = self._fake_factory_and_run(
+            tmp_path, raise_exc=RuntimeError("mid-run explosion")
+        )
+        with pytest.raises(RuntimeError):
+            self._drive(tmp_path, factory)
+        # Trace saved on the exception path too — the diagnostic exists exactly
+        # when a sub-agent failed.
+        assert (tmp_path / "NOTES_LIST_OF_NOTES_sub0_conversation_trace.json").exists()

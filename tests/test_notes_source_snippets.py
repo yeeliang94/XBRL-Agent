@@ -119,6 +119,34 @@ def test_snippet_is_capped(monkeypatch):
     assert "truncated" in snip
 
 
+def test_first_block_alone_over_cap_is_hard_cut(monkeypatch):
+    # A whole note rendered as one giant <table> (a common Malaysian-FS shape:
+    # the entire note IS a single table whose text opens "4. Revenue …") makes
+    # that table the note's heading block. It alone exceeds the cap and there's
+    # no block boundary to stop at, so it must be hard-cut — NOT returned
+    # uncapped. Regression guard: the cap loop unconditionally accepts the first
+    # block, so without the explicit pre-loop guard this returned the full note.
+    monkeypatch.setattr(ss, "_SNIPPET_CHAR_CAP", 60)
+    giant = (
+        "<table><tr><td>4. Revenue</td></tr>"
+        + ("<tr><td>x</td></tr>" * 50)
+        + "</table>"
+    )
+    assert len(giant) > 60
+    snip = ss.extract_note_snippet(giant, 4)
+    assert len(snip) <= 60 + len(ss._TRUNCATION_MARKER)
+    assert "truncated" in snip
+
+
+def test_decimal_prose_not_read_as_note_heading():
+    # "4.5% of receivables were impaired" must NOT parse as the Note 4 heading —
+    # without the strict rule's (?!\d), the decimal splits as number-4 + "."
+    # separator and mis-anchors the note. Verified against the real bug shape.
+    assert ss._heading_note_num("<p>4.5% of receivables were impaired.</p>") is None
+    # A genuine "4." prose heading still resolves.
+    assert ss._heading_note_num("<p>4. Revenue</p>") == 4
+
+
 # --- source.html discovery helpers ---
 
 

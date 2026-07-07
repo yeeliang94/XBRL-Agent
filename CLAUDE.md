@@ -253,7 +253,15 @@ SQLite (hybrid-storage decision; see docs/PLAN-run-page-and-telemetry.md).
 exception paths call a best-effort helper that falls back to
 `agent_run.ctx.state.message_history` (a partial run has no `.result`), via
 `save_messages_trace` — so the trace viewer is useful exactly when debugging
-a failure. Pinned by `tests/test_agent_tracing.py`.
+a failure. The Sheet-12 fan-out saves one trace per sub-agent
+(`NOTES_LIST_OF_NOTES_subN[_retryK]_conversation_trace.json`, run-63 fix).
+**Traces show the END-STATE history, not per-turn snapshots:** pydantic-ai
+1.x persists each turn's processed history back onto the run state, so
+token-saving compaction placeholders ("Page N was viewed earlier…") appear
+where the model originally saw full content — every trace file carries a
+`trace_note` saying so. Don't diagnose "the model wrote while blind" from
+placeholders (the run-63 misdiagnosis). Pinned by
+`tests/test_agent_tracing.py`.
 
 ### 7. Frontend uses inline styles, not Tailwind
 
@@ -621,28 +629,34 @@ Key invariants:
   `html_to_excel_text` overlay. Pinned by the `cellFormatting`/`notesIndent`/
   `NotesReviewTab` web tests + `tests/test_notes_html_sanitize_css.py`.
 - **Two AI styling paths (the `content` channel stays style-free either way):**
-  - **Formatting sidecar + house-style floor (DEFAULT, write-time,
+  - **Formatting sidecar (DEFAULT, write-time,
     docs/PLAN-notes-format-sidecar.md):** notes extraction agents emit an optional
     `format_ops` field per payload (same constrained op vocabulary as
     `notes/format_patch.py` — a structured channel, NOT inline styles in
     `content`). `notes/writer.py::_style_cell_html` applies it through one gate,
     `format_patch.apply_cell_operations` (ops → sanitiser → `verify_format_only`).
-    Fallback: **agent ops → deterministic house-style floor
-    (`notes/format_defaults.py::house_style_ops`, accountant convention; kill
-    switch `XBRL_NOTES_HOUSE_STYLE`, default **OFF** as of 2026-07-07) →
-    unstyled (plain).** The floor is off by default because it *imposed* the
-    accountant convention (notably a double-underline on any "total"-text row)
-    rather than mirroring the source PDF — so it invented borders the statement
-    didn't have. With it off, a cell without usable agent ops renders plain and
-    the operator restyles on demand via the formatter agent. Formatting NEVER
-    blocks a content write — invalid ops degrade to plain (or the floor if
-    re-enabled). Multi-payload rows (`_combine_payloads`) re-offset each
-    payload's table indices; a non-table op in a combined cell drops all ops for
-    that cell. **Styling provenance is surfaced:** `_style_cell_html` tags each
-    cell `ops`/`floor`/`unstyled`, persisted to `notes_cells.style_source` (v29,
+    Fallback: **agent ops → unstyled (plain).** The deterministic house-style
+    floor (`notes/format_defaults.py`, kill switch `XBRL_NOTES_HOUSE_STYLE`) was
+    **REMOVED 2026-07-07** — it *imposed* the accountant convention (notably a
+    double-underline on any "total"-text row) rather than mirroring the source
+    PDF, so it invented borders the statement didn't have. A cell without usable
+    agent ops renders plain and the operator restyles on demand via the
+    formatter agent; legacy DB rows may still carry `style_source='floor'`.
+    Formatting NEVER blocks a content write — invalid ops degrade to plain.
+    Multi-payload rows (`_combine_payloads`) re-offset each payload's table
+    indices; a non-table op in a combined cell drops all ops for that cell.
+    **Omission gets pushback (run-63 fix, 2026-07-07):** the `write_notes`
+    return message appends a nudge when table cells land `unstyled`
+    (`notes/agent.py::format_unstyled_table_nudge` — invite an observation,
+    never invent), the tool docstring + a rebalanced `_notes_base.md`
+    FORMATTING OBSERVATION block say a visible table's formatting is
+    EXPECTED, and the Sheet-12 sink replaces (not concatenates) an
+    identical-content re-send so the nudge's "re-send with format_ops" advice
+    is safe. **Styling provenance is surfaced:** `_style_cell_html` tags each
+    cell `ops`/`unstyled`, persisted to `notes_cells.style_source` (v29,
     preserve-on-omit like `concept_uuid`), returned by `GET /notes_cells`, and
     shown as a chip in the Notes tab (`StyleSourceChip` — only for `unstyled`/
-    `floor`, the cells that may want a formatter pass). Pinned by
+    legacy `floor`, the cells that may want a formatter pass). Pinned by
     `tests/test_notes_format_sidecar.py`, `tests/test_db_schema_v29.py`.
   - **Notes formatter agent (manual REPAIR pass, `POST /api/runs/{id}/notes-format`,
     per prose sheet):** the only AI role that authors styling on demand; returns

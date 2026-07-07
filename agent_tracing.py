@@ -10,6 +10,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -149,7 +150,29 @@ def _write_trace(
         _sanitize_for_trace(msg_dict)
         dicts.append(msg_dict)
 
-    payload: dict[str, Any] = {"messages": dicts}
+    payload: dict[str, Any] = {
+        # Read this before diagnosing from a trace. pydantic-ai (>= 1.x)
+        # writes each turn's PROCESSED history back onto the run state
+        # (`ctx.state.message_history[:] = messages` in _agent_graph), so
+        # this file reflects the FINAL state after every token-saving
+        # history processor has run — not what the model saw at each
+        # earlier turn. Placeholders like "Page N was viewed earlier..."
+        # or "[<tool> result from ~K turns ago ... compacted]" are
+        # post-hoc compactions of content that WAS fully visible to the
+        # model when it was fresh (extraction/history_processors.py keeps
+        # all images until the first successful write and always keeps
+        # the newest batch). The run-63 misdiagnosis (2026-07-07) read
+        # these placeholders as "the model wrote while blind" — it didn't.
+        "trace_note": (
+            "Messages reflect the END-STATE history after token-saving "
+            "compaction (stale page images / bulky old tool results are "
+            "replaced with one-line placeholders once superseded). At the "
+            "turn where a result was fresh, the model saw its full "
+            "content. Do not infer what the model 'saw' at earlier turns "
+            "from placeholders in this file."
+        ),
+        "messages": dicts,
+    }
     if turns is not None:
         # Strip the coordinator-internal `_n_tool_calls` helper key so the
         # trace carries only the user-meaningful per-turn metrics.
@@ -158,7 +181,13 @@ def _write_trace(
             for t in turns
         ]
 
-    trace_path = Path(output_dir) / f"{prefix}_conversation_trace.json"
+    # Windows-forbidden filename characters (colons in agent ids like
+    # "notes:LIST_OF_NOTES:sub0") must never reach the filesystem: the
+    # save_* wrappers are best-effort, so an invalid name would drop the
+    # trace SILENTLY on exactly the platform (Windows) where traces are
+    # most needed. Sanitizing here covers every caller, present and future.
+    safe_prefix = re.sub(r'[<>:"/\\|?*]', "_", prefix)
+    trace_path = Path(output_dir) / f"{safe_prefix}_conversation_trace.json"
     trace_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",

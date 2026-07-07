@@ -13,9 +13,15 @@ import pytest
 
 from ingest import word_convert
 from ingest.word_convert import WordConversionError, convert_docx_to_pdf
+from tests._docx_fixture import build_minimal_docx
 
 
-def _write(path: Path, data: bytes = b"PK\x03\x04fake-docx") -> Path:
+def _write(path: Path, data: bytes | None = None) -> Path:
+    """Stage a source file. With no ``data`` it builds a REAL minimal .docx so
+    it survives the OOXML structure gate in convert_docx_to_pdf; pass explicit
+    bytes to exercise the reject paths (empty, non-zip)."""
+    if data is None:
+        return build_minimal_docx(path)
     path.write_bytes(data)
     return path
 
@@ -143,8 +149,9 @@ def test_soffice_command_builder_moves_output(tmp_path: Path, monkeypatch):
     dest = tmp_path / "uploaded.pdf"
     captured = {}
 
-    def _fake_run(cmd, capture_output, text, timeout):
+    def _fake_run(cmd, capture_output, text, timeout, env=None):
         captured["cmd"] = cmd
+        captured["env"] = env
         # Simulate LibreOffice writing <outdir>/<stem>.pdf
         outdir = Path(cmd[cmd.index("--outdir") + 1])
         (outdir / f"{src.stem}.pdf").write_bytes(b"%PDF-1.7")
@@ -154,6 +161,66 @@ def test_soffice_command_builder_moves_output(tmp_path: Path, monkeypatch):
     word_convert._convert_with_soffice(src, dest, "soffice")
     assert "--convert-to" in captured["cmd"] and "pdf" in captured["cmd"]
     assert dest.exists()
+
+
+def test_soffice_gets_minimal_env_without_secrets(tmp_path: Path, monkeypatch):
+    """The LibreOffice child must not inherit the server's LLM/session secrets —
+    it's handed a minimal allowlisted env, so a converter compromise can't read
+    provider credentials from os.environ."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    monkeypatch.setenv("SESSION_SECRET", "hunter2")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    src = _write(tmp_path / "uploaded.docx")
+    dest = tmp_path / "uploaded.pdf"
+    captured = {}
+
+    def _fake_run(cmd, capture_output, text, timeout, env=None):
+        captured["env"] = env
+        outdir = Path(cmd[cmd.index("--outdir") + 1])
+        (outdir / f"{src.stem}.pdf").write_bytes(b"%PDF-1.7")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(word_convert.subprocess, "run", _fake_run)
+    word_convert._convert_with_soffice(src, dest, "soffice")
+    env = captured["env"]
+    assert env is not None
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "SESSION_SECRET" not in env
+    assert env.get("PATH") == "/usr/bin"  # essentials still pass through
+
+
+def test_rejects_non_ooxml_file(tmp_path: Path):
+    """A file merely NAMED .docx (renamed RTF / legacy .doc / arbitrary bytes)
+    is refused before it can reach the converter's format-sniffing filters."""
+    bad = _write(tmp_path / "renamed.docx", b"{\\rtf1 this is actually rtf}")
+    with pytest.raises(WordConversionError) as ei:
+        convert_docx_to_pdf(bad, tmp_path / "out.pdf")
+    assert "valid Word .docx" in ei.value.user_message
+
+
+def test_rejects_zip_missing_document_xml(tmp_path: Path):
+    """A ZIP that isn't an OOXML wordprocessing package (no word/document.xml)
+    is refused even though it's a valid archive."""
+    import zipfile
+
+    bad = tmp_path / "shell.docx"
+    with zipfile.ZipFile(bad, "w") as z:
+        z.writestr("hello.txt", "not a word doc")
+    with pytest.raises(WordConversionError) as ei:
+        convert_docx_to_pdf(bad, tmp_path / "out.pdf")
+    assert "valid Word .docx" in ei.value.user_message
+
+
+def test_valid_docx_passes_structure_gate(tmp_path: Path, monkeypatch):
+    """A genuine OOXML .docx clears the gate and reaches _run_conversion."""
+    src = _write(tmp_path / "real.docx")
+
+    def _fake(s: Path, d: Path):
+        d.write_bytes(b"%PDF-1.7 ok")
+
+    monkeypatch.setattr(word_convert, "_run_conversion", _fake)
+    out = convert_docx_to_pdf(src, tmp_path / "out.pdf")
+    assert out.exists() and out.stat().st_size > 0
 
 
 def test_word_com_timeout_raises(tmp_path: Path, monkeypatch):
@@ -193,7 +260,7 @@ def test_word_com_success_no_raise(tmp_path: Path, monkeypatch):
 def test_soffice_nonzero_exit_raises(tmp_path: Path, monkeypatch):
     src = _write(tmp_path / "in.docx")
 
-    def _fake_run(cmd, capture_output, text, timeout):
+    def _fake_run(cmd, capture_output, text, timeout, env=None):
         return subprocess.CompletedProcess(cmd, 1, "", "conversion boom")
 
     monkeypatch.setattr(word_convert.subprocess, "run", _fake_run)

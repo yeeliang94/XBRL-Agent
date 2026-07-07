@@ -345,10 +345,19 @@ While a note's table is in front of you, you can SEE its visible
 formatting. Record that observation in the payload's optional
 `format_ops` field as structured operations. Rules:
 
+- **For tables, an observation is EXPECTED, not extra credit.** Nearly
+  every real AFS table visibly shows at least (a) right-aligned amount
+  columns and (b) a summation rule above — and often a double rule
+  below — the total figures. If you reproduced a table, you were just
+  looking at it: record what you saw. A tables-heavy batch where no
+  payload carries `format_ops` almost always means observations were
+  skipped, not that every source table was truly plain.
 - **Content always comes first.** Never spend effort on formatting at the
-  expense of content coverage or fidelity. When unsure, omit `format_ops`
-  entirely — the cell then renders plain (no borders, no fills), which is
-  safe and can be restyled later. Do NOT guess formatting to fill the field.
+  expense of content coverage or fidelity. If you genuinely cannot make
+  out a table's formatting (e.g. an unreadable scan), omit `format_ops`
+  for that payload — the cell then renders plain (no borders, no fills),
+  which is safe and can be restyled later. Do NOT guess formatting to
+  fill the field.
 - **`content` stays style-free.** `format_ops` is the ONLY formatting
   channel; the writer validates and applies it deterministically. If the
   operations fail validation they are dropped and the cell renders plain

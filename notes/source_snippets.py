@@ -37,8 +37,11 @@ _TRUNCATION_MARKER = "\n<!-- [truncated — read the remaining pages in the PDF]
 #     trustworthy, so the looser rule is safe there.
 # Both anchored to the block start so "at 4.5% interest" mid-paragraph never
 # triggers. Loose (LLM verifies) — mirrors scout.notes_discoverer._NOTE_REF_RE.
+# The strict rule's `(?!\d)` stops a decimal ("4.5% of receivables were
+# impaired") from splitting as number-4 + "." separator and being misread as
+# the Note 4 heading.
 _NOTE_HEADING_STRICT_RE = re.compile(
-    r"^\s*(?:note\s+)?(\d{1,3})\s*[\.\)\-:]\s*\S",
+    r"^\s*(?:note\s+)?(\d{1,3})\s*[\.\)\-:]\s*(?!\d)\S",
     re.IGNORECASE,
 )
 _NOTE_HEADING_LOOSE_RE = re.compile(
@@ -151,9 +154,16 @@ def extract_note_snippet(html: str, note_num: int) -> str:
             break
 
     # Cap at a whole-block boundary so we never hand the agent a snippet cut
-    # mid-tag. If the very first block already exceeds the cap, hard-cut it
-    # (rare; a single pathological note) rather than return nothing.
+    # mid-tag. `selected` is always non-empty (start was found, end > start).
     selected = blocks[start:end]
+    # If the very first block alone exceeds the cap — a whole note rendered as
+    # one giant <table>, a common Malaysian-FS shape — there is no block
+    # boundary to cap at, so hard-cut it. This MUST run before the loop below:
+    # the loop always accepts the first block (it only checks the running total
+    # from the second block on), so without this guard a single oversized block
+    # would return uncapped.
+    if len(selected[0]) > _SNIPPET_CHAR_CAP:
+        return selected[0][:_SNIPPET_CHAR_CAP] + _TRUNCATION_MARKER
     out: list[str] = []
     total = 0
     truncated = False
@@ -163,12 +173,31 @@ def extract_note_snippet(html: str, note_num: int) -> str:
             break
         out.append(b)
         total += len(b)
-    if not out:  # first block alone over the cap
-        return selected[0][:_SNIPPET_CHAR_CAP] + _TRUNCATION_MARKER
     snippet = "".join(out).strip()
     if truncated:
         snippet += _TRUNCATION_MARKER
     return snippet
+
+
+def read_note_snippet_at(
+    source_html_path: str | Path | None, note_num: int
+) -> str:
+    """Return the chunk for ``note_num`` from an explicit ``source.html`` path.
+
+    Returns "" when the path is None / missing / unreadable or the note isn't
+    found — the caller treats an empty result as "no source formatting
+    available, read the PDF". This is the variant the notes agent's
+    ``read_source_note`` tool uses, so ``NotesDeps.source_html_path`` (resolved
+    once at agent-build time) is the single source of truth rather than being
+    re-derived from the PDF path on every call.
+    """
+    if not source_html_path:
+        return ""
+    try:
+        html = Path(source_html_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return extract_note_snippet(html, note_num)
 
 
 def read_note_snippet(pdf_path: str | Path, note_num: int) -> str:
@@ -177,9 +206,4 @@ def read_note_snippet(pdf_path: str | Path, note_num: int) -> str:
     Returns "" when there is no sidecar or the note isn't found — the caller
     treats an empty result as "no source formatting available, read the PDF".
     """
-    path = source_html_path_for(pdf_path)
-    try:
-        html = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return ""
-    return extract_note_snippet(html, note_num)
+    return read_note_snippet_at(source_html_path_for(pdf_path), note_num)

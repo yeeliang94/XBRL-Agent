@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,7 +40,7 @@ from pydantic_ai.messages import (
 )
 
 from agent_runner import RetryPolicy, make_emitter, run_agent_with_retries
-from agent_tracing import MAX_AGENT_ITERATIONS
+from agent_tracing import MAX_AGENT_ITERATIONS, save_messages_trace
 from notes._rate_limit import (
     RATE_LIMIT_MAX_RETRIES,
     is_rate_limit_error,
@@ -85,6 +86,24 @@ _SUB_AGENT_LAUNCH_STAGGER_SECS = 0.6
 # ---------------------------------------------------------------------------
 # Retry-contract marker
 # ---------------------------------------------------------------------------
+
+def _sub_trace_prefix(sub_agent_id: str, attempt: int) -> str:
+    """Filename prefix for a sub-agent's conversation trace.
+
+    Live sub-agent ids are shaped ``notes:LIST_OF_NOTES:sub0`` — colons are
+    forbidden in Windows filenames, and `save_messages_trace` is best-effort
+    (swallows the OSError), so an unsanitized prefix would make the trace
+    silently vanish on exactly the platform the diagnostic exists for
+    (run-63 was a Windows run). Keep only the short tail (``sub0``) — the
+    parent template name is already in the literal prefix — and defensively
+    strip any other Windows-forbidden character.
+    """
+    short_id = sub_agent_id.rsplit(":", 1)[-1]
+    safe_id = re.sub(r'[<>:"/\\|?*]', "_", short_id)
+    return f"NOTES_LIST_OF_NOTES_{safe_id}" + (
+        f"_retry{attempt}" if attempt else ""
+    )
+
 
 class _SubAgentNoWriteError(RuntimeError):
     """Raised when a sub-agent finishes cleanly but produces zero payloads
@@ -654,104 +673,121 @@ async def _invoke_sub_agent_once(
     tool_start: dict[str, float] = {}
     thinking_counter = 0
 
+    # Per-sub-agent trace file (run-63 fix, 2026-07-07): the fan-out used to
+    # persist NO conversation traces, so a List-of-Notes defect (the sheet
+    # where the table-heavy notes live) could not be diagnosed after the
+    # fact. One file per sub-agent attempt; the `finally` below saves it on
+    # every exit path — success, iteration cap, LLM error, cancel — mirroring
+    # the failed-agent trace guarantee the face coordinators give (gotcha #6).
+    trace_prefix = _sub_trace_prefix(sub_agent_id, attempt)
+
     async with agent.iter(prompt, deps=deps) as agent_run:
-        async for node in agent_run:
-            iteration += 1
-            if iteration > iteration_cap:
-                raise RuntimeError(
-                    f"Sub-agent {sub_agent_id} hit iteration limit "
-                    f"({iteration_cap})"
-                )
-            if Agent.is_call_tools_node(node):
-                async with node.stream(agent_run.ctx) as tool_stream:
-                    async for event in tool_stream:
-                        if isinstance(event, FunctionToolCallEvent):
-                            phase = _PHASE_MAP.get(event.part.tool_name)
-                            if phase:
-                                await _emit("status", {
-                                    "phase": phase,
-                                    "message": f"{sub_agent_id}: {phase.replace('_', ' ')}",
-                                })
-                            raw_args = event.part.args
-                            if isinstance(raw_args, str):
-                                try:
-                                    parsed = json.loads(raw_args)
-                                except (json.JSONDecodeError, TypeError):
-                                    parsed = {}
-                            elif isinstance(raw_args, dict):
-                                parsed = raw_args
-                            else:
-                                parsed = {}
-                            # Namespace tool_call_id with sub_agent_id so parallel
-                            # sub-agents that share one parent agent_id can't
-                            # collide in the frontend timeline Map (the live
-                            # reducer treats matching ids as duplicates and
-                            # would silently drop the second call).
-                            namespaced_id = f"{sub_agent_id}:{event.part.tool_call_id}"
-                            await _emit("tool_call", {
-                                "tool_name": event.part.tool_name,
-                                "tool_call_id": namespaced_id,
-                                "args": parsed,
-                            })
-                            tool_start[namespaced_id] = time.monotonic()
-                        elif isinstance(event, FunctionToolResultEvent):
-                            content = event.result.content
-                            summary = str(content)[:800] if content else ""
-                            namespaced_id = f"{sub_agent_id}:{event.result.tool_call_id}"
-                            start_t = tool_start.pop(namespaced_id, None)
-                            duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
-                            await _emit("tool_result", {
-                                "tool_name": event.result.tool_name,
-                                "tool_call_id": namespaced_id,
-                                "result_summary": summary,
-                                "duration_ms": duration_ms,
-                            })
-            elif Agent.is_model_request_node(node):
-                tid = f"{sub_agent_id}_think_{thinking_counter}"
-                active = False
-                async with node.stream(agent_run.ctx) as model_stream:
-                    async for event in model_stream:
-                        if isinstance(event, PartDeltaEvent):
-                            delta = event.delta
-                            if isinstance(delta, TextPartDelta):
-                                if active:
-                                    await _emit("thinking_end", {
-                                        "thinking_id": tid, "summary": "", "full_length": 0,
+        try:
+            async for node in agent_run:
+                iteration += 1
+                if iteration > iteration_cap:
+                    raise RuntimeError(
+                        f"Sub-agent {sub_agent_id} hit iteration limit "
+                        f"({iteration_cap})"
+                    )
+                if Agent.is_call_tools_node(node):
+                    async with node.stream(agent_run.ctx) as tool_stream:
+                        async for event in tool_stream:
+                            if isinstance(event, FunctionToolCallEvent):
+                                phase = _PHASE_MAP.get(event.part.tool_name)
+                                if phase:
+                                    await _emit("status", {
+                                        "phase": phase,
+                                        "message": f"{sub_agent_id}: {phase.replace('_', ' ')}",
                                     })
-                                    active = False
-                                    thinking_counter += 1
-                                    tid = f"{sub_agent_id}_think_{thinking_counter}"
-                                await _emit("text_delta", {"content": delta.content_delta})
-                            elif isinstance(delta, ThinkingPartDelta):
-                                active = True
-                                await _emit("thinking_delta", {
-                                    "content": delta.content_delta or "",
-                                    "thinking_id": tid,
+                                raw_args = event.part.args
+                                if isinstance(raw_args, str):
+                                    try:
+                                        parsed = json.loads(raw_args)
+                                    except (json.JSONDecodeError, TypeError):
+                                        parsed = {}
+                                elif isinstance(raw_args, dict):
+                                    parsed = raw_args
+                                else:
+                                    parsed = {}
+                                # Namespace tool_call_id with sub_agent_id so parallel
+                                # sub-agents that share one parent agent_id can't
+                                # collide in the frontend timeline Map (the live
+                                # reducer treats matching ids as duplicates and
+                                # would silently drop the second call).
+                                namespaced_id = f"{sub_agent_id}:{event.part.tool_call_id}"
+                                await _emit("tool_call", {
+                                    "tool_name": event.part.tool_name,
+                                    "tool_call_id": namespaced_id,
+                                    "args": parsed,
                                 })
-                if active:
-                    await _emit("thinking_end", {
-                        "thinking_id": tid, "summary": "", "full_length": 0,
-                    })
-                    thinking_counter += 1
+                                tool_start[namespaced_id] = time.monotonic()
+                            elif isinstance(event, FunctionToolResultEvent):
+                                content = event.result.content
+                                summary = str(content)[:800] if content else ""
+                                namespaced_id = f"{sub_agent_id}:{event.result.tool_call_id}"
+                                start_t = tool_start.pop(namespaced_id, None)
+                                duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
+                                await _emit("tool_result", {
+                                    "tool_name": event.result.tool_name,
+                                    "tool_call_id": namespaced_id,
+                                    "result_summary": summary,
+                                    "duration_ms": duration_ms,
+                                })
+                elif Agent.is_model_request_node(node):
+                    tid = f"{sub_agent_id}_think_{thinking_counter}"
+                    active = False
+                    async with node.stream(agent_run.ctx) as model_stream:
+                        async for event in model_stream:
+                            if isinstance(event, PartDeltaEvent):
+                                delta = event.delta
+                                if isinstance(delta, TextPartDelta):
+                                    if active:
+                                        await _emit("thinking_end", {
+                                            "thinking_id": tid, "summary": "", "full_length": 0,
+                                        })
+                                        active = False
+                                        thinking_counter += 1
+                                        tid = f"{sub_agent_id}_think_{thinking_counter}"
+                                    await _emit("text_delta", {"content": delta.content_delta})
+                                elif isinstance(delta, ThinkingPartDelta):
+                                    active = True
+                                    await _emit("thinking_delta", {
+                                        "content": delta.content_delta or "",
+                                        "thinking_id": tid,
+                                    })
+                    if active:
+                        await _emit("thinking_end", {
+                            "thinking_id": tid, "summary": "", "full_length": 0,
+                        })
+                        thinking_counter += 1
 
-            usage = agent_run.usage()
-            total = usage.total_tokens or 0
-            prompt_t = usage.request_tokens or 0
-            completion_t = usage.response_tokens or 0
-            # Keep the caller's failure-path accumulator in sync so the
-            # retry wrapper can report accurate spend if the next
-            # iteration raises.
-            if usage_out is not None:
-                usage_out["prompt"] = int(prompt_t)
-                usage_out["completion"] = int(completion_t)
-            await _emit("token_update", {
-                "prompt_tokens": prompt_t,
-                "completion_tokens": completion_t,
-                "thinking_tokens": 0,
-                "cumulative": total,
-                "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
-            })
+                usage = agent_run.usage()
+                total = usage.total_tokens or 0
+                prompt_t = usage.request_tokens or 0
+                completion_t = usage.response_tokens or 0
+                # Keep the caller's failure-path accumulator in sync so the
+                # retry wrapper can report accurate spend if the next
+                # iteration raises.
+                if usage_out is not None:
+                    usage_out["prompt"] = int(prompt_t)
+                    usage_out["completion"] = int(completion_t)
+                await _emit("token_update", {
+                    "prompt_tokens": prompt_t,
+                    "completion_tokens": completion_t,
+                    "thinking_tokens": 0,
+                    "cumulative": total,
+                    "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
+                })
 
+        finally:
+            # Best-effort on EVERY exit path (success, iteration cap,
+            # LLM error, cancel) — save_messages_trace never raises.
+            save_messages_trace(
+                list(agent_run.ctx.state.message_history),
+                output_dir,
+                trace_prefix,
+            )
     # Capture the final aggregate usage so the retry wrapper + fanout can
     # fold it into the parent cost report (Phase 5.1). If the loop never
     # entered a model_request_node (empty batch short-circuit, cancel

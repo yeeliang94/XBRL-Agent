@@ -121,3 +121,32 @@ def test_writers_are_best_effort(tmp_path: Path) -> None:
     save_messages_trace(object(), str(tmp_path), "SOPL")  # not iterable → caught
     # No trace files should have been written for the broken inputs.
     assert not (tmp_path / "SOFP_conversation_trace.json").exists()
+
+
+def test_prefix_with_windows_forbidden_chars_still_writes(tmp_path: Path) -> None:
+    """A prefix carrying Windows-forbidden characters (live sub-agent ids are
+    shaped "notes:LIST_OF_NOTES:sub0") must be sanitized, not passed through:
+    the save_* wrappers swallow errors, so an invalid filename would drop the
+    trace SILENTLY on Windows — the exact platform run-63 made diagnosable."""
+    messages = [_Msg({"role": "tool", "content": "hello"})]
+    save_messages_trace(
+        messages, str(tmp_path), 'NOTES_LIST_OF_NOTES_notes:LIST<>OF|NOTES?:sub0'
+    )
+
+    written = list(tmp_path.glob("*_conversation_trace.json"))
+    assert len(written) == 1
+    name = written[0].name
+    for ch in '<>:"/\\|?*':
+        assert ch not in name
+    trace = json.loads(written[0].read_text(encoding="utf-8"))
+    assert trace["messages"][0]["content"] == "hello"
+
+
+def test_trace_note_stamped_on_every_trace(tmp_path: Path) -> None:
+    """Every trace file carries the compaction disclaimer (run-63 fix): the
+    persisted history is the END-STATE after token-saving processors, so a
+    reader must not infer per-turn visibility from placeholders."""
+    save_messages_trace([_Msg({"role": "user", "content": "hi"})], str(tmp_path), "SOFP")
+    trace = _read_trace(tmp_path, "SOFP")
+    assert "compaction" in trace["trace_note"]
+    assert "Do not infer" in trace["trace_note"]

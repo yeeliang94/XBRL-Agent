@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 logger = logging.getLogger("server")
@@ -77,6 +78,58 @@ class WordConversionError(Exception):
         super().__init__(technical)
         self.user_message = user_message or (
             "We couldn't convert this Word file to PDF. " + _FALLBACK_HINT
+        )
+
+
+# LibreOffice parses ~100 formats and picks the import filter by CONTENT, not
+# extension — several legacy filters (RTF, binary .doc, WMF) have a history of
+# memory-corruption CVEs. Since uploads are third-party files, we refuse
+# anything that isn't a genuine OOXML .docx BEFORE it reaches the converter
+# (below). A real .docx is a ZIP whose central directory carries these members;
+# a file that passes this check can only route to the OOXML import filter, so
+# the legacy-filter attack surface is never reached.
+_OOXML_REQUIRED_MEMBERS = ("word/document.xml", "[Content_Types].xml")
+
+# Environment the LibreOffice child is allowed to see. The server process holds
+# the LLM/session secrets (GEMINI/OPENAI/ANTHROPIC keys, SESSION_SECRET); the
+# converter needs none of them, so we pass only what LibreOffice needs to start
+# (PATH, HOME/temp, locale). If soffice ever code-execs on a crafted input, it
+# can't read provider credentials from its own environment.
+_SOFFICE_ENV_KEYS = (
+    "PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE",
+    "USER", "LOGNAME", "DISPLAY", "FONTCONFIG_PATH", "FONTCONFIG_FILE",
+    # Windows essentials (in case LibreOffice is the forced converter there).
+    "SYSTEMROOT", "SystemRoot", "USERPROFILE", "WINDIR", "COMSPEC",
+)
+
+
+def _soffice_env() -> dict[str, str]:
+    """A minimal environment for the LibreOffice subprocess (see comment above)."""
+    return {k: os.environ[k] for k in _SOFFICE_ENV_KEYS if k in os.environ}
+
+
+def _validate_docx_structure(src: Path) -> None:
+    """Reject a file that isn't a genuine OOXML .docx before conversion.
+
+    The upload endpoint validates only the ``.docx`` *extension*. Without this,
+    a renamed RTF / legacy binary ``.doc`` / other LibreOffice-parseable format
+    would be auto-detected and routed to its (possibly vulnerable) import
+    filter. A valid ``.docx`` is a ZIP whose members include those in
+    ``_OOXML_REQUIRED_MEMBERS``; anything else raises here.
+    """
+    try:
+        with zipfile.ZipFile(src) as zf:
+            names = set(zf.namelist())
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise WordConversionError(
+            f"Not a valid .docx (not a ZIP container): {exc}",
+            user_message="This file isn't a valid Word .docx. " + _FALLBACK_HINT,
+        ) from exc
+    missing = [m for m in _OOXML_REQUIRED_MEMBERS if m not in names]
+    if missing:
+        raise WordConversionError(
+            f"File named .docx but missing OOXML members: {missing}",
+            user_message="This file isn't a valid Word .docx. " + _FALLBACK_HINT,
         )
 
 
@@ -126,6 +179,7 @@ def _convert_with_soffice(src: Path, dest: Path, soffice: str) -> None:
             capture_output=True,
             text=True,
             timeout=_CONVERT_TIMEOUT_S,
+            env=_soffice_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise WordConversionError(
@@ -262,6 +316,12 @@ def convert_docx_to_pdf(src: str | os.PathLike, dest: str | os.PathLike) -> Path
             "The uploaded Word file is empty.",
             user_message="The uploaded Word file appears to be empty.",
         )
+
+    # Reject non-OOXML files (renamed RTF / legacy .doc / other formats) before
+    # they reach the converter's content-sniffing filters — see the comment on
+    # _validate_docx_structure. Guards both backends since it's on the shared
+    # entry point.
+    _validate_docx_structure(src_p)
 
     dest_p.parent.mkdir(parents=True, exist_ok=True)
 

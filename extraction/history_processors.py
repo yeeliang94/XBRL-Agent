@@ -2,8 +2,19 @@
 
 These are **pure functions over the model-message list** that run just before
 each model call. They strip stale, re-billed payloads (old page images, the
-repeated bulky template summary) out of the *outbound* request without touching
-extraction logic, the in-memory conversation, or the saved traces.
+repeated bulky template summary) out of the outbound request without touching
+extraction logic.
+
+**The processed history IS what gets persisted.** pydantic-ai 1.x writes each
+turn's processed messages back onto the run state
+(`ctx.state.message_history[:] = messages` in `_agent_graph.py`), so
+`result.all_messages()` — and therefore every saved
+`*_conversation_trace.json` — reflects the final compacted state, not the
+original verbatim exchange. A placeholder in a trace ("Page N was viewed
+earlier…") means the content was compacted on a LATER turn; the model saw it
+in full while it was fresh. `agent_tracing._write_trace` stamps each trace
+file with a `trace_note` saying exactly this, because a 2026-07-07 diagnosis
+(run 63) misread those placeholders as "the agent wrote while blind".
 
 Why this exists: agent runs re-send the entire conversation history on every
 turn (no trimming). The dominant waste is old image blobs and the one-time
