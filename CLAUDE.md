@@ -1289,6 +1289,13 @@ docs/PLAN-word-input.md.
 # Backend (from repo root) — excludes live LLM tests by default
 python -m pytest tests/ -v
 
+# FULL SUITE, ~4x faster — parallelise across cores (needs pytest-xdist).
+# ~3100 tests: serial ~240s → ~60s. Use this for the whole-suite gate.
+python -m pytest tests/ -n auto
+# Focused / TDD runs stay SERIAL on purpose — for one file or one test,
+# worker spawn + per-worker imports make `-n auto` SLOWER, so just:
+#   python -m pytest tests/test_foo.py -q      (add `-n0` to force serial anywhere)
+
 # Live E2E (uses TEST_MODEL from .env, needs matching API key)
 python -m pytest -m live -v
 

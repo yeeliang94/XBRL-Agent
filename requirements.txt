@@ -32,3 +32,9 @@ argon2-cffi>=23.1.0
 # (`soffice`), a system package, not a pip dependency.
 mammoth>=1.6.0
 docx2pdf>=0.1.8 ; sys_platform == "win32"
+# Test tooling: pytest-xdist parallelises the backend suite across cores.
+# The full suite is ~3100 tests and runs ~4x faster with `pytest tests/ -n auto`
+# (serial ~240s → ~60s). Deliberately NOT wired into addopts — worker spawn +
+# per-worker imports make a single-file/TDD run SLOWER, so parallelism is an
+# explicit `-n auto` flag for the full suite only (see CLAUDE.md → Testing).
+pytest-xdist>=3.8.0
