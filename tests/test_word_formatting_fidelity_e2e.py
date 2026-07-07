@@ -73,26 +73,24 @@ def test_styled_docx_flows_to_source_html_and_is_ops_reproducible(tmp_path: Path
     assert "text-align: right" in styled
 
 
-def test_reference_only_props_are_the_only_ones_ops_cannot_take(tmp_path: Path):
-    """Sanity on the tier split: everything the reader injects is either
-    reproducible via ops (Tier 1) or one of the documented reference-only props.
-    A cell-level padding op must be rejected by the write gate (proving why the
-    prompt tells the agent to ignore it), while the same cell's border/align
-    op is accepted."""
+def test_every_injected_prop_is_now_ops_reproducible(tmp_path: Path):
+    """Post-Phase-4 the tier split has collapsed: EVERY property the docx reader
+    injects — including padding and paragraph spacing — is reproducible through
+    a format_op. Nothing the agent sees in the source is un-copyable."""
     from ingest.docx_styles import REFERENCE_ONLY_PROPS
-    from notes.format_patch import FormatPatchError
 
-    assert "padding" in REFERENCE_ONLY_PROPS
+    assert REFERENCE_ONLY_PROPS == frozenset()  # no un-copyable props remain
 
     content = "<table><tbody><tr><td>x</td><td>1</td></tr></tbody></table>"
-    # A border op is accepted...
+    # padding op (Phase 4) is now accepted by the write gate...
+    padded = apply_cell_operations(
+        content,
+        [{"target": {"table": 0, "cell": {"r": 1, "c": 1}},
+          "style": {"padding": "4px 8px"}}])
+    assert "padding: 4px 8px" in padded
+    # ...as is a border/align op.
     ok = apply_cell_operations(
         content,
         [{"target": {"table": 0, "cell": {"r": 1, "c": 2}},
           "style": {"text_align": "right"}}])
     assert "text-align: right" in ok
-
-    # ...and there is no ops verb that injects raw padding — the op vocabulary
-    # simply has no padding key, so the reader is right to flag it reference-only.
-    from notes.format_patch import STYLE_TO_CSS
-    assert not any("padding" in v for v in STYLE_TO_CSS.values())
