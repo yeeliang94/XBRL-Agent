@@ -200,13 +200,21 @@ function AgentTabsImpl({
         </span>
         {agent.flag && (
           // Honest-completion flag (peer-review F1): finalised but the agent
-          // accepted a known imbalance / unfilled-mandatory — needs review.
+          // accepted a known imbalance / unfilled-mandatory — needs a human
+          // look. The plain chip reads "Needs review"; the model's free-text
+          // detail stays in the tooltip (warningText token, not off-palette).
           <span
-            aria-label={`Needs review: ${agent.flag}`}
-            title={`Needs review: ${agent.flag}`}
-            style={{ marginLeft: 4, color: "#b54708", fontSize: 12 }}
+            aria-label={`Needs your review: ${agent.flag}`}
+            title={agent.flag}
+            style={{
+              marginLeft: 4,
+              color: pwc.warningText,
+              fontSize: 11,
+              fontWeight: pwc.weight.medium,
+              whiteSpace: "nowrap",
+            }}
           >
-            ⚠
+            ⚠ Needs review
           </span>
         )}
       </button>
