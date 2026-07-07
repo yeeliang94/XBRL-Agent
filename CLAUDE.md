@@ -350,7 +350,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **28**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **29**). `init_db`
 reads the stored version and walks an old DB up **one version at a time**
 through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
 the current schema automatically. `db/schema.py` is the authoritative
@@ -380,7 +380,7 @@ Recent tables/columns, each detailed in its linked gotcha: v11
 · v20 `auth_users.is_admin` (#24) · v22 `runs.notes_table_style` (#16) ·
 v23–v25 notes-reviewer tables + `notes_cell_tombstones` (#16, #27) · v26–v27
 notes-formatter `notes_format_tasks` / `notes_format_snapshots` (#16) · v28
-`notes_coverage_rows` (#27).
+`notes_coverage_rows` (#27) · v29 `notes_cells.style_source` (#16).
 
 ### 12. Filing level — Company vs Group
 
@@ -629,11 +629,21 @@ Key invariants:
     `format_patch.apply_cell_operations` (ops → sanitiser → `verify_format_only`).
     Fallback: **agent ops → deterministic house-style floor
     (`notes/format_defaults.py::house_style_ops`, accountant convention; kill
-    switch `XBRL_NOTES_HOUSE_STYLE`, default ON) → theme.** Formatting NEVER
-    blocks a content write — invalid ops degrade to the floor. Multi-payload rows
-    (`_combine_payloads`) re-offset each payload's table indices; a non-table op
-    in a combined cell drops all ops for that cell. Pinned by
-    `tests/test_notes_format_sidecar.py`.
+    switch `XBRL_NOTES_HOUSE_STYLE`, default **OFF** as of 2026-07-07) →
+    unstyled (plain).** The floor is off by default because it *imposed* the
+    accountant convention (notably a double-underline on any "total"-text row)
+    rather than mirroring the source PDF — so it invented borders the statement
+    didn't have. With it off, a cell without usable agent ops renders plain and
+    the operator restyles on demand via the formatter agent. Formatting NEVER
+    blocks a content write — invalid ops degrade to plain (or the floor if
+    re-enabled). Multi-payload rows (`_combine_payloads`) re-offset each
+    payload's table indices; a non-table op in a combined cell drops all ops for
+    that cell. **Styling provenance is surfaced:** `_style_cell_html` tags each
+    cell `ops`/`floor`/`unstyled`, persisted to `notes_cells.style_source` (v29,
+    preserve-on-omit like `concept_uuid`), returned by `GET /notes_cells`, and
+    shown as a chip in the Notes tab (`StyleSourceChip` — only for `unstyled`/
+    `floor`, the cells that may want a formatter pass). Pinned by
+    `tests/test_notes_format_sidecar.py`, `tests/test_db_schema_v29.py`.
   - **Notes formatter agent (manual REPAIR pass, `POST /api/runs/{id}/notes-format`,
     per prose sheet):** the only AI role that authors styling on demand; returns
     JSON style patches applied to `notes_cells.html`, rejected unless rendered
@@ -1121,7 +1131,13 @@ Load-bearing invariants:
   INPUT only. The notes reviewer auto-resolves every non-placed row via two
   grounded tools (`resolve_coverage_note` → `confirmed_absent`/`not_applicable`;
   `verify_subnote` → `verified`/`missing`) accumulated on `NotesReviewerDeps`;
-  the FINAL checklist merges those verdicts + reviewer-authored notes. The pass
+  the FINAL checklist merges those verdicts + reviewer-authored notes. **Batch
+  variants (2026-07-07) cut turn count** — `resolve_coverage_notes` /
+  `verify_subnotes` / `clear_note_cells` apply a list in ONE tool call under the
+  same grounding + once-per-pass snapshot latch, so the reviewer stops burning
+  one turn per row/ref (which was timing the pass out against the 300s wallclock
+  — `notes_reviewer_wallclock_exceeded`). Pinned by
+  `tests/test_notes_reviewer_coverage.py`. The pass
   recomputes + persists on EVERY exit path (`_finalize_coverage` in
   `server._run_notes_reviewer_pass`): success → `reviewed`; crash/construction
   failure → `not_reviewed` draft; empty inventory → `inventory_unavailable` +

@@ -284,6 +284,55 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
   });
 });
 
+describe("NotesReviewTab — style-source chip (schema v29)", () => {
+  const STYLE_SAMPLE: NotesCellsResponse = {
+    sheets: [
+      {
+        sheet: "Notes-CI",
+        rows: [
+          {
+            row: 4, label: "Agent styled", html: "<p>a</p>", evidence: null,
+            source_pages: [3], updated_at: "2026-07-07T00:00:00Z",
+            style_source: "ops",
+          },
+          {
+            row: 5, label: "Plain cell", html: "<p>b</p>", evidence: null,
+            source_pages: [3], updated_at: "2026-07-07T00:00:00Z",
+            style_source: "unstyled",
+          },
+          {
+            row: 6, label: "House styled", html: "<p>c</p>", evidence: null,
+            source_pages: [3], updated_at: "2026-07-07T00:00:00Z",
+            style_source: "floor",
+          },
+          {
+            row: 7, label: "Legacy cell", html: "<p>d</p>", evidence: null,
+            source_pages: [3], updated_at: "2026-07-07T00:00:00Z",
+            style_source: null,
+          },
+        ],
+      },
+    ],
+  };
+
+  test("chip renders only for unstyled/floor, not ops/null", async () => {
+    mockFetchOnce(STYLE_SAMPLE);
+    render(<NotesReviewTab runId={9} focusSheet="Notes-CI" />);
+    await waitFor(() =>
+      expect(screen.getByText("Plain cell")).toBeInTheDocument(),
+    );
+    const chips = screen.getAllByTestId("notes-style-source-chip");
+    // Two chips: the "unstyled" row and the "floor" row.
+    const sources = chips
+      .map((c) => c.getAttribute("data-style-source"))
+      .sort();
+    expect(sources).toEqual(["floor", "unstyled"]);
+    // The agent-styled and legacy rows carry no chip.
+    expect(screen.getByText("Agent styled")).toBeInTheDocument();
+    expect(screen.getByText("Legacy cell")).toBeInTheDocument();
+  });
+});
+
 describe("NotesReviewTab — numeric table alignment (Part A)", () => {
   const TABLE_SAMPLE: NotesCellsResponse = {
     sheets: [

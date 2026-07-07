@@ -49,7 +49,9 @@ def _open_conn(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
-_SNAPSHOT_COLS = "sheet, row, label, html, evidence, source_pages, concept_uuid"
+_SNAPSHOT_COLS = (
+    "sheet, row, label, html, evidence, source_pages, concept_uuid, style_source"
+)
 
 
 def snapshot_notes_cells(db_path: str | Path, run_id: int) -> int:

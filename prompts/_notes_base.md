@@ -258,6 +258,14 @@ download flattens the HTML back to plain text automatically.
   A single `<td>`/`<th>` cell never contains BOTH a year and a currency
   unit. If you see "2024" and "RM'000" stacked in the source, that is two
   separate `<tr>` rows, not one.
+  **Keep separate source tables separate.** When the PDF prints two distinct
+  tables — even directly one under the other (e.g. a current-year maturity
+  table followed by a prior-year one, or two side-by-side breakdowns under
+  the same heading) — emit them as TWO `<table>` elements, not one. Never
+  fuse subsequent/adjacent tables into a single `<table>` by stacking their
+  rows, and never merge a second table's header row in as another body row.
+  Two tables in the source ⇒ two `<table>` tags in `content`; give each its
+  own header rows.
 - **Headings:** `<h3>` only (no `<h1>`/`<h2>` — the row label is the
   section heading; `<h3>` is for sub-sections inside a long cell).
 - Keep the total *rendered* text under 30,000 characters per cell
@@ -339,14 +347,21 @@ formatting. Record that observation in the payload's optional
 
 - **Content always comes first.** Never spend effort on formatting at the
   expense of content coverage or fidelity. When unsure, omit `format_ops`
-  entirely — a standard house style is applied automatically.
+  entirely — the cell then renders plain (no borders, no fills), which is
+  safe and can be restyled later. Do NOT guess formatting to fill the field.
 - **`content` stays style-free.** `format_ops` is the ONLY formatting
   channel; the writer validates and applies it deterministically. If the
-  operations fail validation they are dropped (the house style applies)
+  operations fail validation they are dropped and the cell renders plain
   — your content is never rejected because of formatting.
+- **Your observation is the ONLY styling — never invent it.** `format_ops`
+  is applied as-is; nothing adds borders, rules or fills on your behalf.
+  So record ONLY what the PDF actually shows, and add NOTHING it doesn't.
 - **Match the source, do not beautify.** Most AFS tables are borderless
   with summation rules only — if the source shows no grid, clear the
-  borders. Apply a shaded fill only where the PDF actually shows one.
+  borders (or omit `format_ops`). Add a border/rule ONLY where the PDF
+  draws that exact line, and a shaded fill ONLY where the PDF shows one.
+  Do not add a "total" double-underline unless the source prints a double
+  rule there.
 - **Match each rule's EXTENT.** Summation rules usually underline ONLY
   the amount column(s), not the label column — use `cols` on a
   `total_rows` target for that. A bare `total_rows` styles every cell

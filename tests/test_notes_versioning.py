@@ -86,6 +86,34 @@ def test_snapshot_then_revert_restores_exact_original(db_path: Path) -> None:
     assert _live_rows(db_path, run_id) == {10: "<p>orig 10</p>", 11: "<p>orig 11</p>"}
 
 
+def test_revert_restores_original_style_source(db_path: Path) -> None:
+    """Snapshot/revert must round-trip the v29 style_source tag, so reverting a
+    formatter (or reviewer) pass brings back the original chip, not NULL."""
+    run_id = _seed_run(db_path)
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_SHEET, row=10, label="Row 10",
+            html="<p>orig</p>", style_source="unstyled",
+        )
+    assert ensure_notes_snapshot(str(db_path), run_id) is True
+    # Formatter styles the cell — tag flips to "formatter", chip clears.
+    with repo.db_session(db_path) as conn:
+        assert repo.cas_update_notes_cell_html(
+            conn, run_id=run_id, sheet=_SHEET, row=10,
+            expected_html="<p>orig</p>", new_html="<p>styled</p>",
+            style_source="formatter",
+        )
+    with repo.db_session(db_path) as conn:
+        cur = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert cur[10].style_source == "formatter"
+    # Revert brings back both the original HTML AND the original tag.
+    revert_notes_to_original(str(db_path), run_id)
+    with repo.db_session(db_path) as conn:
+        back = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert back[10].html == "<p>orig</p>"
+    assert back[10].style_source == "unstyled"
+
+
 def test_empty_original_snapshot_then_authored_cell_reverts_to_empty(
     db_path: Path,
 ) -> None:

@@ -163,6 +163,10 @@ class NotesCell:
     evidence: Optional[str] = None
     source_pages: list[int] = field(default_factory=list)
     updated_at: str = ""
+    # v29: how the cell got its styling — 'ops' (agent format_ops), 'floor'
+    # (deterministic house style), 'unstyled' (plain), or None (legacy /
+    # reviewer-authored). Read-only signal for the operator.
+    style_source: Optional[str] = None
 
 
 @dataclass
@@ -734,6 +738,7 @@ def upsert_notes_cell(
     evidence: Optional[str] = None,
     source_pages: Optional[list[int]] = None,
     concept_uuid: Optional[str] = None,
+    style_source: Optional[str] = None,
 ) -> int:
     """Insert or update a single notes cell and return its id.
 
@@ -753,7 +758,7 @@ def upsert_notes_cell(
     now = _now()
     pages_json = json.dumps(list(source_pages)) if source_pages else None
     existing = conn.execute(
-        "SELECT id, concept_uuid FROM notes_cells "
+        "SELECT id, concept_uuid, style_source FROM notes_cells "
         "WHERE run_id = ? AND sheet = ? AND row = ?",
         (run_id, sheet, row),
     ).fetchone()
@@ -769,18 +774,24 @@ def upsert_notes_cell(
             or existing[1]
             or mint_notes_concept_uuid(sheet, row, label)
         )
+        # Preserve a previously-recorded style_source when the caller omits one
+        # (e.g. the reviewer's edit/author path, which doesn't run the styling
+        # sidecar) — same "don't silently downgrade" rule as concept_uuid.
+        style = style_source if style_source is not None else existing[2]
         conn.execute(
             "UPDATE notes_cells SET label = ?, html = ?, evidence = ?, "
-            "source_pages = ?, updated_at = ?, concept_uuid = ? WHERE id = ?",
-            (label, html, evidence, pages_json, now, cuid, cell_id),
+            "source_pages = ?, updated_at = ?, concept_uuid = ?, "
+            "style_source = ? WHERE id = ?",
+            (label, html, evidence, pages_json, now, cuid, style, cell_id),
         )
         return cell_id
     cuid = concept_uuid or mint_notes_concept_uuid(sheet, row, label)
     cur = conn.execute(
         "INSERT INTO notes_cells(run_id, sheet, row, label, html, "
-        "evidence, source_pages, updated_at, concept_uuid) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (run_id, sheet, row, label, html, evidence, pages_json, now, cuid),
+        "evidence, source_pages, updated_at, concept_uuid, style_source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_id, sheet, row, label, html, evidence, pages_json, now, cuid,
+         style_source),
     )
     return int(cur.lastrowid)
 
@@ -812,6 +823,7 @@ def list_notes_cells_for_run(
             evidence=r["evidence"],
             source_pages=decode_source_pages(r["source_pages"]),
             updated_at=r["updated_at"] or "",
+            style_source=r["style_source"],
         ))
     return cells
 
@@ -1386,6 +1398,7 @@ def cas_update_notes_cell_html(
     row: int,
     expected_html: str,
     new_html: str,
+    style_source: Optional[str] = None,
 ) -> bool:
     """Statement-atomic compare-and-swap on one notes cell's HTML.
 
@@ -1393,14 +1406,25 @@ def cas_update_notes_cell_html(
     concurrent PATCH can never land between a read and this write. Returns
     False (nothing written) when the row was edited away from
     ``expected_html`` — or no longer exists at all (sheet regenerate).
-    Touches only ``html`` + ``updated_at``; label/evidence/concept_uuid are
-    preserved.
+    Touches only ``html`` + ``updated_at`` (and ``style_source`` when the
+    caller supplies one); label/evidence/concept_uuid are preserved.
+
+    Pass ``style_source`` when the write re-styles the cell (the notes
+    formatter passes ``'formatter'``) so the stale "unstyled"/"floor" chip
+    clears — omit it (None) to leave the existing tag untouched.
     """
-    cur = conn.execute(
-        "UPDATE notes_cells SET html = ?, updated_at = ? "
-        "WHERE run_id = ? AND sheet = ? AND row = ? AND html = ?",
-        (new_html, _now(), run_id, sheet, row, expected_html),
-    )
+    if style_source is not None:
+        cur = conn.execute(
+            "UPDATE notes_cells SET html = ?, updated_at = ?, style_source = ? "
+            "WHERE run_id = ? AND sheet = ? AND row = ? AND html = ?",
+            (new_html, _now(), style_source, run_id, sheet, row, expected_html),
+        )
+    else:
+        cur = conn.execute(
+            "UPDATE notes_cells SET html = ?, updated_at = ? "
+            "WHERE run_id = ? AND sheet = ? AND row = ? AND html = ?",
+            (new_html, _now(), run_id, sheet, row, expected_html),
+        )
     return cur.rowcount > 0
 
 

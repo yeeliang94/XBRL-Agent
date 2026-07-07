@@ -38,7 +38,8 @@ def persist_notes_cells(
 
     Each entry in ``cells_written`` is a dict-like with keys:
 
-        sheet, row, label, html, evidence (optional), source_pages (optional list[int])
+        sheet, row, label, html, evidence (optional), source_pages (optional list[int]),
+        style_source (optional 'ops'|'floor'|'unstyled')
 
     Returns the number of rows upserted (0 if ``cells_written`` is
     empty — which is a legitimate outcome for a "no prose, numeric-only"
@@ -68,6 +69,7 @@ def persist_notes_cells(
             # `source_pages` is optional (defaults to []), `evidence`
             # may be None for rows the agent chose to leave uncited.
             source_pages = cell.get("source_pages") or []
+            style_source = cell.get("style_source")
             repo.upsert_notes_cell(
                 conn,
                 run_id=run_id,
@@ -81,6 +83,9 @@ def persist_notes_cells(
                     else None
                 ),
                 source_pages=[int(p) for p in source_pages],
+                style_source=(
+                    str(style_source) if style_source is not None else None
+                ),
             )
     return len(cells_list)
 

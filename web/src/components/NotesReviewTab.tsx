@@ -929,6 +929,36 @@ function SheetSection({
 }
 
 // ---------------------------------------------------------------------------
+// Style-source chip — surfaces how a prose cell got its table styling at
+// extraction time (schema v29). We only render a chip for the cases the
+// operator wants to hunt down: "unstyled" (rendered plain — the default now
+// that the house-style floor is off) and "floor" (deterministic house style,
+// not a PDF observation). "ops" (agent observed the formatting) and null
+// (blank / reviewer-authored / legacy) render nothing, to keep the column
+// quiet. The chip is a hint to run the notes formatter on that cell.
+function StyleSourceChip({
+  source,
+}: {
+  source?: "ops" | "floor" | "unstyled" | "formatter" | null;
+}) {
+  if (source !== "unstyled" && source !== "floor") return null;
+  const label = source === "unstyled" ? "Unstyled" : "House style";
+  const title =
+    source === "unstyled"
+      ? "This cell rendered plain — the agent recorded no table formatting. Run the notes formatter to style it."
+      : "Styled by the deterministic house style, not a PDF observation. Review or run the notes formatter if it doesn't match the source.";
+  return (
+    <span
+      data-testid="notes-style-source-chip"
+      data-style-source={source}
+      style={styles.styleSourceChip}
+      title={title}
+    >
+      {label}
+    </span>
+  );
+}
+
 // Cell row — label + evidence on the left, editor + actions on the right.
 // ---------------------------------------------------------------------------
 
@@ -1308,6 +1338,7 @@ function CellRow({
       <aside style={styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
         <div style={styles.cellRowNum}>Row {cell.row}</div>
+        <StyleSourceChip source={cell.style_source} />
         {cell.evidence && (
           <div
             data-testid="notes-review-evidence"
@@ -2125,6 +2156,19 @@ const styles = {
     fontSize: 11,
     color: pwc.grey500,
     fontFamily: pwc.fontMono,
+  } as React.CSSProperties,
+  styleSourceChip: {
+    display: "inline-block",
+    marginTop: 4,
+    padding: "1px 6px",
+    borderRadius: 8,
+    border: `1px solid ${pwc.grey300}`,
+    background: pwc.grey100,
+    color: pwc.grey700,
+    fontSize: 10,
+    fontWeight: 600,
+    letterSpacing: 0.2,
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   evidenceBlock: {
     marginTop: 6,

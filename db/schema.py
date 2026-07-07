@@ -153,7 +153,12 @@ from pathlib import Path
 # checklist is recomputed wholesale after the notes reviewer pass and rewritten
 # for the Coverage panel. Pure CREATE TABLE IF NOT EXISTS walk-forward (new
 # table, no ALTER). Pinned by tests/test_db_schema_v28.py.
-CURRENT_SCHEMA_VERSION = 28
+# v29 adds `notes_cells.style_source` — how each prose cell got its styling:
+# 'ops' (agent format_ops observation), 'floor' (deterministic house style),
+# 'unstyled' (plain), or NULL (legacy / reviewer-authored). Surfaced so the
+# operator can see which notes fell back to plain and need a manual formatter
+# pass. Nullable ALTER TABLE column. Pinned by tests/test_db_schema_v29.py.
+CURRENT_SCHEMA_VERSION = 29
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -495,6 +500,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         source_pages  TEXT,
         updated_at    TEXT NOT NULL,
         concept_uuid  TEXT,                    -- P7: link to canonical concept store; NULL = legacy notes write
+        style_source  TEXT,                    -- v29: 'ops'|'floor'|'unstyled'; NULL = legacy / reviewer-authored
         UNIQUE(run_id, sheet, row)
     )
     """,
@@ -796,6 +802,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         evidence      TEXT,
         source_pages  TEXT,                       -- JSON list[int]
         concept_uuid  TEXT,
+        style_source  TEXT,                        -- v29: mirror notes_cells so revert restores the chip
         snapshot_at   TEXT NOT NULL,
         UNIQUE(run_id, sheet, row)
     )
@@ -1138,6 +1145,15 @@ _V27_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("notes_format_tasks", "completion_tokens", "INTEGER DEFAULT 0"),
     ("notes_format_tasks", "cache_read_tokens", "INTEGER DEFAULT 0"),
     ("notes_format_tasks", "cache_write_tokens", "INTEGER DEFAULT 0"),
+)
+
+# v28 → v29: record per-cell styling provenance on notes_cells so the operator
+# can see which prose cells rendered plain (and want a manual formatter pass).
+# The snapshot table mirrors it so "Revert to original" restores the tag.
+# Nullable — legacy rows and reviewer-authored cells stay NULL.
+_V29_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("notes_cells", "style_source", "TEXT"),
+    ("run_notes_cell_snapshots", "style_source", "TEXT"),
 )
 
 
@@ -2071,6 +2087,46 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (28,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            # Re-read so the v28→v29 block below sees the advanced marker.
+            cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            existing = cur.fetchone()
+            current_version = int(existing[0]) if existing is not None else None
+
+        # v28 → v29: add notes_cells.style_source. Same BEGIN IMMEDIATE +
+        # re-check + duplicate-column tolerance as the earlier column steps
+        # (a fresh DB got the column inline in the CREATE, so the PRAGMA
+        # check skips the ALTER there).
+        if current_version is not None and current_version < 29:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 29:
+                    for table, col_name, col_ddl in _V29_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (29,),
                     )
                 conn.commit()
             except Exception:
