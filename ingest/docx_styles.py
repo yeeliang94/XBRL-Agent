@@ -320,8 +320,18 @@ def extract_style_maps(src: str | Path) -> DocxStyleMaps:
                 rows.append(cells)
             maps.tables.append(rows)
         elif child.tag == _q("p"):
-            maps.paragraphs.append(_extract_paragraph_style(child))
+            # mammoth DROPS text-less (spacer) paragraphs from its output, so we
+            # skip them here too — otherwise every empty paragraph shifts the
+            # positional correspondence and the injection pass (which requires an
+            # exact block-count match) bails on any document with spacers. Empty
+            # paragraphs carry no copyable formatting anyway.
+            if _paragraph_has_text(child):
+                maps.paragraphs.append(_extract_paragraph_style(child))
     return maps
+
+
+def _paragraph_has_text(p: ET.Element) -> bool:
+    return any((t.text or "").strip() for t in p.iter(_q("t")))
 
 
 # --- CSS translation (resolved style -> sanitiser vocabulary) ---------------

@@ -117,10 +117,21 @@ def _styled_document() -> str:
         + "</w:tr>"
         "</w:tbl>"
     )
+    # A standalone (non-table) paragraph carrying real block formatting:
+    # right-aligned, with before/after spacing and a left indent. Exercises the
+    # paragraph-injection pass (Codex/HIGH follow-up).
+    spaced_para = (
+        "<w:p><w:pPr>"
+        '<w:jc w:val="right"/>'
+        '<w:ind w:left="360"/>'
+        '<w:spacing w:before="120" w:after="240"/>'
+        "</w:pPr><w:r><w:t>Approved by the board.</w:t></w:r></w:p>"
+    )
     body = "".join([
         _para("4. PROPERTY, PLANT AND EQUIPMENT", heading=True),
         _para("The movement in property, plant and equipment."),
         table,
+        spaced_para,
     ])
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

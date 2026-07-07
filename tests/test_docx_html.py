@@ -93,6 +93,24 @@ def test_injection_carries_word_table_styling_into_html(tmp_path: Path):
     assert "1px solid #000000" in html
 
 
+def test_injection_carries_standalone_paragraph_styling(tmp_path: Path):
+    """Regression (Codex/HIGH): paragraph-level formatting OUTSIDE tables
+    (alignment, indent, before/after spacing) must reach source.html too — the
+    prompt tells the agent to copy it, so it can't silently vanish."""
+    src = build_styled_docx(tmp_path / "styled.docx")
+    html = docx_html.extract_docx_html(src)
+    # The "Approved by the board." paragraph carried jc=right + ind + spacing.
+    import re
+
+    m = re.search(
+        r'<p[^>]*style="([^"]*)"[^>]*>\s*Approved by the board', html)
+    assert m, f"styled standalone paragraph not found in: {html!r}"
+    style = m.group(1)
+    assert "text-align: right" in style
+    assert "margin-left" in style
+    assert "margin-top" in style and "margin-bottom" in style
+
+
 def test_injected_props_are_all_sanitiser_acceptable_or_reference_only(
     tmp_path: Path,
 ):
