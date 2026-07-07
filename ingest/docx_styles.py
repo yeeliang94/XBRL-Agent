@@ -345,11 +345,10 @@ _ALIGN_MAP = {"center": "center", "right": "right", "both": "justify",
 def cell_css(style: CellStyle, *, include_reference_only: bool = True) -> str:
     """Sanitiser-whitelisted CSS for a table cell, from its resolved style.
 
-    Tier-1 props (per-side borders, text-align, background-color) are always
-    emitted. ``include_reference_only`` adds padding — a REFERENCE-only property
-    the notes sanitiser does not yet accept on write (Phase 4). ``source.html``
-    is never sanitised, so it may carry it; the agent is told to ignore it until
-    the write path plumbs it (Step 7)."""
+    Since Phase 4 every property the reader emits — per-side borders, text-align,
+    background-color, AND padding — is write-accepted by the notes sanitiser, so
+    all are emitted. ``include_reference_only`` is retained (defaulting True) for
+    API stability; it now only gates padding, which no caller disables."""
     decls: list[str] = []
     for side in _SIDES:
         v = _edge_css(style.borders.get(side))
@@ -369,8 +368,10 @@ def cell_css(style: CellStyle, *, include_reference_only: bool = True) -> str:
 
 
 def para_css(style: ParaStyle, *, include_reference_only: bool = True) -> str:
-    """Sanitiser-whitelisted CSS for a block (<p>/<h3>/<li>). Tier-1: text-align
-    + margin-left (indent). Reference-only: margin top/bottom (spacing)."""
+    """Sanitiser-whitelisted CSS for a block (<p>/<h3>/<li>): text-align,
+    margin-left (indent), and — since Phase 4 — margin-top/bottom (before/after
+    spacing), all write-accepted. ``include_reference_only`` (default True) is
+    retained for API stability."""
     decls: list[str] = []
     if style.align and style.align in _ALIGN_MAP:
         decls.append(f"text-align: {_ALIGN_MAP[style.align]}")
@@ -385,12 +386,16 @@ def para_css(style: ParaStyle, *, include_reference_only: bool = True) -> str:
     return "; ".join(decls)
 
 
-# The subset of cell_css / para_css properties the notes sanitiser accepts on
-# WRITE today (Tier 1). Kept next to the emitters so the Step-5 test can assert
-# the two vocabularies don't drift, and Phase 4 knows exactly what to widen.
+# The properties cell_css / para_css emit, all now write-accepted by the notes
+# sanitiser (Phase 4 promoted padding + block spacing from reference-only to
+# Tier-1). Kept next to the emitters so the drift-guard test asserts the two
+# vocabularies stay in lock-step. REFERENCE_ONLY_PROPS is retained but EMPTY:
+# nothing the reader emits is reference-only anymore.
 TIER1_CELL_PROPS = frozenset({
     "border-top", "border-right", "border-bottom", "border-left",
-    "text-align", "background-color",
+    "text-align", "background-color", "padding",
 })
-TIER1_BLOCK_PROPS = frozenset({"text-align", "margin-left"})
-REFERENCE_ONLY_PROPS = frozenset({"padding", "margin-top", "margin-bottom"})
+TIER1_BLOCK_PROPS = frozenset({
+    "text-align", "margin-left", "margin-top", "margin-bottom",
+})
+REFERENCE_ONLY_PROPS: frozenset[str] = frozenset()

@@ -143,21 +143,22 @@ def test_paragraph_alignment_indent_and_spacing():
 
 # --- vocabulary drift guard --------------------------------------------------
 def test_emitted_props_match_the_sanitiser_whitelist():
-    """Every Tier-1 property the reader emits must be one the notes sanitiser
-    accepts on a table/block tag — otherwise an injected style would be silently
-    stripped on write. Reference-only props (padding/margins) are the documented
-    exception (Phase 4)."""
+    """Every property the reader emits must be one the notes sanitiser accepts
+    on a table/block tag — otherwise an injected style would be silently stripped
+    on write. Since Phase 4 that includes padding (cells) and margin-top/bottom
+    (blocks), so REFERENCE_ONLY_PROPS is now empty."""
     from notes.html_sanitize import _STYLE_PROPS_BY_TAG
 
     td_props = _STYLE_PROPS_BY_TAG["td"]
     block_props = _STYLE_PROPS_BY_TAG["p"]
-    # Tier-1 cell props are all sanitiser-accepted on <td>.
+    # Every cell prop the reader emits (incl. padding) is accepted on <td>.
     assert TIER1_CELL_PROPS <= td_props
-    # Tier-1 block props are all sanitiser-accepted on <p>.
+    assert "padding" in TIER1_CELL_PROPS and "padding" in td_props
+    # Every block prop (incl. margin-top/bottom) is accepted on <p>.
     assert TIER1_BLOCK_PROPS <= block_props
-    # Reference-only props are NOT (yet) accepted — that's why they're flagged.
-    assert not (REFERENCE_ONLY_PROPS & td_props)
-    assert not (REFERENCE_ONLY_PROPS & block_props)
+    assert {"margin-top", "margin-bottom"} <= block_props
+    # Nothing is reference-only anymore (Phase 4 plumbed padding + spacing).
+    assert REFERENCE_ONLY_PROPS == frozenset()
 
 
 # convenience: build a bytes-docx and hand extract_style_maps a path-like
