@@ -61,6 +61,9 @@ interface Props {
    *  Optional so the panel keeps working in tests / CLI-shaped
    *  callers that don't have a draft to PATCH against. */
   onConfigChange?: (config: RunConfigPayload) => void;
+  /** Admin gate for the eval/benchmark-grading control (an internal QA
+   *  feature). Non-admins never see it. Defaults to false (Phase 3). */
+  isAdmin?: boolean;
 }
 
 const styles = {
@@ -270,7 +273,11 @@ function _seedScoutEnabled(
   return true;  // Original default when no rehydration.
 }
 
-export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange }: Props) {
+export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false }: Props) {
+  // Advanced disclosure (Phase 3): keeps the default view to the accounting
+  // choices; AI-model pickers, scanned-PDF handling, and benchmark grading
+  // live behind this toggle.
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scoutError, setScoutError] = useState<string | null>(null);
@@ -1092,11 +1099,46 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </div>
       </div>
 
-      {/* Gold-standard eval (v16): attach a benchmark to grade this run
-          against. The dropdown only offers benchmarks matching the selected
-          filing standard + level (concept uuids differ per filing). */}
+      {/* Advanced disclosure (Phase 3): a single toggle that reveals the
+          power-user controls — per-statement/per-note AI model pickers, the
+          scanned-PDF handling, and (for admins) benchmark grading. Everyday
+          runs never need to open this. */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Eval testing</span>
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          aria-expanded={showAdvanced}
+          data-testid="advanced-toggle"
+          style={{
+            alignSelf: "flex-start",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 0",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontFamily: pwc.fontHeading,
+            fontSize: 13,
+            fontWeight: pwc.weight.medium,
+            color: pwc.grey700,
+          }}
+        >
+          <span aria-hidden="true">{showAdvanced ? "▾" : "▸"}</span>
+          Advanced settings
+          <span style={{ color: pwc.grey500, fontWeight: pwc.weight.regular }}>
+            (AI models{isAdmin ? ", accuracy grading" : ""}, scanned PDFs)
+          </span>
+        </button>
+      </div>
+
+      {/* Gold-standard eval (v16): attach a benchmark to grade this run
+          against. Admin-only + inside Advanced (an internal QA feature). The
+          dropdown only offers benchmarks matching the selected filing
+          standard + level (concept uuids differ per filing). */}
+      {showAdvanced && isAdmin && (
+      <div style={styles.section}>
+        <span style={styles.sectionLabel}>Accuracy grading</span>
         {/* A button-based switch (NOT an <input type=checkbox>) so it stays out
             of the statement/notes checkbox set the layout tests pin, and reads
             as a pair with the filing-standard / level button toggles above. */}
@@ -1160,14 +1202,21 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         )}
         {evalSelectionMissing && evalCandidates.length > 0 && (
           <span data-testid="eval-pick-hint" style={{ fontSize: 12, color: pwc.orange700 }}>
-            Pick a benchmark to start the run, or turn eval testing off.
+            Pick a benchmark to start the run, or turn grading off.
           </span>
         )}
       </div>
+      )}
 
-      {/* Scout toggle + auto-detect */}
+      {/* Document pre-scan (formerly "Scout"): reads the PDF first to suggest
+          statements, formats and note locations. Results are suggestions to
+          verify — never enforced (gotcha #13). */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Scout</span>
+        <span style={styles.sectionLabel}>Document pre-scan</span>
+        <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey500, marginTop: -4 }}>
+          Reads your document to suggest which statements it contains and how
+          they're laid out. You confirm everything below before the run.
+        </span>
         <ScoutToggle
           enabled={scoutEnabled}
           onToggle={setScoutEnabled}
@@ -1178,7 +1227,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           scoutModel={scoutModel}
           onScoutModelChange={handleScoutModelChange}
         />
-        {scoutEnabled && (
+        {scoutEnabled && showAdvanced && (
           <label
             style={{
               display: "flex", alignItems: "center", gap: pwc.space.sm,
@@ -1193,9 +1242,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               disabled={isDetecting}
             />
             <span>
-              Scanned PDF
-              <span style={{ color: pwc.grey300, marginLeft: 6, fontSize: 12 }}>
-                (skip text extraction, use vision)
+              My document is a scanned image
+              <span style={{ color: pwc.grey500, marginLeft: 6, fontSize: 12 }}>
+                (no selectable text — the AI reads it visually instead)
               </span>
             </span>
           </label>
@@ -1308,11 +1357,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               }}
               role="status"
             >
-              <span>Inventory: {count} note{count === 1 ? "" : "s"}</span>
+              <span>Found {count} note{count === 1 ? "" : "s"} in the document.</span>
               {hintVisible && (
                 <span>
-                  Scout couldn't read any notes from this PDF. Enable "Scanned PDF"
-                  above and re-run Auto-detect to force the vision path.
+                  No notes were found in this document. If it's a scanned image,
+                  open Advanced settings, tick "My document is a scanned image",
+                  and run the pre-scan again.
                 </span>
               )}
             </div>
@@ -1322,9 +1372,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       <hr style={styles.divider} />
 
-      {/* Variant selection */}
+      {/* Statement format (variant) selection */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Variants</span>
+        <span style={styles.sectionLabel}>Statement format</span>
         <VariantSelector
           selections={variantSelections}
           enabledStatements={enabledStmts}
@@ -1335,32 +1385,33 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       <hr style={styles.divider} />
 
-      {/* Statement selection + model overrides */}
+      {/* Which statements to extract. The per-statement AI-model picker only
+          shows inside Advanced (Phase 3). */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Statements &amp; Models</span>
+        <span style={styles.sectionLabel}>Statements to extract</span>
         <StatementRunConfig
           enabled={statementsEnabled}
           modelOverrides={modelOverrides}
           availableModels={availableModels}
           onToggleStatement={handleToggleStatement}
           onModelChange={handleModelChange}
+          showModels={showAdvanced}
         />
       </div>
 
       <hr style={styles.divider} />
 
       {/* Notes templates — independent of face statements. Default OFF.
-          Layout mirrors Statements & Models (checkbox + per-row model
-          picker) so users can opt in per template *and* pick the model
-          that fills it. */}
+          The per-note model picker also lives behind Advanced. */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Notes & Models</span>
+        <span style={styles.sectionLabel}>Notes to include</span>
         <NotesRunConfig
           enabled={notesEnabled}
           modelOverrides={notesModelOverrides}
           availableModels={availableModels}
           onToggleNote={handleToggleNote}
           onModelChange={handleNotesModelChange}
+          showModels={showAdvanced}
         />
       </div>
 
@@ -1373,7 +1424,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         className={uiClass.btnPrimary}
         style={styles.runButton}
       >
-        Run Extraction
+        Start extraction
       </button>
     </div>
   );

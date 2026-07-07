@@ -8,6 +8,10 @@ interface Props {
   availableModels: ModelEntry[];
   onToggleStatement: (stmt: StatementType, enabled: boolean) => void;
   onModelChange: (stmt: StatementType, modelId: string) => void;
+  /** Show the per-statement AI-model picker column. Defaults to true so
+   *  existing callers/tests are unaffected; the pre-run panel passes false to
+   *  keep model choices under its Advanced disclosure (Phase 3). */
+  showModels?: boolean;
 }
 
 const styles = {
@@ -84,6 +88,7 @@ export function StatementRunConfig({
   availableModels,
   onToggleStatement,
   onModelChange,
+  showModels = true,
 }: Props) {
   return (
     <table style={styles.table}>
@@ -103,21 +108,23 @@ export function StatementRunConfig({
                   <span style={styles.stmtName}>{STATEMENT_LABELS[stmt]}</span>
                 </label>
               </td>
-              <td style={styles.cell}>
-                <select
-                  role="combobox"
-                  value={modelOverrides[stmt]}
-                  disabled={!isEnabled}
-                  onChange={(e) => onModelChange(stmt, e.target.value)}
-                  style={isEnabled ? styles.select : styles.selectDisabled}
-                >
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.display_name}
-                    </option>
-                  ))}
-                </select>
-              </td>
+              {showModels && (
+                <td style={styles.cell}>
+                  <select
+                    role="combobox"
+                    value={modelOverrides[stmt]}
+                    disabled={!isEnabled}
+                    onChange={(e) => onModelChange(stmt, e.target.value)}
+                    style={isEnabled ? styles.select : styles.selectDisabled}
+                  >
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              )}
             </tr>
           );
         })}
