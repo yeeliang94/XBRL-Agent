@@ -49,6 +49,19 @@ describe("extractErrorDetail", () => {
     expect(out).toContain("column_map is required");
     expect(out).not.toContain("[object Object]");
   });
+  test("object entries inside errors/input_errors never render [object Object]", () => {
+    const out = extractErrorDetail({ detail: { errors: [{ detail: "bad column map" }] } })!;
+    expect(out).toContain("bad column map");
+    expect(out).not.toContain("[object Object]");
+    const out2 = extractErrorDetail({
+      detail: { input_errors: [{ loc: ["body", "sheet"], msg: "unknown sheet" }] },
+    })!;
+    expect(out2).toMatch(/Sheet: unknown sheet/);
+    expect(out2).not.toContain("[object Object]");
+    // A truly opaque object falls back to compact JSON, still not the placeholder.
+    const out3 = extractErrorDetail({ detail: { errors: [{ code: 7 }] } })!;
+    expect(out3).not.toContain("[object Object]");
+  });
   test("returns null for an unusable body", () => {
     expect(extractErrorDetail({})).toBeNull();
     expect(extractErrorDetail(null)).toBeNull();

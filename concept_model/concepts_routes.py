@@ -17,8 +17,10 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel
+
+from auth.deps import require_admin_dep
 
 
 def _now() -> str:
@@ -226,7 +228,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
         finally:
             conn.close()
 
-    @app.get("/api/templates")
+    @app.get("/api/templates", dependencies=[Depends(require_admin_dep)])
     def list_templates():
         """Phase 5.1 — every imported template, run-independent.
 
@@ -245,7 +247,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
         finally:
             conn.close()
 
-    @app.get("/api/templates/{template_id}/concepts")
+    @app.get("/api/templates/{template_id}/concepts", dependencies=[Depends(require_admin_dep)])
     def template_concepts(template_id: str):
         """Phase 5.1 — concept rows for one template, with NO run scope.
 
@@ -274,7 +276,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
         finally:
             conn.close()
 
-    @app.patch("/api/concepts/{concept_uuid}/display_label")
+    @app.patch("/api/concepts/{concept_uuid}/display_label", dependencies=[Depends(require_admin_dep)])
     def patch_display_label(concept_uuid: str, body: DisplayLabelPatch):
         """UI-only override.  PRD §9 — never leaves the system; the
         exporter ignores it and writes the canonical label."""
