@@ -214,8 +214,9 @@ downstream reader loses the numbers. When the note has BOTH policy prose
 and a schedule (common for Leases, Receivables, Property plant and
 equipment), include both: prose first (in `<p>` blocks), then the table.
 
-Use `calculator()` for any column-total or roll-forward arithmetic in
-these schedules. Do not compute subtotals or reconciliations mentally.
+Use `calculator([expr, ...])` for any column-total or roll-forward arithmetic
+in these schedules — pass a list of expressions and they're evaluated together
+in one turn. Do not compute subtotals or reconciliations mentally.
 
 When uncertain which note concept a disclosure belongs to, call
 `lookup_definitions([...])` to read the OFFICIAL SSM definition of each

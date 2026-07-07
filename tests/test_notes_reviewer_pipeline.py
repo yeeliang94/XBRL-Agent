@@ -171,6 +171,119 @@ def test_reviewer_pass_construction_failure_surfaces_error(
     assert by_kind["complete"]["success"] is False
 
 
+# --- stalled-turn scaffolding (successor to the deleted validator stall test) ---
+
+
+class _StalledTurn:
+    """An async iterator whose first node blocks forever — simulates a hung
+    model turn so the pass's per-turn timeout must cancel it."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        raise AssertionError("unreachable")
+
+
+class _StalledAgentRun:
+    """Stand-in for the object yielded by ``agent.iter(...)`` — an async context
+    manager whose iteration is the stalled turn."""
+
+    def __init__(self, it: _StalledTurn) -> None:
+        self._it = it
+        self.ctx = object()
+
+    def __aiter__(self):
+        return self._it
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _StalledAgent:
+    def __init__(self, it: _StalledTurn) -> None:
+        self._it = it
+
+    def iter(self, *a, **k):
+        return _StalledAgentRun(self._it)
+
+
+class _FakeReviewerDeps:
+    """Minimal deps the reviewer pass touches on the timeout path."""
+
+    writes_performed = 0
+
+    def __init__(self) -> None:
+        self.flags: list = []
+        self.correction_log: list = []
+        self.coverage_note_verdicts: dict = {}
+        self.coverage_subnote_verdicts: dict = {}
+        self.authored_note_nums: set = set()
+
+
+def test_reviewer_pass_times_out_on_stalled_turn(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    """A stalled model turn must not hang the notes reviewer pass.
+
+    Successor to the deleted validator stall test
+    (`test_notes_validator_times_out_when_turn_stalls`): with a low per-turn cap
+    and a turn that never yields, the pass surfaces a
+    `notes_reviewer_wallclock_exceeded` error + failure-`complete` and CANCELS
+    the stalled turn — it never blocks the outer run.
+    """
+    import server
+    import notes.reviewer_agent as ra_mod
+
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(
+            conn, "x.pdf", session_id="s", output_dir=str(tmp_path))
+        # A notes cell so ensure_notes_snapshot (pre-loop) has something to snapshot.
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_S12, row=49,
+                               label="Disclosure of fair value information",
+                               html="<p>fv</p>")
+
+    stalled = _StalledTurn()
+    # One detector finding so count_open_items > 0 → the pass reaches the loop.
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+
+    def _fake_create(*a, **k):
+        return _StalledAgent(stalled), _FakeReviewerDeps(), context
+    monkeypatch.setattr(ra_mod, "create_notes_reviewer_agent", _fake_create)
+    # turn_timeout = min(wallclock, NOTES_VALIDATOR_TURN_TIMEOUT); drive it low.
+    monkeypatch.setattr(server, "NOTES_VALIDATOR_WALLCLOCK_TIMEOUT", 0.1)
+
+    q: asyncio.Queue = asyncio.Queue()
+    outcome = asyncio.run(asyncio.wait_for(
+        server._run_notes_reviewer_pass(
+            run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+            filing_level="company", filing_standard="mfrs",
+            model=FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("x")])),
+            output_dir=str(tmp_path), merged_workbook_path=None, event_queue=q,
+            sidecar_paths=[],
+        ),
+        timeout=10.0,  # safety net — a regression that hangs fails loudly here
+    ))
+
+    assert outcome["invoked"] is True
+    assert outcome["error"] == "notes_reviewer_wallclock_exceeded"
+    assert stalled.cancelled is True, "the stalled turn must be cancelled"
+    by_kind = {e["event"]: e["data"] for e in _drain(q)}
+    assert by_kind["error"]["type"] == "notes_reviewer_wallclock_exceeded"
+    assert by_kind["complete"]["success"] is False
+
+
 def test_reviewer_pass_skips_when_no_findings(db_path: Path, tmp_path):
     import server
 
