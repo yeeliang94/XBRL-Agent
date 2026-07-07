@@ -397,14 +397,15 @@ export function RunDetailView({
   // emphasis: audit (overview) → debug (agents/telemetry) → review (values).
   const tabs: { key: RunTabKey; label: string }[] = [
     { key: "overview", label: "Overview" },
-    { key: "agents", label: "Agents" },
+    // "Activity" (was "Agents") shows what the AI did, per statement, with a
+    // collapsed "Performance details" section that used to be the Telemetry tab.
+    { key: "agents", label: "Activity" },
     { key: "notes", label: "Notes" },
     { key: "checks", label: "Cross-checks" },
-    { key: "telemetry", label: "Telemetry" },
     ...(canonicalEnabled
       ? [
-          { key: "review" as RunTabKey, label: "Review" },
-          { key: "values" as RunTabKey, label: "Values" },
+          { key: "review" as RunTabKey, label: "AI review" },
+          { key: "values" as RunTabKey, label: "Figures" },
         ]
       : []),
     // Gold-standard eval (v16): the Eval scorecard tab only appears when this
@@ -470,23 +471,14 @@ export function RunDetailView({
             style={ui.buttonPrimary}
             title={
               canDownload
-                ? "Download merged workbook"
-                : "No merged workbook (run failed before merge)"
+                ? "Download the completed Excel file"
+                : "The Excel file isn't ready (the run stopped before it was assembled)"
             }
           >
-            Download filled workbook
+            Download filled Excel
           </button>
-          {canonicalEnabled && (
-            <button
-              type="button"
-              onClick={() => setTab("values")}
-              className={uiClass.btnGhost}
-              style={ui.buttonGhost}
-              title="Review this run's extracted values and reconciliation queue"
-            >
-              Review values
-            </button>
-          )}
+          {/* The "Figures" tab is the single door to reviewing values — the
+              old duplicate "Review values" button was removed (Phase 2). */}
           <button
             type="button"
             onClick={() => setMtoolOpen(true)}
@@ -568,14 +560,23 @@ export function RunDetailView({
       {activeTab === "agents" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-agents">
           {detail.agents.length === 0 ? (
-            <p style={styles.dim}>No agents were recorded for this run.</p>
+            <p style={styles.dim}>Nothing was recorded for this run yet.</p>
           ) : (
-            <div style={styles.agentStack}>
+            <div style={styles.agentStack} data-testid="run-detail-agent-list">
               {detail.agents.map((agent) => (
                 <AgentCard key={agent.id} agent={agent} />
               ))}
             </div>
           )}
+          {/* Timing + AI-usage detail (the former Telemetry tab), tucked into a
+              collapsed disclosure so the everyday view stays about what the AI
+              did, not token/latency internals. */}
+          <details style={styles.perfDetails} data-testid="run-detail-telemetry">
+            <summary style={styles.perfSummary}>Performance details</summary>
+            <div style={{ marginTop: pwc.space.md }}>
+              <AgentTelemetryPanel detail={detail} />
+            </div>
+          </details>
         </section>
       )}
 
@@ -602,12 +603,6 @@ export function RunDetailView({
               <PdfSourcePane runId={detail.id} pages={pdfPages} />
             </div>
           )}
-        </section>
-      )}
-
-      {activeTab === "telemetry" && (
-        <section style={styles.section} role="tabpanel" data-testid="run-detail-telemetry">
-          <AgentTelemetryPanel detail={detail} />
         </section>
       )}
 
@@ -843,6 +838,18 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.md,
+  } as React.CSSProperties,
+  perfDetails: {
+    marginTop: pwc.space.lg,
+    borderTop: `1px solid ${pwc.grey200}`,
+    paddingTop: pwc.space.md,
+  } as React.CSSProperties,
+  perfSummary: {
+    cursor: "pointer",
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey700,
   } as React.CSSProperties,
   agentCard: {
     display: "flex",

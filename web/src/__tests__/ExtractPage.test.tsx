@@ -93,13 +93,11 @@ describe("ExtractPage — render-gate regression guards", () => {
     });
     render(<ExtractPage {...props} />);
 
+    // One review door (Phase 2): a single "Open run report" button leads into
+    // the tabbed run detail (whose Figures tab replaces the old separate
+    // "Review extracted values" action).
     expect(
-      screen.getByRole("button", { name: /review extracted values/i }),
-    ).toBeInTheDocument();
-    // B + C: the results screen also leads into the full run report
-    // (flag-independent door to the tabbed run detail).
-    expect(
-      screen.getByRole("button", { name: /open full run report/i }),
+      screen.getByRole("button", { name: /open run report/i }),
     ).toBeInTheDocument();
   });
 

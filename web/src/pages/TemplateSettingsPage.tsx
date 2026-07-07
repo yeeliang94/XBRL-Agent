@@ -99,7 +99,10 @@ export function TemplateSettingsPage() {
 
   return (
     <div data-testid="template-settings-page" style={styles.page}>
-      <PageHeader title="Template settings" />
+      <PageHeader
+        title="Field labels"
+        description="Rename how individual template line items are labelled on screen. This doesn't change the XBRL — only the display text."
+      />
       {error && (
         <div style={{ color: pwc.error, marginBottom: pwc.space.md }}>
           {error}
@@ -114,8 +117,8 @@ export function TemplateSettingsPage() {
           data-testid="ts-empty"
           style={{ color: pwc.grey700, padding: `${pwc.space.md}px 0` }}
         >
-          No templates have been imported yet. Run an extraction in canonical
-          mode to populate the template registry.
+          No templates yet. Run an extraction first — the templates it uses will
+          appear here for you to relabel.
         </div>
       ) : (
         <>

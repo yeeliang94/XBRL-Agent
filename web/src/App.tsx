@@ -559,6 +559,7 @@ export default function App() {
                 : state.view
             }
             showConcepts={canonicalEnabled}
+            isAdmin={Boolean(user?.is_admin)}
             onViewChange={(v) => {
               // Tabs are "go to the top of that section" — clicking
               // History from anywhere must show the list, not the last
@@ -608,9 +609,15 @@ export default function App() {
 
       <main
         style={
-          state.view === "concepts"
+          // The full-bleed wrapper is only for the standalone 3-column
+          // ConceptsPage (bare Template landing, no run id). A `/concepts/{id}`
+          // run page renders the tabbed run detail, so it uses the same
+          // history gutter as `/history/{id}` (Phase 2 gutter fix).
+          state.view === "concepts" && state.selectedRunId == null
             ? styles.mainFull
-            : state.view === "history" || state.view === "benchmarks"
+            : state.view === "history" ||
+              state.view === "benchmarks" ||
+              state.view === "concepts"
             ? styles.mainHistory
             : styles.main
         }
