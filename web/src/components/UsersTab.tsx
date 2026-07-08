@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import { ConfirmDialog } from "./ConfirmDialog";
 import {
   adminListUsers,
   adminAddUser,
@@ -63,14 +64,10 @@ const styles = {
     alignItems: "center",
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
+  // Shared input primitive (Phase 6 layout normalization) instead of the
+  // off-spec local one.
   input: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
-    fontSize: 13,
-    color: pwc.grey900,
-    outline: "none",
+    ...ui.input,
   } as React.CSSProperties,
   heading: {
     fontFamily: pwc.fontHeading,
@@ -105,6 +102,12 @@ export function UsersTab() {
   // Inline reset-password target (the row currently being reset, by email)
   const [resetTarget, setResetTarget] = useState<string | null>(null);
   const [resetValue, setResetValue] = useState("");
+  // One shared confirm dialog for the one-click account actions (disable/
+  // enable, make/revoke admin) — they change who can sign in or administer the
+  // tool, so they confirm like every other consequential action.
+  const [pending, setPending] = useState<
+    { title: string; message: string; confirmLabel: string; act: () => Promise<unknown> } | null
+  >(null);
 
   const reload = useCallback(async () => {
     setError(null);
@@ -189,7 +192,16 @@ export function UsersTab() {
                   className={uiClass.btnSecondary}
                   style={styles.actionBtn}
                   disabled={busy}
-                  onClick={() => run(() => adminSetDisabled(u.email, !u.disabled))}
+                  onClick={() =>
+                    setPending({
+                      title: u.disabled ? `Enable ${u.email}?` : `Disable ${u.email}?`,
+                      message: u.disabled
+                        ? "This account will be able to sign in again."
+                        : "This account will no longer be able to sign in. Any active sessions end.",
+                      confirmLabel: u.disabled ? "Enable" : "Disable",
+                      act: () => adminSetDisabled(u.email, !u.disabled),
+                    })
+                  }
                 >
                   {u.disabled ? "Enable" : "Disable"}
                 </button>
@@ -197,7 +209,16 @@ export function UsersTab() {
                   className={uiClass.btnSecondary}
                   style={styles.actionBtn}
                   disabled={busy}
-                  onClick={() => run(() => adminSetAdmin(u.email, !u.is_admin))}
+                  onClick={() =>
+                    setPending({
+                      title: u.is_admin ? `Revoke admin from ${u.email}?` : `Make ${u.email} an admin?`,
+                      message: u.is_admin
+                        ? "This account will lose access to settings and user management."
+                        : "This account will be able to change shared settings and manage other users.",
+                      confirmLabel: u.is_admin ? "Revoke admin" : "Make admin",
+                      act: () => adminSetAdmin(u.email, !u.is_admin),
+                    })
+                  }
                 >
                   {u.is_admin ? "Revoke admin" : "Make admin"}
                 </button>
@@ -281,6 +302,20 @@ export function UsersTab() {
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={pending !== null}
+        title={pending?.title ?? ""}
+        message={pending?.message ?? ""}
+        confirmLabel={pending?.confirmLabel ?? "Confirm"}
+        busy={busy}
+        onConfirm={() => {
+          const p = pending;
+          setPending(null);
+          if (p) void run(p.act);
+        }}
+        onCancel={() => setPending(null)}
+      />
     </div>
   );
 }

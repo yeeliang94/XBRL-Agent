@@ -17,6 +17,7 @@ import { AgentTabs } from "../components/AgentTabs";
 import type { AgentTabState } from "../components/AgentTabs";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesSubTabBar } from "../components/NotesSubTabBar";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
 import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
 import { isNonAgentTab } from "../lib/agentTabKinds";
@@ -485,6 +486,10 @@ export function ActiveTabPanel({
   // tab bar. The state lives here (not on AppState) because it's purely a
   // UI detail that doesn't need to survive navigation away from /extract.
   const [notes12SubId, setNotes12SubId] = useState<string | null>(null);
+  // Confirm before re-running one statement (it discards that statement's
+  // current result and starts it over). Shared dialog, like every other
+  // destructive action.
+  const [confirmRerun, setConfirmRerun] = useState(false);
 
   // Stop-all is meaningful regardless of which tab is active; surfaced on
   // every header (validator included) so users always have one click out.
@@ -607,7 +612,7 @@ export function ActiveTabPanel({
           {showRerun && (
             <button
               type="button"
-              onClick={() => onRerunAgent!(activeTabId)}
+              onClick={() => setConfirmRerun(true)}
               style={{ ...styles.toolbarBtnBase, ...styles.primaryBtn }}
               title={`Rerun ${activeAgent?.label ?? "agent"}`}
               aria-label={`Rerun ${activeAgent?.label ?? "agent"}`}
@@ -615,6 +620,18 @@ export function ActiveTabPanel({
               Rerun
             </button>
           )}
+          <ConfirmDialog
+            isOpen={confirmRerun}
+            title={`Re-run ${activeAgent?.label ?? "this statement"}?`}
+            message="This starts this statement over from scratch. Its current result is discarded and replaced by the new run."
+            confirmLabel="Re-run"
+            danger={false}
+            onConfirm={() => {
+              setConfirmRerun(false);
+              onRerunAgent!(activeTabId);
+            }}
+            onCancel={() => setConfirmRerun(false)}
+          />
         </div>
         <div style={styles.activityHeaderRight}>
           <span style={styles.activityCount}>

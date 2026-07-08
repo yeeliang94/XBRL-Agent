@@ -23,15 +23,11 @@ const styles = {
     display: "block",
     marginBottom: pwc.space.xs,
   } as React.CSSProperties,
+  // Adopt the shared input primitive (Phase 6 layout normalization: 11/16
+  // padding, 44px min-height, grey300 border) instead of the off-spec local one.
   input: {
+    ...ui.input,
     width: "100%",
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey900,
-    outline: "none",
     boxSizing: "border-box" as const,
   } as React.CSSProperties,
   helperText: {

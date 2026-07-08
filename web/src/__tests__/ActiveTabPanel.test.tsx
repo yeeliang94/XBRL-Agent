@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { ActiveTabPanel } from "../pages/ExtractPage";
 import { initialState } from "../lib/appReducer";
 import { createAgentState } from "../lib/types";
@@ -186,6 +186,9 @@ describe("ActiveTabPanel — header toolbar", () => {
 
     const btn = screen.getByRole("button", { name: /rerun sofp/i });
     fireEvent.click(btn);
+    // Confirm in the shared dialog before the re-run fires.
+    const dialog = screen.getByRole("dialog", { name: /re-run/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^re-run$/i }));
     expect(onRerun).toHaveBeenCalledWith("sofp_0");
   });
 
