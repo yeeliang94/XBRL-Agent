@@ -267,7 +267,21 @@ pins the server gate; web suite 919 green.
 
 **Tests:** test_settings_api.py gains admin-gate cases; UsersTab/GeneralSettingsForm web tests.
 
-### Phase 7 — Motion & perceived speed
+### Phase 7 — Motion & perceived speed — 🟩 CORE DONE (some micro-anims light-touch)
+
+**Status note (2026-07-08):** Motion tokens (`theme.ts` `motion`), the global
+`prefers-reduced-motion` block, and the `skeleton-shimmer`/`dialog-in` keyframes
+shipped in the Phase 5 foundation commit, along with the shared `Disclosure`
+(slide-open + chevron rotate) and `ConfirmDialog` (scale-in) primitives. This
+phase added the `Skeleton`/`SkeletonText` primitives and used them for the
+History list and the Review / Notes-review / Coverage panel loading states
+(replacing "Loading…" text), plus a crossfade transition on the run-report tab
+indicator. Live-feed tool-call cards already fade in (Phase 4). **Light-touch /
+follow-up:** count-up stat numbers, per-cell save-flash, pipeline-strip fill,
+status-badge crossfade, and an exhaustive universal-button-busy audit were left
+as polish — most action buttons already carry busy labels ("Reviewing…",
+"Restoring…", "Filling…"), and count-up/save-flash carry real test risk in the
+value/notes monoliths for marginal gain.
 
 **Goal:** the app feels snappy and deliberate. Two halves: perceived-speed mechanics (the bigger
 payoff) and micro-animations. Both must stay inside the PwC design language — motion follows the

@@ -3,6 +3,7 @@ import { ApiError, userMessage } from "../lib/errors";
 import { coverageStatusLabel, subNoteStateLabel } from "../lib/vocabulary";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
+import { SkeletonText } from "./Skeleton";
 
 /**
  * Notes Coverage checklist panel (docs/PLAN-notes-coverage-and-routing.md
@@ -125,7 +126,12 @@ export function NotesCoveragePanel({ runId }: Props) {
     return () => ctrl.abort();
   }, [load]);
 
-  if (loading) return <p style={styles.dim}>Loading coverage…</p>;
+  if (loading)
+    return (
+      <div style={styles.panel}>
+        <SkeletonText lines={2} label="Loading coverage…" />
+      </div>
+    );
   if (error)
     return (
       <p style={styles.error} role="alert">
