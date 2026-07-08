@@ -520,7 +520,7 @@ const styles = {
     border: `1px solid ${pwc.grey200}`,
     borderRadius: pwc.radius.md,
     padding: pwc.space.md,
-    background: "#fff",
+    background: pwc.white,
   } as const,
   flagHead: {
     display: "flex",
@@ -546,7 +546,7 @@ const styles = {
   } as const,
   reviewBtn: {
     background: pwc.info,
-    color: "#fff",
+    color: pwc.white,
     border: "none",
     borderRadius: pwc.radius.md,
     padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
@@ -554,7 +554,7 @@ const styles = {
     cursor: "pointer",
   } as const,
   revertBtn: {
-    background: "#fff",
+    background: pwc.white,
     color: pwc.errorText,
     border: `1px solid ${pwc.errorBorder}`,
     borderRadius: pwc.radius.md,
@@ -564,7 +564,7 @@ const styles = {
   } as const,
   smallBtn: {
     background: pwc.info,
-    color: "#fff",
+    color: pwc.white,
     border: "none",
     borderRadius: pwc.radius.sm,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,

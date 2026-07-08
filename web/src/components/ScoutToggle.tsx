@@ -48,8 +48,8 @@ const styles = {
     height: 16,
     borderRadius: "50%",
     background: pwc.white,
-    transition: "left 0.2s",
-    boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+    transition: `left ${pwc.motion.duration.base} ${pwc.motion.easing}`,
+    boxShadow: pwc.shadow.card,
   } as React.CSSProperties,
   detectButton: {
     ...ui.buttonSecondary,

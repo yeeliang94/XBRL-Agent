@@ -122,8 +122,8 @@ textarea:focus {
   background: #FFF5ED !important; /* orange50 */
 }
 .pwc-btn-danger:hover:not(:disabled) {
-  background: #FBE9E9 !important; /* errorBg */
-  border-color: #DC2626 !important; /* error */
+  background: #FCECEC !important; /* errorBg */
+  border-color: #E5484D !important; /* error */
 }
 .pwc-btn-primary:disabled,
 .pwc-btn-secondary:disabled,

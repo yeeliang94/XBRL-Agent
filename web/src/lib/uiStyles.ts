@@ -235,6 +235,43 @@ export const ui = {
     flexShrink: 0,
   }),
 
+  // Dense inset box — the named home for the 12px inset used inside cards for
+  // sub-sections / compact panels (layout normalization: promote the ad-hoc
+  // 12px inset to a token so it stops being re-derived per component).
+  cardInset: {
+    padding: pwc.space.md,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    background: pwc.white,
+  } as CSSProperties,
+
+  // One KPI/stat tile at the canonical 16px padding (layout normalization:
+  // replaces the 16 / 24 / 32 tiles scattered across StatTiles / EvalTab /
+  // BenchmarksPage with a single shape).
+  statTile: {
+    padding: pwc.space.lg,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    background: pwc.white,
+    minWidth: 110,
+  } as CSSProperties,
+
+  // Icon button — the shared ≥32px hit-area primitive for glyph-only controls
+  // (layout normalization: sub-32px icon buttons were an accessibility miss).
+  iconButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 32,
+    minHeight: 32,
+    padding: pwc.space.xs,
+    borderRadius: pwc.radius.md,
+    border: "1px solid transparent",
+    background: "transparent",
+    color: pwc.grey700,
+    cursor: "pointer",
+  } as CSSProperties,
+
   // --- Table -------------------------------------------------------------
   tableWrap: {
     border: `1px solid ${pwc.grey200}`,
@@ -257,6 +294,25 @@ export const ui = {
   td: {
     padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
     borderBottom: `1px solid ${pwc.grey200}`,
+  } as CSSProperties,
+
+  // Dense table cells (8/12) — ONE shared compact variant for data-dense
+  // tables (telemetry, cross-checks, coverage), replacing the bespoke
+  // 4/8 · 8/12 · 0/6 paddings each of those grew independently.
+  thDense: {
+    textAlign: "left",
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    background: pwc.grey100,
+    fontSize: 12,
+    textTransform: "uppercase",
+    letterSpacing: 0,
+    color: pwc.grey500,
+    fontWeight: pwc.weight.semibold,
+    borderBottom: `1px solid ${pwc.grey200}`,
+  } as CSSProperties,
+  tdDense: {
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    borderBottom: `1px solid ${pwc.grey100}`,
   } as CSSProperties,
 };
 
