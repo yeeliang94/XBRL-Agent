@@ -746,7 +746,7 @@ describe("PreRunPanel", () => {
     };
     const getSettings = vi.fn().mockResolvedValue(settings);
     render(
-      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} isAdmin />,
     );
 
     await waitFor(() => {
@@ -761,7 +761,7 @@ describe("PreRunPanel", () => {
 
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
     render(
-      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} isAdmin />,
     );
 
     await waitFor(() => {
@@ -817,7 +817,7 @@ describe("PreRunPanel", () => {
 
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
     render(
-      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
+      <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} isAdmin />,
     );
 
     await waitFor(() => {

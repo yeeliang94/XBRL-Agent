@@ -307,8 +307,18 @@ async def update_settings(body: dict, request: Request):
 
 
 @router.post("/api/test-connection")
-async def test_connection(body: dict):
-    """Test LLM connectivity with provided or .env settings."""
+async def test_connection(body: dict, request: Request):
+    """Test LLM connectivity with provided or .env settings.
+
+    Admin-only: this exercises the shared AI plumbing with a supplied model /
+    proxy / key, so it's gated the same way as writing those settings (the
+    hidden button in the settings form is only a UI guard).
+    """
+    with db_session(server.AUDIT_DB_PATH) as conn:
+        denied = auth_routes._require_admin(conn, request)
+    if denied is not None:
+        return denied
+
     load_dotenv(server.ENV_FILE, override=True)
 
     model_name = body.get("model") or os.environ.get("TEST_MODEL", "openai.gpt-5.4")

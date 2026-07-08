@@ -70,3 +70,18 @@ def test_non_admin_can_write_cosmetic_only(env):
         "notes_table_style": {"headerFill": "#f4f4f4"},
     })
     assert r.status_code == 200
+
+
+def test_non_admin_cannot_test_connection(env):
+    """The connection test exercises the shared AI plumbing, so it's admin-only
+    server-side — hiding the button in the UI is not the boundary."""
+    client = TestClient(server.app)
+    _login(client, "user@firm.com", "user-password")
+    r = client.post("/api/test-connection", json={"model": "openai.gpt-5.4"})
+    assert r.status_code == 403
+
+
+def test_unauthenticated_test_connection_is_401(env):
+    client = TestClient(server.app)
+    r = client.post("/api/test-connection", json={"model": "openai.gpt-5.4"})
+    assert r.status_code == 401
