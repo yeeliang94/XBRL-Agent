@@ -68,7 +68,8 @@ interface Props {
   onGaps?: (rows: CoverageNavRow[]) => void;
 }
 
-const RESOLVED = new Set(["confirmed_absent", "not_applicable"]);
+// Reviewer verdicts that resolve a non-placed note (so it's not an open gap).
+const RESOLVED_VERDICTS = new Set(["confirmed_absent", "not_applicable"]);
 
 /** Rows that still need a human look: missing / suspected-gap notes the reviewer
  *  didn't resolve. Placed / skipped / reviewer-resolved rows are not gaps. */
@@ -76,11 +77,9 @@ export function coverageGapRows(rows: CoverageNavRow[]): CoverageNavRow[] {
   return rows.filter(
     (r) =>
       (r.status === "missing" || r.status === "suspected_gap") &&
-      !RESOLVED.has(r.reviewer_verdict || ""),
+      !RESOLVED_VERDICTS.has(r.reviewer_verdict || ""),
   );
 }
-
-const RESOLVED_VERDICTS = new Set(["confirmed_absent", "not_applicable"]);
 
 function statusColor(row: CoverageNavRow): string {
   if (row.status === "placed") return pwc.success;

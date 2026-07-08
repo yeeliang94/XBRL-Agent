@@ -1042,6 +1042,17 @@ function StyleSourceChip({
   );
 }
 
+/** Report a focused cell's source PDF pages to the workspace — but ONLY when
+ *  the cell actually cites pages. A page-less note must leave the Source PDF
+ *  pane on its current page rather than blanking it (review-workspace Phase 1
+ *  spec: "a cell with no pages leaves the pane unchanged"). */
+function reportCellPages(
+  pages: number[] | undefined,
+  cb?: (pages: number[]) => void,
+) {
+  if (pages && pages.length > 0) cb?.(pages);
+}
+
 // Cell row — label + evidence on the left, editor + actions on the right.
 // ---------------------------------------------------------------------------
 
@@ -1428,9 +1439,10 @@ function CellRow({
       // Focusing (click or keyboard-tab) any part of this row tells the
       // workspace which PDF pages the note came from, so the Source PDF pane
       // follows the note the way it follows a face figure. Capture phase so it
-      // fires even when focus lands on the nested editor.
-      onFocusCapture={() => onActiveCellPages?.(cell.source_pages ?? [])}
-      onMouseDown={() => onActiveCellPages?.(cell.source_pages ?? [])}
+      // fires even when focus lands on the nested editor. A page-less note
+      // leaves the pane unchanged (reportCellPages guards on non-empty).
+      onFocusCapture={() => reportCellPages(cell.source_pages, onActiveCellPages)}
+      onMouseDown={() => reportCellPages(cell.source_pages, onActiveCellPages)}
     >
       <aside style={styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
@@ -1573,8 +1585,8 @@ function NumericCellRow({
       data-testid="notes-numeric-row"
       data-cell-row={cell.row}
       style={styles.cellRow}
-      onFocusCapture={() => onActiveCellPages?.(cell.source_pages ?? [])}
-      onMouseDown={() => onActiveCellPages?.(cell.source_pages ?? [])}
+      onFocusCapture={() => reportCellPages(cell.source_pages, onActiveCellPages)}
+      onMouseDown={() => reportCellPages(cell.source_pages, onActiveCellPages)}
     >
       <aside style={styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
