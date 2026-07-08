@@ -202,6 +202,10 @@ export function createMultiAgentSSE(
       onDone();
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
+        // Show the operator a plain-language message, but keep the real error
+        // in the console for support — a parse error or a callback exception
+        // is NOT a network problem and would otherwise be misreported here.
+        console.error("Multi-agent SSE stream failed:", err);
         onError("The connection to the run was lost. Please check your network and try again.");
       }
     }
@@ -264,6 +268,9 @@ export function createMultiAgentSSEByRunId(
       onDone();
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
+        // Same as createMultiAgentSSE: friendly message to the operator, real
+        // error to the console so support can see a non-network failure.
+        console.error("Multi-agent SSE stream (by run id) failed:", err);
         onError("The connection to the run was lost. Please check your network and try again.");
       }
     }

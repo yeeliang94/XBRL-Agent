@@ -91,20 +91,59 @@ export function ConfirmDialog({
   onCancel,
 }: Props) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  // Keep the latest onCancel/busy in refs so the Escape listener never has to
+  // list them as effect deps — otherwise a new inline onCancel identity on
+  // every parent re-render would re-run the focus effect and steal focus back
+  // to Confirm (unusable during a streaming run that re-renders continuously).
+  const onCancelRef = useRef(onCancel);
+  const busyRef = useRef(busy);
+  onCancelRef.current = onCancel;
+  busyRef.current = busy;
 
-  // Escape cancels (while open and not mid-action). Focus the confirm button
-  // on open so a keyboard user can act without reaching for the mouse.
+  // Focus the confirm button on open (keyboard users can act without the
+  // mouse) and restore focus to the trigger element on close. Keyed on
+  // [isOpen] ONLY so re-renders while open never re-steal focus.
   useEffect(() => {
     if (!isOpen) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
     confirmRef.current?.focus();
+    return () => previouslyFocused?.focus?.();
+  }, [isOpen]);
+
+  // Escape cancels (while open and not mid-action). Separate effect reading
+  // refs, so it registers once per open and never re-fires the focus effect.
+  useEffect(() => {
+    if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onCancel();
+      if (e.key === "Escape" && !busyRef.current) onCancelRef.current();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, busy, onCancel]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
+
+  // Trap Tab between the two buttons so focus can't escape an aria-modal
+  // dialog to the background. Only the confirm button is disabled while busy;
+  // Cancel stays reachable, so the trap targets whichever buttons are live.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab") return;
+    const focusables = [cancelRef.current, confirmRef.current].filter(
+      (b): b is HTMLButtonElement => !!b && !b.disabled,
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   return (
     <div
@@ -116,12 +155,15 @@ export function ConfirmDialog({
       role="dialog"
       aria-modal="true"
       aria-label={title}
+      aria-describedby="confirm-dialog-message"
+      onKeyDown={onKeyDown}
     >
       <div style={styles.modal}>
         <h2 style={styles.heading}>{title}</h2>
-        <p style={styles.body}>{message}</p>
+        <p id="confirm-dialog-message" style={styles.body}>{message}</p>
         <div style={styles.actions}>
           <button
+            ref={cancelRef}
             type="button"
             className={uiClass.btnSecondary}
             style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
