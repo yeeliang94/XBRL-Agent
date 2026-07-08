@@ -178,6 +178,27 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(rows.length).toBe(3);
   });
 
+  // Review-workspace Phase 1: focusing a notes cell reports its source PDF
+  // pages so the workspace's Source PDF pane can follow the note.
+  test("focusing a cell reports its source_pages via onActiveCellPages", async () => {
+    mockFetchOnce(SAMPLE);
+    const onActiveCellPages = vi.fn();
+    const { container } = render(
+      <NotesReviewTab runId={42} onActiveCellPages={onActiveCellPages} />,
+    );
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    const rows = container.querySelectorAll<HTMLElement>(
+      '[data-testid="notes-review-row"]',
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    // First cell in SAMPLE carries source_pages [3].
+    fireEvent.mouseDown(rows[0]);
+    expect(onActiveCellPages).toHaveBeenCalledWith([3]);
+  });
+
   test("renders html as rich dom not escaped text", async () => {
     mockFetchOnce(SAMPLE);
     const { container } = render(<NotesReviewTab runId={42} />);

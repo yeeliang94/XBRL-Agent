@@ -114,6 +114,12 @@ export interface NotesReviewTabProps {
    *  SheetNavigator: that section auto-expands and scrolls into view. null /
    *  undefined = no focus (the default stacked, all-collapsed view). */
   focusSheet?: string | null;
+  /** Fired when the reviewer focuses (clicks / tabs into) a notes cell, with
+   *  the PDF pages that cell was extracted from (`NotesCell.source_pages`). The
+   *  workspace uses it to drive the Source PDF pane so a note and its source
+   *  page sit side by side, the way a face figure already does. Optional — the
+   *  standalone Notes tab renders identically without it. */
+  onActiveCellPages?: (pages: number[]) => void;
 }
 
 /** Editor lifecycle status chip per cell. */
@@ -226,7 +232,7 @@ export function canonicalizeHtmlForCompare(html: string): string {
   return root.innerHTML;
 }
 
-export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewTabProps) {
+export function NotesReviewTab({ runId, onRegenerate, focusSheet, onActiveCellPages }: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
   // failure surfaces in a single banner instead of per-cell flicker.
@@ -592,6 +598,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
               focus={active.sheet === sh.sheet}
               focusKey={active.key}
               onFormatted={reloadNotes}
+              onActiveCellPages={onActiveCellPages}
             />
           ))}
         </div>
@@ -643,6 +650,7 @@ function SheetSection({
   onFormatted,
   focus = false,
   focusKey = 0,
+  onActiveCellPages,
 }: {
   runId: number;
   sheet: NotesSheet;
@@ -658,6 +666,8 @@ function SheetSection({
   /** Bumps on every nav-chip click so re-selecting an already-focused but
    *  manually-collapsed section re-opens it (focus alone wouldn't change). */
   focusKey?: number;
+  /** Threaded to each row so focusing a cell reports its source PDF pages. */
+  onActiveCellPages?: (pages: number[]) => void;
 }) {
   // Collapsed by default so a run with 3-5 sheets doesn't mount every
   // TipTap editor on first paint. Matches the agent-card pattern above
@@ -936,6 +946,7 @@ function SheetSection({
                 key={`${runId}:${sheet.sheet}:${cell.row}`}
                 runId={runId}
                 cell={cell}
+                onActiveCellPages={onActiveCellPages}
               />
             ) : (
               // Include `runId` in the CellRow key as well — belt-and-
@@ -948,6 +959,7 @@ function SheetSection({
                 cell={cell}
                 theme={theme}
                 onSaveStatusChange={handleRowSaveStatus}
+                onActiveCellPages={onActiveCellPages}
               />
             ),
           )}
@@ -997,6 +1009,7 @@ function CellRow({
   cell,
   theme,
   onSaveStatusChange,
+  onActiveCellPages,
 }: {
   runId: number;
   sheet: string;
@@ -1005,6 +1018,9 @@ function CellRow({
    *  clipboard output matches the editor preview. */
   theme: ClipboardFormatOptions;
   onSaveStatusChange?: (row: number, status: SaveStatus) => void;
+  /** Fired on focus/click with this cell's source PDF pages so the workspace
+   *  can jump the Source PDF pane to where the note came from. */
+  onActiveCellPages?: (pages: number[]) => void;
 }) {
   const [editable, setEditable] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
@@ -1363,7 +1379,16 @@ function CellRow({
   }, [copiedAt]);
 
   return (
-    <div data-testid="notes-review-row" style={styles.cellRow}>
+    <div
+      data-testid="notes-review-row"
+      style={styles.cellRow}
+      // Focusing (click or keyboard-tab) any part of this row tells the
+      // workspace which PDF pages the note came from, so the Source PDF pane
+      // follows the note the way it follows a face figure. Capture phase so it
+      // fires even when focus lands on the nested editor.
+      onFocusCapture={() => onActiveCellPages?.(cell.source_pages ?? [])}
+      onMouseDown={() => onActiveCellPages?.(cell.source_pages ?? [])}
+    >
       <aside style={styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
         <div style={styles.cellRowNum}>Row {cell.row}</div>
@@ -1429,7 +1454,15 @@ function CellRow({
 // (PLAN-notes-template-registry Track B) rather than the prose notes_cells.
 // ---------------------------------------------------------------------------
 
-function NumericCellRow({ runId, cell }: { runId: number; cell: NotesCell }) {
+function NumericCellRow({
+  runId,
+  cell,
+  onActiveCellPages,
+}: {
+  runId: number;
+  cell: NotesCell;
+  onActiveCellPages?: (pages: number[]) => void;
+}) {
   const values = cell.values ?? {};
   // Only render the columns this filing level actually uses, in a stable
   // canonical order (NUMERIC_VALUE_COLUMNS insertion order).
@@ -1493,7 +1526,12 @@ function NumericCellRow({ runId, cell }: { runId: number; cell: NotesCell }) {
   );
 
   return (
-    <div data-testid="notes-numeric-row" style={styles.cellRow}>
+    <div
+      data-testid="notes-numeric-row"
+      style={styles.cellRow}
+      onFocusCapture={() => onActiveCellPages?.(cell.source_pages ?? [])}
+      onMouseDown={() => onActiveCellPages?.(cell.source_pages ?? [])}
+    >
       <aside style={styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
         <div style={styles.cellRowNum}>Row {cell.row}</div>
