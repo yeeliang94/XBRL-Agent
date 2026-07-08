@@ -91,4 +91,14 @@ export const pwc = {
     elevated: '0 2px 4px rgba(26,26,25,0.04), 0 4px 12px rgba(26,26,25,0.07)',
     modal: '0 8px 28px rgba(26,26,25,0.10)',
   },
+
+  // Motion — one restraint budget for the whole UI ("depth felt, not seen").
+  // Every transition/animation reads from these so nothing is bouncy or slow;
+  // a single decelerate curve (no overshoot) and three short durations. A
+  // global prefers-reduced-motion block in index.css zeroes these out.
+  motion: {
+    duration: { fast: '150ms', base: '200ms', slow: '250ms' },
+    // Decelerate, no overshoot — enterprise-calm, never playful.
+    easing: 'cubic-bezier(0.2, 0, 0, 1)',
+  },
 } as const;

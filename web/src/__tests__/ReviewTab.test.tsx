@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { ReviewTab } from "../components/ReviewTab";
 
 const originalFetch = globalThis.fetch;
@@ -122,7 +122,7 @@ describe("ReviewTab", () => {
     fireEvent.change(screen.getByLabelText("Re-review guidance"), {
       target: { value: "look at page 44" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
 
     await waitFor(() => {
       expect(posts.some((p) => p.url === "/api/runs/7/re-review")).toBe(true);
@@ -143,7 +143,7 @@ describe("ReviewTab", () => {
     fireEvent.change(screen.getByLabelText("Reviewer model"), {
       target: { value: "openai.gpt-5.4" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
     await waitFor(() => {
       const post = posts.find((p) => p.url === "/api/runs/7/re-review");
       expect(post && JSON.parse(post.init!.body as string).model).toBe("openai.gpt-5.4");
@@ -155,21 +155,23 @@ describe("ReviewTab", () => {
     mockApi(posts, { ok: true, invoked: false, writes_performed: 0, flags_raised: 0 });
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
     await waitFor(() => {
       expect(screen.getByTestId("review-notice").textContent)
         .toMatch(/no failing cross-checks or open conflicts/i);
     });
   });
 
-  test("Revert button posts to /revert-to-original (after confirm)", async () => {
+  test("Restore-original button posts to /revert-to-original (after confirm)", async () => {
     const posts: { url: string; init?: RequestInit }[] = [];
     mockApi(posts);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
 
-    fireEvent.click(screen.getByRole("button", { name: /revert to original/i }));
+    // Opens the shared confirm dialog; the POST fires on confirm.
+    fireEvent.click(screen.getByRole("button", { name: /restore original extraction/i }));
+    const dialog = screen.getByRole("dialog", { name: /restore the original extraction/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /restore original/i }));
     await waitFor(() => {
       expect(posts.some((p) => p.url === "/api/runs/7/revert-to-original")).toBe(true);
     });
@@ -182,7 +184,7 @@ describe("ReviewTab", () => {
     mockApi(posts, { ok: true, invoked: true, writes_performed: 2, flags_raised: 0, export_stale: true });
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
     await waitFor(() => {
       expect(screen.getByTestId("review-warning").textContent).toMatch(/stale/i);
     });
@@ -196,7 +198,7 @@ describe("ReviewTab", () => {
     mockApi(posts, { ok: true, invoked: true, writes_performed: 2, flags_raised: 0, cascade_error: "RuntimeError: boom" });
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
     await waitFor(() => {
       expect(screen.getByTestId("review-warning").textContent)
         .toMatch(/totals could not be recomputed after the review/i);
@@ -213,7 +215,7 @@ describe("ReviewTab", () => {
     });
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
     await waitFor(() => {
       const text = screen.getByTestId("review-warning").textContent ?? "";
       expect(text).toMatch(/totals could not be recomputed after the review/i);
@@ -226,10 +228,11 @@ describe("ReviewTab", () => {
     // be stale. The revert response carries cascade_ok:false → a warning banner.
     const posts: { url: string; init?: RequestInit }[] = [];
     mockApi(posts, { ok: true, reverted: true, cascade_ok: false, cascade_error: "RuntimeError: boom" });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /revert to original/i }));
+    fireEvent.click(screen.getByRole("button", { name: /restore original extraction/i }));
+    const dialog = screen.getByRole("dialog", { name: /restore the original extraction/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /restore original/i }));
     await waitFor(() => {
       expect(screen.getByTestId("review-warning").textContent).toMatch(/could not be recomputed/i);
     });
@@ -279,7 +282,7 @@ describe("ReviewTab", () => {
     );
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /^re-review$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/snapshot failed/i);
     });

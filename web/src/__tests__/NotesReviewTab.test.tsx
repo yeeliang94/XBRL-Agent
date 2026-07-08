@@ -386,7 +386,9 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     );
     expandAllSheets();
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
-    const editButtons = screen.getAllByRole("button", { name: /edit/i });
+    // Match the row's exact "Edit" button — the header "Re-extract notes
+    // (replaces your edits)" button also contains "edit".
+    const editButtons = screen.getAllByRole("button", { name: /^edit$/i });
     fireEvent.click(editButtons[0]);
     // After clicking Edit, the corresponding editor element gains
     // contenteditable=true.
@@ -889,7 +891,7 @@ describe("NotesReviewTab — regenerate confirm (Step 12)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getByRole("button", { name: /regenerate notes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
       expect(screen.getByText(/overwrite 3/i)).toBeInTheDocument();
@@ -926,7 +928,7 @@ describe("NotesReviewTab — regenerate confirm (Step 12)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getByRole("button", { name: /regenerate notes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
     await waitFor(() => expect(onRegenerate).toHaveBeenCalledWith(42));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -951,7 +953,7 @@ describe("NotesReviewTab — regenerate confirm (Step 12)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getByRole("button", { name: /regenerate notes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
     expect(onRegenerate).toHaveBeenCalledWith(42);
@@ -1000,7 +1002,7 @@ describe("NotesReviewTab edited_count fail-closed", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getByRole("button", { name: /regenerate notes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
 
     // The confirm modal must open — with copy that signals the safety
     // check could not run — rather than silently proceeding.
@@ -1032,7 +1034,7 @@ describe("NotesReviewTab edited_count fail-closed", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getByRole("button", { name: /regenerate notes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
 
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     expect(screen.getByRole("dialog")).toHaveTextContent(
@@ -2295,8 +2297,7 @@ describe("NotesReviewTab — AI formatter", () => {
     });
   });
 
-  test("Revert formatting confirms, calls the endpoint, and refetches cells", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  test("Remove-formatting confirms via dialog, calls the endpoint, and refetches cells", async () => {
     const fetchMock = routedFetch({
       status: (url) =>
         url.includes("Notes-CI")
@@ -2310,7 +2311,10 @@ describe("NotesReviewTab — AI formatter", () => {
     render(<NotesReviewTab runId={42} />);
     const revertButton = await screen.findByTestId("notes-format-revert");
     const before = notesCellsCalls(fetchMock);
+    // Opens the shared confirm dialog; the endpoint fires on confirm.
     fireEvent.click(revertButton);
+    const dialog = screen.getByRole("dialog", { name: /remove formatting changes/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /remove formatting/i }));
 
     await waitFor(() => {
       expect(
@@ -2320,6 +2324,5 @@ describe("NotesReviewTab — AI formatter", () => {
       ).toBe(true);
       expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
     });
-    expect(confirmSpy).toHaveBeenCalled();
   });
 });

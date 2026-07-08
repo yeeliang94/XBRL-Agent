@@ -87,6 +87,11 @@ export interface ConceptsPageProps {
   // compact gold editor is rendered. `runId` is null in this mode.
   source?: "run" | "benchmark";
   benchmarkId?: number | null;
+  // When the Figures view is embedded in the run report (which has its own
+  // Notes tab), selecting a notes sheet should hand off to that tab rather than
+  // embed a second copy of the editor. The parent passes a switch-to-Notes
+  // callback; when absent (standalone use), the editor stays embedded.
+  onOpenNotes?: () => void;
 }
 
 type Period = "CY" | "PY";
@@ -141,6 +146,7 @@ export function ConceptsPage({
   runId,
   source = "run",
   benchmarkId = null,
+  onOpenNotes,
 }: ConceptsPageProps) {
   // Gold-standard eval (v16): in benchmark mode we read/write gold facts; the
   // run-only effects (edited_count, conflicts, recheck) all short-circuit on
@@ -806,7 +812,7 @@ export function ConceptsPage({
                 className={uiClass.btnPrimary}
                 style={ui.buttonPrimary}
               >
-                Download final Excel
+                Download filled Excel
               </a>
             </div>
           </div>
@@ -887,7 +893,23 @@ export function ConceptsPage({
           )}
         </section>
 
-        {notesActive ? (
+        {notesActive && onOpenNotes ? (
+          // Embedded in the run report: don't duplicate the notes editor —
+          // the Notes tab is its single home. Hand off there instead.
+          <div data-testid="review-notes-linkout" style={styles.notesLinkOut}>
+            <p style={styles.notesLinkOutText}>
+              Notes are reviewed and edited in the <strong>Notes</strong> tab.
+            </p>
+            <button
+              type="button"
+              className={uiClass.btnPrimary}
+              style={{ ...ui.buttonPrimary, ...ui.buttonSm }}
+              onClick={onOpenNotes}
+            >
+              Open the Notes tab
+            </button>
+          </div>
+        ) : notesActive ? (
           <div data-testid="review-notes-panel">
             <NotesReviewTab runId={runId} focusSheet={activeNotesSheet} />
           </div>
@@ -2172,6 +2194,24 @@ function EditableValueCell({
 }
 
 const styles = {
+  // Hand-off panel shown in the run report's Figures view when a notes sheet
+  // is selected — the Notes tab owns the editor (no duplicate embed).
+  notesLinkOut: {
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "flex-start",
+    gap: pwc.space.md,
+    padding: pwc.space.xl,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.lg,
+    background: pwc.white,
+  } as const,
+  notesLinkOutText: {
+    margin: 0,
+    fontFamily: pwc.fontBody,
+    fontSize: 15,
+    color: pwc.grey800,
+  } as const,
   // 3-column workspace shell. No flex-wrap: columns keep their row so the
   // resize handles stay between them; the Results column flexes to fill.
   shell: {

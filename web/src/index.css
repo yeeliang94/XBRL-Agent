@@ -20,6 +20,20 @@ body {
   box-sizing: border-box;
 }
 
+/* Accessibility + enterprise-hardware floor: honour the OS "reduce motion"
+   setting by collapsing every animation/transition to a near-instant change.
+   Kept as one global block so no component has to opt in (Phase 7). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @keyframes pulse-subtle {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -55,6 +69,20 @@ body {
 @keyframes glyph-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
+}
+
+/* Skeleton shimmer — a soft opacity breathe on placeholder bars while real
+   content loads (Phase 7). Opacity-only so it costs nothing on slow laptops. */
+@keyframes skeleton-shimmer {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* Dialog entrance — scale 97%→100% with a fade (Phase 7). transform/opacity
+   only; paired backdrop fade lives on the scrim element inline. */
+@keyframes dialog-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 /* Keyboard-accessible focus ring for inline-styled buttons.
