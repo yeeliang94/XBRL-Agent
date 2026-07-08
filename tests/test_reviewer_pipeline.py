@@ -127,6 +127,79 @@ async def test_reviewer_pass_snapshots_then_applies_grounded_fix(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reviewer_outcome_carries_turn_and_tool_call_rollups(tmp_path):
+    """Run-168 QA fix: the CORRECTION row used to show '0 turns · 0 tool
+    calls' beside real token spend because the outcome never carried
+    tool_call_count (and only the success path set turns). The outcome
+    must now report the rollups the finalizers persist to run_agents."""
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    failed = [CrossCheckResult(
+        name="sofp_assets_balance", status="failed", expected=170.0,
+        actual=150.0, diff=20.0, message="assets total off by 20",
+        target_sheet="SOFP", target_row=10)]
+    queue: asyncio.Queue = asyncio.Queue()
+
+    outcome = await _run_reviewer_pass(
+        failed_checks=failed, conflicts=[], model=FunctionModel(_fix_cash_scripted),
+        filing_level="company", event_queue=queue, db_path=db, run_id=run_id)
+
+    # One scripted apply_fixes call → exactly one tool call. Turn count
+    # follows the loop's existing call-tools semantics (the closing text
+    # response also lands on a call-tools node), so pin non-zero rather
+    # than an exact figure. Token keys must exist (values come from the
+    # model's usage object; FunctionModel reports synthetic counts).
+    assert outcome["tool_call_count"] == 1
+    assert outcome["turns_used"] >= 1
+    assert int(outcome.get("total_tokens", 0)) >= 0
+    assert "prompt_tokens" in outcome
+    assert "completion_tokens" in outcome
+
+
+def _fix_then_raise(messages, info: AgentInfo) -> ModelResponse:
+    """Apply one grounded fix (records a real call-tools turn), then raise on
+    the follow-up so the reviewer exits via the generic-exception path."""
+    for m in messages:
+        for part in getattr(m, "parts", []):
+            if part.part_kind == "tool-return":
+                raise RuntimeError("boom after one real turn")
+    return ModelResponse(parts=[ToolCallPart(
+        tool_name="apply_fixes",
+        args={"fixes": [{"concept_uuid": LEAF1, "value": 120.0,
+                         "reason": "extraction misread 100; PDF shows 120",
+                         "evidence": "page 12: Cash 120"}]})])
+
+
+@pytest.mark.asyncio
+async def test_reviewer_turn_count_survives_a_failure_exit(tmp_path):
+    """Codex review P2: `outcome` is seeded with turns_used=0, so the old
+    `setdefault` at the end of the pass was a permanent no-op — the
+    wall-clock and generic-exception handlers never set turns_used, so a
+    reviewer that ran real turns before crashing still persisted 0 turns.
+    A failure exit must report the turns it actually ran."""
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    failed = [CrossCheckResult(
+        name="sofp_assets_balance", status="failed", expected=170.0,
+        actual=150.0, diff=20.0, message="assets total off by 20",
+        target_sheet="SOFP", target_row=10)]
+    queue: asyncio.Queue = asyncio.Queue()
+
+    outcome = await _run_reviewer_pass(
+        failed_checks=failed, conflicts=[], model=FunctionModel(_fix_then_raise),
+        filing_level="company", event_queue=queue, db_path=db, run_id=run_id)
+
+    # The pass errored (generic-exception path)…
+    assert outcome["error"] == "reviewer_exception"
+    # …but it ran one real apply_fixes turn first, which MUST be reported —
+    # not silently persisted as 0 (the pre-fix behaviour).
+    assert outcome["turns_used"] >= 1
+    assert outcome["tool_call_count"] >= 1
+
+
+@pytest.mark.asyncio
 async def test_reviewer_pass_saves_conversation_trace(tmp_path):
     """Phase 4 (holistic audit) — the reviewer's transcript is persisted to
     {output_dir}/CORRECTION_conversation_trace.json so its judgement is

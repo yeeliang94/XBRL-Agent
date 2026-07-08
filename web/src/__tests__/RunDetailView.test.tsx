@@ -120,6 +120,63 @@ describe("RunDetailView", () => {
     expect(screen.getAllByText(/completed/i).length).toBeGreaterThan(0);
   });
 
+  test("per-agent duration sums turn compute time, not the shared batch window", () => {
+    // Run-168 QA fix: face/notes agents are batch-stamped, so started_at/
+    // ended_at are the same whole-run window for every row. The Activity
+    // duration must instead come from each agent's own per-turn compute
+    // time — so two agents sharing an identical timestamp window but with
+    // different turn totals show DIFFERENT durations.
+    const shared = { started_at: "2026-04-10T09:30:00Z", ended_at: "2026-04-10T09:35:58Z" };
+    const detail = makeDetail({
+      agents: [
+        makeAgent({
+          id: 1,
+          statement_type: "SOFP",
+          ...shared,
+          // 90s + 30s = 2m 00s of real compute.
+          turns: [
+            { duration_ms: 90_000 } as never,
+            { duration_ms: 30_000 } as never,
+          ],
+        }),
+        makeAgent({
+          id: 2,
+          statement_type: "SOPL",
+          ...shared,
+          // 15s of real compute — same window, very different duration.
+          turns: [{ duration_ms: 15_000 } as never],
+        }),
+      ],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    clickRunTab(/^activity$/i);
+    const list = screen.getByTestId("run-detail-agent-list");
+    // Summed compute, not the identical 5m 58s window.
+    expect(within(list).getByText("2m 00s")).toBeTruthy();
+    expect(within(list).getByText("15s")).toBeTruthy();
+    expect(within(list).queryByText("5m 58s")).toBeNull();
+  });
+
+  test("duration falls back to the timestamp window when no turn telemetry", () => {
+    // Legacy rows / the Sheet-12 fan-out parent carry no per-turn data; the
+    // timestamp window is the best available signal there.
+    const detail = makeDetail({
+      agents: [
+        makeAgent({
+          id: 1,
+          started_at: "2026-04-10T09:30:00Z",
+          ended_at: "2026-04-10T09:30:45Z",
+          turns: [],
+        }),
+      ],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    clickRunTab(/^activity$/i);
+    expect(
+      within(screen.getByTestId("run-detail-agent-list")).getByText("45s"),
+    ).toBeTruthy();
+  });
+
   test("Figures tab is gated on canonical mode (peer-review F6)", () => {
     // Default (canonical disabled) → no Figures tab, matching TopNav/Results
     // gating. (The old duplicate "Review values" header button was removed in
@@ -709,8 +766,9 @@ describe("RunDetailView", () => {
   });
 
   test("history_detail_renders_correction_agent", () => {
-    // Phase 7.2: a persisted CORRECTION pseudo-agent must render under
-    // its friendly label ("Correction") — no raw DB enum leakage.
+    // Run-168 QA fix: a persisted CORRECTION pseudo-agent renders under
+    // the product's name for that pass ("AI review", from the central
+    // vocabulary) — no raw DB enum leakage, no legacy "Correction".
     const detail = makeDetail({
       agents: [
         makeAgent(),
@@ -727,11 +785,11 @@ describe("RunDetailView", () => {
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/^activity$/i);
-    expect(within(screen.getByTestId("run-detail-agent-list")).getByText("Correction")).toBeTruthy();
+    expect(within(screen.getByTestId("run-detail-agent-list")).getByText("AI review")).toBeTruthy();
   });
 
   test("history_detail_renders_notes_validator_agent", () => {
-    // Phase 7.2 counterpart: NOTES_VALIDATOR pseudo-agent label.
+    // Counterpart: NOTES_VALIDATOR renders as "Notes review".
     const detail = makeDetail({
       agents: [
         makeAgent(),
@@ -748,7 +806,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/^activity$/i);
-    expect(within(screen.getByTestId("run-detail-agent-list")).getByText("Notes Validator")).toBeTruthy();
+    expect(within(screen.getByTestId("run-detail-agent-list")).getByText("Notes review")).toBeTruthy();
   });
 
   test("Telemetry tab renders per-turn metrics from the agent payload", () => {

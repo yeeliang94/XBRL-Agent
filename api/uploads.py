@@ -304,14 +304,34 @@ async def scout_pdf(session_id: str, request: Request):
 
     def _finish_scout_agent_row(
         agent_row_id: int, status: str, error: str = "scout failed",
+        usage: Optional[dict] = None,
     ) -> None:
         try:
             import sqlite3
             from db import repository as repo
+            # Run-168 QA fix: persist the scout's real usage instead of
+            # finalizing with the 0 defaults (the Activity tab showed
+            # "0 turns · 0 tokens · $0.0000" for every scout). The dict
+            # is filled by run_scout_streaming on every exit path; cost
+            # is estimated here because pricing needs the model name.
+            usage = usage or {}
+            prompt_t = int(usage.get("prompt_tokens", 0) or 0)
+            completion_t = int(usage.get("completion_tokens", 0) or 0)
+            try:
+                from pricing import estimate_cost
+                cost = estimate_cost(prompt_t, completion_t, 0, scout_model_name)
+            except Exception:  # noqa: BLE001 — pricing is advisory
+                cost = 0.0
             conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
             try:
                 repo.finish_run_agent(
                     conn, agent_row_id, status,
+                    total_tokens=int(usage.get("total_tokens", 0) or 0),
+                    total_cost=cost,
+                    prompt_tokens=prompt_t,
+                    completion_tokens=completion_t,
+                    turn_count=int(usage.get("turn_count", 0) or 0),
+                    tool_call_count=int(usage.get("tool_call_count", 0) or 0),
                     # v17 (item 9): SCOUT rows carry the failure class too.
                     # Pass the real failure detail (e.g. the scout timeout
                     # reason) so a degraded scout derives turn_timeout /
@@ -350,6 +370,9 @@ async def scout_pdf(session_id: str, request: Request):
         scout_attempt = _claim_scout_attempt(session_id)
         scout_row_status = "failed"
         scout_error_detail = "scout failed"
+        # Filled by run_scout_streaming on every exit path (success,
+        # timeout, crash) — read at finalize time below.
+        scout_usage: dict = {}
         try:
             yield f"event: status\ndata: {json.dumps({'phase': 'scouting', 'message': 'Starting scout...'})}\n\n"
 
@@ -360,6 +383,7 @@ async def scout_pdf(session_id: str, request: Request):
                 on_event=on_event,
                 force_vision_inventory=force_vision_inventory,
                 output_dir=str(session_dir),
+                usage_out=scout_usage,
             ))
 
             # Register so abort endpoints can cancel it
@@ -444,6 +468,7 @@ async def scout_pdf(session_id: str, request: Request):
                 if scout_agent_row_id is not None:
                     _finish_scout_agent_row(
                         scout_agent_row_id, scout_row_status, scout_error_detail,
+                        usage=scout_usage,
                     )
 
     return StreamingResponse(

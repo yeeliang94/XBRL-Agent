@@ -5,6 +5,7 @@ import { ui, uiClass } from "../lib/uiStyles";
 import { fetchAgentTrace } from "../lib/api";
 import { displayModelId } from "../lib/modelId";
 import { notesTabLabel } from "../lib/appReducer";
+import { pseudoAgentLabel } from "../lib/vocabulary";
 import type { RunDetailJson, RunAgentJson, AgentTraceJson } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -33,10 +34,12 @@ function fmtDuration(ms: number | null | undefined): string {
   return `${(v / 1000).toFixed(1)} s`;
 }
 
-/** Friendly agent name — mirrors RunDetailView's AgentCard logic. */
+/** Friendly agent name — mirrors RunDetailView's AgentCard logic.
+ *  Pseudo-agents resolve through the central vocabulary ("AI review" /
+ *  "Notes review") so this panel matches the rest of the product. */
 function agentDisplayName(a: RunAgentJson): string {
-  if (a.statement_type === "CORRECTION") return "Correction";
-  if (a.statement_type === "NOTES_VALIDATOR") return "Notes Validator";
+  const pseudo = pseudoAgentLabel(a.statement_type);
+  if (pseudo) return pseudo;
   if (a.statement_type.startsWith("NOTES_")) return notesTabLabel(a.statement_type);
   return a.statement_type;
 }

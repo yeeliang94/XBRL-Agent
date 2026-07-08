@@ -718,15 +718,21 @@ function SheetSection({
   useEffect(() => {
     if (!focus) return;
     setExpanded(true);
-    if (focusRow != null) {
-      // Jump to the specific cell (notes checklist "jump to where it landed").
-      // Rows only exist once expanded, so defer to the next frame. scrollIntoView
-      // is optional-chained for jsdom (no-op in tests).
-      const raf =
-        typeof requestAnimationFrame === "function"
-          ? requestAnimationFrame
-          : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
-      raf(() => {
+    // BOTH the cell-jump and the plain section-scroll must run AFTER the
+    // expand paints. This section was collapsed, so its rows don't exist
+    // yet at effect time; scrolling synchronously here lands on the tiny
+    // collapsed header and a smooth scroll stops short — the run-168 QA
+    // symptom where picking "List of Notes" left the panel parked at the
+    // top on "Summary of Accounting Policies". Deferring one frame lets
+    // the revealed rows lay out first so the scroll reaches the section.
+    // scrollIntoView is optional-chained for jsdom (no-op in tests).
+    const raf =
+      typeof requestAnimationFrame === "function"
+        ? requestAnimationFrame
+        : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
+    raf(() => {
+      if (focusRow != null) {
+        // Jump to the specific cell (notes checklist "jump to where it landed").
         const el = sectionRef.current?.querySelector<HTMLElement>(
           `[data-cell-row="${focusRow}"]`,
         );
@@ -734,10 +740,10 @@ function SheetSection({
           block: "center",
           behavior: "smooth",
         });
-      });
-      return;
-    }
-    sectionRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      } else {
+        sectionRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      }
+    });
   }, [focus, focusKey, focusRow]);
 
   // Hydrate format state on mount so a pass launched in another tab/session

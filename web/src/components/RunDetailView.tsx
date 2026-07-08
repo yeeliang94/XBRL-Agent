@@ -26,6 +26,7 @@ import {
 } from "../lib/buildToolTimeline";
 import { displayModelId } from "../lib/modelId";
 import { notesTabLabel } from "../lib/appReducer";
+import { pseudoAgentLabel } from "../lib/vocabulary";
 import { isNotes12StatementType } from "../lib/notes";
 
 // ---------------------------------------------------------------------------
@@ -163,22 +164,38 @@ function crossChecksForValidator(
   }));
 }
 
-/** Wall-clock duration between two ISO timestamps, as a terse "1m 02s" /
- *  "850 ms" string. Returns "—" when either bound is missing (legacy rows,
- *  or an agent that never reached a terminal state). */
-function formatAgentDuration(
-  started: string | null,
-  ended: string | null,
-): string {
-  if (!started || !ended) return "—";
-  const ms = new Date(ended).getTime() - new Date(started).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "—";
+/** Format a millisecond span as a terse "1m 02s" / "850 ms" string. */
+function formatDurationMs(ms: number): string {
   if (ms < 1000) return `${ms} ms`;
   const secs = Math.round(ms / 1000);
   if (secs < 60) return `${secs}s`;
   const m = Math.floor(secs / 60);
   const s = secs % 60;
   return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+/** Per-agent duration for the Activity tab.
+ *
+ * The stored `started_at`/`ended_at` on a face or notes agent are batch
+ * stamps — every row is pre-created before extraction and finalized after
+ * it, so a naive `ended - started` collapses to the WHOLE-RUN wall clock and
+ * every agent shows the same figure (run-168 QA finding: eight agents all
+ * reading "5m 58s"). The honest per-agent number is the sum of its recorded
+ * per-turn compute times, which the detail payload already carries. We prefer
+ * that; for rows with no turn telemetry (the Sheet-12 fan-out parent, older
+ * runs) we fall back to the timestamp window — which is already a real window
+ * for the agents that are stamped individually (scout, AI review). */
+function formatAgentDuration(agent: RunAgentJson): string {
+  const turnMs = (agent.turns ?? []).reduce(
+    (sum, t) => sum + (t.duration_ms ?? 0),
+    0,
+  );
+  if (turnMs > 0) return formatDurationMs(turnMs);
+  const { started_at: started, ended_at: ended } = agent;
+  if (!started || !ended) return "—";
+  const ms = new Date(ended).getTime() - new Date(started).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  return formatDurationMs(ms);
 }
 
 // Phase 9: one card per agent. Header shows statement, status, model,
@@ -198,15 +215,14 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
   // Notes agents are persisted with statement_type = "NOTES_<TEMPLATE>"
   // — render with the same friendly chip the live UI uses so history
   // doesn't fall back to the raw DB enum value (peer-review MEDIUM).
-  // Phase 7.2: CORRECTION + NOTES_VALIDATOR pseudo-agents get the same
-  // friendly labels as the live UI (from appReducer's
-  // PSEUDO_AGENT_LABELS). Keeping the map local to one line keeps the
-  // two call-sites in lockstep without a shared import for three rows.
+  // Pseudo-agents (CORRECTION / NOTES_VALIDATOR / VALIDATOR) resolve
+  // through the central vocabulary so this row wears the same name as
+  // the tab describing the same work ("AI review" / "Notes review") —
+  // three drifting local maps were the run-168 QA finding.
   let displayName: string;
-  if (agent.statement_type === "CORRECTION") {
-    displayName = "Correction";
-  } else if (agent.statement_type === "NOTES_VALIDATOR") {
-    displayName = "Notes Validator";
+  const pseudoLabel = pseudoAgentLabel(agent.statement_type);
+  if (pseudoLabel) {
+    displayName = pseudoLabel;
   } else if (agent.statement_type.startsWith("NOTES_")) {
     displayName = notesTabLabel(agent.statement_type);
   } else {
@@ -272,7 +288,7 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
               {agent.token_breakdown.tool_call_count} tool calls
             </span>
           )}
-          <span>{formatAgentDuration(agent.started_at, agent.ended_at)}</span>
+          <span>{formatAgentDuration(agent)}</span>
           <span style={styles.agentTokens}>
             {agent.total_tokens != null
               ? `${agent.total_tokens.toLocaleString()} tokens`

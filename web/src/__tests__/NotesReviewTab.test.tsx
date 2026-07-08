@@ -338,6 +338,41 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     // A non-picked sheet stays collapsed.
     expect(screen.queryByText("Corporate info")).toBeNull();
   });
+
+  test("focusing a sheet scrolls its section into view AFTER it expands", async () => {
+    // Run-168 QA regression guard: the section-level scroll used to fire
+    // synchronously, before the just-expanded rows laid out, so the smooth
+    // scroll stopped short and the panel stayed parked on the first section
+    // ("Summary of Accounting Policies") while the chip said "List of Notes".
+    // The fix defers the scroll a frame; here we assert it happens at all
+    // for a plain sheet focus (jsdom rAF flushes on the microtask turn).
+    // jsdom doesn't implement scrollIntoView (the component optional-chains
+    // it), so install a mock on the prototype for the duration of this test.
+    const spy = vi.fn();
+    const proto = Element.prototype as unknown as {
+      scrollIntoView?: (arg?: unknown) => void;
+    };
+    const had = Object.prototype.hasOwnProperty.call(proto, "scrollIntoView");
+    const prev = proto.scrollIntoView;
+    proto.scrollIntoView = spy;
+    try {
+      mockFetchOnce(SAMPLE);
+      render(<NotesReviewTab runId={42} focusSheet="Notes-SummaryofAccPol" />);
+      // Section expands (rows mount) first…
+      await waitFor(() =>
+        expect(screen.getByText("Revenue")).toBeInTheDocument(),
+      );
+      // …then the deferred scroll runs. It targets the section start, which
+      // only lands correctly because the rows are already present.
+      await waitFor(() => expect(spy).toHaveBeenCalled());
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ block: "start" }),
+      );
+    } finally {
+      if (had) proto.scrollIntoView = prev;
+      else delete proto.scrollIntoView;
+    }
+  });
 });
 
 describe("NotesReviewTab — style-source chip (schema v29)", () => {

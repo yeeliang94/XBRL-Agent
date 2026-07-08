@@ -996,21 +996,25 @@ export function ConceptsPage({
             attention" queue (click-to-cell); the dedicated Cross-checks tab
             keeps the full expected/actual detail. */}
 
-        <section style={styles.toolbar} aria-label="Review controls">
-          {!notesActive && isGroupRun && (
-            <div style={styles.controlGroup}>
-              <span style={ui.fieldLabel}>Entity</span>
-              <SegmentedControl
-                testId="entity-scope-toggle"
-                values={["Company", "Group"] as const}
-                activeValue={activeScope}
-                onChange={setActiveScope}
-                buttonTestId={(scope) => `scope-btn-${scope}`}
-              />
-            </div>
-          )}
+        {/* Both toolbar controls only apply to figure sheets, so on a
+            notes sheet the whole card is skipped — rendering the shell
+            with its children hidden painted an empty white box between
+            the outcome strip and the notes editor (run-168 QA finding). */}
+        {!notesActive && (
+          <section style={styles.toolbar} aria-label="Review controls">
+            {isGroupRun && (
+              <div style={styles.controlGroup}>
+                <span style={ui.fieldLabel}>Entity</span>
+                <SegmentedControl
+                  testId="entity-scope-toggle"
+                  values={["Company", "Group"] as const}
+                  activeValue={activeScope}
+                  onChange={setActiveScope}
+                  buttonTestId={(scope) => `scope-btn-${scope}`}
+                />
+              </div>
+            )}
 
-          {!notesActive && (
             <div style={styles.searchGroup}>
               <label htmlFor="concept-search" style={ui.fieldLabel}>
                 Search
@@ -1025,8 +1029,8 @@ export function ConceptsPage({
                 style={{ ...ui.input, width: "100%" }}
               />
             </div>
-          )}
-        </section>
+          </section>
+        )}
 
         {notesActive ? (
           // Notes edit in place, next to the Source PDF — focusing a cell jumps
