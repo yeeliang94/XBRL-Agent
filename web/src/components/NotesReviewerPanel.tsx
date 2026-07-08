@@ -5,6 +5,7 @@ import type { ModelEntry } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
 import { flagKindLabel, humanize } from "../lib/vocabulary";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { SkeletonText } from "./Skeleton";
 
 /**
  * Notes Reviewer panel (docs/PLAN.md — Notes Reviewer, Phase 4).
@@ -221,7 +222,12 @@ export function NotesReviewerPanel({ runId }: Props) {
     }
   };
 
-  if (loading) return <p style={styles.dim}>Loading notes review…</p>;
+  if (loading)
+    return (
+      <div style={styles.panel}>
+        <SkeletonText lines={2} label="Loading notes review…" />
+      </div>
+    );
   if (error)
     return (
       <p style={styles.error} role="alert">

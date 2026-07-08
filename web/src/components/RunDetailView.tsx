@@ -756,6 +756,9 @@ const styles = {
     borderBottom: "2px solid transparent",
     marginBottom: -1,
     cursor: "pointer",
+    // Crossfade the active-tab indicator + label colour when switching
+    // (Phase 7 motion tokens).
+    transition: `color ${pwc.motion.duration.fast} ${pwc.motion.easing}, border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   tabActive: {
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
@@ -768,6 +771,7 @@ const styles = {
     borderBottom: `2px solid ${pwc.orange500}`,
     marginBottom: -1,
     cursor: "pointer",
+    transition: `color ${pwc.motion.duration.fast} ${pwc.motion.easing}, border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   // Full-bleed panel for the Values (Concepts) tab — its 3-column workspace
   // wants the whole width, unlike the prose-width Overview/Agents panels.

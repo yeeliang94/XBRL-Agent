@@ -5,6 +5,7 @@ import type { ModelEntry } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
 import { flagKindLabel, humanize } from "../lib/vocabulary";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { SkeletonText } from "./Skeleton";
 
 /**
  * Review tab (docs/Archive/PLAN-reviewer-agent.md, Step 16).
@@ -287,7 +288,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
     }
   };
 
-  if (loading) return <p style={styles.dim}>Loading review…</p>;
+  if (loading) return <SkeletonText lines={3} label="Loading review…" />;
   if (error) return <p style={styles.error} role="alert">{error}</p>;
   if (!data) return null;
 

@@ -2,6 +2,7 @@ import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 import type { RunSummaryJson } from "../lib/types";
+import { Skeleton } from "./Skeleton";
 
 // ---------------------------------------------------------------------------
 // HistoryList — table of past runs. Stateless: parent owns the list and
@@ -50,9 +51,17 @@ export function HistoryList({
   onResumeDraft,
 }: HistoryListProps) {
   if (isLoading) {
+    // Skeleton rows in the shape of the list (Phase 7) instead of a bare
+    // "Loading…" line, so the layout doesn't jump when the runs arrive.
     return (
-      <div style={styles.container}>
-        <p style={styles.placeholder}>Loading recent runs…</p>
+      <div style={styles.container} role="status" aria-label="Loading recent runs…">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} style={styles.skeletonRow}>
+            <Skeleton width="40%" />
+            <Skeleton width="14%" />
+            <Skeleton width="12%" />
+          </div>
+        ))}
       </div>
     );
   }
@@ -348,6 +357,13 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 14,
     margin: 0,
+  } as React.CSSProperties,
+  skeletonRow: {
+    display: "flex",
+    gap: pwc.space.xl,
+    alignItems: "center",
+    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
+    borderBottom: `1px solid ${pwc.grey100}`,
   } as React.CSSProperties,
   errorBanner: {
     padding: pwc.space.lg,

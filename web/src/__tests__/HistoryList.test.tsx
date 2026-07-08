@@ -55,7 +55,8 @@ describe("HistoryList", () => {
 
   test("loading state when isLoading prop is true", () => {
     render(<HistoryList runs={[]} isLoading onRunSelected={() => {}} />);
-    expect(screen.getByText(/loading/i)).toBeTruthy();
+    // Skeleton rows announce themselves via an aria-labelled status region.
+    expect(screen.getByRole("status", { name: /loading/i })).toBeTruthy();
   });
 
   test("error banner when error prop is set", () => {

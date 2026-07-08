@@ -34,3 +34,24 @@ export function Skeleton({ width = "100%", height = 14, radius = pwc.radius.sm, 
     />
   );
 }
+
+// A stack of shimmer lines standing in for a loading text block / panel. The
+// last line is shorter (like a real paragraph's final line). `role="status"`
+// so assistive tech announces "loading" without a visible spinner.
+export function SkeletonText({
+  lines = 3,
+  label = "Loading…",
+  gap = 10,
+}: {
+  lines?: number;
+  label?: string;
+  gap?: number;
+}) {
+  return (
+    <div role="status" aria-label={label} style={{ display: "flex", flexDirection: "column", gap }}>
+      {Array.from({ length: lines }).map((_, i) => (
+        <Skeleton key={i} width={i === lines - 1 ? "60%" : "100%"} />
+      ))}
+    </div>
+  );
+}
