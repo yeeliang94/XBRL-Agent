@@ -11,6 +11,7 @@ import { PdfSourcePane } from "../components/PdfSourcePane";
 import { fetchNotesCells, sortSheetsBySlot } from "../lib/notesCells";
 import { templateDisplayName, notesSheetDisplayName } from "../lib/sheetLabels";
 import { parseEvidencePages } from "../lib/evidencePages";
+import { TERMS } from "../lib/vocabulary";
 import { formatAccounting, formatGroupedInput } from "../lib/numberFormat";
 import { downloadFilledUrl } from "../lib/api";
 import type { CrossCheckResult } from "../lib/types";
@@ -766,7 +767,7 @@ export function ConceptsPage({
   const menuColumn = (
     <div style={{ ...styles.column, flex: `0 0 ${menuWidth}px`, width: menuWidth }}>
       <ColumnHeader
-        title="Menu"
+        title={TERMS.documentColumn}
         testId="menu"
         onHide={() => setMenuCollapsed(true)}
       />
@@ -817,7 +818,7 @@ export function ConceptsPage({
           />
         </CollapsiblePanel>
       )}
-      <CollapsiblePanel title="Needs attention" testId="panel-attention">
+      <CollapsiblePanel title={TERMS.needsAttention} testId="panel-attention">
         <NeedsAttentionPanel
           failingChecks={failingChecks}
           onSelectCheck={handleSelectTarget}
@@ -866,10 +867,10 @@ export function ConceptsPage({
 
   return (
     <div data-testid="concepts-page" style={styles.shell}>
-      {/* Column 1 — Menu (sheets, selected field, reconciliation) */}
+      {/* Column 1 — Document (statements, notes checklist, needs-attention) */}
       {menuCollapsed ? (
         <CollapsedRail
-          label="Menu"
+          label={TERMS.documentColumn}
           testId="menu"
           onExpand={() => setMenuCollapsed(false)}
         />
@@ -890,7 +891,7 @@ export function ConceptsPage({
         <section style={styles.reviewHeader}>
           <div style={styles.titleRow}>
             <div>
-              <h1 style={styles.pageTitle}>Extracted values</h1>
+              <h1 style={styles.pageTitle}>{TERMS.reviewWorkspaceTitle}</h1>
             </div>
             <div style={styles.actionRow}>
               {recheck.summary && (
@@ -909,7 +910,7 @@ export function ConceptsPage({
                   opacity: recheck.running ? 0.7 : 1,
                 }}
               >
-                {recheck.running ? "Checking..." : "Re-run checks"}
+                {recheck.running ? TERMS.validatingFigures : TERMS.validateFigures}
               </button>
               <a
                 data-testid="generate-final-excel"

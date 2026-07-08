@@ -97,7 +97,7 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    expect(screen.getByText("Extracted values")).toBeTruthy();
+    expect(screen.getByText("Review extracted results")).toBeTruthy();
     await waitFor(() => screen.getByTestId("concept-row-leaf-1"));
   });
 
