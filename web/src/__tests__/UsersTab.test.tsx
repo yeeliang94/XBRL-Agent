@@ -42,6 +42,9 @@ describe("UsersTab", () => {
     await waitFor(() => expect(screen.getByText("user@firm.com")).toBeInTheDocument());
     const userRow = screen.getByText("user@firm.com").closest("tr")!;
     fireEvent.click(within(userRow).getByRole("button", { name: /disable/i }));
+    // Confirm in the shared dialog.
+    const dialog = screen.getByRole("dialog", { name: /disable user@firm.com/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^disable$/i }));
     await waitFor(() => expect(api.adminSetDisabled).toHaveBeenCalledWith("user@firm.com", true));
   });
 
@@ -50,6 +53,8 @@ describe("UsersTab", () => {
     await waitFor(() => expect(screen.getByText("user@firm.com")).toBeInTheDocument());
     const userRow = screen.getByText("user@firm.com").closest("tr")!;
     fireEvent.click(within(userRow).getByRole("button", { name: /make admin/i }));
+    const dialog = screen.getByRole("dialog", { name: /make user@firm.com an admin/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /make admin/i }));
     await waitFor(() => expect(api.adminSetAdmin).toHaveBeenCalledWith("user@firm.com", true));
   });
 
@@ -82,6 +87,8 @@ describe("UsersTab", () => {
     await waitFor(() => expect(screen.getByText("admin@firm.com")).toBeInTheDocument());
     const adminRow = screen.getByText("admin@firm.com").closest("tr")!;
     fireEvent.click(within(adminRow).getByRole("button", { name: /revoke admin/i }));
+    const dialog = screen.getByRole("dialog", { name: /revoke admin from admin@firm.com/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /revoke admin/i }));
     await waitFor(() =>
       expect(screen.getByText(/only remaining admin/i)).toBeInTheDocument());
   });

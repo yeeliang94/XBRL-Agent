@@ -235,7 +235,20 @@ is the highest-risk change for marginal gain; flagged for a follow-up.
 **Tests:** NotesReviewTab / NotesReviewerPanel / NotesCoveragePanel / ReviewTab / ConceptsPage
 web tests — the biggest test-update surface of the plan; budget accordingly.
 
-### Phase 6 — Trust, safety, and admin gating
+### Phase 6 — Trust, safety, and admin gating — 🟩 DONE
+
+**Status note (2026-07-08):** AI plumbing (proxy URL / API key / model / auto-
+review / spot-check / entity-memory) renders read-only for non-admins in
+`GeneralSettingsForm` with a "Managed by your administrator" note; admins see
+"These settings apply to everyone." Server-side, `/api/settings` refuses a
+non-admin write touching any admin-only key via `auth_routes._require_admin`
+(cosmetic `notes_table_style` stays open). Settings copy de-jargoned (no more
+"Enterprise LiteLLM" / "Bruno"; entity-memory reworded). Per-agent Rerun and
+the UsersTab disable/enable + make/revoke-admin actions now confirm via the
+shared `ConfirmDialog`. One persistent AI disclaimer line on the results
+surface and the run-report header. Inputs in GeneralSettingsForm / AccountTab /
+UsersTab adopt `ui.input` (layout item #1). New `tests/test_settings_admin_gate.py`
+pins the server gate; web suite 919 green.
 
 - **Admin-only AI plumbing:** General settings' Proxy URL / API Key / Model Name / default
   model roles / auto-review / spot-check / entity-memory render read-only ("Managed by your

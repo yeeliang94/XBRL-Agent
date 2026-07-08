@@ -216,8 +216,10 @@ describe("SettingsModal — P3 enhancements", () => {
     renderModal();
     await waitFor(() => expect(screen.getByDisplayValue(defaultSettings.proxy_url)).toBeInTheDocument());
 
-    expect(screen.getByText(/Enterprise LiteLLM proxy endpoint/)).toBeInTheDocument();
-    expect(screen.getByText(/From Bruno/)).toBeInTheDocument();
+    // Plain-English helper copy (Phase 6): no more "Enterprise LiteLLM" /
+    // "Bruno" jargon.
+    expect(screen.getByText(/web address of your organisation/)).toBeInTheDocument();
+    expect(screen.getByText(/access key for your organisation/)).toBeInTheDocument();
     expect(screen.getByText(/e\.g\., openai\.gpt-5\.4/)).toBeInTheDocument();
   });
 

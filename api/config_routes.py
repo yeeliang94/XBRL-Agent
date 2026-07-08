@@ -11,16 +11,38 @@ import os
 import time
 
 from dotenv import load_dotenv, set_key
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 import re
 
 import server
+from auth import routes as auth_routes
+from db.repository import db_session
 
 logger = logging.getLogger("server")
 
 router = APIRouter()
+
+# AI-plumbing + firm-wide run defaults that only an administrator may change
+# (docs/PLAN-ui-ux-plain-language-overhaul.md Phase 6). The UI renders these
+# read-only for non-admins, but the server is the real boundary: a write that
+# touches any of these keys from a non-admin is refused. Cosmetic/firm-default
+# keys not in this set (e.g. notes_table_style) stay writable.
+_ADMIN_ONLY_SETTINGS_KEYS = frozenset({
+    "model",
+    "api_key",
+    "proxy_url",
+    "default_models",
+    "scout_enabled_default",
+    "auto_review",
+    "notes_auto_review",
+    "spot_check",
+    "spot_check_mode",
+    "notes_coverage",
+    "entity_memory",
+    "tolerance_rm",
+})
 
 # Notes-table style theme validation (docs/PLAN-notes-table-theme.md). Mirrors
 # the frontend `parseThemeOptions` (clipboardFormat.ts) + the sanitiser colour
@@ -165,8 +187,20 @@ async def get_settings():
 
 
 @router.post("/api/settings")
-async def update_settings(body: dict):
-    """Update .env file with new settings."""
+async def update_settings(body: dict, request: Request):
+    """Update .env file with new settings.
+
+    AI-plumbing + firm-wide run-default keys are admin-only (the settings form
+    hides them from non-admins, but the server enforces it). A non-admin write
+    that touches any such key is refused with 403; a write touching only the
+    cosmetic keys (e.g. notes_table_style) is allowed for everyone.
+    """
+    if _ADMIN_ONLY_SETTINGS_KEYS.intersection(body):
+        with db_session(server.AUDIT_DB_PATH) as conn:
+            denied = auth_routes._require_admin(conn, request)
+        if denied is not None:
+            return denied
+
     ENV_FILE = server.ENV_FILE
     if not ENV_FILE.exists():
         # encoding pinned per the Windows UTF-8 invariant (gotcha #1).

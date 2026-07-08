@@ -39,6 +39,15 @@ const styles = {
     boxShadow: pwc.shadow.card,
     overflow: "hidden",
   } as React.CSSProperties,
+  aiDisclaimer: {
+    margin: 0,
+    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
+    background: pwc.grey50,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
+  } as React.CSSProperties,
   tabBar: {
     display: "flex",
     borderBottom: `1px solid ${pwc.grey200}`,
@@ -270,6 +279,11 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
 
   return (
     <div style={styles.container}>
+      {/* AI disclaimer — one persistent line on the results surface (Phase 6). */}
+      <p style={styles.aiDisclaimer} role="note">
+        Figures were extracted by AI — verify against the source PDF before filing.
+      </p>
+
       {/* Tab bar */}
       <div style={styles.tabBar}>
         {tabs.map((tab) => (

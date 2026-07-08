@@ -461,6 +461,10 @@ export function RunDetailView({
               {new Date(detail.created_at).toLocaleString()}
             </span>
           </div>
+          {/* AI disclaimer — one persistent line on the run report (Phase 6). */}
+          <p style={styles.aiDisclaimer} role="note">
+            Figures were extracted by AI — verify against the source PDF before filing.
+          </p>
         </div>
         <div style={styles.actions}>
           <button
@@ -722,6 +726,12 @@ const styles = {
     color: pwc.grey700,
     fontSize: 13,
     fontFamily: pwc.fontBody,
+  } as React.CSSProperties,
+  aiDisclaimer: {
+    margin: `${pwc.space.sm}px 0 0`,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
   } as React.CSSProperties,
   actions: {
     display: "flex",

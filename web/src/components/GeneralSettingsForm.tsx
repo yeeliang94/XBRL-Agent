@@ -26,6 +26,11 @@ interface Props {
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
   onCancel?: () => void;
+  // AI plumbing is admin-only (Phase 6): non-admins see the fields read-only
+  // with a "managed by your administrator" note and no Save. Defaults to true
+  // so existing callers (the legacy modal, tests) keep the editable form; the
+  // Settings page threads the real value from /api/auth/me.
+  isAdmin?: boolean;
 }
 
 interface FieldErrors {
@@ -164,7 +169,10 @@ const styles = {
   } as React.CSSProperties,
 };
 
-export function GeneralSettingsForm({ getSettings, saveSettings, testConnection, onCancel }: Props) {
+export function GeneralSettingsForm({ getSettings, saveSettings, testConnection, onCancel, isAdmin = true }: Props) {
+  // Non-admins get a read-only view of the AI plumbing; the server enforces
+  // the same boundary (api/config_routes.py), the UI just makes it clear.
+  const readOnly = !isAdmin;
   const [model, setModel] = useState("");
   const [proxyUrl, setProxyUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -313,9 +321,23 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     <div onKeyDown={handleKeyDown}>
       {loadError && <p style={styles.loadError}>{loadError}</p>}
 
+      {/* Admin banner — the AI settings are shared, so make the audience of a
+          change explicit; non-admins are told they're read-only. */}
+      {readOnly ? (
+        <div style={ui.alertInfo} role="note">
+          <span aria-hidden="true" style={ui.alertIcon(pwc.info)}>ⓘ</span>
+          <span>These settings are managed by your administrator.</span>
+        </div>
+      ) : (
+        <div style={{ ...ui.alertInfo, marginBottom: pwc.space.lg }} role="note">
+          <span aria-hidden="true" style={ui.alertIcon(pwc.info)}>ⓘ</span>
+          <span>These settings apply to everyone using this tool.</span>
+        </div>
+      )}
+
       {/* Proxy URL */}
       <div style={styles.fieldGroup}>
-        <label style={styles.label}>Proxy URL</label>
+        <label style={styles.label}>AI service address</label>
         <input
           type="text"
           value={proxyUrl}
@@ -324,16 +346,21 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           placeholder="https://genai-sharedservice-emea.pwc.com"
           // Focus the first field on mount so keyboard users land inside the
           // form, not on whatever was behind it.
-          autoFocus
+          autoFocus={!readOnly}
+          disabled={readOnly}
           style={{
-            ...styles.input,
+            ...ui.input,
+            width: "100%",
             ...(errors.proxyUrl ? styles.inputError : {}),
           }}
         />
         {errors.proxyUrl ? (
           <p style={styles.errorText}>{errors.proxyUrl}</p>
         ) : (
-          <p style={styles.helperText}>Enterprise LiteLLM proxy endpoint (must be HTTPS)</p>
+          <p style={styles.helperText}>
+            The web address of your organisation&apos;s AI service — ask your IT
+            team if you&apos;re unsure. Must start with https://.
+          </p>
         )}
       </div>
 
@@ -350,16 +377,20 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           onBlur={() => validateField("apiKey")}
-          placeholder="Enter new API key"
+          placeholder={readOnly ? "" : "Enter new API key"}
+          disabled={readOnly}
           style={{
-            ...styles.input,
+            ...ui.input,
+            width: "100%",
             ...(errors.apiKey ? styles.inputError : {}),
           }}
         />
         {errors.apiKey ? (
           <p style={styles.errorText}>{errors.apiKey}</p>
         ) : (
-          <p style={styles.helperText}>From Bruno → Collection → Auth tab</p>
+          <p style={styles.helperText}>
+            The access key for your organisation&apos;s AI service.
+          </p>
         )}
       </div>
 
@@ -372,8 +403,12 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           onChange={(e) => setModel(e.target.value)}
           onBlur={() => validateField("model")}
           placeholder="openai.gpt-5.4"
+          disabled={readOnly}
           style={{
-            ...styles.inputMono,
+            ...ui.input,
+            width: "100%",
+            fontFamily: pwc.fontMono,
+            fontSize: 13,
             ...(errors.model ? styles.inputError : {}),
           }}
         />
@@ -391,6 +426,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             type="checkbox"
             checked={autoReview}
             onChange={(e) => setAutoReview(e.target.checked)}
+            disabled={readOnly}
             aria-label="Automatically run the reviewer after extraction"
           />
           <span style={styles.label}>Automatically run the reviewer after extraction</span>
@@ -408,6 +444,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             type="checkbox"
             checked={spotCheck}
             onChange={(e) => setSpotCheck(e.target.checked)}
+            disabled={readOnly}
             aria-label="Spot-check runs even when all cross-checks pass"
           />
           <span style={styles.label}>Spot-check runs even when all cross-checks pass</span>
@@ -420,8 +457,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <select
           value={spotCheckMode}
           onChange={(e) => setSpotCheckMode(e.target.value === "full" ? "full" : "light")}
-          disabled={!spotCheck}
-          style={{ ...styles.input, opacity: spotCheck ? 1 : 0.5, maxWidth: 320 }}
+          disabled={!spotCheck || readOnly}
+          style={{ ...ui.input, opacity: spotCheck ? 1 : 0.5, maxWidth: 320 }}
           aria-label="Spot-check depth"
         >
           <option value="light">Light — fast sanity pass (default)</option>
@@ -440,14 +477,16 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             type="checkbox"
             checked={entityMemory}
             onChange={(e) => setEntityMemory(e.target.checked)}
+            disabled={readOnly}
             aria-label="Reuse prior-year hints for repeat entities"
           />
           <span style={styles.label}>Reuse prior-year hints for repeat entities</span>
         </label>
         <p style={styles.helperText}>
-          When a run's entity was processed before, last year's variant, scale
-          unit, and page offset are shown to the agents as advisory hints to
-          verify against the current PDF. Turn off if entity names collide.
+          When a company has been processed before, last year&apos;s format,
+          scale (e.g. RM &apos;000), and page positions are shown to the AI as
+          hints to double-check against this year&apos;s PDF. Turn this off if
+          two different companies share a name.
         </p>
       </div>
 
@@ -457,7 +496,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           the form's main Save button below. */}
       <NotesPasteFormatSection getSettings={getSettings} saveSettings={saveSettings} />
 
-      {/* Test Connection */}
+      {/* Test Connection — admin-only (it exercises the shared AI plumbing). */}
+      {!readOnly && (
       <div style={{ marginBottom: pwc.space.lg }}>
         <button
           onClick={handleTestConnection}
@@ -489,24 +529,30 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           </div>
         )}
       </div>
+      )}
 
-      {/* Actions */}
-      <div style={styles.actions}>
-        {saved && <span style={styles.savedBadge}>Saved!</span>}
-        {onCancel && (
-          <button onClick={onCancel} className={uiClass.btnSecondary} style={styles.cancelButton}>
-            Cancel
-          </button>
-        )}
-        <button
-          onClick={handleSave}
-          disabled={saving || hasErrors}
-          className={uiClass.btnPrimary}
-          style={styles.saveButton}
-        >
-          {saving ? "Saving..." : "Save"}
-        </button>
-      </div>
+      {/* Actions — a non-admin can't save the AI plumbing, so the Save row is
+          hidden (a Cancel is still offered when the modal host provides one). */}
+      {(!readOnly || onCancel) && (
+        <div style={styles.actions}>
+          {saved && <span style={styles.savedBadge}>Saved!</span>}
+          {onCancel && (
+            <button onClick={onCancel} className={uiClass.btnSecondary} style={styles.cancelButton}>
+              {readOnly ? "Close" : "Cancel"}
+            </button>
+          )}
+          {!readOnly && (
+            <button
+              onClick={handleSave}
+              disabled={saving || hasErrors}
+              className={uiClass.btnPrimary}
+              style={styles.saveButton}
+            >
+              {saving ? "Saving..." : "Save"}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

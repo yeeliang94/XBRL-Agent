@@ -82,6 +82,7 @@ export function SettingsPage({ isAdmin }: Props) {
             getSettings={getSettings}
             saveSettings={updateSettings}
             testConnection={testConnection}
+            isAdmin={isAdmin}
           />
         </section>
       )}
