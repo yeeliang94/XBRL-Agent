@@ -104,4 +104,52 @@ describe("ConfirmDialog", () => {
     const btn = screen.getByRole("button", { name: "Deleting…" }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
+
+  test("focuses confirm on open", () => {
+    render(
+      <ConfirmDialog
+        isOpen
+        title="Delete?"
+        message="Gone."
+        confirmLabel="Delete"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Delete" }),
+    );
+  });
+
+  test("re-render with a fresh onCancel identity does not steal focus back to confirm", () => {
+    // Regression: the focus effect must key on [isOpen] only. A parent that
+    // re-renders while the dialog is open (e.g. streaming SSE) passes a new
+    // inline onCancel each time; the old code re-fired focus() and made Cancel
+    // unreachable by keyboard.
+    const { rerender } = render(
+      <ConfirmDialog
+        isOpen
+        title="Delete?"
+        message="Gone."
+        confirmLabel="Delete"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    cancel.focus();
+    expect(document.activeElement).toBe(cancel);
+    // Re-render with a brand-new onCancel function identity.
+    rerender(
+      <ConfirmDialog
+        isOpen
+        title="Delete?"
+        message="Gone."
+        confirmLabel="Delete"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(document.activeElement).toBe(cancel);
+  });
 });
