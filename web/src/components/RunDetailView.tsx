@@ -643,8 +643,12 @@ export function RunDetailView({
         <section style={styles.sectionFull} role="tabpanel" data-testid="run-detail-values">
           {/* Notes render inline in the workspace (next to the Source PDF)
               rather than bouncing to the Notes tab — the review-workspace
-              revamp (docs/PLAN-review-workspace.md Phase 1). */}
-          <ConceptsPage runId={detail.id} />
+              revamp (docs/PLAN-review-workspace.md Phase 1). The run's stored
+              cross-checks seed the outcome strip's "Checks passing" (Phase 3). */}
+          <ConceptsPage
+            runId={detail.id}
+            initialCrossChecks={crossChecksForValidator(detail.cross_checks)}
+          />
         </section>
       )}
 

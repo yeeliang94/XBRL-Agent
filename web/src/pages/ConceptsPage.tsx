@@ -89,6 +89,11 @@ export interface ConceptsPageProps {
   // compact gold editor is rendered. `runId` is null in this mode.
   source?: "run" | "benchmark";
   benchmarkId?: number | null;
+  // The run's stored cross-checks, passed by the run report so the outcome
+  // strip can show "Checks passing X/Y" on load (before any manual re-run).
+  // Optional — the standalone template view has none. A manual re-run's fresh
+  // results take precedence over this baseline.
+  initialCrossChecks?: CrossCheckResult[];
 }
 
 type Period = "CY" | "PY";
@@ -143,6 +148,7 @@ export function ConceptsPage({
   runId,
   source = "run",
   benchmarkId = null,
+  initialCrossChecks,
 }: ConceptsPageProps) {
   // Gold-standard eval (v16): in benchmark mode we read/write gold facts; the
   // run-only effects (edited_count, conflicts, recheck) all short-circuit on
@@ -210,6 +216,12 @@ export function ConceptsPage({
     sheet: string;
     row: number;
     key: number;
+  } | null>(null);
+  // Notes-placed count for the outcome strip, reported up by the checklist nav
+  // (which already fetches coverage) so we don't fetch it twice.
+  const [notesCoverage, setNotesCoverage] = useState<{
+    placed: number;
+    total: number;
   } | null>(null);
   // 3-column workspace layout: the Menu and Source PDF columns are both
   // resizable (drag handle) and hideable (collapse to a thin rail). The
@@ -625,13 +637,17 @@ export function ConceptsPage({
     }
   }, []);
 
-  // Editable count is scoped to the CURRENT view so it reads consistently
-  // beside "Fields shown" (both describe the visible set). A global editable
-  // count next to a filtered shown-count read like a bug — e.g. "710 editable"
-  // sitting next to "123 fields shown".
-  const shownCount = filtered.filter((c) => c.kind !== "ABSTRACT").length;
-  const editableCount = filtered.filter(
-    (c) => c.editable === true && c.kind !== "ABSTRACT"
+  // Outcome strip (review-workspace Phase 3): "Checks passing X/Y". A manual
+  // re-run's fresh results win over the run's stored baseline. Only graded
+  // checks (passed/failed/warning) count — not_applicable/pending are excluded,
+  // matching the re-run summary above.
+  const effectiveChecks =
+    crossChecks.length > 0 ? crossChecks : initialCrossChecks ?? [];
+  const checksPassing = effectiveChecks.filter(
+    (c) => c.status === "passed",
+  ).length;
+  const checksGraded = effectiveChecks.filter(
+    (c) => c.status === "passed" || c.status === "failed" || c.status === "warning",
   ).length;
 
   // Eval (v16): benchmark gold editor — a compact reuse of the same grid,
@@ -789,12 +805,10 @@ export function ConceptsPage({
             runId={runId}
             activeSheet={notesActive ? activeNotesSheet : null}
             onSelectNote={handleCoverageSelect}
+            onSummary={setNotesCoverage}
           />
         </CollapsiblePanel>
       )}
-      <CollapsiblePanel title="Selected field" testId="panel-details">
-        <ConceptEvidenceBody concept={selectedConcept} />
-      </CollapsiblePanel>
       <CollapsiblePanel
         title={`Reconciliation queue (${totalOpenConflicts})`}
         testId="panel-recon"
@@ -820,6 +834,19 @@ export function ConceptsPage({
           evidence pages so a reviewer can eyeball the figure against the
           document without leaving the page (M1). */}
       <PdfSourcePane runId={runId} pages={pdfPages} />
+      {/* Field details — the technical metadata (template, cell, source,
+          evidence) for the selected value. Collapsed by default so the everyday
+          view stays label + figures; opened on demand (review-workspace
+          Phase 3). Only meaningful for a face concept, so hidden on notes. */}
+      {!notesActive && (
+        <CollapsiblePanel
+          title="Field details"
+          testId="panel-details"
+          defaultOpen={false}
+        >
+          <ConceptEvidenceBody concept={selectedConcept} />
+        </CollapsiblePanel>
+      )}
     </div>
   );
 
@@ -881,12 +908,32 @@ export function ConceptsPage({
             </div>
           </div>
 
+          {/* Outcome strip — what a reviewer cares about (are the checks
+              passing, did the notes land, what have I changed), not row counts
+              (review-workspace Phase 3). Metrics only appear when their source
+              exists, so a face-only run drops "Notes placed" and a run with no
+              cross-checks drops "Checks passing". */}
           <div style={styles.summaryStrip} aria-label="Review summary">
-            <ReviewMetric label="Templates" value={String(templates.length)} />
-            <ReviewMetric label="Fields shown" value={String(shownCount)} />
-            <ReviewMetric label="Editable" value={String(editableCount)} />
+            {checksGraded > 0 && (
+              <ReviewMetric
+                label="Checks passing"
+                value={`${checksPassing}/${checksGraded}`}
+                tone={checksPassing === checksGraded ? "success" : "warning"}
+              />
+            )}
+            {notesCoverage && notesCoverage.total > 0 && (
+              <ReviewMetric
+                label="Notes placed"
+                value={`${notesCoverage.placed}/${notesCoverage.total}`}
+                tone={
+                  notesCoverage.placed === notesCoverage.total
+                    ? "success"
+                    : "warning"
+                }
+              />
+            )}
             <ReviewMetric
-              label="User edits"
+              label="Your edits"
               value={String(editedCount)}
               tone={editedCount > 0 ? "accent" : "neutral"}
             />
@@ -1768,13 +1815,15 @@ function ReviewMetric({
 }: {
   label: string;
   value: string;
-  tone?: "neutral" | "accent" | "warning";
+  tone?: "neutral" | "accent" | "warning" | "success";
 }) {
   const palette =
     tone === "accent"
       ? { bg: pwc.orange50, color: pwc.orange700, border: pwc.orange100 }
       : tone === "warning"
       ? { bg: pwc.warningBg, color: pwc.warningText, border: pwc.warningBorder }
+      : tone === "success"
+      ? { bg: pwc.successBg, color: pwc.successText, border: pwc.successBorder }
       : { bg: pwc.grey50, color: pwc.grey900, border: pwc.grey200 };
   return (
     <div

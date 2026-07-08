@@ -1,6 +1,14 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { ConceptsPage, formatGroupedInput } from "../pages/ConceptsPage";
+import type { CrossCheckResult } from "../lib/types";
 
 // Vitest setup stubs `fetch`; each test reassigns the implementation.
 const originalFetch = globalThis.fetch;
@@ -920,6 +928,48 @@ describe("ConceptsPage", () => {
     fireEvent.click(note);
     expect(screen.getByTestId("review-notes-panel")).toBeTruthy();
     expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
+  });
+
+  // Review-workspace Phase 3: outcome-based summary strip.
+  test("outcome strip shows 'Checks passing X/Y' from the run's cross-checks", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes_cells")) return { sheets: [] };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    const checks = [
+      { name: "sofp_balances", status: "passed" },
+      { name: "sopl_ties", status: "failed" },
+      { name: "n/a check", status: "not_applicable" },
+    ] as CrossCheckResult[];
+    render(<ConceptsPage runId={42} initialCrossChecks={checks} />);
+    const strip = await waitFor(() => screen.getByLabelText("Review summary"));
+    // 1 passed of 2 graded (the not_applicable check is excluded).
+    expect(within(strip).getByText("Checks passing")).toBeTruthy();
+    expect(within(strip).getByText("1/2")).toBeTruthy();
+    // The old row-count metrics are gone.
+    expect(within(strip).queryByText("Fields shown")).toBeNull();
+    expect(within(strip).queryByText("Templates")).toBeNull();
+  });
+
+  // Review-workspace Phase 3: technical metadata hidden behind a drawer.
+  test("field details are collapsed by default and open on demand", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes_cells")) return { sheets: [] };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("panel-details"));
+    // The engineer metadata (template id, cell coord) is NOT shown by default.
+    expect(screen.queryByText("Template")).toBeNull();
+    expect(screen.queryByText("Cell")).toBeNull();
+    // Opening the drawer reveals it.
+    fireEvent.click(screen.getByTestId("panel-details-toggle"));
+    expect(screen.getByText("Template")).toBeTruthy();
+    expect(screen.getByText("Cell")).toBeTruthy();
   });
 
   test("renders a Generate final Excel link to the download endpoint", async () => {
