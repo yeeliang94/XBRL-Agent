@@ -1229,9 +1229,15 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           onAutoDetect={handleAutoDetect}
           isDetecting={isDetecting}
           canAutoDetect={!!sessionId}
-          availableModels={availableModels}
+          // The scout model picker persists the firm-wide `default_models`
+          // (the scout endpoint reads it from .env), which is admin-only. A
+          // non-admin's change would 403 while the UI showed the new pick, so
+          // the picker is hidden for them (ScoutToggle drops it when the
+          // handler/models are absent). Auto-detect still runs on the persisted
+          // default.
+          availableModels={isAdmin ? availableModels : undefined}
           scoutModel={scoutModel}
-          onScoutModelChange={handleScoutModelChange}
+          onScoutModelChange={isAdmin ? handleScoutModelChange : undefined}
         />
         {scoutEnabled && showAdvanced && (
           <label
