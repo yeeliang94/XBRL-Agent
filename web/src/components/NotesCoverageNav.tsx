@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, userMessage } from "../lib/errors";
 import { coverageStatusLabel } from "../lib/vocabulary";
 import { pwc } from "../lib/theme";
@@ -59,6 +59,9 @@ interface Props {
   activeSheet?: string | null;
   /** Fired when a note is clicked; the parent decides how to navigate. */
   onSelectNote: (row: CoverageNavRow) => void;
+  /** Fired once coverage loads with the placed/total counts, so the workspace's
+   *  outcome strip can show "Notes placed N/M" without fetching coverage twice. */
+  onSummary?: (summary: { placed: number; total: number }) => void;
 }
 
 const RESOLVED_VERDICTS = new Set(["confirmed_absent", "not_applicable"]);
@@ -70,10 +73,20 @@ function statusColor(row: CoverageNavRow): string {
   return pwc.error;
 }
 
-export function NotesCoverageNav({ runId, activeSheet, onSelectNote }: Props) {
+export function NotesCoverageNav({
+  runId,
+  activeSheet,
+  onSelectNote,
+  onSummary,
+}: Props) {
   const [data, setData] = useState<CoveragePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Keep the latest onSummary without re-firing the fetch when the parent
+  // passes a fresh closure each render.
+  const onSummaryRef = useRef(onSummary);
+  onSummaryRef.current = onSummary;
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -82,7 +95,14 @@ export function NotesCoverageNav({ runId, activeSheet, onSelectNote }: Props) {
       try {
         const r = await fetch(`/api/runs/${runId}/notes-coverage`, { signal });
         if (!r.ok) throw ApiError.fromResponse(r.status, null);
-        setData(await r.json());
+        const payload = (await r.json()) as CoveragePayload;
+        setData(payload);
+        if (payload?.summary) {
+          onSummaryRef.current?.({
+            placed: payload.summary.placed ?? 0,
+            total: payload.summary.total ?? 0,
+          });
+        }
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         setError(userMessage(e));
