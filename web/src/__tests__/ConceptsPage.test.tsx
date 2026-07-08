@@ -786,13 +786,14 @@ describe("ConceptsPage", () => {
     const input = (await waitFor(() =>
       screen.getByTestId("value-input-leaf-1")
     )) as HTMLInputElement;
-    // Initially no conflicts.
-    await waitFor(() => screen.getByTestId("reconciliation-empty"));
+    // Initially nothing needs attention (no checks / gaps / conflicts).
+    await waitFor(() => screen.getByTestId("needs-attention-clear"));
 
     fireEvent.change(input, { target: { value: "999" } });
     fireEvent.blur(input);
 
-    // After the edit, the queue refetches and the conflict appears.
+    // After the edit, a conflict opens → the Needs-attention queue surfaces it
+    // via the embedded reconciliation queue.
     await waitFor(() => screen.getByTestId("conflict-1"));
   });
 
@@ -1008,7 +1009,7 @@ describe("ConceptsPage", () => {
     expect(summary.textContent).toMatch(/1 failed/);
   });
 
-  test("Re-run checks renders a cross-check detail panel with the failed check", async () => {
+  test("a failed re-run check surfaces in the Needs-attention queue", async () => {
     mockFetch((url) => {
       if (url.includes("/recheck"))
         return {
@@ -1024,13 +1025,12 @@ describe("ConceptsPage", () => {
     });
     render(<ConceptsPage runId={42} />);
     const btn = await waitFor(() => screen.getByTestId("recheck-btn"));
-    // No panel until a re-run has produced results.
-    expect(screen.queryByTestId("review-cross-checks")).toBeNull();
+    // Nothing needs attention until a re-run produces a failure.
+    expect(screen.getByTestId("needs-attention-clear")).toBeTruthy();
     fireEvent.click(btn);
-    const panel = await waitFor(() => screen.getByTestId("review-cross-checks"));
-    // The failing check is now a named, visible finding (not just a count).
-    expect(panel.textContent).toMatch(/sofp_balance/);
-    expect(panel.textContent).toMatch(/assets exceed equity\+liabilities/);
+    const attn = await waitFor(() => screen.getByTestId("needs-attention"));
+    // The failing check is a named, visible finding (not just a count).
+    expect(attn.textContent).toMatch(/assets exceed equity\+liabilities/);
   });
 
   test("clicking a targeted failed check selects the offending concept's sheet", async () => {
@@ -1074,9 +1074,10 @@ describe("ConceptsPage", () => {
     // SOFP active initially → leaf-2 hidden.
     expect(screen.queryByTestId("concept-row-leaf-2")).toBeNull();
     fireEvent.click(screen.getByTestId("recheck-btn"));
-    const row = await waitFor(() => screen.getByTestId("cross-check-row-sopl_check"));
+    // The failing check appears in the Needs-attention queue; clicking it jumps
+    // to its target cell (switching the active template to SOPL).
+    const row = await waitFor(() => screen.getByTestId("attention-check-0"));
     fireEvent.click(row);
-    // Click-through switched the active template to SOPL → leaf-2 visible.
     await waitFor(() => screen.getByTestId("concept-row-leaf-2"));
   });
 
@@ -1154,20 +1155,20 @@ describe("ConceptsPage", () => {
     expect(screen.getByTestId("pdf-source-pane")).toBeTruthy();
   });
 
-  test("a panel toggle collapses its body (reconciliation queue)", async () => {
+  test("a panel toggle collapses its body (Needs attention)", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    // The reconciliation queue is embedded in the Menu column's recon panel.
-    await waitFor(() => screen.getByTestId("reconciliation-empty"));
-    fireEvent.click(screen.getByTestId("panel-recon-toggle"));
-    expect(screen.queryByTestId("reconciliation-empty")).toBeNull();
+    // Nothing outstanding → the Needs-attention panel shows its all-clear line.
+    await waitFor(() => screen.getByTestId("needs-attention-clear"));
+    fireEvent.click(screen.getByTestId("panel-attention-toggle"));
+    expect(screen.queryByTestId("needs-attention-clear")).toBeNull();
     // Toggling again restores it.
-    fireEvent.click(screen.getByTestId("panel-recon-toggle"));
-    expect(screen.getByTestId("reconciliation-empty")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("panel-attention-toggle"));
+    expect(screen.getByTestId("needs-attention-clear")).toBeTruthy();
   });
 
   test("shows an edited-values banner when facts/edited_count > 0", async () => {
