@@ -317,13 +317,16 @@ describe("RunDetailView", () => {
     expect(btn.disabled).toBe(true);
   });
 
-  test("Delete button triggers confirm and fires onDelete on confirm", () => {
+  test("Delete button opens the confirm dialog and fires onDelete on confirm", () => {
     const onDelete = vi.fn<(id: number) => void>();
     render(
       <RunDetailView detail={makeDetail()} onDelete={onDelete} onDownload={() => {}} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /delete/i }));
-    expect(window.confirm).toHaveBeenCalled();
+    // Click the header trigger to open the shared ConfirmDialog…
+    fireEvent.click(screen.getByRole("button", { name: /^delete run$/i }));
+    // …then confirm inside the dialog (title identifies the modal).
+    const dialog = screen.getByRole("dialog", { name: /delete run/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^delete run$/i }));
     expect(onDelete).toHaveBeenCalledWith(42);
   });
 
@@ -369,13 +372,14 @@ describe("RunDetailView", () => {
     expect(screen.getByText(/completed.*with.*errors/i)).toBeTruthy();
   });
 
-  test("Delete button does NOT fire onDelete when confirm is cancelled", () => {
-    (window.confirm as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
+  test("Delete button does NOT fire onDelete when the dialog is cancelled", () => {
     const onDelete = vi.fn<(id: number) => void>();
     render(
       <RunDetailView detail={makeDetail()} onDelete={onDelete} onDownload={() => {}} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /^delete run$/i }));
+    const dialog = screen.getByRole("dialog", { name: /delete run/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
     expect(onDelete).not.toHaveBeenCalled();
   });
 

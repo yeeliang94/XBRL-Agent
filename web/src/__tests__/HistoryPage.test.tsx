@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act, within } from "@testing-library/react";
 
 // Mock the API client so HistoryPage never hits a real backend.
 vi.mock("../lib/api", async () => {
@@ -193,7 +193,10 @@ describe("HistoryPage", () => {
       offset: 0,
     });
 
+    // Opens the shared confirm dialog; confirm inside it to actually delete.
     fireEvent.click(screen.getByRole("button", { name: /^delete run$/i }));
+    const dialog = screen.getByRole("dialog", { name: /delete run/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^delete run$/i }));
 
     // deleteRun called with the right id
     await waitFor(() => {

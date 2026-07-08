@@ -83,9 +83,12 @@ describe("NotesCoveragePanel", () => {
     expect(screen.getAllByTestId("coverage-status-placed").length).toBe(2);
     expect(screen.getByTestId("coverage-status-missing")).toBeTruthy();
     expect(screen.getByTestId("coverage-summary").textContent).toContain("1 unresolved");
-    // The reviewer-added carve-out marker shows.
+    // The reviewer-added marker shows.
     expect(screen.getByTestId("coverage-added-6")).toBeTruthy();
-    expect(screen.getByText("carve-out")).toBeTruthy();
+    // Routing codename (carve-out) is off the chip face now — in the tooltip.
+    expect(screen.queryByText("carve-out")).toBeNull();
+    const carveChip = screen.getByTestId("coverage-placement-Notes-SummaryofAccPol-14");
+    expect(carveChip.getAttribute("title")).toMatch(/carve-out/i);
   });
 
   test("sub-note roll-up expands to per-sub-ref detail", async () => {

@@ -95,6 +95,11 @@ export function NotesCoveragePanel({ runId }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  // Whether the checklist table is shown. Null = follow the default (auto-open
+  // only when something needs attention), a boolean = the user's explicit
+  // choice. Keeps a clean, all-placed run folded to a one-line green summary
+  // while still surfacing gaps without a click (Phase 5 de-cluttering).
+  const [tableToggled, setTableToggled] = useState<boolean | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -132,17 +137,32 @@ export function NotesCoveragePanel({ runId }: Props) {
   if (data.banner === "pre_feature" && data.rows.length === 0) return null;
 
   const s = data.summary;
+  // Auto-open the full checklist when there's a gap to look at; otherwise stay
+  // folded. The user's explicit toggle always wins.
+  const needsAttention =
+    s.unresolved > 0 || s.missing > 0 || s.suspected_gap > 0 ||
+    data.banner === "inventory_unavailable" || data.banner === "not_reviewed";
+  const showTable = tableToggled ?? needsAttention;
 
   return (
     <div data-testid="notes-coverage-panel" style={styles.panel}>
-      <div style={styles.headerRow}>
-        <span style={styles.title}>Notes coverage checklist</span>
+      <button
+        type="button"
+        style={styles.headerToggle}
+        onClick={() => setTableToggled(!showTable)}
+        aria-expanded={showTable}
+        data-testid="coverage-toggle"
+      >
+        <span aria-hidden="true" style={styles.chevron}>{showTable ? "▾" : "▸"}</span>
+        <span style={styles.title}>
+          Notes coverage — {s.placed} of {s.total} note{s.total === 1 ? "" : "s"} placed
+        </span>
         <div style={styles.headerSpacer} />
         <span style={styles.dim} data-testid="coverage-summary">
           {s.total} note(s) · {s.placed} placed · {s.missing} missing ·{" "}
           {s.suspected_gap} suspected gap · {s.unresolved} unresolved
         </span>
-      </div>
+      </button>
 
       {data.banner === "inventory_unavailable" && (
         <p
@@ -165,7 +185,7 @@ export function NotesCoveragePanel({ runId }: Props) {
         </p>
       )}
 
-      {data.rows.length > 0 && (
+      {showTable && data.rows.length > 0 && (
         <table style={styles.table}>
           <thead>
             <tr>
@@ -236,11 +256,16 @@ export function NotesCoveragePanel({ runId }: Props) {
                               style={styles.placementChip}
                               onClick={() => focusCell(p.sheet, p.row)}
                               data-testid={`coverage-placement-${p.sheet}-${p.row}`}
+                              // Routing codenames (fan-out / carve-out) are
+                              // engineer-only detail — kept in the tooltip, off
+                              // the chip face (§2).
+                              title={
+                                KIND_TAG[p.kind]
+                                  ? `Placed via ${KIND_TAG[p.kind]}`
+                                  : undefined
+                              }
                             >
                               {p.sheet} · row {p.row}
-                              {KIND_TAG[p.kind] && (
-                                <span style={styles.kindTag}>{KIND_TAG[p.kind]}</span>
-                              )}
                             </button>
                           ))}
                         </div>
@@ -300,6 +325,20 @@ const styles = {
     flexWrap: "wrap" as const,
     marginBottom: pwc.space.sm,
   } as const,
+  headerToggle: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    flexWrap: "wrap" as const,
+    width: "100%",
+    marginBottom: pwc.space.sm,
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    cursor: "pointer",
+    textAlign: "left" as const,
+  } as const,
+  chevron: { color: pwc.grey500, fontSize: 12, width: 12, display: "inline-block" } as const,
   headerSpacer: { flex: 1 },
   title: {
     fontFamily: pwc.fontHeading,

@@ -13,6 +13,7 @@ import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
 import { ValidatorTab } from "./ValidatorTab";
 import { ReviewTab } from "./ReviewTab";
 import { MtoolFillModal } from "./MtoolFillModal";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 import { NotesReviewTab } from "./NotesReviewTab";
@@ -315,6 +316,9 @@ export function RunDetailView({
   const [tab, setTab] = useState<RunTabKey>(initialTab);
   // mTool fill modal (button, NOT a tab — gotcha #7).
   const [mtoolOpen, setMtoolOpen] = useState(false);
+  // Delete confirmation — the shared ConfirmDialog replaces window.confirm so
+  // every destructive action in the app confirms the same, plain-English way.
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Step 8/12 — clicking a failed cross-check drives the source-PDF pane to
   // the cited page(s) of the cell it targets. We resolve (target_sheet,
@@ -384,12 +388,8 @@ export function RunDetailView({
   const canDelete = detail.status !== "running";
 
   const handleDelete = () => {
-    // Confirm before destructive action — no native dialog in jsdom so the
-    // tests stub window.confirm. We accept the slightly-ugly native prompt
-    // here instead of pulling in a modal dependency.
-    if (window.confirm(`Delete run #${detail.id} (${detail.pdf_filename})?`)) {
-      onDelete(detail.id);
-    }
+    // Open the shared confirm dialog; the actual delete fires on confirm.
+    setConfirmDelete(true);
   };
 
   // Tab definitions. Values is hidden unless canonical mode is on (the
@@ -512,6 +512,24 @@ export function RunDetailView({
 
       <MtoolFillModal runId={detail.id} open={mtoolOpen} onClose={() => setMtoolOpen(false)} />
 
+      <ConfirmDialog
+        isOpen={confirmDelete}
+        title={`Delete run ${detail.id}?`}
+        message={
+          <>
+            This removes <strong>{detail.pdf_filename}</strong> from your history.
+            The extracted figures and any downloads for this run go with it. The
+            original PDF and workbook files on disk are kept.
+          </>
+        }
+        confirmLabel="Delete run"
+        onConfirm={() => {
+          setConfirmDelete(false);
+          onDelete(detail.id);
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
+
       {/* Tab bar — one shared navigation for the whole run, replacing the
           old long scroll of stacked sections + the disjointed /concepts jump. */}
       <div
@@ -619,7 +637,9 @@ export function RunDetailView({
 
       {activeTab === "values" && canonicalEnabled && (
         <section style={styles.sectionFull} role="tabpanel" data-testid="run-detail-values">
-          <ConceptsPage runId={detail.id} />
+          {/* Selecting a notes sheet here hands off to the Notes tab rather
+              than embedding a second editor (the Notes tab is its home). */}
+          <ConceptsPage runId={detail.id} onOpenNotes={() => setTab("notes")} />
         </section>
       )}
 

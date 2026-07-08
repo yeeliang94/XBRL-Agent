@@ -4,6 +4,7 @@ import { ui } from "../lib/uiStyles";
 import type { ModelEntry } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
 import { flagKindLabel, humanize } from "../lib/vocabulary";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 /**
  * Notes Reviewer panel (docs/PLAN.md — Notes Reviewer, Phase 4).
@@ -101,6 +102,11 @@ export function NotesReviewerPanel({ runId }: Props) {
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
+  // Collapsed by default: the notes editor is the surface the operator works
+  // in, so the reviewer's diff/flags fold into a one-line summary bar that
+  // expands on demand (Phase 5 de-cluttering).
+  const [expanded, setExpanded] = useState(false);
+  const [confirmRevert, setConfirmRevert] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,13 +188,6 @@ export function NotesReviewerPanel({ runId }: Props) {
   };
 
   const revert = async () => {
-    if (
-      !window.confirm(
-        "Revert the notes to the original extraction? The reviewer's prose changes will be discarded.",
-      )
-    ) {
-      return;
-    }
     setBusy("revert");
     setActionError(null);
     setNotice(null);
@@ -247,7 +246,22 @@ export function NotesReviewerPanel({ runId }: Props) {
       )}
 
       <div style={styles.headerRow}>
-        <span style={styles.title}>Notes reviewer</span>
+        {/* Summary-bar toggle: a one-line "N change(s), M flag(s) — view
+            details" that expands the diff/flags in place. */}
+        <button
+          type="button"
+          style={styles.summaryToggle}
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          data-testid="notes-reviewer-toggle"
+        >
+          <span aria-hidden="true" style={styles.chevron}>{expanded ? "▾" : "▸"}</span>
+          <span style={styles.title}>Notes review</span>
+          <span style={styles.dim}>
+            {data.diff.length} change{data.diff.length === 1 ? "" : "s"} ·{" "}
+            {data.flags.length} flag{data.flags.length === 1 ? "" : "s"}
+          </span>
+        </button>
         {data.has_reviewer_version ? (
           <span style={styles.badge} data-testid="notes-reviewer-version-indicator">
             <span aria-hidden="true" style={ui.badgeDot(pwc.info)} />
@@ -283,19 +297,33 @@ export function NotesReviewerPanel({ runId }: Props) {
           onClick={reReview}
           disabled={busy !== null}
         >
-          {busy === "review" ? "Reviewing…" : "Re-review"}
+          {busy === "review" ? "Reviewing…" : "Run notes review again"}
         </button>
         {data.has_reviewer_version && (
           <button
             type="button"
             style={styles.revertBtn}
-            onClick={revert}
+            onClick={() => setConfirmRevert(true)}
             disabled={busy !== null}
           >
-            {busy === "revert" ? "Reverting…" : "Revert to original"}
+            {busy === "revert" ? "Restoring…" : "Restore original extraction"}
           </button>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmRevert}
+        title="Restore the original notes?"
+        message="The notes review's changes to the prose will be discarded and the notes go back to what was first extracted from the PDF. Your own manual edits to those cells are also affected."
+        confirmLabel="Restore original"
+        busyLabel="Restoring…"
+        busy={busy === "revert"}
+        onConfirm={() => {
+          setConfirmRevert(false);
+          void revert();
+        }}
+        onCancel={() => setConfirmRevert(false)}
+      />
 
       {busy === "review" && (
         <p style={styles.dim} role="status">
@@ -304,7 +332,7 @@ export function NotesReviewerPanel({ runId }: Props) {
         </p>
       )}
 
-      {(data.diff.length > 0 || data.flags.length > 0) && (
+      {expanded && (data.diff.length > 0 || data.flags.length > 0) && (
         <>
           <h4 style={styles.h4}>Changes ({data.diff.length})</h4>
           {data.diff.length === 0 ? (
@@ -416,6 +444,17 @@ const styles = {
     flexWrap: "wrap" as const,
   } as const,
   headerSpacer: { flex: 1 },
+  summaryToggle: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    cursor: "pointer",
+    textAlign: "left" as const,
+  } as const,
+  chevron: { color: pwc.grey500, fontSize: 12, width: 12, display: "inline-block" } as const,
   title: { fontFamily: pwc.fontHeading, fontWeight: 600, color: pwc.grey900, fontSize: 14 },
   badge: {
     ...ui.badge,

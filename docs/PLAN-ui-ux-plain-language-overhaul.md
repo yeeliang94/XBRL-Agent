@@ -188,7 +188,21 @@ still working, and never needs the raw feed.
 **Tests:** test_pipeline_stage_events.py pins stage labels — update backend strings + frontend
 `PipelineStage` union together (gotcha #19). ExtractPage/ToolCallCard/ResultsView web tests.
 
-### Phase 5 — Run report & notes de-cluttering (highest structural risk)
+### Phase 5 — Run report & notes de-cluttering (highest structural risk) — 🟩 DONE (one item deferred)
+
+**Status note (2026-07-08):** Shared `ConfirmDialog`/`Disclosure`/`Skeleton`
+primitives + motion tokens (theme.ts `motion`, index.css reduced-motion) landed
+as a foundation up front (Phase 7 material, pulled forward because 5/6 consume
+them). Notes tab: coverage + reviewer panels collapse to summary bars (coverage
+auto-opens when a gap needs attention); editor is the default surface. All four
+`window.confirm` calls → shared `ConfirmDialog`; `ConfirmRegenerateModal` removed.
+Verb unification applied (§2). Coverage chip fan-out/carve-out moved to tooltip.
+ConceptsPage: duplicated notes-editor embed removed (hands off to the Notes tab),
+"Download filled Excel" everywhere. **Deferred:** the editor-toolbar dropdown
+reorg (Tier-1 overflow + Tier-2 Borders/Fill/Structure dropdowns) — the toolbar
+already carries labelled `group(...)` captions addressing the discoverability
+complaint, and converting the selection-guarded TipTap controls to popover menus
+is the highest-risk change for marginal gain; flagged for a follow-up.
 
 **Goal:** the Notes and Figures tabs stop stacking equal-weight panels; duplicate verbs merge.
 

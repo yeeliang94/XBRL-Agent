@@ -4,6 +4,7 @@ import { ui } from "../lib/uiStyles";
 import type { ModelEntry } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
 import { flagKindLabel, humanize } from "../lib/vocabulary";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 /**
  * Review tab (docs/Archive/PLAN-reviewer-agent.md, Step 16).
@@ -141,6 +142,8 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
   // Reviewer model picker — the same model list the rest of the app uses.
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
+  // Shared confirm dialog for the destructive "restore original" action.
+  const [confirmRevert, setConfirmRevert] = useState(false);
 
   // Load the available model list + the configured reviewer default once, so
   // the user can pick which model runs a manual re-review.
@@ -243,9 +246,6 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
   };
 
   const revert = async () => {
-    if (!window.confirm("Revert this run to the original extraction? The reviewer's changes will be discarded.")) {
-      return;
-    }
     setBusy("revert");
     setActionError(null);
     setWarning(null);
@@ -318,13 +318,27 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
           <button
             type="button"
             style={styles.revertBtn}
-            onClick={revert}
+            onClick={() => setConfirmRevert(true)}
             disabled={busy !== null}
           >
-            {busy === "revert" ? "Reverting…" : "Revert to original"}
+            {busy === "revert" ? "Restoring…" : "Restore original extraction"}
           </button>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmRevert}
+        title="Restore the original extraction?"
+        message="The AI review's changes to this run's figures will be discarded and the figures go back to what was first extracted from the PDF."
+        confirmLabel="Restore original"
+        busyLabel="Restoring…"
+        busy={busy === "revert"}
+        onConfirm={() => {
+          setConfirmRevert(false);
+          void revert();
+        }}
+        onCancel={() => setConfirmRevert(false)}
+      />
 
       {/* Diff */}
       <h3 style={styles.h3}>Changes ({data.diff.length})</h3>
@@ -442,7 +456,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       )}
 
       {/* Guidance + re-review */}
-      <h3 style={styles.h3}>Re-review</h3>
+      <h3 style={styles.h3}>Run AI review again</h3>
       <textarea
         style={styles.guidanceBox}
         placeholder="Optional guidance for the next pass (e.g. 'the PPE note is on page 44')…"
@@ -476,7 +490,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
           onClick={reReview}
           disabled={busy !== null}
         >
-          {busy === "review" ? "Reviewing…" : "Re-review"}
+          {busy === "review" ? "Reviewing…" : "Run AI review again"}
         </button>
       </div>
       {busy === "review" && (

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { NotesReviewerPanel } from "../components/NotesReviewerPanel";
 
 const originalFetch = globalThis.fetch;
@@ -79,6 +79,9 @@ describe("NotesReviewerPanel", () => {
     render(<NotesReviewerPanel runId={7} />);
     await waitFor(() => screen.getByTestId("notes-reviewer-panel"));
     expect(screen.getByTestId("notes-reviewer-version-indicator")).toBeTruthy();
+    // Diff/flags are collapsed by default (editor is the primary surface) —
+    // expand the summary bar to reveal them.
+    fireEvent.click(screen.getByTestId("notes-reviewer-toggle"));
     expect(screen.getByText("Disclosure of financial instruments")).toBeTruthy();
     expect(screen.getByText("Authored")).toBeTruthy();
     expect(screen.getByText(/two fair-value notes/i)).toBeTruthy();
@@ -94,7 +97,7 @@ describe("NotesReviewerPanel", () => {
     await waitFor(() =>
       expect((screen.getByLabelText("Notes reviewer model") as HTMLSelectElement).value)
         .toBe("google.gemini-3"));
-    fireEvent.click(screen.getByText("Re-review"));
+    fireEvent.click(screen.getByText("Run notes review again"));
     await waitFor(() =>
       expect(posts.some((p) => p.url.endsWith("/notes-review/re-review"))).toBe(true));
     const body = JSON.parse((posts.find((p) => p.url.endsWith("/notes-review/re-review"))!.init!.body) as string);
@@ -107,6 +110,8 @@ describe("NotesReviewerPanel", () => {
     const posts: { url: string; init?: RequestInit }[] = [];
     mockApi(posts);
     render(<NotesReviewerPanel runId={7} />);
+    await waitFor(() => screen.getByTestId("notes-reviewer-toggle"));
+    fireEvent.click(screen.getByTestId("notes-reviewer-toggle"));
     await waitFor(() => screen.getByTestId("notes-flag-3"));
     fireEvent.change(screen.getByLabelText("Answer notes flag 3"), {
       target: { value: "looks fine" },
@@ -119,10 +124,12 @@ describe("NotesReviewerPanel", () => {
   test("revert posts to /notes-review/revert-to-original after confirm", async () => {
     const posts: { url: string; init?: RequestInit }[] = [];
     mockApi(posts);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<NotesReviewerPanel runId={7} />);
-    await waitFor(() => screen.getByText("Revert to original"));
-    fireEvent.click(screen.getByText("Revert to original"));
+    await waitFor(() => screen.getByText("Restore original extraction"));
+    // Opens the shared confirm dialog; the POST fires on confirm.
+    fireEvent.click(screen.getByText("Restore original extraction"));
+    const dialog = screen.getByRole("dialog", { name: /restore the original notes/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /restore original/i }));
     await waitFor(() =>
       expect(posts.some((p) => p.url.endsWith("/notes-review/revert-to-original"))).toBe(true));
   });

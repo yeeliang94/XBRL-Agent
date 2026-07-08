@@ -93,6 +93,7 @@ import {
   type ClipboardFormatOptions,
 } from "../lib/clipboardFormat";
 import { ClipboardFormatControls } from "./ClipboardFormatControls";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
 import type { ModelEntry } from "../lib/types";
 import "./NotesReviewTab.css";
@@ -492,7 +493,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
           style={styles.regenerateButton}
           onClick={handleRegenerateClick}
         >
-          Regenerate notes
+          Re-extract notes (replaces your edits)
         </button>
       </header>
 
@@ -522,7 +523,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
             disabled={!runTheme}
             onClick={() => persistRunTheme(null)}
           >
-            Use firm default
+            Reset style to firm default
           </button>
         </div>
       )}
@@ -596,16 +597,35 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet }: NotesReviewT
         </div>
       )}
 
-      {pendingCount !== null && (
-        <ConfirmRegenerateModal
-          count={pendingCount}
-          onCancel={() => setPendingCount(null)}
-          onConfirm={() => {
-            setPendingCount(null);
-            onRegenerate?.(runId);
-          }}
-        />
-      )}
+      <ConfirmDialog
+        isOpen={pendingCount !== null}
+        title="Re-extract notes?"
+        message={
+          pendingCount === UNKNOWN_COUNT ? (
+            <>
+              We couldn&apos;t verify whether your edits would be overwritten —
+              the safety check failed. Re-extracting will replace every cell on
+              this run&apos;s notes sheets. If you have unsaved edits, cancel and
+              try again in a moment.
+            </>
+          ) : (
+            <>
+              You&apos;ll be taken to the Extract page. Re-upload the same PDF
+              and start a new notes run there — when it completes, it will
+              overwrite {pendingCount ?? 0} edited cell
+              {pendingCount === 1 ? "" : "s"} on this run. Your current edits
+              stay in place until that new run finishes.
+            </>
+          )
+        }
+        confirmLabel="Continue"
+        danger={false}
+        onConfirm={() => {
+          setPendingCount(null);
+          onRegenerate?.(runId);
+        }}
+        onCancel={() => setPendingCount(null)}
+      />
     </div>
   );
 }
@@ -651,6 +671,8 @@ function SheetSection({
   // notes_formatter default; empty falls through to the server's fallback
   // (the run's extraction model — api/notes_formatter.py).
   const [selectedModel, setSelectedModel] = useState<string>(formatterDefaultModel);
+  // Confirm dialog for removing this sheet's formatting (shared dialog).
+  const [confirmRevertFormat, setConfirmRevertFormat] = useState(false);
   useEffect(() => {
     setSelectedModel(formatterDefaultModel);
   }, [formatterDefaultModel]);
@@ -727,11 +749,6 @@ function SheetSection({
   }, [runId, sheet.sheet, selectedModel]);
 
   const handleRevert = useCallback(async () => {
-    if (!window.confirm(
-      "Revert this sheet's formatting to the pre-format state?",
-    )) {
-      return;
-    }
     setFormatError(null);
     try {
       await revertNotesFormatter(runId, sheet.sheet);
@@ -878,14 +895,25 @@ function SheetSection({
               type="button"
               className={uiClass.btnGhost}
               style={styles.sheetFormatButton}
-              onClick={handleRevert}
+              onClick={() => setConfirmRevertFormat(true)}
               data-testid="notes-format-revert"
             >
-              Revert formatting
+              Remove formatting changes
             </button>
           )}
         </div>
       )}
+      <ConfirmDialog
+        isOpen={confirmRevertFormat}
+        title="Remove formatting changes?"
+        message="This sheet's cells go back to how they looked before the last formatting pass. The figures and wording are unchanged — only the styling is removed."
+        confirmLabel="Remove formatting"
+        onConfirm={() => {
+          setConfirmRevertFormat(false);
+          void handleRevert();
+        }}
+        onCancel={() => setConfirmRevertFormat(false)}
+      />
       {expanded && isFormatting && (
         <div
           style={styles.formattingBanner}
@@ -1859,69 +1887,6 @@ function SaveStatusBadge({ status }: { status: SaveStatus }) {
     <span style={{ ...styles.statusBadge, color }}>
       {label}
     </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Regenerate confirm modal (Step 12).
-// ---------------------------------------------------------------------------
-
-function ConfirmRegenerateModal({
-  count,
-  onCancel,
-  onConfirm,
-}: {
-  count: number;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  // count === UNKNOWN_COUNT means the edited_count endpoint failed
-  // (5xx / network error). We can't say "this will overwrite N cells"
-  // because we don't know N — instead we warn the user that the safety
-  // check didn't run and any edits on this run could be overwritten.
-  const isUnknown = count === UNKNOWN_COUNT;
-  return (
-    <div style={styles.modalBackdrop} role="dialog" aria-modal="true">
-      <div style={styles.modalCard}>
-        <h4 style={styles.modalTitle}>Regenerate notes?</h4>
-        <p style={styles.modalBody}>
-          {isUnknown ? (
-            <>
-              We couldn't verify whether your edits would be overwritten —
-              the edited-count check failed. Regenerating now will replace
-              every cell on this run's notes sheets. If you have unsaved
-              edits, cancel and try again in a moment.
-            </>
-          ) : (
-            <>
-              You'll be taken to the Extract page. Re-upload the same PDF
-              and start a new notes run there — when it completes, it will
-              overwrite {count} edited cell{count === 1 ? "" : "s"} on this
-              run. Your current edits stay in place until that new run
-              finishes.
-            </>
-          )}
-        </p>
-        <div style={styles.modalActions}>
-          <button
-            type="button"
-            className={uiClass.btnSecondary}
-            style={styles.modalCancelButton}
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className={uiClass.btnPrimary}
-            style={styles.modalConfirmButton}
-            onClick={onConfirm}
-          >
-            Continue
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 
