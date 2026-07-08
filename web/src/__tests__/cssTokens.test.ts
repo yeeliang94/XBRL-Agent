@@ -28,6 +28,8 @@ const INDEX_TOKENS = [
   "grey300", // secondary hover border + scrollbar thumb
   "grey500", // scrollbar thumb hover
   "grey900", // body text + agent-tab hover text
+  "errorBg", // danger button hover background
+  "error", // danger button hover border
 ] as const;
 
 const NOTES_TOKENS = [

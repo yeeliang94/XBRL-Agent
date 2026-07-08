@@ -787,14 +787,10 @@ const styles = {
     marginBottom: pwc.space.md,
   } as React.CSSProperties,
   metricTile: {
+    ...ui.statTile,
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    background: pwc.white,
-    minWidth: 110,
   } as React.CSSProperties,
   metricValue: {
     fontFamily: pwc.fontMono,

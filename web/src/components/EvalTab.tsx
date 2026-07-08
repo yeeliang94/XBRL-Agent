@@ -128,7 +128,9 @@ const styles = {
   } as React.CSSProperties,
   headline: {
     fontFamily: pwc.fontMono,
-    fontSize: 56,
+    // Brought down from an off-scale 56px to the display size the rest of the
+    // app uses for hero numbers (layout normalization, Phase 8).
+    fontSize: 30,
     fontWeight: pwc.weight.regular,
     color: pwc.grey900,
     lineHeight: 1,

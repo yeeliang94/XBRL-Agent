@@ -390,7 +390,7 @@ const styles = {
     alignItems: "flex-start",
   } as const,
   placementChip: {
-    background: "#fff",
+    background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
     color: pwc.grey800,
     borderRadius: pwc.radius.sm,
@@ -431,7 +431,7 @@ const styles = {
   subCell: {
     padding: pwc.space.sm,
     borderBottom: `1px solid ${pwc.grey100}`,
-    background: "#fff",
+    background: pwc.white,
   } as const,
   subRow: {
     display: "flex",

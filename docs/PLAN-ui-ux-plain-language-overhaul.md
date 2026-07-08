@@ -331,7 +331,24 @@ notes editor never animates while typing; every animation must answer "what just
 **Tests:** snapshot-level only — assert reduced-motion block exists, Disclosure/Skeleton
 primitives render; do not pin durations in tests.
 
-### Phase 8 — Design-language polish + layout normalization
+### Phase 8 — Design-language polish + layout normalization — 🟩 CORE DONE (broad sweeps light-touch)
+
+**Status note (2026-07-08):** Fixed the load-bearing token drifts: index.css
+danger-hover reds → the real `errorBg`/`error` values (added to the cssTokens
+lockstep guard); EvalTab hero number 56px → 30px; ScoutToggle knob shadow →
+`pwc.shadow.card`; `#fff` literals → `pwc.white` in the touched panels. Modal
+scrims/shadows are unified (the off-spec `ConfirmRegenerateModal` was deleted in
+Phase 5; MtoolFillModal already used the canonical scrim + `shadow.modal`).
+AgentTabs already used `pwc.warningText`; emoji buttons became icons in Phase 4.
+Added the four new `uiStyles` primitives the plan calls for — `ui.cardInset`,
+`ui.statTile`, `ui.iconButton`, `ui.thDense`/`ui.tdDense` — each with a pinning
+test (`uiStyles.test.ts`); `statTile` adopted in the run-report metric tiles.
+**Light-touch / follow-up:** the broad off-grid sweep (NotesReviewTab fractional
+paddings, straggler radii/`#fff`), full dense-table adoption across
+telemetry/ValidatorTab/coverage, and the AgentTabs status-dot restyle are left
+as mechanical cleanups — the primitives now exist for them to converge onto, and
+PageHeader's 32px title stays as the documented in-app canon (its comment already
+records the deliberate deviation from the reference's size).
 
 Fix the 11 audited drifts: index.css:97-98 danger-hover reds → token values (lockstep rule);
 AgentTabs.tsx:207 `#b54708` → `pwc.warningText`; emoji buttons → icons.tsx (done in Phase 4);
