@@ -275,6 +275,53 @@ class TestSOCIEToSOFPEquity:
         )
         assert result.status == "failed"
 
+    def test_xlsx_falls_back_to_component_sum_when_total_col_blank(self, tmp_dir):
+        """Run-168 QA fix (xlsx path): when the Total col X is blank, the check
+        reconstructs closing equity by summing the component columns (issued
+        capital B + retained earnings C + reserves...), so a healthy SOCIE
+        whose apex total never materialised still ties out."""
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
+
+        # Col X (24) left blank; B (issued capital) = 1,000,000 and
+        # C (retained earnings) = 200,000 present → sum 1,200,000.
+        row = ["*Equity at end of period"] + [None] * 23
+        row[1] = 1_000_000.0   # col B
+        row[2] = 200_000.0     # col C
+        _make_workbook({"SOCIE": [row]}, socie_path)
+        _make_workbook({
+            "SOFP-CuNonCu": [["*Total equity", 1_200_000.0, 1_000_000.0]],
+        }, sofp_path)
+
+        result = SOCIEToSOFPEquityCheck().run(
+            {StatementType.SOCIE: socie_path, StatementType.SOFP: sofp_path},
+            tolerance=1.0,
+        )
+        assert result.status == "passed", result.message
+
+    def test_xlsx_row_sum_skips_blank_duplicate_and_finds_populated_row(self, tmp_dir):
+        """Parity with find_value_by_label (review I-1): when two rows share the
+        'Equity at end of period' label and BOTH have a blank Total col X, the
+        row-sum fallback must skip the first (all-blank components) row and read
+        the second (populated) one — not stop at the first and report None."""
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
+
+        blank_row = ["*Equity at end of period"] + [None] * 23   # all blank
+        good_row = ["*Equity at end of period"] + [None] * 23
+        good_row[1] = 900_000.0    # col B
+        good_row[2] = 300_000.0    # col C  → sum 1,200,000
+        _make_workbook({"SOCIE": [blank_row, good_row]}, socie_path)
+        _make_workbook({
+            "SOFP-CuNonCu": [["*Total equity", 1_200_000.0, 1_000_000.0]],
+        }, sofp_path)
+
+        result = SOCIEToSOFPEquityCheck().run(
+            {StatementType.SOCIE: socie_path, StatementType.SOFP: sofp_path},
+            tolerance=1.0,
+        )
+        assert result.status == "passed", result.message
+
 
 # ---------------------------------------------------------------------------
 # Check 5: SOCF closing cash = SOFP cash
@@ -666,6 +713,33 @@ class TestMessagePrefixHonoursFilingLevel:
             tolerance=1.0, filing_level="company",
         )
         assert "Group" not in result.message, result.message
+
+    def test_socie_to_sofp_equity_missing_value_message_is_plain_english(self, tmp_dir):
+        """Run-168 QA fix: the missing-value failure used to interpolate raw
+        Python values ('SOCIE=None, SOFP=963391.0') straight into a message
+        the Needs-attention panel renders verbatim. The message must name
+        the missing side in plain English and format the found side with
+        thousands separators — never 'None' or a trailing '.0'."""
+        socie_path = os.path.join(tmp_dir, "socie.xlsx")
+        sofp_path = os.path.join(tmp_dir, "sofp.xlsx")
+        pad = [None] * 22
+        # SOCIE has the label row but no value in the Total column (col X)
+        # — the run-168 shape: agents never write formula columns.
+        _make_workbook({
+            "SOCIE": [["*Equity at end of period", *pad, None]],
+        }, socie_path)
+        _make_workbook({
+            "SOFP-CuNonCu": [["*Total equity", 963391.0, 964869.0]],
+        }, sofp_path)
+        result = SOCIEToSOFPEquityCheck().run(
+            {StatementType.SOCIE: socie_path, StatementType.SOFP: sofp_path},
+            tolerance=1.0, filing_level="company",
+        )
+        assert result.status == "failed"
+        assert "None" not in result.message, result.message
+        assert "963391.0" not in result.message, result.message
+        assert "963,391" in result.message, result.message
+        assert "not filled in" in result.message, result.message
 
     def test_filing_level_prefix_helper_is_single_source_of_truth(self):
         """S-4: extract `_filing_level_prefix` helper into cross_checks.util

@@ -1457,6 +1457,7 @@ async def run_scout_streaming(
     *,
     force_vision_inventory: bool = False,
     output_dir: Optional[str] = None,
+    usage_out: Optional[dict] = None,
 ) -> Infopack:
     """Run the scout agent with structured event streaming.
 
@@ -1470,6 +1471,15 @@ async def run_scout_streaming(
             PDF is scanned.
         output_dir: where the scout conversation trace is persisted
             (item 2, gotcha #6). None skips trace persistence.
+        usage_out: optional dict the scout fills with its end-of-run
+            usage (prompt_tokens / completion_tokens / total_tokens /
+            turn_count / tool_call_count) so the SSE endpoint can
+            persist real telemetry onto the SCOUT run_agents row —
+            before this, the row always finalized with the 0 defaults
+            (run-168 QA finding). Filled on EVERY exit path (success,
+            timeout-degraded, crash) because a failed scout still
+            burned tokens. Best-effort: a usage-read failure leaves the
+            token keys absent, never raises.
     """
     agent, deps = create_scout_agent(
         pdf_path=pdf_path,
@@ -1490,6 +1500,28 @@ async def run_scout_streaming(
 
     tool_start_times: dict[str, float] = {}
     thinking_counter = 0
+
+    # Telemetry counters for the SCOUT run_agents row. A "turn" here is
+    # one model request (matching the face coordinator's meaning); tool
+    # calls are counted as they stream past.
+    model_turn_count = 0
+    tool_call_count = 0
+
+    def _fill_usage() -> None:
+        """Copy the run's usage into ``usage_out``. Called on every exit
+        path; advisory by contract — must never mask the real outcome."""
+        if usage_out is None:
+            return
+        usage_out["turn_count"] = model_turn_count
+        usage_out["tool_call_count"] = tool_call_count
+        try:
+            u = agent_run_obj.usage() if agent_run_obj is not None else None
+            if u is not None:
+                usage_out["prompt_tokens"] = int(u.request_tokens or 0)
+                usage_out["completion_tokens"] = int(u.response_tokens or 0)
+                usage_out["total_tokens"] = int(u.total_tokens or 0)
+        except Exception:  # noqa: BLE001 — telemetry is advisory
+            logger.debug("scout usage capture skipped", exc_info=True)
 
     async def _emit(event_type: str, data: dict) -> None:
         if on_event:
@@ -1534,6 +1566,7 @@ async def run_scout_streaming(
                             tool_stream, turn_timeout
                         ):
                             if isinstance(event, FunctionToolCallEvent):
+                                tool_call_count += 1
                                 raw_args = event.part.args
                                 if isinstance(raw_args, str):
                                     try:
@@ -1570,6 +1603,7 @@ async def run_scout_streaming(
                                 })
 
                 elif Agent.is_model_request_node(node):
+                    model_turn_count += 1
                     thinking_id = f"scout_think_{thinking_counter}"
                     thinking_active = False
                     async with node.stream(agent_run.ctx) as model_stream:
@@ -1617,6 +1651,7 @@ async def run_scout_streaming(
         # a disconnected SSE client) must not skip the trace — it matters most
         # exactly when the run is failing (gotcha #6).
         _save_scout_trace(agent_run_obj, output_dir)
+        _fill_usage()
         await _emit("error", {
             "type": "scout_timeout",
             "message": f"{reason} The run can proceed without scout hints.",
@@ -1634,9 +1669,11 @@ async def run_scout_streaming(
         # trace, then let the caller's existing handling decide (the SSE
         # endpoint already surfaces these as error / scout_cancelled).
         _save_scout_trace(agent_run_obj, output_dir)
+        _fill_usage()
         raise
 
     _save_scout_trace(agent_run_obj, output_dir)
+    _fill_usage()
 
     if deps.infopack is not None:
         # Same safety net as run_scout — see _populate_inventory_via_vision.

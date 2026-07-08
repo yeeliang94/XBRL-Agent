@@ -11,9 +11,39 @@ from statement_types import StatementType
 from cross_checks.framework import CrossCheckResult, Comparand
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label,
-    find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
+    find_value_in_block, find_row_sum_in_block, socie_component_columns,
+    SOCIE_GROUP_BLOCKS, is_sore_run,
     socie_total_column, filing_level_prefix,
 )
+
+
+def _fmt_amount(value) -> str:
+    """Human formatting for check messages: thousands separators, no
+    trailing ``.0``. Run-168 QA finding: the raw f-string interpolation
+    leaked ``SOCIE=None, SOFP=963391.0`` straight into the Needs-attention
+    panel (which renders check messages verbatim)."""
+    if value is None:
+        return "not found"
+    v = float(value)
+    if v.is_integer():
+        return f"{int(v):,}"
+    return f"{v:,.2f}"
+
+
+def _equity_not_found_clause(socie_equity, sofp_equity) -> str:
+    """Plain-English body for the one-side-missing failure, shared by the
+    xlsx and fact-based paths and by the Group/Company sub-clauses."""
+    socie_part = (
+        f"SOCIE closing equity is {_fmt_amount(socie_equity)}"
+        if socie_equity is not None
+        else "the SOCIE closing equity total ('Equity at end of period') was not filled in"
+    )
+    sofp_part = (
+        f"SOFP total equity is {_fmt_amount(sofp_equity)}"
+        if sofp_equity is not None
+        else "the SOFP 'Total equity' figure was not filled in"
+    )
+    return f"{socie_part}; {sofp_part}"
 
 
 class SOCIEToSOFPEquityCheck:
@@ -40,21 +70,39 @@ class SOCIEToSOFPEquityCheck:
             # column here (unlike the profit check, where retained-
             # earnings-only filings read col C).
             col = socie_total_column(filing_standard)
+            comp_cols = socie_component_columns(filing_standard)
             if filing_level == "group":
                 blk = SOCIE_GROUP_BLOCKS["group_cy"]
                 socie_equity = find_value_in_block(
                     socie_ws, "equity at end of period", col=col,
                     start_row=blk[0], end_row=blk[1], wb=socie_wb,
                 )
+                if socie_equity is None:
+                    # Apex Total blank — reconstruct from component columns
+                    # (see run_facts for the full rationale).
+                    socie_equity = find_row_sum_in_block(
+                        socie_ws, "equity at end of period", comp_cols,
+                        start_row=blk[0], end_row=blk[1], wb=socie_wb,
+                    )
                 co_blk = SOCIE_GROUP_BLOCKS["company_cy"]
                 co_socie_equity = find_value_in_block(
                     socie_ws, "equity at end of period", col=col,
                     start_row=co_blk[0], end_row=co_blk[1], wb=socie_wb,
                 )
+                if co_socie_equity is None:
+                    co_socie_equity = find_row_sum_in_block(
+                        socie_ws, "equity at end of period", comp_cols,
+                        start_row=co_blk[0], end_row=co_blk[1], wb=socie_wb,
+                    )
             else:
                 socie_equity = find_value_by_label(
                     socie_ws, "equity at end of period", col=col, wb=socie_wb,
                 )
+                if socie_equity is None:
+                    socie_equity = find_row_sum_in_block(
+                        socie_ws, "equity at end of period", comp_cols,
+                        start_row=1, end_row=socie_ws.max_row, wb=socie_wb,
+                    )
         socie_wb.close()
 
         sofp_wb = open_workbook(workbook_paths[StatementType.SOFP])
@@ -71,7 +119,8 @@ class SOCIEToSOFPEquityCheck:
         if socie_equity is None or sofp_equity is None:
             return CrossCheckResult(
                 name=self.name, status="failed",
-                message=f"Could not find equity values: SOCIE={socie_equity}, SOFP={sofp_equity}",
+                message="Couldn't compare equity totals: "
+                        f"{_equity_not_found_clause(socie_equity, sofp_equity)}.",
             )
 
         diff = abs(socie_equity - sofp_equity)
@@ -87,7 +136,8 @@ class SOCIEToSOFPEquityCheck:
             if co_socie_equity is None or co_sofp_equity is None:
                 co_passed = False
                 parts.append(
-                    f"Company: missing equity values (SOCIE={co_socie_equity}, SOFP={co_sofp_equity})"
+                    "Company: couldn't compare equity totals — "
+                    f"{_equity_not_found_clause(co_socie_equity, co_sofp_equity)}"
                 )
             else:
                 co_diff = abs(co_socie_equity - co_sofp_equity)
@@ -125,7 +175,8 @@ class SOCIEToSOFPEquityCheck:
         """Fact-based twin of :meth:`run` (item 32). SOCIE equity-at-end is the
         matrix Total column (MFRS X / MPERS B); SOFP total equity is linear."""
         from cross_checks.facts_util import (
-            primary_scope, read_labelled_value, read_matrix_value, socie_total_col,
+            primary_scope, read_labelled_value, read_matrix_value,
+            read_matrix_row_sum, socie_component_cols, socie_total_col,
         )
         from cross_checks.util import filing_level_prefix
 
@@ -133,6 +184,14 @@ class SOCIEToSOFPEquityCheck:
         col = socie_total_col(ctx.filing_standard)
         socie = read_matrix_value(
             ctx, StatementType.SOCIE, "equity at end of period", col, "CY", scope)
+        if socie.value is None:
+            # Apex Total (col X) not materialised by the cascade — reconstruct
+            # closing equity from the per-component columns, which resolve one
+            # hop above the agent's leaves (run-168: empty reserve columns left
+            # X blank though every real component closing was present).
+            socie = read_matrix_row_sum(
+                ctx, StatementType.SOCIE, "equity at end of period",
+                socie_component_cols(ctx.filing_standard), "CY", scope)
         sofp = read_labelled_value(ctx, StatementType.SOFP, "total equity", "CY", scope)
         socie_equity, sofp_equity = socie.value, sofp.value
         socie_sheet = socie.sheet or "SOCIE"
@@ -141,7 +200,8 @@ class SOCIEToSOFPEquityCheck:
         if socie_equity is None or sofp_equity is None:
             return CrossCheckResult(
                 name=self.name, status="failed",
-                message=f"Could not find equity values: SOCIE={socie_equity}, SOFP={sofp_equity}",
+                message="Couldn't compare equity totals: "
+                        f"{_equity_not_found_clause(socie_equity, sofp_equity)}.",
             )
 
         diff = abs(socie_equity - sofp_equity)
@@ -153,15 +213,21 @@ class SOCIEToSOFPEquityCheck:
         co_sofp_equity = None
         co_passed = True
         if ctx.filing_level == "group":
-            co_socie_equity = read_matrix_value(
+            co_socie = read_matrix_value(
                 ctx, StatementType.SOCIE, "equity at end of period", col,
-                "CY", "Company").value
+                "CY", "Company")
+            if co_socie.value is None:
+                co_socie = read_matrix_row_sum(
+                    ctx, StatementType.SOCIE, "equity at end of period",
+                    socie_component_cols(ctx.filing_standard), "CY", "Company")
+            co_socie_equity = co_socie.value
             co_sofp_equity = read_labelled_value(
                 ctx, StatementType.SOFP, "total equity", "CY", "Company").value
             if co_socie_equity is None or co_sofp_equity is None:
                 co_passed = False
                 parts.append(
-                    f"Company: missing equity values (SOCIE={co_socie_equity}, SOFP={co_sofp_equity})"
+                    "Company: couldn't compare equity totals — "
+                    f"{_equity_not_found_clause(co_socie_equity, co_sofp_equity)}"
                 )
             else:
                 co_diff = abs(co_socie_equity - co_sofp_equity)

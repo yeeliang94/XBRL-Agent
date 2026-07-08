@@ -946,9 +946,9 @@ describe("appReducer", () => {
   });
 
   test("appReducer_handles_correction_agent", () => {
-    // Phase 7.1: a CORRECTION agent_id event must materialise a tab with
-    // a friendly "Correction" label, without any frontend enum extension
-    // (backend promise in PLAN §3.2: reuse the existing coarse envelope).
+    // A CORRECTION agent_id event must materialise a tab wearing the
+    // product's name for that pass ("AI review", central vocabulary),
+    // without any frontend enum extension (run-168 QA label fix).
     const running = appReducer(
       appReducer(initialState, {
         type: "UPLOADED",
@@ -971,7 +971,7 @@ describe("appReducer", () => {
     });
     const agent = after.agents["CORRECTION"];
     expect(agent).toBeDefined();
-    expect(agent.label).toBe("Correction");
+    expect(agent.label).toBe("AI review");
     expect(after.agentTabOrder).toContain("CORRECTION");
   });
 
@@ -1000,7 +1000,7 @@ describe("appReducer", () => {
     });
     const agent = after.agents["NOTES_VALIDATOR"];
     expect(agent).toBeDefined();
-    expect(agent.label).toBe("Notes Validator");
+    expect(agent.label).toBe("Notes review");
     expect(after.agentTabOrder).toContain("NOTES_VALIDATOR");
   });
 

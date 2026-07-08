@@ -33,6 +33,26 @@ export const TERMS = {
   needsAttention: "Needs attention",
 } as const;
 
+/** Pseudo-agent rows persisted under fixed backend IDs (wire values —
+ *  mapped, never renamed). The display labels must match the product's
+ *  surface names: the pass that fixes flagged figures is "AI review"
+ *  everywhere else in the app, and the notes pass is "Notes review".
+ *  Three components used to carry their own hardcoded "Correction" /
+ *  "Notes Validator" maps, so the Activity row and the tab describing
+ *  the same work wore different names (run-168 QA finding).
+ *
+ *  VALIDATOR is synthetic: created by the live reducer when cross_checks
+ *  arrive, to carry the cross-check table. */
+const PSEUDO_AGENT_LABELS: Record<string, string> = {
+  CORRECTION: TERMS.aiReview,
+  NOTES_VALIDATOR: TERMS.notesReview,
+  VALIDATOR: "Cross-checks",
+};
+
+export function pseudoAgentLabel(statementType: string): string | null {
+  return PSEUDO_AGENT_LABELS[statementType.toUpperCase()] ?? null;
+}
+
 /** Plain-English labels for the SSM taxonomy variant codes. Display only —
  *  the API still speaks the raw code. Unknown codes fall back to themselves. */
 const VARIANT_LABELS: Record<string, string> = {

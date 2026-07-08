@@ -420,6 +420,75 @@ class TestScoutTraceRoute:
         assert "messages" in trace_resp.json()
 
 
+class TestScoutUsagePersistence:
+    """Run-168 QA fix: the SCOUT run_agents row must carry the scout's
+    real token/turn usage instead of finalizing with the 0 defaults
+    (the Activity tab showed every scout as '0 turns · 0 tokens ·
+    $0.0000'). The endpoint passes a ``usage_out`` dict into
+    ``run_scout_streaming``; whatever the scout fills there must land
+    on the row."""
+
+    def test_scout_row_persists_usage_from_usage_out(
+        self, app_client, session_dir,
+    ):
+        client, session_id = app_client
+        _sid, d, tmp_path = session_dir
+
+        import sqlite3
+        import server
+        from db import repository as repo
+        from db.schema import init_db
+        init_db(server.AUDIT_DB_PATH)
+        conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+        try:
+            run_id = repo.create_run(
+                conn, pdf_filename="f.pdf", session_id=session_id,
+                output_dir=str(d), config=None, scout_enabled=True,
+                status="draft",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        async def fake_streaming(pdf_path, model, on_event=None, *,
+                                 usage_out=None, **_kwargs):
+            # Simulate the scout's end-of-run usage capture.
+            if usage_out is not None:
+                usage_out.update({
+                    "prompt_tokens": 12_000,
+                    "completion_tokens": 3_000,
+                    "total_tokens": 15_000,
+                    "turn_count": 7,
+                    "tool_call_count": 4,
+                })
+            return _fake_infopack()
+
+        with patch("scout.runner.run_scout_streaming", side_effect=fake_streaming):
+            resp = client.post(f"/api/scout/{session_id}")
+        assert resp.status_code == 200
+
+        conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+        try:
+            row = conn.execute(
+                "SELECT status, total_tokens, prompt_tokens, completion_tokens, "
+                "turn_count, tool_call_count, total_cost FROM run_agents "
+                "WHERE run_id = ? AND statement_type = 'SCOUT'", (run_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None
+        status, total_t, prompt_t, completion_t, turns, tool_calls, cost = row
+        assert status == "succeeded"
+        assert total_t == 15_000
+        assert prompt_t == 12_000
+        assert completion_t == 3_000
+        assert turns == 7
+        assert tool_calls == 4
+        # Cost is derived from pricing; exact value depends on the model
+        # table, but real usage must never persist as a hard $0-or-crash.
+        assert cost is not None and cost >= 0.0
+
+
 def _parse_sse(text: str) -> list[dict]:
     """Parse SSE text into list of {event, data} dicts."""
     events = []

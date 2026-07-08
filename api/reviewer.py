@@ -271,6 +271,13 @@ async def re_review(run_id: int, body: Optional[dict] = None):
                     total_tokens=int(outcome.get("total_tokens", 0) or 0),
                     total_cost=float(outcome.get("total_cost", 0.0) or 0.0),
                     turn_count=int(outcome.get("turns_used", 0) or 0),
+                    # Run-168 QA fix: same rollups the auto path persists —
+                    # without them the Activity row reads "0 tool calls".
+                    prompt_tokens=int(outcome.get("prompt_tokens", 0) or 0),
+                    completion_tokens=int(
+                        outcome.get("completion_tokens", 0) or 0),
+                    tool_call_count=int(
+                        outcome.get("tool_call_count", 0) or 0),
                     # v17 (item 9): classify the manual re-review outcome.
                     error_type=server._error_type_for_outcome(
                         outcome.get("error")),

@@ -17,6 +17,7 @@ import type {
   PipelineStage,
 } from "./types";
 import { createAgentState } from "./types";
+import { pseudoAgentLabel } from "./vocabulary";
 
 // Backend-emitted error string for user-cancelled agents. Kept as a named
 // constant so the two sites that check it can't drift out of sync.
@@ -495,27 +496,19 @@ export function agentSubAgentSummary(agent: AgentState): string | null {
   return `${noteSpan}, ${pageSpan}`;
 }
 
-// Phase 7: display labels for pseudo-agents that emit under a fixed ID
-// (correction pass + notes post-validator). Kept as a dedicated map so the
-// upper-case uppercasing in deriveAgentLabel can't accidentally munge them
-// and a test can pin the exact tab text users see.
-//
-// VALIDATOR is synthetic: created in handleRunComplete when cross_checks
-// arrive, to carry the cross-check table. The friendly label "Cross-checks"
-// stops it from visually colliding with the "Notes Validator" agent tab.
-const PSEUDO_AGENT_LABELS: Record<string, string> = {
-  CORRECTION: "Correction",
-  NOTES_VALIDATOR: "Notes Validator",
-  VALIDATOR: "Cross-checks",
-};
-
-/** Derive the display label for a newly created agent slot. */
+/** Derive the display label for a newly created agent slot.
+ *
+ * Pseudo-agents (CORRECTION / NOTES_VALIDATOR / VALIDATOR) resolve
+ * through the central vocabulary so live tabs wear the same names as
+ * the run-detail surfaces ("AI review" / "Notes review") — this used
+ * to be a third local copy of the label map (run-168 QA finding). */
 function deriveAgentLabel(agentId: string, role: string): string {
   if (agentId.startsWith("notes:")) {
     return notesTabLabel(role || agentId);
   }
   const upper = (role || agentId).toUpperCase();
-  if (PSEUDO_AGENT_LABELS[upper]) return PSEUDO_AGENT_LABELS[upper];
+  const pseudo = pseudoAgentLabel(upper);
+  if (pseudo) return pseudo;
   return upper.replace(/_\d+$/, "");
 }
 

@@ -115,6 +115,29 @@ def socie_total_col(filing_standard: str) -> str:
     return "B" if filing_standard == "mpers" else "X"
 
 
+# Primitive component columns of an MFRS SOCIE row (fact-space twin of
+# cross_checks.util._MFRS_SOCIE_COMPONENT_COLS). These carry real per-component
+# figures and sum to the row Total in col X; the formula subtotal columns
+# M/S/T/U and the apex X are excluded. Summed across "equity at end of period"
+# they reconstruct closing equity when the cascade left X blank.
+_MFRS_SOCIE_COMPONENT_COLS = [
+    "B", "C", "D",                          # issued capital, retained earnings, treasury
+    "E", "F", "G", "H", "I", "J", "K", "L", # non-distributable reserves (M = SUM)
+    "N", "O", "P", "Q", "R",                # distributable reserves (S = SUM)
+    "V", "W",                                # other components, NCI
+]
+
+
+def socie_component_cols(filing_standard: str) -> list[str]:
+    """Component matrix columns whose row values sum to col X's Total.
+
+    MPERS keeps its total in col B, so the fallback there is ``["B"]`` — a
+    no-op re-read of the same cell.
+    """
+    return ["B"] if filing_standard == "mpers" \
+        else list(_MFRS_SOCIE_COMPONENT_COLS)
+
+
 def socie_retained_col(filing_standard: str) -> str:
     """The matrix column read for profit when there's no NCI data (MFRS col C)."""
     return "B" if filing_standard == "mpers" else "C"
@@ -253,3 +276,32 @@ def read_matrix_value(
         if value is not None:
             return LabelledValue(value, sheet, row)
     return LabelledValue(None, None, None)
+
+
+def read_matrix_row_sum(
+    ctx,
+    stmt: StatementType,
+    row_label,
+    cols,
+    period: str,
+    entity_scope: str,
+) -> LabelledValue:
+    """Sum a SOCIE matrix ROW across ``cols`` (fact-space).
+
+    The fallback for a computed row Total (col X) the cascade left blank: the
+    per-component cells one hop above the agent's leaves usually resolve even
+    when the apex total doesn't. Present cells sum; an absent column counts as
+    0 (an empty reserve column is genuinely zero). Returns
+    ``LabelledValue(None, ...)`` when NO listed column carries a value — an
+    all-blank row is "not found", not zero equity.
+    """
+    total: Optional[float] = None
+    sheet = None
+    row = None
+    for col in cols:
+        lv = read_matrix_value(ctx, stmt, row_label, col, period, entity_scope)
+        if lv.value is not None:
+            total = lv.value if total is None else total + lv.value
+            if sheet is None:  # anchor comparand at the first populated component
+                sheet, row = lv.sheet, lv.row
+    return LabelledValue(total, sheet, row)

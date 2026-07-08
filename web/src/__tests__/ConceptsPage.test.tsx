@@ -816,6 +816,27 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
   });
 
+  test("notes view hides the whole Review-controls toolbar, not just its contents", async () => {
+    // Run-168 QA fix: the toolbar card used to keep rendering with both
+    // children (Search + Entity toggle) hidden, painting an empty white
+    // box between the outcome strip and the notes editor.
+    mockFetch((url) => {
+      if (url.includes("/notes_cells")) return { sheets: [] };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    // Face view: the toolbar (with Search) is present.
+    expect(screen.getByTestId("concept-search")).toBeTruthy();
+    expect(screen.getByLabelText("Review controls")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
+    // Notes view: the toolbar section itself is gone — no empty shell.
+    expect(screen.queryByLabelText("Review controls")).toBeNull();
+    expect(screen.queryByTestId("concept-search")).toBeNull();
+  });
+
   test("face templates render as friendly short codes, not raw ids", async () => {
     mockFetch((url) => {
       if (url.includes("/notes_cells")) return { sheets: [] };

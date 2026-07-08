@@ -1104,6 +1104,21 @@ async def _run_list_of_notes_fanout(
         except Exception:  # noqa: BLE001
             logger.debug("notes12 skips side-log write skipped", exc_info=True)
 
+        # Sum each sub-agent's captured usage up front — every return
+        # branch below (skip carve-out, total failure, normal write)
+        # attaches these rollups to the NotesAgentResult so the parent
+        # run_agents row records real spend. Before this the sums only
+        # reached the cost-report text file, so the Activity tab showed
+        # Sheet-12 as 0 tokens / $0 despite real spend (run-168 QA
+        # finding). Per-turn detail intentionally stays empty (gotcha
+        # #6: the sub-agents merge into one row).
+        total_prompt = sum(r.prompt_tokens for r in sub_result.sub_agent_results)
+        total_completion = sum(r.completion_tokens for r in sub_result.sub_agent_results)
+        try:
+            rollup_cost = estimate_cost(total_prompt, total_completion, 0, model)
+        except Exception:  # noqa: BLE001 — an unknown model must not zero the token rollup
+            rollup_cost = 0.0
+
         # Total-failure guard: an empty aggregated payload list coming out
         # of a non-empty inventory means every sub-agent lost coverage.
         # Writer treats empty payloads as a no-op success, so without this
@@ -1183,6 +1198,11 @@ async def _run_list_of_notes_fanout(
                     status="succeeded",
                     workbook_path=output_path,
                     warnings=warnings_only,
+                    # Sub-agents still burned tokens deciding to skip.
+                    prompt_tokens=total_prompt,
+                    completion_tokens=total_completion,
+                    total_tokens=total_prompt + total_completion,
+                    total_cost=rollup_cost,
                 )
 
             failed = [r for r in sub_result.sub_agent_results if r.status == "failed"]
@@ -1196,6 +1216,11 @@ async def _run_list_of_notes_fanout(
                 template_type=NotesTemplateType.LIST_OF_NOTES,
                 status="failed",
                 error=err,
+                # A failed pass still spent tokens — report them honestly.
+                prompt_tokens=total_prompt,
+                completion_tokens=total_completion,
+                total_tokens=total_prompt + total_completion,
+                total_cost=rollup_cost,
             )
 
         # Final workbook write — one call with the aggregated payload list.
@@ -1226,17 +1251,18 @@ async def _run_list_of_notes_fanout(
                 template_type=NotesTemplateType.LIST_OF_NOTES,
                 status="failed",
                 error=err,
+                # The sub-agents ran and spent tokens before the write
+                # failed — report them like the other failure branches.
+                prompt_tokens=total_prompt,
+                completion_tokens=total_completion,
+                total_tokens=total_prompt + total_completion,
+                total_cost=rollup_cost,
             )
 
-        # Phase 5.1: write the parent Sheet-12 cost report by summing each
-        # sub-agent's captured usage. Without this the operator has no
-        # idea what Sheet-12 cost without hand-aggregating SSE events
-        # from the DB. Best-effort: a write failure here must not fail
-        # the sheet, so we log and continue.
+        # Phase 5.1: write the parent Sheet-12 cost report. Best-effort:
+        # a write failure here must not fail the sheet, so we log and
+        # continue.
         try:
-            total_prompt = sum(r.prompt_tokens for r in sub_result.sub_agent_results)
-            total_completion = sum(r.completion_tokens for r in sub_result.sub_agent_results)
-            cost = estimate_cost(total_prompt, total_completion, 0, model)
             report_lines = [
                 f"Sheet 12 (List of Notes) — aggregate across {len(sub_result.sub_agent_results)} sub-agent(s)",
                 "─" * 80,
@@ -1253,7 +1279,7 @@ async def _run_list_of_notes_fanout(
                 f"{'Total':<30} {'':<10} {total_prompt:>10} {total_completion:>10}"
             )
             report_lines.append("")
-            report_lines.append(f"Estimated cost: ${cost:.4f}")
+            report_lines.append(f"Estimated cost: ${rollup_cost:.4f}")
             report_path = Path(output_dir) / (
                 f"NOTES_{NotesTemplateType.LIST_OF_NOTES.value}_cost_report.txt"
             )
@@ -1305,6 +1331,13 @@ async def _run_list_of_notes_fanout(
             # pass; the single `write_result.cells_written` is therefore
             # the authoritative manifest for persistence (Step 6).
             cells_written=list(write_result.cells_written),
+            # Token ROLLUPS populate even though per-turn detail stays
+            # empty (gotcha #6: sub-agents merge into one row). Without
+            # these the parent run_agents row records 0 tokens / $0.
+            prompt_tokens=total_prompt,
+            completion_tokens=total_completion,
+            total_tokens=total_prompt + total_completion,
+            total_cost=rollup_cost,
         )
 
     except asyncio.CancelledError:

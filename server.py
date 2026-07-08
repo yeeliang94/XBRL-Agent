@@ -1625,14 +1625,6 @@ async def _run_reviewer_pass(
         outcome["writes_performed"] = deps.writes_performed
         outcome["flags_raised"] = deps.flags_raised
         outcome["turns_used"] = turn_count
-        try:
-            from pricing import estimate_cost as _ec
-            _u = agent_run.usage()
-            outcome["total_tokens"] = int(_u.total_tokens or 0)
-            outcome["total_cost"] = _ec(
-                _in_tokens(_u), _out_tokens(_u), 0, model)
-        except Exception:  # noqa: BLE001
-            logger.debug("reviewer token capture skipped")
         await _emit("complete", {
             "success": True, "writes_performed": deps.writes_performed,
             "flags_raised": deps.flags_raised,
@@ -1719,6 +1711,37 @@ async def _run_reviewer_pass(
                     "Failed to save reviewer trace for run %s", run_id,
                     exc_info=True,
                 )
+
+    # Telemetry rollups for the CORRECTION run_agents row — captured ONCE
+    # here so every exit path (success, exhausted, wallclock, exception)
+    # reports them: a failed pass still burned real turns and tokens.
+    # Run-168 QA finding: the Activity row showed "0 turns · 0 tool calls"
+    # next to 364k tokens because only the success path recorded turns and
+    # nobody recorded tool calls. Advisory by contract — a capture failure
+    # must never mask the pass outcome.
+    #
+    # ASSIGN, don't setdefault: `outcome` is seeded with turns_used=0 at
+    # construction (so the early construction-failure returns report 0),
+    # which means a setdefault here is a permanent no-op — the wall-clock and
+    # generic-exception handlers never set turns_used, so they would persist 0
+    # despite real reviewer activity (Codex review P2). `_call_tools_turns()`
+    # is the authoritative count on every path that reaches here (the success
+    # and exhausted handlers set the same value earlier), and the cancel path
+    # re-raises before this line, so an unconditional assign is correct.
+    outcome["turns_used"] = _call_tools_turns()
+    outcome["tool_call_count"] = sum(
+        int(t.get("_n_tool_calls") or 0) for t in _turn_records
+    )
+    try:
+        from pricing import estimate_cost as _ec
+        _u = agent_run.usage()
+        outcome["total_tokens"] = int(_u.total_tokens or 0)
+        outcome["prompt_tokens"] = _in_tokens(_u)
+        outcome["completion_tokens"] = _out_tokens(_u)
+        outcome["total_cost"] = _ec(
+            _in_tokens(_u), _out_tokens(_u), 0, model)
+    except Exception:  # noqa: BLE001
+        logger.debug("reviewer token capture skipped")
 
     # Item 14: surface the per-kind apply_fix rejection tally. deps is bound
     # for every non-cancel exit (construction failures returned earlier), so
@@ -5550,6 +5573,15 @@ async def run_multi_agent_stream(
                             workbook_path=None,
                             total_tokens=int(_co.get("total_tokens", 0)),
                             total_cost=float(_co.get("total_cost", 0.0)),
+                            # Run-168 QA fix: turn/tool-call rollups used
+                            # to be omitted here, so the Activity row read
+                            # "0 turns · 0 tool calls" beside real tokens.
+                            prompt_tokens=int(_co.get("prompt_tokens", 0)),
+                            completion_tokens=int(
+                                _co.get("completion_tokens", 0)),
+                            turn_count=int(_co.get("turns_used", 0)),
+                            tool_call_count=int(
+                                _co.get("tool_call_count", 0)),
                             # v17 (item 9): classify the reviewer outcome.
                             error_type=_error_type_for_outcome(
                                 _co.get("error")),

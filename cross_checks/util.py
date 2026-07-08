@@ -18,6 +18,31 @@ _SOCIE_NCI_COL = 23       # W — Non-controlling interests
 _SOCIE_TOTAL_COL = 24     # X — Total
 _SOCIE_RETAINED_COL = 3   # C — Retained earnings
 
+# Primitive component columns of an MFRS SOCIE row — the ones that carry real
+# per-component figures, summing to the row Total in col X. Excludes the
+# formula subtotal columns M(13)/S(19)/T(20)/U(21) and the apex X(24). Summing
+# these across the "equity at end of period" row reconstructs closing equity
+# when the cascade left col X blank (empty reserve columns break the horizontal
+# M→S→T→U→X chain, so the apex never materialises even though the shallower
+# per-component closings — one hop above the agent's leaves — did). See
+# socie_to_sofp_equity's row-sum fallback.
+_MFRS_SOCIE_COMPONENT_COLS = [
+    2, 3, 4,                       # B issued capital, C retained earnings, D treasury
+    5, 6, 7, 8, 9, 10, 11, 12,     # E–L non-distributable reserves (M = SUM)
+    14, 15, 16, 17, 18,            # N–R distributable reserves (S = SUM)
+    22, 23,                        # V other components, W NCI
+]
+
+
+def socie_component_columns(filing_standard: str = "mfrs") -> list[int]:
+    """Component columns whose row values sum to the SOCIE Total (col X).
+
+    MPERS SOCIE is a flat layout whose total already lives in col B, so the
+    fallback there is just ``[B]`` — a no-op re-read of the same cell.
+    """
+    return [_MPERS_SOCIE_CY_COL] if filing_standard == "mpers" \
+        else list(_MFRS_SOCIE_COMPONENT_COLS)
+
 # Group SOCIE block row ranges (each block is a complete SOCIE for one entity/period)
 SOCIE_GROUP_BLOCKS = {
     "group_cy":   (3, 25),
@@ -198,6 +223,70 @@ def find_value_in_block(
                     return float(raw)
                 except (ValueError, TypeError):
                     continue
+    return None
+
+
+def find_row_sum_in_block(
+    ws,
+    label_substr: Union[str, Sequence[str]],
+    cols: Sequence[int],
+    start_row: int,
+    end_row: int,
+    wb: openpyxl.Workbook = None,
+) -> Optional[float]:
+    """Sum a matched row's values across several columns (formula cells
+    evaluated via ``wb``).
+
+    The row-sum fallback for a computed row Total (SOCIE col X) the cascade
+    left blank: match the row by label, then add up its component columns.
+    Present cells sum; an absent/blank column contributes 0 (an empty reserve
+    column is genuinely zero). Returns ``None`` only when no matching row
+    carries a value in any listed column — an all-blank row is "not found",
+    never a spurious 0.
+
+    Parity with :func:`find_value_by_label`: when the SAME label appears on
+    more than one row (e.g. a data-entry row and a formula row), a matched row
+    whose components are all blank does NOT short-circuit the search — we keep
+    scanning subsequent matches until one yields a value. Returning on the
+    first match would miss a populated later row.
+    """
+    candidates = [label_substr] if isinstance(label_substr, str) else list(label_substr)
+    from openpyxl.utils import get_column_letter
+
+    for candidate in candidates:
+        target = candidate.strip().lower()
+        for r in range(start_row, end_row + 1):
+            cell = ws.cell(row=r, column=1)
+            if cell.value is None:
+                continue
+            normalized = str(cell.value).strip().lstrip("*").strip().lower()
+            if not (normalized == target or target in normalized or normalized in target):
+                continue
+            # Matched the row — sum its component columns.
+            total: Optional[float] = None
+            for col in cols:
+                raw = ws.cell(row=r, column=col).value
+                if raw is None:
+                    continue
+                if isinstance(raw, str) and raw.startswith("="):
+                    if wb is None:
+                        continue
+                    resolved = _resolve_cell_value(
+                        wb, ws.title, f"{get_column_letter(col)}{r}")
+                    if resolved is None:
+                        continue
+                    total = resolved if total is None else total + resolved
+                    continue
+                try:
+                    v = float(raw)
+                except (ValueError, TypeError):
+                    continue
+                total = v if total is None else total + v
+            # An all-blank matched row isn't the answer — a duplicate row
+            # below may carry the real figures. Only a row that produced a
+            # value ends the search.
+            if total is not None:
+                return total
     return None
 
 
