@@ -199,6 +199,41 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(onActiveCellPages).toHaveBeenCalledWith([3]);
   });
 
+  // A page-less note must leave the PDF pane unchanged, not blank it with [].
+  test("focusing a cell with no source_pages does NOT report pages", async () => {
+    mockFetchOnce({
+      sheets: [
+        {
+          sheet: "Notes-CI",
+          rows: [
+            {
+              row: 4,
+              label: "No-pages note",
+              html: "<p>Something</p>",
+              evidence: null,
+              source_pages: [],
+              updated_at: "2026-04-24T10:00:00Z",
+            },
+          ],
+        },
+      ],
+    });
+    const onActiveCellPages = vi.fn();
+    const { container } = render(
+      <NotesReviewTab runId={42} onActiveCellPages={onActiveCellPages} />,
+    );
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    const row = container.querySelector<HTMLElement>(
+      '[data-testid="notes-review-row"]',
+    );
+    expect(row).not.toBeNull();
+    fireEvent.mouseDown(row!);
+    expect(onActiveCellPages).not.toHaveBeenCalled();
+  });
+
   test("renders html as rich dom not escaped text", async () => {
     mockFetchOnce(SAMPLE);
     const { container } = render(<NotesReviewTab runId={42} />);
