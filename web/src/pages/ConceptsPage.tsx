@@ -5,6 +5,8 @@ import { ui, uiClass } from "../lib/uiStyles";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesReviewTab } from "../components/NotesReviewTab";
+import { NotesCoverageNav } from "../components/NotesCoverageNav";
+import type { CoverageNavRow } from "../components/NotesCoverageNav";
 import { PdfSourcePane } from "../components/PdfSourcePane";
 import { fetchNotesCells, sortSheetsBySlot } from "../lib/notesCells";
 import { templateDisplayName, notesSheetDisplayName } from "../lib/sheetLabels";
@@ -202,6 +204,13 @@ export function ConceptsPage({
   // up here instead (review-workspace Phase 1). Cleared on navigation below so
   // a stale note's pages don't linger when switching sheets.
   const [notesPdfPages, setNotesPdfPages] = useState<number[]>([]);
+  // Cell the notes checklist last asked the editor to jump to. `key` bumps per
+  // click so re-selecting the same note re-scrolls (review-workspace Phase 2).
+  const [notesFocusCell, setNotesFocusCell] = useState<{
+    sheet: string;
+    row: number;
+    key: number;
+  } | null>(null);
   // 3-column workspace layout: the Menu and Source PDF columns are both
   // resizable (drag handle) and hideable (collapse to a thin rail). The
   // Results column flexes to fill the rest.
@@ -573,17 +582,48 @@ export function ConceptsPage({
     [selectedConcept?.evidence]
   );
 
-  // Clear the focused-note pages when the view changes (run switch or a
-  // different sheet/notes sub-tab) so the PDF pane doesn't keep showing the
-  // previous note's pages until the reviewer clicks a fresh cell.
+  // Clear the focused-note state on a run switch. (Not on sheet/template change
+  // — the notes checklist sets both the target pages AND the sheet in one go,
+  // so an effect keyed on those would wipe the pages it just set.)
   useEffect(() => {
     setNotesPdfPages([]);
-  }, [runId, activeTemplate, activeNotesSheet]);
+    setNotesFocusCell(null);
+  }, [runId]);
 
   // The pages the Source PDF pane should show: a focused notes cell's pages
   // when the notes editor is active, otherwise the selected face concept's
   // evidence pages.
   const pdfPages = notesActive ? notesPdfPages : selectedEvidencePages;
+
+  // Notes checklist click → navigate to that note. A placed note opens its
+  // sheet and scrolls to the exact cell; a missing note opens the Source PDF at
+  // the note's inventory pages so the reviewer can see what wasn't captured.
+  // Either way the PDF follows the note's page range.
+  const handleCoverageSelect = useCallback((row: CoverageNavRow) => {
+    setSearchQuery("");
+    setActiveTemplate(NOTES_KEY);
+    const pages =
+      row.page_lo != null
+        ? Array.from(
+            { length: Math.max(0, (row.page_hi ?? row.page_lo) - row.page_lo) + 1 },
+            (_, i) => (row.page_lo as number) + i,
+          )
+        : [];
+    setNotesPdfPages(pages);
+    const placement = row.placements[0];
+    if (placement) {
+      setActiveNotesSheet(placement.sheet);
+      setNotesFocusCell((c) => ({
+        sheet: placement.sheet,
+        row: placement.row,
+        key: (c?.key ?? 0) + 1,
+      }));
+    } else {
+      // Nowhere placed — show all notes and let the PDF carry the evidence.
+      setActiveNotesSheet(null);
+      setNotesFocusCell(null);
+    }
+  }, []);
 
   // Editable count is scoped to the CURRENT view so it reads consistently
   // beside "Fields shown" (both describe the visible set). A global editable
@@ -737,9 +777,21 @@ export function ConceptsPage({
             setSearchQuery("");
             setActiveTemplate(NOTES_KEY);
             setActiveNotesSheet(sheet);
+            // Manual sub-tab switch: drop the previous note's PDF pages so the
+            // pane waits for a fresh cell focus rather than showing stale pages.
+            setNotesPdfPages([]);
           }}
         />
       </CollapsiblePanel>
+      {notesSheets.length > 0 && (
+        <CollapsiblePanel title="Notes checklist" testId="panel-notes-checklist">
+          <NotesCoverageNav
+            runId={runId}
+            activeSheet={notesActive ? activeNotesSheet : null}
+            onSelectNote={handleCoverageSelect}
+          />
+        </CollapsiblePanel>
+      )}
       <CollapsiblePanel title="Selected field" testId="panel-details">
         <ConceptEvidenceBody concept={selectedConcept} />
       </CollapsiblePanel>
@@ -912,6 +964,7 @@ export function ConceptsPage({
             <NotesReviewTab
               runId={runId}
               focusSheet={activeNotesSheet}
+              focusCell={notesFocusCell}
               onActiveCellPages={setNotesPdfPages}
             />
           </div>

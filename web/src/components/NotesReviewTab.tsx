@@ -114,6 +114,11 @@ export interface NotesReviewTabProps {
    *  SheetNavigator: that section auto-expands and scrolls into view. null /
    *  undefined = no focus (the default stacked, all-collapsed view). */
   focusSheet?: string | null;
+  /** Jump to a specific cell (sheet + row) and scroll it into view — driven by
+   *  the workspace's notes checklist ("jump to where this note landed"). `key`
+   *  bumps on every click so re-selecting the same cell re-scrolls. null = no
+   *  cell focus. */
+  focusCell?: { sheet: string; row: number; key: number } | null;
   /** Fired when the reviewer focuses (clicks / tabs into) a notes cell, with
    *  the PDF pages that cell was extracted from (`NotesCell.source_pages`). The
    *  workspace uses it to drive the Source PDF pane so a note and its source
@@ -232,7 +237,7 @@ export function canonicalizeHtmlForCompare(html: string): string {
   return root.innerHTML;
 }
 
-export function NotesReviewTab({ runId, onRegenerate, focusSheet, onActiveCellPages }: NotesReviewTabProps) {
+export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onActiveCellPages }: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
   // failure surfaces in a single banner instead of per-cell flicker.
@@ -294,6 +299,19 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, onActiveCellPa
   useEffect(() => {
     if (focusSheet) setActive((a) => ({ sheet: focusSheet, key: a.key + 1 }));
   }, [focusSheet]);
+
+  // Cell-level focus from the workspace notes checklist ("jump to where this
+  // note landed"). Opens the target sheet (like a nav chip) AND remembers the
+  // row so the matching SheetSection scrolls that cell into view. Keyed on
+  // focusCell.key so re-clicking the same cell re-scrolls.
+  const [focusRow, setFocusRow] = useState<number | null>(null);
+  useEffect(() => {
+    if (!focusCell) return;
+    setActive((a) => ({ sheet: focusCell.sheet, key: a.key + 1 }));
+    setFocusRow(focusCell.row);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key is the stable
+    // re-trigger; depending on the object identity would loop.
+  }, [focusCell?.key]);
 
   useEffect(() => {
     // Clear prior-run state synchronously so the user never sees run
@@ -597,6 +615,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, onActiveCellPa
               formatterDefaultModel={formatterDefaultModel}
               focus={active.sheet === sh.sheet}
               focusKey={active.key}
+              focusRow={active.sheet === sh.sheet ? focusRow : null}
               onFormatted={reloadNotes}
               onActiveCellPages={onActiveCellPages}
             />
@@ -650,6 +669,7 @@ function SheetSection({
   onFormatted,
   focus = false,
   focusKey = 0,
+  focusRow = null,
   onActiveCellPages,
 }: {
   runId: number;
@@ -666,6 +686,9 @@ function SheetSection({
   /** Bumps on every nav-chip click so re-selecting an already-focused but
    *  manually-collapsed section re-opens it (focus alone wouldn't change). */
   focusKey?: number;
+  /** When set (and this is the focused section), scroll this specific row into
+   *  view instead of the section top — the notes-checklist "jump to cell". */
+  focusRow?: number | null;
   /** Threaded to each row so focusing a cell reports its source PDF pages. */
   onActiveCellPages?: (pages: number[]) => void;
 }) {
@@ -695,8 +718,27 @@ function SheetSection({
   useEffect(() => {
     if (!focus) return;
     setExpanded(true);
+    if (focusRow != null) {
+      // Jump to the specific cell (notes checklist "jump to where it landed").
+      // Rows only exist once expanded, so defer to the next frame. scrollIntoView
+      // is optional-chained for jsdom (no-op in tests).
+      const raf =
+        typeof requestAnimationFrame === "function"
+          ? requestAnimationFrame
+          : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
+      raf(() => {
+        const el = sectionRef.current?.querySelector<HTMLElement>(
+          `[data-cell-row="${focusRow}"]`,
+        );
+        (el ?? sectionRef.current)?.scrollIntoView?.({
+          block: "center",
+          behavior: "smooth",
+        });
+      });
+      return;
+    }
     sectionRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
-  }, [focus, focusKey]);
+  }, [focus, focusKey, focusRow]);
 
   // Hydrate format state on mount so a pass launched in another tab/session
   // (or one that finished while this section was unmounted) is reflected here:
@@ -1381,6 +1423,7 @@ function CellRow({
   return (
     <div
       data-testid="notes-review-row"
+      data-cell-row={cell.row}
       style={styles.cellRow}
       // Focusing (click or keyboard-tab) any part of this row tells the
       // workspace which PDF pages the note came from, so the Source PDF pane
@@ -1528,6 +1571,7 @@ function NumericCellRow({
   return (
     <div
       data-testid="notes-numeric-row"
+      data-cell-row={cell.row}
       style={styles.cellRow}
       onFocusCapture={() => onActiveCellPages?.(cell.source_pages ?? [])}
       onMouseDown={() => onActiveCellPages?.(cell.source_pages ?? [])}
