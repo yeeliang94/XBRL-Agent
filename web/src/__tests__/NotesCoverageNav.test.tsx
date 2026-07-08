@@ -106,4 +106,32 @@ describe("NotesCoverageNav", () => {
     expect(screen.queryByTestId("notes-coverage-nav")).toBeNull();
     expect(container.textContent).not.toContain("placed");
   });
+
+  test("reports content presence via onVisible", async () => {
+    // Has rows → visible.
+    mockCoverage(SAMPLE);
+    const onVisible = vi.fn();
+    render(<NotesCoverageNav runId={42} onSelectNote={() => {}} onVisible={onVisible} />);
+    await waitFor(() => expect(onVisible).toHaveBeenCalledWith(true));
+    cleanup();
+
+    // pre_feature empty → not visible.
+    mockCoverage({ run_id: 42, banner: "pre_feature", inventory_available: true, rows: [] });
+    const onVisible2 = vi.fn();
+    render(<NotesCoverageNav runId={42} onSelectNote={() => {}} onVisible={onVisible2} />);
+    await waitFor(() => expect(onVisible2).toHaveBeenCalledWith(false));
+    cleanup();
+
+    // inventory_unavailable with no rows → still visible (loud banner).
+    mockCoverage({
+      run_id: 42,
+      banner: "inventory_unavailable",
+      inventory_available: false,
+      rows: [],
+      summary: { placed: 0, missing: 0, skipped: 0, suspected_gap: 0, total: 0, unresolved: 0 },
+    });
+    const onVisible3 = vi.fn();
+    render(<NotesCoverageNav runId={42} onSelectNote={() => {}} onVisible={onVisible3} />);
+    await waitFor(() => expect(onVisible3).toHaveBeenCalledWith(true));
+  });
 });

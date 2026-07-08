@@ -95,6 +95,11 @@ export interface ConceptsPageProps {
   // Optional — the standalone template view has none. A manual re-run's fresh
   // results take precedence over this baseline.
   initialCrossChecks?: CrossCheckResult[];
+  // Re-extract-notes handler, threaded to the embedded notes editor so its
+  // "Re-extract notes" button actually launches a rerun (it used to no-op in
+  // this path once the Notes-tab link-out was removed). Optional — absent in
+  // the standalone template view, where the button falls back to inert.
+  onRegenerateNotes?: (runId: number) => void;
 }
 
 type Period = "CY" | "PY";
@@ -150,6 +155,7 @@ export function ConceptsPage({
   source = "run",
   benchmarkId = null,
   initialCrossChecks,
+  onRegenerateNotes,
 }: ConceptsPageProps) {
   // Gold-standard eval (v16): in benchmark mode we read/write gold facts; the
   // run-only effects (edited_count, conflicts, recheck) all short-circuit on
@@ -227,6 +233,10 @@ export function ConceptsPage({
   // Unresolved notes gaps for the Needs-attention queue, reported up by the
   // checklist nav (same coverage fetch).
   const [coverageGaps, setCoverageGaps] = useState<CoverageNavRow[]>([]);
+  // Whether the coverage nav has anything to show. We ALWAYS mount the nav (so
+  // coverage is fetched even when notes_cells is empty — e.g. inventory
+  // unavailable) but only reveal the panel chrome once it reports content.
+  const [coverageHasContent, setCoverageHasContent] = useState(false);
   // 3-column workspace layout: the Menu and Source PDF columns are both
   // resizable (drag handle) and hideable (collapse to a thin rail). The
   // Results column flexes to fill the rest.
@@ -598,12 +608,19 @@ export function ConceptsPage({
     [selectedConcept?.evidence]
   );
 
-  // Clear the focused-note state on a run switch. (Not on sheet/template change
-  // — the notes checklist sets both the target pages AND the sheet in one go,
-  // so an effect keyed on those would wipe the pages it just set.)
+  // Clear the focused-note + coverage state on a run switch (this component is
+  // reused across runs, not remounted). Without resetting notesCoverage /
+  // coverageGaps, the previous run's "Notes placed" metric and Needs-attention
+  // rows would linger if the next run self-hides the coverage nav. (Not keyed
+  // on sheet/template change — the notes checklist sets both the target pages
+  // AND the sheet in one go, so an effect keyed on those would wipe the pages
+  // it just set.)
   useEffect(() => {
     setNotesPdfPages([]);
     setNotesFocusCell(null);
+    setNotesCoverage(null);
+    setCoverageGaps([]);
+    setCoverageHasContent(false);
   }, [runId]);
 
   // The pages the Source PDF pane should show: a focused notes cell's pages
@@ -807,7 +824,13 @@ export function ConceptsPage({
           }}
         />
       </CollapsiblePanel>
-      {notesSheets.length > 0 && (
+      {/* Always mounted so /notes-coverage is fetched for EVERY run — a run
+          whose notes extraction produced no cells can still have an
+          inventory-unavailable state that must surface loudly (gotcha #27).
+          The nav self-hides on a face-only / pre-feature run and reports that
+          via onVisible, so we keep the panel chrome hidden (display:none, not
+          unmounted) until there's content. */}
+      <div style={coverageHasContent ? undefined : { display: "none" }}>
         <CollapsiblePanel title="Notes checklist" testId="panel-notes-checklist">
           <NotesCoverageNav
             runId={runId}
@@ -815,9 +838,10 @@ export function ConceptsPage({
             onSelectNote={handleCoverageSelect}
             onSummary={setNotesCoverage}
             onGaps={setCoverageGaps}
+            onVisible={setCoverageHasContent}
           />
         </CollapsiblePanel>
-      )}
+      </div>
       <CollapsiblePanel title={TERMS.needsAttention} testId="panel-attention">
         <NeedsAttentionPanel
           failingChecks={failingChecks}
@@ -1013,6 +1037,7 @@ export function ConceptsPage({
               focusSheet={activeNotesSheet}
               focusCell={notesFocusCell}
               onActiveCellPages={setNotesPdfPages}
+              onRegenerate={onRegenerateNotes}
             />
           </div>
         ) : filtered.length > 0 && filtered.every((r) => r.shape === "matrix") ? (
