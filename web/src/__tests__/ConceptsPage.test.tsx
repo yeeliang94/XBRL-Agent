@@ -853,6 +853,75 @@ describe("ConceptsPage", () => {
     expect(ci.getAttribute("aria-current")).toBe("true");
   });
 
+  // Review-workspace Phase 2: the scout notes checklist lives in the left
+  // column and doubles as navigation — clicking a placed note opens its sheet.
+  test("notes checklist navigates to a placed note's sheet", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes-coverage"))
+        return {
+          run_id: 42,
+          banner: "reviewed",
+          inventory_available: true,
+          rows: [
+            {
+              note_num: 5,
+              title: "Revenue",
+              status: "placed",
+              reviewer_verdict: null,
+              placements: [
+                {
+                  sheet: "Notes-SummaryofAccPol",
+                  row: 7,
+                  row_label: "Revenue",
+                  kind: "primary",
+                },
+              ],
+              page_lo: 12,
+              page_hi: 13,
+            },
+          ],
+          summary: {
+            placed: 1,
+            missing: 0,
+            skipped: 0,
+            suspected_gap: 0,
+            total: 1,
+            unresolved: 0,
+          },
+        };
+      if (url.includes("/notes_cells"))
+        return {
+          sheets: [
+            { sheet: "Notes-CI", rows: [] },
+            {
+              sheet: "Notes-SummaryofAccPol",
+              rows: [
+                {
+                  row: 7,
+                  label: "Revenue",
+                  html: "<p>Accrual</p>",
+                  evidence: "Page 12",
+                  source_pages: [12],
+                },
+              ],
+            },
+          ],
+        };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    // The checklist panel appears (run has notes) and lists the note.
+    const note = await waitFor(() => screen.getByTestId("coverage-nav-note-5"));
+    expect(screen.getByTestId("panel-notes-checklist")).toBeTruthy();
+    // Face tree first; clicking the note swaps the panel to the notes editor.
+    expect(screen.getByTestId("concept-row-leaf-1")).toBeTruthy();
+    fireEvent.click(note);
+    expect(screen.getByTestId("review-notes-panel")).toBeTruthy();
+    expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
+  });
+
   test("renders a Generate final Excel link to the download endpoint", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
