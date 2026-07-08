@@ -3,10 +3,10 @@ import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
-import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesReviewTab } from "../components/NotesReviewTab";
 import { NotesCoverageNav } from "../components/NotesCoverageNav";
 import type { CoverageNavRow } from "../components/NotesCoverageNav";
+import { NeedsAttentionPanel } from "../components/NeedsAttentionPanel";
 import { PdfSourcePane } from "../components/PdfSourcePane";
 import { fetchNotesCells, sortSheetsBySlot } from "../lib/notesCells";
 import { templateDisplayName, notesSheetDisplayName } from "../lib/sheetLabels";
@@ -223,6 +223,9 @@ export function ConceptsPage({
     placed: number;
     total: number;
   } | null>(null);
+  // Unresolved notes gaps for the Needs-attention queue, reported up by the
+  // checklist nav (same coverage fetch).
+  const [coverageGaps, setCoverageGaps] = useState<CoverageNavRow[]>([]);
   // 3-column workspace layout: the Menu and Source PDF columns are both
   // resizable (drag handle) and hideable (collapse to a thin rail). The
   // Results column flexes to fill the rest.
@@ -649,6 +652,10 @@ export function ConceptsPage({
   const checksGraded = effectiveChecks.filter(
     (c) => c.status === "passed" || c.status === "failed" || c.status === "warning",
   ).length;
+  // Failing / warning checks feed the Needs-attention queue.
+  const failingChecks = effectiveChecks.filter(
+    (c) => c.status === "failed" || c.status === "warning",
+  );
 
   // Eval (v16): benchmark gold editor — a compact reuse of the same grid,
   // without the run-only chrome (no PDF pane, conflicts, notes, download). Gold
@@ -806,18 +813,25 @@ export function ConceptsPage({
             activeSheet={notesActive ? activeNotesSheet : null}
             onSelectNote={handleCoverageSelect}
             onSummary={setNotesCoverage}
+            onGaps={setCoverageGaps}
           />
         </CollapsiblePanel>
       )}
-      <CollapsiblePanel
-        title={`Reconciliation queue (${totalOpenConflicts})`}
-        testId="panel-recon"
-      >
-        <ReconciliationQueue
-          runId={runId}
-          reloadKey={conflictReloadKey}
-          onSelectConcept={handleSelectConcept}
-          embedded
+      <CollapsiblePanel title="Needs attention" testId="panel-attention">
+        <NeedsAttentionPanel
+          failingChecks={failingChecks}
+          onSelectCheck={handleSelectTarget}
+          coverageGaps={coverageGaps}
+          onSelectNote={handleCoverageSelect}
+          openConflicts={totalOpenConflicts}
+          reconciliation={
+            <ReconciliationQueue
+              runId={runId}
+              reloadKey={conflictReloadKey}
+              onSelectConcept={handleSelectConcept}
+              embedded
+            />
+          }
         />
       </CollapsiblePanel>
     </div>
@@ -953,24 +967,9 @@ export function ConceptsPage({
           </div>
         )}
 
-        {/* Cross-statement check detail. Appears after a re-run so a failed
-            check (e.g. SOFP no longer balances) is a named, sometimes-clickable
-            finding — not just the aggregate count in the header. Distinct from
-            the reconciliation queue, which checks within-statement sums. */}
-        {crossChecks.length > 0 && (
-          <div style={styles.crossChecksWrap}>
-            <CollapsiblePanel
-              title="Cross-check results"
-              testId="review-cross-checks"
-            >
-              <ValidatorTab
-                crossChecks={crossChecks}
-                onSelectTarget={handleSelectTarget}
-                embedded
-              />
-            </CollapsiblePanel>
-          </div>
-        )}
+        {/* Failing cross-checks now surface in the left-column "Needs
+            attention" queue (click-to-cell); the dedicated Cross-checks tab
+            keeps the full expected/actual detail. */}
 
         <section style={styles.toolbar} aria-label="Review controls">
           {!notesActive && isGroupRun && (

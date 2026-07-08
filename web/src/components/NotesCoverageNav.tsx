@@ -62,6 +62,22 @@ interface Props {
   /** Fired once coverage loads with the placed/total counts, so the workspace's
    *  outcome strip can show "Notes placed N/M" without fetching coverage twice. */
   onSummary?: (summary: { placed: number; total: number }) => void;
+  /** Fired once coverage loads with the unresolved gap rows (missing /
+   *  suspected_gap that the reviewer didn't resolve), so the Needs-attention
+   *  queue can list them without a second coverage fetch. */
+  onGaps?: (rows: CoverageNavRow[]) => void;
+}
+
+const RESOLVED = new Set(["confirmed_absent", "not_applicable"]);
+
+/** Rows that still need a human look: missing / suspected-gap notes the reviewer
+ *  didn't resolve. Placed / skipped / reviewer-resolved rows are not gaps. */
+export function coverageGapRows(rows: CoverageNavRow[]): CoverageNavRow[] {
+  return rows.filter(
+    (r) =>
+      (r.status === "missing" || r.status === "suspected_gap") &&
+      !RESOLVED.has(r.reviewer_verdict || ""),
+  );
 }
 
 const RESOLVED_VERDICTS = new Set(["confirmed_absent", "not_applicable"]);
@@ -78,15 +94,18 @@ export function NotesCoverageNav({
   activeSheet,
   onSelectNote,
   onSummary,
+  onGaps,
 }: Props) {
   const [data, setData] = useState<CoveragePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Keep the latest onSummary without re-firing the fetch when the parent
-  // passes a fresh closure each render.
+  // Keep the latest callbacks without re-firing the fetch when the parent
+  // passes fresh closures each render.
   const onSummaryRef = useRef(onSummary);
   onSummaryRef.current = onSummary;
+  const onGapsRef = useRef(onGaps);
+  onGapsRef.current = onGaps;
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -103,6 +122,9 @@ export function NotesCoverageNav({
             total: payload.summary.total ?? 0,
           });
         }
+        onGapsRef.current?.(
+          coverageGapRows(Array.isArray(payload?.rows) ? payload.rows : []),
+        );
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         setError(userMessage(e));
