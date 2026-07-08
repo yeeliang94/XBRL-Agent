@@ -66,6 +66,11 @@ interface Props {
    *  suspected_gap that the reviewer didn't resolve), so the Needs-attention
    *  queue can list them without a second coverage fetch. */
   onGaps?: (rows: CoverageNavRow[]) => void;
+  /** Fired with whether this nav actually renders anything (rows, an
+   *  inventory-unavailable banner, or an error) so the parent can show the
+   *  panel chrome only when there's content — while still ALWAYS mounting the
+   *  nav so coverage is fetched even on a run with no notes_cells. */
+  onVisible?: (visible: boolean) => void;
 }
 
 // Reviewer verdicts that resolve a non-placed note (so it's not an open gap).
@@ -94,6 +99,7 @@ export function NotesCoverageNav({
   onSelectNote,
   onSummary,
   onGaps,
+  onVisible,
 }: Props) {
   const [data, setData] = useState<CoveragePayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,6 +111,8 @@ export function NotesCoverageNav({
   onSummaryRef.current = onSummary;
   const onGapsRef = useRef(onGaps);
   onGapsRef.current = onGaps;
+  const onVisibleRef = useRef(onVisible);
+  onVisibleRef.current = onVisible;
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -121,12 +129,17 @@ export function NotesCoverageNav({
             total: payload.summary.total ?? 0,
           });
         }
-        onGapsRef.current?.(
-          coverageGapRows(Array.isArray(payload?.rows) ? payload.rows : []),
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        onGapsRef.current?.(coverageGapRows(rows));
+        // Report whether we'll actually render something — mirrors the null
+        // guards below (rows OR the loud inventory-unavailable banner).
+        onVisibleRef.current?.(
+          rows.length > 0 || payload?.banner === "inventory_unavailable",
         );
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         setError(userMessage(e));
+        onVisibleRef.current?.(true); // an error banner is content worth showing
       } finally {
         if (!signal?.aborted) setLoading(false);
       }

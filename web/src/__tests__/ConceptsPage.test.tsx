@@ -931,6 +931,51 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
   });
 
+  // Codex review fix: the embedded notes editor's "Re-extract notes" button
+  // must actually launch a rerun (it used to no-op once the link-out was gone).
+  test("embedded notes editor's Re-extract button invokes the regenerate handler", async () => {
+    mockFetch((url) => {
+      if (url.includes("edited_count")) return { count: 0 };
+      if (url.includes("/notes-coverage")) return {};
+      if (url.includes("/notes_cells")) return { sheets: [{ sheet: "Notes-CI", rows: [] }] };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    const onRegenerateNotes = vi.fn();
+    render(<ConceptsPage runId={42} onRegenerateNotes={onRegenerateNotes} />);
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
+    // With no unsaved edits (edited_count 0) the confirm dialog is skipped and
+    // the rerun fires straight away — proving the handler is actually wired.
+    const btn = await screen.findByRole("button", { name: /re-extract notes/i });
+    fireEvent.click(btn);
+    await waitFor(() => expect(onRegenerateNotes).toHaveBeenCalledWith(42));
+  });
+
+  // Codex review fix: coverage must be fetched even when the run produced no
+  // notes cells, so an inventory-unavailable state surfaces loudly.
+  test("coverage inventory-unavailable surfaces even with empty notes_cells", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes-coverage"))
+        return {
+          run_id: 42,
+          banner: "inventory_unavailable",
+          inventory_available: false,
+          rows: [],
+          summary: { placed: 0, missing: 0, skipped: 0, suspected_gap: 0, total: 0, unresolved: 0 },
+        };
+      if (url.includes("/notes_cells")) return { sheets: [] };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() =>
+      screen.getByTestId("coverage-nav-inventory_unavailable"),
+    );
+  });
+
   // Review-workspace Phase 3: outcome-based summary strip.
   test("outcome strip shows 'Checks passing X/Y' from the run's cross-checks", async () => {
     mockFetch((url) => {

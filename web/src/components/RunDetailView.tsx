@@ -648,6 +648,7 @@ export function RunDetailView({
           <ConceptsPage
             runId={detail.id}
             initialCrossChecks={crossChecksForValidator(detail.cross_checks)}
+            onRegenerateNotes={onRegenerateNotes}
           />
         </section>
       )}
