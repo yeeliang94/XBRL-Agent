@@ -641,9 +641,10 @@ export function RunDetailView({
 
       {activeTab === "values" && canonicalEnabled && (
         <section style={styles.sectionFull} role="tabpanel" data-testid="run-detail-values">
-          {/* Selecting a notes sheet here hands off to the Notes tab rather
-              than embedding a second editor (the Notes tab is its home). */}
-          <ConceptsPage runId={detail.id} onOpenNotes={() => setTab("notes")} />
+          {/* Notes render inline in the workspace (next to the Source PDF)
+              rather than bouncing to the Notes tab — the review-workspace
+              revamp (docs/PLAN-review-workspace.md Phase 1). */}
+          <ConceptsPage runId={detail.id} />
         </section>
       )}
 

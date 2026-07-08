@@ -87,11 +87,6 @@ export interface ConceptsPageProps {
   // compact gold editor is rendered. `runId` is null in this mode.
   source?: "run" | "benchmark";
   benchmarkId?: number | null;
-  // When the Figures view is embedded in the run report (which has its own
-  // Notes tab), selecting a notes sheet should hand off to that tab rather than
-  // embed a second copy of the editor. The parent passes a switch-to-Notes
-  // callback; when absent (standalone use), the editor stays embedded.
-  onOpenNotes?: () => void;
 }
 
 type Period = "CY" | "PY";
@@ -146,7 +141,6 @@ export function ConceptsPage({
   runId,
   source = "run",
   benchmarkId = null,
-  onOpenNotes,
 }: ConceptsPageProps) {
   // Gold-standard eval (v16): in benchmark mode we read/write gold facts; the
   // run-only effects (edited_count, conflicts, recheck) all short-circuit on
@@ -202,6 +196,12 @@ export function ConceptsPage({
   // single entry. Notes only apply to runs (not the benchmark gold editor).
   const [notesSheets, setNotesSheets] = useState<string[]>([]);
   const [activeNotesSheet, setActiveNotesSheet] = useState<string | null>(null);
+  // Source-PDF pages for the notes cell the reviewer last focused. A face
+  // concept drives the PDF pane from its evidence string; a notes cell has no
+  // concept row, so NotesReviewTab reports the focused cell's `source_pages`
+  // up here instead (review-workspace Phase 1). Cleared on navigation below so
+  // a stale note's pages don't linger when switching sheets.
+  const [notesPdfPages, setNotesPdfPages] = useState<number[]>([]);
   // 3-column workspace layout: the Menu and Source PDF columns are both
   // resizable (drag handle) and hideable (collapse to a thin rail). The
   // Results column flexes to fill the rest.
@@ -573,6 +573,18 @@ export function ConceptsPage({
     [selectedConcept?.evidence]
   );
 
+  // Clear the focused-note pages when the view changes (run switch or a
+  // different sheet/notes sub-tab) so the PDF pane doesn't keep showing the
+  // previous note's pages until the reviewer clicks a fresh cell.
+  useEffect(() => {
+    setNotesPdfPages([]);
+  }, [runId, activeTemplate, activeNotesSheet]);
+
+  // The pages the Source PDF pane should show: a focused notes cell's pages
+  // when the notes editor is active, otherwise the selected face concept's
+  // evidence pages.
+  const pdfPages = notesActive ? notesPdfPages : selectedEvidencePages;
+
   // Editable count is scoped to the CURRENT view so it reads consistently
   // beside "Fields shown" (both describe the visible set). A global editable
   // count next to a filtered shown-count read like a bug — e.g. "710 editable"
@@ -755,7 +767,7 @@ export function ConceptsPage({
       {/* Source-PDF verification: the pane follows the selected concept's
           evidence pages so a reviewer can eyeball the figure against the
           document without leaving the page (M1). */}
-      <PdfSourcePane runId={runId} pages={selectedEvidencePages} />
+      <PdfSourcePane runId={runId} pages={pdfPages} />
     </div>
   );
 
@@ -893,25 +905,15 @@ export function ConceptsPage({
           )}
         </section>
 
-        {notesActive && onOpenNotes ? (
-          // Embedded in the run report: don't duplicate the notes editor —
-          // the Notes tab is its single home. Hand off there instead.
-          <div data-testid="review-notes-linkout" style={styles.notesLinkOut}>
-            <p style={styles.notesLinkOutText}>
-              Notes are reviewed and edited in the <strong>Notes</strong> tab.
-            </p>
-            <button
-              type="button"
-              className={uiClass.btnPrimary}
-              style={{ ...ui.buttonPrimary, ...ui.buttonSm }}
-              onClick={onOpenNotes}
-            >
-              Open the Notes tab
-            </button>
-          </div>
-        ) : notesActive ? (
+        {notesActive ? (
+          // Notes edit in place, next to the Source PDF — focusing a cell jumps
+          // the PDF pane to that note's source pages (review-workspace Phase 1).
           <div data-testid="review-notes-panel">
-            <NotesReviewTab runId={runId} focusSheet={activeNotesSheet} />
+            <NotesReviewTab
+              runId={runId}
+              focusSheet={activeNotesSheet}
+              onActiveCellPages={setNotesPdfPages}
+            />
           </div>
         ) : filtered.length > 0 && filtered.every((r) => r.shape === "matrix") ? (
           // Only render the matrix grid when EVERY visible row is matrix.
@@ -2194,24 +2196,6 @@ function EditableValueCell({
 }
 
 const styles = {
-  // Hand-off panel shown in the run report's Figures view when a notes sheet
-  // is selected — the Notes tab owns the editor (no duplicate embed).
-  notesLinkOut: {
-    display: "flex",
-    flexDirection: "column" as const,
-    alignItems: "flex-start",
-    gap: pwc.space.md,
-    padding: pwc.space.xl,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.lg,
-    background: pwc.white,
-  } as const,
-  notesLinkOutText: {
-    margin: 0,
-    fontFamily: pwc.fontBody,
-    fontSize: 15,
-    color: pwc.grey800,
-  } as const,
   // 3-column workspace shell. No flex-wrap: columns keep their row so the
   // resize handles stay between them; the Results column flexes to fill.
   shell: {
