@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, deleteBenchmark } from "../lib/api";
+import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, deleteBenchmark, fetchRuns } from "../lib/api";
+import type { RunSummaryJson } from "../lib/types";
 import type { BenchmarkJson } from "../lib/types";
 import { ConceptsPage } from "./ConceptsPage";
 
@@ -208,10 +209,36 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
   const [level, setLevel] = useState("company");
   const [file, setFile] = useState<File | null>(null);
   const [runId, setRunId] = useState("");
+  // Seedable runs for the picker — gold can only come from a terminal run
+  // (from-run rejects draft/running/failed/aborted), so filter to those.
+  const [runOptions, setRunOptions] = useState<RunSummaryJson[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+
+  // Load recent seedable runs for the "From a run" picker (E5) — replaces the
+  // typo-prone free-text run number. Only when that mode is active.
+  useEffect(() => {
+    if (mode !== "run") return;
+    let cancelled = false;
+    fetchRuns({ limit: 100, offset: 0 })
+      .then((res) => {
+        if (cancelled) return;
+        const seedable = res.runs.filter(
+          (r) => r.status === "completed" || r.status === "completed_with_errors",
+        );
+        setRunOptions(seedable);
+      })
+      .catch(() => {
+        // A failed list just leaves the picker empty — the user can retry by
+        // reopening the form; never blocks the upload-workbook path.
+        if (!cancelled) setRunOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
 
   const submit = useCallback(
     async (e: React.FormEvent) => {
@@ -313,19 +340,25 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
         </div>
         {mode === "run" ? (
           <div style={styles.formField}>
-            <label htmlFor="bench-run-id" style={ui.fieldLabel}>Run number</label>
-            <input
+            <label htmlFor="bench-run-id" style={ui.fieldLabel}>Run</label>
+            <select
               id="bench-run-id"
               data-testid="bench-run-id"
-              style={ui.input}
-              inputMode="numeric"
+              style={ui.select}
               value={runId}
               onChange={(e) => setRunId(e.target.value)}
-              placeholder="e.g. 159"
-            />
+            >
+              <option value="">Select a finished run…</option>
+              {runOptions.map((r) => (
+                <option key={r.id} value={String(r.id)}>
+                  {`Run ${r.id} · ${r.pdf_filename} · ${new Date(r.created_at).toLocaleDateString()}`}
+                </option>
+              ))}
+            </select>
             <span style={styles.fieldHint}>
-              Standard / level are taken from the run. Edit the gold values
-              afterwards in the benchmark editor.
+              {runOptions.length === 0
+                ? "No finished runs yet — complete an extraction first."
+                : "Standard / level are taken from the run. Edit the gold values afterwards in the benchmark editor."}
             </span>
           </div>
         ) : (
