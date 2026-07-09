@@ -708,6 +708,16 @@ function NotesPasteFormatSection({
     [saveSettings],
   );
 
+  // Clear pending timers on unmount so a late setState (the "Saved" flash or a
+  // still-pending debounced save) can't fire against an unmounted section
+  // (peer-review LOW). Refs, so this runs once.
+  useEffect(() => {
+    return () => {
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, []);
+
   return (
     // Card + left rule visually mark this section as the one that AUTO-SAVES,
     // so it's clearly distinct from the Save-button-gated fields around it (C4).

@@ -105,6 +105,38 @@ def test_start_flips_status_and_streams(draft_with_config):
     assert row["ended_at"] is not None
 
 
+def test_start_reserves_session_before_the_draft_flip(draft_with_config):
+    """Peer-review race: the session must be in active_runs BEFORE the
+    draft→running flip so a concurrent Clear-Drafts (which excludes active_runs
+    sessions) can't delete the draft mid-start. We wrap mark_draft_started to
+    record the reservation state at flip time."""
+    import db.repository as repo
+
+    client, run_id, session_id, output_dir, db_path = draft_with_config
+    reserved_at_flip: dict[str, bool] = {}
+    real_flip = repo.mark_draft_started
+
+    def _recording_flip(conn, rid):
+        reserved_at_flip["value"] = session_id in server.active_runs
+        return real_flip(conn, rid)
+
+    async def quiet_coordinator(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
+        if event_queue is not None:
+            await event_queue.put(None)
+        return CoordinatorResult(agent_results=[])
+
+    with patch("db.repository.mark_draft_started", side_effect=_recording_flip), \
+         patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("coordinator.run_extraction", side_effect=quiet_coordinator), \
+         patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(output_dir / session_id / "filled.xlsx"), sheets_copied=0)), \
+         patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
+        resp = client.post(f"/api/runs/{run_id}/start")
+
+    assert resp.status_code == 200
+    assert reserved_at_flip.get("value") is True, \
+        "session must be reserved in active_runs before the flip"
+
+
 def test_start_rejected_on_non_draft(draft_with_config):
     """A run that has already started cannot be re-started via /start."""
     client, run_id, session_id, output_dir, db_path = draft_with_config

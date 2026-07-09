@@ -81,17 +81,20 @@ describe("BenchmarksPage", () => {
     mockFetch((url, init) => {
       calls.push({ url, init });
       if (url === "/api/benchmarks") return { benchmarks: [] };
-      if (url.startsWith("/api/runs"))
-        return {
-          runs: [
-            {
-              id: 159, created_at: "2026-06-04T00:00:00Z", pdf_filename: "FINCO.pdf",
-              status: "completed_with_errors", session_id: "s159", statements_run: [],
-              models_used: [], duration_seconds: 1, scout_enabled: false, has_merged_workbook: true,
-            },
-          ],
-          total: 1, limit: 100, offset: 0,
-        };
+      if (url.startsWith("/api/runs")) {
+        // The picker fetches each terminal status separately; return run 159
+        // only for its actual status so it isn't double-listed.
+        const runs = url.includes("status=completed_with_errors")
+          ? [
+              {
+                id: 159, created_at: "2026-06-04T00:00:00Z", pdf_filename: "FINCO.pdf",
+                status: "completed_with_errors", session_id: "s159", statements_run: [],
+                models_used: [], duration_seconds: 1, scout_enabled: false, has_merged_workbook: true,
+              },
+            ]
+          : [];
+        return { runs, total: runs.length, limit: 100, offset: 0 };
+      }
       if (url === "/api/benchmarks/from-run")
         return { ok: true, id: 7, ingested: 102, statements: ["SOFP", "SOCIE"], source_run_id: 159, source_run_status: "completed_with_errors" };
       return {};
