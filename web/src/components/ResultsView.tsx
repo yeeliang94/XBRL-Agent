@@ -302,7 +302,7 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
         <div style={styles.reviewActionBar}>
           <span style={styles.reviewActionCopy}>
             Check the figures against your source document before you file. The run
-            report opens on the Figures tab, with the notes and cross-checks alongside.
+            report has every value, the notes, and the cross-checks — open it to review.
           </span>
           <div style={styles.reviewActionGroup}>
             {/* One review door (Phase 2): the run report is the single entry

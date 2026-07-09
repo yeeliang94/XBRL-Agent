@@ -75,6 +75,19 @@ export function templateSortKey(templateId: string): number {
   return code == null ? 99 : STATEMENT_ORDER[code] ?? 99;
 }
 
+/** Plain-language subtitle for a BARE statement code ("SOFP" → "Balance
+ *  sheet"), or null if unrecognised. Sibling of templateSubtitle for callers
+ *  (the Activity tab) that hold the raw statement_type, not a template_id. */
+export function statementCodeSubtitle(code: string): string | null {
+  return STATEMENT_SUBTITLES[code.toLowerCase()] ?? null;
+}
+
+/** Reading-order sort key for a BARE statement code; unrecognised codes sort
+ *  last, preserving their relative order (stable sort). */
+export function statementCodeOrder(code: string): number {
+  return STATEMENT_ORDER[code.toLowerCase()] ?? 99;
+}
+
 // Notes sheet names ("Notes-CI" etc.) → plain English. The keys mirror the
 // MBRS sheet enum (notes_types.py); MFRS and MPERS share the same sheet names
 // so one map covers both filing standards.

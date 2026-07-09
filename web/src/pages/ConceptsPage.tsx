@@ -274,7 +274,9 @@ export function ConceptsPage({
   // resizable (drag handle) and hideable (collapse to a thin rail). The
   // Results column flexes to fill the rest.
   const [menuWidth, setMenuWidth] = useState(280);
-  const [pdfWidth, setPdfWidth] = useState(440);
+  // Wider default so the source PDF is actually readable at rest (UX-QA #7f) —
+  // still user-resizable/collapsible for reviewers who want more table room.
+  const [pdfWidth, setPdfWidth] = useState(520);
   const [menuCollapsed, setMenuCollapsed] = useState(false);
   const [pdfCollapsed, setPdfCollapsed] = useState(false);
   const [selectedConceptUuid, setSelectedConceptUuid] = useState<string | null>(

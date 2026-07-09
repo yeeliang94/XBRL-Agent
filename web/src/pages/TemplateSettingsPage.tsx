@@ -76,7 +76,11 @@ export function TemplateSettingsPage() {
       .then((data) => {
         const list: TemplateRow[] = data.templates || [];
         setTemplates(list);
-        setActiveTemplate(list[0]?.template_id || null);
+        // Default to a primary statement (SOFP) rather than list[0], which is
+        // the first template_id alphabetically — a minor note like "Issued
+        // capital" (UX-QA #19). Fall back to the first template if no SOFP.
+        const sofp = list.find((t) => /-sofp-/.test(t.template_id));
+        setActiveTemplate((sofp ?? list[0])?.template_id || null);
         setLoading(false);
       })
       .catch((err) => {
