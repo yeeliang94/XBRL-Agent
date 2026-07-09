@@ -103,6 +103,21 @@ def test_resolve_session_fails_closed_on_disabled_user(client):
     assert client.get("/api/auth/me").status_code == 401
 
 
+def test_refresh_reissues_cookie_with_renewed_max_age(client):
+    """R5 follow-up: /api/auth/refresh must re-emit the session cookie so its
+    browser Max-Age slides forward with the server session — otherwise an
+    actively-used session's cookie expires ~1h after login and logs the user
+    out mid-review even though the DB session was kept alive."""
+    _login(client)
+    r = client.post("/api/auth/refresh")
+    assert r.status_code == 200
+    set_cookies = r.headers.get_list("set-cookie")
+    # A fresh Set-Cookie for the session, carrying the persistent Max-Age.
+    assert any(
+        "xbrl_session=" in c and "max-age=3600" in c.lower() for c in set_cookies
+    ), set_cookies
+
+
 def test_dev_cookie_flags(client):
     r = client.post("/api/auth/login/password",
                     json={"email": "you@firm.com", "password": "correct-horse"})

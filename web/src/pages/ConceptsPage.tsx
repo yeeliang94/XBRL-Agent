@@ -1118,6 +1118,8 @@ export function ConceptsPage({
             onSelectRow={setSelectedConceptUuid}
             activeScope={activeScope}
             showPeriods={hasPyFacts}
+            cyLabel={reportingCy ? `CY (${reportingCy})` : "CY"}
+            pyLabel={reportingPy ? `PY (${reportingPy})` : "PY"}
           />
         ) : (
           <ConceptTree
@@ -1452,6 +1454,8 @@ function ConceptMatrixGrid({
   onSelectRow,
   activeScope,
   showPeriods,
+  cyLabel = "CY",
+  pyLabel = "PY",
 }: {
   rows: ConceptRow[];
   onEditValue: EditValueFn;
@@ -1460,6 +1464,9 @@ function ConceptMatrixGrid({
   onSelectRow: (uuid: string) => void;
   activeScope: "Company" | "Group";
   showPeriods: boolean;
+  // Year-labelled period headers ("CY (FY2021)"); default to plain codes.
+  cyLabel?: string;
+  pyLabel?: string;
 }) {
   // Distinct component columns, in spreadsheet order (B, C, …).
   const cols: string[] = [];
@@ -1583,7 +1590,7 @@ function ConceptMatrixGrid({
             style={styles.matrixPeriodHeader}
             title={`${col} ${period}`}
           >
-            {period}
+            {period === "CY" ? cyLabel : pyLabel}
           </div>
         ))}
       </div>
