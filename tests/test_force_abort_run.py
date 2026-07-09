@@ -72,8 +72,12 @@ def test_live_run_is_cancelled_not_clobbered(client, monkeypatch):
 
     calls = {}
     import task_registry
-    monkeypatch.setattr(task_registry, "cancel_all",
-                        lambda sid: calls.setdefault("sid", sid) or 3)
+
+    def _fake_cancel_all(sid):
+        calls["sid"] = sid
+        return 3  # number of tasks cancelled
+
+    monkeypatch.setattr(task_registry, "cancel_all", _fake_cancel_all)
 
     resp = tc.post(f"/api/runs/{rid}/force-abort")
     assert resp.status_code == 200
@@ -81,6 +85,30 @@ def test_live_run_is_cancelled_not_clobbered(client, monkeypatch):
     assert calls["sid"] == "live-sess"
 
     # DB row is left for the live stream's finally block to finalize.
+    conn = sqlite3.connect(str(db))
+    try:
+        status = conn.execute(
+            "SELECT status FROM runs WHERE id = ?", (rid,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert status == "running"
+
+
+def test_live_run_with_nothing_cancellable_returns_409_not_false_success(client, monkeypatch):
+    # A live session in a between-stages gap (merge/cross-checks/review) has no
+    # cancellable task, so cancel_all returns 0. The endpoint must NOT claim the
+    # run was aborted — it 409s truthfully and leaves the row running.
+    tc, db, srv = client
+    rid = _insert_run(db, status="running", session_id="gap-sess")
+    srv.active_runs.add("gap-sess")
+
+    import task_registry
+    monkeypatch.setattr(task_registry, "cancel_all", lambda sid: 0)
+
+    resp = tc.post(f"/api/runs/{rid}/force-abort")
+    assert resp.status_code == 409
+
     conn = sqlite3.connect(str(db))
     try:
         status = conn.execute(

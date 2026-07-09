@@ -112,6 +112,24 @@ def test_terminal_and_draft_runs_are_untouched(conn):
     ).fetchone()["status"] == "draft"
 
 
+def test_startup_mode_reaps_all_orphaned_running_rows(conn):
+    # At startup EVERY running row is orphaned (no stream can have started yet),
+    # so the _lifespan call passes max_age_hours=0 to reap all of them —
+    # including a row that started seconds ago. This closes the
+    # crash-then-immediate-restart gap where a young orphan would survive a 6h
+    # threshold forever (peer review).
+    fresh = _iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+    run_id = _make_run(conn, status="running", started_at=fresh)
+
+    # Default threshold spares it; startup mode reaps it.
+    assert repo.reconcile_stale_runs(conn, max_age_hours=6) == 0
+    assert repo.reconcile_stale_runs(conn, max_age_hours=0) == 1
+    conn.commit()
+    assert conn.execute(
+        "SELECT status FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()["status"] == "aborted"
+
+
 def test_custom_age_threshold_is_honoured(conn):
     started = _iso(datetime.now(timezone.utc) - timedelta(hours=3))
     run_id = _make_run(conn, status="running", started_at=started)

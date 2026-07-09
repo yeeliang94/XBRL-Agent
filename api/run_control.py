@@ -330,6 +330,8 @@ async def force_abort_run(run_id: int):
                                   the stream's own finally block writes the
                                   terminal status, so we DON'T touch the row
                                   here (avoids racing the coordinator's writes).
+                                  If nothing was cancellable (a between-stages
+                                  gap), 409 rather than falsely claim success.
       - Otherwise (dead row)    → flip the DB row straight to `aborted`.
 
     The startup reaper (`reconcile_stale_runs`) covers this automatically on
@@ -355,8 +357,23 @@ async def force_abort_run(run_id: int):
     # A genuinely-live run: cancel its tasks and let the stream finalize.
     if run.session_id and run.session_id in server.active_runs:
         import task_registry
-        task_registry.cancel_all(run.session_id)
-        return {"aborted": run_id, "mode": "cancelled_live"}
+        cancelled = task_registry.cancel_all(run.session_id)
+        if cancelled > 0:
+            return {"aborted": run_id, "mode": "cancelled_live",
+                    "cancelled": cancelled}
+        # Live session but nothing cancellable right now: the run is between
+        # agents in a post-extraction stage (merge / cross-checks / review),
+        # which task_registry doesn't hold a cancellable task for. Don't lie
+        # that it was aborted, and don't flip the DB row (that would race the
+        # stream's own finalization). Tell the user to retry in a moment — the
+        # stage is short and the normal completion path will finalize it.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This run is finishing a stage (merging or checking) and can't "
+                "be stopped right now. Try again in a moment."
+            ),
+        )
 
     # A dead row: no owning stream will ever finalize it — flip it ourselves.
     conn = server._open_audit_conn()

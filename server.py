@@ -2400,19 +2400,23 @@ async def _lifespan(app: FastAPI):
     # Retire extraction runs left `running` by a dead process (UX-QA #2). The
     # run executes inside a streaming request that dies with the process, so a
     # surviving `running` row is a History dead-end (Download/Delete disabled,
-    # no live indicator). Flip stale ones to `aborted` so the lifecycle
-    # contract (gotcha #10) holds across restarts. Fresh in-flight runs are
-    # spared by the age threshold. Best-effort — must not block startup.
+    # no live indicator). At startup EVERY `running` row is orphaned — no
+    # stream can have started yet (this runs before requests are served and
+    # `active_runs` is empty) — so reap all of them (`max_age_hours=0`), not
+    # just old ones. Reaping only >6h rows left a crash-then-immediate-restart
+    # orphan `running` until the next late restart (peer review). Flipping to
+    # `aborted` upholds the lifecycle contract (gotcha #10) across restarts.
+    # Best-effort — must not block startup.
     try:
         from db import repository as repo
         conn = _open_audit_conn()
         try:
-            n = repo.reconcile_stale_runs(conn)
+            n = repo.reconcile_stale_runs(conn, max_age_hours=0)
             conn.commit()
         finally:
             conn.close()
         if n:
-            logger.info("reconciled %d stale run(s) at startup", n)
+            logger.info("reconciled %d orphaned run(s) at startup", n)
     except Exception:
         logger.warning("stale run reconciliation failed at startup",
                        exc_info=True)
