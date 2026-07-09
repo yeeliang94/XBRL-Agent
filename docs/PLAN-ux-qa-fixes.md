@@ -1,6 +1,10 @@
 # Implementation Plan: UX/QA Review Fixes (2026-07-09)
 
-**Overall Progress:** `12%` — Phase 1 complete (stale-run reaper, force-abort, error banner).
+**Overall Progress:** `90%` — Phases 1–4 complete; Phase 5 core done (some P2/P3
+polish deferred, listed in that commit); Phase 6 done (found + fixed the
+"10 statements" bug; #24 left as an upstream import investigation). Deferred:
+Step 12 (soft-delete/undo, a product decision) and the lower-value Phase 5
+polish items. Full suites green: backend 3176 passed, web 1011 passed.
 **PRD Reference:** `docs/UX-QA-Review_VALIDATION_2026-07-09.md` (the validated findings) and
 `docs/UX-QA-Product-Review_2026-07-09.md` (the original review + Section 12 backlog).
 **Last Updated:** 2026-07-09
@@ -67,7 +71,7 @@ the real, smaller defect underneath them.**
 
 ### Phase 2 — Honesty bugs (P1): the tool must not lie about state or cost
 
-- [ ] 🟥 **Step 4: One canonical run-status vocabulary** — kill the "Completed / Didn't finish / Completed with errors / Failed" four-way split for one run. (Backlog #22)
+- [x] 🟩 **Step 4: One canonical run-status vocabulary** — kill the "Completed / Didn't finish / Completed with errors / Failed" four-way split for one run. (Backlog #22)
   - [ ] 🟥 Make `web/src/lib/runStatus.ts` the single source: one `overall_status` → `{label, tone}` map covering `completed`, `completed_with_errors`, `failed`, `aborted`, `correction_exhausted`, `running`, `draft`.
   - [ ] 🟥 Replace the binary `complete.success ? "Done" : "Didn't finish"` in `ResultsView.tsx:375-385` and the `AgentTimeline` terminal-row label with lookups against that map. Ensure `completed_with_errors` never renders as "Didn't finish".
   - [ ] 🟥 Backend: stop deriving `"success": overall_status == "completed"` as the *only* completion signal (`server.py:5867`) — pass the real `overall_status` through the `run_complete` event so the UI maps it directly.
@@ -75,89 +79,89 @@ the real, smaller defect underneath them.**
   - [ ] 🟥 Web tests: given a `completed_with_errors` run, Summary card, activity log, and History badge all show the *same* label; assert "Didn't finish" never appears for that status.
   - **Verify:** re-run an extraction that lands `completed_with_errors` → all three surfaces read "Completed with errors" (or the agreed single label); no "Didn't finish".
 
-- [ ] 🟥 **Step 5: Honest live cost meter** — the streaming meter must reflect the real bill, or say what it excludes. (Backlog #23)
+- [x] 🟩 **Step 5: Honest live cost meter** — the streaming meter must reflect the real bill, or say what it excludes. (Backlog #23)
   - [ ] 🟥 Preferred: include scout + reviewer tokens in the live meter. Scout runs on `/api/scout/{session}` (separate stream) and the reviewer emits no `token_update` (`server.py:1606`) — so either (a) emit token events from those passes, or (b) after each pass, push a one-shot rollup delta into the extraction stream's token state.
   - [ ] 🟥 Minimum-viable fallback if (a) is too big: relabel the meter "Extraction only (excludes scout & AI review)" so $2.03-vs-$3.55 isn't presented as the total.
   - [ ] 🟥 Test: a mocked run with scout + reviewer token rows → live-meter total equals the Overview `telemetry_rollup` total (or the label is present).
   - **Verify:** run an extraction with scout + auto-review on → the number the meter settles on matches the finished Overview cost (run 216 reference: should reach $3.55, not stop at $2.03).
 
-- [ ] 🟥 **Step 6: One number-formatting convention everywhere** — grouped, fixed decimals, in columns *and* messages. (Backlog #9)
+- [x] 🟩 **Step 6: One number-formatting convention everywhere** — grouped, fixed decimals, in columns *and* messages. (Backlog #9)
   - [ ] 🟥 Format figures in cross-check *messages* at the source (`cross_checks/*.py`, e.g. `sofp_balance.py:74`) using a shared grouping/`:,.2f` helper, so `assets (1,002,593)` not `(1002593.0)`.
   - [ ] 🟥 Give `ValidatorTab.tsx` Expected/Actual/Diff a fixed fraction-digit rule (currently bare `toLocaleString()`).
   - [ ] 🟥 Update the cross-check message pinning tests in `tests/test_cross_checks.py` to the new formatted strings.
   - **Verify:** `pytest tests/test_cross_checks.py -q` green; Cross-checks tab shows grouped figures in both the columns and the message.
 
-- [ ] 🟥 **Step 7: Notes pre-run affordance + post-scan nudge** — notes look inert and nothing invites turning them on after a scan. (Reframed backlog #24)
+- [x] 🟩 **Step 7: Notes pre-run affordance + post-scan nudge** — notes look inert and nothing invites turning them on after a scan. (Reframed backlog #24)
   - [ ] 🟥 Fix the unchecked-note label contrast in `NotesRunConfig.tsx:41-49` (drop `grey300` for a normal-weight readable colour) so a togglable checkbox never reads as disabled.
   - [ ] 🟥 When the scout reports notes found (`PreRunPanel.tsx:1359-1382`), surface a one-line nudge near the notes block ("Scout found N notes — tick any you want extracted"). No auto-selection.
   - [ ] 🟥 Web test (`PreRunPanel`/`NotesRunConfig`): note checkboxes are enabled and toggle; the nudge appears after a mocked scout-notes result.
   - **Verify:** upload a doc, run scout → notes read as selectable, the nudge appears, ticking a note enables its model dropdown and includes it in the start payload.
 
-- [ ] 🟥 **Step 8: Scan-first guard on "Start extraction"** — don't let a run start with no scan and zero chosen formats without warning. (Backlog #5)
+- [x] 🟩 **Step 8: Scan-first guard on "Start extraction"** — don't let a run start with no scan and zero chosen formats without warning. (Backlog #5)
   - [ ] 🟥 In `PreRunPanel.tsx` (`canRun`, `~:1002`), when scout hasn't run and all variants are unresolved, either soft-warn ("Formats not detected — run pre-scan or pick a format?") or gate Start behind a confirm.
   - [ ] 🟥 Web test: Start is guarded/soft-warned in the no-scan/no-format state; unaffected once ≥1 format resolves or scout ran.
   - **Verify:** fresh upload → Start prompts about missing scan/formats; after Auto-detect, Start is clean.
 
-- [ ] 🟥 **Step 9: Flag "no source page" values in Figures** — the unverifiable rows are exactly the ones needing scrutiny. (Backlog #6)
+- [x] 🟩 **Step 9: Flag "no source page" values in Figures** — the unverifiable rows are exactly the ones needing scrutiny. (Backlog #6)
   - [ ] 🟥 `ConceptsPage.tsx`: add a per-row "no source" badge and a filter/toggle ("Show only unverified") keyed on missing evidence page (`evidencePages.ts`).
   - [ ] 🟥 Web test: a row with no source page shows the badge and is included by the filter.
   - **Verify:** open a run's Figures tab → values lacking a source page carry a visible badge; the filter narrows to them.
 
-- [ ] 🟥 **Step 10: Add-user form autofill fix** — stop the browser from injecting an email into Name and a saved password. (Backlog #8)
+- [x] 🟩 **Step 10: Add-user form autofill fix** — stop the browser from injecting an email into Name and a saved password. (Backlog #8)
   - [ ] 🟥 `UsersTab.tsx:263-286`: set `autoComplete` correctly (`off`/`new-password`, mirroring the guard already in `GeneralSettingsForm.tsx:382,423`), add visible `<label>`s, add an inline 8-char hint; apply the same to the inline reset-password field (`:227-234`).
   - [ ] 🟥 Web test: add-user inputs carry the expected `autoComplete` values and visible labels.
   - **Verify:** open Users → Add user with a browser password manager active → Name field is empty, password not pre-filled.
 
 ### Phase 3 — Confirmation & undo consistency (P1, reframed #4)
 
-- [ ] 🟥 **Step 11: Unify the confirm pattern + close the real gaps** — one dialog style; no self-lockout.
+- [x] 🟩 **Step 11: Unify the confirm pattern + close the real gaps** — one dialog style; no self-lockout.
   - [ ] 🟥 Replace the raw `window.confirm` in `BenchmarksPage.tsx:134` with the shared `ConfirmDialog`.
   - [ ] 🟥 Add a confirm to **Reset password** in `UsersTab.tsx` (currently no dialog).
   - [ ] 🟥 Hide/disable **Disable** and **Revoke admin** on the signed-in admin's *own* row (`UsersTab.tsx:184-224`) — thread the current user's identity in; keep the server last-admin guard as backstop.
   - [ ] 🟥 Web tests: benchmark delete uses `ConfirmDialog`; reset-password confirms; self-row destructive actions are absent.
   - **Verify:** delete a benchmark → shared dialog; reset a password → confirm; your own row shows no Disable/Revoke-admin.
 
-- [ ] 🟥 **Step 12 (optional, larger): Soft-delete / undo for Delete run** — a short undo window after deletion.
+- [ ] 🟥 (deferred — product decision) **Step 12 (optional, larger): Soft-delete / undo for Delete run** — a short undo window after deletion.
   - [ ] 🟥 Decide scope with product: tombstone + N-second undo toast vs. hard delete (current). If in scope, add a soft-delete flag + reaper.
   - **Verify:** delete a run → undo toast restores it within the window. *(Flagged as a separate decision — may defer.)*
 
 ### Phase 4 — Landing/History lifecycle hygiene (P1/P2, the real half of #10)
 
-- [ ] 🟥 **Step 13: Recent-runs prioritises results; drafts metric reworded** — the landing page shouldn't be all empty drafts. (Backlog #10, landing half only — History pagination/sort were REFUTED)
+- [x] 🟩 **Step 13: Recent-runs prioritises results; drafts metric reworded** — the landing page shouldn't be all empty drafts. (Backlog #10, landing half only — History pagination/sort were REFUTED)
   - [ ] 🟥 `api.ts` recent-runs fetch (`:282-287`): prioritise/split completed results from drafts, mirroring what HistoryPage already does.
   - [ ] 🟥 Reword the "Drafts in progress" tile (`StatTiles.tsx:52`) to "Unstarted drafts" (or similar) and include `completed_with_errors` in the "Completed this month" count (`api.ts:307`).
   - [ ] 🟥 Web tests: recent-runs surfaces results ahead of drafts; the month metric counts errored-completions.
   - **Verify:** landing page shows recent *results* prominently; the month count includes runs that finished with advisories.
 
-- [ ] 🟥 **Step 14: Bulk-clear stale drafts from the UI** — the `DELETE /api/runs/drafts` endpoint exists; surface it. (Backlog #10)
+- [x] 🟩 **Step 14: Bulk-clear stale drafts from the UI** — the `DELETE /api/runs/drafts` endpoint exists; surface it. (Backlog #10)
   - [ ] 🟥 Add a "Clear unstarted drafts" action (with `ConfirmDialog`) on the landing/History drafts section, calling the existing bulk endpoint.
   - [ ] 🟥 Web test: the action calls the endpoint and refreshes the list.
   - **Verify:** click Clear drafts → confirm → the 79 drafts drop out of History and the tile updates.
 
 ### Phase 5 — Polish & consistency (P2/P3)
 
-- [ ] 🟥 **Step 15: Statement-order + acronym gloss on Activity/Overview** — order SOFP→SOPL→SOCI→SOCF→SOCIE (client sort or backend `ORDER BY`), add the existing `templateSubtitle` gloss to agent rows (`RunDetailView.tsx:1070`). (Backlog #14, #12-legend)
+- [x] 🟩 **Step 15: Statement-order + acronym gloss on Activity/Overview** — order SOFP→SOPL→SOCI→SOCF→SOCIE (client sort or backend `ORDER BY`), add the existing `templateSubtitle` gloss to agent rows (`RunDetailView.tsx:1070`). (Backlog #14, #12-legend)
   - **Verify:** Activity lists statements in preparer order; each shows its plain-English name.
-- [ ] 🟥 **Step 16: Proportional font for accountant-facing meta** — swap `pwc.fontMono` on `agentMetaRow`/telemetry for the body font; keep raw ids in tooltips. (Backlog #12)
+- [x] 🟩 **Step 16: Proportional font for accountant-facing meta** — swap `pwc.fontMono` on `agentMetaRow`/telemetry for the body font; keep raw ids in tooltips. (Backlog #12)
   - **Verify:** Activity/telemetry rows read as prose, not a debug log.
-- [ ] 🟥 **Step 17: Calmer "needs attention" wording** — distinguish advisory (non-blocking) from failing so "8/8 passing" + "3 needs attention" don't look contradictory (`RunDetailView.tsx:490-504`). (Backlog #13a)
+- [x] 🟩 **Step 17: Calmer "needs attention" wording** — distinguish advisory (non-blocking) from failing so "8/8 passing" + "3 needs attention" don't look contradictory (`RunDetailView.tsx:490-504`). (Backlog #13a)
   - **Verify:** a warnings-only run reads as clean-with-advisories, not alarming.
-- [ ] 🟥 **Step 18: "Open run report" deep-links to Figures** — thread `initialRunTab="values"` on that nav path (`App.tsx:694`) to match the copy. (Backlog #25)
+- [x] 🟩 **Step 18: "Open run report" deep-links to Figures** — thread `initialRunTab="values"` on that nav path (`App.tsx:694`) to match the copy. (Backlog #25)
   - **Verify:** click "Open run report" → lands on Figures.
-- [ ] 🟥 **Step 19: Overall vs per-statement progress** — give the stepper an overall-run phase instead of the selected tab's (`ExtractPage.tsx:267-270`). (Backlog #26)
+- [ ] 🟥 (deferred) **Step 19: Overall vs per-statement progress** — give the stepper an overall-run phase instead of the selected tab's (`ExtractPage.tsx:267-270`). (Backlog #26)
   - **Verify:** stepper stays pre-Complete until *all* statements finish.
-- [ ] 🟥 **Step 20: Differentiate scout log rows** — add per-statement/page labels to `discover_notes`/`Read Face Structure` (`toolLabels.ts:177-185`); add a rough progress hint to the pre-scan spinner (`ScoutToggle.tsx:152`). (Backlog #27)
+- [ ] 🟥 (deferred) **Step 20: Differentiate scout log rows** — add per-statement/page labels to `discover_notes`/`Read Face Structure` (`toolLabels.ts:177-185`); add a rough progress hint to the pre-scan spinner (`ScoutToggle.tsx:152`). (Backlog #27)
   - **Verify:** scout log rows are distinguishable; the spinner shows some progress signal.
-- [ ] 🟥 **Step 21: Smaller polish batch** — model-name abstraction under Advanced (#15), date-range presets in History filters (#16), Field-labels default to SOFP (#19), Users table hierarchy pass (#20), source-PDF default width bump (Figures 7f-P2), notes-tab control grouping (#7c), louder confidence dots (#5-P2), AI-review empty-state collapse (#7e), mTool helper-line progressive disclosure (#7g).
+- [~] 🟨 (partial — SOFP default, louder dots, PDF width done) **Step 21: Smaller polish batch** — model-name abstraction under Advanced (#15), date-range presets in History filters (#16), Field-labels default to SOFP (#19), Users table hierarchy pass (#20), source-PDF default width bump (Figures 7f-P2), notes-tab control grouping (#7c), louder confidence dots (#5-P2), AI-review empty-state collapse (#7e), mTool helper-line progressive disclosure (#7g).
   - **Verify:** each has a matching web test / visual check; group into 1–2 PRs.
-- [ ] 🟥 **Step 22: Notes formatter error handling** — audit the `error_type` map so no error hits the reasonless fallback, and add a dismiss to the error strip (`vocabulary.ts:171-185`, `NotesReviewTab.tsx:938`). (Reframed backlog #3)
+- [ ] 🟥 (deferred) **Step 22: Notes formatter error handling** — audit the `error_type` map so no error hits the reasonless fallback, and add a dismiss to the error strip (`vocabulary.ts:171-185`, `NotesReviewTab.tsx:938`). (Reframed backlog #3)
   - **Verify:** each backend formatter `error_type` maps to a specific reason+remedy; the strip is dismissable.
 
 ### Phase 6 — Investigations (DISPUTED — verify before touching code)
 
-- [ ] 🟥 **Step 23: "10 STATEMENTS" reconciliation** — the tile counts face-agents (=5) in code; couldn't reproduce 10. Open the exact run the reviewer saw; if a real "10" surfaces, trace the count and fix; else close as not-a-bug. (Backlog #13b)
+- [x] 🟩 **Step 23: "10 STATEMENTS" reconciliation** — the tile counts face-agents (=5) in code; couldn't reproduce 10. Open the exact run the reviewer saw; if a real "10" surfaces, trace the count and fix; else close as not-a-bug. (Backlog #13b)
   - **Verify:** documented conclusion (reproduced+fixed, or closed with reason).
-- [ ] 🟥 **Step 24: "Editable abstract row" import check** — ABSTRACT rows are never editable in the UI, so an editable "Statement of cash flows, indirect method" means that row imported as a LEAF. Check the concept import/classification for that template; fix upstream if mis-classified.
+- [ ] 🟥 (investigation — needs a repro run) **Step 24: "Editable abstract row" import check** — ABSTRACT rows are never editable in the UI, so an editable "Statement of cash flows, indirect method" means that row imported as a LEAF. Check the concept import/classification for that template; fix upstream if mis-classified.
   - **Verify:** the row imports as ABSTRACT and renders non-editable, OR confirmed already correct.
 
 ---
