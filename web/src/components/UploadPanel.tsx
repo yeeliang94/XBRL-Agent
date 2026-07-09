@@ -1,9 +1,9 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { userMessage } from "../lib/errors";
 import type { UploadResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
-import { ui, uiClass } from "../lib/uiStyles";
 import { ElapsedTimer } from "./ElapsedTimer";
+import { FileDropzone } from "./FileDropzone";
 
 interface Props {
   onUpload: (file: File) => Promise<UploadResponse>;
@@ -25,28 +25,6 @@ const styles = {
     border: `1px solid ${pwc.grey200}`,
     boxShadow: pwc.shadow.card,
     padding: pwc.space.xl,
-  } as React.CSSProperties,
-  dropZone: {
-    border: `2px dashed ${pwc.grey200}`,
-    borderRadius: pwc.radius.lg,
-    padding: pwc.space.xxxl,
-    textAlign: "center" as const,
-    background: pwc.grey50,
-  } as React.CSSProperties,
-  dropText: {
-    fontFamily: pwc.fontBody,
-    color: pwc.grey700,
-    fontSize: 15,
-    marginBottom: pwc.space.md,
-  } as React.CSSProperties,
-  chooseButton: {
-    ...ui.buttonPrimary,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  chooseButtonDisabled: {
-    ...ui.buttonPrimary,
-    cursor: "not-allowed",
-    opacity: 0.5,
   } as React.CSSProperties,
   fileRow: {
     display: "flex",
@@ -118,7 +96,6 @@ const styles = {
 };
 
 export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -153,55 +130,20 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
     [onUpload],
   );
 
-  const handleChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) handleFile(file);
-    },
-    [handleFile],
-  );
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      const file = e.dataTransfer.files[0];
-      if (file) handleFile(file);
-    },
-    [handleFile],
-  );
-
   const disabled = isRunning || uploading;
 
   return (
     <div style={styles.container}>
       {!filename ? (
-        <div
-          data-testid="drop-zone"
-          onDrop={handleDrop}
-          onDragOver={(e) => e.preventDefault()}
-          style={styles.dropZone}
+        <FileDropzone
+          accept=".pdf,.docx"
+          label="Drop a PDF or Word (.docx) file here or click the button below"
+          inputLabel="Upload document"
+          disabled={disabled}
+          onFile={handleFile}
         >
-          <p style={styles.dropText}>Drop a PDF or Word (.docx) file here or click the button below</p>
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            disabled={disabled}
-            className={uiClass.btnPrimary}
-            style={disabled ? styles.chooseButtonDisabled : styles.chooseButton}
-          >
-            Choose file
-          </button>
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".pdf,.docx"
-            onChange={handleChange}
-            disabled={disabled}
-            style={{ display: "none" }}
-            aria-label="Upload document"
-          />
           {uploading && <p style={styles.uploading}>Uploading...</p>}
-        </div>
+        </FileDropzone>
       ) : (
         <div style={styles.fileRow}>
           <div style={styles.fileInfo}>

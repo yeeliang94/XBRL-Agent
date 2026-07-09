@@ -3,6 +3,7 @@ import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { denominationLabel } from "../lib/vocabulary";
+import { FileDropzone } from "./FileDropzone";
 
 /**
  * mTool fill modal (docs/PLAN.md Phase 4, Steps 9/11).
@@ -306,7 +307,6 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [columnConfidence, setColumnConfidence] = useState<string | null>(null);
   const [detectBusy, setDetectBusy] = useState(false);
   const [detectErr, setDetectErr] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
   // Monotonic token so a slow column-detect for template A can't land its
   // result after the user has switched to template B (a stale columnMap would
   // be sent as an explicit override and MIS-TARGET writes). Bumped on every
@@ -600,27 +600,32 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </label>
         )}
 
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".xlsx"
-          onChange={(e) => {
-            const f = e.target.files?.[0] ?? null;
-            detectSeq.current += 1; // invalidate any in-flight detect for the old file
-            setFile(f);
-            setColumnMap(null); // a different template has a different layout
-            setColumnConfidence(null);
-            setDetectErr(null);
-            setDetectBusy(false);
-            setColumnPrompt(null);
-            setPreview(null); // a different template ⇒ a different plan
-            setPreviewErr(null);
-            setNoteTargets({}); // decisions were made against the old template
-            if (f) runDetect(f); // confirm the column layout up front
-          }}
-          aria-label="mTool template file"
-          style={{ fontSize: 13, marginBottom: pwc.space.md }}
-        />
+        <div style={{ marginBottom: pwc.space.md }}>
+          <FileDropzone
+            accept=".xlsx"
+            label={
+              file
+                ? `Selected: ${file.name} — drop another to replace`
+                : "Drop your empty mTool template (.xlsx) here or choose a file"
+            }
+            buttonLabel="Choose template"
+            inputLabel="mTool template file"
+            testId="mtool-template-dropzone"
+            onFile={(f) => {
+              detectSeq.current += 1; // invalidate any in-flight detect for the old file
+              setFile(f);
+              setColumnMap(null); // a different template has a different layout
+              setColumnConfidence(null);
+              setDetectErr(null);
+              setDetectBusy(false);
+              setColumnPrompt(null);
+              setPreview(null); // a different template ⇒ a different plan
+              setPreviewErr(null);
+              setNoteTargets({}); // decisions were made against the old template
+              runDetect(f); // confirm the column layout up front
+            }}
+          />
+        </div>
 
         {detectBusy && (
           <div style={{ ...styles.statLine, color: pwc.grey700 }}>
