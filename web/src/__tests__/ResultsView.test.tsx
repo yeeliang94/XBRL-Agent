@@ -131,14 +131,21 @@ describe("ResultsView — P4", () => {
     expect(screen.getByText(/\$0\.0035/)).toBeInTheDocument(); // cost
   });
 
-  test("Summary tab shows time taken, done status, and AI-usage detail", () => {
+  test("Summary tab shows time taken, completed status, and AI-usage detail", () => {
     renderResults();
     // Token/cost live inside the collapsed "AI usage" details (still in the DOM).
     expect(screen.getByText(/5,000/)).toBeInTheDocument();
     expect(screen.getByText(/\$0\.0035/)).toBeInTheDocument();
     expect(screen.getByText(/02:00/)).toBeInTheDocument(); // ~120s elapsed
-    // Status now reads in plain English ("Done" instead of "Success").
-    expect(screen.getByText(/Done/i)).toBeInTheDocument();
+    // Status uses the shared vocabulary ("Completed"), unified across surfaces.
+    expect(screen.getByText(/Completed/i)).toBeInTheDocument();
+  });
+
+  // UX-QA #22: completed_with_errors must NOT render as "Didn't finish".
+  test("completed_with_errors shows the shared label, never 'Didn't finish'", () => {
+    renderResults({ success: false, overallStatus: "completed_with_errors" });
+    expect(screen.getByText(/Completed with errors/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Didn't finish/i)).toBeNull();
   });
 
   test("Data Preview tab renders table with field name + value columns", async () => {

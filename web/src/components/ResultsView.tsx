@@ -4,6 +4,7 @@ import type { CompleteData } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { formatElapsedMs } from "../lib/time";
+import { runStatusDisplay } from "../lib/runStatus";
 
 interface Props {
   complete: CompleteData;
@@ -372,17 +373,25 @@ function SummaryTab({ complete, runStartTime }: { complete: CompleteData; runSta
         <div style={styles.card}>
           <div style={styles.cardLabel}>Status</div>
           <div>
-            {complete.success ? (
-              <span style={styles.successBadge}>
-                <span aria-hidden="true" style={ui.badgeDot(pwc.success)} />
-                Done
-              </span>
-            ) : (
-              <span style={styles.failBadge}>
-                <span aria-hidden="true" style={ui.badgeDot(pwc.error)} />
-                Didn't finish
-              </span>
-            )}
+            {(() => {
+              // One honest status label (UX-QA #22). completed_with_errors must
+              // NOT render as "Didn't finish" — map through the shared
+              // vocabulary the History list + run-detail badge already use, so
+              // every surface agrees. Fall back to the binary success/failure
+              // labels for legacy events that don't carry overall_status.
+              const status =
+                complete.overallStatus ??
+                (complete.success ? "completed" : "failed");
+              const display = runStatusDisplay(status);
+              return (
+                <span
+                  style={{ ...ui.badge, borderColor: display.accent }}
+                >
+                  <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
+                  {display.label}
+                </span>
+              );
+            })()}
           </div>
         </div>
         <div style={styles.card}>

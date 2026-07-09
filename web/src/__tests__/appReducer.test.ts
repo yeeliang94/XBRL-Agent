@@ -1124,7 +1124,7 @@ describe("appReducer", () => {
     expect(withToast.toast!.message).toMatch(/complete/i);
   });
 
-  test("run_complete with success:false does NOT set a success toast", () => {
+  test("run_complete with success:false (hard failure) does NOT set a success toast", () => {
     const running = runningState();
     const withToast = appReducer(running, {
       type: "EVENT",
@@ -1142,6 +1142,31 @@ describe("appReducer", () => {
       } as SSEEvent,
     });
     expect(withToast.toast).toBeNull();
+  });
+
+  // UX-QA #22: a completed_with_errors run finished and produced a workbook —
+  // it must get a distinct warning toast + carry overallStatus, not be silent.
+  test("run_complete completed_with_errors sets an error-tone toast and carries overallStatus", () => {
+    const running = runningState();
+    const next = appReducer(running, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: false,
+          overall_status: "completed_with_errors",
+          merged_workbook: "/out/filled.xlsx",
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: ["SOFP"],
+          statements_failed: [],
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(next.toast).not.toBeNull();
+    expect(next.toast!.tone).toBe("error");
+    expect(next.complete!.overallStatus).toBe("completed_with_errors");
   });
 
   // Peer-review regression: the backend's validation-fail paths emit

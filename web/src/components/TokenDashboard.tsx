@@ -77,6 +77,19 @@ const styles = {
     fontWeight: pwc.weight.regular,
     color: pwc.success,
   } as React.CSSProperties,
+  // Honesty caption (UX-QA #23): this live meter sums only the extraction
+  // agents. The pre-scan (scout) runs on a separate stream and the AI-review
+  // pass emits no token events, so both land on the final total but not here —
+  // say so, or a user watching the meter under-reads the eventual bill by ~40%.
+  costCaption: {
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+    color: pwc.grey500,
+    marginTop: 2,
+    maxWidth: 220,
+    textAlign: "right" as const,
+    lineHeight: 1.35,
+  } as React.CSSProperties,
   pulsingDot: {
     width: 8,
     height: 8,
@@ -119,6 +132,10 @@ export function TokenDashboard({ tokens, isRunning }: Props) {
             {isRunning && <span style={styles.pulsingDot} />}
           </div>
           <div style={styles.costValue}>${tokens.cost_estimate.toFixed(4)}</div>
+          <div style={styles.costCaption}>
+            Extraction only — the pre-scan and AI review add to the final total
+            on the run report.
+          </div>
         </div>
       </div>
     </div>

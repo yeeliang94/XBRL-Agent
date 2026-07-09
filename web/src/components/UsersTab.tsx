@@ -86,6 +86,18 @@ const styles = {
     color: pwc.grey700,
     cursor: "pointer",
   } as React.CSSProperties,
+  // Visible field labels for the add-user form (UX-QA #8) — stacked above each
+  // input so the field is named even after the placeholder disappears.
+  fieldLabel: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 2,
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    color: pwc.grey500,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.04em",
+  } as React.CSSProperties,
 };
 
 export function UsersTab() {
@@ -230,6 +242,7 @@ export function UsersTab() {
                       onChange={(e) => setResetValue(e.target.value)}
                       placeholder="New password"
                       aria-label={`New password for ${u.email}`}
+                      autoComplete="new-password"
                       style={styles.input}
                     />
                     <button
@@ -259,31 +272,49 @@ export function UsersTab() {
 
       <div style={styles.addForm}>
         <p style={styles.heading}>Add user</p>
+        {/* autoComplete guards (UX-QA #8): an email field directly above a
+            password field triggers the browser's login-form heuristic, which
+            autofilled the admin's own email into Name and their saved password
+            into Password. `off` / `new-password` defeat it — the same guard
+            GeneralSettingsForm already uses. Visible <label>s so the fields are
+            named even when placeholders vanish on input. */}
         <div style={styles.addRow}>
-          <input
-            type="email"
-            value={newEmail}
-            onChange={(e) => setNewEmail(e.target.value)}
-            placeholder="email@firm.com"
-            aria-label="New user email"
-            style={styles.input}
-          />
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="Display name"
-            aria-label="New user display name"
-            style={styles.input}
-          />
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            placeholder="Password"
-            aria-label="New user password"
-            style={styles.input}
-          />
+          <label style={styles.fieldLabel}>
+            Email
+            <input
+              type="email"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              placeholder="email@firm.com"
+              aria-label="New user email"
+              autoComplete="off"
+              style={styles.input}
+            />
+          </label>
+          <label style={styles.fieldLabel}>
+            Name
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Display name"
+              aria-label="New user display name"
+              autoComplete="off"
+              style={styles.input}
+            />
+          </label>
+          <label style={styles.fieldLabel}>
+            Password (min 8 characters)
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Password"
+              aria-label="New user password"
+              autoComplete="new-password"
+              style={styles.input}
+            />
+          </label>
           <label style={styles.checkboxLabel}>
             <input
               type="checkbox"

@@ -3,6 +3,7 @@ import type { SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { ToolCallCard } from "./ToolCallCard";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
+import { runStatusDisplay } from "../lib/runStatus";
 
 // AgentTimeline is the single replacement for ChatFeed. It renders one row
 // per tool call via ToolCallCard, plus a terminal row for the final
@@ -171,6 +172,39 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
               </ul>
             </div>
           )}
+        </div>
+      );
+    }
+    // Finished-but-flagged path (UX-QA #22): a run_complete carrying
+    // overall_status = completed_with_errors / correction_exhausted is NOT a
+    // failure — it produced a workbook but a check didn't pass. Render it in
+    // the shared amber/needs-review vocabulary so the activity log agrees with
+    // the Summary card + History badge instead of shouting red "Failed".
+    const overallStatus =
+      event.event === "run_complete"
+        ? (data as { overall_status?: string }).overall_status
+        : undefined;
+    if (
+      overallStatus === "completed_with_errors" ||
+      overallStatus === "correction_exhausted"
+    ) {
+      const display = runStatusDisplay(overallStatus);
+      return (
+        <div
+          data-terminal="completed-with-errors"
+          style={{ ...styles.terminalRow, border: `1px solid ${pwc.grey200}`, borderLeft: `3px solid ${display.accent}` }}
+        >
+          <div style={styles.terminalMain}>
+            <span
+              aria-hidden="true"
+              style={{ ...styles.terminalDot, background: display.accent }}
+            />
+            <span style={styles.terminalLabel}>Run finished</span>
+          </div>
+          <span style={{ ...ui.badge, borderColor: display.accent, flexShrink: 0 }}>
+            <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
+            {display.label}
+          </span>
         </div>
       );
     }

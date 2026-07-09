@@ -31,6 +31,7 @@ from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, find_label_row,
     filing_level_prefix,
 )
+from cross_checks._format import fmt_amount, fmt_diff
 
 
 # Magnitude-scaled tolerance, mirroring tools.verifier._balance_tolerance so
@@ -108,9 +109,9 @@ class SOCFArticulationCheck:
         eff_tol = _effective_tolerance(tolerance, beginning, net_change, ending)
         passed = diff <= eff_tol
         return passed, (
-            f"{label}: closing cash ({ending}) "
-            f"{'==' if passed else '!='} opening ({beginning}) + "
-            f"net change ({net_change}) = {expected}, diff={diff:.2f}"
+            f"{label}: closing cash ({fmt_amount(ending)}) "
+            f"{'==' if passed else '!='} opening ({fmt_amount(beginning)}) + "
+            f"net change ({fmt_amount(net_change)}) = {fmt_amount(expected)}, diff={fmt_diff(diff)}"
         )
 
     def run(self, workbook_paths: Dict[StatementType, str], tolerance: float,

@@ -13,6 +13,7 @@ from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, socie_column,
     find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run, filing_level_prefix,
 )
+from cross_checks._format import fmt_amount, fmt_diff
 
 
 class SOPLToSOCIEProfitCheck:
@@ -82,7 +83,7 @@ class SOPLToSOCIEProfitCheck:
         # label so with_period=False. See cross_checks.util for the
         # S-3/S-4 rationale behind centralising this prefix.
         primary_label = filing_level_prefix(filing_level, with_period=False)
-        parts = [f"{primary_label}: SOPL ({sopl_profit}) vs SOCIE ({socie_profit}), diff={diff:.2f}"]
+        parts = [f"{primary_label}: SOPL ({fmt_amount(sopl_profit)}) vs SOCIE ({fmt_amount(socie_profit)}), diff={fmt_diff(diff)}"]
 
         # Group filings must carry Company totals — see sofp_balance.py for
         # the peer-review background on the old silent-pass default.
@@ -97,7 +98,7 @@ class SOPLToSOCIEProfitCheck:
                 co_diff = abs(co_sopl_profit - co_socie_profit)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SOPL ({co_sopl_profit}) vs SOCIE ({co_socie_profit}), diff={co_diff:.2f}"
+                    f"Company: SOPL ({fmt_amount(co_sopl_profit)}) vs SOCIE ({fmt_amount(co_socie_profit)}), diff={fmt_diff(co_diff)}"
                 )
 
         passed = group_passed and co_passed
@@ -165,7 +166,7 @@ class SOPLToSOCIEProfitCheck:
         diff = abs(sopl_profit - socie_profit)
         group_passed = diff <= tolerance
         primary_label = filing_level_prefix(ctx.filing_level, with_period=False)
-        parts = [f"{primary_label}: SOPL ({sopl_profit}) vs SOCIE ({socie_profit}), diff={diff:.2f}"]
+        parts = [f"{primary_label}: SOPL ({fmt_amount(sopl_profit)}) vs SOCIE ({fmt_amount(socie_profit)}), diff={fmt_diff(diff)}"]
 
         co_sopl_profit = None
         co_socie_profit = None
@@ -185,7 +186,7 @@ class SOPLToSOCIEProfitCheck:
                 co_diff = abs(co_sopl_profit - co_socie_profit)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SOPL ({co_sopl_profit}) vs SOCIE ({co_socie_profit}), diff={co_diff:.2f}"
+                    f"Company: SOPL ({fmt_amount(co_sopl_profit)}) vs SOCIE ({fmt_amount(co_socie_profit)}), diff={fmt_diff(co_diff)}"
                 )
 
         passed = group_passed and co_passed

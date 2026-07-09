@@ -12,6 +12,7 @@ from cross_checks.framework import CrossCheckResult, Comparand
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, filing_level_prefix,
 )
+from cross_checks._format import fmt_amount, fmt_diff
 
 
 def _read_sofp_cash_equivalents_fact(ctx, period: str, entity_scope: str):
@@ -91,7 +92,7 @@ class SOCFToSOFPCashCheck:
         group_passed = diff <= tolerance
         # Reconciliation check — see cross_checks.util.filing_level_prefix.
         primary_label = filing_level_prefix(filing_level, with_period=False)
-        parts = [f"{primary_label}: SOCF ({socf_cash}) vs SOFP ({sofp_cash}), diff={diff:.2f}"]
+        parts = [f"{primary_label}: SOCF ({fmt_amount(socf_cash)}) vs SOFP ({fmt_amount(sofp_cash)}), diff={fmt_diff(diff)}"]
         # Peer-review (Edge AFS, 2026-05-28): when one side is 0 and the
         # other is non-trivial, the failure is almost always a missing
         # SOFP fill (face line with no note) rather than a balance mismatch.
@@ -117,7 +118,7 @@ class SOCFToSOFPCashCheck:
                 co_diff = abs(co_socf_cash - co_sofp_cash)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SOCF ({co_socf_cash}) vs SOFP ({co_sofp_cash}), diff={co_diff:.2f}"
+                    f"Company: SOCF ({fmt_amount(co_socf_cash)}) vs SOFP ({fmt_amount(co_sofp_cash)}), diff={fmt_diff(co_diff)}"
                 )
 
         comparands = [
@@ -171,7 +172,7 @@ class SOCFToSOFPCashCheck:
         diff = abs(socf_cash - sofp_cash)
         group_passed = diff <= tolerance
         primary_label = filing_level_prefix(ctx.filing_level, with_period=False)
-        parts = [f"{primary_label}: SOCF ({socf_cash}) vs SOFP ({sofp_cash}), diff={diff:.2f}"]
+        parts = [f"{primary_label}: SOCF ({fmt_amount(socf_cash)}) vs SOFP ({fmt_amount(sofp_cash)}), diff={fmt_diff(diff)}"]
         if not group_passed and sofp_cash == 0 and socf_cash != 0:
             parts.append(
                 "SOFP cash is 0 but SOCF closing cash is non-zero — the "
@@ -197,7 +198,7 @@ class SOCFToSOFPCashCheck:
                 co_diff = abs(co_socf_cash - co_sofp_cash)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SOCF ({co_socf_cash}) vs SOFP ({co_sofp_cash}), diff={co_diff:.2f}"
+                    f"Company: SOCF ({fmt_amount(co_socf_cash)}) vs SOFP ({fmt_amount(co_sofp_cash)}), diff={fmt_diff(co_diff)}"
                 )
 
         comparands = [

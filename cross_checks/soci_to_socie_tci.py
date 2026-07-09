@@ -14,6 +14,7 @@ from cross_checks.util import (
     find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
     socie_total_column, filing_level_prefix,
 )
+from cross_checks._format import fmt_amount, fmt_diff
 
 
 class SOCIToSOCIETCICheck:
@@ -75,7 +76,7 @@ class SOCIToSOCIETCICheck:
         group_passed = diff <= tolerance
         # Reconciliation check — see cross_checks.util.filing_level_prefix.
         primary_label = filing_level_prefix(filing_level, with_period=False)
-        parts = [f"{primary_label}: SOCI ({soci_tci}) vs SOCIE ({socie_tci}), diff={diff:.2f}"]
+        parts = [f"{primary_label}: SOCI ({fmt_amount(soci_tci)}) vs SOCIE ({fmt_amount(socie_tci)}), diff={fmt_diff(diff)}"]
 
         # Group filings must carry Company totals — see sofp_balance.py for
         # the peer-review background on the old silent-pass default.
@@ -90,7 +91,7 @@ class SOCIToSOCIETCICheck:
                 co_diff = abs(co_soci_tci - co_socie_tci)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SOCI ({co_soci_tci}) vs SOCIE ({co_socie_tci}), diff={co_diff:.2f}"
+                    f"Company: SOCI ({fmt_amount(co_soci_tci)}) vs SOCIE ({fmt_amount(co_socie_tci)}), diff={fmt_diff(co_diff)}"
                 )
 
         comparands = [
@@ -146,7 +147,7 @@ class SOCIToSOCIETCICheck:
         diff = abs(soci_tci - socie_tci)
         group_passed = diff <= tolerance
         primary_label = filing_level_prefix(ctx.filing_level, with_period=False)
-        parts = [f"{primary_label}: SOCI ({soci_tci}) vs SOCIE ({socie_tci}), diff={diff:.2f}"]
+        parts = [f"{primary_label}: SOCI ({fmt_amount(soci_tci)}) vs SOCIE ({fmt_amount(socie_tci)}), diff={fmt_diff(diff)}"]
 
         co_soci_tci = None
         co_socie_tci = None
@@ -167,7 +168,7 @@ class SOCIToSOCIETCICheck:
                 co_diff = abs(co_soci_tci - co_socie_tci)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SOCI ({co_soci_tci}) vs SOCIE ({co_socie_tci}), diff={co_diff:.2f}"
+                    f"Company: SOCI ({fmt_amount(co_soci_tci)}) vs SOCIE ({fmt_amount(co_socie_tci)}), diff={fmt_diff(co_diff)}"
                 )
 
         comparands = [

@@ -17,6 +17,7 @@ from cross_checks.framework import CrossCheckResult, Comparand
 from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, is_sore_run,
 )
+from cross_checks._format import fmt_amount, fmt_diff
 
 
 class SoREToSOFPRetainedEarningsCheck:
@@ -80,7 +81,7 @@ class SoREToSOFPRetainedEarningsCheck:
         diff = abs(sore_re - sofp_re)
         group_passed = diff <= tolerance
         parts = [
-            f"Group: SoRE ({sore_re}) vs SOFP ({sofp_re}), diff={diff:.2f}"
+            f"Group: SoRE ({fmt_amount(sore_re)}) vs SOFP ({fmt_amount(sofp_re)}), diff={fmt_diff(diff)}"
         ]
 
         # Group filings must also line up on Company CY — mirrors the dual-
@@ -96,7 +97,7 @@ class SoREToSOFPRetainedEarningsCheck:
                 co_diff = abs(co_sore_re - co_sofp_re)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SoRE ({co_sore_re}) vs SOFP ({co_sofp_re}), diff={co_diff:.2f}"
+                    f"Company: SoRE ({fmt_amount(co_sore_re)}) vs SOFP ({fmt_amount(co_sofp_re)}), diff={fmt_diff(co_diff)}"
                 )
 
         comparands = [
@@ -161,7 +162,7 @@ class SoREToSOFPRetainedEarningsCheck:
         group_passed = diff <= tolerance
         # The xlsx path hardcodes the "Group:" prefix here (it does not route
         # through filing_level_prefix) — mirror that verbatim for parity.
-        parts = [f"Group: SoRE ({sore_re}) vs SOFP ({sofp_re}), diff={diff:.2f}"]
+        parts = [f"Group: SoRE ({fmt_amount(sore_re)}) vs SOFP ({fmt_amount(sofp_re)}), diff={fmt_diff(diff)}"]
 
         co_sore_re = None
         co_sofp_re = None
@@ -181,7 +182,7 @@ class SoREToSOFPRetainedEarningsCheck:
                 co_diff = abs(co_sore_re - co_sofp_re)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SoRE ({co_sore_re}) vs SOFP ({co_sofp_re}), diff={co_diff:.2f}"
+                    f"Company: SoRE ({fmt_amount(co_sore_re)}) vs SOFP ({fmt_amount(co_sofp_re)}), diff={fmt_diff(co_diff)}"
                 )
 
         comparands = [
