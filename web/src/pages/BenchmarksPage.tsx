@@ -218,17 +218,23 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
   const [warning, setWarning] = useState<string | null>(null);
 
   // Load recent seedable runs for the "From a run" picker (E5) — replaces the
-  // typo-prone free-text run number. Only when that mode is active.
+  // typo-prone free-text run number. Fetch each terminal status SERVER-SIDE so
+  // valid older completed runs aren't hidden behind a newest page that happens
+  // to be mostly drafts/failed (a client-side filter of one page would drop
+  // them). Only when that mode is active.
   useEffect(() => {
     if (mode !== "run") return;
     let cancelled = false;
-    fetchRuns({ limit: 100, offset: 0 })
-      .then((res) => {
+    Promise.all([
+      fetchRuns({ status: "completed", limit: 100, offset: 0 }),
+      fetchRuns({ status: "completed_with_errors", limit: 100, offset: 0 }),
+    ])
+      .then(([done, withErrors]) => {
         if (cancelled) return;
-        const seedable = res.runs.filter(
-          (r) => r.status === "completed" || r.status === "completed_with_errors",
+        const merged = [...done.runs, ...withErrors.runs].sort((a, b) =>
+          a.created_at < b.created_at ? 1 : -1, // newest first
         );
-        setRunOptions(seedable);
+        setRunOptions(merged);
       })
       .catch(() => {
         // A failed list just leaves the picker empty — the user can retry by

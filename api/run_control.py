@@ -186,14 +186,20 @@ async def start_run_endpoint(run_id: int, request: Request):
             detail="Extraction already running for this session.",
         )
 
-    # Atomic flip BEFORE we acquire the active_runs reservation OR open
-    # the SSE stream (peer-review HIGH #3). The atomic UPDATE is the
-    # single source of truth for "this thread won the right to start
-    # this draft" — if it returns rowcount=0 another request raced us
-    # and we must NOT proceed (silently creating a fresh row would
-    # break the shareable /run/{id} URL semantics). Doing the flip
-    # here also lets `run_multi_agent_stream`'s `existing_run_id` path
-    # trust the row is already 'running'.
+    # Reserve the session in active_runs BEFORE the draft→running flip.
+    # Bulk draft cleanup (DELETE /api/runs/drafts) excludes active_runs
+    # sessions, so reserving here — rather than after the flip — closes the
+    # window where a concurrent Clear-Drafts could delete this draft between
+    # our checks and the flip committing, 409-ing the start and vanishing the
+    # upload from History (peer-review race). Released again if we lose the flip.
+    server.active_runs.add(session_id)
+
+    # Atomic flip is the single source of truth for "this thread won the right
+    # to start this draft" — if it returns rowcount=0 another request raced us
+    # and we must NOT proceed (silently creating a fresh row would break the
+    # shareable /run/{id} URL semantics). Doing the flip here also lets
+    # `run_multi_agent_stream`'s `existing_run_id` path trust the row is already
+    # 'running'.
     flip_conn = server._open_audit_conn()
     try:
         flipped = repo.mark_draft_started(flip_conn, run_id)
@@ -201,6 +207,10 @@ async def start_run_endpoint(run_id: int, request: Request):
     finally:
         flip_conn.close()
     if not flipped:
+        # We didn't win the flip (or the row changed): release the reservation
+        # so we don't leak it. The winner (if any) owns a 'running' row and is
+        # protected by its status, not by this set.
+        server.active_runs.discard(session_id)
         raise HTTPException(
             status_code=409,
             detail=(
@@ -208,8 +218,6 @@ async def start_run_endpoint(run_id: int, request: Request):
                 "Refresh the page and try again."
             ),
         )
-
-    server.active_runs.add(session_id)
 
     try:
         load_dotenv(server.ENV_FILE, override=True)
