@@ -1100,6 +1100,44 @@ describe("RunDetailView", () => {
     expect(onForceAbort).toHaveBeenCalledWith(42);
   });
 
+  // UX-QA #14: Activity lists statements in reading order, not backend order.
+  test("Activity orders agents scout → SOFP → SOPL → SOCI → SOCIE → SOCF", () => {
+    const detail = makeDetail({
+      agents: [
+        makeAgent({ id: 1, statement_type: "SOCF" }),
+        makeAgent({ id: 2, statement_type: "SCOUT" }),
+        makeAgent({ id: 3, statement_type: "SOFP" }),
+        makeAgent({ id: 4, statement_type: "SOPL" }),
+      ],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    clickRunTab(/activity/i);
+    const cards = screen.getAllByTestId("run-detail-agent");
+    const order = cards.map((c) => c.textContent);
+    // Scout first, then face statements in reading order (SOCF last).
+    expect(order[0]).toMatch(/scout/i);
+    expect(order[1]).toMatch(/SOFP/);
+    expect(order[2]).toMatch(/SOPL/);
+    expect(order[3]).toMatch(/SOCF/);
+  });
+
+  // UX-QA #13a: advisory-only run doesn't show an amber "Needs attention".
+  test("advisory warnings don't inflate the Needs-attention count", () => {
+    const detail = makeDetail({
+      cross_checks: [
+        { name: "sofp_balance", status: "passed", expected: 1, actual: 1, diff: 0, tolerance: 1, message: "OK" },
+        { name: "notes_consistency", status: "warning", expected: null, actual: null, diff: null, tolerance: null, message: "advisory" },
+      ],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    // Needs attention tile reads 0 (only blocking failures count); the advisory
+    // shows in its own tile. The tile is value-div + label-div, so go up one
+    // level from the label to read both.
+    const tile = screen.getByText("Needs attention").parentElement;
+    expect(tile?.textContent).toMatch(/^0Needs attention/);
+    expect(screen.getByText("Advisory notes")).toBeInTheDocument();
+  });
+
   test("running run without onForceAbort falls back to the disabled Delete", () => {
     render(
       <RunDetailView

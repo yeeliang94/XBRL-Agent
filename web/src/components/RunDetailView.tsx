@@ -29,6 +29,7 @@ import { notesTabLabel } from "../lib/appReducer";
 import { formatCost } from "../lib/numberFormat";
 import { denominationLabel, pseudoAgentLabel, variantLabel, crossCheckLabel } from "../lib/vocabulary";
 import { isNotes12StatementType } from "../lib/notes";
+import { statementCodeSubtitle, statementCodeOrder } from "../lib/sheetLabels";
 
 // ---------------------------------------------------------------------------
 // RunDetailView — hydrated detail panel for a single past run.
@@ -205,6 +206,15 @@ function formatAgentDuration(agent: RunAgentJson): string {
 // Phase 9: one card per agent. Header shows statement, status, model,
 // total tokens; body is an AgentTimeline fed by the persisted events so
 // past runs replay the same ToolCallCard rows as a live run.
+// Activity-tab ordering (UX-QA #14): scout first (-1), then face statements in
+// reading order (0-5), then everything else (notes, AI review) at 99 — a stable
+// sort keeps that tail in its original arrival order.
+function agentActivityOrder(agent: RunAgentJson): number {
+  const t = agent.statement_type;
+  if (t === "SCOUT") return -1;
+  return statementCodeOrder(t);
+}
+
 function AgentCard({ agent }: { agent: RunAgentJson }) {
   // Sheet-12 sub-tab selection — mirrors the live ExtractPage path so
   // replay looks identical to live once the operator picks a sub. null =
@@ -269,6 +279,13 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
             {expanded ? "▾" : "▸"}
           </span>
           <span style={styles.agentStatement}>{displayName}</span>
+          {/* Plain-English gloss for face-statement codes (UX-QA #12/legend) —
+              "SOFP" alone assumes the reader speaks MBRS shorthand. */}
+          {statementCodeSubtitle(agent.statement_type) && (
+            <span style={styles.agentSubtitle}>
+              {statementCodeSubtitle(agent.statement_type)}
+            </span>
+          )}
           {agent.variant && (
             <span style={styles.agentVariant}>({agent.variant})</span>
           )}
@@ -521,7 +538,11 @@ export function RunDetailView({
       passed,
       graded: passed + failed,
       advisories,
-      needsAttention: failed + advisories,
+      // "Needs attention" counts only BLOCKING failures (UX-QA #13a). Advisory
+      // warnings are non-blocking and get their own calmer "Advisory notes"
+      // tile — folding them in here made a clean-but-advisory run show an amber
+      // "Needs attention" next to "8/8 passing", which read as a contradiction.
+      needsAttention: failed,
       statements,
     };
   })();
@@ -815,9 +836,16 @@ export function RunDetailView({
             <p style={styles.dim}>Nothing was recorded for this run yet.</p>
           ) : (
             <div style={styles.agentStack} data-testid="run-detail-agent-list">
-              {detail.agents.map((agent) => (
-                <AgentCard key={agent.id} agent={agent} />
-              ))}
+              {/* Statement reading order (UX-QA #14), matching the Figures
+                  sheet-nav so the app orders statements one way everywhere:
+                  scout first, then face statements in reading order, then notes
+                  / AI-review pseudo-agents (stable, keeping their arrival
+                  order). Beats the backend's incidental alphabetical order. */}
+              {[...detail.agents]
+                .sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b))
+                .map((agent) => (
+                  <AgentCard key={agent.id} agent={agent} />
+                ))}
             </div>
           )}
           {/* Timing + AI-usage detail (the former Telemetry tab), tucked into a
@@ -1223,6 +1251,12 @@ const styles = {
     color: pwc.grey500,
     fontSize: 13,
   } as React.CSSProperties,
+  // Plain-English gloss next to the statement code (UX-QA #12).
+  agentSubtitle: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
+  } as React.CSSProperties,
   // v17 (item 9): muted mono chip naming the failure class on failed rows.
   agentErrorType: {
     color: pwc.grey500,
@@ -1232,11 +1266,14 @@ const styles = {
     borderRadius: pwc.radius.sm,
     padding: "1px 6px",
   } as React.CSSProperties,
+  // Proportional, not monospace (UX-QA #12): the model · turns · duration meta
+  // read as a debug log in mono. Numbers here are incidental, not a table to
+  // align, so the body font is friendlier for the accountant/PM audience.
   agentMetaRow: {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.md,
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
     fontSize: 12,
     color: pwc.grey700,
   } as React.CSSProperties,

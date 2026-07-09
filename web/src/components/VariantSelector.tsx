@@ -159,6 +159,12 @@ export function VariantSelector({
               }
               style={{
                 ...styles.confidenceDot,
+                // "Please check" is the state that matters — make it louder
+                // than "Confident" (UX-QA #5): bigger with an error-tinted ring
+                // instead of the same quiet 10px dot as every other state.
+                ...(sel.confidence === "low" && sel.variant
+                  ? { width: 14, height: 14, boxShadow: `0 0 0 3px ${pwc.errorBg}` }
+                  : {}),
                 background:
                   sel.confidence == null
                     ? "transparent"
