@@ -528,10 +528,16 @@ export function RunDetailView({
     const passed = checks.filter((c) => c.status === "passed").length;
     const failed = checks.filter((c) => c.status === "failed").length;
     const advisories = checks.filter((c) => c.status === "warning").length;
-    // A run's face statements = agents that carry facts (exclude the pseudo
-    // rows like the reviewer / cross-check carriers, which aren't statements).
+    // A run's "statements" = the FACE statements the user chose (UX-QA #13b).
+    // The old filter only dropped NOTES_LIST_OF_NOTES + the named pseudo-agents,
+    // so it silently counted SCOUT and every per-template notes agent
+    // (NOTES_ACC_POLICIES, …) as statements — a 5-statement run with notes +
+    // scout reported "8-10 statements". Exclude scout and ALL notes agents so
+    // the count matches what the user selected.
     const statements = detail.agents.filter(
-      (a) => !isNotes12StatementType(a.statement_type) &&
+      (a) => a.statement_type !== "SCOUT" &&
+        !a.statement_type.startsWith("NOTES_") &&
+        !isNotes12StatementType(a.statement_type) &&
         pseudoAgentLabel(a.statement_type) === null,
     ).length;
     return {
