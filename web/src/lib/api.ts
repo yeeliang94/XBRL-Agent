@@ -279,11 +279,18 @@ export interface HomeStats {
   completedThisMonth: number;
 }
 
-/** The few most-recent runs, newest first. Reuses the runs list (which is
- *  already ordered `created_at DESC` server-side) capped to `limit`. */
+/** The few most-recent runs for the landing page, with real RESULTS surfaced
+ *  ahead of drafts (UX-QA #10). A draft row is created at upload time, so the
+ *  raw newest-first page is often all abandoned drafts — a first-time viewer
+ *  then sees no evidence the tool has ever produced a result. We fetch a wider
+ *  window and stable-partition non-drafts first (each group still newest-first),
+ *  then cap to `limit`. */
 export async function fetchRecentRuns(limit = 5): Promise<RunSummaryJson[]> {
-  const res = await fetchRuns({ limit });
-  return res.runs;
+  const res = await fetchRuns({ limit: Math.max(limit * 4, 20) });
+  const rows = res.runs;
+  const results = rows.filter((r) => r.status !== "draft");
+  const drafts = rows.filter((r) => r.status === "draft");
+  return [...results, ...drafts].slice(0, limit);
 }
 
 /** First day of the current month as `YYYY-MM-01`, in the browser's local
@@ -301,15 +308,19 @@ function currentMonthStart(): string {
  *  we never use the returned rows, so this stays cheap regardless of how
  *  many runs match. */
 export async function fetchHomeStats(): Promise<HomeStats> {
-  const [all, drafts, completed] = await Promise.all([
+  const monthStart = currentMonthStart();
+  const [all, drafts, completed, completedWithErrors] = await Promise.all([
     fetchRuns({ limit: 1 }),
     fetchRuns({ status: "draft", limit: 1 }),
-    fetchRuns({ status: "completed", dateFrom: currentMonthStart(), limit: 1 }),
+    fetchRuns({ status: "completed", dateFrom: monthStart, limit: 1 }),
+    // A run that finished with advisory errors still finished (UX-QA #10) —
+    // count it so "Completed this month" doesn't under-report real work.
+    fetchRuns({ status: "completed_with_errors", dateFrom: monthStart, limit: 1 }),
   ]);
   return {
     total: all.total,
     drafts: drafts.total,
-    completedThisMonth: completed.total,
+    completedThisMonth: completed.total + completedWithErrors.total,
   };
 }
 

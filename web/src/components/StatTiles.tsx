@@ -49,7 +49,7 @@ export function StatTiles({
       <div style={styles.tile}>
         <span style={styles.value}>{fmtCount(drafts)}</span>
         <span style={styles.labelRow}>
-          <span style={styles.label}>Drafts in progress</span>
+          <span style={styles.label}>Unstarted drafts</span>
           {canClearDrafts && (
             <button
               type="button"

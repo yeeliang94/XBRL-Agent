@@ -8,7 +8,7 @@ describe("StatTiles", () => {
       <StatTiles total={42} drafts={3} completedThisMonth={7} lastStatus="completed" />,
     );
     expect(screen.getByText("Total runs")).toBeTruthy();
-    expect(screen.getByText("Drafts in progress")).toBeTruthy();
+    expect(screen.getByText("Unstarted drafts")).toBeTruthy();
     expect(screen.getByText("Completed this month")).toBeTruthy();
     expect(screen.getByText("Last run status")).toBeTruthy();
     expect(screen.getByText("42")).toBeTruthy();

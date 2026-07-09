@@ -24,7 +24,8 @@ function primeFetch(opts?: { recent?: unknown[]; fail?: boolean }) {
     .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 9, limit: 1, offset: 0 }) })
     .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 2, limit: 1, offset: 0 }) })
     .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 4, limit: 1, offset: 0 }) })
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: recent, total: recent.length, limit: 5, offset: 0 }) });
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: recent, total: recent.length, limit: 20, offset: 0 }) });
 }
 
 const noop = () => {};
@@ -61,13 +62,15 @@ describe("HomeHero", () => {
   test("clearing drafts confirms, calls the bulk-delete endpoint, and refetches (E3)", async () => {
     // Initial load: total=9, drafts=2, completed=4, then the recent list.
     primeFetch();
-    // After the confirm: the DELETE, then a fresh 4-call reload with 0 drafts.
+    // After the confirm: the DELETE, then a fresh 5-call reload (4 stats + the
+    // recent list) with 0 drafts.
     mockFetch
       .mockResolvedValueOnce({ ok: true, json: async () => ({ deleted: 2 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 7, limit: 1, offset: 0 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 4, limit: 1, offset: 0 }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 5, offset: 0 }) });
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 20, offset: 0 }) });
 
     render(
       <HomeHero active onResumeDraft={noop} onOpenRun={noop} onViewAllRuns={noop}>
