@@ -20,11 +20,14 @@ interface Props {
   // The Users tab is admin-only. The page also relies on the server enforcing
   // it, but hiding the tab keeps non-admins from seeing a 403 surface.
   isAdmin: boolean;
+  // Signed-in admin's email — used by UsersTab to hide self-destructive
+  // actions on the admin's own row (UX-QA #13).
+  currentEmail?: string;
 }
 
 type TabKey = "general" | "account" | "users";
 
-export function SettingsPage({ isAdmin }: Props) {
+export function SettingsPage({ isAdmin, currentEmail }: Props) {
   const tabs: { key: TabKey; label: string }[] = [
     { key: "general", label: "General" },
     { key: "account", label: "Account" },
@@ -95,7 +98,7 @@ export function SettingsPage({ isAdmin }: Props) {
 
       {activeTab === "users" && isAdmin && (
         <section style={styles.section} role="tabpanel">
-          <UsersTab />
+          <UsersTab currentEmail={currentEmail} />
         </section>
       )}
     </div>

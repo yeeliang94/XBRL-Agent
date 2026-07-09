@@ -100,7 +100,15 @@ const styles = {
   } as React.CSSProperties,
 };
 
-export function UsersTab() {
+interface UsersTabProps {
+  /** Signed-in admin's email. The self-destructive actions (Disable, Revoke
+   *  admin) are hidden on this user's own row so the UI can't offer a
+   *  self-lockout, even though the server's last-admin guard is the real
+   *  backstop (UX-QA #13). */
+  currentEmail?: string;
+}
+
+export function UsersTab({ currentEmail }: UsersTabProps = {}) {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -193,47 +201,55 @@ export function UsersTab() {
           </tr>
         </thead>
         <tbody>
-          {users.map((u) => (
+          {users.map((u) => {
+            // Don't offer the signed-in admin controls that could lock them
+            // out of their own account (UX-QA #13).
+            const isSelf = currentEmail != null && u.email === currentEmail;
+            return (
             <tr key={u.email}>
               <td style={styles.td}>{u.email}</td>
               <td style={styles.td}>{u.display_name}</td>
               <td style={styles.td}>{u.disabled ? "disabled" : "active"}</td>
               <td style={styles.td}>{u.is_admin ? "admin" : "user"}</td>
               <td style={styles.td}>
-                <button
-                  className={uiClass.btnSecondary}
-                  style={styles.actionBtn}
-                  disabled={busy}
-                  onClick={() =>
-                    setPending({
-                      title: u.disabled ? `Enable ${u.email}?` : `Disable ${u.email}?`,
-                      message: u.disabled
-                        ? "This account will be able to sign in again."
-                        : "This account will no longer be able to sign in. Any active sessions end.",
-                      confirmLabel: u.disabled ? "Enable" : "Disable",
-                      act: () => adminSetDisabled(u.email, !u.disabled),
-                    })
-                  }
-                >
-                  {u.disabled ? "Enable" : "Disable"}
-                </button>
-                <button
-                  className={uiClass.btnSecondary}
-                  style={styles.actionBtn}
-                  disabled={busy}
-                  onClick={() =>
-                    setPending({
-                      title: u.is_admin ? `Revoke admin from ${u.email}?` : `Make ${u.email} an admin?`,
-                      message: u.is_admin
-                        ? "This account will lose access to settings and user management."
-                        : "This account will be able to change shared settings and manage other users.",
-                      confirmLabel: u.is_admin ? "Revoke admin" : "Make admin",
-                      act: () => adminSetAdmin(u.email, !u.is_admin),
-                    })
-                  }
-                >
-                  {u.is_admin ? "Revoke admin" : "Make admin"}
-                </button>
+                {!isSelf && (
+                  <button
+                    className={uiClass.btnSecondary}
+                    style={styles.actionBtn}
+                    disabled={busy}
+                    onClick={() =>
+                      setPending({
+                        title: u.disabled ? `Enable ${u.email}?` : `Disable ${u.email}?`,
+                        message: u.disabled
+                          ? "This account will be able to sign in again."
+                          : "This account will no longer be able to sign in. Any active sessions end.",
+                        confirmLabel: u.disabled ? "Enable" : "Disable",
+                        act: () => adminSetDisabled(u.email, !u.disabled),
+                      })
+                    }
+                  >
+                    {u.disabled ? "Enable" : "Disable"}
+                  </button>
+                )}
+                {!isSelf && (
+                  <button
+                    className={uiClass.btnSecondary}
+                    style={styles.actionBtn}
+                    disabled={busy}
+                    onClick={() =>
+                      setPending({
+                        title: u.is_admin ? `Revoke admin from ${u.email}?` : `Make ${u.email} an admin?`,
+                        message: u.is_admin
+                          ? "This account will lose access to settings and user management."
+                          : "This account will be able to change shared settings and manage other users.",
+                        confirmLabel: u.is_admin ? "Revoke admin" : "Make admin",
+                        act: () => adminSetAdmin(u.email, !u.is_admin),
+                      })
+                    }
+                  >
+                    {u.is_admin ? "Revoke admin" : "Make admin"}
+                  </button>
+                )}
                 {resetTarget === u.email ? (
                   <span style={{ display: "inline-flex", gap: pwc.space.xs, alignItems: "center" }}>
                     <input
@@ -266,7 +282,8 @@ export function UsersTab() {
                 )}
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
 

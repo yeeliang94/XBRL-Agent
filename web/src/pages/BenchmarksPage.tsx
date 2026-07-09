@@ -6,6 +6,7 @@ import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, deleteBenchma
 import type { RunSummaryJson } from "../lib/types";
 import type { BenchmarkJson } from "../lib/types";
 import { ConceptsPage } from "./ConceptsPage";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 
 // ---------------------------------------------------------------------------
 // BenchmarksPage — gold-standard eval library (v16).
@@ -125,25 +126,23 @@ function BenchmarkCard({
   onDeleted: () => void;
 }) {
   const [deleting, setDeleting] = useState(false);
-  const onDelete = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      // eval_scores.benchmark_id is ON DELETE CASCADE, so deleting a benchmark
-      // also removes the scorecard of every run graded against it (and those
-      // runs' History score reverts to "—"). Say so honestly.
-      if (!window.confirm(`Delete benchmark "${benchmark.name}"? This permanently removes its gold answers AND the scorecard of every run graded against it. This can't be undone.`)) {
-        return;
-      }
-      setDeleting(true);
-      try {
-        await deleteBenchmark(benchmark.id);
-        onDeleted();
-      } catch {
-        setDeleting(false);
-      }
-    },
-    [benchmark.id, benchmark.name, onDeleted]
-  );
+  // Use the shared ConfirmDialog (UX-QA #4) instead of window.confirm so every
+  // destructive action in the app confirms the same way.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const runDelete = useCallback(async () => {
+    setConfirmOpen(false);
+    setDeleting(true);
+    try {
+      await deleteBenchmark(benchmark.id);
+      onDeleted();
+    } catch {
+      setDeleting(false);
+    }
+  }, [benchmark.id, onDeleted]);
+  const onDelete = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmOpen(true);
+  }, []);
 
   return (
     <div
@@ -195,6 +194,20 @@ function BenchmarkCard({
           {deleting ? "Deleting…" : "Delete"}
         </button>
       </div>
+      <ConfirmDialog
+        isOpen={confirmOpen}
+        title={`Delete benchmark ${benchmark.name}?`}
+        message={
+          <>
+            This permanently removes its gold answers <strong>and the scorecard
+            of every run graded against it</strong> (those runs' History score
+            reverts to “—”). This can’t be undone.
+          </>
+        }
+        confirmLabel="Delete benchmark"
+        onConfirm={runDelete}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 }

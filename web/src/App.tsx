@@ -649,7 +649,7 @@ export default function App() {
           // Consolidated settings page (replaces the gear's settings modal):
           // General · Account · Users. The Users tab is admin-gated (and the
           // server enforces it independently).
-          <SettingsPage isAdmin={Boolean(user?.is_admin)} />
+          <SettingsPage isAdmin={Boolean(user?.is_admin)} currentEmail={user?.email} />
         ) : state.view === "benchmarks" ? (
           // Gold-standard eval (v16): the benchmark library + gold editor.
           // selectedRunId carries the selected benchmark id (the generic
