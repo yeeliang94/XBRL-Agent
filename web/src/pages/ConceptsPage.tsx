@@ -91,11 +91,17 @@ export interface ConceptRow {
 // leaf that carries an extracted value but cites no source page. These are the
 // rows most needing a manual eyeball, so we badge + let them be filtered — not
 // treat them like any other row.
-function rowLacksSource(row: ConceptRow): boolean {
+export function rowLacksSource(row: ConceptRow): boolean {
   if (!(row.kind === "LEAF" || row.kind === "MATRIX_CELL")) return false;
   if (row.is_alias) return false;
   if (row.value == null) return false;
-  return parseEvidencePages(row.evidence || row.source).length === 0;
+  // Mirror the PDF pane's evidence→source fallback (selectedEvidencePages): a
+  // page can live in EITHER column, so a row lacks a source only if NEITHER
+  // yields a page token. `evidence || source` was wrong — a non-empty evidence
+  // string with no page (e.g. "see note") would suppress a valid `source`
+  // citation like "SOFP p.12" and falsely badge the row.
+  if (parseEvidencePages(row.evidence).length > 0) return false;
+  return parseEvidencePages(row.source).length === 0;
 }
 
 export interface ConceptsPageProps {

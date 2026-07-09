@@ -82,6 +82,24 @@ describe("BenchmarksPage", () => {
       expect(calls.some((c) => c === "DELETE /api/benchmarks/1")).toBe(true));
   });
 
+  // UX-QA review fix: the ConfirmDialog is a sibling of the clickable card, so
+  // confirming/cancelling a delete must not bubble to the card and open it.
+  test("delete confirm/cancel does not open the benchmark", async () => {
+    mockFetch((url) => (url === "/api/benchmarks" ? sampleList : {}));
+    const onSelect = vi.fn();
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={onSelect} />);
+    fireEvent.click(await screen.findByTestId("benchmark-delete-1"));
+    const dialog = await screen.findByRole("dialog", { name: /delete benchmark/i });
+    // Cancel: card must not open.
+    fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
+    expect(onSelect).not.toHaveBeenCalled();
+    // Reopen and confirm: still must not open the benchmark.
+    fireEvent.click(screen.getByTestId("benchmark-delete-1"));
+    const dialog2 = await screen.findByRole("dialog", { name: /delete benchmark/i });
+    fireEvent.click(within(dialog2).getByRole("button", { name: /delete benchmark/i }));
+    await waitFor(() => expect(onSelect).not.toHaveBeenCalled());
+  });
+
   test("upload mode requires a file before submitting", async () => {
     mockFetch((url) => (url === "/api/benchmarks" ? { benchmarks: [] } : {}));
     render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);

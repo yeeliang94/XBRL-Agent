@@ -7,8 +7,39 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { ConceptsPage, formatGroupedInput } from "../pages/ConceptsPage";
+import { ConceptsPage, formatGroupedInput, rowLacksSource } from "../pages/ConceptsPage";
+import type { ConceptRow } from "../pages/ConceptsPage";
 import type { CrossCheckResult } from "../lib/types";
+
+// UX-QA #6 review fix: the no-source badge must mirror the PDF pane's
+// evidence→source fallback — a page in EITHER column counts. `evidence ||
+// source` wrongly suppressed a valid `source` page when evidence was a
+// non-empty, page-less string.
+describe("rowLacksSource", () => {
+  const base: ConceptRow = {
+    concept_uuid: "x", parent_uuid: null, kind: "LEAF",
+    canonical_label: "Cash", display_label: null, render_sheet: "SOFP",
+    render_row: 5, render_col: "B", template_id: "t", value: 100,
+    value_status: "observed", children_status: null, source: null, evidence: null,
+  };
+  test("page in source (evidence blank) → has source", () => {
+    expect(rowLacksSource({ ...base, source: "SOFP p.12" })).toBe(false);
+  });
+  test("non-page evidence but a page in source → still has source", () => {
+    expect(rowLacksSource({ ...base, evidence: "see note", source: "pdf p.12" })).toBe(false);
+  });
+  test("page in evidence → has source", () => {
+    expect(rowLacksSource({ ...base, evidence: "Page 15, 'Cash'" })).toBe(false);
+  });
+  test("no page anywhere → lacks source", () => {
+    expect(rowLacksSource({ ...base, evidence: "see note", source: "cascade" })).toBe(true);
+  });
+  test("null value / abstract / alias are never flagged", () => {
+    expect(rowLacksSource({ ...base, value: null })).toBe(false);
+    expect(rowLacksSource({ ...base, kind: "ABSTRACT" })).toBe(false);
+    expect(rowLacksSource({ ...base, is_alias: true })).toBe(false);
+  });
+});
 
 // Vitest setup stubs `fetch`; each test reassigns the implementation.
 const originalFetch = globalThis.fetch;

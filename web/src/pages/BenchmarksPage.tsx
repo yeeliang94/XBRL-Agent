@@ -145,6 +145,11 @@ function BenchmarkCard({
   }, []);
 
   return (
+    // The ConfirmDialog is a SIBLING of the clickable card, not a child (UX-QA
+    // review): rendered inside the card, its Confirm/Cancel/backdrop clicks
+    // bubble through React's synthetic-event tree to the card's onClick and
+    // open the benchmark while you're confirming a delete.
+    <>
     <div
       data-testid={`benchmark-card-${benchmark.id}`}
       style={styles.card}
@@ -194,6 +199,7 @@ function BenchmarkCard({
           {deleting ? "Deleting…" : "Delete"}
         </button>
       </div>
+    </div>
       <ConfirmDialog
         isOpen={confirmOpen}
         title={`Delete benchmark ${benchmark.name}?`}
@@ -208,7 +214,7 @@ function BenchmarkCard({
         onConfirm={runDelete}
         onCancel={() => setConfirmOpen(false)}
       />
-    </div>
+    </>
   );
 }
 
