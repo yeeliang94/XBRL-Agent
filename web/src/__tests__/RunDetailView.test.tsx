@@ -868,6 +868,31 @@ describe("RunDetailView", () => {
     expect(screen.getByText("$0.01")).toBeTruthy();
   });
 
+  test("Overview leads with outcomes, telemetry demoted below (E1)", () => {
+    const detail = makeDetail({
+      cross_checks: [
+        { name: "sofp_balance", status: "passed", expected: 1, actual: 1, diff: 0, tolerance: 1, message: "" },
+        { name: "socf_articulation", status: "failed", expected: 2, actual: 1, diff: 1, tolerance: 1, message: "" },
+      ],
+      telemetry_rollup: {
+        total_tokens: 2000, total_cost: 0.01, prompt_tokens: 1700,
+        completion_tokens: 300, turn_count: 9, tool_call_count: 4,
+      },
+    });
+    const { container } = render(
+      <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    // The outcome metrics render (1 of 2 numeric checks passing).
+    expect(screen.getByText("Checks passing")).toBeTruthy();
+    expect(screen.getByText("1/2")).toBeTruthy();
+    expect(screen.getByText("Needs attention")).toBeTruthy();
+    // Outcomes come before the "Total tokens" telemetry in DOM order.
+    const bodyText = container.textContent ?? "";
+    expect(bodyText.indexOf("Checks passing")).toBeLessThan(
+      bodyText.indexOf("Total tokens"),
+    );
+  });
+
   test("initialTab='values' opens the Values tab (the /concepts/{id} alias)", () => {
     // The /concepts/{id} route now opens the unified run page directly on
     // Values. ConceptsPage fetches on mount, so stub fetch.

@@ -628,10 +628,15 @@ export function ConceptsPage({
   // Memoised so the PDF pane isn't handed a fresh array on every unrelated
   // re-render (which would reset its current page + zoom). Keyed on the
   // evidence string itself.
-  const selectedEvidencePages = useMemo(
-    () => parseEvidencePages(selectedConcept?.evidence),
-    [selectedConcept?.evidence]
-  );
+  const selectedEvidencePages = useMemo(() => {
+    // Prefer the evidence string; fall back to the Source column when evidence
+    // carries no page token, so a citation that lives in `source` (e.g.
+    // "SOFP p.12") still drives the PDF pane instead of showing "no source
+    // page recorded" (E7).
+    const fromEvidence = parseEvidencePages(selectedConcept?.evidence);
+    if (fromEvidence.length > 0) return fromEvidence;
+    return parseEvidencePages(selectedConcept?.source);
+  }, [selectedConcept?.evidence, selectedConcept?.source]);
 
   // Clear the focused-note + coverage state on a run switch (this component is
   // reused across runs, not remounted). Without resetting notesCoverage /
@@ -1359,6 +1364,22 @@ function ConceptTree({
       depthByUuid.set(r.concept_uuid, 0);
     }
   }
+  // Collapse consecutive ABSTRACT headers that repeat the same label — the
+  // taxonomy nests "Statement of cash flows" three deep, which rendered as
+  // three identical section bands in a row (E7). A data row (or a differently
+  // labelled header) breaks the run, so nothing real is hidden.
+  const visibleRows: ConceptRow[] = [];
+  let prevAbstractLabel: string | null = null;
+  for (const r of rows) {
+    const label = (r.display_label || r.canonical_label || "").trim();
+    if (r.kind === "ABSTRACT") {
+      if (prevAbstractLabel !== null && prevAbstractLabel === label) continue;
+      prevAbstractLabel = label;
+    } else {
+      prevAbstractLabel = null;
+    }
+    visibleRows.push(r);
+  }
   return (
     <div
       role="tree"
@@ -1377,7 +1398,7 @@ function ConceptTree({
         <div style={styles.headerCell}>State</div>
         <div style={styles.headerCell}>Source</div>
       </div>
-      {rows.map((r) => (
+      {visibleRows.map((r) => (
         <ConceptRowView
           // Composite key: alias rows share concept_uuid with their
           // primary, so a uuid-only key would collide and React would

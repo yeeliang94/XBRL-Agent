@@ -1,4 +1,5 @@
 import { pwc } from "../lib/theme";
+import { denominationLabel } from "../lib/vocabulary";
 import { ui } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 import type { RunSummaryJson } from "../lib/types";
@@ -94,6 +95,17 @@ export function RecentRunsList({
                     <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
                     {display.label}
                   </span>
+                  {/* Same context chips as History so two runs of the same PDF
+                      are distinguishable at a glance (E4). */}
+                  {run.filing_level === "group" && (
+                    <span style={{ ...styles.inlineBadge, borderColor: pwc.info }}>Group</span>
+                  )}
+                  {run.filing_standard === "mpers" && (
+                    <span style={{ ...styles.inlineBadge, borderColor: pwc.orange500 }}>MPERS</span>
+                  )}
+                  {run.denomination && run.denomination !== "thousands" && (
+                    <span style={styles.inlineBadge}>{denominationLabel(run.denomination)}</span>
+                  )}
                   <span style={styles.date}>{formatDate(run.created_at)}</span>
                 </div>
               </div>
@@ -179,6 +191,9 @@ const styles = {
     gap: pwc.space.sm,
   } as React.CSSProperties,
   badge: {
+    ...ui.badge,
+  } as React.CSSProperties,
+  inlineBadge: {
     ...ui.badge,
   } as React.CSSProperties,
   date: {

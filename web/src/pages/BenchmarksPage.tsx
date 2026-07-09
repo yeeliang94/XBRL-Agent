@@ -168,16 +168,32 @@ function BenchmarkCard({
           {benchmark.statements.join(" · ") || "no statements"}
         </div>
       </div>
-      <button
-        type="button"
-        data-testid={`benchmark-delete-${benchmark.id}`}
-        className={uiClass.btnDanger}
-        style={{ ...ui.buttonDanger, opacity: deleting ? 0.6 : 1 }}
-        onClick={onDelete}
-        disabled={deleting}
-      >
-        {deleting ? "Deleting…" : "Delete"}
-      </button>
+      <div style={styles.cardActions}>
+        {/* An explicit Open button — the whole card is clickable, but that
+            affordance wasn't discoverable next to a lone Delete (E5). */}
+        <button
+          type="button"
+          data-testid={`benchmark-open-${benchmark.id}`}
+          className={uiClass.btnSecondary}
+          style={ui.buttonSecondary}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          data-testid={`benchmark-delete-${benchmark.id}`}
+          className={uiClass.btnDanger}
+          style={{ ...ui.buttonDanger, opacity: deleting ? 0.6 : 1 }}
+          onClick={onDelete}
+          disabled={deleting}
+        >
+          {deleting ? "Deleting…" : "Delete"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -517,9 +533,14 @@ const styles = {
     fontSize: 13,
   } as React.CSSProperties,
   cardCount: {
-    fontFamily: pwc.fontMono,
+    // Proportional, matching the rest of the card (was monospace, E5).
     fontSize: 13,
     color: pwc.grey700,
+  } as React.CSSProperties,
+  cardActions: {
+    display: "flex",
+    gap: pwc.space.sm,
+    alignItems: "center",
   } as React.CSSProperties,
   cardStatements: {
     color: pwc.grey500,

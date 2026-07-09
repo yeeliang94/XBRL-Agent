@@ -482,6 +482,28 @@ export function RunDetailView({
 
   const rollup = detail.telemetry_rollup;
 
+  // Outcome summary for the Overview strip (E1). Cross-check status can carry
+  // an advisory "warning" beyond the typed enum, so compare as strings.
+  const outcomes = (() => {
+    const checks = (detail.cross_checks ?? []) as { status: string }[];
+    const passed = checks.filter((c) => c.status === "passed").length;
+    const failed = checks.filter((c) => c.status === "failed").length;
+    const advisories = checks.filter((c) => c.status === "warning").length;
+    // A run's face statements = agents that carry facts (exclude the pseudo
+    // rows like the reviewer / cross-check carriers, which aren't statements).
+    const statements = detail.agents.filter(
+      (a) => !isNotes12StatementType(a.statement_type) &&
+        pseudoAgentLabel(a.statement_type) === null,
+    ).length;
+    return {
+      passed,
+      graded: passed + failed,
+      advisories,
+      needsAttention: failed + advisories,
+      statements,
+    };
+  })();
+
   // Roving keyboard navigation for the tab bar (WAI-ARIA tabs pattern):
   // Arrow keys move between tabs, Home/End jump to ends, and focus follows
   // selection. Inline styles can't express this, so it lives here.
@@ -631,17 +653,49 @@ export function RunDetailView({
 
       {activeTab === "overview" && (
         <section style={styles.section} role="tabpanel">
-          {rollup && (
-            <div style={styles.metricStrip}>
-              <MetricTile label="Total tokens" value={rollup.total_tokens.toLocaleString()} />
-              <MetricTile label="Est. cost" value={formatCost(rollup.total_cost)} />
-              <MetricTile label="Turns" value={String(rollup.turn_count)} />
-              <MetricTile label="Tool calls" value={String(rollup.tool_call_count)} />
-              <MetricTile label="Agents" value={String(detail.agents.length)} />
-            </div>
-          )}
+          {/* Lead with OUTCOMES — the first question is "did it extract
+              correctly / anything to fix", not how many tokens it used (E1).
+              Cost/tokens are demoted below the configuration. */}
+          <div style={styles.metricStrip}>
+            <MetricTile
+              label="Checks passing"
+              value={
+                outcomes.graded > 0
+                  ? `${outcomes.passed}/${outcomes.graded}`
+                  : "—"
+              }
+              tone={
+                outcomes.graded === 0
+                  ? "neutral"
+                  : outcomes.passed === outcomes.graded
+                  ? "success"
+                  : "warning"
+              }
+            />
+            <MetricTile
+              label="Needs attention"
+              value={String(outcomes.needsAttention)}
+              tone={outcomes.needsAttention > 0 ? "warning" : "success"}
+            />
+            {outcomes.advisories > 0 && (
+              <MetricTile label="Advisory notes" value={String(outcomes.advisories)} />
+            )}
+            <MetricTile label="Statements" value={String(outcomes.statements)} />
+          </div>
           <h4 style={styles.sectionHeading}>Run configuration</h4>
           <ConfigBlock config={detail.config} />
+          {rollup && (
+            <>
+              <h4 style={styles.sectionHeading}>Performance</h4>
+              <div style={styles.metricStrip}>
+                <MetricTile label="Total tokens" value={rollup.total_tokens.toLocaleString()} />
+                <MetricTile label="Est. cost" value={formatCost(rollup.total_cost)} />
+                <MetricTile label="Turns" value={String(rollup.turn_count)} />
+                <MetricTile label="Tool calls" value={String(rollup.tool_call_count)} />
+                <MetricTile label="Agents" value={String(detail.agents.length)} />
+              </div>
+            </>
+          )}
         </section>
       )}
 
@@ -731,10 +785,22 @@ export function RunDetailView({
 }
 
 /** A single labelled metric in the Overview strip. */
-function MetricTile({ label, value }: { label: string; value: string }) {
+function MetricTile({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  tone?: "neutral" | "success" | "warning";
+}) {
+  const accent =
+    tone === "success" ? pwc.success : tone === "warning" ? pwc.warning : undefined;
   return (
     <div style={styles.metricTile}>
-      <div style={styles.metricValue}>{value}</div>
+      <div style={{ ...styles.metricValue, ...(accent ? { color: accent } : {}) }}>
+        {value}
+      </div>
       <div style={styles.metricLabel}>{label}</div>
     </div>
   );

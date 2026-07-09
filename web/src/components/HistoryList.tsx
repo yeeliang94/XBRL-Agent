@@ -105,7 +105,12 @@ export function HistoryList({
             <th style={styles.th}>When</th>
             <th style={styles.th}>Status</th>
             {/* Gold-standard eval (v16): the run's benchmark accuracy. */}
-            <th style={{ ...styles.th, textAlign: "right" }}>Score</th>
+            <th
+              style={{ ...styles.th, textAlign: "right" }}
+              title="Accuracy vs a benchmark's verified answers — blank unless a benchmark was attached"
+            >
+              Score
+            </th>
             <th style={{ ...styles.th, textAlign: "right" }}>Duration</th>
           </tr>
         </thead>
@@ -206,7 +211,10 @@ export function HistoryList({
                       {Math.round(run.eval_score * 100)}%
                     </span>
                   ) : (
-                    <span style={styles.dim}>—</span>
+                    <span
+                      style={styles.dim}
+                      title="Only scored when the run was graded against a benchmark"
+                    >—</span>
                   )}
                 </td>
                 <td style={{ ...styles.td, textAlign: "right" }}>

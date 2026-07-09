@@ -127,6 +127,12 @@ const styles = {
     overflowY: "auto" as const,
     padding: pwc.space.xl,
   } as React.CSSProperties,
+  headerRow: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+  } as React.CSSProperties,
   heading: {
     fontFamily: pwc.fontHeading,
     fontWeight: pwc.weight.medium,
@@ -134,6 +140,15 @@ const styles = {
     color: pwc.grey900,
     margin: 0,
     marginBottom: pwc.space.md,
+  } as React.CSSProperties,
+  closeX: {
+    border: "none",
+    background: "transparent",
+    color: pwc.grey500,
+    fontSize: 18,
+    lineHeight: 1,
+    cursor: "pointer",
+    padding: pwc.space.xs,
   } as React.CSSProperties,
   sub: {
     fontSize: 13,
@@ -490,7 +505,19 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       aria-label="Fill mTool template"
     >
       <div style={styles.modal}>
-        <h2 style={styles.heading}>Fill mTool template</h2>
+        <div style={styles.headerRow}>
+          <h2 style={styles.heading}>Fill mTool template</h2>
+          {/* Corner close — Esc + scrim-click already close, but a visible ✕
+              is the discoverable affordance (E6). */}
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={styles.closeX}
+          >
+            ✕
+          </button>
+        </div>
         <p style={styles.sub}>
           Upload the empty template you exported from mTool. We fill in this run&apos;s
           figures and written notes and give you back one file, ready to open in mTool
@@ -615,11 +642,16 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 disabled={!file || previewBusy}
                 className={uiClass.btnGhost}
                 style={{ ...ui.buttonGhost, fontSize: 12 }}
+                // Explain why it's inert before a file is chosen, rather than
+                // looking like a silent no-op (E6).
+                title={file ? undefined : "Choose a template file first"}
               >
                 {previewBusy ? "Checking…" : "Check notes against this template"}
               </button>
               <span style={{ color: pwc.grey500, fontSize: 12 }}>
-                Nothing is written — this only shows where each note would go.
+                {file
+                  ? "Nothing is written — this only shows where each note would go."
+                  : "Choose a template file above to enable this."}
               </span>
             </div>
             {previewErr && (
