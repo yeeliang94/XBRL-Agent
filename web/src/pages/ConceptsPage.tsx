@@ -1969,24 +1969,28 @@ function ReviewMetric({
   caption?: string;
   captionTestId?: string;
 }) {
+  // Status is carried by a left rule + the label's dark text on a NEUTRAL
+  // surface — matching the app's alerts (ui.alertWarning) and error banner,
+  // not a full coloured fill. `rule` null keeps the plain all-round border for
+  // the neutral tone. (Design language: status colour is an accent, never a
+  // brand-competing background wash.)
   const palette =
     tone === "accent"
-      ? { bg: pwc.orange50, color: pwc.orange700, border: pwc.orange100 }
+      ? { rule: pwc.orange500, label: pwc.orange700 }
       : tone === "warning"
-      ? { bg: pwc.warningBg, color: pwc.warningText, border: pwc.warningBorder }
+      ? { rule: pwc.warning, label: pwc.warningText }
       : tone === "success"
-      ? { bg: pwc.successBg, color: pwc.successText, border: pwc.successBorder }
-      : { bg: pwc.grey50, color: pwc.grey900, border: pwc.grey200 };
+      ? { rule: pwc.success, label: pwc.successText }
+      : { rule: null as string | null, label: pwc.grey700 };
   return (
     <div
       style={{
         ...styles.metric,
-        background: palette.bg,
-        borderColor: palette.border,
+        ...(palette.rule ? { borderLeft: `3px solid ${palette.rule}` } : {}),
       }}
     >
       <span style={styles.metricValue}>{value}</span>
-      <span style={{ ...styles.metricLabel, color: palette.color }}>{label}</span>
+      <span style={{ ...styles.metricLabel, color: palette.label }}>{label}</span>
       {caption && (
         <span data-testid={captionTestId} style={styles.metricCaption}>
           {caption}
@@ -2627,6 +2631,7 @@ const styles = {
     marginTop: pwc.space.xl,
   } as React.CSSProperties,
   metric: {
+    background: pwc.grey50,
     border: `1px solid ${pwc.grey200}`,
     borderRadius: pwc.radius.lg,
     padding: `${pwc.space.md}px ${pwc.space.lg}px`,
