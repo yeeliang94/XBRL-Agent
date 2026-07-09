@@ -1136,6 +1136,12 @@ describe("ConceptsPage", () => {
     // 1 passed of 2 graded (the not_applicable check is excluded).
     expect(within(strip).getByText("Checks passing")).toBeTruthy();
     expect(within(strip).getByText("1/2")).toBeTruthy();
+    // Design language: the not-all-passing tile carries its status as a left
+    // rule on a NEUTRAL surface, not an amber fill (matches the app's alerts).
+    const card = within(strip).getByText("Checks passing").closest("div")!;
+    const cardStyle = getComputedStyle(card);
+    expect(cardStyle.backgroundColor).toBe("rgb(250, 250, 250)"); // grey50, not warningBg
+    expect(cardStyle.borderLeftColor).toBe("rgb(239, 164, 23)"); // warning left rule
     // The old row-count metrics are gone.
     expect(within(strip).queryByText("Fields shown")).toBeNull();
     expect(within(strip).queryByText("Templates")).toBeNull();
