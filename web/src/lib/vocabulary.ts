@@ -126,12 +126,15 @@ export function subNoteStateLabel(state: string): string {
 /** A few cross-check names read badly even title-cased, so name them directly;
  *  everything else falls through to the generic humanizer. */
 const CROSS_CHECK_LABELS: Record<string, string> = {
+  sofp_balance: "Balance sheet balances (assets = equity + liabilities)",
   socie_to_sofp_equity: "Equity total agrees with the balance sheet",
   sopl_to_socie_profit: "Profit agrees between income statement and equity",
   soci_to_socie_tci: "Total comprehensive income agrees with equity",
   socf_to_sofp_cash: "Closing cash agrees with the balance sheet",
   socf_articulation: "Cash-flow movements reconcile",
   sore_to_sofp_retained_earnings: "Retained earnings agree with the balance sheet",
+  sopl_attribution_footing: "Profit split (owners vs non-controlling) adds up",
+  soci_attribution_footing: "Comprehensive income split (owners vs non-controlling) adds up",
 };
 
 export function crossCheckLabel(name: string): string {

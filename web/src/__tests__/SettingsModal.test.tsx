@@ -220,7 +220,9 @@ describe("SettingsModal — P3 enhancements", () => {
     // "Bruno" jargon.
     expect(screen.getByText(/web address of your organisation/)).toBeInTheDocument();
     expect(screen.getByText(/access key for your organisation/)).toBeInTheDocument();
-    expect(screen.getByText(/e\.g\., openai\.gpt-5\.4/)).toBeInTheDocument();
+    // Model helper (the field is a text input here since this mock returns no
+    // available_models; D4 shows a picker when models are present).
+    expect(screen.getByText(/which ai model runs the extraction/i)).toBeInTheDocument();
   });
 
   test("save blocks invalid values even when user never blurred (e.g., types then hits Enter)", async () => {

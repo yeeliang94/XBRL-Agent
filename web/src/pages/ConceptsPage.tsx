@@ -173,6 +173,11 @@ export function ConceptsPage({
   const isBenchmark = source === "benchmark";
   const effectiveId = isBenchmark ? benchmarkId : runId;
   const [concepts, setConcepts] = useState<ConceptRow[]>([]);
+  // Reporting periods (e.g. "FY2021" / "FY2020") from the run's scout, used to
+  // label the CY / PY column headers with their years (D5). Null when scout
+  // didn't capture them — the headers stay plain "CY" / "PY".
+  const [reportingCy, setReportingCy] = useState<string | null>(null);
+  const [reportingPy, setReportingPy] = useState<string | null>(null);
   const [activeTemplate, setActiveTemplate] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Phase 2 (step 2.10): cross-template search.  We keep the search
@@ -293,6 +298,8 @@ export function ConceptsPage({
       })
       .then((data) => {
         setConcepts(data.concepts || []);
+        setReportingCy(data.reporting_period_cy ?? null);
+        setReportingPy(data.reporting_period_py ?? null);
         const firstTemplate = (data.concepts || [])[0]?.template_id || null;
         setActiveTemplate(firstTemplate);
       })
@@ -1116,6 +1123,8 @@ export function ConceptsPage({
             onSelectRow={setSelectedConceptUuid}
             activeScope={activeScope}
             showPeriods={hasPyFacts}
+            cyLabel={reportingCy ? `CY (${reportingCy})` : "CY"}
+            pyLabel={reportingPy ? `PY (${reportingPy})` : "PY"}
           />
         )}
       </main>
@@ -1328,6 +1337,8 @@ function ConceptTree({
   onSelectRow,
   activeScope,
   showPeriods,
+  cyLabel = "CY",
+  pyLabel = "PY",
 }: {
   rows: ConceptRow[];
   onEditValue: EditValueFn;
@@ -1336,6 +1347,9 @@ function ConceptTree({
   onSelectRow: (uuid: string) => void;
   activeScope: "Company" | "Group";
   showPeriods: boolean;
+  // Year-labelled column headers ("CY (FY2021)"); default to plain codes.
+  cyLabel?: string;
+  pyLabel?: string;
 }) {
   const depthByUuid = new Map<string, number>();
   for (const r of rows) {
@@ -1358,8 +1372,8 @@ function ConceptTree({
             codename — plain-language rule (CLAUDE.md "talk like a product
             person"). Numeric column headers right-align over their figures. */}
         <div style={styles.headerCell}>Line item</div>
-        <div style={styles.headerCellNumeric}>{showPeriods ? "CY" : "Value"}</div>
-        {showPeriods && <div style={styles.headerCellNumeric}>PY</div>}
+        <div style={styles.headerCellNumeric}>{showPeriods ? cyLabel : "Value"}</div>
+        {showPeriods && <div style={styles.headerCellNumeric}>{pyLabel}</div>}
         <div style={styles.headerCell}>State</div>
         <div style={styles.headerCell}>Source</div>
       </div>

@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
+import { templateGroupLabel, templatePickerLabel } from "../lib/sheetLabels";
 
 // ---------------------------------------------------------------------------
 // TemplateSettingsPage — Phase 5.1 global template settings.
@@ -37,6 +38,24 @@ export function TemplateSettingsPage() {
   const [concepts, setConcepts] = useState<TemplateConcept[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Group templates by "MFRS · Company" etc. so the picker uses <optgroup>
+  // with human labels instead of a flat list of 45 cryptic ids (D3). Groups
+  // and options keep the templates' incoming order (already reading-order).
+  const templateGroups = useMemo(() => {
+    const groups: { label: string; templates: TemplateRow[] }[] = [];
+    const byLabel = new Map<string, TemplateRow[]>();
+    for (const t of templates) {
+      const g = templateGroupLabel(t.template_id);
+      if (!byLabel.has(g)) {
+        const bucket: TemplateRow[] = [];
+        byLabel.set(g, bucket);
+        groups.push({ label: g, templates: bucket });
+      }
+      byLabel.get(g)!.push(t);
+    }
+    return groups;
+  }, [templates]);
 
   // Load the template list once.
   useEffect(() => {
@@ -133,10 +152,18 @@ export function TemplateSettingsPage() {
           onChange={(e) => setActiveTemplate(e.target.value || null)}
           style={ui.select}
         >
-          {templates.map((t) => (
-            <option key={t.template_id} value={t.template_id}>
-              {t.template_id}
-            </option>
+          {templateGroups.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.templates.map((t) => (
+                <option
+                  key={t.template_id}
+                  value={t.template_id}
+                  title={t.template_id}
+                >
+                  {templatePickerLabel(t.template_id)}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </div>

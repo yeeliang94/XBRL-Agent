@@ -235,7 +235,8 @@ describe("RunDetailView", () => {
     // use getAllByText to assert presence without asserting uniqueness.
     expect(screen.getAllByText(/SOFP/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/SOPL/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/CuNonCu/).length).toBeGreaterThan(0);
+    // Variant renders in plain language now (D2), not the raw "CuNonCu" code.
+    expect(screen.getAllByText(/Current \/ Non-current/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/gemini-3-flash-preview/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/scout/i).length).toBeGreaterThan(0);
   });
@@ -295,7 +296,8 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/cross-checks/i);
-    expect(screen.getByText("sofp_balance")).toBeTruthy();
+    // Check name renders in plain language (D1); raw id is the title tooltip.
+    expect(screen.getByTitle("sofp_balance")).toBeTruthy();
     expect(screen.getByText("Passed")).toBeTruthy();
   });
 

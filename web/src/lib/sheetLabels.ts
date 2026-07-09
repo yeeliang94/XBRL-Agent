@@ -91,3 +91,63 @@ const NOTES_SHEET_LABELS: Record<string, string> = {
 export function notesSheetDisplayName(sheet: string): string {
   return NOTES_SHEET_LABELS[sheet] ?? sheet;
 }
+
+// --- Field-labels template picker (D3) --------------------------------------
+// The picker used to list raw ids like "mfrs-company-notes-issuedcapital-v1".
+// These helpers turn an id into a readable label + a Standard·Level group so
+// the picker can use <optgroup> and human option text (raw id kept as a
+// tooltip). Unknown shapes fall back to the raw id so nothing disappears.
+
+// Lowercase variant tokens as they appear INSIDE a template_id (the
+// vocabulary.ts VARIANT_LABELS map is keyed on the CamelCase API codes, which
+// don't match the id casing — so the picker needs its own lowercase map).
+const TEMPLATE_VARIANT_LABELS: Record<string, string> = {
+  cunoncu: "Current / Non-current",
+  orderofliquidity: "Order of liquidity",
+  function: "By function",
+  nature: "By nature",
+  beforetax: "Before tax",
+  netoftax: "Net of tax",
+  direct: "Direct method",
+  indirect: "Indirect method",
+};
+
+// Notes template tokens ("notes-<token>-v1") → plain English.
+const TEMPLATE_NOTES_NAMES: Record<string, string> = {
+  corporateinfo: "Corporate Information",
+  summaryofaccpol: "Summary of Accounting Policies",
+  listofnotes: "List of Notes",
+  issuedcapital: "Issued Capital",
+  relatedpartytran: "Related Party Transactions",
+};
+
+const TEMPLATE_ID_RE = /^(mfrs|mpers)-(company|group)-(.+)-v\d+$/;
+
+function titleCase(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** "MFRS · Company" group heading for a template_id (or "Other" if unparseable). */
+export function templateGroupLabel(templateId: string): string {
+  const m = TEMPLATE_ID_RE.exec(templateId);
+  if (!m) return "Other";
+  return `${m[1].toUpperCase()} · ${titleCase(m[2])}`;
+}
+
+/** Human label for a template_id: "SOFP — Order of liquidity",
+ *  "Notes — Corporate Information", "SOCIE". Falls back to the raw id. */
+export function templatePickerLabel(templateId: string): string {
+  const m = TEMPLATE_ID_RE.exec(templateId);
+  if (!m) return templateId;
+  const rest = m[3];
+  if (rest.startsWith("notes-")) {
+    const token = rest.slice("notes-".length);
+    return `Notes — ${TEMPLATE_NOTES_NAMES[token] ?? titleCase(token)}`;
+  }
+  const dash = rest.indexOf("-");
+  const code = dash === -1 ? rest : rest.slice(0, dash);
+  const variant = dash === -1 ? null : rest.slice(dash + 1);
+  const codeLabel = code === "sore" ? "SoRE" : code.toUpperCase();
+  if (!variant) return codeLabel;
+  return `${codeLabel} — ${TEMPLATE_VARIANT_LABELS[variant] ?? titleCase(variant)}`;
+}

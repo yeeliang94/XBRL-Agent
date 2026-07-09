@@ -16,11 +16,13 @@ describe("ValidatorTab", () => {
   test("renders all 4 status states", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
-    // All check names visible
-    expect(screen.getByText("sofp_balance")).toBeTruthy();
-    expect(screen.getByText("sopl_to_socie_profit")).toBeTruthy();
-    expect(screen.getByText("soci_to_socie_tci")).toBeTruthy();
-    expect(screen.getByText("socf_to_sofp_cash")).toBeTruthy();
+    // Check names render as plain language (D1); the raw snake_case id stays
+    // available as the cell's title tooltip.
+    expect(screen.getByText(/balance sheet balances/i)).toBeTruthy();
+    expect(screen.getByText(/profit agrees between income statement and equity/i)).toBeTruthy();
+    expect(screen.getByText(/total comprehensive income agrees with equity/i)).toBeTruthy();
+    expect(screen.getByText(/closing cash agrees with the balance sheet/i)).toBeTruthy();
+    expect(screen.getByTitle("sofp_balance")).toBeTruthy();
   });
 
   test("clicking a check with a target calls onSelectTarget (Step 8)", () => {
@@ -46,14 +48,14 @@ describe("ValidatorTab", () => {
   test("passed row shows pass badge", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
-    const passedRow = screen.getByText("sofp_balance").closest("tr")!;
+    const passedRow = screen.getByTitle("sofp_balance").closest("tr")!;
     expect(passedRow.textContent).toContain("Passed");
   });
 
   test("failed row shows fail badge with expected/actual/diff", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
-    const failedRow = screen.getByText("sopl_to_socie_profit").closest("tr")!;
+    const failedRow = screen.getByTitle("sopl_to_socie_profit").closest("tr")!;
     expect(failedRow.textContent).toContain("Failed");
     expect(failedRow.textContent).toContain("500");
     expect(failedRow.textContent).toContain("480");
@@ -63,7 +65,7 @@ describe("ValidatorTab", () => {
   test("pending row still shows Pending status text", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
-    const pendingRow = screen.getByText("soci_to_socie_tci").closest("tr")!;
+    const pendingRow = screen.getByTitle("soci_to_socie_tci").closest("tr")!;
     expect(pendingRow.textContent).toContain("Pending");
   });
 
@@ -85,7 +87,7 @@ describe("ValidatorTab", () => {
   test("not_applicable row is styled muted", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
-    const naRow = screen.getByText("socf_to_sofp_cash").closest("tr")!;
+    const naRow = screen.getByTitle("socf_to_sofp_cash").closest("tr")!;
     expect(naRow.textContent).toContain("N/A");
   });
 
