@@ -93,17 +93,21 @@ export function HistoryList({
             timestamp/status columns. `table-layout: fixed` plus <col>
             widths makes the layout predictable regardless of content. */}
         <colgroup>
-          <col style={{ width: "40%" }} />
-          <col style={{ width: "16%" }} />
+          <col style={{ width: "34%" }} />
           <col style={{ width: "14%" }} />
-          <col style={{ width: "14%" }} />
+          <col style={{ width: "12%" }} />
           <col style={{ width: "16%" }} />
+          <col style={{ width: "10%" }} />
+          <col style={{ width: "14%" }} />
         </colgroup>
         <thead>
           <tr>
             <th style={styles.th}>Filename</th>
             <th style={styles.th}>When</th>
             <th style={styles.th}>Status</th>
+            {/* The filter has a Standard control but the list had no matching
+                column; this carries the run's standard + level (E2). */}
+            <th style={styles.th}>Standard</th>
             {/* Gold-standard eval (v16): the run's benchmark accuracy. */}
             <th
               style={{ ...styles.th, textAlign: "right" }}
@@ -169,21 +173,8 @@ export function HistoryList({
                   >
                     {run.pdf_filename}
                   </a>
-                  {run.filing_level === "group" && (
-                    // Category tag (not a status) — outline pill, info-blue
-                    // border, neutral label. Dot-less; the dot connotes state.
-                    <span style={{ ...styles.inlineBadge, borderColor: pwc.info }}>
-                      Group
-                    </span>
-                  )}
-                  {run.filing_standard === "mpers" && (
-                    // MPERS-only tag. Default (mfrs) is implied — a badge on
-                    // every row would be noise. Brand-orange border to stay
-                    // distinct from the blue Group tag right next to it.
-                    <span style={{ ...styles.inlineBadge, borderColor: pwc.orange500 }}>
-                      MPERS
-                    </span>
-                  )}
+                  {/* Standard + level moved to their own column (E2); only the
+                      denomination tag stays inline (a different axis). */}
                   {run.denomination && run.denomination !== "thousands" && (
                     // Non-default denomination only. "thousands" (RM '000) is
                     // the common case and implied; a tag on every row is noise.
@@ -199,6 +190,13 @@ export function HistoryList({
                   <span style={{ ...styles.badge, borderColor: display.accent }}>
                     <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
                     {display.label}
+                  </span>
+                </td>
+                <td style={styles.td}>
+                  <span style={styles.dim}>
+                    {(run.filing_standard ?? "mfrs").toUpperCase()}
+                    {" · "}
+                    {run.filing_level === "group" ? "Group" : "Company"}
                   </span>
                 </td>
                 <td style={{ ...styles.td, textAlign: "right" }}>

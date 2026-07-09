@@ -61,6 +61,27 @@ describe("HistoryPage", () => {
     });
   });
 
+  test("drafts go into their own collapsed section, not the main list (E2)", async () => {
+    fetchRuns.mockResolvedValue({
+      runs: [
+        baseRun, // completed
+        { ...baseRun, id: 2, pdf_filename: "DRAFT-A.pdf", status: "draft" },
+        { ...baseRun, id: 3, pdf_filename: "DRAFT-B.pdf", status: "draft" },
+      ],
+      total: 3,
+      limit: 50,
+      offset: 0,
+    });
+    render(<HistoryPage />);
+    // The drafts section exists and is labelled with its count.
+    const section = await waitFor(() => screen.getByTestId("drafts-section"));
+    expect(section.textContent).toContain("Drafts — not started (2)");
+    // The completed run is in the MAIN list (the first table), the drafts
+    // live inside the <details> section.
+    expect(within(section).getByText("DRAFT-A.pdf")).toBeTruthy();
+    expect(within(section).queryByText("FINCO-Audited-2021.pdf")).toBeNull();
+  });
+
   test("typing in the search box re-fetches with the new q (debounced)", async () => {
     // This test uses fake timers because we need deterministic control over
     // the 300ms HistoryFilters debounce. waitFor loops need timer advances.

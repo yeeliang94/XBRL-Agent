@@ -256,29 +256,31 @@ describe("HistoryList", () => {
     expect(onRunSelected).not.toHaveBeenCalled();
   });
 
-  // Phase 8 MPERS wiring: MPERS badge on the filename cell.
-  test("renders MPERS badge when filing_standard is mpers", () => {
+  // E2: standard + level live in their own Standard column (was an inline
+  // filename badge). The column mirrors the Standard filter.
+  test("Standard column shows MPERS · level when filing_standard is mpers", () => {
     const runs: RunSummaryJson[] = [
-      { ...makeRuns()[0], filing_standard: "mpers" },
+      { ...makeRuns()[0], filing_standard: "mpers", filing_level: "group" },
     ];
     render(<HistoryList runs={runs} onRunSelected={() => {}} />);
     const row = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
-    expect(row.textContent).toContain("MPERS");
+    expect(row.textContent).toContain("MPERS · Group");
   });
 
-  test("no MPERS badge when filing_standard is mfrs", () => {
+  test("Standard column shows MFRS for an mfrs run, never MPERS", () => {
     const runs: RunSummaryJson[] = [
       { ...makeRuns()[0], filing_standard: "mfrs" },
     ];
     render(<HistoryList runs={runs} onRunSelected={() => {}} />);
     const row = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
+    expect(row.textContent).toContain("MFRS");
     expect(row.textContent).not.toContain("MPERS");
   });
 
-  test("no MPERS badge on legacy runs without filing_standard field", () => {
-    // Legacy payload — field missing entirely. Defaults to MFRS, so no badge.
+  test("legacy runs without filing_standard default to MFRS · Company", () => {
     render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
     const row = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
+    expect(row.textContent).toContain("MFRS · Company");
     expect(row.textContent).not.toContain("MPERS");
   });
 
