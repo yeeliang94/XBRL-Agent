@@ -503,8 +503,12 @@ export function RunDetailView({
             type="button"
             onClick={() => setMtoolOpen(true)}
             disabled={!canFillMtool}
-            className={uiClass.btnGhost}
-            style={ui.buttonGhost}
+            // Outline secondary, NOT a ghost/text link: the header actions
+            // should share one visual language (filled primary + outline
+            // secondaries). A bare orange text label here read as a hyperlink
+            // sitting between two buttons (run-168 design critique).
+            className={uiClass.btnSecondary}
+            style={ui.buttonSecondary}
             title={
               canFillMtool
                 ? "Fill an mTool template from this run's figures"
@@ -513,6 +517,9 @@ export function RunDetailView({
           >
             Fill mTool template
           </button>
+          {/* Hairline divider so the destructive action doesn't sit shoulder
+              to shoulder with the most-clicked buttons. */}
+          <span aria-hidden="true" style={styles.actionsDivider} />
           <button
             type="button"
             onClick={handleDelete}
@@ -757,7 +764,15 @@ const styles = {
   } as React.CSSProperties,
   actions: {
     display: "flex",
+    alignItems: "center",
     gap: pwc.space.sm,
+  } as React.CSSProperties,
+  // Separates the destructive Delete from the everyday actions.
+  actionsDivider: {
+    alignSelf: "stretch",
+    width: 1,
+    background: pwc.grey200,
+    margin: `0 ${pwc.space.xs}px`,
   } as React.CSSProperties,
   // Tab bar: a thin row of buttons with the active one underlined in the
   // brand orange. Data-dense chrome — keep it tight, not airy.

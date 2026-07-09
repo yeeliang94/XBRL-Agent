@@ -25,9 +25,26 @@ export interface PdfSourcePaneProps {
   // Total pages, if the parent already knows it. Otherwise the pane fetches
   // it once so the manual jumper and free paging can bound themselves.
   totalPages?: number;
+  // True when the pane sits inside a workspace column that already carries
+  // its own "Source PDF" header + Hide control (ConceptsPage). Suppresses the
+  // pane's internal title and Show/Hide toggle so the same label and the same
+  // action don't appear twice in one panel (run-168 design critique).
+  embedded?: boolean;
+  // Whether anything is currently selected in the parent surface. When false
+  // and there are no cited pages, the pane shows a neutral "select a figure"
+  // prompt instead of "No source page recorded" — which read as an error
+  // before the user had done anything. Defaults true (existing callers only
+  // render the pane once a target is selected).
+  hasSelection?: boolean;
 }
 
-export function PdfSourcePane({ runId, pages, totalPages }: PdfSourcePaneProps) {
+export function PdfSourcePane({
+  runId,
+  pages,
+  totalPages,
+  embedded = false,
+  hasSelection = true,
+}: PdfSourcePaneProps) {
   // Resolved page count: prop wins, else fetched. null = unknown / no PDF.
   const [resolvedTotal, setResolvedTotal] = useState<number | null>(
     totalPages ?? null
@@ -124,11 +141,16 @@ export function PdfSourcePane({ runId, pages, totalPages }: PdfSourcePaneProps) 
     setCurrent(clamped);
   }
 
+  // Embedded panes have no internal Show/Hide toggle — the workspace column
+  // header owns hiding — so their content must never be stuck collapsed by
+  // the narrow-viewport default.
+  const isCollapsed = embedded ? false : collapsed;
+
   // No source PDF for this run — show a quiet empty state, not an error.
   if (!hasPdf) {
     return (
       <section style={styles.panel} data-testid="pdf-source-pane">
-        <h2 style={styles.title}>Source PDF</h2>
+        {!embedded && <h2 style={styles.title}>Source PDF</h2>}
         <p style={styles.muted}>
           No source PDF is stored for this run, so side-by-side verification
           isn't available here.
@@ -139,10 +161,10 @@ export function PdfSourcePane({ runId, pages, totalPages }: PdfSourcePaneProps) 
 
   return (
     <section style={styles.panel} data-testid="pdf-source-pane">
-      <div style={styles.headerRow}>
-        <h2 style={styles.title}>Source PDF</h2>
+      <div style={embedded ? styles.headerRowEmbedded : styles.headerRow}>
+        {!embedded && <h2 style={styles.title}>Source PDF</h2>}
         <div style={styles.zoomGroup}>
-          {!collapsed && (
+          {!isCollapsed && (
             <>
               <button
                 type="button"
@@ -164,26 +186,33 @@ export function PdfSourcePane({ runId, pages, totalPages }: PdfSourcePaneProps) 
               </button>
             </>
           )}
-          <button
-            type="button"
-            data-testid="pdf-collapse-toggle"
-            onClick={() => setCollapsed((c) => !c)}
-            style={styles.iconButton}
-            title={collapsed ? "Show source page" : "Hide source page"}
-          >
-            {collapsed ? "Show" : "Hide"}
-          </button>
+          {!embedded && (
+            <button
+              type="button"
+              data-testid="pdf-collapse-toggle"
+              onClick={() => setCollapsed((c) => !c)}
+              style={styles.iconButton}
+              title={collapsed ? "Show source page" : "Hide source page"}
+            >
+              {collapsed ? "Show" : "Hide"}
+            </button>
+          )}
         </div>
       </div>
 
-      {collapsed ? null : (
+      {isCollapsed ? null : (
         <>
 
-      {pages.length === 0 && (
-        <p style={styles.mutedSmall} data-testid="pdf-no-evidence">
-          No source page recorded for this value — jump to a page manually.
-        </p>
-      )}
+      {pages.length === 0 &&
+        (hasSelection ? (
+          <p style={styles.mutedSmall} data-testid="pdf-no-evidence">
+            No source page recorded for this value — jump to a page manually.
+          </p>
+        ) : (
+          <p style={styles.mutedSmall} data-testid="pdf-no-selection">
+            Select a figure or note to see the page it came from.
+          </p>
+        ))}
 
       {pages.length > 0 && (
         <div style={styles.chipRow} data-testid="pdf-cited-chips">
@@ -290,6 +319,13 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
+  } as React.CSSProperties,
+  // Embedded (workspace) variant: no title on the left, so the zoom controls
+  // right-align on their own row.
+  headerRowEmbedded: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
   } as React.CSSProperties,
   title: {
     margin: 0,

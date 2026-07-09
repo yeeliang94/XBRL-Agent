@@ -63,6 +63,28 @@ describe("PdfSourcePane", () => {
     expect(screen.queryByTestId("pdf-page-image")).not.toBeNull();
   });
 
+  test("no selection → neutral prompt instead of 'no source page recorded'", () => {
+    // "No source page recorded for this value" read as an error before the
+    // user had selected anything (run-168 design critique) — with
+    // hasSelection={false} the pane invites a selection instead.
+    render(
+      <PdfSourcePane runId={5} pages={[]} totalPages={50} hasSelection={false} />,
+    );
+    expect(screen.queryByTestId("pdf-no-evidence")).toBeNull();
+    expect(screen.getByTestId("pdf-no-selection")).toBeTruthy();
+  });
+
+  test("embedded mode drops the duplicate title and Hide toggle", () => {
+    // Inside the review workspace the column header already says "Source PDF"
+    // and owns hiding — the pane must not repeat either (run-168 design
+    // critique: duplicated label + two Hide controls in one panel).
+    render(<PdfSourcePane runId={7} pages={[14]} totalPages={50} embedded />);
+    expect(screen.queryByText("Source PDF")).toBeNull();
+    expect(screen.queryByTestId("pdf-collapse-toggle")).toBeNull();
+    // Content still renders (embedded panes are never stuck collapsed).
+    expect(screen.queryByTestId("pdf-page-image")).not.toBeNull();
+  });
+
   test("shows the empty state when the run has no source PDF", async () => {
     // No totalPages prop → the pane fetches the count; a null result means
     // no stored PDF.

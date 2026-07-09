@@ -1,5 +1,10 @@
 import { describe, test, expect } from "vitest";
-import { templateDisplayName, notesSheetDisplayName } from "../lib/sheetLabels";
+import {
+  templateDisplayName,
+  templateSubtitle,
+  templateSortKey,
+  notesSheetDisplayName,
+} from "../lib/sheetLabels";
 
 describe("templateDisplayName", () => {
   test("maps each face-statement variant to its short code", () => {
@@ -19,6 +24,47 @@ describe("templateDisplayName", () => {
   test("falls back to the raw id for an unrecognised template", () => {
     expect(templateDisplayName("mfrs-company-mystery-v1")).toBe(
       "mfrs-company-mystery-v1",
+    );
+  });
+});
+
+describe("templateSubtitle", () => {
+  test("glosses each statement code in plain English", () => {
+    expect(templateSubtitle("mfrs-company-sofp-cunoncu-v1")).toBe("Balance sheet");
+    expect(templateSubtitle("mfrs-company-sopl-function-v1")).toBe("Income statement");
+    expect(templateSubtitle("mfrs-company-soci-netoftax-v1")).toBe("Comprehensive income");
+    expect(templateSubtitle("mfrs-company-socie-v1")).toBe("Changes in equity");
+    expect(templateSubtitle("mpers-group-sore-v1")).toBe("Retained earnings");
+    expect(templateSubtitle("mfrs-company-socf-indirect-v1")).toBe("Cash flows");
+  });
+
+  test("returns null for an unrecognised template", () => {
+    expect(templateSubtitle("mfrs-company-mystery-v1")).toBeNull();
+  });
+});
+
+describe("templateSortKey", () => {
+  test("orders statements in annual-report reading order", () => {
+    const ids = [
+      "mfrs-company-socf-indirect-v1",
+      "mfrs-company-socie-v1",
+      "mfrs-company-sofp-cunoncu-v1",
+      "mfrs-company-soci-netoftax-v1",
+      "mfrs-company-sopl-function-v1",
+    ];
+    const sorted = [...ids].sort((a, b) => templateSortKey(a) - templateSortKey(b));
+    expect(sorted.map(templateDisplayName)).toEqual([
+      "SOFP",
+      "SOPL",
+      "SOCI",
+      "SOCIE",
+      "SOCF",
+    ]);
+  });
+
+  test("unrecognised templates sort last", () => {
+    expect(templateSortKey("mfrs-company-mystery-v1")).toBeGreaterThan(
+      templateSortKey("mfrs-company-socf-indirect-v1"),
     );
   });
 });

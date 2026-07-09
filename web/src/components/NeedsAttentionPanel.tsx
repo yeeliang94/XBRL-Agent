@@ -61,51 +61,66 @@ export function NeedsAttentionPanel({
       </div>
 
       {failingChecks.length > 0 && (
-        <ul style={styles.list} aria-label="Checks that need attention">
-          {failingChecks.map((c, i) => {
-            const canJump = !!c.target_sheet && c.target_row != null;
-            const dot = c.status === "warning" ? pwc.warning : pwc.error;
-            return (
-              <li key={`chk-${c.name}-${i}`}>
-                <button
-                  type="button"
-                  style={{ ...styles.item, cursor: canJump ? "pointer" : "default" }}
-                  disabled={!canJump}
-                  onClick={() =>
-                    canJump && onSelectCheck(c.target_sheet as string, c.target_row as number)
-                  }
-                  data-testid={`attention-check-${i}`}
-                >
-                  <span aria-hidden="true" style={ui.badgeDot(dot)} />
-                  <span style={styles.itemText}>
-                    {c.message || c.name}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <div>
+          {/* Visible group heading — the coloured dots alone carried both the
+              category and the severity, which fails for colour-blind readers
+              and forces everyone else to guess (run-168 design critique). */}
+          <div style={styles.subHead}>Checks not passing ({failingChecks.length})</div>
+          <ul style={styles.list} aria-label="Checks that need attention">
+            {failingChecks.map((c, i) => {
+              const canJump = !!c.target_sheet && c.target_row != null;
+              const warning = c.status === "warning";
+              const dot = warning ? pwc.warning : pwc.error;
+              return (
+                <li key={`chk-${c.name}-${i}`}>
+                  <button
+                    type="button"
+                    style={{ ...styles.item, cursor: canJump ? "pointer" : "default" }}
+                    disabled={!canJump}
+                    onClick={() =>
+                      canJump && onSelectCheck(c.target_sheet as string, c.target_row as number)
+                    }
+                    data-testid={`attention-check-${i}`}
+                  >
+                    <span aria-hidden="true" style={styles.itemDot(dot)} />
+                    <span style={styles.itemText}>
+                      {/* Severity in words, so colour isn't the only signal. */}
+                      <span style={warning ? styles.severityWarning : styles.severityError}>
+                        {warning ? "Warning" : "Failed"}
+                      </span>
+                      {" · "}
+                      {c.message || c.name}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
 
       {coverageGaps.length > 0 && (
-        <ul style={styles.list} aria-label="Notes that need attention">
-          {coverageGaps.map((row) => (
-            <li key={`gap-${row.note_num}`}>
-              <button
-                type="button"
-                style={{ ...styles.item, cursor: "pointer" }}
-                onClick={() => onSelectNote(row)}
-                data-testid={`attention-note-${row.note_num}`}
-              >
-                <span aria-hidden="true" style={ui.badgeDot(pwc.error)} />
-                <span style={styles.itemText}>
-                  Note {row.note_num}
-                  {row.title ? `: ${row.title}` : ""} — not placed
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div>
+          <div style={styles.subHead}>Notes not placed ({coverageGaps.length})</div>
+          <ul style={styles.list} aria-label="Notes that need attention">
+            {coverageGaps.map((row) => (
+              <li key={`gap-${row.note_num}`}>
+                <button
+                  type="button"
+                  style={{ ...styles.item, cursor: "pointer" }}
+                  onClick={() => onSelectNote(row)}
+                  data-testid={`attention-note-${row.note_num}`}
+                >
+                  <span aria-hidden="true" style={styles.itemDot(pwc.error)} />
+                  <span style={styles.itemText}>
+                    Note {row.note_num}
+                    {row.title ? `: ${row.title}` : ""} — not placed
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {openConflicts > 0 && (
@@ -146,8 +161,10 @@ const styles = {
     gap: 2,
   } as const,
   item: {
+    // Top-aligned so the dot sits on the FIRST line of a wrapped message
+    // instead of floating mid-paragraph.
     display: "flex",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: pwc.space.sm,
     width: "100%",
     background: "transparent",
@@ -159,9 +176,23 @@ const styles = {
     fontSize: 13,
     color: pwc.grey800,
   } as const,
+  // Wraps in full — no ellipsis. A finding the reviewer can't read in full is
+  // a finding they can't act on (run-168 design critique).
   itemText: {
-    overflow: "hidden",
-    textOverflow: "ellipsis",
+    minWidth: 0,
+    lineHeight: 1.45,
+    overflowWrap: "anywhere" as const,
+  } as const,
+  // Badge dot nudged down to optically centre on the first text line.
+  itemDot: (color: string) =>
+    ({ ...ui.badgeDot(color), marginTop: 5 }) as React.CSSProperties,
+  severityError: {
+    fontWeight: 600,
+    color: pwc.errorText,
+  } as const,
+  severityWarning: {
+    fontWeight: 600,
+    color: pwc.warningText,
   } as const,
   conflicts: {
     marginTop: pwc.space.xs,

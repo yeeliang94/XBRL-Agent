@@ -816,6 +816,60 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
   });
 
+  test("page-less notes cell reads as selected-without-evidence, not as no selection", async () => {
+    // Peer-review finding: selection used to be inferred from the reported
+    // page list, so focusing a notes cell with no source_pages looked like
+    // "nothing selected" (or left the previous note's pages up). Selection is
+    // now tracked separately: before any focus the pane invites a selection;
+    // after focusing a page-less cell it states no page was recorded.
+    mockFetch((url) => {
+      if (url.includes("/notes_cells"))
+        return {
+          sheets: [
+            {
+              sheet: "Notes-CI",
+              rows: [
+                {
+                  row: 4,
+                  label: "No-pages note",
+                  html: "<p>Something</p>",
+                  evidence: null,
+                  source_pages: [],
+                  updated_at: "2026-04-24T10:00:00Z",
+                },
+              ],
+            },
+          ],
+        };
+      if (url.includes("/pdf/info")) return { pages: 26 };
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    const { container } = render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
+    // No cell focused yet → neutral prompt, not the "no source page" notice.
+    await waitFor(() => screen.getByTestId("pdf-no-selection"));
+    expect(screen.queryByTestId("pdf-no-evidence")).toBeNull();
+    // Expand the sheet and focus its (page-less) cell.
+    screen.getAllByTestId("sheet-title").forEach((t) => {
+      const btn = t.closest("button");
+      if (btn) fireEvent.click(btn);
+    });
+    const row = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>(
+        '[data-testid="notes-review-row"]',
+      );
+      if (!el) throw new Error("row not rendered yet");
+      return el;
+    });
+    fireEvent.mouseDown(row);
+    // Selected, but genuinely page-less → the honest notice, no stale pages.
+    await waitFor(() => screen.getByTestId("pdf-no-evidence"));
+    expect(screen.queryByTestId("pdf-no-selection")).toBeNull();
+  });
+
   test("notes view hides the whole Review-controls toolbar, not just its contents", async () => {
     // Run-168 QA fix: the toolbar card used to keep rendering with both
     // children (Search + Entity toggle) hidden, painting an empty white
@@ -1039,17 +1093,85 @@ describe("ConceptsPage", () => {
     expect(screen.getByText("Cell")).toBeTruthy();
   });
 
-  test("renders a Generate final Excel link to the download endpoint", async () => {
+  test("does NOT render its own Download button (the run header owns the single CTA)", async () => {
+    // Two identical primary "Download filled Excel" buttons on one screen
+    // (run header + workspace header) made users ask whether they differ —
+    // the workspace copy was removed (run-168 design critique).
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    const link = (await waitFor(() =>
-      screen.getByTestId("generate-final-excel")
-    )) as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe("/api/runs/42/download/filled");
+    await waitFor(() => screen.getByTestId("recheck-btn"));
+    expect(screen.queryByTestId("generate-final-excel")).toBeNull();
+  });
+
+  test("sheet navigator lists statements in reading order, not backend order", async () => {
+    // Backend order here is SOCF before SOFP (what an alphabetical template
+    // scan produces); the navigator must re-order to the annual-report
+    // sequence — balance sheet first, cash flows last.
+    const socfFirst = {
+      run_id: 42,
+      concepts: [
+        {
+          ...sampleConcepts.concepts[1],
+          concept_uuid: "socf-leaf",
+          render_sheet: "SOCF-Indirect",
+          template_id: "mfrs-company-socf-indirect-v1",
+        },
+        ...sampleConcepts.concepts,
+      ],
+    };
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return socfFirst;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    const nav = await waitFor(() => screen.getByTestId("sheet-navigator"));
+    const html = nav.innerHTML;
+    expect(html.indexOf("sheet-nav-mfrs-company-sofp-cunoncu-v1")).toBeLessThan(
+      html.indexOf("sheet-nav-mfrs-company-socf-indirect-v1")
+    );
+  });
+
+  test("sheet navigator glosses each statement acronym in plain English", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    const nav = await waitFor(() => screen.getByTestId("sheet-navigator"));
+    expect(within(nav).getByText("Balance sheet")).toBeTruthy();
+  });
+
+  test("a mandatory LEAF with no value carries a visible 'Required' explanation", async () => {
+    const withMandatory = {
+      run_id: 42,
+      concepts: [
+        ...sampleConcepts.concepts,
+        {
+          ...sampleConcepts.concepts[1],
+          concept_uuid: "mand-1",
+          canonical_label: "*Cash and cash equivalents",
+          render_row: 12,
+          value: null,
+          value_status: null,
+          source: null,
+        },
+      ],
+    };
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return withMandatory;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("required-chip-mand-1"));
+    // A filled leaf gets no chip.
+    expect(screen.queryByTestId("required-chip-leaf-1")).toBeNull();
   });
 
   test("Re-run checks button summarises cross-check results", async () => {

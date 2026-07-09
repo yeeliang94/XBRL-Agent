@@ -119,11 +119,13 @@ export interface NotesReviewTabProps {
    *  bumps on every click so re-selecting the same cell re-scrolls. null = no
    *  cell focus. */
   focusCell?: { sheet: string; row: number; key: number } | null;
-  /** Fired when the reviewer focuses (clicks / tabs into) a notes cell, with
-   *  the PDF pages that cell was extracted from (`NotesCell.source_pages`). The
-   *  workspace uses it to drive the Source PDF pane so a note and its source
-   *  page sit side by side, the way a face figure already does. Optional — the
-   *  standalone Notes tab renders identically without it. */
+  /** Fired on EVERY cell focus (click / tab into), with the PDF pages that
+   *  cell was extracted from (`NotesCell.source_pages`) — an EMPTY array when
+   *  the cell has none, so the caller can clear stale pages and mark the
+   *  selection as "no source page recorded". The workspace uses it to drive
+   *  the Source PDF pane so a note and its source page sit side by side, the
+   *  way a face figure already does. Optional — the standalone Notes tab
+   *  renders identically without it. */
   onActiveCellPages?: (pages: number[]) => void;
 }
 
@@ -1056,7 +1058,13 @@ function reportCellPages(
   pages: number[] | undefined,
   cb?: (pages: number[]) => void,
 ) {
-  if (pages && pages.length > 0) cb?.(pages);
+  // Always report — INCLUDING an empty list. The old guard (only report
+  // non-empty) left the PREVIOUS note's pages showing when a page-less cell
+  // was focused, silently mislabelling them as this cell's source. The
+  // workspace tracks "a cell is selected" separately, so an empty report now
+  // renders the honest "No source page recorded" state instead of a stale
+  // page (run-168 peer-review finding).
+  cb?.(pages ?? []);
 }
 
 // Cell row — label + evidence on the left, editor + actions on the right.
