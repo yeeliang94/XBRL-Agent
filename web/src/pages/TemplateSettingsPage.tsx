@@ -36,8 +36,19 @@ export function TemplateSettingsPage() {
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<string | null>(null);
   const [concepts, setConcepts] = useState<TemplateConcept[]>([]);
+  const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Case-insensitive filter over the visible label (E8) — large templates have
+  // dozens of rows, so a filter beats scrolling. Empty query shows everything.
+  const filteredConcepts = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return concepts;
+    return concepts.filter((c) =>
+      (c.display_label || c.canonical_label || "").toLowerCase().includes(q),
+    );
+  }, [concepts, query]);
 
   // Group templates by "MFRS · Company" etc. so the picker uses <optgroup>
   // with human labels instead of a flat list of 45 cryptic ids (D3). Groups
@@ -80,6 +91,7 @@ export function TemplateSettingsPage() {
   // Load the active template's concepts whenever it changes.
   useEffect(() => {
     if (!activeTemplate) return;
+    setQuery(""); // a fresh template starts unfiltered
     const controller = new AbortController();
     fetch(`/api/templates/${activeTemplate}/concepts`, { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(ApiError.fromResponse(r.status, null))))
@@ -166,6 +178,15 @@ export function TemplateSettingsPage() {
             </optgroup>
           ))}
         </select>
+        <input
+          type="search"
+          data-testid="ts-search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Filter labels…"
+          aria-label="Filter labels"
+          style={{ ...ui.input, minWidth: 200 }}
+        />
       </div>
       {/* Legend — explains the two things a first-time user can't infer: why
           some rows are greyed out (and un-renamable), and what the leading
@@ -184,8 +205,12 @@ export function TemplateSettingsPage() {
           <div style={styles.emptyRow}>
             No fields for this template.
           </div>
+        ) : filteredConcepts.length === 0 ? (
+          <div style={styles.emptyRow} data-testid="ts-no-matches">
+            No labels match “{query}”.
+          </div>
         ) : (
-          concepts.map((c) => (
+          filteredConcepts.map((c) => (
             <TemplateConceptRow
               key={c.concept_uuid}
               concept={c}

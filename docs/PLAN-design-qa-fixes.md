@@ -222,22 +222,30 @@ headers in `ConceptsPage.tsx:1345-1346`.
 - Tests: `ValidatorTab.test.tsx`, `RunDetailView.test.tsx`, `ConceptsPage.test.tsx`,
   `SettingsPage.test.tsx`, `tests/test_concepts_routes.py` (if the API shape grows).
 
-### Sprint E — Structural UX (larger; schedule after A-D) — 🟨 CORE DONE
+### Sprint E — Structural UX (larger; schedule after A-D) — 🟩 DONE
 
-*Implemented: E1 (Overview leads with outcomes, telemetry demoted to a
-Performance section), E2 (Score column + empty-dash tooltips, a result count),
-E4 (RecentRunsList gains standard/level/RM chips), E5 (visible Open button on
-benchmark cards, gold-count no longer monospace), E6 (mTool modal corner ✕ +
-explanatory hint on the disabled check-notes button), E7 (collapse consecutive
-duplicate ABSTRACT headers, fall back to the Source column for a page number),
-E8 (Field-labels legend for greyed/`*` rows + an "edited" chip on customised
-labels).*
+*All items implemented across two passes:*
+- *E1 — Overview leads with outcomes; telemetry demoted to a Performance section.*
+- *E2 — Score column + empty-dash tooltips, a result count, a dedicated
+  **Standard column** (standard/level moved out of the filename badges), and
+  **drafts in their own collapsed section**.*
+- *E3 — **bulk draft cleanup**: `DELETE /api/runs/drafts` (draft-only, skips a
+  mid-start draft) + a confirm-gated "Clear" action on the Drafts KPI tile.*
+- *E4 — RecentRunsList standard/level/RM chips; the 4th KPI tile (Last run
+  status) sits on a neutral surface so it reads as a distinct panel, not a
+  broken counter.*
+- *E5 — benchmark cards get a visible Open button; gold-count de-monospaced;
+  the "From a run" field is a **run picker** of finished runs, not free text.*
+- *E6 — mTool modal corner ✕ + hint on the disabled check-notes button; the
+  Extract dropzone extracted into a shared **`FileDropzone`** reused by the
+  mTool template picker.*
+- *E7 — collapse consecutive duplicate ABSTRACT headers; fall back to the
+  Source column for a page number.*
+- *E8 — Field-labels legend + "edited" chip + a **label search filter**.*
 
-*Deferred (lower-priority polish / scope): E3 (bulk draft cleanup — adds a
-destructive endpoint, wants its own confirm-guarded design), E2's dedicated
-Standard column + drafts-in-their-own-section, E5's searchable run picker,
-E6's shared dropzone extraction, E8's per-template label search, the 4th KPI
-card reshape, and History's native date-input restyle (needs a datepicker dep).*
+*Follow-on design fix (from a live screenshot): the Figures summary tiles
+(`ReviewMetric`) moved off status-colour fills to the neutral-surface +
+left-rule accent the app's alerts use.*
 
 
 **E1. Overview leads with outcomes.** `RunDetailView.tsx:589-602` is hard-coded to
