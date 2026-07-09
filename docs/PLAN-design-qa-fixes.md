@@ -151,7 +151,7 @@ plus the pushState effect (`App.tsx:263-302`) — fix together.
 - Tests: `tests/test_auth_sessions.py`, `test_auth_middleware.py` (both pin the 900s
   default today — update deliberately).
 
-### Sprint C — Design language (consistency sweep)
+### Sprint C — Design language (consistency sweep) — 🟩 DONE
 
 **C1. Retire the blue buttons — DECIDED: make them NEUTRAL (secondary), not orange.**
 - `ReviewTab.tsx:636-644,654-662` and `NotesReviewerPanel.tsx:547-555,565-573` hand-roll

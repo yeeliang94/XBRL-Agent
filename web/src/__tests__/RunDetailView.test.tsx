@@ -862,7 +862,8 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     // Overview is the default tab — the strip is visible immediately.
     expect(screen.getByText("2,000")).toBeTruthy();
-    expect(screen.getByText("$0.0060")).toBeTruthy();
+    // Cost is rounded to cents now, not shown to 4 decimals ($0.0060 → $0.01).
+    expect(screen.getByText("$0.01")).toBeTruthy();
   });
 
   test("initialTab='values' opens the Values tab (the /concepts/{id} alias)", () => {

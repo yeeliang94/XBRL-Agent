@@ -17,7 +17,12 @@ import {
 } from "../lib/sheetLabels";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { TERMS } from "../lib/vocabulary";
-import { formatAccounting, formatGroupedInput } from "../lib/numberFormat";
+import {
+  formatAccounting,
+  formatGroupedInput,
+  formatGroupedAccounting,
+  parseAccountingInput,
+} from "../lib/numberFormat";
 import type { CrossCheckResult } from "../lib/types";
 import { TemplateSettingsPage } from "./TemplateSettingsPage";
 
@@ -2287,11 +2292,11 @@ function EditableValueCell({
   // Parse the field: empty → clear (null); a finite number → that number;
   // anything else is rejected (don't save garbage — Phase 4.1 hardens this).
   function parse(raw: string): number | null | undefined {
-    // Strip thousands separators so a formatted at-rest value ("1,234,567")
-    // round-trips cleanly even if it reaches parse without being re-typed.
-    const t = raw.replace(/,/g, "").trim();
-    if (t === "") return null;
-    const n = Number(t);
+    // Empty clears; otherwise read thousands separators AND accounting
+    // parentheses ("(1,234)" → -1234) so the at-rest accounting display
+    // round-trips even if it reaches parse without being re-typed.
+    if (raw.trim() === "") return null;
+    const n = parseAccountingInput(raw);
     return Number.isFinite(n) ? n : undefined;
   }
 
@@ -2333,9 +2338,11 @@ function EditableValueCell({
     ? `value-status-${uuid}-${period}`
     : `value-status-${uuid}`;
   const highlightEmpty = highlight && draft.trim() === "";
-  // Grouped (1,234,567) when at rest; raw digits while focused so typing,
-  // cursor position, and the Number() round-trip aren't disturbed (issue 4).
-  const displayValue = focused ? draft : formatGroupedInput(draft);
+  // Accounting-grouped ("(20,667)" for negatives) when at rest so an editable
+  // leaf matches an adjacent COMPUTED total; raw digits while focused so
+  // typing, cursor position, and the round-trip aren't disturbed (issue 4 /
+  // C5). parse() reads the parens back to a negative on save.
+  const displayValue = focused ? draft : formatGroupedAccounting(draft);
 
   return (
     <span

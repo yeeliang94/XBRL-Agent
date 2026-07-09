@@ -1,6 +1,7 @@
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
+import { denominationLabel } from "../lib/vocabulary";
 import type { RunSummaryJson } from "../lib/types";
 import { Skeleton } from "./Skeleton";
 
@@ -182,7 +183,7 @@ export function HistoryList({
                     // Non-default denomination only. "thousands" (RM '000) is
                     // the common case and implied; a tag on every row is noise.
                     <span style={styles.inlineBadge}>
-                      {run.denomination === "units" ? "RM" : "RM mil"}
+                      {denominationLabel(run.denomination)}
                     </span>
                   )}
                 </td>

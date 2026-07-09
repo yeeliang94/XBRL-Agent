@@ -633,14 +633,13 @@ const styles = {
     fontSize: 13,
     marginBottom: pwc.space.sm,
   } as const,
+  // Neutral secondary — a re-run action is not the screen's primary CTA, and
+  // the design system reserves orange for that one action and forbids status
+  // colours (the old blue `pwc.info` fill) as button backgrounds (docs/
+  // PLAN-design-qa-fixes.md C1).
   reviewBtn: {
-    background: pwc.info,
-    color: "#fff",
-    border: "none",
-    borderRadius: pwc.radius.md,
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontWeight: 600,
-    cursor: "pointer",
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
   } as const,
   revertBtn: {
     background: "#fff",
@@ -652,12 +651,9 @@ const styles = {
     cursor: "pointer",
   } as const,
   smallBtn: {
-    background: pwc.info,
-    color: "#fff",
-    border: "none",
+    ...ui.buttonSecondary,
     borderRadius: pwc.radius.sm,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontWeight: 600,
-    cursor: "pointer",
+    fontSize: 13,
   } as const,
 };

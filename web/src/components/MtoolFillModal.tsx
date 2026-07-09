@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import { denominationLabel } from "../lib/vocabulary";
 
 /**
  * mTool fill modal (docs/PLAN.md Phase 4, Steps 9/11).
@@ -506,7 +507,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             <div style={styles.statLine}>
               <strong>{c!.writes}</strong> values will be written across{" "}
               {meta.sheets_covered.length} sheet(s) &middot; {meta.filing_standard.toUpperCase()}{" "}
-              {meta.filing_level} &middot; denomination: {meta.denomination ?? "unknown"}
+              {meta.filing_level} &middot; denomination: {meta.denomination ? denominationLabel(meta.denomination) : "unknown"}
             </div>
             {totalExcluded > 0 && (
               <div style={{ ...styles.statLine, color: pwc.grey700 }}>

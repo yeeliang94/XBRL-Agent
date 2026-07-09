@@ -72,6 +72,21 @@ export function variantLabel(code: string): string {
   return VARIANT_LABELS[code] ?? code;
 }
 
+/** Denomination enum (`units` / `thousands` / `millions`) → the currency+scale
+ *  label operators read (RM / RM '000 / RM mil). One home for the mapping that
+ *  used to be copy-pasted in RunDetailView, HistoryList, and the mTool modal
+ *  (which showed the raw enum "units") — docs/PLAN-design-qa-fixes.md C2. */
+const DENOMINATION_LABELS: Record<string, string> = {
+  units: "RM",
+  thousands: "RM '000",
+  millions: "RM mil",
+};
+
+export function denominationLabel(denomination: string | null | undefined): string {
+  if (!denomination) return DENOMINATION_LABELS.thousands;
+  return DENOMINATION_LABELS[denomination] ?? denomination;
+}
+
 /** Reviewer flag kinds (`stuck` / `disputes_prior` / `needs_human`) → labels
  *  that say what the flag means, not what the code is called. */
 const FLAG_KIND_LABELS: Record<string, string> = {
