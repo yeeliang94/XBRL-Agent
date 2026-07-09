@@ -1,5 +1,5 @@
 import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
+import { ui, uiClass } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 
 // ---------------------------------------------------------------------------
@@ -21,6 +21,9 @@ export interface StatTilesProps {
   completedThisMonth?: number;
   /** Status string of the most-recent run, or null when there are none. */
   lastStatus?: string | null;
+  /** When provided AND drafts > 0, a "Clear" action shows on the drafts tile
+   *  to sweep abandoned drafts (E3). Omitted → no action rendered. */
+  onClearDrafts?: () => void;
 }
 
 /** Show the number, or a dash while it's missing (loading / fetch failed). */
@@ -28,8 +31,15 @@ function fmtCount(n: number | undefined): string {
   return n == null ? "—" : n.toLocaleString();
 }
 
-export function StatTiles({ total, drafts, completedThisMonth, lastStatus }: StatTilesProps) {
+export function StatTiles({
+  total,
+  drafts,
+  completedThisMonth,
+  lastStatus,
+  onClearDrafts,
+}: StatTilesProps) {
   const last = lastStatus ? runStatusDisplay(lastStatus) : null;
+  const canClearDrafts = onClearDrafts != null && (drafts ?? 0) > 0;
   return (
     <div style={styles.grid}>
       <div style={styles.tile}>
@@ -38,13 +48,29 @@ export function StatTiles({ total, drafts, completedThisMonth, lastStatus }: Sta
       </div>
       <div style={styles.tile}>
         <span style={styles.value}>{fmtCount(drafts)}</span>
-        <span style={styles.label}>Drafts in progress</span>
+        <span style={styles.labelRow}>
+          <span style={styles.label}>Drafts in progress</span>
+          {canClearDrafts && (
+            <button
+              type="button"
+              className={uiClass.btnGhost}
+              style={styles.clearLink}
+              onClick={onClearDrafts}
+              data-testid="clear-drafts"
+            >
+              Clear
+            </button>
+          )}
+        </span>
       </div>
       <div style={styles.tile}>
         <span style={styles.value}>{fmtCount(completedThisMonth)}</span>
         <span style={styles.label}>Completed this month</span>
       </div>
-      <div style={styles.tile}>
+      {/* Visually detached from the three counters — it holds a status chip,
+          not a number, so a subtle neutral surface marks it as a different
+          KIND of tile rather than a broken counter (E4). */}
+      <div style={styles.statusTile}>
         {last ? (
           <span style={{ ...ui.badge, alignSelf: "flex-start", borderColor: last.accent }}>
             <span aria-hidden="true" style={ui.badgeDot(last.accent)} />
@@ -78,6 +104,29 @@ const styles = {
     gap: pwc.space.xs,
     padding: pwc.space.lg,
     minWidth: 0,
+  } as React.CSSProperties,
+  // The status tile: same card, but a neutral grey surface so it reads as a
+  // distinct "last run" panel next to the three white counter tiles (E4).
+  statusTile: {
+    ...ui.card,
+    background: pwc.grey50,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xs,
+    padding: pwc.space.lg,
+    minWidth: 0,
+  } as React.CSSProperties,
+  labelRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  clearLink: {
+    ...ui.buttonGhost,
+    padding: 0,
+    minHeight: 0,
+    fontSize: 12,
   } as React.CSSProperties,
   value: {
     fontFamily: pwc.fontHeading,

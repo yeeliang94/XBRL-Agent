@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
-import { fetchHomeStats, fetchRecentRuns } from "../lib/api";
+import { fetchHomeStats, fetchRecentRuns, deleteDraftRuns } from "../lib/api";
 import type { HomeStats } from "../lib/api";
 import type { RunSummaryJson } from "../lib/types";
 import { StatTiles } from "./StatTiles";
 import { RecentRunsList } from "./RecentRunsList";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 // ---------------------------------------------------------------------------
 // HomeHero — the homepage landing layout (PLAN-homepage-redesign.md).
@@ -51,6 +52,30 @@ export function HomeHero({
   const [recent, setRecent] = useState<RunSummaryJson[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Draft-cleanup confirm gate (E3).
+  const [confirmClearDrafts, setConfirmClearDrafts] = useState(false);
+  const [clearingDrafts, setClearingDrafts] = useState(false);
+
+  // One loader so both the mount effect and a post-cleanup refresh share the
+  // same fetch. Not cancellable here (callers that need cancellation wrap it).
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const [s, runs] = await Promise.all([
+        fetchHomeStats(),
+        fetchRecentRuns(RECENT_LIMIT),
+      ]);
+      setStats(s);
+      setRecent(runs);
+    } catch (err) {
+      // Quiet degradation: keep whatever we had, flag the error so the
+      // children show placeholders. Never blocks the upload card.
+      setError(userMessage(err));
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   // Fetch the home data when the sections become active. We refetch each time
   // they re-activate (e.g. user uploads, then resets back to the empty page)
@@ -69,8 +94,6 @@ export function HomeHero({
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        // Quiet degradation: keep whatever we had, flag the error so the
-        // children show placeholders. Never blocks the upload card.
         setError(userMessage(err));
       })
       .finally(() => {
@@ -80,6 +103,19 @@ export function HomeHero({
       cancelled = true;
     };
   }, [active]);
+
+  const handleClearDrafts = useCallback(async () => {
+    setClearingDrafts(true);
+    try {
+      await deleteDraftRuns();
+      setConfirmClearDrafts(false);
+      await load(); // refresh counts + recents so the swept drafts disappear
+    } catch (err) {
+      setError(userMessage(err));
+    } finally {
+      setClearingDrafts(false);
+    }
+  }, [load]);
 
   // Last-run status is derived from the recent list rather than a dedicated
   // fetch — the newest run is simply the first row.
@@ -97,6 +133,7 @@ export function HomeHero({
           // null while loading so the badge doesn't flash a stale status;
           // resolves to the real status (or null for no-runs) once loaded.
           lastStatus={isLoading || error ? null : lastStatus}
+          onClearDrafts={() => setConfirmClearDrafts(true)}
         />
       )}
 
@@ -112,6 +149,25 @@ export function HomeHero({
           onViewAll={onViewAllRuns}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={confirmClearDrafts}
+        title="Clear abandoned drafts?"
+        message={
+          <>
+            This permanently removes{" "}
+            <strong>{stats?.drafts ?? 0} draft{(stats?.drafts ?? 0) === 1 ? "" : "s"}</strong>{" "}
+            — uploads that were never started. Completed and in-progress runs
+            are not affected, and the original PDFs on disk are kept.
+          </>
+        }
+        confirmLabel="Clear drafts"
+        danger
+        busy={clearingDrafts}
+        busyLabel="Clearing…"
+        onConfirm={handleClearDrafts}
+        onCancel={() => setConfirmClearDrafts(false)}
+      />
     </div>
   );
 }

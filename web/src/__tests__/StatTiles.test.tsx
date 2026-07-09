@@ -1,5 +1,5 @@
-import { describe, test, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, test, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { StatTiles } from "../components/StatTiles";
 
 describe("StatTiles", () => {
@@ -44,5 +44,19 @@ describe("StatTiles", () => {
     expect(screen.getByText("Last run status")).toBeTruthy();
     // The last-status tile has no badge — just the placeholder dash.
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("Clear-drafts action shows only when drafts exist and a handler is wired (E3)", () => {
+    const onClearDrafts = vi.fn();
+    // No handler → no action even with drafts.
+    const { rerender } = render(<StatTiles total={5} drafts={3} completedThisMonth={0} />);
+    expect(screen.queryByTestId("clear-drafts")).toBeNull();
+    // Handler but zero drafts → no action.
+    rerender(<StatTiles total={5} drafts={0} completedThisMonth={0} onClearDrafts={onClearDrafts} />);
+    expect(screen.queryByTestId("clear-drafts")).toBeNull();
+    // Handler + drafts → action fires the callback.
+    rerender(<StatTiles total={5} drafts={3} completedThisMonth={0} onClearDrafts={onClearDrafts} />);
+    fireEvent.click(screen.getByTestId("clear-drafts"));
+    expect(onClearDrafts).toHaveBeenCalledOnce();
   });
 });

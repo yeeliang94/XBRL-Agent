@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 
 def _now() -> str:
@@ -2329,6 +2329,31 @@ def delete_run(conn: sqlite3.Connection, run_id: int) -> bool:
     conn.execute("PRAGMA foreign_keys = ON")
     cur = conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
     return cur.rowcount > 0
+
+
+def delete_draft_runs(
+    conn: sqlite3.Connection,
+    protected_session_ids: "Iterable[str]" = (),
+) -> int:
+    """Bulk-delete every abandoned draft (``status = 'draft'``), returning the
+    count removed. Draft-only by construction — the WHERE clause can never match
+    a started/terminal run, so this cannot delete real work. A draft whose
+    session is mid-start (its id in ``protected_session_ids``) is skipped so the
+    cleanup can't race a run that's just been launched. Same cascade + no
+    on-disk deletion as ``delete_run``.
+    """
+    conn.execute("PRAGMA foreign_keys = ON")
+    protected = tuple(s for s in protected_session_ids if s)
+    if protected:
+        placeholders = ",".join("?" * len(protected))
+        cur = conn.execute(
+            "DELETE FROM runs WHERE status = 'draft' "
+            f"AND (session_id IS NULL OR session_id NOT IN ({placeholders}))",
+            protected,
+        )
+    else:
+        cur = conn.execute("DELETE FROM runs WHERE status = 'draft'")
+    return cur.rowcount
 
 
 # ---------------------------------------------------------------------------

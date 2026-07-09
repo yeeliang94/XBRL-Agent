@@ -349,6 +349,12 @@ export async function deleteRun(runId: number): Promise<{ deleted: number }> {
   return apiFetch(`/api/runs/${runId}`, { method: "DELETE" });
 }
 
+/** Bulk-delete abandoned draft runs (uploads that were never started). Returns
+ *  the count removed. Draft-only server-side — cannot touch real runs. */
+export async function deleteDraftRuns(): Promise<{ deleted: number }> {
+  return apiFetch(`/api/runs/drafts`, { method: "DELETE" });
+}
+
 /** Build the download URL for a past run's merged workbook.
  *  Returned as a plain string so the caller can hand it to an `<a href>` or
  *  `window.location.href =` — streaming a file through fetch + Blob would
