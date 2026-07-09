@@ -12,8 +12,8 @@ import type { RunDetailJson } from "../lib/types";
 // the app-level selectedRunId state.
 //
 // The chrome here is intentionally minimal: a top bar with a Back button
-// on the left, the run title on the right (if loaded), and the embedded
-// RunDetailView body. No overlay, no Escape handler — a page dismissal is
+// on the left and the embedded RunDetailView body (which carries the run
+// number in its kicker — it is deliberately not repeated up here). No overlay, no Escape handler — a page dismissal is
 // the Back button (which prefers history.back() so browser Back behaves
 // naturally and the list scroll position is preserved by React + the
 // browser).
@@ -67,11 +67,9 @@ export function RunDetailPage({
               CLAUDE.md gotcha #7. */}
           ← Back to history
         </button>
-        {detail && (
-          <span style={styles.runTitle} aria-live="polite">
-            Run #{detail.id}
-          </span>
-        )}
+        {/* The run number is NOT repeated here — the detail view's kicker
+            ("RUN {id}") already names the run, and two copies of the same
+            label an inch apart read as clutter (run-168 design critique). */}
       </header>
 
       {isLoading && <p style={styles.state}>Loading run details…</p>}
@@ -111,11 +109,6 @@ const styles = {
   backButton: {
     ...ui.buttonGhost,
     ...ui.buttonSm,
-  } as React.CSSProperties,
-  runTitle: {
-    fontFamily: pwc.fontMono,
-    fontSize: 13,
-    color: pwc.grey700,
   } as React.CSSProperties,
   state: {
     textAlign: "center" as const,

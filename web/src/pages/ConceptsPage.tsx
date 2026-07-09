@@ -9,11 +9,15 @@ import type { CoverageNavRow } from "../components/NotesCoverageNav";
 import { NeedsAttentionPanel } from "../components/NeedsAttentionPanel";
 import { PdfSourcePane } from "../components/PdfSourcePane";
 import { fetchNotesCells, sortSheetsBySlot } from "../lib/notesCells";
-import { templateDisplayName, notesSheetDisplayName } from "../lib/sheetLabels";
+import {
+  templateDisplayName,
+  templateSubtitle,
+  templateSortKey,
+  notesSheetDisplayName,
+} from "../lib/sheetLabels";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { TERMS } from "../lib/vocabulary";
 import { formatAccounting, formatGroupedInput } from "../lib/numberFormat";
-import { downloadFilledUrl } from "../lib/api";
 import type { CrossCheckResult } from "../lib/types";
 import { TemplateSettingsPage } from "./TemplateSettingsPage";
 
@@ -217,6 +221,11 @@ export function ConceptsPage({
   // up here instead (review-workspace Phase 1). Cleared on navigation below so
   // a stale note's pages don't linger when switching sheets.
   const [notesPdfPages, setNotesPdfPages] = useState<number[]>([]);
+  // Whether a notes cell is currently selected — tracked SEPARATELY from
+  // notesPdfPages because a selected cell can legitimately have no recorded
+  // pages. Inferring selection from pages.length made a page-less cell look
+  // like "nothing selected" (run-168 peer-review finding).
+  const [notesCellSelected, setNotesCellSelected] = useState(false);
   // Cell the notes checklist last asked the editor to jump to. `key` bumps per
   // click so re-selecting the same note re-scrolls (review-workspace Phase 2).
   const [notesFocusCell, setNotesFocusCell] = useState<{
@@ -519,12 +528,16 @@ export function ConceptsPage({
     [concepts, handleSelectConcept]
   );
 
-  // Distinct templates for the selector dropdown — order-preserving so
-  // SOFP appears before SOPL/SOCI/SOCF when a run carries all four.
+  // Distinct templates for the navigator, in financial-statement reading
+  // order (SOFP → SOPL → SOCI → SOCIE → SOCF) — the backend's incidental
+  // order surfaced alphabetically, putting cash flows first (run-168 design
+  // critique). Array.sort is stable, so unrecognised templates keep their
+  // backend order at the end.
   const templates: string[] = [];
   for (const c of concepts) {
     if (!templates.includes(c.template_id)) templates.push(c.template_id);
   }
+  templates.sort((a, b) => templateSortKey(a) - templateSortKey(b));
 
   // Per-template ordered render_sheets — the navigator expands a face
   // statement (one template, several sub-sheets) into nested entries so the
@@ -617,11 +630,20 @@ export function ConceptsPage({
   // it just set.)
   useEffect(() => {
     setNotesPdfPages([]);
+    setNotesCellSelected(false);
     setNotesFocusCell(null);
     setNotesCoverage(null);
     setCoverageGaps([]);
     setCoverageHasContent(false);
   }, [runId]);
+
+  // Focusing a notes cell in the editor: follow its recorded pages (possibly
+  // none) and mark the selection. An empty page list is a real state —
+  // "selected, but no source page recorded" — not "nothing selected".
+  const handleNotesCellPages = useCallback((pages: number[]) => {
+    setNotesPdfPages(pages);
+    setNotesCellSelected(true);
+  }, []);
 
   // The pages the Source PDF pane should show: a focused notes cell's pages
   // when the notes editor is active, otherwise the selected face concept's
@@ -644,6 +666,9 @@ export function ConceptsPage({
         : [];
     setNotesPdfPages(pages);
     const placement = row.placements[0];
+    // A placed note targets a specific cell (selected); a missing note has
+    // no cell to select — the pane just shows the note's inventory pages.
+    setNotesCellSelected(!!placement);
     if (placement) {
       setActiveNotesSheet(placement.sheet);
       setNotesFocusCell((c) => ({
@@ -733,7 +758,7 @@ export function ConceptsPage({
               id="gold-search"
               data-testid="gold-search"
               type="search"
-              placeholder="Search across all templates"
+              placeholder="Search all sheets"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={{ ...ui.input, width: "100%" }}
@@ -818,9 +843,11 @@ export function ConceptsPage({
             setSearchQuery("");
             setActiveTemplate(NOTES_KEY);
             setActiveNotesSheet(sheet);
-            // Manual sub-tab switch: drop the previous note's PDF pages so the
-            // pane waits for a fresh cell focus rather than showing stale pages.
+            // Manual sub-tab switch: drop the previous note's PDF pages AND
+            // its selection so the pane waits for a fresh cell focus rather
+            // than showing stale pages.
             setNotesPdfPages([]);
+            setNotesCellSelected(false);
           }}
         />
       </CollapsiblePanel>
@@ -871,8 +898,14 @@ export function ConceptsPage({
       />
       {/* Source-PDF verification: the pane follows the selected concept's
           evidence pages so a reviewer can eyeball the figure against the
-          document without leaving the page (M1). */}
-      <PdfSourcePane runId={runId} pages={pdfPages} />
+          document without leaving the page (M1). `embedded` because the
+          column header above already says "Source PDF" and owns Hide. */}
+      <PdfSourcePane
+        runId={runId}
+        pages={pdfPages}
+        embedded
+        hasSelection={notesActive ? notesCellSelected : selectedConcept != null}
+      />
       {/* Field details — the technical metadata (template, cell, source,
           evidence) for the selected value. Collapsed by default so the everyday
           view stays label + figures; opened on demand (review-workspace
@@ -936,14 +969,10 @@ export function ConceptsPage({
               >
                 {recheck.running ? TERMS.validatingFigures : TERMS.validateFigures}
               </button>
-              <a
-                data-testid="generate-final-excel"
-                href={downloadFilledUrl(runId)}
-                className={uiClass.btnPrimary}
-                style={ui.buttonPrimary}
-              >
-                Download filled Excel
-              </a>
+              {/* No Download button here — the run header directly above this
+                  workspace already carries the one primary "Download filled
+                  Excel" action. Two identical primary CTAs on one screen made
+                  users ask whether they differ (run-168 design critique). */}
             </div>
           </div>
 
@@ -971,10 +1000,20 @@ export function ConceptsPage({
                 }
               />
             )}
+            {/* Neutral, not amber: an edit count is information, not a
+                problem. Amber is reserved for the checks metric so its signal
+                stays meaningful. The explanation lives IN the card (it used
+                to be repeated in a separate banner directly below). */}
             <ReviewMetric
               label="Your edits"
               value={String(editedCount)}
-              tone={editedCount > 0 ? "accent" : "neutral"}
+              tone="neutral"
+              caption={
+                editedCount > 0
+                  ? `${editedCount} value${editedCount === 1 ? "" : "s"} edited since the run finished — included in the downloaded Excel; re-running an agent overwrites them.`
+                  : undefined
+              }
+              captionTestId="edited-values-banner"
             />
           </div>
         </section>
@@ -982,13 +1021,6 @@ export function ConceptsPage({
         {loadError && (
           <div style={styles.errorBanner}>
             Failed to load concepts: {loadError}
-          </div>
-        )}
-        {editedCount > 0 && (
-          <div data-testid="edited-values-banner" style={styles.editedBanner}>
-            {editedCount} value{editedCount === 1 ? "" : "s"} edited since the
-            run finished. These are included in the downloaded Excel. Re-running
-            an agent will overwrite them.
           </div>
         )}
 
@@ -1023,7 +1055,7 @@ export function ConceptsPage({
                 id="concept-search"
                 data-testid="concept-search"
                 type="search"
-                placeholder="Search across all templates"
+                placeholder="Search all sheets"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 style={{ ...ui.input, width: "100%" }}
@@ -1040,7 +1072,7 @@ export function ConceptsPage({
               runId={runId}
               focusSheet={activeNotesSheet}
               focusCell={notesFocusCell}
-              onActiveCellPages={setNotesPdfPages}
+              onActiveCellPages={handleNotesCellPages}
               onRegenerate={onRegenerateNotes}
             />
           </div>
@@ -1306,9 +1338,12 @@ function ConceptTree({
         role="row"
         style={{ ...styles.treeHeaderRow, gridTemplateColumns: treeColumns(showPeriods) }}
       >
-        <div style={styles.headerCell}>Concept</div>
-        <div style={styles.headerCell}>{showPeriods ? "CY" : "Value"}</div>
-        {showPeriods && <div style={styles.headerCell}>PY</div>}
+        {/* "Line item" (accountant vocabulary), not the internal "Concept"
+            codename — plain-language rule (CLAUDE.md "talk like a product
+            person"). Numeric column headers right-align over their figures. */}
+        <div style={styles.headerCell}>Line item</div>
+        <div style={styles.headerCellNumeric}>{showPeriods ? "CY" : "Value"}</div>
+        {showPeriods && <div style={styles.headerCellNumeric}>PY</div>}
         <div style={styles.headerCell}>State</div>
         <div style={styles.headerCell}>Source</div>
       </div>
@@ -1655,7 +1690,10 @@ function ConceptRowView({
       ref={rowRef}
       data-testid={`concept-row-${row.concept_uuid}`}
       data-kind={row.kind}
-      onClick={() => onSelectRow(row.concept_uuid)}
+      // Section headers aren't selectable — they carry no value, so clicking
+      // one used to select a row the PDF pane / details panel could do
+      // nothing with. Data rows keep the click-to-select behaviour.
+      onClick={isAbstract ? undefined : () => onSelectRow(row.concept_uuid)}
       style={{
         display: "grid",
         gridTemplateColumns: isAbstract
@@ -1663,8 +1701,13 @@ function ConceptRowView({
           : treeColumns(showPeriods),
         gap: pwc.space.lg,
         minWidth: 760,
+        // Section headers are visually distinct from data rows: tighter,
+        // smaller, semibold caption on a grey band — so a run of same-named
+        // taxonomy headers ("Statement of cash flows" nested three deep)
+        // reads as structure, not as three broken data rows (run-168
+        // design critique).
         padding: isAbstract
-          ? `${pwc.space.lg}px ${pwc.space.xl}px`
+          ? `${pwc.space.sm}px ${pwc.space.xl}px`
           : `${pwc.space.lg}px ${pwc.space.xl}px`,
         background: isAbstract
           ? pwc.grey100
@@ -1673,10 +1716,12 @@ function ConceptRowView({
           : pwc.white,
         borderBottom: `1px solid ${pwc.grey100}`,
         fontFamily: pwc.fontBody,
-        fontSize: 15,
-        fontWeight: isAbstract ? pwc.weight.medium : pwc.weight.regular,
-        color: isComputed ? pwc.grey700 : pwc.grey900,
-        cursor: "pointer",
+        fontSize: isAbstract ? 12 : 15,
+        fontWeight: isAbstract ? pwc.weight.semibold : pwc.weight.regular,
+        letterSpacing: isAbstract ? 0.4 : undefined,
+        textTransform: isAbstract ? ("uppercase" as const) : undefined,
+        color: isAbstract ? pwc.grey700 : isComputed ? pwc.grey700 : pwc.grey900,
+        cursor: isAbstract ? "default" : "pointer",
         alignItems: "center",
       }}
     >
@@ -1718,6 +1763,20 @@ function ConceptRowView({
             </span>
           )}
         </span>
+        {/* Explain the orange highlight instead of leaving a bare empty
+            input: a "*" (mandatory) row with no extracted value tells the
+            reviewer WHY it's flagged and what to do (run-168 design
+            critique — "highlighting should carry a reason"). */}
+        {isEditable &&
+          (cyIncompleteMandatory || (showPeriods && pyIncompleteMandatory)) && (
+            <span
+              data-testid={`required-chip-${row.concept_uuid}`}
+              style={styles.requiredChip}
+              title="This line is mandatory in the filing template but no value was extracted. Enter one, or leave it blank if the statement genuinely doesn't disclose it."
+            >
+              Required — no value extracted
+            </span>
+          )}
       </div>
       {!isAbstract && (
         <>
@@ -1841,10 +1900,16 @@ function ReviewMetric({
   label,
   value,
   tone = "neutral",
+  caption,
+  captionTestId,
 }: {
   label: string;
   value: string;
   tone?: "neutral" | "accent" | "warning" | "success";
+  /** Optional one-line explanation rendered inside the card — used by the
+   *  edits metric so the same fact isn't told twice (card + banner). */
+  caption?: string;
+  captionTestId?: string;
 }) {
   const palette =
     tone === "accent"
@@ -1864,6 +1929,11 @@ function ReviewMetric({
     >
       <span style={styles.metricValue}>{value}</span>
       <span style={{ ...styles.metricLabel, color: palette.color }}>{label}</span>
+      {caption && (
+        <span data-testid={captionTestId} style={styles.metricCaption}>
+          {caption}
+        </span>
+      )}
     </div>
   );
 }
@@ -1996,8 +2066,13 @@ function SheetNavigator({
                 fontWeight: active && activeSheet == null ? 600 : 500,
               }}
             >
-              <span style={styles.sideNavLabel} title={tid}>
+              <span style={{ ...styles.sideNavLabel, ...styles.sideNavLabelStack }} title={tid}>
                 {templateDisplayName(tid)}
+                {/* Plain-English gloss under the MBRS acronym — "SOFP" alone
+                    assumes the reader speaks taxonomy shorthand. */}
+                {templateSubtitle(tid) && (
+                  <span style={styles.sideNavSubtitle}>{templateSubtitle(tid)}</span>
+                )}
               </span>
               {count > 0 && (
                 <span
@@ -2099,7 +2174,7 @@ function ConceptEvidenceBody({
       ) : (
         <div style={styles.evidenceStack}>
           <div>
-            <div style={styles.evidenceLabel}>Concept</div>
+            <div style={styles.evidenceLabel}>Line item</div>
             <div style={styles.evidenceText}>
               {concept.display_label || concept.canonical_label}
             </div>
@@ -2511,6 +2586,12 @@ const styles = {
     fontWeight: 500,
     letterSpacing: 0,
   } as React.CSSProperties,
+  metricCaption: {
+    fontSize: 12,
+    lineHeight: 1.45,
+    color: pwc.grey700,
+    marginTop: 2,
+  } as React.CSSProperties,
   errorBanner: {
     marginBottom: pwc.space.md,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
@@ -2521,17 +2602,6 @@ const styles = {
     color: pwc.grey800,
     fontSize: 13,
     lineHeight: 1.5,
-  } as React.CSSProperties,
-  editedBanner: {
-    marginBottom: pwc.space.md,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.orange50,
-    border: `1px solid ${pwc.orange100}`,
-    borderLeft: `3px solid ${pwc.orange400}`,
-    borderRadius: pwc.radius.sm,
-    fontSize: 13,
-    lineHeight: 1.5,
-    color: pwc.grey800,
   } as React.CSSProperties,
   crossChecksWrap: {
     marginBottom: pwc.space.lg,
@@ -2612,6 +2682,20 @@ const styles = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
     minWidth: 0,
+  } as React.CSSProperties,
+  // Stacks the statement code over its plain-English subtitle.
+  sideNavLabelStack: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 1,
+  } as React.CSSProperties,
+  sideNavSubtitle: {
+    fontSize: 11,
+    fontWeight: pwc.weight.regular,
+    color: pwc.grey500,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   sideNavSubGroup: {
     display: "flex",
@@ -2696,6 +2780,14 @@ const styles = {
     fontSize: 14,
     fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
+  // Numeric columns (CY / PY / Value) right-align, header included, so
+  // magnitudes line up the way accountants read them.
+  headerCellNumeric: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    textAlign: "right" as const,
+  } as React.CSSProperties,
   valueCell: {
     textAlign: "right" as const,
     display: "flex",
@@ -2743,6 +2835,13 @@ const styles = {
     display: "flex",
     alignItems: "center",
     minWidth: 0,
+  } as React.CSSProperties,
+  // Small caption under a mandatory line item whose value is still blank —
+  // names the reason the input is highlighted orange.
+  requiredChip: {
+    fontSize: 12,
+    color: pwc.warningText,
+    fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   sourceCell: {
     color: pwc.grey700,

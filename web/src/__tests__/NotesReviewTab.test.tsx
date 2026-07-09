@@ -199,8 +199,12 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(onActiveCellPages).toHaveBeenCalledWith([3]);
   });
 
-  // A page-less note must leave the PDF pane unchanged, not blank it with [].
-  test("focusing a cell with no source_pages does NOT report pages", async () => {
+  // A page-less note reports an EMPTY list — it must not leave the PREVIOUS
+  // note's pages showing (they'd be mislabelled as this cell's source). The
+  // workspace tracks "cell selected" separately, so [] renders as the honest
+  // "No source page recorded" state (run-168 peer-review; reverses the older
+  // leave-the-pane-unchanged behaviour, which predated selection tracking).
+  test("focusing a cell with no source_pages reports an empty list", async () => {
     mockFetchOnce({
       sheets: [
         {
@@ -231,7 +235,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     );
     expect(row).not.toBeNull();
     fireEvent.mouseDown(row!);
-    expect(onActiveCellPages).not.toHaveBeenCalled();
+    expect(onActiveCellPages).toHaveBeenCalledWith([]);
   });
 
   test("renders html as rich dom not escaped text", async () => {
