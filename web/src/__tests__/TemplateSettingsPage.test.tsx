@@ -59,6 +59,27 @@ describe("TemplateSettingsPage", () => {
     expect(screen.getByTestId("ts-legend")).toBeTruthy();
   });
 
+  test("the search box filters concept rows by label (E8)", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (url: string) => {
+        const body = url.includes("/concepts") ? concepts : templates;
+        return { ok: true, status: 200, json: async () => body } as Response;
+      }
+    );
+    render(<TemplateSettingsPage />);
+    await waitFor(() => screen.getByTestId("ts-row-leaf-1"));
+    // Both rows present initially.
+    expect(screen.getByTestId("ts-row-leaf-1")).toBeTruthy();
+    expect(screen.getByTestId("ts-row-abs-1")).toBeTruthy();
+    // Filter to "biolog" → only the matching row remains.
+    fireEvent.change(screen.getByTestId("ts-search"), { target: { value: "biolog" } });
+    expect(screen.getByTestId("ts-row-leaf-1")).toBeTruthy();
+    expect(screen.queryByTestId("ts-row-abs-1")).toBeNull();
+    // A non-matching query shows the empty state.
+    fireEvent.change(screen.getByTestId("ts-search"), { target: { value: "zzz" } });
+    expect(screen.getByTestId("ts-no-matches")).toBeTruthy();
+  });
+
   test("customised rows carry an 'edited' chip (E8)", async () => {
     const edited = {
       template_id: "mfrs-company-sofp-cunoncu-v1",
