@@ -26,7 +26,8 @@ import {
 } from "../lib/buildToolTimeline";
 import { displayModelId } from "../lib/modelId";
 import { notesTabLabel } from "../lib/appReducer";
-import { pseudoAgentLabel } from "../lib/vocabulary";
+import { formatCost } from "../lib/numberFormat";
+import { denominationLabel, pseudoAgentLabel } from "../lib/vocabulary";
 import { isNotes12StatementType } from "../lib/notes";
 
 // ---------------------------------------------------------------------------
@@ -112,11 +113,7 @@ function ConfigBlock({
   });
   entries.push({
     label: "Denomination",
-    value: (
-      config.denomination === "units" ? "RM"
-        : config.denomination === "millions" ? "RM mil"
-        : "RM '000"
-    ),
+    value: denominationLabel(config.denomination as string | undefined),
   });
   // Notes — only surface when the run actually selected any. Empty lists
   // would render as "Notes: —" for every face-only run, which is noise.
@@ -293,7 +290,7 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
             {agent.total_tokens != null
               ? `${agent.total_tokens.toLocaleString()} tokens`
               : "— tokens"}
-            {agent.total_cost != null ? ` · $${agent.total_cost.toFixed(4)}` : ""}
+            {agent.total_cost != null ? ` · ${formatCost(agent.total_cost)}` : ""}
           </span>
         </div>
       </button>
@@ -634,7 +631,7 @@ export function RunDetailView({
           {rollup && (
             <div style={styles.metricStrip}>
               <MetricTile label="Total tokens" value={rollup.total_tokens.toLocaleString()} />
-              <MetricTile label="Est. cost" value={`$${rollup.total_cost.toFixed(4)}`} />
+              <MetricTile label="Est. cost" value={formatCost(rollup.total_cost)} />
               <MetricTile label="Turns" value={String(rollup.turn_count)} />
               <MetricTile label="Tool calls" value={String(rollup.tool_call_count)} />
               <MetricTile label="Agents" value={String(detail.agents.length)} />

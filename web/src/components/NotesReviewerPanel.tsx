@@ -544,14 +544,11 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 13,
   } as const,
+  // Neutral secondary, not a blue status-colour fill — one primary (orange)
+  // action per screen (docs/PLAN-design-qa-fixes.md C1).
   reviewBtn: {
-    background: pwc.info,
-    color: pwc.white,
-    border: "none",
-    borderRadius: pwc.radius.md,
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    fontWeight: 600,
-    cursor: "pointer",
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
   } as const,
   revertBtn: {
     background: pwc.white,
@@ -563,12 +560,9 @@ const styles = {
     cursor: "pointer",
   } as const,
   smallBtn: {
-    background: pwc.info,
-    color: pwc.white,
-    border: "none",
+    ...ui.buttonSecondary,
     borderRadius: pwc.radius.sm,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontWeight: 600,
-    cursor: "pointer",
+    fontSize: 13,
   } as const,
 };

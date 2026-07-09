@@ -6,6 +6,8 @@ import {
   coverageStatusLabel,
   subNoteStateLabel,
   crossCheckLabel,
+  denominationLabel,
+  notesFormatErrorMessage,
 } from "../lib/vocabulary";
 
 describe("TERMS", () => {
@@ -73,5 +75,39 @@ describe("crossCheckLabel", () => {
   });
   test("unknown names still produce a readable phrase", () => {
     expect(crossCheckLabel("some_new_check")).not.toContain("_");
+  });
+});
+
+describe("denominationLabel", () => {
+  test("maps the scale enum to a currency+scale label", () => {
+    expect(denominationLabel("units")).toBe("RM");
+    expect(denominationLabel("thousands")).toBe("RM '000");
+    expect(denominationLabel("millions")).toBe("RM mil");
+  });
+  test("defaults to RM '000 when absent", () => {
+    expect(denominationLabel(null)).toBe("RM '000");
+    expect(denominationLabel(undefined)).toBe("RM '000");
+  });
+});
+
+describe("notesFormatErrorMessage", () => {
+  test("maps a taxonomy code to plain language and hides the raw dict", () => {
+    const msg = notesFormatErrorMessage(
+      "validation_failed",
+      "target matched no elements: {'table': 0, 'cell': {'r': 5, 'c': 2}}",
+    );
+    expect(msg).not.toContain("{");
+    expect(msg).not.toContain("target matched");
+    expect(msg.toLowerCase()).toContain("no longer matches");
+  });
+  test("an unmapped code with a dict-shaped error falls back to a generic sentence", () => {
+    const msg = notesFormatErrorMessage("mystery", "boom {x: 1}");
+    expect(msg).not.toContain("{");
+    expect(msg.toLowerCase()).toContain("couldn't be applied");
+  });
+  test("a genuine sentence from an unmapped code passes through", () => {
+    expect(notesFormatErrorMessage(null, "The service was unavailable.")).toBe(
+      "The service was unavailable.",
+    );
   });
 });

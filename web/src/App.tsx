@@ -628,14 +628,18 @@ export default function App() {
 
       <main
         style={
-          // The full-bleed wrapper is only for the standalone 3-column
-          // ConceptsPage (bare Template landing, no run id). A `/concepts/{id}`
-          // run page renders the tabbed run detail, so it uses the same
-          // history gutter as `/history/{id}` (Phase 2 gutter fix).
+          // Two intentional widths (docs/PLAN-design-qa-fixes.md C3):
+          //  • Workspace pages (History, run detail via /concepts/{id}) run
+          //    full-bleed — they hold wide tables / side-by-side panes.
+          //  • The bare Template landing is the 3-column ConceptsPage (its own
+          //    tight-gutter full-bleed variant).
+          //  • Everything else — Extract, Settings, Benchmarks — is a content
+          //    page and shares the one capped, centred width so moving between
+          //    them doesn't jump. (Benchmarks used to be full-bleed, which is
+          //    what made the width feel inconsistent.)
           state.view === "concepts" && state.selectedRunId == null
             ? styles.mainFull
             : state.view === "history" ||
-              state.view === "benchmarks" ||
               state.view === "concepts"
             ? styles.mainHistory
             : styles.main

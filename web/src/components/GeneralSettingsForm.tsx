@@ -121,11 +121,17 @@ const styles = {
   actions: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "flex-end",
+    // Test Connection sits on the left, Save/Cancel group on the right (C4).
+    justifyContent: "space-between",
     gap: pwc.space.md,
     marginTop: pwc.space.xl,
     paddingTop: pwc.space.lg,
     borderTop: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  actionsRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.md,
   } as React.CSSProperties,
   cancelButton: {
     ...ui.buttonSecondary,
@@ -159,6 +165,27 @@ const styles = {
   savedBadge: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
+    color: pwc.success,
+  } as React.CSSProperties,
+  // The auto-saving section — a subtle card with a left rule to set it apart
+  // from the Save-button-gated fields (C4).
+  autoSaveCard: {
+    marginBottom: pwc.space.xl,
+    padding: pwc.space.lg,
+    background: pwc.grey100,
+    borderLeft: `3px solid ${pwc.grey300}`,
+    borderRadius: pwc.radius.sm,
+  } as React.CSSProperties,
+  autoSaveHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  autoSaveChip: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    fontWeight: pwc.weight.medium,
     color: pwc.success,
   } as React.CSSProperties,
   loadError: {
@@ -511,61 +538,66 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           the form's main Save button below. */}
       <NotesPasteFormatSection getSettings={getSettings} saveSettings={saveSettings} />
 
-      {/* Test Connection — admin-only (it exercises the shared AI plumbing). */}
-      {!readOnly && (
-      <div style={{ marginBottom: pwc.space.lg }}>
-        <button
-          onClick={handleTestConnection}
-          disabled={testing}
-          className={uiClass.btnSecondary}
-          style={styles.testButton}
-        >
-          {testing ? (
+      {/* Test-connection result — shown above the action row (which holds the
+          Test Connection button itself, admin-only). */}
+      {!readOnly && testResult && (
+        <div style={styles.testResult}>
+          {testResult.status === "ok" ? (
             <>
-              <span style={styles.testSpinner} /> Testing...
+              <span style={{ color: pwc.success, fontSize: 16 }}>✓</span>
+              <span style={{ color: pwc.success }}>{testResult.message}</span>
             </>
           ) : (
-            "Test Connection"
+            <>
+              <span style={{ color: pwc.error, fontSize: 16 }}>✗</span>
+              <span style={{ color: pwc.error }}>{testResult.message}</span>
+            </>
           )}
-        </button>
-        {testResult && (
-          <div style={styles.testResult}>
-            {testResult.status === "ok" ? (
-              <>
-                <span style={{ color: pwc.success, fontSize: 16 }}>✓</span>
-                <span style={{ color: pwc.success }}>{testResult.message}</span>
-              </>
-            ) : (
-              <>
-                <span style={{ color: pwc.error, fontSize: 16 }}>✗</span>
-                <span style={{ color: pwc.error }}>{testResult.message}</span>
-              </>
-            )}
-          </div>
-        )}
-      </div>
+        </div>
       )}
 
-      {/* Actions — a non-admin can't save the AI plumbing, so the Save row is
+      {/* One action row: Test Connection on the left, Save/Cancel on the right,
+          so the primary controls aren't scattered across the form (C4). A
+          non-admin can't save the AI plumbing, so Test Connection + Save are
           hidden (a Cancel is still offered when the modal host provides one). */}
       {(!readOnly || onCancel) && (
         <div style={styles.actions}>
-          {saved && <span style={styles.savedBadge}>Saved!</span>}
-          {onCancel && (
-            <button onClick={onCancel} className={uiClass.btnSecondary} style={styles.cancelButton}>
-              {readOnly ? "Close" : "Cancel"}
-            </button>
-          )}
-          {!readOnly && (
+          {!readOnly ? (
             <button
-              onClick={handleSave}
-              disabled={saving || hasErrors}
-              className={uiClass.btnPrimary}
-              style={styles.saveButton}
+              onClick={handleTestConnection}
+              disabled={testing}
+              className={uiClass.btnSecondary}
+              style={styles.testButton}
             >
-              {saving ? "Saving..." : "Save"}
+              {testing ? (
+                <>
+                  <span style={styles.testSpinner} /> Testing...
+                </>
+              ) : (
+                "Test Connection"
+              )}
             </button>
+          ) : (
+            <span />
           )}
+          <div style={styles.actionsRight}>
+            {saved && <span style={styles.savedBadge}>Saved!</span>}
+            {onCancel && (
+              <button onClick={onCancel} className={uiClass.btnSecondary} style={styles.cancelButton}>
+                {readOnly ? "Close" : "Cancel"}
+              </button>
+            )}
+            {!readOnly && (
+              <button
+                onClick={handleSave}
+                disabled={saving || hasErrors}
+                className={uiClass.btnPrimary}
+                style={styles.saveButton}
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -586,6 +618,11 @@ function NotesPasteFormatSection({
     parseThemeOptions(null),
   );
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Transient "Saved" confirmation so the auto-save is VISIBLE — otherwise the
+  // user can't tell this section persists on change while the rest of the form
+  // waits for the Save button (the "mixed save model" confusion, C4).
+  const [justSaved, setJustSaved] = useState(false);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last value the SERVER confirmed — restored if a save fails so the UI never
   // shows (or copies) an unsaved theme that a refresh would silently revert
   // (peer-review MEDIUM #5).
@@ -626,6 +663,10 @@ function NotesPasteFormatSection({
           .then(() => {
             lastSavedRef.current = clean;
             setSaveError(null);
+            // Flash a brief "Saved" so the auto-save is legible.
+            setJustSaved(true);
+            if (savedTimer.current) clearTimeout(savedTimer.current);
+            savedTimer.current = setTimeout(() => setJustSaved(false), 2000);
           })
           .catch(() => {
             setSaveError("Couldn't save the table style — check your connection.");
@@ -637,14 +678,28 @@ function NotesPasteFormatSection({
   );
 
   return (
-    <div style={styles.fieldGroup}>
-      <label style={styles.label}>Notes table style</label>
+    // Card + left rule visually mark this section as the one that AUTO-SAVES,
+    // so it's clearly distinct from the Save-button-gated fields around it (C4).
+    <div style={styles.autoSaveCard}>
+      <div style={styles.autoSaveHeader}>
+        <label style={styles.label}>Notes table style</label>
+        <span
+          style={{
+            ...styles.autoSaveChip,
+            visibility: justSaved ? "visible" : "hidden",
+          }}
+          role="status"
+          aria-live="polite"
+        >
+          ✓ Saved
+        </span>
+      </div>
       <p style={styles.helperText}>
         The firm default look for notes tables — grid colour, header fill, font,
         spacing. It styles BOTH the on-screen Notes review preview AND what you
         paste into M-Tool, so they match. Shared by everyone; changes save
-        automatically (no Save button). You can still override it per run, and
-        format individual cells.
+        automatically — no Save button needed for this section. You can still
+        override it per run, and format individual cells.
       </p>
       {saveError && (
         <p style={{ ...styles.helperText, color: pwc.error ?? "#b00020" }} role="alert">
