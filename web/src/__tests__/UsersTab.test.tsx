@@ -80,6 +80,20 @@ describe("UsersTab", () => {
     expect(api.adminAddUser).not.toHaveBeenCalled();
   });
 
+  // UX-QA #13: the signed-in admin can't be offered self-lockout controls.
+  test("hides Disable and Revoke-admin on the signed-in admin's own row", async () => {
+    render(<UsersTab currentEmail="admin@firm.com" />);
+    await waitFor(() => expect(screen.getByText("admin@firm.com")).toBeInTheDocument());
+    const selfRow = screen.getByText("admin@firm.com").closest("tr")!;
+    expect(within(selfRow).queryByRole("button", { name: /disable/i })).toBeNull();
+    expect(within(selfRow).queryByRole("button", { name: /revoke admin/i })).toBeNull();
+    // Reset password stays available (a self-service-safe two-step reveal).
+    expect(within(selfRow).getByRole("button", { name: /reset password/i })).toBeInTheDocument();
+    // Other users' rows keep their controls.
+    const otherRow = screen.getByText("user@firm.com").closest("tr")!;
+    expect(within(otherRow).getByRole("button", { name: /disable/i })).toBeInTheDocument();
+  });
+
   test("the 409 last-admin guard error is surfaced inline", async () => {
     (api.adminSetAdmin as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("Cannot demote the only remaining admin. Promote another account first."));

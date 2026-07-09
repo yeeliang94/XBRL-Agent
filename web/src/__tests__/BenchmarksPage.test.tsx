@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { BenchmarksPage } from "../pages/BenchmarksPage";
 
 const originalFetch = globalThis.fetch;
@@ -62,6 +62,24 @@ describe("BenchmarksPage", () => {
     const card = await screen.findByTestId("benchmark-card-1");
     fireEvent.click(card);
     expect(onSelect).toHaveBeenCalledWith(1);
+  });
+
+  // UX-QA #4: delete now goes through the shared ConfirmDialog, not window.confirm.
+  test("deleting a benchmark confirms via the shared dialog before calling the API", async () => {
+    const calls: string[] = [];
+    mockFetch((url, init) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === "/api/benchmarks") return sampleList;
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    fireEvent.click(await screen.findByTestId("benchmark-delete-1"));
+    // No API delete yet — the confirm dialog is open.
+    expect(calls.some((c) => c.startsWith("DELETE"))).toBe(false);
+    const dialog = await screen.findByRole("dialog", { name: /delete benchmark/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete benchmark/i }));
+    await waitFor(() =>
+      expect(calls.some((c) => c === "DELETE /api/benchmarks/1")).toBe(true));
   });
 
   test("upload mode requires a file before submitting", async () => {
