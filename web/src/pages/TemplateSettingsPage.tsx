@@ -172,16 +172,39 @@ function TemplateConceptRow({
   onRename: (uuid: string, label: string | null) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(concept.display_label || "");
+  const [draft, setDraft] = useState("");
   const isAbstract = concept.kind === "ABSTRACT";
   const label = concept.display_label || concept.canonical_label;
+
+  // Seed the edit box with the label the user actually sees, so renaming
+  // "Notes – Issued capital" doesn't start from an empty field (it used to
+  // seed from display_label alone, which is empty for the common no-override
+  // row). Entering edit mode is the only place draft is reset.
+  const startEditing = () => {
+    setDraft(label);
+    setEditing(true);
+  };
+
+  const commit = () => {
+    setEditing(false);
+    const next = draft.trim();
+    // Clearing the field, or typing the canonical text back, means "no
+    // override" — send null so the row reverts to the taxonomy default
+    // rather than storing a redundant custom label.
+    const nextLabel = next && next !== concept.canonical_label ? next : null;
+    if (nextLabel !== (concept.display_label || null)) {
+      void onRename(concept.concept_uuid, nextLabel);
+    }
+  };
+
+  const cancel = () => setEditing(false);
 
   return (
     <div
       data-testid={`ts-row-${concept.concept_uuid}`}
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) 112px",
+        gridTemplateColumns: "minmax(0, 1fr) 168px",
         gap: pwc.space.lg,
         padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
         borderBottom: `1px solid ${pwc.grey100}`,
@@ -198,11 +221,17 @@ function TemplateConceptRow({
           <input
             data-testid={`ts-rename-input-${concept.concept_uuid}`}
             value={draft}
+            autoFocus
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => {
-              setEditing(false);
-              if (draft !== (concept.display_label || "")) {
-                void onRename(concept.concept_uuid, draft || null);
+            onKeyDown={(e) => {
+              // Enter commits, Escape cancels — the affordances the bare
+              // textbox used to lack.
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancel();
               }
             }}
             style={{ ...ui.input, width: "100%" }}
@@ -211,16 +240,36 @@ function TemplateConceptRow({
           <span>{label}</span>
         )}
       </div>
-      <div>
+      <div style={{ display: "flex", gap: pwc.space.sm, justifyContent: "flex-end" }}>
         {!isAbstract && !editing && (
           <button
             data-testid={`ts-rename-btn-${concept.concept_uuid}`}
-            onClick={() => setEditing(true)}
+            onClick={startEditing}
             className={uiClass.btnSecondary}
             style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
           >
             Rename
           </button>
+        )}
+        {editing && (
+          <>
+            <button
+              data-testid={`ts-rename-cancel-${concept.concept_uuid}`}
+              onClick={cancel}
+              className={uiClass.btnSubtle}
+              style={{ ...ui.buttonSubtle, ...ui.buttonSm }}
+            >
+              Cancel
+            </button>
+            <button
+              data-testid={`ts-rename-save-${concept.concept_uuid}`}
+              onClick={commit}
+              className={uiClass.btnPrimary}
+              style={{ ...ui.buttonPrimary, ...ui.buttonSm }}
+            >
+              Save
+            </button>
+          </>
         )}
       </div>
     </div>

@@ -52,6 +52,20 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("button", { name: /change password/i })).toBeInTheDocument();
   });
 
+  test("credential fields carry anti-autofill attributes so the browser can't paste the login email into the AI service address", async () => {
+    render(<SettingsPage isAdmin={true} />);
+    const url = await screen.findByLabelText("AI service address");
+    // A login-form heuristic (URL field above a password field) was pasting
+    // the saved account email here; these attributes break that pairing.
+    expect(url.getAttribute("name")).toBe("ai-service-address");
+    expect(url.getAttribute("autocomplete")).toBe("off");
+    expect(url.getAttribute("type")).toBe("url");
+
+    const apiKey = document.querySelector<HTMLInputElement>("#ai-service-api-key");
+    expect(apiKey).not.toBeNull();
+    expect(apiKey!.getAttribute("autocomplete")).toBe("new-password");
+  });
+
   test("ArrowRight moves selection along the tablist", () => {
     render(<SettingsPage isAdmin={true} />);
     const tabs = within(tablist()).getAllByRole("tab");

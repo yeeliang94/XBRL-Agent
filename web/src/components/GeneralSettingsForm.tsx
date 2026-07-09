@@ -337,9 +337,17 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
 
       {/* Proxy URL */}
       <div style={styles.fieldGroup}>
-        <label style={styles.label}>AI service address</label>
+        <label style={styles.label} htmlFor="ai-service-address">AI service address</label>
         <input
-          type="text"
+          type="url"
+          id="ai-service-address"
+          name="ai-service-address"
+          // A URL field sitting directly above a password field trips the
+          // browser's "username + password" login heuristic, which then
+          // autofills the saved account email here. Naming it non-credentially
+          // and turning autofill off breaks that pairing so the field stays
+          // empty until the operator types a real address.
+          autoComplete="off"
           value={proxyUrl}
           onChange={(e) => setProxyUrl(e.target.value)}
           onBlur={() => validateField("proxyUrl")}
@@ -374,6 +382,13 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         </label>
         <input
           type="password"
+          id="ai-service-api-key"
+          name="ai-service-api-key"
+          // "new-password" tells password managers this is a value to set, not
+          // an existing credential to autofill — so they don't paste the saved
+          // login password here (and, paired with the URL field's non-login
+          // name above, don't treat the two as a sign-in form).
+          autoComplete="new-password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           onBlur={() => validateField("apiKey")}
