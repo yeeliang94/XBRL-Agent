@@ -112,6 +112,9 @@ def test_dev_cookie_flags(client):
     assert "HttpOnly" in cookie
     assert "samesite=lax" in cookie.lower()
     assert "Secure" not in cookie
+    # R5: the cookie now persists across a browser restart (Max-Age set,
+    # tracking the 1-hour idle window) instead of dying with the browser.
+    assert "max-age=3600" in cookie.lower()
 
 
 def test_prod_cookie_is_forced_secure_over_http(tmp_path, monkeypatch):

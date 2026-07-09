@@ -125,6 +125,18 @@ export function ExtractPage({
     fetchRunDetail(id)
       .then((detail) => {
         if (cancelled) return;
+        // A shared /run/{id} link only means "resume this upload" for an
+        // actual DRAFT. For a completed / running / failed run, dropping the
+        // user into a blank "Start extraction" config panel looks like they're
+        // about to re-run a finished job — so redirect to that run's detail
+        // view instead (docs/PLAN-design-qa-fixes.md R1).
+        if (detail.status && detail.status !== "draft") {
+          rehydratedRunIdRef.current = null;
+          dispatch({ type: "SET_VIEW", payload: "history" });
+          dispatch({ type: "SET_SELECTED_RUN_ID", payload: id });
+          dispatch({ type: "SET_CURRENT_RUN_ID", payload: null });
+          return;
+        }
         // Stash the saved config first so PreRunPanel sees it on its
         // first render after the UPLOADED dispatch below.
         setDraftConfig(detail.config ?? null);

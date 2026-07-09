@@ -120,6 +120,11 @@ export function HistoryList({
               if (isDraft && onResumeDraft) onResumeDraft(run.id);
               else onRunSelected(run.id);
             };
+            // A real link target so the row supports middle-click /
+            // open-in-new-tab / copy-link (a bare role="button" row can't) —
+            // docs/PLAN-design-qa-fixes.md R4. Drafts resume at /run/{id};
+            // finished runs open their detail at /history/{id}.
+            const runHref = isDraft ? `/run/${run.id}` : `/history/${run.id}`;
             // Rows act like buttons: focusable with Tab, activatable with
             // Enter/Space, and announced as interactive to assistive tech.
             // We keep the <tr> element so the table row/column context is
@@ -142,9 +147,22 @@ export function HistoryList({
                 style={isSelected ? styles.rowSelected : styles.row}
               >
                 <td style={styles.tdFilename}>
-                  <span style={styles.filename} title={run.pdf_filename}>
+                  <a
+                    href={runHref}
+                    style={styles.filename}
+                    title={run.pdf_filename}
+                    onClick={(e) => {
+                      // Plain click → SPA activate (no full page load). Let
+                      // modified clicks (new tab / window) fall through to the
+                      // browser's native href handling.
+                      e.stopPropagation();
+                      if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+                      e.preventDefault();
+                      handleActivate();
+                    }}
+                  >
                     {run.pdf_filename}
-                  </span>
+                  </a>
                   {run.filing_level === "group" && (
                     // Category tag (not a status) — outline pill, info-blue
                     // border, neutral label. Dot-less; the dot connotes state.
@@ -328,6 +346,9 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontWeight: pwc.weight.medium,
     color: pwc.grey900,
+    // Rendered as an <a> for middle-click / open-in-new-tab support, but it
+    // should read as a filename, not a blue underlined link.
+    textDecoration: "none",
     display: "block",
     // Single-line truncation: long filenames like
     // "Audited Financial Statements for the FYE 31 December 2022.pdf"
