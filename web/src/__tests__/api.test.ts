@@ -121,54 +121,63 @@ describe("API client", () => {
   describe("fetchRecentRuns", () => {
     beforeEach(() => mockFetch.mockClear());
 
-    test("requests a single capped page and returns its rows", async () => {
-      const rows = [{ id: 2 }, { id: 1 }];
+    test("fetches a wide window and surfaces results ahead of drafts, capped to limit", async () => {
+      // Newest-first page: newest two are drafts, older ones are results.
+      const rows = [
+        { id: 6, status: "draft" },
+        { id: 5, status: "draft" },
+        { id: 4, status: "completed" },
+        { id: 3, status: "completed_with_errors" },
+        { id: 2, status: "draft" },
+        { id: 1, status: "completed" },
+      ];
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ runs: rows, total: 2, limit: 5, offset: 0 }),
+        json: async () => ({ runs: rows, total: 6, limit: 20, offset: 0 }),
       });
-      const result = await fetchRecentRuns(5);
+      const result = await fetchRecentRuns(3);
       const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("limit=5");
-      // No status/date filters — recents is the unfiltered newest-first page.
+      // Wider window than the display limit so results further back surface.
+      expect(calledUrl).toContain("limit=20");
       expect(calledUrl).not.toContain("status=");
-      expect(result).toEqual(rows);
+      // Results first (newest-first within group), then drafts, capped to 3.
+      expect(result.map((r) => r.id)).toEqual([4, 3, 1]);
     });
 
-    test("defaults to a limit of 5 when none is given", async () => {
+    test("defaults to a limit of 5 (fetching a wider window)", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ runs: [], total: 0, limit: 5, offset: 0 }),
+        json: async () => ({ runs: [], total: 0, limit: 20, offset: 0 }),
       });
       await fetchRecentRuns();
       const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("limit=5");
+      expect(calledUrl).toContain("limit=20");
     });
   });
 
   describe("fetchHomeStats", () => {
     beforeEach(() => mockFetch.mockClear());
 
-    test("derives the three counts from each filter's server total", async () => {
-      // Three parallel calls, each reading `total` off a limit=1 page.
-      // Resolve in the same order fetchHomeStats issues them: all, draft,
-      // completed-this-month.
+    test("derives the counts from each filter's server total", async () => {
+      // Four parallel calls, each reading `total` off a limit=1 page.
+      // Order fetchHomeStats issues them: all, draft, completed-this-month,
+      // completed_with_errors-this-month. The last two sum into the month count.
       mockFetch
         .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 42, limit: 1, offset: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 3, limit: 1, offset: 0 }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 7, limit: 1, offset: 0 }) });
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 7, limit: 1, offset: 0 }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 2, limit: 1, offset: 0 }) });
 
       const stats = await fetchHomeStats();
-      expect(stats).toEqual({ total: 42, drafts: 3, completedThisMonth: 7 });
+      expect(stats).toEqual({ total: 42, drafts: 3, completedThisMonth: 9 });
 
       const urls = mockFetch.mock.calls.map((c) => c[0] as string);
       // Drafts call carries the status filter.
       expect(urls.some((u) => u.includes("status=draft"))).toBe(true);
-      // Completed-this-month call carries the completed status AND a
-      // first-of-month date floor (sent as the `from` alias).
-      const completedUrl = urls.find((u) => u.includes("status=completed"));
-      expect(completedUrl).toBeDefined();
-      expect(completedUrl).toMatch(/from=\d{4}-\d{2}-01/);
+      // Both completed variants this month carry a first-of-month date floor.
+      const completedUrl = urls.find((u) => u.includes("status=completed&"));
+      expect(completedUrl ?? urls.find((u) => /status=completed(&|$)/.test(u))).toMatch(/from=\d{4}-\d{2}-01/);
+      expect(urls.some((u) => u.includes("status=completed_with_errors"))).toBe(true);
     });
   });
 
