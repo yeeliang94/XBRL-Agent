@@ -38,10 +38,14 @@ const styles = {
     gap: pwc.space.sm,
     cursor: "pointer",
   } as React.CSSProperties,
+  // An UNCHECKED note is still fully selectable — the checkbox is never
+  // disabled (UX-QA #24). The old grey300 made an unticked row read as a
+  // disabled control, so users thought notes couldn't be included at all. Use
+  // a readable grey so it reads as "available, not selected" instead.
   labelDisabled: {
     fontFamily: pwc.fontBody,
     fontSize: 14,
-    color: pwc.grey300,
+    color: pwc.grey700,
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,

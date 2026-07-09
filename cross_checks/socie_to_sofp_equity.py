@@ -15,6 +15,7 @@ from cross_checks.util import (
     SOCIE_GROUP_BLOCKS, is_sore_run,
     socie_total_column, filing_level_prefix,
 )
+from cross_checks._format import fmt_amount, fmt_diff
 
 
 def _fmt_amount(value) -> str:
@@ -127,7 +128,7 @@ class SOCIEToSOFPEquityCheck:
         group_passed = diff <= tolerance
         # Reconciliation check — see cross_checks.util.filing_level_prefix.
         primary_label = filing_level_prefix(filing_level, with_period=False)
-        parts = [f"{primary_label}: SOCIE ({socie_equity}) vs SOFP ({sofp_equity}), diff={diff:.2f}"]
+        parts = [f"{primary_label}: SOCIE ({fmt_amount(socie_equity)}) vs SOFP ({fmt_amount(sofp_equity)}), diff={fmt_diff(diff)}"]
 
         # Group filings must carry Company totals — see sofp_balance.py for
         # the peer-review background on the old silent-pass default.
@@ -143,7 +144,7 @@ class SOCIEToSOFPEquityCheck:
                 co_diff = abs(co_socie_equity - co_sofp_equity)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SOCIE ({co_socie_equity}) vs SOFP ({co_sofp_equity}), diff={co_diff:.2f}"
+                    f"Company: SOCIE ({fmt_amount(co_socie_equity)}) vs SOFP ({fmt_amount(co_sofp_equity)}), diff={fmt_diff(co_diff)}"
                 )
 
         comparands = [
@@ -207,7 +208,7 @@ class SOCIEToSOFPEquityCheck:
         diff = abs(socie_equity - sofp_equity)
         group_passed = diff <= tolerance
         primary_label = filing_level_prefix(ctx.filing_level, with_period=False)
-        parts = [f"{primary_label}: SOCIE ({socie_equity}) vs SOFP ({sofp_equity}), diff={diff:.2f}"]
+        parts = [f"{primary_label}: SOCIE ({fmt_amount(socie_equity)}) vs SOFP ({fmt_amount(sofp_equity)}), diff={fmt_diff(diff)}"]
 
         co_socie_equity = None
         co_sofp_equity = None
@@ -233,7 +234,7 @@ class SOCIEToSOFPEquityCheck:
                 co_diff = abs(co_socie_equity - co_sofp_equity)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company: SOCIE ({co_socie_equity}) vs SOFP ({co_sofp_equity}), diff={co_diff:.2f}"
+                    f"Company: SOCIE ({fmt_amount(co_socie_equity)}) vs SOFP ({fmt_amount(co_sofp_equity)}), diff={fmt_diff(co_diff)}"
                 )
 
         comparands = [

@@ -97,6 +97,17 @@ const styles = {
     textTransform: "uppercase" as const,
     letterSpacing: 0.5,
   } as React.CSSProperties,
+  // Post-scan "found notes" nudge (UX-QA #24).
+  notesNudge: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey800,
+    background: pwc.grey50,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.sm,
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    marginBottom: pwc.space.sm,
+  } as React.CSSProperties,
   divider: {
     height: 1,
     background: pwc.grey200,
@@ -1417,6 +1428,20 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           The per-note model picker also lives behind Advanced. */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Notes to include</span>
+        {/* Post-scan nudge (UX-QA #24): notes default OFF and read as
+            "available, not selected" — but after a scan that found notes,
+            invite the user to include them. Otherwise a scan that reports
+            "Found 14 notes" seems to do nothing, and users conclude notes
+            can't be included at all. */}
+        {infopack &&
+          Array.isArray(infopack.notes_inventory) &&
+          (infopack.notes_inventory as unknown[]).length > 0 &&
+          !NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]) && (
+            <div style={styles.notesNudge} role="status">
+              The pre-scan found notes in this document. Tick any you’d like
+              extracted below — none are included by default.
+            </div>
+          )}
         <NotesRunConfig
           enabled={notesEnabled}
           modelOverrides={notesModelOverrides}
@@ -1440,6 +1465,19 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           Advanced settings, or turn grading off.
         </p>
       )}
+      {/* Scan-first soft-warning (UX-QA #5): if no pre-scan has run and no
+          statement format is resolved, the run starts against the fallback
+          Default layout with no confirmation. Nudge the user to scan or pick a
+          format — non-blocking, since an operator can still choose to proceed. */}
+      {canRun && !infopack &&
+        enabledStmts.length > 0 &&
+        enabledStmts.every((s) => !variantSelections[s]?.variant) && (
+          <p role="status" style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.orange700, margin: 0 }}>
+            No statement formats are set yet. Run the document pre-scan above (or
+            pick a format for each statement) so the AI uses the right layout —
+            otherwise it falls back to a default that may not match this document.
+          </p>
+        )}
       <button
         onClick={handleRun}
         disabled={!canRun}

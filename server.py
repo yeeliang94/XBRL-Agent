@@ -5885,6 +5885,12 @@ async def run_multi_agent_stream(
                 # folds in merge, cross-checks, correction_exhausted, and
                 # open canonical conflicts.
                 "success": overall_status == "completed",
+                # The single authoritative terminal status, passed through so
+                # the live UI maps it to ONE honest label (UX-QA #22) instead
+                # of collapsing every non-"completed" outcome to "Didn't
+                # finish". completed_with_errors is a partial success, not a
+                # failure.
+                "overall_status": overall_status,
                 "merged_workbook": merged_path if merge_result.success else None,
                 "merge_errors": merge_result.errors,
                 "cross_checks": checks_data,

@@ -291,6 +291,9 @@ export interface ScaleConflictData {
 
 export interface CompleteData {
   success: boolean;
+  // Mirror of RunCompleteData.overall_status (UX-QA #22) so the Summary card
+  // renders one honest status label instead of a binary Done/"Didn't finish".
+  overallStatus?: string;
   output_path: string;
   excel_path: string;
   trace_path: string;
@@ -355,6 +358,11 @@ export interface CrossCheckResult {
 /** Final aggregate event for multi-agent runs. */
 export interface RunCompleteData {
   success: boolean;
+  // The single authoritative terminal status (UX-QA #22): completed |
+  // completed_with_errors | correction_exhausted | failed | aborted. Passed
+  // through so the live UI shows one honest label per outcome instead of a
+  // binary success/"Didn't finish". Absent on legacy / early-reject events.
+  overall_status?: string;
   // Present when the backend rejects a run before any agent starts
   // (unknown statement, invalid infopack, model setup failure, …). The
   // happy-path success event and per-agent-failure rollups don't carry it.

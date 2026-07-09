@@ -87,6 +87,17 @@ export interface ConceptRow {
   scope_facts?: Record<string, Record<string, number | null>>;
 }
 
+// A value the reviewer can't check against the PDF (UX-QA #6): an editable
+// leaf that carries an extracted value but cites no source page. These are the
+// rows most needing a manual eyeball, so we badge + let them be filtered — not
+// treat them like any other row.
+function rowLacksSource(row: ConceptRow): boolean {
+  if (!(row.kind === "LEAF" || row.kind === "MATRIX_CELL")) return false;
+  if (row.is_alias) return false;
+  if (row.value == null) return false;
+  return parseEvidencePages(row.evidence || row.source).length === 0;
+}
+
 export interface ConceptsPageProps {
   // Null when the Concepts top-nav tab is opened without a run selected —
   // the page then shows a "pick a run" empty state instead of fetching.
@@ -184,6 +195,9 @@ export function ConceptsPage({
   // index in the page rather than re-querying so multi-statement
   // navigation stays snappy on slow networks.
   const [searchQuery, setSearchQuery] = useState("");
+  // Filter to only values that cite no source page (UX-QA #6) — the rows most
+  // needing a manual eyeball against the PDF.
+  const [showOnlyNoSource, setShowOnlyNoSource] = useState(false);
   // Phase 4 step 4.12 — Group runs toggle between Company / Group
   // value columns.  Defaults to Company; the toggle is rendered only
   // when at least one concept carries facts in both scopes.
@@ -598,7 +612,13 @@ export function ConceptsPage({
       Object.values(c.scope_facts).some((periods) => periods?.PY !== undefined)
   );
 
-  const filtered = baseRows;
+  // "Show only unverified" narrows to values with no cited source page. A
+  // parent whose children are all sourced simply drops out — this is a review
+  // aid, not the structural tree, so a flat filtered list is fine.
+  const filtered = showOnlyNoSource
+    ? baseRows.filter(rowLacksSource)
+    : baseRows;
+  const noSourceCount = baseRows.filter(rowLacksSource).length;
 
   useEffect(() => {
     if (notesActive) {
@@ -1089,6 +1109,17 @@ export function ConceptsPage({
                 style={{ ...ui.input, width: "100%" }}
               />
             </div>
+            {noSourceCount > 0 && (
+              <label style={styles.noSourceFilterLabel}>
+                <input
+                  type="checkbox"
+                  data-testid="filter-no-source"
+                  checked={showOnlyNoSource}
+                  onChange={(e) => setShowOnlyNoSource(e.target.checked)}
+                />
+                Show only unverified ({noSourceCount} with no source page)
+              </label>
+            )}
           </section>
         )}
 
@@ -1835,6 +1866,18 @@ function ConceptRowView({
               Required — no value extracted
             </span>
           )}
+        {/* No-source badge (UX-QA #6): this value can't be checked against the
+            PDF because no source page was recorded. Flag it for extra scrutiny
+            rather than letting it look like any other verified row. */}
+        {rowLacksSource(row) && (
+          <span
+            data-testid={`no-source-chip-${row.concept_uuid}`}
+            style={styles.noSourceChip}
+            title="No source page was recorded for this value, so it can't be checked against the PDF automatically. Verify it manually before filing."
+          >
+            No source page — verify manually
+          </span>
+        )}
       </div>
       {!isAbstract && (
         <>
@@ -2907,6 +2950,22 @@ const styles = {
     fontSize: 12,
     color: pwc.warningText,
     fontWeight: pwc.weight.medium,
+  } as React.CSSProperties,
+  // No-source badge + its filter toggle (UX-QA #6).
+  noSourceChip: {
+    fontSize: 12,
+    color: pwc.warningText,
+    fontWeight: pwc.weight.medium,
+  } as React.CSSProperties,
+  noSourceFilterLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.xs,
+    marginTop: pwc.space.xs,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey700,
+    cursor: "pointer",
   } as React.CSSProperties,
   sourceCell: {
     color: pwc.grey700,

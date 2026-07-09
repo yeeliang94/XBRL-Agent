@@ -13,6 +13,7 @@ from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, find_label_row,
     filing_level_prefix,
 )
+from cross_checks._format import fmt_amount, fmt_diff
 
 
 class SOFPBalanceCheck:
@@ -71,7 +72,10 @@ class SOFPBalanceCheck:
         # (peer-review S-3/S-4). SOFP is a CY/PY balance check — include
         # the period marker.
         primary_label = filing_level_prefix(filing_level, with_period=True)
-        parts = [f"{primary_label}: assets ({assets_cy}) vs equity+liab ({eq_liab_cy}), diff={diff:.2f}"]
+        parts = [
+            f"{primary_label}: assets ({fmt_amount(assets_cy)}) vs "
+            f"equity+liab ({fmt_amount(eq_liab_cy)}), diff={fmt_diff(diff)}"
+        ]
 
         # Group filings must carry Company totals. Missing values used to
         # default co_passed=True, silently hiding an incomplete extraction.
@@ -86,7 +90,8 @@ class SOFPBalanceCheck:
                 co_diff = abs(co_assets_cy - co_eq_liab_cy)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company CY: assets ({co_assets_cy}) vs equity+liab ({co_eq_liab_cy}), diff={co_diff:.2f}"
+                    f"Company CY: assets ({fmt_amount(co_assets_cy)}) vs "
+                    f"equity+liab ({fmt_amount(co_eq_liab_cy)}), diff={fmt_diff(co_diff)}"
                 )
 
         passed = group_passed and co_passed
@@ -161,7 +166,10 @@ class SOFPBalanceCheck:
         diff = abs(assets_cy - eq_liab_cy)
         group_passed = diff <= tolerance
         primary_label = filing_level_prefix(ctx.filing_level, with_period=True)
-        parts = [f"{primary_label}: assets ({assets_cy}) vs equity+liab ({eq_liab_cy}), diff={diff:.2f}"]
+        parts = [
+            f"{primary_label}: assets ({fmt_amount(assets_cy)}) vs "
+            f"equity+liab ({fmt_amount(eq_liab_cy)}), diff={fmt_diff(diff)}"
+        ]
 
         co_passed = True
         if ctx.filing_level == "group":
@@ -174,7 +182,8 @@ class SOFPBalanceCheck:
                 co_diff = abs(co_assets_cy - co_eq_liab_cy)
                 co_passed = co_diff <= tolerance
                 parts.append(
-                    f"Company CY: assets ({co_assets_cy}) vs equity+liab ({co_eq_liab_cy}), diff={co_diff:.2f}"
+                    f"Company CY: assets ({fmt_amount(co_assets_cy)}) vs "
+                    f"equity+liab ({fmt_amount(co_eq_liab_cy)}), diff={fmt_diff(co_diff)}"
                 )
 
         passed = group_passed and co_passed

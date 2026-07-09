@@ -37,6 +37,14 @@ const STATUS_DISPLAY: Record<
   not_applicable: { label: "N/A", accent: pwc.grey500 },
 };
 
+// One number convention for the Expected/Actual/Diff cells (UX-QA #9): grouped
+// thousands, capped at 2 decimals so a float diff doesn't spill locale-default
+// precision next to the now-grouped message figures.
+function fmtCheckAmount(value: number | null | undefined): string {
+  if (value == null) return "—";
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -112,13 +120,13 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                     </span>
                   </td>
                   <td style={{ ...styles.td, textAlign: "right", fontFamily: pwc.fontMono }}>
-                    {check.expected != null ? check.expected.toLocaleString() : "—"}
+                    {fmtCheckAmount(check.expected)}
                   </td>
                   <td style={{ ...styles.td, textAlign: "right", fontFamily: pwc.fontMono }}>
-                    {check.actual != null ? check.actual.toLocaleString() : "—"}
+                    {fmtCheckAmount(check.actual)}
                   </td>
                   <td style={{ ...styles.td, textAlign: "right", fontFamily: pwc.fontMono }}>
-                    {check.diff != null ? check.diff.toLocaleString() : "—"}
+                    {fmtCheckAmount(check.diff)}
                   </td>
                   <td style={{ ...styles.td, fontSize: 13, color: pwc.grey700 }}>
                     {check.message}

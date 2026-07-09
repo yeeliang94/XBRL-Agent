@@ -623,6 +623,9 @@ function handleRunComplete(
     isRunning: false,
     complete: {
       success: rc.success,
+      // Carry the authoritative terminal status through (UX-QA #22) so the
+      // Summary card shows one honest label rather than Done/"Didn't finish".
+      overallStatus: rc.overall_status,
       output_path: "",
       excel_path: rc.merged_workbook || "",
       trace_path: "",
@@ -642,9 +645,14 @@ function handleRunComplete(
     crossChecks: rc.cross_checks || [],
     crossChecksPartial: rc.cross_checks_partial || false,
   };
-  // Phase 9: success toast only — the red path shows its error in-panel.
+  // Completion toast. A clean run reads "successfully"; a
+  // completed_with_errors run finished and produced a workbook but a check
+  // failed — surface it as a distinct warning toast (UX-QA #22) instead of
+  // giving it no completion feedback at all, which read as a silent failure.
   if (rc.success) {
     out.toast = { message: "Run completed successfully", tone: "success" };
+  } else if (rc.overall_status === "completed_with_errors") {
+    out.toast = { message: "Run completed with errors — review before filing", tone: "error" };
   }
 
   // Start from the caller's in-progress snapshot so any slot added in

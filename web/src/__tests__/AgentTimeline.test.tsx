@@ -146,6 +146,23 @@ describe("AgentTimeline", () => {
     expect(container.querySelector("[data-terminal='done']")).toBeTruthy();
   });
 
+  test("run_complete completed_with_errors renders the amber row, not red Failed (UX-QA #22)", () => {
+    const events = [
+      { event: "complete", data: { success: true }, timestamp: 1 },
+      {
+        event: "run_complete",
+        data: { success: false, overall_status: "completed_with_errors" },
+        timestamp: 2,
+      },
+    ] as unknown as SSEEvent[];
+    const { container } = render(
+      <AgentTimeline events={events} toolTimeline={[]} isRunning={false} />,
+    );
+    expect(container.querySelector("[data-terminal='completed-with-errors']")).toBeTruthy();
+    expect(container.querySelector("[data-terminal='error']")).toBeNull();
+    expect(screen.getByText(/Completed with errors/i)).toBeInTheDocument();
+  });
+
   test("run_complete with success:false and merge_errors shows the first error", () => {
     const events = [
       {

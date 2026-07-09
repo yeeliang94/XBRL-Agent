@@ -40,6 +40,7 @@ from cross_checks.util import (
     open_workbook, find_sheet, find_value_by_label, find_label_row,
     filing_level_prefix,
 )
+from cross_checks._format import fmt_amount, fmt_diff
 
 
 def _effective_tolerance(tolerance: float, *magnitudes: Optional[float]) -> float:
@@ -124,9 +125,9 @@ class _AttributionFootingBase:
         return {
             "verdict": "passed" if passed else "failed",
             "msg": (
-                f"{label}: {self._noun} ({income}) "
-                f"{'==' if passed else '!='} attribution split ({attribution}), "
-                f"diff={diff:.2f}"
+                f"{label}: {self._noun} ({fmt_amount(income)}) "
+                f"{'==' if passed else '!='} attribution split ({fmt_amount(attribution)}), "
+                f"diff={fmt_diff(diff)}"
             ),
             "comparands": [
                 Comparand(label=self._income_label + suffix, sheet=sheet,
