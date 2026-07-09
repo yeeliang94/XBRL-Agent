@@ -340,6 +340,17 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     ? `Showing ${visibleRuns.length} of ${runs.length} loaded run${runs.length === 1 ? "" : "s"} (${filters.standard!.toUpperCase()}). Load more to scan earlier rows.`
     : null;
 
+  // Split drafts into their own collapsed section so they don't bury the real
+  // runs (E2). When the user explicitly filters by status, keep the single
+  // list (the filter already scopes what they see).
+  const statusFilterActive = !!filters.status;
+  const draftRuns = statusFilterActive
+    ? []
+    : visibleRuns.filter((r) => r.status === "draft");
+  const mainRuns = statusFilterActive
+    ? visibleRuns
+    : visibleRuns.filter((r) => r.status !== "draft");
+
   // When a run is selected, the detail page takes over the whole container
   // instead of floating a modal over the list. The list's scroll position
   // is preserved by React retaining the parent's DOM when we toggle the
@@ -404,13 +415,29 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
         </p>
       )}
       <HistoryList
-        runs={visibleRuns}
+        runs={mainRuns}
         isLoading={isLoading}
         error={error}
         selectedId={selectedId}
         onRunSelected={handleRunSelected}
         onResumeDraft={onResumeDraft}
       />
+      {/* Drafts sit in their own collapsed section so unstarted uploads don't
+          bury the real runs (E2). Skipped when the user explicitly filters by
+          status — then everything shows in the main list above. */}
+      {draftRuns.length > 0 && (
+        <details style={styles.draftsSection} data-testid="drafts-section">
+          <summary style={styles.draftsSummary}>
+            Drafts — not started ({draftRuns.length})
+          </summary>
+          <HistoryList
+            runs={draftRuns}
+            selectedId={selectedId}
+            onRunSelected={handleRunSelected}
+            onResumeDraft={onResumeDraft}
+          />
+        </details>
+      )}
       {filterNote && (
         // Client-side filter transparency: this footnote explains why
         // Load-more can show "n remaining" while the visible list is
@@ -491,6 +518,17 @@ const styles = {
     color: pwc.grey700,
     fontFamily: pwc.fontBody,
     fontSize: 13,
+  } as React.CSSProperties,
+  draftsSection: {
+    marginTop: pwc.space.lg,
+  } as React.CSSProperties,
+  draftsSummary: {
+    cursor: "pointer",
+    padding: `${pwc.space.sm}px 0`,
+    color: pwc.grey700,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   filterNote: {
     marginTop: pwc.space.xs,
