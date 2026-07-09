@@ -1025,4 +1025,91 @@ describe("RunDetailView", () => {
     expect(screen.getByTestId("eval-flags").textContent).toContain("3 scale mismatch");
     expect(screen.getByTestId("eval-flags").textContent).toContain("11 missing");
   });
+
+  // --- UX-QA #1: completed-with-errors warning banner ---
+  test("completed_with_errors run shows a warning banner naming the failing check", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          status: "completed_with_errors",
+          cross_checks: [
+            {
+              name: "sofp_balance",
+              status: "failed",
+              expected: 100,
+              actual: 90,
+              diff: 10,
+              tolerance: 1,
+              message: "assets vs equity+liab",
+            },
+          ],
+        })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    const banner = screen.getByRole("alert");
+    expect(banner.textContent).toMatch(/didn.t pass/i);
+    // The human-readable check name appears, not the raw id.
+    expect(banner.textContent).toMatch(/balance/i);
+    // Download is demoted to a secondary until acknowledged.
+    const download = screen.getByRole("button", { name: /download filled excel/i });
+    expect(download.className).toMatch(/secondary/i);
+  });
+
+  test("acknowledging the error banner restores Download to primary", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({ status: "completed_with_errors" })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /i.ve reviewed these/i }));
+    const download = screen.getByRole("button", { name: /download filled excel/i });
+    expect(download.className).toMatch(/primary/i);
+    expect(download.className).not.toMatch(/secondary/i);
+  });
+
+  test("clean completed run shows no warning banner and a primary Download", () => {
+    render(
+      <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    const download = screen.getByRole("button", { name: /download filled excel/i });
+    expect(download.className).toMatch(/primary/i);
+  });
+
+  // --- UX-QA #2: abort control for a wedged running run ---
+  test("running run offers Abort (not disabled Delete) and confirms before firing", () => {
+    const onForceAbort = vi.fn();
+    render(
+      <RunDetailView
+        detail={makeDetail({ status: "running", merged_workbook_path: null })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+        onForceAbort={onForceAbort}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /delete run/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /abort run/i }));
+    // Confirm dialog gates the action — its confirm button shares the label, so
+    // click the last "Abort run" button (the dialog's, not the header trigger).
+    const abortButtons = screen.getAllByRole("button", { name: /^abort run$/i });
+    fireEvent.click(abortButtons[abortButtons.length - 1]);
+    expect(onForceAbort).toHaveBeenCalledWith(42);
+  });
+
+  test("running run without onForceAbort falls back to the disabled Delete", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({ status: "running", merged_workbook_path: null })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    const del = screen.getByRole("button", { name: /delete run/i });
+    expect(del).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /abort run/i })).toBeNull();
+  });
 });

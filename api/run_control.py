@@ -313,6 +313,61 @@ async def abort_agent(session_id: str, agent_id: str):
     return {"cancelled": agent_id}
 
 
+@router.post("/api/runs/{run_id}/force-abort")
+async def force_abort_run(run_id: int):
+    """Rescue a run wedged in `running` status (UX-QA #2).
+
+    The live Stop-All (`/api/abort/{session_id}`) only reaches a run whose
+    stream is still in memory. A run left `running` by a dead process — e.g.
+    opened from History a month later — has no such session, so Download and
+    Delete stay disabled forever with no escape. This gives the user that
+    escape:
+
+      - Run not found          → 404.
+      - Run not `running`       → 409 (nothing to abort; it's already terminal
+                                  or a draft).
+      - Session still streaming → real cancel via `task_registry.cancel_all`;
+                                  the stream's own finally block writes the
+                                  terminal status, so we DON'T touch the row
+                                  here (avoids racing the coordinator's writes).
+      - Otherwise (dead row)    → flip the DB row straight to `aborted`.
+
+    The startup reaper (`reconcile_stale_runs`) covers this automatically on
+    restart; this endpoint is the on-demand equivalent so the user needn't wait
+    for one.
+    """
+    from db import repository as repo
+
+    conn = server._open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+    finally:
+        conn.close()
+
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status != "running":
+        raise HTTPException(
+            status_code=409,
+            detail="This run isn't running, so there's nothing to abort.",
+        )
+
+    # A genuinely-live run: cancel its tasks and let the stream finalize.
+    if run.session_id and run.session_id in server.active_runs:
+        import task_registry
+        task_registry.cancel_all(run.session_id)
+        return {"aborted": run_id, "mode": "cancelled_live"}
+
+    # A dead row: no owning stream will ever finalize it — flip it ourselves.
+    conn = server._open_audit_conn()
+    try:
+        repo.mark_run_finished(conn, run_id, "aborted")
+        conn.commit()
+    finally:
+        conn.close()
+    return {"aborted": run_id, "mode": "reaped_dead"}
+
+
 # ---------------------------------------------------------------------------
 # Rerun endpoint — re-extract a single statement in an existing session
 # ---------------------------------------------------------------------------

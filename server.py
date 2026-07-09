@@ -2397,6 +2397,26 @@ async def _lifespan(app: FastAPI):
         logger.warning("notes formatter task reconciliation failed at startup",
                        exc_info=True)
 
+    # Retire extraction runs left `running` by a dead process (UX-QA #2). The
+    # run executes inside a streaming request that dies with the process, so a
+    # surviving `running` row is a History dead-end (Download/Delete disabled,
+    # no live indicator). Flip stale ones to `aborted` so the lifecycle
+    # contract (gotcha #10) holds across restarts. Fresh in-flight runs are
+    # spared by the age threshold. Best-effort — must not block startup.
+    try:
+        from db import repository as repo
+        conn = _open_audit_conn()
+        try:
+            n = repo.reconcile_stale_runs(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        if n:
+            logger.info("reconciled %d stale run(s) at startup", n)
+    except Exception:
+        logger.warning("stale run reconciliation failed at startup",
+                       exc_info=True)
+
     # Sweep auth sessions that idled out and were never accessed again (the user
     # closed the tab). resolve_session deletes expired rows lazily on access, so
     # this only reaps the never-touched-again ones; without it the table grows

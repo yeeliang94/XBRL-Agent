@@ -7,7 +7,7 @@ import { HistoryFilters } from "../components/HistoryFilters";
 import { HistoryList } from "../components/HistoryList";
 import { RunDetailPage } from "../components/RunDetailPage";
 import type { RunTabKey } from "../components/RunDetailView";
-import { fetchRuns, fetchRunDetail, deleteRun, downloadFilledUrl } from "../lib/api";
+import { fetchRuns, fetchRunDetail, deleteRun, forceAbortRun, downloadFilledUrl } from "../lib/api";
 import type { RunDetailJson, RunSummaryJson, RunsFilterParams } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -231,6 +231,20 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     window.location.href = downloadFilledUrl(runId);
   }, []);
 
+  // Force-abort a wedged `running` run opened from History (UX-QA #2). The
+  // backend flips a dead row to `aborted`; we then reload both the list and the
+  // open detail so Delete/Download become usable without a page refresh.
+  const handleForceAbort = useCallback(async (runId: number) => {
+    try {
+      await forceAbortRun(runId);
+      setRefetchKey((k) => k + 1);
+      const fresh = await fetchRunDetail(runId);
+      setDetail(fresh);
+    } catch (err) {
+      setDetailError(userMessage(err));
+    }
+  }, []);
+
   // Step 12: Regenerate notes — the NotesReviewTab already showed the
   // confirm dialog when any cells were user-edited, so by the time this
   // handler fires the user has opted in to clobbering their edits.
@@ -390,6 +404,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           }}
           onDownload={handleDownload}
           onDelete={handleDelete}
+          onForceAbort={handleForceAbort}
           onRegenerateNotes={handleRegenerateNotes}
         />
       </div>

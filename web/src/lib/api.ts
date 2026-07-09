@@ -349,6 +349,15 @@ export async function deleteRun(runId: number): Promise<{ deleted: number }> {
   return apiFetch(`/api/runs/${runId}`, { method: "DELETE" });
 }
 
+/** Rescue a run wedged in `running` status (UX-QA #2). A dead row is flipped
+ *  to `aborted`; a genuinely-live one is cancelled. Backend returns 409 if the
+ *  run isn't running and 404 if it's unknown. */
+export async function forceAbortRun(
+  runId: number,
+): Promise<{ aborted: number; mode: string }> {
+  return apiFetch(`/api/runs/${runId}/force-abort`, { method: "POST" });
+}
+
 /** Bulk-delete abandoned draft runs (uploads that were never started). Returns
  *  the count removed. Draft-only server-side — cannot touch real runs. */
 export async function deleteDraftRuns(): Promise<{ deleted: number }> {

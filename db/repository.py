@@ -14,7 +14,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
@@ -1833,6 +1833,34 @@ def fetch_review_task(
         "model_name": row["model_name"],
         "outcome": outcome,
     }
+
+
+def reconcile_stale_runs(conn: sqlite3.Connection, max_age_hours: float = 6.0) -> int:
+    """Retire extraction runs orphaned by a process restart (UX-QA #2).
+
+    A run executes inside a streaming request; if the process dies mid-run the
+    `runs` row is left `status='running'` forever. On the History page such a
+    row shows Download/Delete disabled and no live indicator — a dead-end the
+    user can't escape. This mirrors `reconcile_stale_review_tasks`: at startup,
+    flip every `running` run older than ``max_age_hours`` to a terminal
+    ``aborted`` so gotcha #10's "no row stuck non-terminal" contract holds
+    across restarts. A row with a blank ``started_at`` (definitionally broken —
+    run-start always stamps it) is reaped regardless of age.
+
+    A genuinely fresh `running` row (started within the window) is left alone so
+    a very recent restart during an in-flight run doesn't kill live work.
+    Returns rows reconciled. Called once at startup, before any request served.
+    """
+    now = _now()
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    ).isoformat(timespec="seconds").replace("+00:00", "Z")
+    cur = conn.execute(
+        "UPDATE runs SET status = 'aborted', ended_at = ? "
+        "WHERE status = 'running' AND (started_at = '' OR started_at < ?)",
+        (now, cutoff),
+    )
+    return int(cur.rowcount)
 
 
 def reconcile_stale_review_tasks(conn: sqlite3.Connection) -> int:

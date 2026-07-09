@@ -27,7 +27,7 @@ import {
 import { displayModelId } from "../lib/modelId";
 import { notesTabLabel } from "../lib/appReducer";
 import { formatCost } from "../lib/numberFormat";
-import { denominationLabel, pseudoAgentLabel, variantLabel } from "../lib/vocabulary";
+import { denominationLabel, pseudoAgentLabel, variantLabel, crossCheckLabel } from "../lib/vocabulary";
 import { isNotes12StatementType } from "../lib/notes";
 
 // ---------------------------------------------------------------------------
@@ -43,6 +43,10 @@ export interface RunDetailViewProps {
   detail: RunDetailJson;
   onDownload: (runId: number) => void;
   onDelete: (runId: number) => void;
+  /** Rescue a run wedged in `running` status (UX-QA #2). When provided and the
+   *  run is `running`, an "Abort run" control replaces the disabled Delete so a
+   *  dead run isn't a dead-end. Optional — absent for callers that can't act. */
+  onForceAbort?: (runId: number) => void;
   /** Called when the user confirms "Regenerate notes" in the Notes
    *  Review section. The parent wires this to the existing rerun
    *  endpoint. Optional — legacy callers without Step 12 UX still
@@ -347,8 +351,8 @@ function writeRunTabToUrl(key: RunTabKey): void {
 }
 
 export function RunDetailView({
-  detail, onDownload, onDelete, onRegenerateNotes, canonicalEnabled = false,
-  initialTab = "overview",
+  detail, onDownload, onDelete, onForceAbort, onRegenerateNotes,
+  canonicalEnabled = false, initialTab = "overview",
 }: RunDetailViewProps) {
   // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
   // PDF panes) only mounts when its tab is active, so opening a run doesn't
@@ -378,6 +382,12 @@ export function RunDetailView({
   // Delete confirmation — the shared ConfirmDialog replaces window.confirm so
   // every destructive action in the app confirms the same, plain-English way.
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Abort confirmation for a wedged `running` run (UX-QA #2).
+  const [confirmAbort, setConfirmAbort] = useState(false);
+  // Whether the user has acknowledged the "completed with errors" warning
+  // banner (UX-QA #1). Until they do, Download stays a secondary (not primary)
+  // action so the tool doesn't invite filing failed-check data at a glance.
+  const [errorAck, setErrorAck] = useState(false);
 
   // Step 8/12 — clicking a failed cross-check drives the source-PDF pane to
   // the cited page(s) of the cell it targets. We resolve (target_sheet,
@@ -429,6 +439,18 @@ export function RunDetailView({
   };
 
   const canDownload = !!detail.merged_workbook_path;
+  const isRunning = detail.status === "running";
+  // A finished-but-flagged run (UX-QA #1): it completed AND offers a download,
+  // but a consistency check failed — so the page must NOT look like a clean run.
+  // `failed` is excluded (it has no workbook to download and already reads as a
+  // failure); this targets the states that quietly pair an amber badge with a
+  // big Download button.
+  const isErrorOutcome =
+    detail.status === "completed_with_errors" ||
+    detail.status === "correction_exhausted";
+  const failingCheckNames = (detail.cross_checks ?? [])
+    .filter((c) => c.status === "failed")
+    .map((c) => crossCheckLabel(c.name));
   // mTool fill needs a completed run (facts must be final) — same gate the
   // backend enforces (api/mtool.py _FILLABLE_STATUSES).
   const canFillMtool =
@@ -548,20 +570,30 @@ export function RunDetailView({
           </p>
         </div>
         <div style={styles.actions}>
-          <button
-            type="button"
-            onClick={() => onDownload(detail.id)}
-            disabled={!canDownload}
-            className={uiClass.btnPrimary}
-            style={ui.buttonPrimary}
-            title={
-              canDownload
-                ? "Download the completed Excel file"
-                : "The Excel file isn't ready (the run stopped before it was assembled)"
-            }
-          >
-            Download filled Excel
-          </button>
+          {(() => {
+            // Demote Download to a secondary until the user acknowledges the
+            // error banner, so a completed-with-errors run doesn't lead with a
+            // filled primary button inviting a (possibly wrong) filing (#1).
+            const demote = isErrorOutcome && !errorAck;
+            return (
+              <button
+                type="button"
+                onClick={() => onDownload(detail.id)}
+                disabled={!canDownload}
+                className={demote ? uiClass.btnSecondary : uiClass.btnPrimary}
+                style={demote ? ui.buttonSecondary : ui.buttonPrimary}
+                title={
+                  canDownload
+                    ? demote
+                      ? "Review the failing checks above before downloading"
+                      : "Download the completed Excel file"
+                    : "The Excel file isn't ready (the run stopped before it was assembled)"
+                }
+              >
+                Download filled Excel
+              </button>
+            );
+          })()}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
           <button
@@ -585,24 +617,102 @@ export function RunDetailView({
           {/* Hairline divider so the destructive action doesn't sit shoulder
               to shoulder with the most-clicked buttons. */}
           <span aria-hidden="true" style={styles.actionsDivider} />
-          <button
-            type="button"
-            onClick={handleDelete}
-            disabled={!canDelete}
-            className={uiClass.btnDanger}
-            style={ui.buttonDanger}
-            title={
-              canDelete
-                ? "Delete run from history (on-disk files are kept)"
-                : "Can't delete a run that's still in progress — wait for it to finish or abort it first."
-            }
-          >
-            Delete run
-          </button>
+          {isRunning && onForceAbort ? (
+            // A run wedged in `running` can never be deleted (Delete is disabled
+            // and the API 409s). Give the user an escape hatch: abort it, which
+            // flips a dead row to `aborted` so Delete/Download become usable
+            // (UX-QA #2).
+            <button
+              type="button"
+              onClick={() => setConfirmAbort(true)}
+              className={uiClass.btnDanger}
+              style={ui.buttonDanger}
+              title="Stop this run and mark it aborted — use this if a run has been stuck for a long time."
+            >
+              Abort run
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={!canDelete}
+              className={uiClass.btnDanger}
+              style={ui.buttonDanger}
+              title={
+                canDelete
+                  ? "Delete run from history (on-disk files are kept)"
+                  : "Can't delete a run that's still in progress — wait for it to finish or abort it first."
+              }
+            >
+              Delete run
+            </button>
+          )}
         </div>
       </header>
 
+      {/* Finished-but-flagged warning (UX-QA #1): a completed_with_errors /
+          needs-review run must not look like a clean run. Name the failing
+          check(s), link straight to the Cross-checks tab, and keep Download
+          demoted until acknowledged. */}
+      {isErrorOutcome && (
+        <div style={styles.errorBanner} role="alert">
+          <div style={styles.errorBannerBody}>
+            <strong style={styles.errorBannerTitle}>
+              This run finished, but a consistency check didn’t pass.
+            </strong>
+            <span style={styles.errorBannerText}>
+              {failingCheckNames.length > 0 ? (
+                <>
+                  Review before filing:{" "}
+                  {failingCheckNames.join(", ")}.
+                </>
+              ) : (
+                <>Review the cross-checks before downloading or filing this run.</>
+              )}
+            </span>
+          </div>
+          <div style={styles.errorBannerActions}>
+            <button
+              type="button"
+              onClick={() => selectTab("checks")}
+              className={uiClass.btnSecondary}
+              style={ui.buttonSecondary}
+            >
+              View cross-checks
+            </button>
+            {!errorAck && (
+              <button
+                type="button"
+                onClick={() => setErrorAck(true)}
+                className={uiClass.btnGhost}
+                style={ui.buttonGhost}
+              >
+                I’ve reviewed these
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <MtoolFillModal runId={detail.id} open={mtoolOpen} onClose={() => setMtoolOpen(false)} />
+
+      <ConfirmDialog
+        isOpen={confirmAbort}
+        title={`Abort run ${detail.id}?`}
+        message={
+          <>
+            This marks <strong>{detail.pdf_filename}</strong> as aborted so you
+            can delete or re-run it. Use this only if the run has clearly
+            stopped — any work still in progress will be lost.
+          </>
+        }
+        confirmLabel="Abort run"
+        onConfirm={() => {
+          setConfirmAbort(false);
+          onForceAbort?.(detail.id);
+        }}
+        onCancel={() => setConfirmAbort(false)}
+      />
 
       <ConfirmDialog
         isOpen={confirmDelete}
@@ -872,6 +982,42 @@ const styles = {
     color: pwc.grey700,
   } as React.CSSProperties,
   actions: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  // Finished-but-flagged banner (#1): neutral surface with an amber left-rule,
+  // matching the design-system alert treatment (no loud full-bleed fill).
+  errorBanner: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.md,
+    padding: pwc.space.md,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderLeft: `3px solid ${pwc.warning}`,
+    borderRadius: pwc.radius.md,
+  } as React.CSSProperties,
+  errorBannerBody: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 2,
+    minWidth: 240,
+    flex: "1 1 320px",
+  } as React.CSSProperties,
+  errorBannerTitle: {
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    color: pwc.grey800,
+  } as React.CSSProperties,
+  errorBannerText: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
+  } as React.CSSProperties,
+  errorBannerActions: {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
