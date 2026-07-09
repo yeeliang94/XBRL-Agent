@@ -2,8 +2,12 @@
 
 **Audience:** the operator on the Windows box where SSM's mTool 2.1 is installed.
 **Requested by:** the xbrl-agent team (Mac side).
-**Status:** NOT normally needed. Formatting is already handled (see below). Use
-this only if a SPECIFIC construct still renders wrong in mTool after decoration.
+**Status:** the original render-fidelity recon (sections below) is NOT normally
+needed — formatting is already handled. **BUT the [Size recon](#size-recon-2026-07-09--requested)
+section at the bottom IS an active request (2026-07-09)** — please run it on the
+next mTool session. It answers a different question: how mTool itself stores a
+heavily-styled note, and whether Excel's 32,767-character cell limit actually
+bites in the mTool workflow.
 
 ## Status — read this first
 
@@ -133,3 +137,67 @@ numeric `text-align: right`, etc.):
   `<colgroup><col style="width: …">` for column widths
 - Colour: `<span style="color: #rrggbb">`, cell fills via
   `background-color: #rrggbb`
+
+---
+
+## Size recon (2026-07-09) — REQUESTED
+
+**Why:** our automated fill can bust Excel's 32,767-character-per-cell limit on
+big tables — not because the note's words are long, but because our styling is
+written out per table cell (measured: a 50-row × 6-column table is ~1.7k of
+text but ~33k once decorated). Meanwhile, users can heavily style notes inside
+mTool's own editor and it saves without complaint. We need to see **what mTool
+itself writes** for a big styled note, so we can either mimic its compact form
+or learn that the limit doesn't bite in the mTool workflow at all.
+
+Same ground rules as above (dummy/test filing, copy the zip before inspecting,
+plain-text email back).
+
+### Step 1 — paste the ready-made big note into mTool
+
+1. On the Windows box, open `mtool/examples/recon_size_test_note.html` in a
+   browser (Edge/Chrome — double-click the file).
+2. Select all (**Ctrl+A**), copy (**Ctrl+C**).
+3. In a throwaway test filing, open any prose-note text-block popup and paste
+   (**Ctrl+V**). Confirm the table pasted WITH its borders/fills/alignment —
+   if it pasted as plain text, tell us and stop here.
+4. Save/close the filing normally so **mTool writes the payload**.
+5. Note which visible note you pasted into (sheet + row/label).
+
+### Step 2 — dump what mTool stored
+
+```
+python mtool/examples/dump_fn_payload.py --workbook <that-filing>.xlsx
+```
+
+The dumper prints every populated payload **with its character count**. Find
+the one containing "SIZE-RECON TEST NOTE".
+
+### Step 3 — answer these questions
+
+1. **Character count** of that payload (the dumper prints it). This is the
+   headline number — over or under 32,767?
+2. Did mTool **save and reopen** the note intact (styling still visible when
+   you reopen the popup)? Any warning or truncation on save?
+3. Paste back **one full `<td>` and the opening `<table …>` tag** verbatim from
+   the dump — we want to see how many characters of styling mTool spends per
+   cell vs per table.
+4. Does mTool put styling on **every cell**, **once per table/row**, or use
+   something else entirely (`class=` references, a stylesheet block, RTF-ish
+   markup)?
+5. **Does your normal filing workflow ever open the filled mTool workbook in
+   Excel itself** (not mTool) — e.g. to check figures — and re-save it? This
+   decides whether Excel's 32,767 limit is a real constraint or a theoretical
+   one for this workflow.
+6. If the payload came out UNDER 32,767: try making the table even bigger
+   (copy-paste the table's rows a second time inside the mTool editor, roughly
+   doubling it), save, dump again. Does mTool still save fine past ~33k? Any
+   complaint from mTool's own Validate?
+
+### What we do with it
+
+- If mTool stores styling compactly (per-table, classes, or attributes) → we
+  slim our decorator to match (see docs/PLAN-mtool-compact-decoration.md).
+- If mTool happily exceeds 32,767 and Excel is never in the loop → we can relax
+  the fill guard for the mTool path (currently it skips oversize notes).
+- Either way we keep the degradation ladder as the safety net.
