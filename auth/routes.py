@@ -78,6 +78,9 @@ def _set_session_cookie(response: Response, cookie_value: str) -> None:
         secure=config.secure_cookies(),
         samesite="lax",
         path="/",
+        # Persist across a browser restart (was a session-only cookie). Tracks
+        # the sliding idle-timeout window so it never outlives its session.
+        max_age=config.cookie_max_age_seconds(),
     )
 
 

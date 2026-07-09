@@ -165,21 +165,18 @@ describe("App routing", () => {
   // PLAN-persistent-draft-uploads.md (Phase C) — `/run/<id>` URL.
   // ---------------------------------------------------------------------------
 
-  test("initial /run/42 URL boots the extract view with currentRunId set", async () => {
-    // The shareable upload URL: refreshing or copy-pasting `/run/42` must
-    // land on the extract workspace (not history) and surface the run id
-    // so ExtractPage can fetch + rehydrate the saved PDF + draft config.
+  test("initial /run/42 URL for a non-draft run redirects to run detail", async () => {
+    // The default mock resolves run 42 as `completed`; a shared /run/{id}
+    // link for a finished run must open its detail view, not the bare
+    // config panel (R1). The draft case — where /run/{id} stays on the
+    // Extract workspace to resume the upload — is pinned separately below.
     window.history.replaceState({}, "", "/run/42");
     const { default: App } = await import("../App");
     render(<App />);
-    // Mount-time pushState effect runs after the first render — give it a tick.
+    // Mount effect + the async fetchRunDetail redirect need a couple of ticks.
     await new Promise((r) => setTimeout(r, 0));
-    // URL must NOT be rewritten back to `/` (the bare extract page).
-    expect(window.location.pathname).toBe("/run/42");
-    // The Extract tab must be the selected one.
-    expect(
-      screen.getByRole("tab", { name: /extract/i }).getAttribute("aria-selected"),
-    ).toBe("true");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(window.location.pathname).toBe("/history/42");
   });
 
   test("initial /concepts/42 URL survives mount (not rewritten to /)", async () => {
@@ -269,6 +266,51 @@ describe("App routing", () => {
     expect(screen.getByText("Annual-Report.pdf")).toBeInTheDocument();
     // URL stays at /run/42 — no rewrite back to /.
     expect(window.location.pathname).toBe("/run/42");
+  });
+
+  test("initial /field-labels URL boots the Field-labels page for an admin (not Extract home)", async () => {
+    // R2: a direct visit to /field-labels used to fall through to the Extract
+    // home; it must resolve to the standalone template label editor. Field
+    // labels is admin-only, so an admin session is required for it to stick.
+    vi.resetModules();
+    vi.doMock("../lib/api", async () => {
+      const actual = await vi.importActual<typeof import("../lib/api")>(
+        "../lib/api",
+      );
+      return {
+        ...actual,
+        getAuthMe: vi.fn(async () => ({
+          email: "admin@localhost", display_name: "Admin", provider: "dev",
+          is_admin: true,
+        })),
+        getSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+        })),
+        getExtendedSettings: vi.fn(async () => ({
+          model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
+          available_models: [], default_models: {},
+          scout_enabled_default: false, tolerance_rm: 1,
+        })),
+        fetchRuns: vi.fn(async () => ({ runs: [], total: 0 })),
+        listTemplates: vi.fn(async () => ({ templates: [] })),
+      };
+    });
+    const fetchStub = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ templates: [] }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchStub);
+    try {
+      window.history.replaceState({}, "", "/field-labels");
+      const { default: App } = await import("../App");
+      render(<App />);
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      // URL is preserved (not rewritten to "/").
+      expect(window.location.pathname).toBe("/field-labels");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   test("uploading a PDF drives the URL to /run/{run_id}", async () => {

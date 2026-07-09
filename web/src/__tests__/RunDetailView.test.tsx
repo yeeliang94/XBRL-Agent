@@ -104,6 +104,9 @@ describe("RunDetailView", () => {
     // jsdom does not implement HTMLDialogElement.showModal, used by <dialog>.
     // Stub confirm() so tests can drive the confirm flow without the dialog.
     vi.spyOn(window, "confirm").mockReturnValue(true);
+    // Reset the URL so a `?tab=` written by a prior test (tab selection now
+    // mirrors into the query — R3) doesn't leak into the next test's default.
+    window.history.replaceState({}, "", "/");
   });
   afterEach(() => {
     cleanup();
@@ -911,6 +914,21 @@ describe("RunDetailView", () => {
     expect(
       within(tablist).getByRole("tab", { name: /^overview$/i }).getAttribute("aria-selected"),
     ).toBe("true");
+  });
+
+  test("a ?tab= deep link opens that tab and clicking a tab writes ?tab= (R3)", () => {
+    window.history.replaceState({}, "", "/history/1?tab=checks");
+    render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
+    const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+    // The URL param selects the Cross-checks tab on mount.
+    expect(
+      within(tablist).getByRole("tab", { name: /cross-?checks/i }).getAttribute("aria-selected"),
+    ).toBe("true");
+    // Switching to Activity mirrors into the query without a full navigation.
+    fireEvent.click(within(tablist).getByRole("tab", { name: /activity/i }));
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("agents");
+    // The pathname is left untouched (App.tsx owns that).
+    expect(window.location.pathname).toBe("/history/1");
   });
 
   test("arrow keys move between run-detail tabs (WAI-ARIA tabs pattern)", () => {

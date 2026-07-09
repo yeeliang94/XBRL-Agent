@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PdfSourcePane } from "./PdfSourcePane";
@@ -321,6 +321,31 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
 // canonical mode (the reviewer diff + concept tree only exist there).
 export type RunTabKey = "overview" | "agents" | "notes" | "checks" | "telemetry" | "review" | "values" | "eval";
 
+const RUN_TAB_KEYS: readonly RunTabKey[] = [
+  "overview", "agents", "notes", "checks", "telemetry", "review", "values", "eval",
+];
+
+/** Read the active run-detail tab from the URL's `?tab=` param so a specific
+ *  tab is bookmarkable / shareable / restored on reload (docs/
+ *  PLAN-design-qa-fixes.md R3). Returns null when absent or unrecognised. */
+function readRunTabFromUrl(): RunTabKey | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("tab");
+  return raw && (RUN_TAB_KEYS as readonly string[]).includes(raw)
+    ? (raw as RunTabKey)
+    : null;
+}
+
+/** Write the active tab into the URL without adding history entries (a tab
+ *  switch shouldn't need a Back press per tab). Only touches the `?tab=`
+ *  query — the pathname (managed by App.tsx) is left untouched. */
+function writeRunTabToUrl(key: RunTabKey): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("tab", key);
+  window.history.replaceState(window.history.state, "", url.toString());
+}
+
 export function RunDetailView({
   detail, onDownload, onDelete, onRegenerateNotes, canonicalEnabled = false,
   initialTab = "overview",
@@ -328,8 +353,26 @@ export function RunDetailView({
   // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
   // PDF panes) only mounts when its tab is active, so opening a run doesn't
   // spin up a dozen TipTap editors or fetch concept trees up front.
-  // `initialTab` lets the /concepts/{id} alias open straight on Values.
-  const [tab, setTab] = useState<RunTabKey>(initialTab);
+  // Priority: a `?tab=` deep link wins, then the `initialTab` prop (the
+  // /concepts/{id} alias opens straight on Values), then Overview.
+  const [tab, setTab] = useState<RunTabKey>(
+    () => readRunTabFromUrl() ?? initialTab,
+  );
+  // Switching tabs mirrors the choice into `?tab=` so reload / share / back
+  // land on the same tab (R3). Kept separate from the App-level pathname sync.
+  const selectTab = useCallback((key: RunTabKey) => {
+    setTab(key);
+    writeRunTabToUrl(key);
+  }, []);
+  // Back/forward across tabs: re-read the query so the visible tab follows.
+  useEffect(() => {
+    const onPop = () => {
+      const fromUrl = readRunTabFromUrl();
+      if (fromUrl) setTab(fromUrl);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   // mTool fill modal (button, NOT a tab — gotcha #7).
   const [mtoolOpen, setMtoolOpen] = useState(false);
   // Delete confirmation — the shared ConfirmDialog replaces window.confirm so
@@ -451,7 +494,7 @@ export function RunDetailView({
     else if (e.key === "End") next = tabs.length - 1;
     else return;
     e.preventDefault();
-    setTab(tabs[next].key);
+    selectTab(tabs[next].key);
     const btns =
       tabBarRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
     btns?.[next]?.focus();
@@ -576,7 +619,7 @@ export function RunDetailView({
               // Roving tabindex: only the active tab is in the tab order;
               // arrow keys reach the others (WAI-ARIA tabs pattern).
               tabIndex={active ? 0 : -1}
-              onClick={() => setTab(t.key)}
+              onClick={() => selectTab(t.key)}
               onKeyDown={(e) => onTabKeyDown(e, i)}
               style={active ? styles.tabActive : styles.tab}
             >

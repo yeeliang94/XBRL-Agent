@@ -77,6 +77,15 @@ describe("HistoryList", () => {
     expect(onRunSelected).toHaveBeenCalledWith(2);
   });
 
+  test("the filename is a real link to the run, so it can be opened in a new tab", () => {
+    render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
+    // A completed run links to its detail page; middle-click / cmd-click open
+    // it in a new tab because it's a genuine <a href>, not a role=button row.
+    const link = screen.getByText("ACME-2023.pdf").closest("a");
+    expect(link).not.toBeNull();
+    expect(link!.getAttribute("href")).toBe("/history/2");
+  });
+
   // ---------------------------------------------------------------------------
   // PLAN-persistent-draft-uploads.md — Phase D (steps 21-22).
   // Drafts live in History (so users can find their unstarted uploads) but

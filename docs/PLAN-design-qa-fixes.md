@@ -107,7 +107,7 @@ against any dict-shaped string regardless of source.*
   silently no-ops).
 - Tests: `NotesReviewTab.test.tsx`.
 
-### Sprint B — Routing & session (one coordinated change)
+### Sprint B — Routing & session (one coordinated change) — 🟩 DONE
 
 All three routing findings converge on `parseRouteFromPath` (`appReducer.ts:208-249`)
 plus the pushState effect (`App.tsx:263-302`) — fix together.

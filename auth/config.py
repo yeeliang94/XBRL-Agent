@@ -20,8 +20,11 @@ PLAIN_COOKIE_NAME = "xbrl_session"
 # fail-closed check), so this default can never gate confidential data.
 _DEV_SESSION_SECRET = "dev-insecure-session-secret-not-for-production"
 
-# Sliding idle-timeout default: 15 minutes (the agreed requirement).
-_DEFAULT_IDLE_TIMEOUT_S = 900
+# Sliding idle-timeout default: 1 hour. Raised from 15 min per the operator's
+# request (docs/PLAN-design-qa-fixes.md R5) — a tool handling financial
+# statements shouldn't log people out mid-review. The SPA keeps an active
+# session warm via /api/auth/refresh, so this is a floor on INACTIVITY.
+_DEFAULT_IDLE_TIMEOUT_S = 3600
 
 # Brute-force defaults: 5 failures locks the (email, IP) for 15 minutes.
 _DEFAULT_MAX_ATTEMPTS = 5
@@ -85,6 +88,15 @@ def idle_timeout_seconds() -> int:
         return int(os.environ.get("AUTH_IDLE_TIMEOUT_S", _DEFAULT_IDLE_TIMEOUT_S))
     except ValueError:
         return _DEFAULT_IDLE_TIMEOUT_S
+
+
+def cookie_max_age_seconds() -> int:
+    """Persist the session cookie for the idle-timeout window so a login
+    survives a browser restart (it used to be a session-only cookie that died
+    with the browser process — docs/PLAN-design-qa-fixes.md R5). The server
+    still enforces the sliding idle timeout, so the cookie can't outlive the
+    session it points at."""
+    return idle_timeout_seconds()
 
 
 def login_max_attempts() -> int:

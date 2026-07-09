@@ -266,9 +266,12 @@ export default function App() {
       // Keep /concepts/<id> in the URL so refresh / share / back work for
       // the canonical-mode tree view. Without this branch the effect falls
       // through to "/" and immediately pushes the deep link away on boot.
+      // Bare Template landing now has its own addressable path instead of
+      // collapsing to "/" (which made the Field-labels page unshareable and
+      // its deep link fail — docs/PLAN-design-qa-fixes.md R2).
       expected = state.selectedRunId != null
         ? `/concepts/${state.selectedRunId}`
-        : "/";
+        : "/field-labels";
     } else if (state.view === "benchmarks") {
       // Gold-standard eval (v16): /benchmarks lists; /benchmarks/<id> opens the
       // gold editor. The benchmark id rides on selectedRunId (the generic

@@ -208,7 +208,16 @@ const BENCHMARKS_RE = /^\/benchmarks\/(\d+)\/?$/;
 export function parseRouteFromPath(
   pathname: string,
 ): { view: AppView; selectedRunId: number | null; currentRunId: number | null } {
+  if (pathname.startsWith("/field-labels")) {
+    // The bare "Field labels" landing (the standalone template label editor).
+    // It's the `concepts` view with no run id; giving it a real path means a
+    // direct visit no longer bounces to the Extract home (docs/
+    // PLAN-design-qa-fixes.md R2).
+    return { view: "concepts", selectedRunId: null, currentRunId: null };
+  }
   if (pathname.startsWith("/concepts")) {
+    // /concepts/<id> is the per-run Figures alias; bare /concepts is accepted
+    // as an alias of /field-labels for back-compat.
     const m = CONCEPTS_RE.exec(pathname);
     return {
       view: "concepts",
