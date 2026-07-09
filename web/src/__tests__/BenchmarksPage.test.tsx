@@ -76,11 +76,22 @@ describe("BenchmarksPage", () => {
     expect(await screen.findByTestId("bench-error")).toHaveTextContent(/workbook/i);
   });
 
-  test("from-run mode (default) requires a run number, then posts to /from-run", async () => {
+  test("from-run mode (default) picks a run, then posts to /from-run", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     mockFetch((url, init) => {
       calls.push({ url, init });
       if (url === "/api/benchmarks") return { benchmarks: [] };
+      if (url.startsWith("/api/runs"))
+        return {
+          runs: [
+            {
+              id: 159, created_at: "2026-06-04T00:00:00Z", pdf_filename: "FINCO.pdf",
+              status: "completed_with_errors", session_id: "s159", statements_run: [],
+              models_used: [], duration_seconds: 1, scout_enabled: false, has_merged_workbook: true,
+            },
+          ],
+          total: 1, limit: 100, offset: 0,
+        };
       if (url === "/api/benchmarks/from-run")
         return { ok: true, id: 7, ingested: 102, statements: ["SOFP", "SOCIE"], source_run_id: 159, source_run_status: "completed_with_errors" };
       return {};
@@ -88,18 +99,15 @@ describe("BenchmarksPage", () => {
     render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
     await screen.findByTestId("add-benchmark-form");
 
-    // Name without a run number → validation error.
+    // Name but no run selected → validation error.
     fireEvent.change(screen.getByTestId("bench-name"), { target: { value: "From run 159" } });
     fireEvent.click(screen.getByTestId("bench-submit"));
-    expect(await screen.findByTestId("bench-error")).toHaveTextContent(/run number/i);
-
-    // Partial / non-integer input must NOT silently seed run 159.
-    fireEvent.change(screen.getByTestId("bench-run-id"), { target: { value: "159.9" } });
-    fireEvent.click(screen.getByTestId("bench-submit"));
-    expect(await screen.findByTestId("bench-error")).toHaveTextContent(/run number/i);
+    expect(await screen.findByTestId("bench-error")).toHaveTextContent(/run/i);
     expect(calls.some((c) => c.url === "/api/benchmarks/from-run")).toBe(false);
 
-    // With a valid run number it posts to the from-run endpoint and reports success.
+    // The picker lists the finished run; selecting it and submitting posts.
+    await waitFor(() =>
+      expect(screen.getByTestId("bench-run-id")).toHaveTextContent(/FINCO\.pdf/));
     fireEvent.change(screen.getByTestId("bench-run-id"), { target: { value: "159" } });
     fireEvent.click(screen.getByTestId("bench-submit"));
     expect(await screen.findByTestId("bench-ok")).toHaveTextContent(/102 gold cells/);
