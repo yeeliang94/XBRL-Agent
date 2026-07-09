@@ -199,7 +199,13 @@ async def refresh(request: Request):
                 content={"detail": "Session expired."},
             )
         repo.touch_auth_session(conn, session.session_id)
-    return {"ok": True}
+    # Reissue the cookie so its browser-side Max-Age slides forward with the
+    # server-side session. Without this the persistent cookie (Max-Age set only
+    # at login) would still expire ~1 hour after login, logging out an actively
+    # used session mid-review even though the DB session was kept alive.
+    response = JSONResponse(content={"ok": True})
+    _set_session_cookie(response, cookie_value)
+    return response
 
 
 @router.post("/api/auth/logout")

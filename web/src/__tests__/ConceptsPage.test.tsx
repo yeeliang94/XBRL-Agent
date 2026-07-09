@@ -615,6 +615,34 @@ describe("ConceptsPage", () => {
     expect(screen.getByTestId("matrix-cell-11-B-PY").textContent).toMatch(/1,011/);
   });
 
+  test("the SOCIE matrix period headers carry reporting years too (D5 matrix)", async () => {
+    const withPy = {
+      run_id: 7,
+      reporting_period_cy: "FY2021",
+      reporting_period_py: "FY2020",
+      concepts: matrixConcepts.concepts.map((c) =>
+        c.kind === "MATRIX_CELL"
+          ? {
+              ...c,
+              scope_facts: {
+                Company: { CY: c.value, PY: (c.value as number) + 1000 },
+              },
+            }
+          : c
+      ),
+    };
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return withPy;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={7} />);
+    const grid = await waitFor(() => screen.getByTestId("concept-matrix-grid"));
+    // Year-labelled headers, not bare "CY" / "PY".
+    expect(grid.textContent).toContain("CY (FY2021)");
+    expect(grid.textContent).toContain("PY (FY2020)");
+  });
+
   test("editable matrix cells render an input and PATCH the facts endpoint", async () => {
     // Peer-review F1: SOCIE data-entry component cells must be editable.
     const editableMatrix = {
