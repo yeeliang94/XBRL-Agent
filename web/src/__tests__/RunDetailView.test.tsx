@@ -1121,12 +1121,36 @@ describe("RunDetailView", () => {
     expect(order[3]).toMatch(/SOCF/);
   });
 
+  // UX-QA #13b: the Statements tile counts face statements only, not scout/notes.
+  test("Statements count excludes scout and notes agents", () => {
+    const detail = makeDetail({
+      agents: [
+        makeAgent({ id: 1, statement_type: "SCOUT" }),
+        makeAgent({ id: 2, statement_type: "SOFP" }),
+        makeAgent({ id: 3, statement_type: "SOPL" }),
+        makeAgent({ id: 4, statement_type: "NOTES_ACC_POLICIES" }),
+        makeAgent({ id: 5, statement_type: "NOTES_LIST_OF_NOTES" }),
+        makeAgent({ id: 6, statement_type: "CORRECTION" }),
+      ],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    // Only SOFP + SOPL are statements → 2, not 6. ("Statements" also appears as
+    // a config row, so pick the metric tile whose text starts with the count.)
+    const metricTile = screen
+      .getAllByText("Statements")
+      .map((el) => el.parentElement)
+      .find((t) => /^\d/.test(t?.textContent ?? ""));
+    expect(metricTile?.textContent).toMatch(/^2Statements/);
+  });
+
   // UX-QA #13a: advisory-only run doesn't show an amber "Needs attention".
   test("advisory warnings don't inflate the Needs-attention count", () => {
     const detail = makeDetail({
+      // "warning" is a runtime advisory status the outcomes logic compares as a
+      // string; the typed union doesn't list it, so cast the fixture.
       cross_checks: [
         { name: "sofp_balance", status: "passed", expected: 1, actual: 1, diff: 0, tolerance: 1, message: "OK" },
-        { name: "notes_consistency", status: "warning", expected: null, actual: null, diff: null, tolerance: null, message: "advisory" },
+        { name: "notes_consistency", status: "warning" as never, expected: null, actual: null, diff: null, tolerance: null, message: "advisory" },
       ],
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
