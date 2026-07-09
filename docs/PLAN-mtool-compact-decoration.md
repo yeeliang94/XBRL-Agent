@@ -1,11 +1,8 @@
 # PLAN — mTool compact decoration tier
 
-**Status:** CONFIRMED, ready to build (2026-07-09) — the size recon results
-(docs/RECON-RESULTS-mtool-size-2026-07-09.md) settled the open questions:
-mTool's native storage is ~5× heavier than ours (nothing to mimic), and mTool
-is an Excel add-in, so the 32,767 limit is fully real (the recon payload's
-34,431 stored chars decode to ~27.5k for Excel — UNDER the limit; Excel was
-never tested past it). The compact tier is the fix; the 32,767 guard stays.
+**Status:** DRAFT (2026-07-09) — shaped, not started. Companion to the size
+recon in docs/MTOOL-NOTES-FORMAT-RECON.md (the recon may further improve or
+simplify this plan; it does not block Steps 1–3).
 
 ## The problem, in plain language
 
@@ -85,13 +82,6 @@ operator gate passes and only if the recon shows no better option.
 - **The render behaviour of table attributes inside the TX27 popup is an
   ASSUMPTION until observed** (the Amgen-popup precedent, gotcha #28). Hence
   the operator gate below.
-- **TX re-inflation (recon finding, 2026-07-09):** if a user edits one of our
-  notes inside mTool, TX re-serialises it in its own ~5×-heavier native form
-  (~395 chars/cell) on save — a table we write compact at ~12k can come back
-  near the limit (~27.5k Excel-decoded for a 55×6 table) and cross it on
-  bigger tables, with Excel truncate-and-repair as the failure mode. Outside
-  our control; it is the standing reason the degradation ladder + oversize
-  flag stay even after this ships.
 
 ## Steps
 
@@ -111,15 +101,8 @@ operator gate passes and only if the recon shows no better option.
   grid/padding/alignment render like the full tier. Bundle into the same
   session as the size recon (docs/MTOOL-NOTES-FORMAT-RECON.md, bottom section)
   and the pending word-fidelity render check.
-- [x] **Step 5 (decision — RESOLVED by the 2026-07-09 recon):**
-  - Mimic mTool's storage: **NO** — native TX is ~5× heavier than us.
-  - Relax the 32,767 guard: **NO** — the recon payload was under the limit
-    by Excel's decoded counting (~27.5k), so Excel was never tested past
-    32,767; the 2026-07-06 truncate-and-repair incident stands. Revisit
-    only after the recon's Step-4 doubling probe on a future Windows
-    session.
-  - Promote compact to default (replacing full): decide after the Step-4
-    operator gate confirms the compact render.
+- [ ] **Step 5 (decision, post-gate + post-recon):** promote compact to
+  default? relax the 32,767 guard? — revisit with the recon evidence.
 
 **Verify:** `./venv/bin/python -m pytest tests/test_mtool_notes_decorate.py
 tests/test_mtool_notes_exporter.py tests/test_mtool_offline_fill.py
