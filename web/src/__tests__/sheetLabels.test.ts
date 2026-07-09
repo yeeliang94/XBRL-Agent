@@ -4,6 +4,8 @@ import {
   templateSubtitle,
   templateSortKey,
   notesSheetDisplayName,
+  templatePickerLabel,
+  templateGroupLabel,
 } from "../lib/sheetLabels";
 
 describe("templateDisplayName", () => {
@@ -84,5 +86,41 @@ describe("notesSheetDisplayName", () => {
 
   test("passes unknown sheet names through unchanged", () => {
     expect(notesSheetDisplayName("Notes-Future")).toBe("Notes-Future");
+  });
+});
+
+describe("templatePickerLabel (D3)", () => {
+  test("face statements read as CODE — Variant", () => {
+    expect(templatePickerLabel("mfrs-company-sofp-orderofliquidity-v1")).toBe(
+      "SOFP — Order of liquidity",
+    );
+    expect(templatePickerLabel("mfrs-group-socf-indirect-v1")).toBe(
+      "SOCF — Indirect method",
+    );
+  });
+  test("variant-less statements are just the code", () => {
+    expect(templatePickerLabel("mfrs-company-socie-v1")).toBe("SOCIE");
+    expect(templatePickerLabel("mpers-group-sore-v1")).toBe("SoRE");
+  });
+  test("notes templates read as Notes — Name", () => {
+    expect(templatePickerLabel("mfrs-company-notes-issuedcapital-v1")).toBe(
+      "Notes — Issued Capital",
+    );
+    expect(templatePickerLabel("mfrs-group-notes-corporateinfo-v1")).toBe(
+      "Notes — Corporate Information",
+    );
+  });
+  test("unparseable ids fall back to the raw id", () => {
+    expect(templatePickerLabel("weird-id")).toBe("weird-id");
+  });
+});
+
+describe("templateGroupLabel (D3)", () => {
+  test("groups by standard and level", () => {
+    expect(templateGroupLabel("mfrs-company-sofp-cunoncu-v1")).toBe("MFRS · Company");
+    expect(templateGroupLabel("mpers-group-sore-v1")).toBe("MPERS · Group");
+  });
+  test("unparseable ids group under Other", () => {
+    expect(templateGroupLabel("weird-id")).toBe("Other");
   });
 });

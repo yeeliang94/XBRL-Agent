@@ -196,7 +196,7 @@ plus the pushState effect (`App.tsx:263-302`) — fix together.
 - Tests: `ConceptsPage.test.tsx:354-362` pins the current minus behavior — update
   deliberately in the same commit.
 
-### Sprint D — Plain-language labels (the "PM can't read code" sweep)
+### Sprint D — Plain-language labels (the "PM can't read code" sweep) — 🟩 DONE
 
 The mapping infrastructure mostly already exists and is simply bypassed:
 

@@ -27,7 +27,7 @@ import {
 import { displayModelId } from "../lib/modelId";
 import { notesTabLabel } from "../lib/appReducer";
 import { formatCost } from "../lib/numberFormat";
-import { denominationLabel, pseudoAgentLabel } from "../lib/vocabulary";
+import { denominationLabel, pseudoAgentLabel, variantLabel } from "../lib/vocabulary";
 import { isNotes12StatementType } from "../lib/notes";
 
 // ---------------------------------------------------------------------------
@@ -89,8 +89,11 @@ function ConfigBlock({
   if (Object.keys(variants).length > 0) {
     entries.push({
       label: "Variants",
+      // Plain-language variant names ("Order of liquidity" not
+      // "OrderOfLiquidity"); the statement code (SOFP) is the operator's own
+      // shorthand and stays (D2).
       value: Object.entries(variants)
-        .map(([k, v]) => `${k}=${v}`)
+        .map(([k, v]) => `${k}: ${variantLabel(v)}`)
         .join(", "),
     });
   }
@@ -99,7 +102,7 @@ function ConfigBlock({
     entries.push({
       label: "Model overrides",
       value: Object.entries(models)
-        .map(([k, v]) => `${k}=${v}`)
+        .map(([k, v]) => `${k}: ${displayModelId(v)}`)
         .join(", "),
     });
   }

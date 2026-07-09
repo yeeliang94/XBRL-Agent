@@ -13,6 +13,7 @@ tables which exist regardless of which pipeline filled them.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
@@ -57,10 +58,28 @@ def register_concept_routes(app, audit_db_getter) -> None:
         conn = _conn()
         try:
             run = conn.execute(
-                "SELECT id FROM runs WHERE id = ?", (run_id,)
+                "SELECT id, run_config_json FROM runs WHERE id = ?", (run_id,)
             ).fetchone()
             if run is None:
                 raise HTTPException(status_code=404, detail="Run not found")
+
+            # Reporting periods (e.g. "FY2021" / "FY2020") if scout captured
+            # them — so the Figures grid can label the CY / PY columns with
+            # their years instead of bare "CY" / "PY" (D5). Best-effort: a run
+            # without scout, or an unparseable config, just yields nulls and the
+            # UI keeps the plain headers.
+            reporting_cy = reporting_py = None
+            try:
+                cfg_raw = run["run_config_json"] if "run_config_json" in run.keys() else None
+                if cfg_raw:
+                    infopack = (json.loads(cfg_raw) or {}).get("infopack")
+                    if isinstance(infopack, dict):
+                        cy = infopack.get("reporting_period_cy")
+                        py = infopack.get("reporting_period_py")
+                        reporting_cy = cy if isinstance(cy, str) and cy.strip() else None
+                        reporting_py = py if isinstance(py, str) and py.strip() else None
+            except (ValueError, TypeError):
+                pass  # malformed config → no year labels, not an error
 
             # Peer-review #3: scope concept_nodes to ONLY the templates
             # this run actually touched.  Without this filter a
@@ -99,7 +118,12 @@ def register_concept_routes(app, audit_db_getter) -> None:
             if not template_ids:
                 # No facts yet → nothing to show.  Return empty rather
                 # than leaking the whole DB.
-                return {"run_id": run_id, "concepts": []}
+                return {
+                    "run_id": run_id,
+                    "concepts": [],
+                    "reporting_period_cy": reporting_cy,
+                    "reporting_period_py": reporting_py,
+                }
 
             placeholders = ",".join("?" for _ in template_ids)
 
@@ -224,7 +248,12 @@ def register_concept_routes(app, audit_db_getter) -> None:
                 v["render_col"] or "",
             ))
 
-            return {"run_id": run_id, "concepts": concept_views}
+            return {
+                "run_id": run_id,
+                "concepts": concept_views,
+                "reporting_period_cy": reporting_cy,
+                "reporting_period_py": reporting_py,
+            }
         finally:
             conn.close()
 

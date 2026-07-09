@@ -1,5 +1,6 @@
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
+import { crossCheckLabel } from "../lib/vocabulary";
 import type { CrossCheckResult } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -100,7 +101,9 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                   }}
                 >
                   <td style={styles.td}>
-                    <span style={{ fontFamily: pwc.fontMono, fontSize: 13 }}>{check.name}</span>
+                    {/* Plain-language check name; the raw snake_case id stays
+                        available as a tooltip for anyone who needs it (D1). */}
+                    <span title={check.name}>{crossCheckLabel(check.name)}</span>
                   </td>
                   <td style={styles.td}>
                     <span style={{ ...styles.badge, borderColor: display.accent }}>

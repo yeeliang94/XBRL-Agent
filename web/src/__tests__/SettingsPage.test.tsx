@@ -10,6 +10,10 @@ vi.mock("../lib/api", async () => {
       proxy_url: "https://proxy.example.com",
       api_key_set: true,
       api_key_preview: "sk-1...abcd",
+      available_models: [
+        { id: "openai.gpt-5.4", display_name: "GPT-5.4", provider: "openai", supports_vision: true, notes: "" },
+        { id: "gemini-3-pro", display_name: "Gemini 3 Pro", provider: "google", supports_vision: true, notes: "" },
+      ],
     })),
     updateSettings: vi.fn(async () => ({ status: "ok" })),
     testConnection: vi.fn(async () => ({ status: "ok", model: "openai.gpt-5.4", latency_ms: 100 })),
@@ -64,6 +68,19 @@ describe("SettingsPage", () => {
     const apiKey = document.querySelector<HTMLInputElement>("#ai-service-api-key");
     expect(apiKey).not.toBeNull();
     expect(apiKey!.getAttribute("autocomplete")).toBe("new-password");
+  });
+
+  test("the Model field is a picker of known models, not free text (D4)", async () => {
+    render(<SettingsPage isAdmin={true} />);
+    // The field starts as a text input and flips to a <select> once the
+    // async settings load supplies available_models.
+    await waitFor(() => {
+      expect((screen.getByLabelText("Model") as HTMLElement).tagName).toBe("SELECT");
+    });
+    const modelSelect = screen.getByLabelText("Model") as HTMLSelectElement;
+    expect(within(modelSelect).getByText(/GPT-5\.4 \(openai\.gpt-5\.4\)/)).toBeTruthy();
+    expect(within(modelSelect).getByText(/Gemini 3 Pro \(gemini-3-pro\)/)).toBeTruthy();
+    expect(modelSelect.value).toBe("openai.gpt-5.4");
   });
 
   test("ArrowRight moves selection along the tablist", () => {

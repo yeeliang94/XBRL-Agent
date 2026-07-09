@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { userMessage } from "../lib/errors";
-import type { SettingsResponse } from "../lib/types";
+import type { ModelEntry, SettingsResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
@@ -20,7 +20,7 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; notes_table_style?: Partial<ClipboardFormatOptions> }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
   saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
@@ -201,6 +201,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   // the same boundary (api/config_routes.py), the UI just makes it clear.
   const readOnly = !isAdmin;
   const [model, setModel] = useState("");
+  // Known models from config/models.json (same source the run-config pickers
+  // use). When present, the model field is a dropdown instead of typo-prone
+  // free text (D4); an empty list falls back to the text input.
+  const [availableModels, setAvailableModels] = useState<ModelEntry[]>([]);
   const [proxyUrl, setProxyUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyPreview, setApiKeyPreview] = useState("");
@@ -253,6 +257,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setSpotCheck(s.spot_check !== false);
         setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
         setEntityMemory(s.entity_memory !== false);
+        if (Array.isArray(s.available_models)) setAvailableModels(s.available_models);
       })
       .catch((e) => {
         if (!cancelled) setLoadError(userMessage(e));
@@ -436,28 +441,54 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         )}
       </div>
 
-      {/* Model */}
+      {/* Model — a picker of known models (config/models.json) instead of a
+          typo-prone free-text field (D4). Falls back to a text input when the
+          model list isn't available. */}
       <div style={styles.fieldGroup}>
-        <label style={styles.label}>Model Name</label>
-        <input
-          type="text"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          onBlur={() => validateField("model")}
-          placeholder="openai.gpt-5.4"
-          disabled={readOnly}
-          style={{
-            ...ui.input,
-            width: "100%",
-            fontFamily: pwc.fontMono,
-            fontSize: 13,
-            ...(errors.model ? styles.inputError : {}),
-          }}
-        />
+        <label style={styles.label} htmlFor="settings-model">Model</label>
+        {availableModels.length > 0 ? (
+          <select
+            id="settings-model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={readOnly}
+            style={{ ...ui.select, width: "100%" }}
+          >
+            {/* Keep a saved model that isn't in the known list so it isn't
+                silently dropped on save. */}
+            {model && !availableModels.some((m) => m.id === model) && (
+              <option value={model}>{model} (custom)</option>
+            )}
+            {availableModels.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.display_name} ({m.id})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            id="settings-model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            onBlur={() => validateField("model")}
+            placeholder="openai.gpt-5.4"
+            disabled={readOnly}
+            style={{
+              ...ui.input,
+              width: "100%",
+              fontFamily: pwc.fontMono,
+              fontSize: 13,
+              ...(errors.model ? styles.inputError : {}),
+            }}
+          />
+        )}
         {errors.model ? (
           <p style={styles.errorText}>{errors.model}</p>
         ) : (
-          <p style={styles.helperText}>e.g., openai.gpt-5.4</p>
+          <p style={styles.helperText}>
+            Which AI model runs the extraction. Ask your team if unsure.
+          </p>
         )}
       </div>
 
