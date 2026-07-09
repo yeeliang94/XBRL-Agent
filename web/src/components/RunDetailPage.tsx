@@ -29,6 +29,9 @@ export interface RunDetailPageProps {
   onBack: () => void;
   onDownload: (runId: number) => void;
   onDelete: (runId: number) => void;
+  /** Forwarded to RunDetailView — rescue a run wedged in `running` status
+   *  (UX-QA #2). Optional; when absent the abort control is not shown. */
+  onForceAbort?: (runId: number) => void;
   /** Forwarded to the embedded RunDetailView so Notes Review can wire its
    *  Regenerate button. Optional for callers that don't use the notes
    *  subsystem. */
@@ -48,6 +51,7 @@ export function RunDetailPage({
   onBack,
   onDownload,
   onDelete,
+  onForceAbort,
   onRegenerateNotes,
   canonicalEnabled = false,
   initialTab,
@@ -83,6 +87,7 @@ export function RunDetailPage({
           detail={detail}
           onDownload={onDownload}
           onDelete={onDelete}
+          onForceAbort={onForceAbort}
           onRegenerateNotes={onRegenerateNotes}
           canonicalEnabled={canonicalEnabled}
           initialTab={initialTab}
