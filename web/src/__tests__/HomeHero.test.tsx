@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { HomeHero } from "../components/HomeHero";
 
 const mockFetch = vi.fn();
@@ -56,6 +56,41 @@ describe("HomeHero", () => {
     expect(screen.queryByText("Total runs")).toBeNull();
     expect(screen.queryByText(/recent runs/i)).toBeNull();
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  test("clearing drafts confirms, calls the bulk-delete endpoint, and refetches (E3)", async () => {
+    // Initial load: total=9, drafts=2, completed=4, then the recent list.
+    primeFetch();
+    // After the confirm: the DELETE, then a fresh 4-call reload with 0 drafts.
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ deleted: 2 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 7, limit: 1, offset: 0 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 4, limit: 1, offset: 0 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 5, offset: 0 }) });
+
+    render(
+      <HomeHero active onResumeDraft={noop} onOpenRun={noop} onViewAllRuns={noop}>
+        <div>UPLOAD CARD</div>
+      </HomeHero>,
+    );
+    // Wait for the drafts count (2) to render, so the Clear action appears.
+    await waitFor(() => expect(screen.getByTestId("clear-drafts")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("clear-drafts"));
+    // Confirm dialog opens; confirm the sweep.
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /clear drafts/i }));
+
+    // The bulk-delete endpoint was hit with DELETE.
+    await waitFor(() => {
+      const call = mockFetch.mock.calls.find(
+        (c) => typeof c[0] === "string" && c[0].includes("/api/runs/drafts"),
+      );
+      expect(call).toBeTruthy();
+      expect(call![1]?.method).toBe("DELETE");
+    });
+    // Drafts count refreshed to 0 → the Clear action is gone.
+    await waitFor(() => expect(screen.queryByTestId("clear-drafts")).toBeNull());
   });
 
   test("degrades quietly when the fetch fails (upload child still shown)", async () => {

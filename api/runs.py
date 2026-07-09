@@ -400,6 +400,28 @@ async def patch_run_notes_table_style_endpoint(run_id: int, body: dict):
     return {"id": run_id, "notes_table_style": style}
 
 
+@router.delete("/api/runs/drafts")
+async def delete_draft_runs_endpoint():
+    """Bulk-delete abandoned draft runs (uploads that were never started).
+
+    Registered BEFORE ``/api/runs/{run_id}`` so the literal ``drafts`` segment
+    isn't matched as an int run id. Draft-only by construction (the repo query
+    filters ``status = 'draft'``), and any draft whose session is mid-start is
+    skipped, so this can never delete real or in-flight work. Returns the count
+    removed.
+    """
+    from db import repository as repo
+    conn = server._open_audit_conn()
+    try:
+        removed = repo.delete_draft_runs(
+            conn, protected_session_ids=set(server.active_runs)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"deleted": removed}
+
+
 @router.delete("/api/runs/{run_id}")
 async def delete_run_endpoint(run_id: int):
     """Hard-delete a run row from the DB.

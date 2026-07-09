@@ -299,6 +299,38 @@ def test_delete_run_200_and_gone_from_list(api_env):
     assert body["total"] == 0
 
 
+def test_delete_drafts_removes_only_drafts(api_env):
+    """E3: the bulk cleanup deletes abandoned drafts and leaves real runs."""
+    client, db_path, _ = api_env
+    _seed_run(db_path, session_id="d1", pdf_filename="d1.pdf", output_dir="/tmp/d1", status="draft")
+    _seed_run(db_path, session_id="d2", pdf_filename="d2.pdf", output_dir="/tmp/d2", status="draft")
+    keep = _seed_run(db_path, session_id="ok", pdf_filename="ok.pdf", output_dir="/tmp/ok", status="completed")
+
+    r = client.delete("/api/runs/drafts")
+    assert r.status_code == 200
+    assert r.json()["deleted"] == 2
+
+    body = client.get("/api/runs").json()
+    assert body["total"] == 1
+    assert body["runs"][0]["id"] == keep
+
+
+def test_delete_drafts_skips_a_mid_start_draft(api_env, monkeypatch):
+    """A draft whose session is actively starting must not be swept away."""
+    import server
+    client, db_path, _ = api_env
+    _seed_run(db_path, session_id="starting", pdf_filename="s.pdf", output_dir="/tmp/s", status="draft")
+    _seed_run(db_path, session_id="idle", pdf_filename="i.pdf", output_dir="/tmp/i", status="draft")
+    # Simulate an in-flight extraction holding the session lock.
+    monkeypatch.setattr(server, "active_runs", {"starting"})
+
+    r = client.delete("/api/runs/drafts")
+    assert r.status_code == 200
+    assert r.json()["deleted"] == 1
+    # The protected draft survives.
+    assert client.get("/api/runs").json()["total"] == 1
+
+
 def test_delete_run_does_not_remove_output_directory(api_env, tmp_path):
     """History delete is DB-only. The on-disk folder must remain intact."""
     client, db_path, out = api_env
