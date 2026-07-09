@@ -55,6 +55,38 @@ describe("TemplateSettingsPage", () => {
     // ABSTRACT rows are not renamable.
     expect(screen.queryByTestId("ts-rename-btn-abs-1")).toBeNull();
     expect(screen.getByTestId("ts-rename-btn-leaf-1")).toBeTruthy();
+    // E8: a legend explains greyed headers + the * mandatory marker.
+    expect(screen.getByTestId("ts-legend")).toBeTruthy();
+  });
+
+  test("customised rows carry an 'edited' chip (E8)", async () => {
+    const edited = {
+      template_id: "mfrs-company-sofp-cunoncu-v1",
+      concepts: [
+        {
+          concept_uuid: "leaf-1", parent_uuid: null, kind: "LEAF",
+          canonical_label: "Biological assets", display_label: "Livestock",
+          render_sheet: "SOFP-CuNonCu", render_row: 10, render_col: "B", matrix_col: null,
+        },
+        {
+          concept_uuid: "leaf-2", parent_uuid: null, kind: "LEAF",
+          canonical_label: "Property", display_label: null,
+          render_sheet: "SOFP-CuNonCu", render_row: 11, render_col: "B", matrix_col: null,
+        },
+      ],
+    };
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (url: string) => {
+        const body = url.includes("/concepts") ? edited : templates;
+        return { ok: true, status: 200, json: async () => body } as Response;
+      }
+    );
+    render(<TemplateSettingsPage />);
+    await waitFor(() => screen.getByTestId("ts-row-leaf-1"));
+    // The renamed row shows its custom label + the chip; the untouched one doesn't.
+    expect(screen.getByText("Livestock")).toBeTruthy();
+    expect(screen.getByTestId("ts-edited-leaf-1")).toBeTruthy();
+    expect(screen.queryByTestId("ts-edited-leaf-2")).toBeNull();
   });
 
   test("renaming a label PATCHes the global display_label endpoint", async () => {

@@ -392,6 +392,17 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
         description="Every extraction you've run — open one to review its figures, notes and checks, or download the Excel."
       />
       <HistoryFilters value={filters} onChange={setFilters} />
+      {!isLoading && !error && (
+        // A plain result count so the list isn't an unbounded wall of rows
+        // with no sense of scale (E2).
+        <p role="status" style={styles.resultCount} data-testid="history-result-count">
+          {total === 0
+            ? "No runs yet"
+            : `${total} run${total === 1 ? "" : "s"}${
+                runs.length < total ? ` · ${runs.length} loaded` : ""
+              }`}
+        </p>
+      )}
       <HistoryList
         runs={visibleRuns}
         isLoading={isLoading}
@@ -472,6 +483,12 @@ const styles = {
     border: `1px solid ${pwc.grey200}`,
     borderLeft: `3px solid ${pwc.error}`,
     borderRadius: pwc.radius.md,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+  } as React.CSSProperties,
+  resultCount: {
+    margin: `${pwc.space.xs}px 0`,
+    color: pwc.grey700,
     fontFamily: pwc.fontBody,
     fontSize: 13,
   } as React.CSSProperties,

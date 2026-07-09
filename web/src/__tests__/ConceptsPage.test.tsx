@@ -124,6 +124,45 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("value-input-abs-1")).toBeNull();
   });
 
+  test("collapses consecutive duplicate ABSTRACT headers (E7)", async () => {
+    const dupHeaders = {
+      run_id: 42,
+      concepts: [
+        {
+          concept_uuid: "cf-1", parent_uuid: null, kind: "ABSTRACT",
+          canonical_label: "Statement of cash flows", display_label: null,
+          render_sheet: "SOCF-Indirect", render_row: 3, render_col: "B",
+          template_id: "mfrs-company-socf-indirect-v1",
+          value: null, value_status: null, children_status: null, source: null, evidence: null,
+        },
+        {
+          concept_uuid: "cf-2", parent_uuid: "cf-1", kind: "ABSTRACT",
+          canonical_label: "Statement of cash flows", display_label: null,
+          render_sheet: "SOCF-Indirect", render_row: 4, render_col: "B",
+          template_id: "mfrs-company-socf-indirect-v1",
+          value: null, value_status: null, children_status: null, source: null, evidence: null,
+        },
+        {
+          concept_uuid: "cf-leaf", parent_uuid: "cf-2", kind: "LEAF",
+          canonical_label: "Net cash from operations", display_label: null,
+          render_sheet: "SOCF-Indirect", render_row: 5, render_col: "B",
+          template_id: "mfrs-company-socf-indirect-v1",
+          value: 10, value_status: "observed", children_status: null, source: null, evidence: null,
+        },
+      ],
+    };
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return dupHeaders;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("concept-row-cf-leaf"));
+    // First header renders; the identical consecutive one is collapsed away.
+    expect(screen.getByTestId("concept-row-cf-1")).toBeTruthy();
+    expect(screen.queryByTestId("concept-row-cf-2")).toBeNull();
+  });
+
   test("hides the internal 'cascade' provenance tag from the source column", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;

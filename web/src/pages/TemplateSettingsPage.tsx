@@ -167,6 +167,15 @@ export function TemplateSettingsPage() {
           ))}
         </select>
       </div>
+      {/* Legend — explains the two things a first-time user can't infer: why
+          some rows are greyed out (and un-renamable), and what the leading
+          asterisk means (E8). */}
+      <p style={styles.legend} data-testid="ts-legend">
+        <span style={styles.legendSwatch} aria-hidden="true" />
+        Greyed rows are section headers — they can&apos;t be renamed.
+        {"  "}
+        A leading <strong>*</strong> marks a mandatory MBRS field.
+      </p>
       <div
         role="table"
         style={styles.tableWrap}
@@ -264,7 +273,16 @@ function TemplateConceptRow({
             style={{ ...ui.input, width: "100%" }}
           />
         ) : (
-          <span>{label}</span>
+          <span>
+            {label}
+            {/* Flag a customised label so it's easy to spot what's been
+                changed from the taxonomy default (E8). */}
+            {concept.display_label && (
+              <span style={styles.editedChip} data-testid={`ts-edited-${concept.concept_uuid}`}>
+                edited
+              </span>
+            )}
+          </span>
         )}
       </div>
       <div style={{ display: "flex", gap: pwc.space.sm, justifyContent: "flex-end" }}>
@@ -314,6 +332,35 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.lg,
+  } as React.CSSProperties,
+  legend: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    margin: `${pwc.space.sm}px 0 ${pwc.space.md}px`,
+    color: pwc.grey700,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+  } as React.CSSProperties,
+  legendSwatch: {
+    display: "inline-block",
+    width: 14,
+    height: 14,
+    background: pwc.grey100,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: 2,
+    flexShrink: 0,
+  } as React.CSSProperties,
+  editedChip: {
+    marginLeft: pwc.space.sm,
+    padding: `1px ${pwc.space.xs}px`,
+    fontSize: 11,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey700,
+    background: pwc.grey100,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: 3,
+    verticalAlign: "middle",
   } as React.CSSProperties,
   tableWrap: {
     ...ui.card,
