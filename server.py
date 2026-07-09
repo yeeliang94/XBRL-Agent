@@ -592,6 +592,30 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
         try:
             run = repo.fetch_run(conn, run_id)
             agents = repo.fetch_run_agents(conn, run_id)
+            # Preserve the advisory notes-warnings from the original pass.
+            # The numeric registry below can't re-derive them (they compare
+            # note TEXT / citations, which a figure edit doesn't change), so
+            # re-running without them would silently shrink the check set —
+            # the "8/11 → 8/8" review bug. Status "warning" uniquely marks
+            # these advisory rows; numeric checks only emit passed/failed/
+            # not_applicable/pending. Carried through verbatim (docs/
+            # PLAN-design-qa-fixes.md A3, decision (a)).
+            advisory_rows = [
+                {
+                    "name": c.check_name,
+                    "status": c.status,
+                    "expected": c.expected,
+                    "actual": c.actual,
+                    "diff": c.diff,
+                    "tolerance": c.tolerance,
+                    "message": c.message,
+                    "target_sheet": c.target_sheet,
+                    "target_row": c.target_row,
+                    "comparands_json": c.comparands_json,
+                }
+                for c in repo.fetch_cross_checks(conn, run_id)
+                if c.status == "warning"
+            ]
         finally:
             conn.close()
         if run is None or not run.merged_workbook_path:
@@ -703,7 +727,7 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
             )
             return None
         from cross_checks.framework import comparands_to_json
-        return [
+        numeric_rows = [
             {
                 "name": r.name,
                 "status": r.status,
@@ -719,6 +743,9 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
             }
             for r in results
         ]
+        # Re-attach the preserved advisory warnings so the check set stays
+        # stable across a recheck (no phantom "8/11 → 8/8" shrink).
+        return numeric_rows + advisory_rows
     except Exception:  # noqa: BLE001 — a re-check must never 500 the page
         logger.exception("on-demand re-check failed for run %s", run_id)
         return None

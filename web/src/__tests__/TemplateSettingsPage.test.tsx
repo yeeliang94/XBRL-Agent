@@ -73,12 +73,58 @@ describe("TemplateSettingsPage", () => {
     const btn = await waitFor(() => screen.getByTestId("ts-rename-btn-leaf-1"));
     fireEvent.click(btn);
     const input = screen.getByTestId("ts-rename-input-leaf-1") as HTMLInputElement;
+    // The box prefills with the label the user sees (was empty before).
+    expect(input.value).toBe("Biological assets");
     fireEvent.change(input, { target: { value: "Livestock" } });
-    fireEvent.blur(input);
+    fireEvent.click(screen.getByTestId("ts-rename-save-leaf-1"));
     await waitFor(() =>
       expect(patches.find((p) => p.url.includes("/api/concepts/leaf-1/display_label"))).toBeTruthy()
     );
     const p = patches.find((x) => x.url.includes("/api/concepts/leaf-1/display_label"))!;
     expect(p.body.display_label).toBe("Livestock");
+  });
+
+  test("Cancel discards the edit without PATCHing", async () => {
+    const patches: Array<{ url: string; body: any }> = [];
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (url: string, init?: RequestInit) => {
+        if (init?.method === "PATCH") {
+          patches.push({ url, body: JSON.parse(init.body as string) });
+          return { ok: true, status: 200, json: async () => ({}) } as Response;
+        }
+        const body = url.includes("/concepts") ? concepts : templates;
+        return { ok: true, status: 200, json: async () => body } as Response;
+      }
+    );
+    render(<TemplateSettingsPage />);
+    fireEvent.click(await waitFor(() => screen.getByTestId("ts-rename-btn-leaf-1")));
+    const input = screen.getByTestId("ts-rename-input-leaf-1") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Should not save" } });
+    fireEvent.click(screen.getByTestId("ts-rename-cancel-leaf-1"));
+    // Back to the read-only label, no PATCH fired.
+    await waitFor(() => screen.getByTestId("ts-rename-btn-leaf-1"));
+    expect(patches.length).toBe(0);
+    expect(screen.getByText("Biological assets")).toBeTruthy();
+  });
+
+  test("Escape cancels the edit", async () => {
+    const patches: Array<{ url: string }> = [];
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (url: string, init?: RequestInit) => {
+        if (init?.method === "PATCH") {
+          patches.push({ url });
+          return { ok: true, status: 200, json: async () => ({}) } as Response;
+        }
+        const body = url.includes("/concepts") ? concepts : templates;
+        return { ok: true, status: 200, json: async () => body } as Response;
+      }
+    );
+    render(<TemplateSettingsPage />);
+    fireEvent.click(await waitFor(() => screen.getByTestId("ts-rename-btn-leaf-1")));
+    const input = screen.getByTestId("ts-rename-input-leaf-1") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Nope" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    await waitFor(() => screen.getByTestId("ts-rename-btn-leaf-1"));
+    expect(patches.length).toBe(0);
   });
 });

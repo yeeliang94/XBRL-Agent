@@ -116,6 +116,35 @@ def test_recheck_fact_based_does_not_rebuild_workbook(client: TestClient, monkey
         assert {"name", "status", "message"} <= set(res.keys())
 
 
+def test_recheck_preserves_advisory_warnings(client: TestClient):
+    """A3 (docs/PLAN-design-qa-fixes.md): the numeric recheck can't re-derive
+    the advisory notes-warnings, so it must carry the persisted ``warning``
+    rows through — otherwise the check set silently shrinks after a Validate
+    (the "8/11 → 8/8" bug)."""
+    import sqlite3 as _sq
+    import server as srv
+
+    conn = _sq.connect(str(srv.AUDIT_DB_PATH))
+    try:
+        conn.execute(
+            "INSERT INTO cross_checks(run_id, check_name, status, message) "
+            "VALUES (?,?,?,?)",
+            (client.run_id, "Notes consistency: Sheet 11 ↔ Sheet 12",
+             "warning", "cites pages [19] vs [21] — no overlap"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    body = client.get(f"/api/runs/{client.run_id}/recheck").json()
+    names = [r["name"] for r in body["results"]]
+    warnings = [r for r in body["results"] if r["status"] == "warning"]
+    assert "Notes consistency: Sheet 11 ↔ Sheet 12" in names
+    assert len(warnings) == 1
+    # And the numeric checks are still present alongside it.
+    assert any(r["status"] in {"passed", "failed"} for r in body["results"])
+
+
 def test_recheck_unknown_run_404(client: TestClient):
     assert client.get("/api/runs/9999/recheck").status_code == 404
 

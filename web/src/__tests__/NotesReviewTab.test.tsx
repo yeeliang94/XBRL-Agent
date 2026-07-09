@@ -982,25 +982,40 @@ describe("NotesReviewTab — regenerate confirm (Step 12)", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    render(<NotesReviewTab runId={42} />);
+    render(<NotesReviewTab runId={42} onRegenerate={vi.fn()} />);
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
     fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
-      expect(screen.getByText(/overwrite 3/i)).toBeInTheDocument();
+      expect(screen.getByText(/replace 3 edited/i)).toBeInTheDocument();
     });
-    // Peer-review #2: the old wording said edits are lost "when you
-    // click Rerun there" — but the Extract-page redirect never wires
-    // up a rerun for the user, so nothing happens unless they re-
-    // upload the PDF and launch a run manually. Guard against that
-    // wording reappearing.
+    // A5 (docs/PLAN-design-qa-fixes.md): the action re-extracts IN PLACE via
+    // the rerun-notes endpoint — the copy must NOT describe the old
+    // Extract-page manual re-upload flow.
     const dialogText = screen.getByRole("dialog").textContent ?? "";
     expect(dialogText.toLowerCase()).not.toContain("click rerun");
-    // The honest replacement mentions the re-upload step so the user
-    // knows what "regenerate" actually requires of them.
-    expect(dialogText.toLowerCase()).toMatch(/re-?upload|extract page/);
+    expect(dialogText.toLowerCase()).not.toMatch(/re-?upload|extract page/);
+    expect(dialogText.toLowerCase()).toMatch(/fresh notes extraction/);
+  });
+
+  test("re-extract button is disabled when no handler is wired", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify(SAMPLE), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expect(
+      screen.getByRole("button", { name: /re-extract notes/i }),
+    ).toBeDisabled();
   });
 
   test("regenerate button skips dialog when no edits", async () => {
@@ -1050,7 +1065,11 @@ describe("NotesReviewTab — regenerate confirm (Step 12)", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /re-extract notes/i,
+      }),
+    );
     expect(onRegenerate).toHaveBeenCalledWith(42);
   });
 });
@@ -1107,8 +1126,14 @@ describe("NotesReviewTab edited_count fail-closed", () => {
     );
     expect(onRegenerate).not.toHaveBeenCalled();
 
-    // User explicitly confirms → regenerate fires.
-    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    // User explicitly confirms → regenerate fires. (The unknown-count branch
+    // keeps its own copy, but the confirm button shares the header's label,
+    // so scope to the dialog.)
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /re-extract notes/i,
+      }),
+    );
     expect(onRegenerate).toHaveBeenCalledWith(42);
   });
 
@@ -2284,8 +2309,46 @@ describe("NotesReviewTab — AI formatter", () => {
     await vi.advanceTimersByTimeAsync(2100);
 
     const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent("timed out");
+    // The timeout taxonomy code renders as plain language, not the raw
+    // backend string ("Formatter timed out after 300s.").
+    expect(alert).toHaveTextContent("ran out of time");
     expect(notesCellsCalls(fetchMock)).toBe(before);
+    vi.useRealTimers();
+  });
+
+  test("a raw-dict formatter error is not shown to the operator; a plain sentence is", async () => {
+    vi.useFakeTimers();
+    let launched = false;
+    routedFetch({
+      status: (url) => {
+        if (!url.includes("Notes-CI") || !launched) {
+          return { status: "idle", sheet: "other" };
+        }
+        // The real leak: format_patch.py raises a message carrying a Python
+        // dict. It must never reach the DOM.
+        return {
+          status: "done", sheet: "Notes-CI",
+          error: "target matched no elements: {'table': 0, 'cell': {'r': 5, 'c': 2}}",
+          error_type: "validation_failed",
+          changed_rows: 0,
+        };
+      },
+      launch: () => {
+        launched = true;
+        return { ok: true, status: "running", sheet: "Notes-CI" };
+      },
+    });
+
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+    fireEvent.click(screen.getAllByTestId("notes-format-button")[0]);
+    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(2100);
+
+    const alert = screen.getByRole("alert");
+    expect(alert).not.toHaveTextContent("target matched no elements");
+    expect(alert).not.toHaveTextContent("{");
+    expect(alert).toHaveTextContent("no longer matches your text");
     vi.useRealTimers();
   });
 

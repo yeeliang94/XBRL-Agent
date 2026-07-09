@@ -684,18 +684,24 @@ export function ConceptsPage({
   }, []);
 
   // Outcome strip (review-workspace Phase 3): "Checks passing X/Y". A manual
-  // re-run's fresh results win over the run's stored baseline. Only graded
-  // checks (passed/failed/warning) count — not_applicable/pending are excluded,
-  // matching the re-run summary above.
+  // re-run's fresh results win over the run's stored baseline.
   const effectiveChecks =
     crossChecks.length > 0 ? crossChecks : initialCrossChecks ?? [];
   const checksPassing = effectiveChecks.filter(
     (c) => c.status === "passed",
   ).length;
+  // Denominator is the pass/fail numeric checks only — the ones "Validate
+  // figures" actually re-runs. Advisory warnings (note-text consistency) are
+  // counted SEPARATELY so the headline doesn't move when a recheck preserves
+  // them (the "8/11 → 8/8" bug: warnings used to inflate then vanish from the
+  // denominator). See docs/PLAN-design-qa-fixes.md A3.
   const checksGraded = effectiveChecks.filter(
-    (c) => c.status === "passed" || c.status === "failed" || c.status === "warning",
+    (c) => c.status === "passed" || c.status === "failed",
   ).length;
-  // Failing / warning checks feed the Needs-attention queue.
+  const advisoryCount = effectiveChecks.filter(
+    (c) => c.status === "warning",
+  ).length;
+  // Failing checks + advisory warnings both feed the Needs-attention queue.
   const failingChecks = effectiveChecks.filter(
     (c) => c.status === "failed" || c.status === "warning",
   );
@@ -987,6 +993,11 @@ export function ConceptsPage({
                 label="Checks passing"
                 value={`${checksPassing}/${checksGraded}`}
                 tone={checksPassing === checksGraded ? "success" : "warning"}
+                caption={
+                  advisoryCount > 0
+                    ? `${advisoryCount} advisory note${advisoryCount === 1 ? "" : "s"} to review (not counted above)`
+                    : undefined
+                }
               />
             )}
             {notesCoverage && notesCoverage.total > 0 && (

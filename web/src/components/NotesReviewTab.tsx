@@ -86,6 +86,7 @@ import {
 import { copyHtmlAsRichText } from "../lib/clipboard";
 import { tagNumericCells } from "../lib/tableAlign";
 import { formatGroupedInput } from "../lib/numberFormat";
+import { notesFormatErrorMessage } from "../lib/vocabulary";
 import {
   resolveTheme,
   themeToCssVars,
@@ -518,6 +519,14 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
           className={uiClass.btnGhost}
           style={styles.regenerateButton}
           onClick={handleRegenerateClick}
+          // Disabled when no re-extract handler is wired — the button used to
+          // silently do nothing in that case.
+          disabled={!onRegenerate}
+          title={
+            onRegenerate
+              ? undefined
+              : "Re-extract isn't available in this view"
+          }
         >
           Re-extract notes (replaces your edits)
         </button>
@@ -638,15 +647,14 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
             </>
           ) : (
             <>
-              You&apos;ll be taken to the Extract page. Re-upload the same PDF
-              and start a new notes run there — when it completes, it will
-              overwrite {pendingCount ?? 0} edited cell
-              {pendingCount === 1 ? "" : "s"} on this run. Your current edits
-              stay in place until that new run finishes.
+              This starts a fresh notes extraction on this PDF. When it
+              finishes it will replace {pendingCount ?? 0} edited cell
+              {pendingCount === 1 ? "" : "s"} on this run&apos;s notes sheets.
+              Your current edits stay in place until the new run completes.
             </>
           )
         }
-        confirmLabel="Continue"
+        confirmLabel="Re-extract notes"
         danger={false}
         onConfirm={() => {
           setPendingCount(null);
@@ -784,7 +792,7 @@ function SheetSection({
         .catch((err: Error) => {
           if (!cancelled) {
             clearInterval(timer);
-            setFormatError(err.message);
+            setFormatError(userMessage(err));
             setFormatStatus(null);
           }
         });
@@ -937,16 +945,22 @@ function SheetSection({
           data-testid="notes-format-summary"
         >
           <span style={styles.formatSummaryText}>
-            {formatError || formatStatus?.error || (
-              `${formatStatus?.summary || "Formatting complete."} ` +
-              `Changed ${formatStatus?.changed_rows ?? 0} row(s).` +
-              (typeof formatStatus?.confidence === "number"
-                ? ` Confidence ${(formatStatus.confidence * 100).toFixed(0)}%.`
-                : "") +
-              (totalTokens > 0
-                ? ` ~${totalTokens.toLocaleString()} tokens.`
-                : "")
-            )}
+            {formatError ||
+              (formatStatus?.error
+                ? notesFormatErrorMessage(
+                    formatStatus.error_type,
+                    formatStatus.error,
+                  )
+                : (
+                  `${formatStatus?.summary || "Formatting complete."} ` +
+                  `Changed ${formatStatus?.changed_rows ?? 0} row(s).` +
+                  (typeof formatStatus?.confidence === "number"
+                    ? ` Confidence ${(formatStatus.confidence * 100).toFixed(0)}%.`
+                    : "") +
+                  (totalTokens > 0
+                    ? ` ~${totalTokens.toLocaleString()} tokens.`
+                    : "")
+                ))}
           </span>
           {formatStatus?.can_revert
             && formatStatus.error_type !== "reverted"
