@@ -594,6 +594,125 @@ describe("MtoolFillModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     await waitFor(() => expect(screen.getByText(/no fillable facts/i)).toBeTruthy());
   });
+
+  test("offers a note-styling choice, defaults to Styled, sends notes_styling", async () => {
+    let sentStyling: FormDataEntryValue | null = null;
+    mockFetch((url, init) => {
+      if (url.includes("/mtool-fill/patch")) {
+        const body = init?.body as FormData;
+        sentStyling = body?.get?.("notes_styling") ?? null;
+        return new Response(new Blob(["x"]), {
+          status: 200,
+          headers: {
+            "X-mTool-Report": JSON.stringify({
+              status: "ok",
+              counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
+              unresolved: [],
+              skipped_formula: [],
+              mismatches: [],
+            }),
+          },
+        });
+      }
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId("notes-styling-options")).toBeTruthy());
+
+    const styled = screen.getByLabelText(/styled notes \(recommended\)/i) as HTMLInputElement;
+    const none = screen.getByLabelText(/no styling \(diagnostic\)/i) as HTMLInputElement;
+    expect(styled.checked).toBe(true); // safe default
+    expect(none.checked).toBe(false);
+
+    // Switch to the diagnostic mode and fill — the form carries "none".
+    fireEvent.click(none);
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
+    await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
+    expect(sentStyling).toBe("none");
+  });
+
+  test("labels a diagnostic no-styling fill in the report so it isn't mistaken for a bug", async () => {
+    const reportHeader = JSON.stringify({
+      status: "ok",
+      counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
+      unresolved: [],
+      skipped_formula: [],
+      mismatches: [],
+      notes: {
+        status: "ok",
+        styling_disabled: true,
+        counts: { written: 2, created: 0, unresolved: 0, mismatches: 0, errors: 0 },
+      },
+    });
+    mockFetch((url) => {
+      if (url.includes("/mtool-fill/patch"))
+        return new Response(new Blob(["x"]), { status: 200, headers: { "X-mTool-Report": reportHeader } });
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
+    await waitFor(() => expect(screen.getByText(/written without styling/i)).toBeTruthy());
+    expect(screen.getByText(/plain-looking notes are expected/i)).toBeTruthy();
+  });
+
+  test("surfaces the size-degradation tiers in the notes report", async () => {
+    const reportHeader = JSON.stringify({
+      status: "ok",
+      counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
+      unresolved: [],
+      skipped_formula: [],
+      mismatches: [],
+      notes: {
+        status: "ok",
+        styling_disabled: false,
+        counts: {
+          written: 5,
+          created: 0,
+          unresolved: 0,
+          mismatches: 0,
+          errors: 0,
+          formatting_compacted: 2,
+          formatting_reduced: 1,
+          formatting_dropped: 1,
+        },
+      },
+    });
+    mockFetch((url) => {
+      if (url.includes("/mtool-fill/patch"))
+        return new Response(new Blob(["x"]), { status: 200, headers: { "X-mTool-Report": reportHeader } });
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(JSON.stringify({ meta: { counts: { notes: 5 } }, footnotes: [] }), { status: 200 });
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/2 large note\(s\) used slimmer styling/i)).toBeTruthy()
+    );
+    expect(screen.getByText(/1 note\(s\) lost minor styling to fit/i)).toBeTruthy();
+    expect(screen.getByText(/1 note\(s\) written without styling \(too large/i)).toBeTruthy();
+  });
 });
 
 function makeDetail(overrides: Partial<RunDetailJson> = {}): RunDetailJson {

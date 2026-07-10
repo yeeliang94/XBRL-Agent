@@ -1,8 +1,13 @@
 # PLAN — mTool compact decoration tier
 
-**Status:** DRAFT (2026-07-09) — shaped, not started. Companion to the size
-recon in docs/MTOOL-NOTES-FORMAT-RECON.md (the recon may further improve or
-simplify this plan; it does not block Steps 1–3).
+**Status:** BUILT 2026-07-10 (Steps 1–3 + the "no styling" diagnostic toggle;
+suites green). Remaining: Step-4 operator gate on the Windows box.
+Background: the size recon (docs/RECON-RESULTS-mtool-size-2026-07-09.md)
+settled the open questions — mTool's native storage is ~5× heavier than ours
+(nothing to mimic), and mTool is an Excel add-in, so the 32,767 limit is fully
+real (the recon payload's 34,431 stored chars decode to ~27.5k for Excel —
+UNDER the limit; Excel was never tested past it). The compact tier is the fix;
+the 32,767 guard stays.
 
 ## The problem, in plain language
 
@@ -82,27 +87,62 @@ operator gate passes and only if the recon shows no better option.
 - **The render behaviour of table attributes inside the TX27 popup is an
   ASSUMPTION until observed** (the Amgen-popup precedent, gotcha #28). Hence
   the operator gate below.
+- **TX re-inflation (recon finding, 2026-07-09):** if a user edits one of our
+  notes inside mTool, TX re-serialises it in its own ~5×-heavier native form
+  (~395 chars/cell) on save — a table we write compact at ~12k can come back
+  near the limit (~27.5k Excel-decoded for a 55×6 table) and cross it on
+  bigger tables, with Excel truncate-and-repair as the failure mode. Outside
+  our control; it is the standing reason the degradation ladder + oversize
+  flag stay even after this ships.
 
 ## Steps
 
-- [ ] **Step 1 — build the compact tier** in `decorate_notes_html`
+- [x] **Step 1 — build the compact tier** in `decorate_notes_html`
   (`compact=True`, alongside `lite`), per-table user-owned-border fallback
-  included. Pin with new cases in `tests/test_mtool_notes_decorate.py`
-  (compact output shape; user-border table NOT compacted; whiteout still runs).
-- [ ] **Step 2 — wire the ladder** in `mtool/notes_exporter._resolve_note_html`
-  (full → compact → lite → flat), count it in `meta.counts`
-  (`formatting_compacted`), surface the tier in the fill report like
-  lite/flat. Pin in `tests/test_mtool_notes_exporter.py` +
-  `tests/test_mtool_routes.py` (report shows the tier by note label).
-- [ ] **Step 3 — re-run the size table** (the measurement script in the PR
-  description) and record before/after tiers for 25/50/100-row tables.
-- [ ] **Step 4 — OPERATOR GATE (Windows box, real mTool):** fill a test filing
-  with a compact-tier note (a 50+ row table), open the popup, confirm the
-  grid/padding/alignment render like the full tier. Bundle into the same
-  session as the size recon (docs/MTOOL-NOTES-FORMAT-RECON.md, bottom section)
-  and the pending word-fidelity render check.
-- [ ] **Step 5 (decision, post-gate + post-recon):** promote compact to
-  default? relax the 32,767 guard? — revisit with the recon evidence.
+  included. Pinned in `tests/test_mtool_notes_decorate.py`
+  (compact output shape; user-border/fill tables NOT compacted; border-none
+  themes NOT compacted; per-table sibling decision; whiteout still runs;
+  totals rule; rendered text identical to full). DONE 2026-07-10.
+- [x] **Step 2 — wire the ladder** in `mtool/notes_exporter._resolve_note_html`
+  (full → compact → lite → flat), counted in `meta.counts`
+  (`formatting_compacted`), tier surfaced in the fill report + modal. Also
+  shipped alongside: the **"no styling" diagnostic toggle** (`notes_styling`
+  Form field on the patch endpoint, `styled`|`none`, a radio control in
+  `MtoolFillModal` + honest `styling_disabled` labelling in the report) so an
+  operator can A/B a styled vs plain fill in one click. Pinned in
+  `tests/test_mtool_notes_exporter.py`, `tests/test_mtool_routes.py`, and the
+  `MtoolFillModal` web tests. The formatter agent's `collect_size_signals`
+  inherits the new ladder automatically; a `compact` note is NOT flagged
+  (same visible formatting — no operator attention needed). DONE 2026-07-10.
+- [x] **Step 3 — size table re-measured (2026-07-10; wrapped payload chars,
+  6-col table, default theme):**
+
+  | rows | full | compact | lite | raw | outcome |
+  |---|---|---|---|---|---|
+  | 10 | 8,678 | 3,784 | 7,115 | 1,521 | full (unchanged) |
+  | 25 | 18,278 | 7,234 | 14,825 | 2,946 | full (unchanged) |
+  | 50 | 34,278 | **12,984** | 27,675 | 5,321 | was lite → now **compact** |
+  | 100 | 66,278 | **24,484** | 53,375 | 10,071 | was flat → now **compact** |
+  | 150 | 98,328 | 36,034 | 79,125 | 14,871 | flat (compact just over) |
+
+  Fully-styled ceiling: ~45 rows (full) → **~140 rows** (compact). DONE.
+- [ ] **Step 4 — OPERATOR GATE (Windows box, real mTool):** run
+  `docs/GUIDE-mtool-broken-file-windows-retest.md`. The gate now requires an
+  identical-content full/compact render pair, a 100×6 compact stress control +
+  one-character edit, exact decoded 32,766/32,767/32,768 boundary files, a
+  stored-over/decoded-at-limit escape control, Excel `.Value2.Length`, retained
+  recovery logs/hashes, and separate popup/Validate/Generate results. The
+  current "No styling" option is also tested with a persisted-style note because
+  `decorate=False` does not strip styles already stored in `notes_cells.html`.
+- [x] **Step 5 (decision — RESOLVED by the 2026-07-09 recon):**
+  - Mimic mTool's storage: **NO** — native TX is ~5× heavier than us.
+  - Relax the 32,767 guard: **NO** — the recon payload was under the limit
+    by Excel's decoded counting (~27.5k), so Excel was never tested past
+    32,767; the 2026-07-06 truncate-and-repair incident stands. Revisit
+    only after the recon's Step-4 doubling probe on a future Windows
+    session.
+  - Promote compact to default (replacing full): decide after the Step-4
+    operator gate confirms the compact render.
 
 **Verify:** `./venv/bin/python -m pytest tests/test_mtool_notes_decorate.py
 tests/test_mtool_notes_exporter.py tests/test_mtool_offline_fill.py

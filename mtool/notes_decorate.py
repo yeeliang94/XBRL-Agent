@@ -17,7 +17,10 @@ formatting — this module closes that gap by applying the same decoration in
 Kept deliberately in lock-step with `clipboard.ts` — the DEFAULT options here
 mirror `DEFAULT_FORMAT_OPTIONS` and reproduce the styling that shipped (and was
 mTool-render-proven) before the theme feature. If you change one side, change
-the other and re-check both fixture suites.
+the other and re-check both fixture suites. ONE deliberate divergence: the
+``compact`` tier below is mTool-only (it exists to fit Excel's 32,767-char
+cell limit, which the clipboard payload never faces) — clipboard.ts stays on
+the verbose per-cell form. See docs/PLAN-mtool-compact-decoration.md.
 
 Uses BeautifulSoup (already a backend dependency via the sanitiser). NOT
 imported by ``offline_fill.py`` — that file stays stdlib-only + repo-import-free
@@ -436,7 +439,7 @@ def _cells(row: Tag) -> list[Tag]:
 
 
 def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
-                        lite: bool = False) -> str:
+                        lite: bool = False, compact: bool = False) -> str:
     """Inject the mTool-render-proven inline styles into ``html`` and return the
     decorated fragment (wrapped in a font-bearing ``<div>`` so bare
     ``<strong>`` / loose text inherit the face). Pure — does not mutate input.
@@ -448,8 +451,21 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
 
     ``lite`` drops cosmetic-only per-cell props (vertical-align + text
     wrapping) to shrink the payload ~40% while keeping the formatting a reader
-    notices (borders, font, alignment, header fill). Used as the middle rung of
-    the exporter's full → lite → flat size-degradation ladder."""
+    notices (borders, font, alignment, header fill). Used as a rung of the
+    exporter's size-degradation ladder.
+
+    ``compact`` (mTool-only — clipboard.ts deliberately does NOT mirror it,
+    docs/PLAN-mtool-compact-decoration.md) drops the repeated per-cell
+    boilerplate entirely and lets the table-level legacy attributes
+    (``border="1" cellpadding="4"``) carry the grid + padding, writing
+    per-cell styles only where a cell differs from renderer defaults:
+    numeric right-alignment, header fill/weight + explicit alignment
+    (``<th>`` defaults to CENTER, so it can't be omitted), and the themed
+    totals rule. Two table shapes are NOT compacted and keep the full
+    per-cell treatment: a ``borderStyle: none`` theme (the table attrs get
+    suppressed, so there is nothing to inherit from) and any table where a
+    cell owns its own border/background (user WYSIWYG / sidecar ops — a
+    table-level grid would fight the user's deliberate styling)."""
     if not html:
         return html
     soup = BeautifulSoup(html, "html.parser")
@@ -458,6 +474,10 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     no_border = style.border_style == "none"
 
     table_inherited = _table_inherited_css(style, lite=lite)
+    # Tables eligible for the compact per-cell treatment (by identity — the
+    # decision is per TABLE, so a user-styled table in the same note keeps the
+    # full form while its siblings compact).
+    compact_tables: set[int] = set()
     for table in soup.find_all("table"):
         _merge_style(table,
                      _TABLE_STYLE_KEEP_WIDTH if _table_has_explicit_width(table)
@@ -483,11 +503,22 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                 table["cellpadding"] = "4"
             if not table.has_attr("cellspacing"):
                 table["cellspacing"] = "0"
+            # Compact eligibility: the table attrs above carry grid + padding,
+            # so per-cell boilerplate can be skipped — but only when no cell
+            # owns its own fill either (a user-filled cell means the user is
+            # styling cells deliberately; keep the full proven form there).
+            if compact and not any(
+                    "background" in (c.get("style") or "")
+                    for c in table.find_all(("td", "th"))):
+                compact_tables.add(id(table))
 
     # Row-by-row so the row-label column (first cell of a multi-column row) can
     # stay left while numeric value columns go right.
     for row in soup.find_all("tr"):
         cells = _cells(row)
+        parent_table = row.find_parent("table")
+        row_compact = (parent_table is not None
+                       and id(parent_table) in compact_tables)
         # Themed totals convention: the amount cells of a "total" row get the
         # double rule. Appended INSIDE the same merged addition so a persisted
         # per-cell border (user WYSIWYG / sidecar ops) still wins — the merge
@@ -497,7 +528,19 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
             numeric = should_right_align_cell(cell.get_text(), idx, len(cells))
             align = " text-align: right;" if numeric else " text-align: left;"
             extra = _TOTALS_RULE if totals_row and numeric else ""
-            if cell.name == "th":
+            if row_compact:
+                # Compact: renderer defaults + table attrs carry everything a
+                # left-aligned body cell needs, so it gets NO style at all.
+                # Only the differences are written per cell.
+                if cell.name == "th":
+                    addition = _header_extra(style).lstrip() + align + extra
+                elif numeric:
+                    addition = "text-align: right;" + extra
+                else:
+                    addition = extra.lstrip()
+                if addition:
+                    _merge_cell_style(cell, addition)
+            elif cell.name == "th":
                 _merge_cell_style(
                     cell, cell_base + _header_extra(style) + align + extra)
             else:

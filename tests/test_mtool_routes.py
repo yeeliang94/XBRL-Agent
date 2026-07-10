@@ -420,6 +420,69 @@ def test_patch_fill_notes_on_reports_notes_block(client):
     openpyxl.load_workbook(io.BytesIO(resp.content))
 
 
+def test_patch_notes_styling_none_fills_raw_and_reports_it(client, monkeypatch):
+    """The diagnostic "no styling" toggle: notes_styling=none reaches the
+    exporter as decorate=False, and the report header carries the honest
+    styling_disabled flag so a plain fill can't be misread as a bug."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    import api.mtool as m
+    seen = {}
+    orig = m.build_notes_fill_doc
+
+    def spy(*a, **k):
+        seen.update(k)
+        return orig(*a, **k)
+
+    monkeypatch.setattr(m, "build_notes_fill_doc", spy)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(),
+                   data={"strict": "true", "notes_styling": "none"})
+    assert resp.status_code == 200, resp.text
+    assert seen.get("decorate") is False
+    report = json.loads(resp.headers["X-mTool-Report"])
+    assert report["notes"]["styling_disabled"] is True
+
+
+def test_patch_notes_styling_defaults_to_styled(client, monkeypatch):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    import api.mtool as m
+    seen = {}
+    orig = m.build_notes_fill_doc
+
+    def spy(*a, **k):
+        seen.update(k)
+        return orig(*a, **k)
+
+    monkeypatch.setattr(m, "build_notes_fill_doc", spy)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={"strict": "true"})
+    assert resp.status_code == 200, resp.text
+    assert seen.get("decorate") is True
+    report = json.loads(resp.headers["X-mTool-Report"])
+    assert report["notes"]["styling_disabled"] is False
+    # The size-tier counters ride along (all zero for this tiny note).
+    assert report["notes"]["counts"]["formatting_compacted"] == 0
+    assert report["notes"]["counts"]["formatting_reduced"] == 0
+    assert report["notes"]["counts"]["formatting_dropped"] == 0
+
+
+def test_patch_bad_notes_styling_is_422(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(),
+                   data={"strict": "true", "notes_styling": "fancy"})
+    assert resp.status_code == 422
+    assert "notes_styling" in resp.json()["detail"]
+
+
 def test_patch_notes_exception_preserves_numeric_fill(client, monkeypatch):
     """A notes-fill raise must NOT discard the already-good numeric workbook.
 
@@ -517,6 +580,39 @@ def test_notes_preview_reports_plan_and_slot_count(client):
     # No +FootnoteTexts sheet -> the fill degrades with an error, not a per-note
     # unresolved; either way nothing is planned to write.
     assert plan["unresolved"] or plan["errors"]
+
+
+def test_notes_preview_honours_notes_styling(client, monkeypatch):
+    """The dry-run plan's counts must reflect the styling the operator chose —
+    a "no styling" preview reaches the exporter as decorate=False so it can't
+    report styled size-degradation tiers."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    import api.mtool as m
+    seen = {}
+    orig = m.build_notes_fill_doc
+
+    def spy(*a, **k):
+        seen.update(k)
+        return orig(*a, **k)
+
+    monkeypatch.setattr(m, "build_notes_fill_doc", spy)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/notes-preview",
+                   files=_upload_our_template(),
+                   data={"notes_styling": "none"})
+    assert resp.status_code == 200, resp.text
+    assert seen.get("decorate") is False
+
+
+def test_notes_preview_bad_notes_styling_is_422(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/notes-preview",
+                   files=_upload_our_template(),
+                   data={"notes_styling": "fancy"})
+    assert resp.status_code == 422
+    assert "notes_styling" in resp.json()["detail"]
 
 
 def test_notes_preview_running_run_is_409(client):

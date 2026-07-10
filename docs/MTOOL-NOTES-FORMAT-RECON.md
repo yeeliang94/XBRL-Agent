@@ -2,12 +2,20 @@
 
 **Audience:** the operator on the Windows box where SSM's mTool 2.1 is installed.
 **Requested by:** the xbrl-agent team (Mac side).
+**2026-07-10 update:** for broken-file root-cause retesting, use
+[`GUIDE-mtool-broken-file-windows-retest.md`](GUIDE-mtool-broken-file-windows-retest.md).
+It supersedes the size-only procedure below with static package diagnostics,
+identical-content full/compact A/B files, exact Excel boundary fixtures, real
+Excel `.Value2.Length`, TX re-save controls, and Validate/Generate evidence.
 **Status:** the original render-fidelity recon (sections below) is NOT normally
-needed — formatting is already handled. **BUT the [Size recon](#size-recon-2026-07-09--requested)
-section at the bottom IS an active request (2026-07-09)** — please run it on the
-next mTool session. It answers a different question: how mTool itself stores a
-heavily-styled note, and whether Excel's 32,767-character cell limit actually
-bites in the mTool workflow.
+needed — formatting is already handled. The size recon (bottom section) was
+**RUN 2026-07-09 — results + decisions in
+docs/RECON-RESULTS-mtool-size-2026-07-09.md** (headline: mTool's native
+serialisation is ~5× heavier than ours; mTool is an Excel add-in; the test
+payload's 34,431 stored chars decode to ~27.5k for Excel — UNDER the limit,
+so Excel was never tested past 32,767 and the guard stays). Still open from
+it: the Step-4 doubling probe (find the actual ceiling) — run it on a future
+session before any relaxation of the 32,767 guard.
 
 ## Status — read this first
 

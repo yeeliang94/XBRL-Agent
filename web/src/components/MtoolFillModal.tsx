@@ -34,7 +34,20 @@ interface FillMeta {
 
 interface NotesReport {
   status: string;
-  counts: { written: number; created: number; unresolved: number; mismatches: number; errors: number };
+  // True when the operator chose the diagnostic "no styling" fill.
+  styling_disabled?: boolean;
+  counts: {
+    written: number;
+    created: number;
+    unresolved: number;
+    mismatches: number;
+    errors: number;
+    // Size-degradation tiers: compacted keeps the same look with slimmer
+    // styling; reduced drops cosmetics; dropped writes the note unstyled.
+    formatting_compacted?: number;
+    formatting_reduced?: number;
+    formatting_dropped?: number;
+  };
   unresolved?: { label: string | null; detail?: string }[];
 }
 
@@ -283,6 +296,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [notesCount, setNotesCount] = useState<number | null>(null);
   const [fillNotes, setFillNotes] = useState(true);
   const [createMissingNotes, setCreateMissingNotes] = useState(false);
+  // Note styling mode: "styled" (default, recommended) or "none" — the
+  // diagnostic fill that writes words + table structure with no formatting,
+  // so an operator can isolate whether a fill problem is styling-related.
+  const [notesStyling, setNotesStyling] = useState<"styled" | "none">("styled");
   const [preview, setPreview] = useState<NotesPreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
@@ -326,6 +343,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     if (!open) return;
     setMeta(null);
     setNotesCount(null);
+    setNotesStyling("styled");
     setLoadErr(null);
     setFile(null);
     setReport(null);
@@ -368,6 +386,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       form.append("strict", "true");
       form.append("fill_notes", fillNotes ? "true" : "false");
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
+      if (fillNotes) form.append("notes_styling", notesStyling);
       if (columnMap) form.append("column_map", JSON.stringify(columnMap));
       const targets = fillNotes ? notesTargetsPayload() : null;
       if (targets) form.append("notes_targets", targets);
@@ -435,6 +454,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       const form = new FormData();
       form.append("template", file);
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
+      form.append("notes_styling", notesStyling);
       const targets = notesTargetsPayload();
       if (targets) form.append("notes_targets", targets);
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/notes-preview`, {
@@ -598,6 +618,59 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               </span>
             </span>
           </label>
+        )}
+
+        {notesCount !== null && notesCount > 0 && fillNotes && (
+          <fieldset
+            style={{
+              border: `1px solid ${pwc.grey200}`,
+              borderRadius: pwc.radius.md,
+              padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+              margin: `0 0 ${pwc.space.md}px`,
+            }}
+            data-testid="notes-styling-options"
+          >
+            <legend style={{ fontSize: 12, color: pwc.grey700, padding: `0 4px` }}>
+              Note styling
+            </legend>
+            <label style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <input
+                type="radio"
+                name="notes-styling"
+                checked={notesStyling === "styled"}
+                onChange={() => setNotesStyling("styled")}
+                aria-label="Styled notes (recommended)"
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                Styled <span style={{ color: pwc.grey700 }}>(recommended)</span>
+                <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
+                  Notes look like they do here — table borders, header shading, aligned
+                  numbers. A very large table automatically steps down to simpler styling
+                  so it still fits mTool&apos;s size limit; the result below tells you if
+                  that happened.
+                </span>
+              </span>
+            </label>
+            <label style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <input
+                type="radio"
+                name="notes-styling"
+                checked={notesStyling === "none"}
+                onChange={() => setNotesStyling("none")}
+                aria-label="No styling (diagnostic)"
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                No styling <span style={{ color: pwc.grey700 }}>(diagnostic)</span>
+                <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
+                  Fills the words and table layout with no formatting at all. Use this to
+                  test whether a problem with the filled file is caused by styling — not
+                  for real filings.
+                </span>
+              </span>
+            </label>
+          </fieldset>
         )}
 
         <div style={{ marginBottom: pwc.space.md }}>
@@ -946,6 +1019,29 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 ]
                   .filter(Boolean)
                   .join(", ")}
+                {report.notes.styling_disabled && (
+                  <div style={{ color: pwc.grey700 }}>
+                    Written without styling — you chose the diagnostic “No styling” option,
+                    so plain-looking notes are expected.
+                  </div>
+                )}
+                {!report.notes.styling_disabled &&
+                  ((report.notes.counts.formatting_compacted ?? 0) > 0 ||
+                    (report.notes.counts.formatting_reduced ?? 0) > 0 ||
+                    (report.notes.counts.formatting_dropped ?? 0) > 0) && (
+                    <div style={{ color: pwc.grey700 }}>
+                      {[
+                        (report.notes.counts.formatting_compacted ?? 0) > 0 &&
+                          `${report.notes.counts.formatting_compacted} large note(s) used slimmer styling (looks the same)`,
+                        (report.notes.counts.formatting_reduced ?? 0) > 0 &&
+                          `${report.notes.counts.formatting_reduced} note(s) lost minor styling to fit`,
+                        (report.notes.counts.formatting_dropped ?? 0) > 0 &&
+                          `${report.notes.counts.formatting_dropped} note(s) written without styling (too large — consider splitting the note)`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </div>
+                  )}
               </div>
             )}
           </div>
