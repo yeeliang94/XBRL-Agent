@@ -123,6 +123,7 @@ export type AppView =
   | "history"
   | "concepts"
   | "benchmarks"
+  | "suites"
   | "settings";
 
 export type AppAction =
@@ -232,6 +233,11 @@ export function parseRouteFromPath(
       selectedRunId: m ? Number(m[1]) : null,
       currentRunId: null,
     };
+  }
+  if (pathname.startsWith("/evals")) {
+    // Evals workspace (suites, batch runner, results). Internal navigation
+    // lives inside the page, so this is a singleton top-level route.
+    return { view: "suites", selectedRunId: null, currentRunId: null };
   }
   if (pathname.startsWith("/settings")) {
     // The consolidated settings page (model/proxy + account + admin users).

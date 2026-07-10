@@ -31,6 +31,9 @@ const ITEMS: { id: AppView; label: string; adminOnly?: boolean }[] = [
   // Gold-standard eval (v16): the benchmark library — an internal QA feature,
   // so admin-only too.
   { id: "benchmarks", label: "Benchmarks", adminOnly: true },
+  // Evals workspace (Phase E/F): suites, batch runner, trends + compare. Shares
+  // the QA-surface admin gate with Benchmarks (which it depends on for gold).
+  { id: "suites", label: "Evals", adminOnly: true },
 ];
 
 export function TopNav({ view, onViewChange, showConcepts = true, isAdmin = false }: TopNavProps) {
