@@ -6,7 +6,12 @@ labelled, taxonomy totals.
 """
 from __future__ import annotations
 
-from eval.scorecards import DocumentScorecard, aggregate_suite, _coverage_rate
+import sqlite3
+
+from db.schema import init_db
+from eval.scorecards import (
+    DocumentScorecard, aggregate_suite, _coverage_rate, build_document_scorecard,
+)
 
 
 def _doc(run_id, *, accuracy=None, gold=0, matched=0, status="completed",
@@ -103,3 +108,28 @@ def test_coverage_rate_excludes_skips_and_honours_unavailable():
     banner = [{"note_num": -1, "subnote_ref": None, "status": "inventory_unavailable"}]
     rate2, avail2 = _coverage_rate(banner)
     assert rate2 is None and avail2 is False
+
+
+def test_document_scorecard_counts_only_active_reviewer_flags(tmp_path):
+    """Code-review MEDIUM: resolved/dismissed reviewer flags are closed issues
+    and must not keep dragging the health signal."""
+    db = tmp_path / "sc.db"
+    init_db(db)
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status) "
+            "VALUES ('t', 'x.pdf', 'completed')"
+        )
+        for status in ("open", "answered", "resolved", "dismissed"):
+            conn.execute(
+                "INSERT INTO reviewer_flags(run_id, category, status) "
+                "VALUES (1, 'stuck', ?)",
+                (status,),
+            )
+        conn.commit()
+        card = build_document_scorecard(conn, 1)
+        # open + answered count; resolved + dismissed excluded.
+        assert card.reviewer_flags == 2
+    finally:
+        conn.close()

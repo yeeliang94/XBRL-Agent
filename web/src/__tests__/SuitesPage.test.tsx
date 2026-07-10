@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { SuitesPage } from "../pages/SuitesPage";
 
 const originalFetch = globalThis.fetch;
@@ -62,6 +62,28 @@ describe("SuitesPage", () => {
     fireEvent.click(await screen.findByTestId("suite-card-1"));
     const est = await screen.findByTestId("run-estimate");
     expect(est.textContent).toContain("2 extraction runs");
+  });
+
+  test("a running suite run shows a Stop control that calls /stop", async () => {
+    const calls: string[] = [];
+    mockRoutes((url, init) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === "/api/suites") return { suites: [{ id: 1, name: "S", created_at: "", updated_at: "", doc_count: 1, run_count: 1 }] };
+      if (url === "/api/suites/1" && (init?.method ?? "GET") === "GET")
+        return { id: 1, name: "S", created_at: "", updated_at: "", docs: [] };
+      if (url === "/api/suites/1/runs")
+        return { suite_run_list: [{ id: 5, suite_id: 1, label: "batch", model: null, app_version: null, status: "running", created_at: "2026-07-10", ended_at: null }] };
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      if (url === "/api/suites/1/estimate") return { documents: 1, repeats: 1, extraction_runs: 1, avg_run_seconds: null, estimated_wall_seconds: null, concurrency: 3 };
+      return {};
+    });
+    render(<SuitesPage />);
+    fireEvent.click(await screen.findByTestId("suite-card-1"));
+    const stop = await screen.findByTestId("suite-run-stop-5");
+    fireEvent.click(stop);
+    await waitFor(() =>
+      expect(calls.some((c) => c === "POST /api/suites/1/runs/5/stop")).toBe(true),
+    );
   });
 
   test("results tab renders the trend container and compare picker", async () => {
