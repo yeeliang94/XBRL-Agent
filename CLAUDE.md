@@ -1283,6 +1283,70 @@ Phase 0 converter spike + real-run validation (Steps 6/10) and Windows
 enablement (Step 11) are operator/hardware gates, still open. Plan:
 docs/PLAN-word-input.md.
 
+### 30. Evals workspace — repeats/consistency, mTool gold, suites, trends
+
+The Evals workspace (docs/PLAN-evals-workspace.md, PRD docs/PRD-evals-workspace.md)
+turns one-run-one-gold grading into a corpus-level quality system. Every eval
+child run is a **completely normal extraction run** through the existing
+pipeline; the workspace only launches, watches, grades, and aggregates — it
+NEVER alters extraction behaviour. Schema v30 (repeats/taxonomy/gold-prose) +
+v31 (suites). All additive/nullable (gotcha #11); on rollback the tables sit
+inert.
+
+Load-bearing invariants:
+
+- **Scoring formulas are fixed and decompose (PRD Scoring Design).**
+  `accuracy = matched ÷ gold slots` (unchanged headline; a value slot is
+  concept_uuid × period × entity_scope, LEAF/MATRIX_CELL only — COMPUTED
+  totals excluded so they can't inflate). The **failure taxonomy**
+  (`eval/grader.classify_failures`: scale / sign / period-swap / scope-swap /
+  misplaced / false-not-disclosed / unaddressed / plain-wrong) NEVER softens
+  the score — it powers drill-down + trends. Beyond-gold is a trended watchdog,
+  never a headline penalty. **Consistency = unanimous agreement over the union
+  of slots any repeat filled** (`eval/consistency.py`), needs ≥2 finished
+  repeats else "unavailable" (never a misleading 100%). **Suite aggregate =
+  MEAN of per-document accuracy** (`eval/scorecards.aggregate_suite`), pooled
+  figure secondary, worst document always surfaced, failed docs excluded +
+  "N of M". These live in pure modules with hand-built fixtures — change a
+  formula and its pinning test in the same commit.
+- **Repeats ride one SSE stream** (`server.run_repeat_group_stream`, Step D1):
+  N identically-configured runs back-to-back sharing ONE `session_id` (so
+  Stop-All / disconnect reaches the live repeat) but isolated output subdirs;
+  consistency is finalized on the generator's `finally` (abort mid-group →
+  `partial`). Do NOT reintroduce a separate cancel channel.
+- **Suite batch runner** (`api/suite_runner.py`, Step E3) is a background loop
+  (reviewer-pass thread pattern), concurrency **fixed at 3** (decision #2),
+  Resume re-launches only documents without a finished child run (identified by
+  the deterministic `suite-{suite_run}-doc-{doc}` session id), and
+  `repo.reconcile_stale_suite_runs` retires crash-orphaned `running` suite runs
+  at startup (mirrors `reconcile_stale_review_tasks`). Child runs link via
+  `runs.suite_run_id`, threaded through `run_multi_agent_stream` /
+  `run_repeat_group_stream`.
+- **History hides suite children by default** (Step E6): `GET /api/runs`
+  filters `suite_run_id IS NULL` unless `include_suite_children=true`
+  (decision #1). Repeat children are NOT hidden (they're normal History runs).
+- **mTool gold ingest is strict + variant-precise** (already shipped C1–C3):
+  `POST /api/benchmarks/from-mtool` requires a declared unit (no auto-guess —
+  a wrong unit silently 1000×'s every value) AND an explicit `template_ids`
+  set (gotcha #21 — uuids differ per variant). The C4 form's picker is fed by
+  `GET /api/eval/templates`. Off-template labels surface as unmatched, never
+  fuzzy-matched.
+- **Trends + compare recompute on demand from durable facts** (`eval/compare.py`,
+  F1/F2) — no heavyweight new storage. Compare unions differing document sets
+  (greyed + excluded from the aggregate delta), and warns when gold was edited
+  between the two runs (gold `updated_at` is timestamped).
+- **Frontend:** the "Evals" nav surface (`/evals` → `web/src/pages/SuitesPage.tsx`)
+  is admin-gated like Benchmarks (which it depends on for gold). Recharts is the
+  ONE chart dep (SVG, coexists with the inline-style rule, gotcha #7). The
+  ConsistencyPanel is a run-page SECTION, not a `role="tab"` (gotcha #7).
+
+Pinned by `tests/test_db_schema_v30.py`/`_v31.py`, `test_eval_taxonomy.py`,
+`test_eval_consistency.py`, `test_repeat_group_launch.py`,
+`test_eval_mtool_ingest.py`/`test_mtool_gold_routes.py`, `test_suite_routes.py`,
+`test_suite_runner.py`, `test_suite_scorecards.py`, `test_reviewer_lift.py`,
+`test_suite_compare.py`, and the `ConsistencyPanel`/`BenchmarksPage`/
+`SuitesPage`/`EvalTab` web tests.
+
 ## Testing
 
 ```bash

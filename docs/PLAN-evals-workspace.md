@@ -1,8 +1,18 @@
 # Implementation Plan: Evals Workspace
 
-**Overall Progress:** `0%`
+**Overall Progress:** `100%` (all phases A–F landed on `feat/evals-workspace`)
 **PRD Reference:** [docs/PRD-evals-workspace.md](PRD-evals-workspace.md)
 **Last Updated:** 2026-07-10
+
+> **Status note (2026-07-10):** Phases A–D backend + B2/EvalTab were already
+> committed; this pass completed the Phase-1 frontend (C4 mTool-gold flow,
+> D1 repeats launch + control, D3 ConsistencyPanel) and all of Phase 2
+> (E1 schema v31, E2 suites CRUD+UI, E3 batch runner, E4 scorecards, E5
+> reviewer lift, E6 history filter, F1 trend chart, F2 compare, F3 docs).
+> New invariants captured in CLAUDE.md gotcha #30. Open operator gates: a real
+> human-filled mTool sample for end-to-end ingest validation, and a live
+> multi-document suite run against the LLM proxy (both hardware/credential
+> gates, not code).
 
 ## Summary
 
