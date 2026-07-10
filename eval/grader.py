@@ -32,7 +32,8 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 
 # Powers of ten the grader treats as a "scale mismatch" rather than a plain
 # wrong value. ±3 covers the common thousands error (a run that forgot the
@@ -50,6 +51,31 @@ _GRADEABLE_KINDS = ("LEAF", "MATRIX_CELL")
 _EPSILON = 1e-6
 
 
+# The failure taxonomy (docs/PLAN-evals-workspace.md, PRD Scoring Design). Every
+# WRONG gold slot (missing OR mismatch) is assigned exactly ONE of these, so the
+# counts partition the wrong set: ``sum(taxonomy.values()) == missing + mismatch``.
+# The taxonomy NEVER changes the headline score — it only diagnoses failures for
+# drill-down and trends. `scale` here is the residual-after-priority (a scale
+# error that is also a period-swap classifies as period_swap), so it can be ≤ the
+# independent `scale_mismatch` flag; that's intentional.
+_TAXONOMY_KEYS = (
+    # mismatch refinements (both values present, unequal)
+    "period_swap",   # CY/PY transposed for the same line item
+    "scope_swap",    # Group/Company transposed for the same line item
+    "sign_flip",     # run == -gold
+    "scale",         # run == gold * 10^k
+    "plain_wrong",   # residual mismatch
+    # missing refinements (gold present, run absent/blank)
+    "false_not_disclosed",  # run explicitly asserted "not in PDF"
+    "misplaced",            # the number landed on a different (gold-blank) row
+    "unaddressed",          # the run never dealt with this slot
+)
+
+
+def empty_taxonomy() -> dict[str, int]:
+    return {k: 0 for k in _TAXONOMY_KEYS}
+
+
 @dataclass
 class ScoreCard:
     """Aggregate grading counts for one ``(run, benchmark)`` pair.
@@ -57,6 +83,11 @@ class ScoreCard:
     ``gold_cells`` (the denominator) is ``matched + missing + mismatch``.
     ``extra`` and ``scale_mismatch`` are flags surfaced alongside the score,
     NOT folded into it.
+
+    ``taxonomy`` (v30) partitions the wrong slots into diagnosed failure modes;
+    ``per_statement`` breaks ``gold_cells``/``matched`` down by statement
+    (SOFP/SOPL/…). Both default empty so a bare ``ScoreCard()`` and every legacy
+    caller keep working, and the headline ``score`` is unaffected by either.
     """
     gold_cells: int = 0
     matched: int = 0
@@ -64,6 +95,8 @@ class ScoreCard:
     mismatch: int = 0
     extra: int = 0
     scale_mismatch: int = 0
+    taxonomy: dict[str, int] = field(default_factory=dict)
+    per_statement: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @property
     def score(self) -> float:
@@ -164,6 +197,152 @@ def _gradeable_facts(
     return out
 
 
+def is_sign_flip(run: float, gold: float) -> bool:
+    """True when ``run`` is the exact negation of a non-zero ``gold``."""
+    if gold == 0:
+        return False
+    return math.isclose(run, -gold, rel_tol=1e-6, abs_tol=_EPSILON)
+
+
+def _present_map(
+    facts: dict[tuple[str, str, str], tuple]
+) -> dict[tuple[str, str, str], float]:
+    """{key: present number}, skipping not_disclosed / blank cells."""
+    out: dict[tuple[str, str, str], float] = {}
+    for key, (value, status) in facts.items():
+        num = _present_number(value, status)
+        if num is not None:
+            out[key] = num
+    return out
+
+
+def _is_axis_swap(
+    key: tuple[str, str, str],
+    other_key: tuple[str, str, str],
+    gold_present: dict[tuple[str, str, str], float],
+    run_present: dict[tuple[str, str, str], float],
+) -> bool:
+    """True when ``key`` and ``other_key`` have their gold values transposed in
+    the run (run[key] == gold[other] AND run[other] == gold[key]), with the two
+    gold values distinct so the swap is observable."""
+    if other_key not in gold_present:
+        return False
+    if key not in run_present or other_key not in run_present:
+        return False
+    g_this = gold_present[key]
+    g_other = gold_present[other_key]
+    if _values_equal(g_this, g_other):
+        return False
+    return _values_equal(run_present[key], g_other) and _values_equal(
+        run_present[other_key], g_this
+    )
+
+
+def classify_failures(
+    gold: dict[tuple[str, str, str], tuple],
+    run: dict[tuple[str, str, str], tuple],
+) -> dict[str, int]:
+    """Diagnose every WRONG gold slot into the failure taxonomy.
+
+    Pure: takes the two fact maps (as produced by :func:`_gradeable_facts`) and
+    returns a count per taxonomy key. Guarantees
+    ``sum(result.values()) == missing + mismatch`` — a partition of the wrong
+    slots. Priority for a mismatch: period-swap → scope-swap → sign → scale →
+    plain-wrong (most structural / most actionable first).
+    """
+    gold_present = _present_map(gold)
+    run_present = _present_map(run)
+
+    # For "misplaced": a unique, non-zero gold number that shows up as an EXTRA
+    # run value (a run value on a slot the gold left blank) is "right number,
+    # wrong row". Precompute the extra-value set and gold multiplicities.
+    extra_values = {
+        num for key, num in run_present.items() if key not in gold_present
+    }
+    gold_counts = Counter(gold_present.values())
+
+    tax = empty_taxonomy()
+    for key, g in gold_present.items():
+        uuid, period, scope = key
+        run_fact = run.get(key)
+        r = _present_number(run_fact[0], run_fact[1]) if run_fact else None
+
+        if r is None:
+            # --- missing bucket ---
+            if run_fact is not None and run_fact[1] == "not_disclosed":
+                tax["false_not_disclosed"] += 1
+            elif g != 0 and gold_counts[g] == 1 and g in extra_values:
+                tax["misplaced"] += 1
+            else:
+                tax["unaddressed"] += 1
+            continue
+
+        if _values_equal(r, g):
+            continue  # matched — not a failure
+
+        # --- mismatch bucket (priority order) ---
+        other_period = "PY" if period == "CY" else "CY"
+        other_scope = "Group" if scope == "Company" else "Company"
+        if _is_axis_swap(key, (uuid, other_period, scope), gold_present, run_present):
+            tax["period_swap"] += 1
+        elif _is_axis_swap(key, (uuid, period, other_scope), gold_present, run_present):
+            tax["scope_swap"] += 1
+        elif is_sign_flip(r, g):
+            tax["sign_flip"] += 1
+        elif is_scale_mismatch(r, g):
+            tax["scale"] += 1
+        else:
+            tax["plain_wrong"] += 1
+    return tax
+
+
+def _statement_by_concept(
+    conn: sqlite3.Connection, benchmark_id: int, template_ids: list[str]
+) -> dict[str, str]:
+    """Map each gradeable concept_uuid to its statement type (SOFP/SOPL/…).
+
+    Statement lives on ``eval_benchmark_templates`` per template_id; concepts
+    carry their template_id, so this joins the two. Concepts whose template
+    isn't in the benchmark set are simply absent (grading already excludes
+    them)."""
+    if not template_ids:
+        return {}
+    placeholders = ",".join("?" for _ in template_ids)
+    sql = (
+        "SELECT n.concept_uuid, t.statement_type "
+        "FROM concept_nodes n "
+        "JOIN eval_benchmark_templates t ON t.template_id = n.template_id "
+        f"WHERE t.benchmark_id = ? AND n.template_id IN ({placeholders})"
+    )
+    return {
+        r[0]: r[1]
+        for r in conn.execute(sql, (benchmark_id, *template_ids)).fetchall()
+    }
+
+
+def per_statement_breakdown(
+    conn: sqlite3.Connection,
+    benchmark_id: int,
+    template_ids: list[str],
+    gold: dict[tuple[str, str, str], tuple],
+    run: dict[tuple[str, str, str], tuple],
+) -> dict[str, dict[str, int]]:
+    """Break gold_cells / matched down by statement, so a change can be traced
+    to one statement (e.g. "SOCF went 84% → 93%, nothing else moved")."""
+    stmt_by_concept = _statement_by_concept(conn, benchmark_id, template_ids)
+    gold_present = _present_map(gold)
+    out: dict[str, dict[str, int]] = {}
+    for key, g in gold_present.items():
+        stmt = stmt_by_concept.get(key[0], "OTHER")
+        bucket = out.setdefault(stmt, {"gold_cells": 0, "matched": 0})
+        bucket["gold_cells"] += 1
+        run_fact = run.get(key)
+        r = _present_number(run_fact[0], run_fact[1]) if run_fact else None
+        if r is not None and _values_equal(r, g):
+            bucket["matched"] += 1
+    return out
+
+
 def grade_run(
     conn: sqlite3.Connection, run_id: int, benchmark_id: int
 ) -> ScoreCard:
@@ -219,4 +398,10 @@ def grade_run(
             # gold left empty → extra.
             card.extra += 1
 
+    # v30: diagnose the wrong slots and break the score down by statement. Both
+    # are pure additions layered on the same maps — the headline is untouched.
+    card.taxonomy = classify_failures(gold, run)
+    card.per_statement = per_statement_breakdown(
+        conn, benchmark_id, template_ids, gold, run
+    )
     return card

@@ -772,6 +772,23 @@ export interface EvalScoreJson {
   scale_mismatch: number;
   score: number;
   created_at?: string;
+  // v30 (docs/PLAN-evals-workspace.md): failure diagnosis + per-statement
+  // breakdown. Null on legacy scorecards graded before the taxonomy existed.
+  taxonomy?: EvalTaxonomy | null;
+  per_statement?: Record<string, { gold_cells: number; matched: number }> | null;
+}
+
+// Diagnosed failure counts — a partition of the wrong slots (missing +
+// mismatch). Every key optional so a partial/legacy blob renders safely.
+export interface EvalTaxonomy {
+  period_swap?: number;
+  scope_swap?: number;
+  sign_flip?: number;
+  scale?: number;
+  plain_wrong?: number;
+  false_not_disclosed?: number;
+  misplaced?: number;
+  unaddressed?: number;
 }
 
 // One benchmark in the library (GET /api/benchmarks list shape).
