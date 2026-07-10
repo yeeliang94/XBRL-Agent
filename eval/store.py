@@ -324,6 +324,122 @@ def create_benchmark_from_run(
     }
 
 
+def create_benchmark_from_mtool(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    document: Optional[str],
+    filing_standard: str,
+    filing_level: str,
+    template_ids: list[str],
+    xlsx_path: str | Path,
+    unit_scale: float = 1.0,
+    column_map_override: Optional[dict] = None,
+) -> dict:
+    """Create a benchmark by reverse-ingesting a human-filled mTool workbook
+    (Step C3). The variant-precise ``template_ids`` are supplied explicitly (the
+    operator picks the statements/variants) so cross-variant label collisions
+    can't arise (gotcha #21). Numeric gold + prose footnotes are captured.
+
+    Raises ``ValueError`` (caller rolls back) on: an unknown standard/level (no
+    templates), a low-confidence column layout with no override
+    (``ColumnDetectionError``), or a workbook that yields zero gold facts.
+    """
+    from eval.mtool_ingest import (
+        build_catalogue,
+        extract_prose_gold,
+        ingest_workbook,
+    )
+
+    standard = (filing_standard or "mfrs").lower()
+    level = (filing_level or "company").lower()
+    statement_by_template = {
+        tid: stmt for tid, stmt in _candidate_templates(standard, level)
+    }
+    template_set = [
+        (tid, statement_by_template[tid])
+        for tid in template_ids
+        if tid in statement_by_template
+    ]
+    if not template_set:
+        raise ValueError(
+            "No known templates selected for "
+            f"{standard.upper()} {level}. Pick at least one statement variant."
+        )
+
+    catalogue = build_catalogue(conn, standard, level, [t for t, _ in template_set])
+    # Raises ColumnDetectionError on low confidence (endpoint → 422 asking for
+    # an explicit column map).
+    report = ingest_workbook(
+        xlsx_path,
+        catalogue,
+        filing_level=level,
+        unit_scale=unit_scale,
+        column_map_override=column_map_override,
+    )
+    if report.fact_count == 0:
+        raise ValueError(
+            "No gold figures could be read from the mTool file. Check the "
+            "filing standard / level and that the value columns are filled — "
+            f"{len(report.unmatched_rows)} labelled row(s) matched no concept."
+        )
+
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO eval_benchmarks(name, document, filing_standard, "
+        "filing_level, created_at) VALUES (?, ?, ?, ?, ?)",
+        (name, document, standard, level, now),
+    )
+    benchmark_id = int(cur.lastrowid)
+    # Record only the templates that actually produced facts — the variant the
+    # human file used, mirroring create_benchmark_from_run.
+    for template_id, statement in template_set:
+        if template_id not in report.template_ids:
+            continue
+        conn.execute(
+            "INSERT INTO eval_benchmark_templates(benchmark_id, template_id, "
+            "statement_type) VALUES (?, ?, ?)",
+            (benchmark_id, template_id, statement),
+        )
+
+    source = f"ingested from mTool file{f' ({document})' if document else ''}"
+    for fact in report.facts:
+        conn.execute(
+            "INSERT INTO gold_concept_facts(benchmark_id, concept_uuid, period, "
+            "entity_scope, value, value_status, source, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 'observed', ?, ?) "
+            "ON CONFLICT(benchmark_id, concept_uuid, period, entity_scope) "
+            "DO UPDATE SET value = excluded.value, source = excluded.source, "
+            "updated_at = excluded.updated_at",
+            (benchmark_id, fact.concept_uuid, fact.period, fact.entity_scope,
+             fact.value, source, now),
+        )
+
+    # Capture prose footnotes as gold (graded only in a later phase).
+    prose = extract_prose_gold(xlsx_path)
+    for note in prose:
+        conn.execute(
+            "INSERT INTO gold_note_texts(benchmark_id, note_key, text, "
+            "updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(benchmark_id, note_key) DO UPDATE SET "
+            "text = excluded.text, updated_at = excluded.updated_at",
+            (benchmark_id, note.note_key, note.text, now),
+        )
+
+    return {
+        "id": benchmark_id,
+        "ingested": report.fact_count,
+        "matched_by_statement": report.matched_by_statement,
+        "unmatched_rows": report.unmatched_rows,
+        "ambiguous": report.ambiguous,
+        "sheets_missing": report.sheets_missing,
+        "prose_notes_captured": len(prose),
+        "scale_warning": report.scale_warning,
+        "statements": sorted({s for _, s in template_set}),
+        "template_ids": sorted(report.template_ids),
+    }
+
+
 def benchmark_template_ids(conn: sqlite3.Connection, benchmark_id: int) -> list[str]:
     return [
         r[0]
