@@ -27,11 +27,14 @@ The heavy lifting is split so it's testable in isolation:
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger("server")
 
 from mtool.column_detect import detect_column_map
 from mtool.offline_fill import (
@@ -145,6 +148,17 @@ def build_catalogue(
         placeholders = ",".join("?" for _ in template_ids)
         scope_sql += f" AND n.template_id IN ({placeholders})"
         params.extend(template_ids)
+    else:
+        # Family-only scope spans BOTH variants of every statement, whose
+        # (sheet, label) pairs can collide with different uuids (gotcha #21) —
+        # a last-write-wins overwrite would silently pick one variant. All
+        # production callers pass an explicit set; warn loudly if one doesn't.
+        logger.warning(
+            "build_catalogue called without template_ids — scoping to the whole "
+            "%s%s family. Cross-variant label collisions resolve last-wins; pass "
+            "an explicit variant set to avoid ambiguity (gotcha #21).",
+            filing_standard, filing_level,
+        )
     rows = conn.execute(
         "SELECT n.concept_uuid, n.template_id, n.canonical_label, "
         "n.render_sheet FROM concept_nodes n "
@@ -159,7 +173,18 @@ def build_catalogue(
         norm = normalize_label(label)
         if not norm:
             continue
-        out.setdefault(sheet, {})[norm] = ConceptTarget(
+        sheet_map = out.setdefault(sheet, {})
+        prior = sheet_map.get(norm)
+        if prior is not None and prior.template_id != template_id:
+            # Two variants claim the same (sheet, label) — surface it rather
+            # than silently overwriting.
+            logger.warning(
+                "build_catalogue: label %r on sheet %r exists in both %s and %s "
+                "— keeping the first; scope by template_ids to disambiguate.",
+                label, sheet, prior.template_id, template_id,
+            )
+            continue
+        sheet_map[norm] = ConceptTarget(
             concept_uuid=uuid,
             template_id=template_id,
             canonical_label=label,
