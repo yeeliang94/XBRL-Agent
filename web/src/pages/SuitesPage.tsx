@@ -7,8 +7,8 @@ import { ui, uiClass } from "../lib/uiStyles";
 import { userMessage } from "../lib/errors";
 import {
   fetchSuites, createSuite, getSuite, addSuiteDoc, deleteSuiteDoc,
-  listSuiteRuns, estimateSuiteRun, launchSuiteRun, resumeSuiteRun, getSuiteRun,
-  fetchSuiteResults, compareSuiteRuns, fetchBenchmarks,
+  listSuiteRuns, estimateSuiteRun, launchSuiteRun, resumeSuiteRun, stopSuiteRun,
+  getSuiteRun, fetchSuiteResults, compareSuiteRuns, fetchBenchmarks,
 } from "../lib/api";
 import type {
   SuiteSummaryJson, SuiteJson, SuiteRunSummaryJson, SuiteRunDetailJson,
@@ -400,6 +400,12 @@ function RunList({
                 <td style={styles.td}><StatusChip status={r.status} /></td>
                 <td style={styles.td}>
                   <button style={styles.linkBtn} onClick={() => onOpenRun(r.id)}>Scores</button>
+                  {r.status === "running" && (
+                    <button data-testid={`suite-run-stop-${r.id}`} style={styles.linkBtn}
+                      onClick={() => stopSuiteRun(suiteId, r.id).then(onChanged).catch(() => {})}>
+                      Stop
+                    </button>
+                  )}
                   {r.status === "partial" && (
                     <button style={styles.linkBtn}
                       onClick={() => resumeSuiteRun(suiteId, r.id).then(onChanged)}>
@@ -422,28 +428,50 @@ function SuiteRunDetail({
   suiteId, suiteRunId, onBack,
 }: { suiteId: number; suiteRunId: number; onBack: () => void }) {
   const [detail, setDetail] = useState<SuiteRunDetailJson | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   useEffect(() => {
     let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = () => {
       getSuiteRun(suiteId, suiteRunId).then((d) => {
         if (!live) return;
         setDetail(d);
-        if (d.suite_run.status === "running") setTimeout(poll, 5000);
+        // Keep polling while the batch is still running; store the handle so
+        // navigating away clears it (no orphaned timer/request chain).
+        if (d.suite_run.status === "running") timer = setTimeout(poll, 5000);
       }).catch(() => {});
     };
     poll();
-    return () => { live = false; };
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+    };
   }, [suiteId, suiteRunId]);
 
   if (!detail) return <p style={styles.muted}>Loading scores…</p>;
   const agg = detail.aggregate;
+  const running = detail.suite_run.status === "running";
 
   return (
     <div style={styles.page}>
       <button style={styles.back} onClick={onBack}>← Back to suite</button>
       <h1 style={styles.title}>
         Suite run #{suiteRunId} <StatusChip status={detail.suite_run.status} />
+        {running && (
+          <button
+            data-testid="suite-run-detail-stop"
+            className={uiClass.btnPrimary}
+            style={{ ...ui.buttonPrimary, marginLeft: pwc.space.md, opacity: stopping ? 0.6 : 1 }}
+            disabled={stopping}
+            onClick={() => {
+              setStopping(true);
+              stopSuiteRun(suiteId, suiteRunId).catch(() => {}).finally(() => setStopping(false));
+            }}
+          >
+            {stopping ? "Stopping…" : "Stop run"}
+          </button>
+        )}
       </h1>
       <div style={styles.metricStrip}>
         <Metric label="Mean accuracy" value={pct(agg.mean_accuracy)} />

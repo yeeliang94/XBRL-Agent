@@ -202,10 +202,15 @@ def build_document_scorecard(
     agents = repo.fetch_run_agents(conn, run_id)
     card.failed_agents = sum(1 for a in agents if a.status == "failed")
 
-    # Reviewer flags (open, unanswered) — direct count, no dedicated helper.
+    # Reviewer flags still needing attention — a resolved/dismissed flag is a
+    # closed issue and must not drag the health signal forever. Exclude the two
+    # terminal statuses (rather than allowlisting 'open'/'answered') so a future
+    # non-terminal status still counts. No dedicated repo helper.
     try:
         row = conn.execute(
-            "SELECT COUNT(*) FROM reviewer_flags WHERE run_id = ?", (run_id,)
+            "SELECT COUNT(*) FROM reviewer_flags WHERE run_id = ? "
+            "AND status NOT IN ('resolved', 'dismissed')",
+            (run_id,),
         ).fetchone()
         card.reviewer_flags = int(row[0]) if row else 0
     except sqlite3.OperationalError:
