@@ -185,4 +185,65 @@ describe("BenchmarksPage", () => {
       expect(screen.getByTestId("benchmark-gold-editor")).toBeTruthy()
     );
   });
+
+  // --- Step C4: mTool-as-gold source ---
+
+  test("mtool mode requires a unit + a template before submitting", async () => {
+    mockFetch((url) => {
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      if (url.startsWith("/api/eval/templates"))
+        return { templates: [{ template_id: "mfrs-company-sofp-cunoncu-v1", statement: "SOFP", variant: "cunoncu", label: "SOFP · cunoncu" }] };
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    await screen.findByTestId("add-benchmark-form");
+    fireEvent.click(screen.getByTestId("bench-mode-mtool"));
+    fireEvent.change(screen.getByTestId("bench-name"), { target: { value: "Human FINCO" } });
+    const file = new File(["x"], "mtool.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    fireEvent.change(screen.getByTestId("bench-file"), { target: { files: [file] } });
+    // No unit chosen yet → validation error.
+    fireEvent.click(screen.getByTestId("bench-submit"));
+    expect(await screen.findByTestId("bench-error")).toHaveTextContent(/unit/i);
+  });
+
+  test("mtool happy path posts to /from-mtool and renders the ingest report", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    mockFetch((url, init) => {
+      calls.push({ url, init });
+      if (url === "/api/benchmarks" && (init?.method ?? "GET") === "GET") return { benchmarks: [] };
+      if (url.startsWith("/api/eval/templates"))
+        return { templates: [{ template_id: "mfrs-company-sofp-cunoncu-v1", statement: "SOFP", variant: "cunoncu", label: "SOFP · cunoncu" }] };
+      if (url === "/api/benchmarks/from-mtool")
+        return {
+          ok: true, id: 9, ingested: 40,
+          matched_by_statement: { SOFP: 40 },
+          unmatched_rows: [{ sheet: "SOFP", row: 12, label: "Weird custom line", values: [123] }],
+          prose_notes_captured: 2,
+          scale_warning: null,
+          statements: ["SOFP"],
+        };
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    await screen.findByTestId("add-benchmark-form");
+    fireEvent.click(screen.getByTestId("bench-mode-mtool"));
+    fireEvent.change(screen.getByTestId("bench-name"), { target: { value: "Human FINCO" } });
+    const file = new File(["x"], "mtool.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    fireEvent.change(screen.getByTestId("bench-file"), { target: { files: [file] } });
+    fireEvent.change(screen.getByTestId("bench-unit"), { target: { value: "thousands" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("bench-template-mfrs-company-sofp-cunoncu-v1")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("bench-template-mfrs-company-sofp-cunoncu-v1"));
+    fireEvent.click(screen.getByTestId("bench-submit"));
+
+    const report = await screen.findByTestId("bench-ingest-report");
+    expect(report).toHaveTextContent(/40 gold cells captured/);
+    expect(screen.getByTestId("bench-unmatched")).toHaveTextContent(/Weird custom line/);
+    const post = calls.find((c) => c.url === "/api/benchmarks/from-mtool");
+    expect(post).toBeTruthy();
+    expect((post!.init!.body as FormData).get("unit")).toBe("thousands");
+    expect((post!.init!.body as FormData).get("template_ids")).toBe(
+      JSON.stringify(["mfrs-company-sofp-cunoncu-v1"]),
+    );
+  });
 });

@@ -346,6 +346,14 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const [denomination, setDenomination] = useState<Denomination>(
     () => _seedDenomination(initialConfig),
   );
+  // Evals workspace (Step D1): repeats-for-consistency. 1 = a normal single
+  // run; 2–5 launches that many identically-configured runs back-to-back and
+  // scores their agreement. Seeded from a rehydrated draft's `repeats`.
+  const [repeats, setRepeats] = useState<number>(() => {
+    const v = (initialConfig as { repeats?: unknown } | undefined)?.repeats;
+    const n = typeof v === "number" ? v : 1;
+    return Math.max(1, Math.min(5, n));
+  });
   // When rehydrating, treat the persisted standard as user intent — scout
   // must NOT silently overwrite a user's saved choice on a refresh.
   const filingStandardTouchedRef = useRef(initialConfig?.filing_standard != null);
@@ -949,11 +957,14 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       // A non-admin never sends a benchmark_id even if a resumed draft carried
       // evalEnabled (grading is admin-only — code-review MEDIUM).
       benchmark_id: isAdmin && evalEnabled ? evalBenchmarkId : null,
+      // Evals workspace (Step D1): repeats-for-consistency. Only sent when >1
+      // so a normal run's config stays byte-identical to before this feature.
+      ...(repeats > 1 ? { repeats } : {}),
     };
   }, [
     statementsEnabled, variantSelections, modelOverrides, infopack,
     scoutEnabled, filingLevel, filingStandard, denomination, notesEnabled,
-    notesModelOverrides, evalEnabled, evalBenchmarkId, isAdmin,
+    notesModelOverrides, evalEnabled, evalBenchmarkId, isAdmin, repeats,
   ]);
 
   const handleRun = useCallback(() => {
@@ -1015,7 +1026,43 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.heading}>Run Configuration</h2>
+      {/* Panel header: title on the left, the Advanced-settings toggle pinned
+          to the top-right so it reads as a panel-level control rather than a
+          step in the middle of the form. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: pwc.space.md,
+        }}
+      >
+        <h2 style={styles.heading}>Run Configuration</h2>
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          aria-expanded={showAdvanced}
+          data-testid="advanced-toggle"
+          title="AI models, accuracy grading, scanned PDFs"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 12px",
+            background: showAdvanced ? pwc.grey50 : "none",
+            border: `1px solid ${pwc.grey200}`,
+            borderRadius: pwc.radius.md,
+            cursor: "pointer",
+            fontFamily: pwc.fontHeading,
+            fontSize: 13,
+            fontWeight: pwc.weight.medium,
+            color: pwc.grey700,
+          }}
+        >
+          <span aria-hidden="true">{showAdvanced ? "▾" : "▸"}</span>
+          Advanced settings
+        </button>
+      </div>
 
       {/* Filing standard: MFRS (default) or MPERS. Mirrors the Filing Level
           styling below so the two toggles read as a pair. */}
@@ -1116,38 +1163,51 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </div>
       </div>
 
-      {/* Advanced disclosure (Phase 3): a single toggle that reveals the
-          power-user controls — per-statement/per-note AI model pickers, the
-          scanned-PDF handling, and (for admins) benchmark grading. Everyday
-          runs never need to open this. */}
+      {/* Evals workspace (Step D1): repeats-for-consistency. Open to all users
+          (no gold needed), inside Advanced. 1 = a normal run; 2–5 launches that
+          many identically-configured runs back-to-back and scores their
+          agreement — flaky extraction becomes measurable even without gold. */}
+      {showAdvanced && (
       <div style={styles.section}>
-        <button
-          type="button"
-          onClick={() => setShowAdvanced((v) => !v)}
-          aria-expanded={showAdvanced}
-          data-testid="advanced-toggle"
-          style={{
-            alignSelf: "flex-start",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "6px 0",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            fontFamily: pwc.fontHeading,
-            fontSize: 13,
-            fontWeight: pwc.weight.medium,
-            color: pwc.grey700,
-          }}
-        >
-          <span aria-hidden="true">{showAdvanced ? "▾" : "▸"}</span>
-          Advanced settings
-          <span style={{ color: pwc.grey500, fontWeight: pwc.weight.regular }}>
-            (AI models{isAdmin ? ", accuracy grading" : ""}, scanned PDFs)
+        <span style={styles.sectionLabel}>Repeats (consistency)</span>
+        <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+          {([1, 2, 3, 4, 5] as const).map((n, idx) => {
+            const active = repeats === n;
+            return (
+              <button
+                key={n}
+                type="button"
+                aria-label={`Repeats ${n}`}
+                aria-pressed={active}
+                data-testid={`repeats-${n}`}
+                onClick={() => setRepeats(n)}
+                style={{
+                  fontFamily: pwc.fontHeading,
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 500,
+                  padding: "8px 18px",
+                  border: "none",
+                  borderRight: idx < 4 ? `1px solid ${pwc.grey200}` : "none",
+                  borderRadius: 0,
+                  background: active ? pwc.orange500 : pwc.white,
+                  color: active ? pwc.white : pwc.grey700,
+                  cursor: "pointer",
+                  transition: "background 0.15s, color 0.15s",
+                }}
+              >
+                {n}
+              </button>
+            );
+          })}
+        </div>
+        {repeats > 1 && (
+          <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey300, marginTop: 4 }}>
+            Runs {repeats}× back-to-back (≈{repeats}× the time &amp; tokens); the
+            run page shows a run-to-run agreement score afterwards.
           </span>
-        </button>
+        )}
       </div>
+      )}
 
       {/* Gold-standard eval (v16): attach a benchmark to grade this run
           against. Admin-only + inside Advanced (an internal QA feature). The

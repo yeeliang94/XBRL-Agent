@@ -136,6 +136,25 @@ def test_from_mtool_happy_path(client):
     assert any(abs(c["value"]) >= 100_000 for c in filled)  # ×1000 applied
 
 
+def test_list_eval_templates_for_family(client):
+    """Step C4: the mTool-gold form's variant picker enumerates imported face
+    templates for a filing family."""
+    tc, db, template_id = client
+    resp = tc.get("/api/eval/templates?standard=mfrs&level=company")
+    assert resp.status_code == 200, resp.text
+    templates = resp.json()["templates"]
+    ids = {t["template_id"] for t in templates}
+    assert template_id in ids
+    sofp = next(t for t in templates if t["template_id"] == template_id)
+    assert sofp["statement"] == "SOFP"
+    assert sofp["variant"]  # non-empty variant token
+
+    # A family with nothing imported returns an empty list, not an error.
+    empty = tc.get("/api/eval/templates?standard=mpers&level=group")
+    assert empty.status_code == 200
+    assert empty.json()["templates"] == []
+
+
 def test_unit_is_mandatory(client):
     tc, db, template_id = client
     sheet, leaves = _pick_leaves(db, template_id)

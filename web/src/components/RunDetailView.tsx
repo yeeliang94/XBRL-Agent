@@ -19,6 +19,7 @@ import { NotesSubTabBar } from "./NotesSubTabBar";
 import { NotesReviewTab } from "./NotesReviewTab";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import { NotesCoveragePanel } from "./NotesCoveragePanel";
+import { ConsistencyPanel } from "./ConsistencyPanel";
 import {
   buildToolTimeline,
   filterEventsBySubAgent,
@@ -832,6 +833,9 @@ export function RunDetailView({
                 <MetricTile label="Agents" value={String(detail.agents.length)} />
               </div>
             </>
+          )}
+          {detail.repeat_group_id != null && (
+            <ConsistencyPanel groupId={detail.repeat_group_id} />
           )}
         </section>
       )}

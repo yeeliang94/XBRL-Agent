@@ -567,6 +567,10 @@ export interface RunConfigPayload {
    *  unset/null for a normal run. Set by the extract-page "Eval testing"
    *  toggle; persisted on runs.benchmark_id and graded at run completion. */
   benchmark_id?: number | null;
+  /** Evals workspace (v30): how many identically-configured runs to launch
+   *  back-to-back for a consistency measurement. 1 (default) = a single normal
+   *  run; 2–5 links the runs into a repeat group. */
+  repeats?: number;
 }
 
 // --- Phase 10: Per-agent state for tab-based UI ---
@@ -758,6 +762,47 @@ export interface RunDetailJson {
   // graded).
   benchmark_id?: number | null;
   eval_score?: EvalScoreJson | null;
+  // v30 evals workspace: set when this run is one of N repeats launched
+  // together for a consistency measurement (docs/PLAN-evals-workspace.md).
+  repeat_group_id?: number | null;
+  repeat_index?: number | null;
+  app_version?: string | null;
+}
+
+// Evals workspace (v30): a repeat group + its computed consistency result,
+// as returned by GET /api/repeat-groups/{id}. Feeds the ConsistencyPanel.
+export interface RepeatGroupJson {
+  id: number;
+  created_at: string;
+  repeats_requested: number;
+  benchmark_id: number | null;
+  status: string; // running | complete | partial
+  config: Record<string, unknown> | null;
+  consistency: ConsistencyJson | null;
+  runs: { id: number; status: string; repeat_index: number | null }[];
+}
+
+export interface ConsistencyDisagreement {
+  key: [string, string, string]; // concept_uuid, period, entity_scope
+  // presence rows
+  filled_by?: number[];
+  n_present?: number;
+  n_repeats?: number;
+  // value rows
+  values?: number[];
+  spread?: number;
+}
+
+export interface ConsistencyJson {
+  available: boolean;
+  n_repeats: number;
+  union_slots: number;
+  unanimous: number;
+  consistency: number | null;
+  presence_disagreements: ConsistencyDisagreement[];
+  value_disagreements: ConsistencyDisagreement[];
+  unanimous_right: number | null;
+  unanimous_wrong: number | null;
 }
 
 // Gold-standard eval (v16) scorecard, as returned by GET /api/runs/{id}/eval

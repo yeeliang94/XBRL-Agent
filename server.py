@@ -2560,6 +2560,24 @@ class RunConfigRequest(BaseModel):
     # the end-of-run grading hook and the History/run-page surfaces can find it.
     benchmark_id: Optional[int] = None
 
+    # Evals workspace (v30): how many independent, identically-configured runs
+    # of this document to launch back-to-back for a consistency measurement.
+    # 1 (default) = a single normal run, no repeat group. 2–5 links the runs
+    # into a repeat_groups row and computes a run-to-run agreement score after
+    # the last one finishes (docs/PLAN-evals-workspace.md, Step D1).
+    repeats: int = 1
+
+    @field_validator("repeats")
+    @classmethod
+    def _clamp_repeats(cls, v: int) -> int:
+        # Defensive clamp so a malformed client can't spawn a runaway batch.
+        # Mirrors the extract-page control's 1..5 range.
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 1
+        return max(1, min(5, n))
+
 
 class RunConfigPatchRequest(BaseModel):
     """Partial-update body for PATCH /api/runs/{id}.
@@ -2604,6 +2622,21 @@ class RunConfigPatchRequest(BaseModel):
     # against, persisted with the rest of the draft config. None leaves the
     # run a normal (non-eval) run.
     benchmark_id: Optional[int] = None
+    # Evals workspace (v30): repeats-for-consistency, mirrors
+    # RunConfigRequest.repeats. Optional so a partial PATCH that doesn't touch
+    # it won't clobber a previously-saved value.
+    repeats: Optional[int] = None
+
+    @field_validator("repeats")
+    @classmethod
+    def _clamp_repeats_patch(cls, v):
+        if v is None:
+            return None
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 1
+        return max(1, min(5, n))
     # `infopack` is the scout-derived inventory the legacy `POST /api/run/
     # {session_id}` endpoint receives in its request body. For the
     # persistent-draft flow there is no separate "scout output store" on
@@ -5967,6 +6000,175 @@ async def run_multi_agent_stream(
                 db_conn.close()
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Repeats + consistency (Evals workspace, Step D1)
+# ---------------------------------------------------------------------------
+def _seed_repeat_session_dir(base_dir: Path, index: int) -> Path:
+    """Give repeat *index* its own output subdir seeded with the run's inputs.
+
+    Repeat 0 uses the base session dir untouched (the common single-run shape).
+    Repeats 1..N-1 get ``{base}/repeat_{i}/`` with ``uploaded.pdf`` (and the
+    optional Word/HTML sidecars + filename record) copied in, so each repeat's
+    traces + workbooks are isolated instead of clobbering the previous one.
+    All repeats share the same ``session_id`` on purpose — that keeps Stop-All
+    (``/api/abort/{session_id}``) and the active-runs lock reaching whichever
+    repeat is currently in flight (they run strictly one at a time).
+    """
+    if index == 0:
+        return base_dir
+    sub = base_dir / f"repeat_{index}"
+    sub.mkdir(parents=True, exist_ok=True)
+    import shutil
+    for name in ("uploaded.pdf", "uploaded.docx", "source.html",
+                 "original_filename.txt"):
+        src = base_dir / name
+        if src.exists():
+            try:
+                shutil.copy2(src, sub / name)
+            except OSError:
+                logger.warning(
+                    "Failed to copy %s into repeat dir %s", name, sub,
+                    exc_info=True,
+                )
+    return sub
+
+
+async def run_repeat_group_stream(
+    session_id: str,
+    session_dir: Path,
+    run_config: RunConfigRequest,
+    api_key: str,
+    proxy_url: str,
+    model_name: str,
+    *,
+    first_run_id: Optional[int] = None,
+) -> AsyncIterator[dict]:
+    """Launch N identically-configured runs of one document back-to-back and
+    score their agreement (Evals workspace, Step D1 / PRD Flow 2).
+
+    Each child is a completely normal run through ``run_multi_agent_stream`` —
+    its own audit row, traces, cross-checks, and the gotcha #10 terminal-status
+    guarantee. The children are linked by a ``repeat_groups`` row
+    (``repeat_group_id`` / ``repeat_index``); after the last one finishes we
+    compute + persist consistency on the group (``finalize_repeat_group``).
+
+    Sequential-in-one-stream by design: the client stays attached for the whole
+    group exactly as it does for one long run, so Stop-All / client-disconnect
+    abort the current repeat and the ``finally`` finalizes the group as
+    ``partial`` over whatever finished — no separate cancel channel needed.
+    """
+    from db import repository as repo
+    from eval.consistency import finalize_repeat_group
+    import sqlite3
+
+    n = max(1, min(5, int(getattr(run_config, "repeats", 1) or 1)))
+
+    # Create the group up-front so a crash before the first repeat still leaves
+    # an auditable row. config snapshot = the exact request every repeat runs.
+    group_id: Optional[int] = None
+    gconn = sqlite3.connect(str(AUDIT_DB_PATH))
+    try:
+        group_id = repo.create_repeat_group(
+            gconn,
+            config=run_config.model_dump(),
+            repeats_requested=n,
+            benchmark_id=run_config.benchmark_id,
+        )
+        gconn.commit()
+    except Exception:
+        logger.warning("Failed to create repeat group for %s", session_id,
+                       exc_info=True)
+    finally:
+        gconn.close()
+
+    # Tell the client the group id + total so the consistency panel can attach
+    # and poll (GET /api/repeat-groups/{id}) as repeats land.
+    yield {"event": "repeat_group", "data": {
+        "group_id": group_id, "repeats_total": n, "repeat_index": 0,
+    }}
+
+    try:
+        for i in range(n):
+            # Announce which repeat is starting so the live UI can label it.
+            yield {"event": "repeat_progress", "data": {
+                "group_id": group_id, "repeat_index": i, "repeats_total": n,
+            }}
+
+            # Row ownership: repeat 0 reuses the already-running draft row when
+            # the draft-start path handed us one; otherwise this generator mints
+            # each child row (status running, linked to the group) and hands it
+            # to run_multi_agent_stream via existing_run_id.
+            child_dir = _seed_repeat_session_dir(session_dir, i)
+            child_run_id: Optional[int] = None
+            if i == 0 and first_run_id is not None:
+                child_run_id = first_run_id
+                if group_id is not None:
+                    lc = sqlite3.connect(str(AUDIT_DB_PATH))
+                    try:
+                        lc.execute(
+                            "UPDATE runs SET repeat_group_id = ?, "
+                            "repeat_index = 0 WHERE id = ?",
+                            (group_id, first_run_id),
+                        )
+                        lc.commit()
+                    finally:
+                        lc.close()
+            else:
+                cc = sqlite3.connect(str(AUDIT_DB_PATH))
+                try:
+                    child_run_id = repo.create_run(
+                        cc,
+                        pdf_filename="uploaded.pdf",
+                        session_id=session_id,
+                        output_dir=str(child_dir),
+                        config=run_config.model_dump(),
+                        scout_enabled=run_config.use_scout,
+                        orchestration=getattr(run_config, "orchestration", "split"),
+                        repeat_group_id=group_id,
+                        repeat_index=i,
+                    )
+                    cc.commit()
+                finally:
+                    cc.close()
+
+            agen = run_multi_agent_stream(
+                session_id=session_id,
+                session_dir=child_dir,
+                run_config=run_config,
+                api_key=api_key,
+                proxy_url=proxy_url,
+                model_name=model_name,
+                existing_run_id=child_run_id,
+            )
+            # Pass every child event straight through; the leading
+            # repeat_progress event tells the client which repeat produced them.
+            async for frame in agen:
+                yield frame
+    finally:
+        # Compute + persist consistency over whatever finished — success OR an
+        # abort/disconnect mid-group (then it lands 'partial'). Best-effort so a
+        # scoring failure never masks the run outcome (gotcha #20 spirit).
+        if group_id is not None:
+            fconn = sqlite3.connect(str(AUDIT_DB_PATH))
+            try:
+                result = finalize_repeat_group(fconn, group_id)
+                fconn.commit()
+                try:
+                    yield {"event": "consistency", "data": {
+                        "group_id": group_id, **result.to_dict(),
+                    }}
+                except (RuntimeError, GeneratorExit, asyncio.CancelledError):
+                    # Client already gone — the group is persisted regardless.
+                    pass
+            except Exception:
+                logger.warning(
+                    "Failed to finalize repeat group %s", group_id,
+                    exc_info=True,
+                )
+            finally:
+                fconn.close()
 
 
 # ---------------------------------------------------------------------------
