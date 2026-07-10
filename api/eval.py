@@ -302,6 +302,52 @@ async def create_benchmark_from_mtool_endpoint(
             pass
 
 
+@router.get("/api/eval/templates")
+async def list_eval_templates_endpoint(
+    standard: str = "mfrs", level: str = "company"
+):
+    """List the face template variants imported for a ``{standard}-{level}``
+    family, so the mTool-gold form can offer a variant-precise picker (the
+    from-mtool endpoint requires an explicit template_ids set — gotcha #21).
+
+    Each entry: ``{template_id, statement, variant, label}``. Notes templates
+    are excluded (they're reviewed in the Notes tab, not graded here).
+    """
+    if standard not in ("mfrs", "mpers"):
+        raise HTTPException(status_code=400, detail="standard must be mfrs or mpers")
+    if level not in ("company", "group"):
+        raise HTTPException(status_code=400, detail="level must be company or group")
+    from notes_types import notes_template_ids
+
+    notes_ids = sorted(notes_template_ids())
+    family = f"{standard}-{level}-"
+    conn = server._open_audit_conn()
+    try:
+        not_in = (
+            f"AND template_id NOT IN ({','.join('?' * len(notes_ids))})"
+            if notes_ids else ""
+        )
+        rows = conn.execute(
+            f"SELECT DISTINCT template_id FROM concept_nodes "
+            f"WHERE template_id LIKE ? {not_in} ORDER BY template_id",
+            (family + "%", *notes_ids),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    out = []
+    for (tid,) in rows:
+        parts = tid.split("-")
+        statement = parts[2].upper() if len(parts) >= 3 else "OTHER"
+        variant = parts[3] if len(parts) >= 4 else ""
+        label = f"{statement}{f' · {variant}' if variant else ''}"
+        out.append({
+            "template_id": tid, "statement": statement,
+            "variant": variant, "label": label,
+        })
+    return {"templates": out}
+
+
 @router.post("/api/benchmarks/from-run")
 async def create_benchmark_from_run_endpoint(body: BenchmarkFromRun):
     """Seed a benchmark directly from a finished run's extracted facts.

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, deleteBenchmark, fetchRuns } from "../lib/api";
+import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, createBenchmarkFromMtool, fetchEvalTemplates, deleteBenchmark, fetchRuns } from "../lib/api";
 import type { RunSummaryJson } from "../lib/types";
 import type { BenchmarkJson } from "../lib/types";
 import { ConceptsPage } from "./ConceptsPage";
@@ -222,12 +222,23 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
   // "run" (recommended) seeds gold straight from a finished run's facts —
   // lossless. "upload" reverse-ingests a filled workbook, which silently drops
   // un-recalculated formula cells (SOCIE matrix + cross-sheet rollups).
-  const [mode, setMode] = useState<"run" | "upload">("run");
+  const [mode, setMode] = useState<"run" | "upload" | "mtool">("run");
   const [name, setName] = useState("");
   const [standard, setStandard] = useState("mfrs");
   const [level, setLevel] = useState("company");
   const [file, setFile] = useState<File | null>(null);
   const [runId, setRunId] = useState("");
+  // mTool source (Step C4): the operator declares the figure unit (no default —
+  // a wrong unit silently 1000×'s every value) and picks the variant-precise
+  // template set (gotcha #21). The ingest report is shown after creation.
+  const [unit, setUnit] = useState<"" | "full" | "thousands">("");
+  const [templates, setTemplates] = useState<
+    { template_id: string; statement: string; variant: string; label: string }[]
+  >([]);
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
+  const [report, setReport] = useState<Awaited<
+    ReturnType<typeof createBenchmarkFromMtool>
+  > | null>(null);
   // Seedable runs for the picker — gold can only come from a terminal run
   // (from-run rejects draft/running/failed/aborted), so filter to those.
   const [runOptions, setRunOptions] = useState<RunSummaryJson[]>([]);
@@ -265,12 +276,33 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
     };
   }, [mode]);
 
+  // mTool source: load the family's variant list so the operator picks the
+  // exact templates (the from-mtool endpoint requires an explicit set).
+  useEffect(() => {
+    if (mode !== "mtool") return;
+    let cancelled = false;
+    fetchEvalTemplates(standard, level)
+      .then((ts) => {
+        if (!cancelled) {
+          setTemplates(ts);
+          setSelectedTemplateIds([]); // reset on family change
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTemplates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, standard, level]);
+
   const submit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       setError(null);
       setOk(null);
       setWarning(null);
+      setReport(null);
       if (!name.trim()) {
         setError("Give the benchmark a name.");
         return;
@@ -294,7 +326,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
           setName("");
           setRunId("");
           onCreated();
-        } else {
+        } else if (mode === "upload") {
           if (!file) {
             setError("Choose a filled .xlsx workbook to ingest.");
             setBusy(false);
@@ -311,6 +343,37 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
           setName("");
           setFile(null);
           onCreated();
+        } else {
+          // mode === "mtool"
+          if (!file) {
+            setError("Choose a human-filled mTool .xlsx to ingest.");
+            setBusy(false);
+            return;
+          }
+          if (unit !== "full" && unit !== "thousands") {
+            setError("Declare the figure unit — full figures or thousands (RM'000).");
+            setBusy(false);
+            return;
+          }
+          if (selectedTemplateIds.length === 0) {
+            setError("Pick at least one statement variant to map against.");
+            setBusy(false);
+            return;
+          }
+          const res = await createBenchmarkFromMtool({
+            file,
+            name: name.trim(),
+            filing_standard: standard,
+            filing_level: level,
+            unit,
+            template_ids: selectedTemplateIds,
+          });
+          setReport(res);
+          setOk(`Created "${name.trim()}" — ${res.ingested} gold cells captured.`);
+          if (res.scale_warning) setWarning(res.scale_warning);
+          setName("");
+          setFile(null);
+          onCreated();
         }
       } catch (err) {
         setError(userMessage(err));
@@ -318,7 +381,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
         setBusy(false);
       }
     },
-    [mode, file, name, runId, standard, level, onCreated]
+    [mode, file, name, runId, standard, level, unit, selectedTemplateIds, onCreated]
   );
 
   return (
@@ -349,6 +412,16 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             onChange={() => setMode("upload")}
           />
           From an uploaded workbook
+        </label>
+        <label style={styles.modeOption}>
+          <input
+            type="radio"
+            name="bench-mode"
+            data-testid="bench-mode-mtool"
+            checked={mode === "mtool"}
+            onChange={() => setMode("mtool")}
+          />
+          From an mTool file (human-filled)
         </label>
       </div>
       <div style={styles.formGrid}>
@@ -415,7 +488,9 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
               </select>
             </div>
             <div style={styles.formField}>
-              <label htmlFor="bench-file" style={ui.fieldLabel}>Filled workbook (.xlsx)</label>
+              <label htmlFor="bench-file" style={ui.fieldLabel}>
+                {mode === "mtool" ? "Human-filled mTool file (.xlsx)" : "Filled workbook (.xlsx)"}
+              </label>
               <input
                 id="bench-file"
                 data-testid="bench-file"
@@ -425,9 +500,62 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
                 style={{ fontSize: 14 }}
               />
             </div>
+            {mode === "mtool" && (
+              <div style={styles.formField}>
+                <label htmlFor="bench-unit" style={ui.fieldLabel}>Figure unit</label>
+                <select
+                  id="bench-unit"
+                  data-testid="bench-unit"
+                  style={ui.select}
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value as "" | "full" | "thousands")}
+                >
+                  <option value="">Declare the unit…</option>
+                  <option value="full">Full figures (RM)</option>
+                  <option value="thousands">Thousands (RM'000)</option>
+                </select>
+                <span style={styles.fieldHint}>
+                  Authoritative — a wrong unit silently multiplies every value
+                  by 1,000.
+                </span>
+              </div>
+            )}
           </>
         )}
       </div>
+      {mode === "mtool" && (
+        <div style={styles.formField} data-testid="bench-template-picker">
+          <label style={ui.fieldLabel}>Statement variants to map against</label>
+          {templates.length === 0 ? (
+            <span style={styles.fieldHint}>
+              No templates imported for this filing family yet.
+            </span>
+          ) : (
+            <div style={styles.templateGrid}>
+              {templates.map((t) => {
+                const checked = selectedTemplateIds.includes(t.template_id);
+                return (
+                  <label key={t.template_id} style={styles.modeOption}>
+                    <input
+                      type="checkbox"
+                      data-testid={`bench-template-${t.template_id}`}
+                      checked={checked}
+                      onChange={() =>
+                        setSelectedTemplateIds((prev) =>
+                          checked
+                            ? prev.filter((id) => id !== t.template_id)
+                            : [...prev, t.template_id],
+                        )
+                      }
+                    />
+                    {t.label}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
       <div style={styles.formActions}>
         <button
           type="submit"
@@ -444,6 +572,49 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
       {warning && (
         <div data-testid="bench-warning" style={styles.formWarning}>
           ⚠ {warning}
+        </div>
+      )}
+      {report && (
+        <div data-testid="bench-ingest-report" style={styles.reportCard}>
+          <div style={styles.reportTitle}>Ingest report</div>
+          <div style={styles.reportRow}>
+            ✅ {report.ingested} gold cells captured
+            {Object.keys(report.matched_by_statement).length > 0 && (
+              <span style={styles.fieldHint}>
+                {" "}
+                (
+                {Object.entries(report.matched_by_statement)
+                  .map(([s, n]) => `${s}: ${n}`)
+                  .join(", ")}
+                )
+              </span>
+            )}
+          </div>
+          {report.prose_notes_captured > 0 && (
+            <div style={styles.reportRow}>
+              📝 {report.prose_notes_captured} note prose payloads captured (gold
+              for a future prose-fidelity pass)
+            </div>
+          )}
+          {report.unmatched_rows.length > 0 && (
+            <div style={styles.reportRow} data-testid="bench-unmatched">
+              ⚠️ {report.unmatched_rows.length} row
+              {report.unmatched_rows.length === 1 ? "" : "s"} read but not matched
+              to a concept — enter these by hand in the gold editor:
+              <ul style={styles.unmatchedList}>
+                {report.unmatched_rows.slice(0, 25).map((r, i) => (
+                  <li key={i} style={styles.unmatchedItem}>
+                    <code style={styles.code}>{r.sheet}</code> row {r.row}:{" "}
+                    {r.label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div style={styles.reportRow}>
+            Review &amp; correct the imported gold below — click the new
+            benchmark in the list to open its editor.
+          </div>
         </div>
       )}
     </form>
@@ -515,6 +686,43 @@ const styles = {
     alignItems: "center",
     gap: pwc.space.xs,
     cursor: "pointer",
+  } as React.CSSProperties,
+  templateGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+    gap: pwc.space.sm,
+    fontSize: 13,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  reportCard: {
+    ...ui.card,
+    padding: pwc.space.lg,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.sm,
+    fontSize: 13,
+    color: pwc.grey800,
+  } as React.CSSProperties,
+  reportTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  reportRow: {
+    lineHeight: 1.5,
+  } as React.CSSProperties,
+  unmatchedList: {
+    margin: `${pwc.space.xs}px 0 0`,
+    paddingLeft: pwc.space.lg,
+  } as React.CSSProperties,
+  unmatchedItem: {
+    lineHeight: 1.5,
+  } as React.CSSProperties,
+  code: {
+    fontFamily: pwc.fontMono,
+    fontSize: 12,
+    color: pwc.grey700,
   } as React.CSSProperties,
   formWarning: {
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,

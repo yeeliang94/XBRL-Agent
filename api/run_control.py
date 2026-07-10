@@ -77,14 +77,27 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest, request:
         auth_session_id = server._auth_session_id_from_request(request)
 
         async def event_stream():
-            agen = server.run_multi_agent_stream(
-                session_id=session_id,
-                session_dir=session_dir,
-                run_config=body,
-                api_key=api_key,
-                proxy_url=proxy_url,
-                model_name=model_name,
-            )
+            if getattr(body, "repeats", 1) and body.repeats > 1:
+                # Repeats-for-consistency: N linked runs behind one stream
+                # (Evals workspace, Step D1). first_run_id=None → the group
+                # stream mints every child row itself.
+                agen = server.run_repeat_group_stream(
+                    session_id=session_id,
+                    session_dir=session_dir,
+                    run_config=body,
+                    api_key=api_key,
+                    proxy_url=proxy_url,
+                    model_name=model_name,
+                )
+            else:
+                agen = server.run_multi_agent_stream(
+                    session_id=session_id,
+                    session_dir=session_dir,
+                    run_config=body,
+                    api_key=api_key,
+                    proxy_url=proxy_url,
+                    model_name=model_name,
+                )
             try:
                 async for frame in server.sse_stream_with_keepalive(
                     agen, auth_session_id=auth_session_id
@@ -237,15 +250,29 @@ async def start_run_endpoint(run_id: int, request: Request):
         auth_session_id = server._auth_session_id_from_request(request)
 
         async def event_stream():
-            agen = server.run_multi_agent_stream(
-                session_id=session_id,
-                session_dir=session_dir,
-                run_config=run_config,
-                api_key=api_key,
-                proxy_url=proxy_url,
-                model_name=model_name,
-                existing_run_id=run_id,
-            )
+            if getattr(run_config, "repeats", 1) and run_config.repeats > 1:
+                # Repeats-for-consistency (Evals workspace, Step D1): the
+                # already-flipped draft row becomes repeat 0, the group stream
+                # mints repeats 1..N-1.
+                agen = server.run_repeat_group_stream(
+                    session_id=session_id,
+                    session_dir=session_dir,
+                    run_config=run_config,
+                    api_key=api_key,
+                    proxy_url=proxy_url,
+                    model_name=model_name,
+                    first_run_id=run_id,
+                )
+            else:
+                agen = server.run_multi_agent_stream(
+                    session_id=session_id,
+                    session_dir=session_dir,
+                    run_config=run_config,
+                    api_key=api_key,
+                    proxy_url=proxy_url,
+                    model_name=model_name,
+                    existing_run_id=run_id,
+                )
             try:
                 async for frame in server.sse_stream_with_keepalive(
                     agen, auth_session_id=auth_session_id

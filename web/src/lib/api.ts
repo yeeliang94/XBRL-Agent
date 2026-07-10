@@ -432,7 +432,7 @@ export async function fetchPdfPageCount(runId: number): Promise<number | null> {
 // Gold-standard eval / benchmark library (v16)
 // ---------------------------------------------------------------------------
 
-import type { BenchmarkJson, EvalScoreJson } from "./types";
+import type { BenchmarkJson, EvalScoreJson, RepeatGroupJson } from "./types";
 
 /** List every benchmark in the library. */
 export async function fetchBenchmarks(): Promise<BenchmarkJson[]> {
@@ -494,6 +494,50 @@ export async function createBenchmarkFromRun(args: {
   });
 }
 
+/** Evals workspace (Step C4): the face template variants available for a
+ *  filing family, so the mTool-gold form can offer a variant-precise picker. */
+export async function fetchEvalTemplates(
+  standard: string, level: string,
+): Promise<{ template_id: string; statement: string; variant: string; label: string }[]> {
+  const data = await apiFetch<{ templates: { template_id: string; statement: string; variant: string; label: string }[] }>(
+    `/api/eval/templates?standard=${encodeURIComponent(standard)}&level=${encodeURIComponent(level)}`,
+  );
+  return Array.isArray(data?.templates) ? data.templates : [];
+}
+
+/** Evals workspace (Step C4): create a benchmark by reverse-ingesting a
+ *  human-filled mTool workbook. The unit is declared by the operator (no
+ *  auto-guess) and the variant set is explicit (gotcha #21). Returns the
+ *  ingest report (matched-by-statement / unmatched rows / scale warning). */
+export async function createBenchmarkFromMtool(args: {
+  file: File;
+  name: string;
+  filing_standard: string;
+  filing_level: string;
+  unit: "full" | "thousands";
+  template_ids: string[];
+  document?: string;
+}): Promise<{
+  ok: boolean;
+  id: number;
+  ingested: number;
+  matched_by_statement: Record<string, number>;
+  unmatched_rows: { sheet: string; row: number; label: string; values: number[] }[];
+  prose_notes_captured: number;
+  scale_warning: string | null;
+  statements: string[];
+}> {
+  const form = new FormData();
+  form.append("file", args.file);
+  form.append("name", args.name);
+  form.append("filing_standard", args.filing_standard);
+  form.append("filing_level", args.filing_level);
+  form.append("unit", args.unit);
+  form.append("template_ids", JSON.stringify(args.template_ids));
+  if (args.document) form.append("document", args.document);
+  return apiFetch("/api/benchmarks/from-mtool", { method: "POST", body: form });
+}
+
 /** Delete a benchmark (cascades to its templates + gold facts + scores). */
 export async function deleteBenchmark(id: number): Promise<void> {
   await apiFetch(`/api/benchmarks/${id}`, { method: "DELETE" });
@@ -503,6 +547,17 @@ export async function deleteBenchmark(id: number): Promise<void> {
 export async function fetchRunEval(runId: number): Promise<EvalScoreJson | null> {
   try {
     return await apiFetch<EvalScoreJson>(`/api/runs/${runId}/eval`);
+  } catch {
+    return null;
+  }
+}
+
+/** Evals workspace (v30): fetch a repeat group + its consistency result. */
+export async function fetchRepeatGroup(
+  groupId: number,
+): Promise<RepeatGroupJson | null> {
+  try {
+    return await apiFetch<RepeatGroupJson>(`/api/repeat-groups/${groupId}`);
   } catch {
     return null;
   }
