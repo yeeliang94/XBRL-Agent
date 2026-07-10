@@ -35,13 +35,19 @@ async def list_runs_endpoint(
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    include_suite_children: bool = False,
     limit: int = 50,
     offset: int = 0,
     # Accept `from`/`to` aliases too so the frontend can use human-friendly
     # query params. FastAPI cannot parse a param named `from` (reserved
     # keyword), so we alias via the date-range middleware on the app.
 ):
-    """List past runs with optional filters. Newest first by default."""
+    """List past runs with optional filters. Newest first by default.
+
+    Suite child runs (Evals workspace) are hidden by default so a batch of 30+
+    doesn't bury the list (decision #1); pass include_suite_children=true to
+    show them.
+    """
     from db import repository as repo
     # Clamp once, use for both the DB query AND the response payload.
     # Previously the response echoed the raw request values, so a caller
@@ -58,6 +64,7 @@ async def list_runs_endpoint(
             model=model,
             date_from=date_from,
             date_to=date_to,
+            include_suite_children=include_suite_children,
             limit=safe_limit,
             offset=safe_offset,
         )
@@ -68,6 +75,7 @@ async def list_runs_endpoint(
             model=model,
             date_from=date_from,
             date_to=date_to,
+            include_suite_children=include_suite_children,
         )
     finally:
         conn.close()
@@ -175,6 +183,9 @@ async def get_run_detail_endpoint(run_id: int):
         "app_version": getattr(run, "app_version", None),
         "repeat_group_id": getattr(run, "repeat_group_id", None),
         "repeat_index": getattr(run, "repeat_index", None),
+        # v31 evals workspace: links a suite child run back to its batch (E6),
+        # so the child's run detail can offer a "back to suite run" link.
+        "suite_run_id": getattr(run, "suite_run_id", None),
         # v22 per-run notes-table style override (docs/PLAN-notes-table-theme.md).
         # None on a run with no override — the Notes tab then uses the firm
         # default from /api/config.

@@ -91,6 +91,8 @@ class Run:
     app_version: Optional[str] = None
     repeat_group_id: Optional[int] = None
     repeat_index: Optional[int] = None
+    # v31 evals-workspace: links a suite child run back to its batch (E6).
+    suite_run_id: Optional[int] = None
 
 
 @dataclass
@@ -1955,6 +1957,7 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         app_version=_get("app_version"),
         repeat_group_id=_get("repeat_group_id"),
         repeat_index=_get("repeat_index"),
+        suite_run_id=_get("suite_run_id"),
     )
 
 
@@ -2144,6 +2147,7 @@ def list_runs(
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    include_suite_children: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> list[RunSummary]:
@@ -2168,6 +2172,11 @@ def list_runs(
     if status:
         clauses.append("r.status = ?")
         params.append(status)
+    # Evals workspace (E6): suite child runs are hidden from History by default
+    # (decision #1) so a 30-doc suite run doesn't bury the list. The toggle
+    # passes include_suite_children=True to show them.
+    if not include_suite_children:
+        clauses.append("r.suite_run_id IS NULL")
     # Normalize date-only filters to full ISO timestamps so the lexicographic
     # comparison against `created_at` covers the full day on both ends.
     date_from_norm = _normalize_date_bound(date_from, end_of_day=False)
@@ -2278,6 +2287,7 @@ def count_runs(
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    include_suite_children: bool = False,
 ) -> int:
     """Companion to list_runs — returns the total matching count for the UI
     pagination footer. Keeps the SQL filter logic in one shape by mirroring
@@ -2290,6 +2300,8 @@ def count_runs(
     if status:
         clauses.append("r.status = ?")
         params.append(status)
+    if not include_suite_children:
+        clauses.append("r.suite_run_id IS NULL")
     # Mirror list_runs date normalization so the pagination footer count
     # matches the visible row set.
     date_from_norm = _normalize_date_bound(date_from, end_of_day=False)

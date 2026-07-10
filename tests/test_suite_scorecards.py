@@ -1,0 +1,105 @@
+"""Suite scorecard aggregation (Evals workspace, Step E4).
+
+The pure aggregation math over hand-built document scorecards: mean-of-documents
+headline, pooled secondary, worst-document surfaced, failed document excluded +
+labelled, taxonomy totals.
+"""
+from __future__ import annotations
+
+from eval.scorecards import DocumentScorecard, aggregate_suite, _coverage_rate
+
+
+def _doc(run_id, *, accuracy=None, gold=0, matched=0, status="completed",
+         taxonomy=None, consistency=None, ccpr=None, coverage=None, cov_avail=False):
+    return DocumentScorecard(
+        run_id=run_id, label=f"doc{run_id}", status=status,
+        accuracy=accuracy, gold_cells=gold, matched_cells=matched,
+        taxonomy=taxonomy or {}, consistency=consistency,
+        cross_check_pass_rate=ccpr, notes_coverage=coverage,
+        notes_coverage_available=cov_avail,
+    )
+
+
+def test_mean_is_per_document_not_pooled():
+    # Two docs: one small perfect, one large mediocre. Mean weights them
+    # equally (0.75); pooled weights by size (worse).
+    docs = [
+        _doc(1, accuracy=1.0, gold=2, matched=2),
+        _doc(2, accuracy=0.5, gold=100, matched=50),
+    ]
+    agg = aggregate_suite(docs)
+    assert abs(agg["mean_accuracy"] - 0.75) < 1e-9
+    assert abs(agg["pooled_accuracy"] - (52 / 102)) < 1e-9
+    assert agg["pooled_matched"] == 52
+    assert agg["pooled_gold"] == 102
+
+
+def test_worst_document_surfaced():
+    docs = [
+        _doc(1, accuracy=0.9, gold=10, matched=9),
+        _doc(2, accuracy=0.4, gold=10, matched=4),
+        _doc(3, accuracy=0.7, gold=10, matched=7),
+    ]
+    agg = aggregate_suite(docs)
+    assert agg["worst_document"]["run_id"] == 2
+
+
+def test_failed_document_excluded_and_labelled():
+    docs = [
+        _doc(1, accuracy=0.8, gold=10, matched=8),
+        _doc(2, status="failed"),  # no gold, failed
+        _doc(3, accuracy=0.6, gold=10, matched=6),
+    ]
+    agg = aggregate_suite(docs)
+    # Failed doc is out of the mean (only docs 1 & 3 count).
+    assert abs(agg["mean_accuracy"] - 0.7) < 1e-9
+    assert agg["documents_total"] == 3
+    assert agg["documents_graded"] == 2
+    assert agg["documents_failed"] == 1
+    assert agg["coverage_note"] == "2 of 3"
+
+
+def test_taxonomy_totals_sum_across_documents():
+    docs = [
+        _doc(1, accuracy=0.8, gold=10, matched=8, taxonomy={"sign_flip": 1, "scale": 2}),
+        _doc(2, accuracy=0.6, gold=10, matched=6, taxonomy={"sign_flip": 3}),
+    ]
+    agg = aggregate_suite(docs)
+    assert agg["taxonomy_totals"] == {"sign_flip": 4, "scale": 2}
+
+
+def test_no_graded_documents_gives_null_headline():
+    docs = [_doc(1, status="failed"), _doc(2, accuracy=None)]
+    agg = aggregate_suite(docs)
+    assert agg["mean_accuracy"] is None
+    assert agg["pooled_accuracy"] is None
+    assert agg["worst_document"] is None
+
+
+def test_means_over_consistency_coverage_ccpr():
+    docs = [
+        _doc(1, accuracy=1.0, gold=1, matched=1, consistency=0.8, ccpr=1.0, coverage=0.9, cov_avail=True),
+        _doc(2, accuracy=1.0, gold=1, matched=1, consistency=0.6, ccpr=0.5, coverage=0.7, cov_avail=True),
+    ]
+    agg = aggregate_suite(docs)
+    assert abs(agg["mean_consistency"] - 0.7) < 1e-9
+    assert abs(agg["mean_cross_check_pass_rate"] - 0.75) < 1e-9
+    assert abs(agg["mean_notes_coverage"] - 0.8) < 1e-9
+
+
+def test_coverage_rate_excludes_skips_and_honours_unavailable():
+    # placed=2, missing=1, skipped=1 (excluded) → 2/3.
+    rows = [
+        {"note_num": 1, "subnote_ref": None, "status": "placed"},
+        {"note_num": 2, "subnote_ref": None, "status": "placed"},
+        {"note_num": 3, "subnote_ref": None, "status": "missing"},
+        {"note_num": 4, "subnote_ref": None, "status": "skipped"},
+    ]
+    rate, avail = _coverage_rate(rows)
+    assert avail is True
+    assert abs(rate - 2 / 3) < 1e-9
+
+    # Inventory-unavailable banner → not green, unavailable.
+    banner = [{"note_num": -1, "subnote_ref": None, "status": "inventory_unavailable"}]
+    rate2, avail2 = _coverage_rate(banner)
+    assert rate2 is None and avail2 is False
