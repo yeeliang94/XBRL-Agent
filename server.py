@@ -2367,6 +2367,21 @@ async def _lifespan(app: FastAPI):
         logger.warning("re-review task reconciliation failed at startup",
                        exc_info=True)
 
+    # Retire suite runs left 'running' by a crash (Evals workspace, Step E3) —
+    # same discipline as the review-task reconcile above (gotcha #10 spirit).
+    try:
+        conn = _open_audit_conn()
+        try:
+            ns = repo.reconcile_stale_suite_runs(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        if ns:
+            logger.info("reconciled %d stale suite run(s) at startup", ns)
+    except Exception:
+        logger.warning("suite-run reconciliation failed at startup",
+                       exc_info=True)
+
     # Retire notes re-reviews orphaned by a restart (v24) — same discipline.
     try:
         from db import repository as repo
@@ -6593,6 +6608,7 @@ from api.notes import router as _notes_router
 from api.notes_formatter import router as _notes_formatter_router
 from api.files import router as _files_router
 from api.eval import router as _eval_router
+from api.suites import router as _suites_router
 from api.mtool import router as _mtool_router
 from auth.routes import router as _auth_router
 
@@ -6606,6 +6622,7 @@ app.include_router(_notes_router)
 app.include_router(_notes_formatter_router)
 app.include_router(_files_router)
 app.include_router(_eval_router)
+app.include_router(_suites_router)
 app.include_router(_mtool_router)
 app.include_router(_auth_router)
 

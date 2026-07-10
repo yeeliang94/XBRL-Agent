@@ -314,6 +314,7 @@ def create_run(
     app_version: Optional[str] = None,
     repeat_group_id: Optional[int] = None,
     repeat_index: Optional[int] = None,
+    suite_run_id: Optional[int] = None,
 ) -> int:
     """Insert a new run row and return its id.
 
@@ -348,14 +349,14 @@ def create_run(
     cur = conn.execute(
         "INSERT INTO runs(created_at, pdf_filename, status, notes, "
         "session_id, output_dir, run_config_json, scout_enabled, started_at, "
-        "orchestration, app_version, repeat_group_id, repeat_index) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "orchestration, app_version, repeat_group_id, repeat_index, suite_run_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             now, pdf_filename, status, notes or None,
             session_id, output_dir, config_json,
             1 if scout_enabled else 0, started_at,
             orchestration or "split",
-            app_version, repeat_group_id, repeat_index,
+            app_version, repeat_group_id, repeat_index, suite_run_id,
         ),
     )
     return int(cur.lastrowid)
@@ -2506,6 +2507,207 @@ def fetch_repeat_group(
             for c in children
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Evals workspace Phase 2 (v31) — suites + suite runs + suite docs.
+# A Suite is a named corpus; a Suite Run is one batch execution over it. Child
+# runs link back via runs.suite_run_id. Managed source files live on disk
+# (hybrid storage); only the pointers live here.
+# ---------------------------------------------------------------------------
+def create_suite(conn: sqlite3.Connection, *, name: str) -> int:
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO eval_suites(name, created_at, updated_at) VALUES (?, ?, ?)",
+        (name, now, now),
+    )
+    return int(cur.lastrowid)
+
+
+def rename_suite(conn: sqlite3.Connection, suite_id: int, name: str) -> None:
+    conn.execute(
+        "UPDATE eval_suites SET name = ?, updated_at = ? WHERE id = ?",
+        (name, _now(), suite_id),
+    )
+
+
+def delete_suite(conn: sqlite3.Connection, suite_id: int) -> bool:
+    cur = conn.execute("DELETE FROM eval_suites WHERE id = ?", (suite_id,))
+    return cur.rowcount > 0
+
+
+def list_suites(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Every suite with its document + suite-run counts, newest first."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT s.id, s.name, s.created_at, s.updated_at, "
+            "(SELECT COUNT(*) FROM eval_suite_docs d WHERE d.suite_id = s.id) AS doc_count, "
+            "(SELECT COUNT(*) FROM eval_suite_runs r WHERE r.suite_id = s.id) AS run_count "
+            "FROM eval_suites s ORDER BY s.id DESC"
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    return [dict(r) for r in rows]
+
+
+def get_suite(conn: sqlite3.Connection, suite_id: int) -> Optional[dict[str, Any]]:
+    """A suite + its documents, or None."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT id, name, created_at, updated_at FROM eval_suites WHERE id = ?",
+            (suite_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        docs = conn.execute(
+            "SELECT id, label, source_filename, filing_standard, filing_level, "
+            "benchmark_id, created_at FROM eval_suite_docs WHERE suite_id = ? "
+            "ORDER BY id",
+            (suite_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    out = dict(row)
+    out["docs"] = [dict(d) for d in docs]
+    return out
+
+
+def add_suite_doc(
+    conn: sqlite3.Connection,
+    *,
+    suite_id: int,
+    label: str,
+    source_path: str,
+    source_filename: str,
+    filing_standard: str = "mfrs",
+    filing_level: str = "company",
+    benchmark_id: Optional[int] = None,
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO eval_suite_docs(suite_id, label, source_path, "
+        "source_filename, filing_standard, filing_level, benchmark_id, "
+        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (suite_id, label, source_path, source_filename, filing_standard,
+         filing_level, benchmark_id, _now()),
+    )
+    return int(cur.lastrowid)
+
+
+def delete_suite_doc(conn: sqlite3.Connection, doc_id: int) -> bool:
+    cur = conn.execute("DELETE FROM eval_suite_docs WHERE id = ?", (doc_id,))
+    return cur.rowcount > 0
+
+
+def list_suite_docs(conn: sqlite3.Connection, suite_id: int) -> list[dict[str, Any]]:
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, suite_id, label, source_path, source_filename, "
+            "filing_standard, filing_level, benchmark_id, created_at "
+            "FROM eval_suite_docs WHERE suite_id = ? ORDER BY id",
+            (suite_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    return [dict(r) for r in rows]
+
+
+def create_suite_run(
+    conn: sqlite3.Connection,
+    *,
+    suite_id: int,
+    label: str = "",
+    config: Optional[dict[str, Any]] = None,
+    model: Optional[str] = None,
+    app_version: Optional[str] = None,
+) -> int:
+    if app_version is None:
+        from utils.app_version import get_app_version
+        app_version = get_app_version()
+    cur = conn.execute(
+        "INSERT INTO eval_suite_runs(suite_id, label, config_json, model, "
+        "app_version, status, created_at) VALUES (?, ?, ?, ?, ?, 'running', ?)",
+        (suite_id, label, json.dumps(config) if config is not None else None,
+         model, app_version, _now()),
+    )
+    return int(cur.lastrowid)
+
+
+def update_suite_run_status(
+    conn: sqlite3.Connection, suite_run_id: int, status: str,
+    *, ended: bool = False,
+) -> None:
+    if ended:
+        conn.execute(
+            "UPDATE eval_suite_runs SET status = ?, ended_at = ? WHERE id = ?",
+            (status, _now(), suite_run_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE eval_suite_runs SET status = ? WHERE id = ?",
+            (status, suite_run_id),
+        )
+
+
+def get_suite_run(
+    conn: sqlite3.Connection, suite_run_id: int
+) -> Optional[dict[str, Any]]:
+    """A suite run + its child run ids/statuses (ordered), or None."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT id, suite_id, label, config_json, model, app_version, "
+            "status, created_at, ended_at FROM eval_suite_runs WHERE id = ?",
+            (suite_run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        children = conn.execute(
+            "SELECT id, status, pdf_filename, benchmark_id FROM runs "
+            "WHERE suite_run_id = ? ORDER BY id",
+            (suite_run_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    out = dict(row)
+    out["config"] = _parse_json_dict(out.pop("config_json"))
+    out["runs"] = [dict(c) for c in children]
+    return out
+
+
+def list_suite_runs(
+    conn: sqlite3.Connection, suite_id: int
+) -> list[dict[str, Any]]:
+    """Suite runs for a suite, newest first (no child expansion)."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, suite_id, label, model, app_version, status, "
+            "created_at, ended_at FROM eval_suite_runs WHERE suite_id = ? "
+            "ORDER BY id DESC",
+            (suite_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    return [dict(r) for r in rows]
+
+
+def reconcile_stale_suite_runs(conn: sqlite3.Connection) -> int:
+    """Retire suite runs left 'running' by a crash (mirrors
+    reconcile_stale_review_tasks). Called at startup. Returns the count."""
+    cur = conn.execute(
+        "UPDATE eval_suite_runs SET status = 'partial', ended_at = ? "
+        "WHERE status = 'running'",
+        (_now(),),
+    )
+    return cur.rowcount
 
 
 # ---------------------------------------------------------------------------

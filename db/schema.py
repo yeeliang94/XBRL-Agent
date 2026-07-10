@@ -158,7 +158,7 @@ from pathlib import Path
 # 'unstyled' (plain), or NULL (legacy / reviewer-authored). Surfaced so the
 # operator can see which notes fell back to plain and need a manual formatter
 # pass. Nullable ALTER TABLE column. Pinned by tests/test_db_schema_v29.py.
-CURRENT_SCHEMA_VERSION = 30
+CURRENT_SCHEMA_VERSION = 31
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -221,7 +221,11 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- statement list — SQLite resolves FK targets lazily).
         app_version           TEXT,
         repeat_group_id       INTEGER REFERENCES repeat_groups(id) ON DELETE SET NULL,
-        repeat_index          INTEGER
+        repeat_index          INTEGER,
+        -- v31 evals-workspace Phase 2: links a suite child run back to its
+        -- batch (eval_suite_runs, created later in this list). NULL on every
+        -- non-suite run. History hides suite children by default (E6).
+        suite_run_id          INTEGER REFERENCES eval_suite_runs(id) ON DELETE SET NULL
     )
     """,
 
@@ -738,6 +742,54 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     )
     """,
 
+    # --- v31: Evals workspace Phase 2 — suites + batch runner ---
+    # A Suite is a named corpus of documents run together as a regression set
+    # (PRD Flow 3). Documents (eval_suite_docs) copy their source file into
+    # managed storage so a re-run months later uses byte-identical inputs.
+    # A Suite Run (eval_suite_runs) is one batch execution: a frozen config
+    # snapshot + label + status; its child runs link back via runs.suite_run_id.
+    # No CHECK constraints on the status-like columns (gotcha #11).
+    """
+    CREATE TABLE IF NOT EXISTS eval_suites (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT NOT NULL,
+        created_at    TEXT NOT NULL DEFAULT '',
+        updated_at    TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    # One document per row. `source_path` is the managed copy of the PDF/.docx.
+    # `benchmark_id` is optional gold (a doc without gold still contributes
+    # consistency + health). filing_standard/level pin how the doc is extracted.
+    """
+    CREATE TABLE IF NOT EXISTS eval_suite_docs (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        suite_id         INTEGER NOT NULL REFERENCES eval_suites(id) ON DELETE CASCADE,
+        label            TEXT NOT NULL DEFAULT '',
+        source_path      TEXT NOT NULL DEFAULT '',       -- managed copy of the input file
+        source_filename  TEXT NOT NULL DEFAULT '',       -- original user-visible name
+        filing_standard  TEXT NOT NULL DEFAULT 'mfrs',
+        filing_level     TEXT NOT NULL DEFAULT 'company',
+        benchmark_id     INTEGER REFERENCES eval_benchmarks(id) ON DELETE SET NULL,
+        created_at       TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    # One batch execution of a suite. `config_json` freezes model/repeats/toggles/
+    # label; `status` (running | complete | partial | failed) has no CHECK
+    # constraint (gotcha #11). `app_version` is stamped so trends are comparable.
+    """
+    CREATE TABLE IF NOT EXISTS eval_suite_runs (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        suite_id       INTEGER NOT NULL REFERENCES eval_suites(id) ON DELETE CASCADE,
+        label          TEXT NOT NULL DEFAULT '',
+        config_json    TEXT,                              -- frozen launch config snapshot
+        model          TEXT,
+        app_version    TEXT,
+        status         TEXT NOT NULL DEFAULT 'running',
+        created_at     TEXT NOT NULL DEFAULT '',
+        ended_at       TEXT
+    )
+    """,
+
     # --- v18: authentication layer (PLAN-azure-auth-deployment Phase 1) ---
     # auth_users IS the allowlist: a non-disabled row = an authorised account.
     # email is the primary key, stored lowercased so lookups are case-folded.
@@ -1223,6 +1275,14 @@ _V30_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("runs", "repeat_index", "INTEGER"),
     ("eval_scores", "taxonomy_json", "TEXT"),
     ("eval_scores", "per_statement_json", "TEXT"),
+)
+
+# v30 → v31: Evals workspace Phase 2 (suites + batch runner). New tables
+# (eval_suites / eval_suite_docs / eval_suite_runs) are created via CREATE TABLE
+# IF NOT EXISTS above; this only walks an existing DB forward by adding the
+# suite_run_id linkage column on runs. Nullable (gotcha #11).
+_V31_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("runs", "suite_run_id", "INTEGER REFERENCES eval_suite_runs(id) ON DELETE SET NULL"),
 )
 
 
@@ -2232,6 +2292,40 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (30,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v30 → v31: Evals workspace Phase 2 (suites). New tables created above;
+        # this adds runs.suite_run_id. Same additive, duplicate-tolerant shape.
+        if current_version is not None and current_version < 31:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 31:
+                    for table, col_name, col_ddl in _V31_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (31,),
                     )
                 conn.commit()
             except Exception:
