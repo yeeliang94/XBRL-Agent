@@ -134,6 +134,135 @@ async def create_benchmark_endpoint(
             pass
 
 
+# Declared figure unit → the multiplier applied to every ingested value. The
+# user MUST declare this (decision #4); a wrong declaration is caught by the
+# ingest report's magnitude backstop, not silently swallowed.
+_UNIT_SCALE = {"full": 1.0, "thousands": 1000.0}
+
+
+def _parse_template_ids(raw: str) -> list[str]:
+    """Accept the template set as a JSON array or a comma-separated string."""
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        import json
+
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return [str(t) for t in value] if isinstance(value, list) else []
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+@router.post("/api/benchmarks/from-mtool")
+async def create_benchmark_from_mtool_endpoint(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    filing_standard: str = Form("mfrs"),
+    filing_level: str = Form("company"),
+    unit: str = Form(...),            # 'full' | 'thousands' — MANDATORY
+    template_ids: str = Form(...),    # JSON array or comma-separated
+    document: Optional[str] = Form(None),
+    column_map: Optional[str] = Form(None),  # optional JSON override
+):
+    """Create a benchmark by reverse-ingesting a human-filled mTool workbook.
+
+    The operator declares the figure unit (no auto-guess) and the statement
+    variants (variant-precise template set — gotcha #21). Numeric gold + prose
+    footnotes are captured. Low-confidence column detection with no explicit
+    ``column_map`` is refused with an actionable 422.
+    """
+    from eval import store
+    from eval.mtool_ingest import ColumnDetectionError
+
+    if filing_standard not in ("mfrs", "mpers"):
+        raise HTTPException(status_code=400, detail="filing_standard must be mfrs or mpers")
+    if filing_level not in ("company", "group"):
+        raise HTTPException(status_code=400, detail="filing_level must be company or group")
+    if unit not in _UNIT_SCALE:
+        raise HTTPException(
+            status_code=400,
+            detail="unit must be declared as 'full' or 'thousands'.",
+        )
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail="Only .xlsx / .xlsm mTool workbooks are accepted.")
+    ids = _parse_template_ids(template_ids)
+    if not ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one statement variant (template_ids).",
+        )
+    override = None
+    if column_map:
+        import json
+
+        try:
+            override = json.loads(column_map)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="column_map is not valid JSON.")
+
+    _CHUNK = 1 * 1024 * 1024
+    total = 0
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    try:
+        try:
+            while True:
+                chunk = await file.read(_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > server.MAX_UPLOAD_SIZE:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Max size is "
+                               f"{server.MAX_UPLOAD_SIZE // (1024 * 1024)}MB.",
+                    )
+                tmp.write(chunk)
+        finally:
+            tmp.close()
+
+        conn = server._open_audit_conn()
+        try:
+            result = store.create_benchmark_from_mtool(
+                conn,
+                name=name,
+                document=document or file.filename,
+                filing_standard=filing_standard,
+                filing_level=filing_level,
+                template_ids=ids,
+                xlsx_path=tmp.name,
+                unit_scale=_UNIT_SCALE[unit],
+                column_map_override=override,
+            )
+            conn.commit()
+        except ColumnDetectionError as exc:
+            conn.rollback()
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": str(exc) + ". Provide an explicit column map.",
+                    "low_confidence_sheets": exc.low_sheets,
+                },
+            )
+        except ValueError as exc:
+            conn.rollback()
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception:
+            conn.rollback()
+            logger.exception("benchmark from-mtool creation failed")
+            raise HTTPException(status_code=500, detail="Benchmark creation failed.")
+        finally:
+            conn.close()
+        return {"ok": True, **result}
+    finally:
+        try:
+            Path(tmp.name).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 @router.post("/api/benchmarks/from-run")
 async def create_benchmark_from_run_endpoint(body: BenchmarkFromRun):
     """Seed a benchmark directly from a finished run's extracted facts.
