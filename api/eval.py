@@ -379,3 +379,37 @@ async def get_run_eval_endpoint(run_id: int):
     if score is None:
         raise HTTPException(status_code=404, detail="Run has no eval score")
     return score
+
+
+@router.get("/api/repeat-groups/{group_id}")
+async def get_repeat_group_endpoint(group_id: int):
+    """A repeat group + its computed consistency result (v30). Feeds the
+    consistency panel on a grouped run's page (docs/PLAN-evals-workspace.md)."""
+    from db import repository as repo
+
+    conn = server._open_audit_conn()
+    try:
+        group = repo.fetch_repeat_group(conn, group_id)
+    finally:
+        conn.close()
+    if group is None:
+        raise HTTPException(status_code=404, detail="Repeat group not found")
+    return group
+
+
+@router.post("/api/repeat-groups/{group_id}/recompute")
+async def recompute_repeat_group_endpoint(group_id: int):
+    """Recompute + persist a group's consistency from its finished repeats. Used
+    after a repeat finishes, or manually from the panel."""
+    from db import repository as repo
+    from eval.consistency import finalize_repeat_group
+
+    conn = server._open_audit_conn()
+    try:
+        if repo.fetch_repeat_group(conn, group_id) is None:
+            raise HTTPException(status_code=404, detail="Repeat group not found")
+        result = finalize_repeat_group(conn, group_id)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "group_id": group_id, "consistency": result.to_dict()}
