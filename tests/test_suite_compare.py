@@ -150,6 +150,31 @@ def test_slot_level_diff_finds_regressions_and_fixes(db):
     assert ("c2", "CY", "Company") in fix_keys  # wrong in A, right in B
 
 
+def test_resume_retry_uses_successful_run_not_failed_first_attempt(db):
+    """Regression (code-review): a doc that FAILED then SUCCEEDED on resume has
+    two rows sharing its session id. The representative must be the successful
+    retry — not the oldest (failed) row — and it must be counted ONCE."""
+    from eval.compare import _suite_run_doc_cards
+
+    conn = db
+    a = _suite_run(conn, "2026-01-10")
+    # First attempt for doc 1: FAILED (no eval score, status failed).
+    conn.execute(
+        "INSERT INTO runs(created_at, pdf_filename, status, session_id, suite_run_id, benchmark_id) "
+        "VALUES ('t', 'x.pdf', 'failed', ?, ?, 1)",
+        (f"suite-{a}-doc-1", a),
+    )
+    # Resume retry for doc 1: COMPLETED with a real accuracy (2/2 = 1.0).
+    _child(conn, a, 1, accuracy_num=2, benchmark_id=1)
+    conn.commit()
+
+    cards = _suite_run_doc_cards(conn, a)
+    # Counted once, and it's the successful retry (accuracy present, not failed).
+    assert list(cards.keys()) == [1]
+    assert cards[1].status == "completed"
+    assert cards[1].accuracy == 1.0
+
+
 def test_suite_run_aggregate_keys_documents(db):
     conn = db
     a = _suite_run(conn, "2026-01-10")

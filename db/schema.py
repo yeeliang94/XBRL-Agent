@@ -1094,6 +1094,9 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_eval_benchmark_templates_benchmark_id ON eval_benchmark_templates(benchmark_id)",
     "CREATE INDEX IF NOT EXISTS ix_gold_concept_facts_benchmark_id ON gold_concept_facts(benchmark_id)",
     "CREATE INDEX IF NOT EXISTS ix_eval_scores_run_id ON eval_scores(run_id)",
+    # v31: suite child runs are queried per suite run (trend/compare/detail/
+    # finished-doc/stop) and hidden from History via the same column.
+    "CREATE INDEX IF NOT EXISTS ix_runs_suite_run_id ON runs(suite_run_id)",
     # v23: notes-reviewer tables are always queried per-run.
     "CREATE INDEX IF NOT EXISTS ix_notes_cell_provenance_run_id ON notes_cell_provenance(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_notes_inventory_run_id ON run_notes_inventory(run_id)",
