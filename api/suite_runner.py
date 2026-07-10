@@ -336,11 +336,18 @@ async def resume_suite_run_endpoint(suite_id: int, suite_run_id: int):
         sr = repo.get_suite_run(conn, suite_run_id)
         if sr is None or sr["suite_id"] != suite_id:
             raise HTTPException(status_code=404, detail="Suite run not found")
-        if sr["status"] == "running":
-            raise HTTPException(status_code=409, detail="This suite run is still running.")
         launch = sr.get("config") or {}
-        repo.update_suite_run_status(conn, suite_run_id, "running")
+        # Atomic flip: only the request that wins the non-running → running
+        # transition launches the batch. A read-then-write guard would let two
+        # rapid Resume clicks both pass and spawn duplicate batch threads.
+        cur = conn.execute(
+            "UPDATE eval_suite_runs SET status = 'running' WHERE id = ? "
+            "AND status != 'running'",
+            (suite_run_id,),
+        )
         conn.commit()
+        if cur.rowcount != 1:
+            raise HTTPException(status_code=409, detail="This suite run is already running.")
     finally:
         conn.close()
     _run_batch_thread(suite_run_id, suite_id, launch, resume=True)
@@ -431,18 +438,17 @@ async def compare_suite_runs_endpoint(suite_id: int, a: int, b: int):
 async def get_suite_run_endpoint(suite_id: int, suite_run_id: int):
     """Suite-run detail: status + per-document scorecards + the aggregate."""
     from db import repository as repo
-    from eval.scorecards import build_document_scorecard, aggregate_suite
+    from eval.scorecards import aggregate_suite
+    from eval.compare import _suite_run_doc_cards
 
     conn = server._open_audit_conn()
     try:
         sr = repo.get_suite_run(conn, suite_run_id)
         if sr is None or sr["suite_id"] != suite_id:
             raise HTTPException(status_code=404, detail="Suite run not found")
-        cards = []
-        for child in sr["runs"]:
-            card = build_document_scorecard(conn, child["id"])
-            if card is not None:
-                cards.append(card)
+        # One scorecard per DOCUMENT (deduped across resume-retry + repeat rows),
+        # so the detail view + trend/compare agree and "N of M" isn't inflated.
+        cards = list(_suite_run_doc_cards(conn, suite_run_id).values())
     finally:
         conn.close()
 

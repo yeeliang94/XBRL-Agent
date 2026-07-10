@@ -6107,6 +6107,26 @@ async def run_repeat_group_stream(
         "group_id": group_id, "repeats_total": n, "repeat_index": 0,
     }}
 
+    def _finalize_group() -> Optional[dict]:
+        """Compute + persist consistency over whatever finished (best-effort so
+        a scoring failure never masks the run outcome — gotcha #20 spirit).
+        Returns the result dict, or None on failure / no group."""
+        if group_id is None:
+            return None
+        fconn = sqlite3.connect(str(AUDIT_DB_PATH))
+        try:
+            result = finalize_repeat_group(fconn, group_id)
+            fconn.commit()
+            return result.to_dict()
+        except Exception:
+            logger.warning("Failed to finalize repeat group %s", group_id,
+                           exc_info=True)
+            return None
+        finally:
+            fconn.close()
+
+    current_agen = None
+    finalized = False
     try:
         for i in range(n):
             # Announce which repeat is starting so the live UI can label it.
@@ -6152,7 +6172,7 @@ async def run_repeat_group_stream(
                 finally:
                     cc.close()
 
-            agen = run_multi_agent_stream(
+            current_agen = run_multi_agent_stream(
                 session_id=session_id,
                 session_dir=child_dir,
                 run_config=run_config,
@@ -6163,31 +6183,34 @@ async def run_repeat_group_stream(
             )
             # Pass every child event straight through; the leading
             # repeat_progress event tells the client which repeat produced them.
-            async for frame in agen:
+            async for frame in current_agen:
                 yield frame
+            current_agen = None  # this repeat finished on its own
+
+        # Normal-completion path: finalize + surface consistency here, where
+        # yielding is safe. The finally handles the abort/disconnect path (it
+        # can't yield — the generator is closing).
+        result = _finalize_group()
+        finalized = True
+        if result is not None:
+            yield {"event": "consistency", "data": {
+                "group_id": group_id, **result,
+            }}
     finally:
-        # Compute + persist consistency over whatever finished — success OR an
-        # abort/disconnect mid-group (then it lands 'partial'). Best-effort so a
-        # scoring failure never masks the run outcome (gotcha #20 spirit).
-        if group_id is not None:
-            fconn = sqlite3.connect(str(AUDIT_DB_PATH))
+        # Deterministic close of the in-flight child on abort/disconnect: an
+        # `async for` does NOT aclose its iterator when the body raises
+        # GeneratorExit, so without this the child's terminal-status write
+        # (gotcha #10) would depend on non-deterministic GC finalization.
+        if current_agen is not None:
             try:
-                result = finalize_repeat_group(fconn, group_id)
-                fconn.commit()
-                try:
-                    yield {"event": "consistency", "data": {
-                        "group_id": group_id, **result.to_dict(),
-                    }}
-                except (RuntimeError, GeneratorExit, asyncio.CancelledError):
-                    # Client already gone — the group is persisted regardless.
-                    pass
+                await current_agen.aclose()
             except Exception:
-                logger.warning(
-                    "Failed to finalize repeat group %s", group_id,
-                    exc_info=True,
-                )
-            finally:
-                fconn.close()
+                pass
+        # If we didn't reach the normal finalize (abort/disconnect/exception),
+        # persist consistency now over whatever finished (lands 'partial'). No
+        # yield here — the generator may be closing.
+        if not finalized:
+            _finalize_group()
 
 
 # ---------------------------------------------------------------------------

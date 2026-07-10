@@ -33,27 +33,43 @@ def _doc_id_from_session(session_id: str) -> Optional[int]:
         return None
 
 
+_TERMINAL_OK = ("completed", "completed_with_errors")
+
+
 def _suite_run_doc_cards(
     conn: sqlite3.Connection, suite_run_id: int
 ) -> dict[int, DocumentScorecard]:
-    """Map suite_doc id → its scorecard for this suite run. When a document has
-    repeats, the first finished child run represents it (they share a doc id via
-    the session id)."""
+    """Map suite_doc id → its scorecard for this suite run, one card per document.
+
+    A document can have MORE THAN ONE child run sharing its session id: a
+    Resume re-runs a doc whose first attempt failed, minting a fresh row with
+    the same ``suite-{sr}-doc-{id}`` session (and repeats add rows too). We pick
+    the REPRESENTATIVE run per doc = the terminal-successful attempt with the
+    highest id, falling back to the newest row when none succeeded. Picking the
+    oldest (the failed first attempt) would silently drop the successful retry's
+    accuracy from trend + compare — the whole point of Resume."""
     from db import repository as repo
 
     sr = repo.get_suite_run(conn, suite_run_id)
     if sr is None:
         return {}
-    out: dict[int, DocumentScorecard] = {}
-    # Recover doc id per child run from its session id.
     rows = conn.execute(
-        "SELECT id, session_id FROM runs WHERE suite_run_id = ? ORDER BY id",
+        "SELECT id, session_id, status FROM runs WHERE suite_run_id = ? ORDER BY id",
         (suite_run_id,),
     ).fetchall()
-    for run_id, session_id in rows:
+    # doc_id -> (rank, run_id): rank 1 = terminal-success (wins), 0 = other;
+    # within a rank the higher run id (newest attempt) wins.
+    best: dict[int, tuple[int, int]] = {}
+    for run_id, session_id, status in rows:
         doc_id = _doc_id_from_session(session_id)
-        if doc_id is None or doc_id in out:
+        if doc_id is None:
             continue
+        rank = 1 if status in _TERMINAL_OK else 0
+        prev = best.get(doc_id)
+        if prev is None or (rank, run_id) > prev:
+            best[doc_id] = (rank, run_id)
+    out: dict[int, DocumentScorecard] = {}
+    for doc_id, (_, run_id) in best.items():
         card = build_document_scorecard(conn, run_id)
         if card is not None:
             out[doc_id] = card

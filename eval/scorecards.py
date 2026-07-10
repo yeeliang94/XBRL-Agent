@@ -108,15 +108,17 @@ def aggregate_suite(scorecards: list[DocumentScorecard]) -> dict:
         for k, v in (s.taxonomy or {}).items():
             taxonomy_totals[k] = taxonomy_totals.get(k, 0) + int(v or 0)
 
-    # Consistency + coverage means over documents that have them.
-    consistencies = [s.consistency for s in scorecards if s.consistency is not None]
+    # Consistency + coverage + cross-check means over documents that have them.
+    # Failed docs are excluded to stay consistent with the accuracy headline
+    # (a failed run's partial health signals shouldn't move the suite means).
+    live = [s for s in scorecards if not s.failed]
+    consistencies = [s.consistency for s in live if s.consistency is not None]
     coverages = [
-        s.notes_coverage for s in scorecards
+        s.notes_coverage for s in live
         if s.notes_coverage is not None and s.notes_coverage_available
     ]
-    # Cross-check pass rate mean over documents that ran checks.
     ccprs = [
-        s.cross_check_pass_rate for s in scorecards
+        s.cross_check_pass_rate for s in live
         if s.cross_check_pass_rate is not None
     ]
 
