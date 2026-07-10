@@ -158,7 +158,7 @@ from pathlib import Path
 # 'unstyled' (plain), or NULL (legacy / reviewer-authored). Surfaced so the
 # operator can see which notes fell back to plain and need a manual formatter
 # pass. Nullable ALTER TABLE column. Pinned by tests/test_db_schema_v29.py.
-CURRENT_SCHEMA_VERSION = 29
+CURRENT_SCHEMA_VERSION = 30
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -213,7 +213,15 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- Nullable JSON; NULL = inherit the firm default. Editable post-run
         -- (review happens after extraction), hence its own column, not the
         -- draft-only run_config_json path.
-        notes_table_style     TEXT
+        notes_table_style     TEXT,
+        -- v30 evals-workspace columns (docs/PLAN-evals-workspace.md). All
+        -- nullable: app_version stamps which build produced the run;
+        -- repeat_group_id/repeat_index link repeats for consistency scoring.
+        -- The REFERENCES points forward to repeat_groups (created later in this
+        -- statement list — SQLite resolves FK targets lazily).
+        app_version           TEXT,
+        repeat_group_id       INTEGER REFERENCES repeat_groups(id) ON DELETE SET NULL,
+        repeat_index          INTEGER
     )
     """,
 
@@ -687,9 +695,49 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         extra_cells      INTEGER NOT NULL,          -- run filled, gold blank (WARNING, not in denominator)
         scale_mismatch   INTEGER NOT NULL,          -- subset of mismatch that match after 10^k scaling (flag)
         created_at       TEXT NOT NULL DEFAULT '',
+        -- v30 (docs/PLAN-evals-workspace.md): failure-diagnosis taxonomy and
+        -- per-statement breakdown as JSON. Nullable — legacy scorecards graded
+        -- before the taxonomy read NULL and the frontend degrades gracefully.
+        taxonomy_json    TEXT,
+        per_statement_json TEXT,
         UNIQUE(run_id, benchmark_id)
     )
     """,
+    # --- v30: Evals workspace (docs/PLAN-evals-workspace.md) ---
+    # A repeat group links N runs of the SAME document launched together so the
+    # consistency scorer can compare them (PRD Family 2). `config_json` is the
+    # frozen launch config all repeats share; `consistency_json` is the computed
+    # result (NULL until the last repeat finishes). `benchmark_id` is copied here
+    # so the group knows its gold without re-reading a child run. `status` has no
+    # CHECK constraint on purpose (gotcha #11): running | complete | partial.
+    """
+    CREATE TABLE IF NOT EXISTS repeat_groups (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at         TEXT NOT NULL DEFAULT '',
+        config_json        TEXT,                      -- frozen launch config snapshot
+        repeats_requested  INTEGER NOT NULL DEFAULT 1,
+        benchmark_id       INTEGER REFERENCES eval_benchmarks(id) ON DELETE SET NULL,
+        consistency_json   TEXT,                      -- computed consistency result (NULL = not yet)
+        status             TEXT NOT NULL DEFAULT 'running'
+    )
+    """,
+
+    # Gold prose captured from a human-filled mTool file's footnote payloads at
+    # ingest time (PRD Family 3 — "capture now, grade later"). Numeric gold lives
+    # in gold_concept_facts; this is the narrative side-channel, stored so a
+    # future prose-fidelity pass has ground truth without a second ingest. Nothing
+    # grades it in Phase 1. `note_key` is the mTool join key / note ref.
+    """
+    CREATE TABLE IF NOT EXISTS gold_note_texts (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        benchmark_id     INTEGER NOT NULL REFERENCES eval_benchmarks(id) ON DELETE CASCADE,
+        note_key         TEXT NOT NULL,
+        text             TEXT NOT NULL,
+        updated_at       TEXT NOT NULL DEFAULT '',
+        UNIQUE(benchmark_id, note_key)
+    )
+    """,
+
     # --- v18: authentication layer (PLAN-azure-auth-deployment Phase 1) ---
     # auth_users IS the allowlist: a non-disabled row = an authorised account.
     # email is the primary key, stored lowercased so lookups are case-folded.
@@ -1154,6 +1202,27 @@ _V27_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 _V29_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("notes_cells", "style_source", "TEXT"),
     ("run_notes_cell_snapshots", "style_source", "TEXT"),
+)
+
+
+# v29 → v30: Evals workspace (docs/PLAN-evals-workspace.md).
+#   - runs.app_version       — which build/prompt version produced this run, so
+#                              "better over time" is answerable (PRD Technical
+#                              Approach). NULL on every legacy run.
+#   - runs.repeat_group_id   — links a run to its repeat group (consistency).
+#   - runs.repeat_index      — 0-based position within the group.
+#   - eval_scores.taxonomy_json     — the failure-diagnosis counts (sign flip,
+#                                     period swap, …) as JSON. NULL = legacy
+#                                     scorecard graded before the taxonomy.
+#   - eval_scores.per_statement_json — per-statement accuracy breakdown as JSON.
+# All nullable (gotcha #11): legacy rows read NULL; the frontend renders the
+# richer shape only when present.
+_V30_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("runs", "app_version", "TEXT"),
+    ("runs", "repeat_group_id", "INTEGER REFERENCES repeat_groups(id) ON DELETE SET NULL"),
+    ("runs", "repeat_index", "INTEGER"),
+    ("eval_scores", "taxonomy_json", "TEXT"),
+    ("eval_scores", "per_statement_json", "TEXT"),
 )
 
 
@@ -2127,6 +2196,42 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (29,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v29 → v30: Evals workspace. New tables (repeat_groups, gold_note_texts)
+        # are created above via CREATE TABLE IF NOT EXISTS; this block walks an
+        # existing DB forward by adding the nullable columns. Same BEGIN IMMEDIATE
+        # + duplicate-column tolerance as every prior additive step.
+        if current_version is not None and current_version < 30:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 30:
+                    for table, col_name, col_ddl in _V30_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (30,),
                     )
                 conn.commit()
             except Exception:

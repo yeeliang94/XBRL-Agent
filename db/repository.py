@@ -85,6 +85,12 @@ class Run:
     # v22 per-run notes-table style override (docs/PLAN-notes-table-theme.md).
     # The hydrated Python dict, or None when the run inherits the firm default.
     notes_table_style: Optional[dict[str, Any]] = None
+    # v30 evals-workspace fields (docs/PLAN-evals-workspace.md). `app_version`
+    # is the build that produced the run (None on legacy rows). `repeat_group_id`
+    # / `repeat_index` link a run into a consistency repeat group.
+    app_version: Optional[str] = None
+    repeat_group_id: Optional[int] = None
+    repeat_index: Optional[int] = None
 
 
 @dataclass
@@ -302,6 +308,9 @@ def create_run(
     scout_enabled: bool = False,
     status: str = "running",
     orchestration: str = "split",
+    app_version: Optional[str] = None,
+    repeat_group_id: Optional[int] = None,
+    repeat_index: Optional[int] = None,
 ) -> int:
     """Insert a new run row and return its id.
 
@@ -326,16 +335,24 @@ def create_run(
     # uses started_at to compute wall-clock duration; an empty string means
     # "no duration yet" (vs ended_at-minus-started_at for finished runs).
     started_at = "" if status == "draft" else now
+    # Stamp the running build so the Evals workspace can trend quality across
+    # versions (v30). Resolved lazily and cached, so this is cheap after the
+    # first run. Callers may override (tests pin a value).
+    if app_version is None:
+        from utils.app_version import get_app_version
+
+        app_version = get_app_version()
     cur = conn.execute(
         "INSERT INTO runs(created_at, pdf_filename, status, notes, "
         "session_id, output_dir, run_config_json, scout_enabled, started_at, "
-        "orchestration) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "orchestration, app_version, repeat_group_id, repeat_index) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             now, pdf_filename, status, notes or None,
             session_id, output_dir, config_json,
             1 if scout_enabled else 0, started_at,
             orchestration or "split",
+            app_version, repeat_group_id, repeat_index,
         ),
     )
     return int(cur.lastrowid)
@@ -1931,6 +1948,9 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         orchestration=_get("orchestration", "split") or "split",
         benchmark_id=_get("benchmark_id"),
         notes_table_style=_parse_notes_table_style(_get("notes_table_style")),
+        app_version=_get("app_version"),
+        repeat_group_id=_get("repeat_group_id"),
+        repeat_index=_get("repeat_index"),
     )
 
 

@@ -24,6 +24,13 @@ logger = logging.getLogger("server")
 
 router = APIRouter()
 
+
+def _app_version() -> str:
+    """The running build's version string (cached in utils.app_version)."""
+    from utils.app_version import get_app_version
+
+    return get_app_version()
+
 # AI-plumbing + firm-wide run defaults that only an administrator may change
 # (docs/PLAN-ui-ux-plain-language-overhaul.md Phase 6). The UI renders these
 # read-only for non-admins, but the server is the real boundary: a write that
@@ -164,6 +171,9 @@ async def get_config():
         # Surfaced here so the Notes tab + clipboard read the firm default at
         # render time without a separate /api/settings round-trip.
         "notes_table_style": server._notes_table_style(),
+        # v30 evals workspace: the build that would stamp a run launched now, so
+        # the UI can show "you are on version X" (docs/PLAN-evals-workspace.md).
+        "app_version": _app_version(),
     }
 
 
