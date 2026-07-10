@@ -6207,6 +6207,9 @@ def _run_summary_to_dict(summary) -> dict:
         # graded). Powers the History score column + sparkline.
         "benchmark_id": getattr(summary, "benchmark_id", None),
         "eval_score": getattr(summary, "eval_score", None),
+        # v30 evals workspace: the build that produced this run (None on legacy
+        # rows). Powers the History version column + trend attribution.
+        "app_version": getattr(summary, "app_version", None),
     }
 
 

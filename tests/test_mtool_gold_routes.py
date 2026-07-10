@@ -176,3 +176,33 @@ def test_no_matching_values_is_422(client):
         files={"file": ("h.xlsx", data, "application/octet-stream")},
     )
     assert resp.status_code == 422
+
+
+def test_wrong_shaped_column_map_is_400_not_500(client):
+    """Syntactically-valid JSON with the wrong shape (e.g. []) is a user-fixable
+    400, never a 500 inside ingest (peer-review LOW)."""
+    tc, db, template_id = client
+    sheet, leaves = _pick_leaves(db, template_id)
+    data = _mtool_workbook_bytes(sheet, leaves)
+    for bad in ("[]", "{}", '{"SOFP": 5}', '{"SOFP": {"columns": {}}}'):
+        resp = tc.post(
+            "/api/benchmarks/from-mtool",
+            data={"name": "x", "filing_standard": "mfrs",
+                  "filing_level": "company", "unit": "full",
+                  "template_ids": template_id, "column_map": bad},
+            files={"file": ("h.xlsx", data, "application/octet-stream")},
+        )
+        assert resp.status_code == 400, f"{bad} -> {resp.status_code}"
+
+
+def test_bad_json_column_map_is_400(client):
+    tc, db, template_id = client
+    sheet, leaves = _pick_leaves(db, template_id)
+    data = _mtool_workbook_bytes(sheet, leaves)
+    resp = tc.post(
+        "/api/benchmarks/from-mtool",
+        data={"name": "x", "filing_standard": "mfrs", "filing_level": "company",
+              "unit": "full", "template_ids": template_id, "column_map": "{not json"},
+        files={"file": ("h.xlsx", data, "application/octet-stream")},
+    )
+    assert resp.status_code == 400

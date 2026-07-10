@@ -62,3 +62,19 @@ def test_create_run_accepts_explicit_override(tmp_path):
         )
         run = fetch_run(conn, run_id)
     assert run.app_version == "explicit-1.0"
+
+
+def test_list_runs_carries_app_version(tmp_path):
+    """RunSummary + the History serializer expose app_version (Step A2 surface)."""
+    from db.repository import list_runs
+    import server
+
+    db = tmp_path / "runs.db"
+    init_db(db)
+    with db_session(db) as conn:
+        create_run(conn, "x.pdf", session_id="s", output_dir="/tmp/s",
+                   app_version="build-77")
+        summaries = list_runs(conn)
+    assert summaries[0].app_version == "build-77"
+    wire = server._run_summary_to_dict(summaries[0])
+    assert wire["app_version"] == "build-77"

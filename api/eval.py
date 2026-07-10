@@ -140,6 +140,44 @@ async def create_benchmark_endpoint(
 _UNIT_SCALE = {"full": 1.0, "thousands": 1000.0}
 
 
+def _validate_column_map(cm) -> None:
+    """Reject a syntactically-valid but wrong-shaped column map with a 400 (a
+    user-fixable error), instead of letting it become a 500 inside ingest.
+
+    Expected: ``{sheet: {"label_column": str, "columns": {role: col}}}``."""
+    if not isinstance(cm, dict) or not cm:
+        raise HTTPException(
+            status_code=400,
+            detail="column_map must be a non-empty object keyed by sheet name.",
+        )
+    for sheet, cfg in cm.items():
+        if not isinstance(cfg, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"column_map[{sheet!r}] must be an object with "
+                       "'label_column' and 'columns'.",
+            )
+        if not isinstance(cfg.get("label_column"), str) or not cfg["label_column"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"column_map[{sheet!r}].label_column must be a column letter.",
+            )
+        cols = cfg.get("columns")
+        if not isinstance(cols, dict) or not cols:
+            raise HTTPException(
+                status_code=400,
+                detail=f"column_map[{sheet!r}].columns must be a non-empty "
+                       "object mapping roles to column letters.",
+            )
+        for role, col in cols.items():
+            if not isinstance(col, str) or not col:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"column_map[{sheet!r}].columns[{role!r}] must be a "
+                           "column letter.",
+                )
+
+
 def _parse_template_ids(raw: str) -> list[str]:
     """Accept the template set as a JSON array or a comma-separated string."""
     raw = (raw or "").strip()
@@ -202,6 +240,7 @@ async def create_benchmark_from_mtool_endpoint(
             override = json.loads(column_map)
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="column_map is not valid JSON.")
+        _validate_column_map(override)
 
     _CHUNK = 1 * 1024 * 1024
     total = 0

@@ -119,6 +119,13 @@ class IngestReport:
     ambiguous: list[dict[str, Any]] = field(default_factory=list)
     scale_warning: Optional[str] = None
     template_ids: set[str] = field(default_factory=set)
+    # SOCIE / MATRIX_CELL concepts in scope that were NOT ingested. Mirrors the
+    # mTool exporter's "deferred and counted, never silently dropped" contract
+    # (gotcha #28): matrix cells share row labels across equity-component
+    # columns and mTool's SOCIE layout is Windows-recon-gated, so reverse-
+    # mapping them is deferred — but the count is surfaced so the coverage gap
+    # is visible, not a silent denominator shrink.
+    matrix_deferred: int = 0
 
     @property
     def fact_count(self) -> int:
@@ -210,6 +217,34 @@ def extract_prose_gold(path: str | Path) -> list[NoteText]:
         if info.get("payload_populated") and text and text.strip():
             out.append(NoteText(note_key=key, text=text))
     return out
+
+
+def count_deferred_matrix(
+    conn: sqlite3.Connection,
+    filing_standard: str,
+    filing_level: str,
+    template_ids: Optional[list[str]] = None,
+) -> int:
+    """Count MATRIX_CELL concepts in scope that ingest defers (SOCIE).
+
+    The grader treats LEAF and MATRIX_CELL alike (gotcha #23), but the mTool
+    exporter defers matrix cells and so does this reverse path (gotcha #28) —
+    this makes the deferral COUNTED (never silently dropped) so the operator
+    knows SOCIE wasn't captured, rather than seeing an inflated-looking clean
+    grade over a silently smaller denominator."""
+    family = f"{filing_standard.lower()}-{filing_level.lower()}-"
+    params: list[Any] = [family + "%"]
+    scope_sql = "n.template_id LIKE ?"
+    if template_ids:
+        placeholders = ",".join("?" for _ in template_ids)
+        scope_sql += f" AND n.template_id IN ({placeholders})"
+        params.extend(template_ids)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM concept_nodes n "
+        f"WHERE n.kind = 'MATRIX_CELL' AND {scope_sql}",
+        tuple(params),
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 def _statement_from_template_id(template_id: str) -> str:
