@@ -34,6 +34,7 @@ import math
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import Optional
 
 # Powers of ten the grader treats as a "scale mismatch" rather than a plain
 # wrong value. ±3 covers the common thousands error (a run that forgot the
@@ -405,3 +406,62 @@ def grade_run(
         conn, benchmark_id, template_ids, gold, run
     )
     return card
+
+
+def _grade_fact_map(
+    gold: dict, facts: dict
+) -> "ScoreCard":
+    """Grade an already-loaded ``facts`` map against ``gold`` (headline counts
+    only — no taxonomy/per-statement). Shared by grade_run and the reviewer-lift
+    snapshot grader so both use identical matched/missing/mismatch semantics."""
+    card = ScoreCard()
+    for key, (g_val, g_status) in gold.items():
+        g = _present_number(g_val, g_status)
+        if g is None:
+            continue
+        card.gold_cells += 1
+        f = facts.get(key)
+        r = _present_number(f[0], f[1]) if f else None
+        if r is None:
+            card.missing += 1
+        elif _values_equal(r, g):
+            card.matched += 1
+        else:
+            card.mismatch += 1
+            if is_scale_mismatch(r, g):
+                card.scale_mismatch += 1
+    return card
+
+
+def reviewer_lift(
+    conn: sqlite3.Connection, run_id: int, benchmark_id: int
+) -> Optional[dict]:
+    """Measure what the reviewer pass contributed (Evals workspace, Step E5).
+
+    The pipeline snapshots facts BEFORE the reviewer corrects them
+    (``run_fact_snapshots``). Grading both the snapshot and the final facts
+    gives ``final matched − pre-reviewer matched`` = the slots the reviewer
+    fixed (net). Returns ``None`` when no snapshot exists (no reviewer pass ran).
+    """
+    template_ids = _benchmark_template_ids(conn, benchmark_id)
+    pre = _gradeable_facts(
+        conn, "run_fact_snapshots", "run_id", run_id, template_ids
+    )
+    if not pre:
+        return None
+    gold = _gradeable_facts(
+        conn, "gold_concept_facts", "benchmark_id", benchmark_id, template_ids
+    )
+    final = _gradeable_facts(
+        conn, "run_concept_facts", "run_id", run_id, template_ids
+    )
+    pre_card = _grade_fact_map(gold, pre)
+    final_card = _grade_fact_map(gold, final)
+    return {
+        "pre_matched": pre_card.matched,
+        "final_matched": final_card.matched,
+        "lift_slots": final_card.matched - pre_card.matched,
+        "gold_cells": final_card.gold_cells,
+        "pre_accuracy": (pre_card.matched / pre_card.gold_cells) if pre_card.gold_cells else None,
+        "final_accuracy": (final_card.matched / final_card.gold_cells) if final_card.gold_cells else None,
+    }

@@ -80,6 +80,32 @@ def test_list_includes_drafts(history_with_mixed_runs):
     assert statuses == ["completed", "draft", "failed"]
 
 
+def test_suite_children_hidden_by_default(history_with_mixed_runs):
+    """Evals workspace (E6): a suite child run is excluded from History unless
+    include_suite_children=true is passed."""
+    client, _ = history_with_mixed_runs
+    # Seed a suite child run (suite_run_id set).
+    conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+    try:
+        conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, suite_run_id) "
+            "VALUES ('t', 'suite-child.pdf', 'completed', 42)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Default: the child is hidden (still 3 rows, none named suite-child).
+    body = client.get("/api/runs").json()
+    assert body["total"] == 3
+    assert all(r["pdf_filename"] != "suite-child.pdf" for r in body["runs"])
+
+    # Opt in: the child appears.
+    body2 = client.get("/api/runs?include_suite_children=true").json()
+    assert body2["total"] == 4
+    assert any(r["pdf_filename"] == "suite-child.pdf" for r in body2["runs"])
+
+
 def test_status_filter_draft_only(history_with_mixed_runs):
     """`?status=draft` returns only the draft row — verifies the SQL
     filter accepts the new value with no hidden allow-list."""

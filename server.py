@@ -3751,6 +3751,7 @@ async def run_multi_agent_stream(
     model_name: str,
     *,
     existing_run_id: Optional[int] = None,
+    suite_run_id: Optional[int] = None,
 ) -> AsyncIterator[dict]:
     """Orchestrates multi-agent extraction with SSE event multiplexing.
 
@@ -3921,6 +3922,7 @@ async def run_multi_agent_stream(
                     config=run_config.model_dump(),
                     scout_enabled=run_config.use_scout,
                     orchestration=getattr(run_config, "orchestration", "split"),
+                    suite_run_id=suite_run_id,
                 )
                 db_conn.commit()
             except Exception:
@@ -6059,6 +6061,7 @@ async def run_repeat_group_stream(
     model_name: str,
     *,
     first_run_id: Optional[int] = None,
+    suite_run_id: Optional[int] = None,
 ) -> AsyncIterator[dict]:
     """Launch N identically-configured runs of one document back-to-back and
     score their agreement (Evals workspace, Step D1 / PRD Flow 2).
@@ -6143,6 +6146,7 @@ async def run_repeat_group_stream(
                         orchestration=getattr(run_config, "orchestration", "split"),
                         repeat_group_id=group_id,
                         repeat_index=i,
+                        suite_run_id=suite_run_id,
                     )
                     cc.commit()
                 finally:
@@ -6609,6 +6613,7 @@ from api.notes_formatter import router as _notes_formatter_router
 from api.files import router as _files_router
 from api.eval import router as _eval_router
 from api.suites import router as _suites_router
+from api.suite_runner import router as _suite_runner_router
 from api.mtool import router as _mtool_router
 from auth.routes import router as _auth_router
 
@@ -6623,6 +6628,7 @@ app.include_router(_notes_formatter_router)
 app.include_router(_files_router)
 app.include_router(_eval_router)
 app.include_router(_suites_router)
+app.include_router(_suite_runner_router)
 app.include_router(_mtool_router)
 app.include_router(_auth_router)
 
