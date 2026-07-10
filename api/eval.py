@@ -21,11 +21,14 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 import server
-from auth.deps import require_admin_dep
+
+# Benchmark/eval routes are authenticated (the `/api/*` middleware enforces
+# that globally, gotcha #24) but NOT admin-gated — the Evals workspace is open
+# to all signed-in users (docs/PLAN-evals-workspace.md, decision #6).
 
 logger = logging.getLogger("server")
 
@@ -45,7 +48,7 @@ class BenchmarkFromRun(BaseModel):
     document: Optional[str] = None
 
 
-@router.get("/api/benchmarks", dependencies=[Depends(require_admin_dep)])
+@router.get("/api/benchmarks")
 async def list_benchmarks_endpoint():
     from eval import store
 
@@ -56,7 +59,7 @@ async def list_benchmarks_endpoint():
         conn.close()
 
 
-@router.post("/api/benchmarks", dependencies=[Depends(require_admin_dep)])
+@router.post("/api/benchmarks")
 async def create_benchmark_endpoint(
     file: UploadFile = File(...),
     name: str = Form(...),
@@ -131,7 +134,7 @@ async def create_benchmark_endpoint(
             pass
 
 
-@router.post("/api/benchmarks/from-run", dependencies=[Depends(require_admin_dep)])
+@router.post("/api/benchmarks/from-run")
 async def create_benchmark_from_run_endpoint(body: BenchmarkFromRun):
     """Seed a benchmark directly from a finished run's extracted facts.
 
@@ -164,7 +167,7 @@ async def create_benchmark_from_run_endpoint(body: BenchmarkFromRun):
     return {"ok": True, **result}
 
 
-@router.get("/api/benchmarks/{benchmark_id}", dependencies=[Depends(require_admin_dep)])
+@router.get("/api/benchmarks/{benchmark_id}")
 async def get_benchmark_endpoint(benchmark_id: int):
     from eval import store
 
@@ -178,7 +181,7 @@ async def get_benchmark_endpoint(benchmark_id: int):
     return bench
 
 
-@router.delete("/api/benchmarks/{benchmark_id}", dependencies=[Depends(require_admin_dep)])
+@router.delete("/api/benchmarks/{benchmark_id}")
 async def delete_benchmark_endpoint(benchmark_id: int):
     from eval import store
 
@@ -193,7 +196,7 @@ async def delete_benchmark_endpoint(benchmark_id: int):
     return {"ok": True, "id": benchmark_id}
 
 
-@router.get("/api/benchmarks/{benchmark_id}/concepts", dependencies=[Depends(require_admin_dep)])
+@router.get("/api/benchmarks/{benchmark_id}/concepts")
 async def benchmark_concepts_endpoint(benchmark_id: int):
     """Gold grid in the same shape as ``/api/runs/{id}/concepts`` so the
     frontend ConceptsPage renders it unchanged (source='benchmark')."""
@@ -212,7 +215,7 @@ async def benchmark_concepts_endpoint(benchmark_id: int):
     return {"benchmark_id": benchmark_id, "concepts": concepts}
 
 
-@router.patch("/api/benchmarks/{benchmark_id}/facts", dependencies=[Depends(require_admin_dep)])
+@router.patch("/api/benchmarks/{benchmark_id}/facts")
 async def patch_gold_fact_endpoint(benchmark_id: int, body: GoldFactPatch):
     from eval import store
 
