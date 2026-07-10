@@ -1572,3 +1572,322 @@ def test_refill_of_patched_template_is_idempotent(
     assert "capman body v2" in _payload_of(str(out2), "fn_6")
     assert _detect_duplicate_fn_keys(str(out2), "+FootnoteTexts") == []
 
+
+# ------------------------------------------ broken-file Windows probe harness
+
+def test_probe_decodes_excel_xstrings_and_protected_literals():
+    from mtool.examples.mtool_broken_file_probe import decode_excel_xstring
+
+    assert decode_excel_xstring("a_x000D_b") == "a\rb"
+    assert decode_excel_xstring("a_x000d_b") == "a\rb"
+    # _x005F_ protects the following escape: this is literal text, not CR.
+    assert decode_excel_xstring("a_x005F__x000D_b") == "a_x000D_b"
+
+
+def test_probe_payload_metrics_separate_stored_decoded_and_utf16_lengths():
+    from mtool.examples.mtool_broken_file_probe import payload_metrics
+
+    payload = '<?xml version="1.0"?><html><body>😀_x000D_</body></html>'
+    metrics = payload_metrics(payload)
+    assert metrics["stored_chars"] > metrics["decoded_codepoints"]
+    # Excel/Windows strings count the non-BMP emoji as two UTF-16 units.
+    assert metrics["decoded_utf16_units"] == metrics["decoded_codepoints"] + 1
+    assert metrics["x000d_escapes"] == 1
+    assert metrics["xhtml_valid"] is True
+
+
+def test_probe_inspector_finds_shared_strings_header_drift(footnote_template):
+    from mtool.examples.mtool_broken_file_probe import inspect_workbook
+
+    report = inspect_workbook(footnote_template)
+    codes = {issue["code"] for issue in report["issues"]}
+    # The hand-built fixture deliberately declares count=len(unique strings),
+    # while worksheet references are higher. The probe must expose the exact
+    # sharedStrings repair-risk family that static zip-open checks miss.
+    assert "shared_strings_count_mismatch" in codes
+    assert report["status"] == "root_cause_candidate_found"
+
+
+def test_probe_shared_string_scan_handles_namespace_prefixed_sheets():
+    from mtool.examples.mtool_broken_file_probe import _shared_string_refs
+
+    data = {
+        "xl/worksheets/sheet1.xml": (
+            b'<x:worksheet xmlns:x="urn:test"><x:sheetData><x:row r="1">'
+            b'<x:c r="A1" t="s"><x:v>3</x:v></x:c>'
+            b'</x:row></x:sheetData></x:worksheet>'
+        )
+    }
+    refs, issues = _shared_string_refs(data)
+    assert issues == []
+    assert refs == [{"part": "xl/worksheets/sheet1.xml", "cell": "A1",
+                     "index": 3}]
+
+
+def test_probe_accepts_optional_shared_string_header_counts_when_absent():
+    from mtool.examples.mtool_broken_file_probe import _sst_header
+
+    header, issues = _sst_header({
+        "xl/sharedStrings.xml": (
+            b'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            b'<si><t>x</t></si></sst>'
+        )
+    })
+    assert issues == []
+    assert header["count_attr"] is None
+    assert header["unique_count_attr"] is None
+    assert header["si_count"] == 1
+
+
+def test_probe_inspector_finds_out_of_range_shared_string_ref(
+        tmp_path, footnote_template):
+    from mtool.examples.mtool_broken_file_probe import inspect_workbook
+    from mtool.offline_fill import write_patched_zip
+
+    _, data, _ = load_workbook_entries(footnote_template)
+    sheet = data["xl/worksheets/sheet1.xml"].decode("utf-8")
+    sheet = sheet.replace('<c r="D132" t="s"><v>0</v></c>',
+                          '<c r="D132" t="s"><v>999</v></c>')
+    broken = tmp_path / "bad-ref.xlsx"
+    write_patched_zip(
+        footnote_template, str(broken),
+        {"xl/worksheets/sheet1.xml": sheet.encode("utf-8")},
+    )
+    report = inspect_workbook(broken)
+    assert any(i["code"] == "shared_string_ref_out_of_range"
+               for i in report["issues"])
+
+
+def test_probe_inspector_finds_malformed_footnote_xhtml(
+        tmp_path, footnote_template):
+    from mtool.examples.mtool_broken_file_probe import inspect_workbook
+
+    out = tmp_path / "malformed-note.xlsx"
+    fill_footnotes(
+        footnote_template,
+        {"footnotes": [{"key": "fn_14", "html": "<p>unclosed"}]},
+        output_path=str(out),
+    )
+    report = inspect_workbook(out, {"fn_14"})
+    assert any(i["code"] == "malformed_footnote_xhtml"
+               for i in report["issues"])
+
+
+def test_probe_inspector_finds_duplicate_fn_keys(tmp_path):
+    from mtool.examples.mtool_broken_file_probe import inspect_workbook
+
+    strings = ["Corporate information", "[Text block added]", "fn_1",
+               "Notes-Listofnotes", "<html><body><p>x</p></body></html>"]
+    visible = _ws({9: [("D", 0), ("E", 1)]})
+    fn_sheet = _ws({1: [("A", 2), ("B", 3), ("C", None)],
+                    7: [("A", 2), ("B", 3), ("C", 4)]}, dimension="A1:G7")
+    path = _write_fn_workbook(
+        tmp_path, "probe-dup.xlsx", strings,
+        [("Notes-Listofnotes", visible), ("+FootnoteTexts", fn_sheet)],
+        ["<definedName name=\"fn_1\">'Notes-Listofnotes'!$E$9</definedName>"],
+    )
+    report = inspect_workbook(path)
+    assert any(i["code"] == "duplicate_fn_keys" for i in report["issues"])
+
+
+def test_boundary_probe_builds_exact_decoded_excel_limit(
+        tmp_path, footnote_template):
+    from mtool.examples.mtool_broken_file_probe import make_boundary_workbook
+
+    out = tmp_path / "probe-32767.xlsx"
+    report = make_boundary_workbook(
+        footnote_template, out, "fn_14", 32_767, acknowledged=True,
+    )
+    payload = report["payloads"][0]
+    assert payload["decoded_utf16_units"] == 32_767
+    assert payload["decoded_over_excel_limit"] is False
+    assert payload["xhtml_valid"] is True
+    assert report["probe"]["production_guard_bypassed"] is True
+    assert out.exists()
+
+
+def test_boundary_probe_can_isolate_stored_vs_decoded_counting(
+        tmp_path, footnote_template):
+    from mtool.examples.mtool_broken_file_probe import make_boundary_workbook
+
+    out = tmp_path / "probe-escaped-32767.xlsx"
+    report = make_boundary_workbook(
+        footnote_template, out, "fn_14", 32_767,
+        line_breaks=1_000, acknowledged=True,
+    )
+    payload = report["payloads"][0]
+    assert payload["decoded_utf16_units"] == 32_767
+    assert payload["stored_chars"] > 32_767
+    assert payload["decoded_over_excel_limit"] is False
+    assert payload["x000d_escapes"] >= 1_000
+    assert any(i["code"] == "stored_payload_over_limit_but_decoded_fits"
+               for i in report["issues"])
+
+
+def test_boundary_probe_marks_true_decoded_over_limit(
+        tmp_path, footnote_template):
+    from mtool.examples.mtool_broken_file_probe import make_boundary_workbook
+
+    out = tmp_path / "probe-32768.xlsx"
+    report = make_boundary_workbook(
+        footnote_template, out, "fn_14", 32_768, acknowledged=True,
+    )
+    payload = report["payloads"][0]
+    assert payload["decoded_utf16_units"] == 32_768
+    assert payload["decoded_over_excel_limit"] is True
+    assert any(i["code"] == "decoded_payload_over_excel_limit"
+               for i in report["issues"])
+
+
+def test_boundary_probe_requires_ack_and_refuses_in_place(footnote_template):
+    from mtool.examples.mtool_broken_file_probe import make_boundary_workbook
+
+    with pytest.raises(ValueError, match="explicit unsafe acknowledgement"):
+        make_boundary_workbook(
+            footnote_template, footnote_template + ".out.xlsx",
+            "fn_14", 32_768,
+        )
+    with pytest.raises(ValueError, match="in-place"):
+        make_boundary_workbook(
+            footnote_template, footnote_template, "fn_14", 32_768,
+            acknowledged=True,
+        )
+
+
+def test_render_pair_uses_identical_text_and_distinct_full_compact_shapes(
+        tmp_path, footnote_template):
+    from mtool.examples.mtool_broken_file_probe import make_render_pair
+
+    full = tmp_path / "render-full.xlsx"
+    compact = tmp_path / "render-compact.xlsx"
+    report = make_render_pair(
+        footnote_template, full, compact, "fn_14",
+        rows=25, cols=6, acknowledged=True,
+    )
+    full_payload = report["full"]["payloads"][0]
+    compact_payload = report["compact"]["payloads"][0]
+    assert full_payload["decoded_sha256"] != compact_payload["decoded_sha256"]
+    assert compact_payload["stored_chars"] < full_payload["stored_chars"]
+    assert full_payload["xhtml_valid"] is True
+    assert compact_payload["xhtml_valid"] is True
+    assert full.exists() and compact.exists()
+    # The generator itself asserts BeautifulSoup-rendered text equality before
+    # writing; both outputs carry the same unique A/B marker as a second guard.
+    assert "COMPACT RENDER A/B" in _payload_of(str(full), "fn_14")
+    assert "COMPACT RENDER A/B" in _payload_of(str(compact), "fn_14")
+
+
+def test_render_pair_requires_dummy_filing_ack(footnote_template, tmp_path):
+    from mtool.examples.mtool_broken_file_probe import make_render_pair
+
+    with pytest.raises(ValueError, match="dummy filings only"):
+        make_render_pair(
+            footnote_template, tmp_path / "full.xlsx", tmp_path / "compact.xlsx",
+            "fn_14",
+        )
+
+
+def test_compact_stress_probe_builds_large_under_limit_payload(
+        tmp_path, footnote_template):
+    from mtool.examples.mtool_broken_file_probe import make_compact_stress_workbook
+
+    out = tmp_path / "compact-stress.xlsx"
+    report = make_compact_stress_workbook(
+        footnote_template, out, "fn_14",
+        rows=100, cols=6, acknowledged=True,
+    )
+    payload = report["payloads"][0]
+    assert 20_000 < payload["stored_chars"] < 32_767
+    assert payload["decoded_over_excel_limit"] is False
+    assert report["probe"]["tier_forced"] == "compact"
+
+
+def test_probe_compare_quantifies_mtool_resave_inflation(
+        tmp_path, footnote_template):
+    from mtool.examples.mtool_broken_file_probe import (
+        compare_workbooks,
+        make_boundary_workbook,
+    )
+
+    before = tmp_path / "before.xlsx"
+    after = tmp_path / "after.xlsx"
+    make_boundary_workbook(
+        footnote_template, before, "fn_14", 10_000, acknowledged=True,
+    )
+    make_boundary_workbook(
+        footnote_template, after, "fn_14", 12_500, acknowledged=True,
+    )
+    report = compare_workbooks(before, after, "fn_14")
+    assert report["payload"]["decoded_utf16_units_delta"] == 2_500
+    assert report["payload"]["decoded_payload_unchanged"] is False
+    assert report["package"] == {"members_added": [], "members_removed": []}
+
+
+def test_probe_inspector_reports_invalid_zip(tmp_path):
+    from mtool.examples.mtool_broken_file_probe import inspect_workbook
+
+    broken = tmp_path / "not-a-workbook.xlsx"
+    broken.write_bytes(b"not a zip")
+    report = inspect_workbook(broken)
+    assert report["status"] == "error"
+    assert report["issues"][0]["code"] == "invalid_zip"
+
+
+def test_probe_cli_routes_inspect_generators_and_compare(
+        tmp_path, footnote_template):
+    from mtool.examples.mtool_broken_file_probe import main as probe_main
+
+    inspect_json = tmp_path / "inspect.json"
+    # The hand-built source has intentional sst count drift, hence exit 1.
+    assert probe_main([
+        "inspect", "--workbook", footnote_template,
+        "--json-out", str(inspect_json),
+    ]) == 1
+    assert inspect_json.exists()
+
+    full = tmp_path / "full.xlsx"
+    compact = tmp_path / "compact.xlsx"
+    pair_json = tmp_path / "pair.json"
+    assert probe_main([
+        "make-render-pair", "--workbook", footnote_template,
+        "--full-output", str(full), "--compact-output", str(compact),
+        "--key", "fn_14", "--rows", "10", "--cols", "6",
+        "--unsafe-render-probe", "--json-out", str(pair_json),
+    ]) == 0
+
+    stress = tmp_path / "stress.xlsx"
+    assert probe_main([
+        "make-compact-stress", "--workbook", footnote_template,
+        "--output", str(stress), "--key", "fn_14", "--rows", "50",
+        "--unsafe-render-probe", "--json-out", str(tmp_path / "stress.json"),
+    ]) == 0
+
+    boundary = tmp_path / "boundary.xlsx"
+    assert probe_main([
+        "make-boundary", "--workbook", footnote_template,
+        "--output", str(boundary), "--key", "fn_14",
+        "--decoded-length", "32768", "--unsafe-boundary-probe",
+        "--json-out", str(tmp_path / "boundary.json"),
+    ]) == 0
+
+    compare_json = tmp_path / "compare.json"
+    assert probe_main([
+        "compare", "--before", str(full), "--after", str(compact),
+        "--key", "fn_14", "--json-out", str(compare_json),
+    ]) == 0
+    assert compare_json.exists()
+
+
+def test_windows_excel_probe_keeps_source_read_only_and_alerts_visible():
+    """The COM helper cannot run on Mac CI, but its safety contract is pinned:
+    source opens read-only, evidence dialogs stay visible, and round-trip output
+    uses SaveCopyAs rather than saving over the source."""
+    from pathlib import Path
+
+    script = (Path(__file__).resolve().parents[1] / "mtool" / "examples"
+              / "windows_excel_note_probe.ps1").read_text(encoding="utf-8")
+    assert "$excel.DisplayAlerts = $true" in script
+    assert "$Excel.Workbooks.Open($Path, 0, $true)" in script
+    assert "$excel.Workbooks.Open($source, 0, $true)" in script
+    assert "$bookForCopy.SaveCopyAs($destination)" in script
+    assert "Refusing to save over the source workbook" in script

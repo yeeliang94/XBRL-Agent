@@ -94,23 +94,57 @@ def test_decorate_false_keeps_raw_html(notes_db):
     assert doc["footnotes"][0]["html"] == "<p>Acme</p>"
 
 
-def _wide_table(n_rows: int, n_cols: int = 10) -> str:
+def test_meta_labels_the_no_styling_diagnostic_fill(notes_db):
+    """The doc carries an honest styling flag so the fill report / modal can
+    say 'plain on purpose' instead of looking like a formatting bug."""
+    db, run_id = notes_db
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>x</p>")
+    assert build_notes_fill_doc(db, run_id)["meta"][
+        "styling_disabled"] is False
+    assert build_notes_fill_doc(db, run_id, decorate=False)["meta"][
+        "styling_disabled"] is True
+
+
+def _wide_table(n_rows: int, n_cols: int = 10, user_style: bool = False) -> str:
+    """All-numeric wide table; ``user_style`` puts a user-owned (WYSIWYG)
+    border on the first cell, which makes the table compact-INELIGIBLE (the
+    compact tier must not fight deliberate per-cell styling)."""
     cells = "".join("<td>1,234</td>" for _ in range(n_cols))
-    return "<table><tbody>" + "".join(
-        f"<tr>{cells}</tr>" for _ in range(n_rows)) + "</tbody></table>"
+    first = ('<td style="border: 2px solid #000">1,234</td>'
+             + "".join("<td>1,234</td>" for _ in range(n_cols - 1)))
+    rows = []
+    for i in range(n_rows):
+        rows.append(f"<tr>{first if (user_style and i == 0) else cells}</tr>")
+    return "<table><tbody>" + "".join(rows) + "</tbody></table>"
+
+
+def test_big_note_degrades_to_compact_tier(notes_db):
+    """Full decoration over the limit but the compact decoration fits: the
+    note keeps its VISIBLE formatting (table grid via the legacy attrs,
+    numeric right-alignment) with per-cell boilerplate dropped."""
+    db, run_id = notes_db
+    _add_note(db, run_id, "Notes-Listofnotes", 17, "Movement table",
+              _wide_table(9, 40))                     # measured -> compact
+    doc = build_notes_fill_doc(db, run_id)
+    fn = doc["footnotes"][0]
+    assert fn.get("format_tier") == "compact"
+    assert "formatting_dropped" not in fn
+    assert 'border="1"' in fn["html"]                 # table-level grid KEPT
+    assert "text-align: right" in fn["html"]          # numeric alignment KEPT
+    assert "border: 1px solid" not in fn["html"]      # per-cell boilerplate gone
+    assert doc["meta"]["counts"]["formatting_compacted"] == 1
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+    assert len(wrap_footnote_html(fn["html"])) <= EXCEL_CELL_CHAR_LIMIT
 
 
 def test_near_limit_note_degrades_to_lite_tier(notes_db):
-    """Full decoration over the limit but the lighter 'lite' decoration fits:
-    the note keeps borders/font/alignment (cosmetic props dropped).
-
-    Fixture width bumped to 40 cols after the Step-3 style hoist
-    (docs/PLAN-word-formatting-fidelity.md): hoisting font/wrap off every cell
-    shrank the full tier so much that a 10-col table jumps straight full->flat;
-    the lite window only opens on very wide tables now."""
+    """Full is over the limit AND the table is compact-ineligible (a cell owns
+    a user border, so compact keeps the full per-cell form and is over too) —
+    the lighter 'lite' decoration is the first rung that fits: the note keeps
+    borders/font/alignment (cosmetic props dropped)."""
     db, run_id = notes_db
     _add_note(db, run_id, "Notes-Listofnotes", 17, "Movement table",
-              _wide_table(9, 40))                     # measured -> lite
+              _wide_table(9, 40, user_style=True))    # measured -> lite
     doc = build_notes_fill_doc(db, run_id)
     fn = doc["footnotes"][0]
     assert fn.get("format_tier") == "lite"
@@ -123,10 +157,10 @@ def test_near_limit_note_degrades_to_lite_tier(notes_db):
 
 
 def test_oversize_note_degrades_to_flat_content(notes_db):
-    """Even lite is over the limit but raw fits: emit FLAT (content preserved,
-    flagged) rather than being skipped by the fill guard."""
+    """Even compact + lite are over the limit but raw fits: emit FLAT (content
+    preserved, flagged) rather than being skipped by the fill guard."""
     db, run_id = notes_db
-    raw = _wide_table(15, 40)                           # measured -> flat
+    raw = _wide_table(30, 40)                           # measured -> flat
     _add_note(db, run_id, "Notes-Listofnotes", 17, "Big movement table", raw)
     doc = build_notes_fill_doc(db, run_id)
     fn = doc["footnotes"][0]
@@ -174,7 +208,8 @@ def test_empty_and_unlabelled_notes_are_skipped_not_emitted(notes_db):
 
     assert doc["meta"]["counts"] == {
         "notes": 1, "skipped_empty": 1, "skipped_no_label": 1,
-        "formatting_reduced": 0, "formatting_dropped": 0}
+        "formatting_compacted": 0, "formatting_reduced": 0,
+        "formatting_dropped": 0}
     assert [f["label"] for f in doc["footnotes"]] == ["Corporate information"]
 
 

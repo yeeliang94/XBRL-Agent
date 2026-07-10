@@ -134,6 +134,21 @@ def _resolve_notes_style(run) -> NotesTableStyle:
     return NotesTableStyle.from_theme(theme)
 
 
+def _resolve_notes_decorate(notes_styling: str) -> bool:
+    """Validate the notes-styling mode and return the exporter ``decorate``
+    flag. ``"styled"`` -> the render-proven decoration (size-degrading per note
+    when needed); ``"none"`` -> the diagnostic raw fill (words + table structure,
+    no formatting, so the operator can isolate whether a fill problem is caused
+    by styling). A typo 422s here so it fails loudly instead of silently filling
+    unstyled."""
+    if notes_styling not in ("styled", "none"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"notes_styling must be 'styled' or 'none', "
+                   f"got {notes_styling!r}")
+    return notes_styling == "styled"
+
+
 def _build_doc(run_id: int):
     run, standard, level, denom = _load_fillable_run(run_id)
     doc = build_fill_doc(
@@ -177,6 +192,7 @@ async def patch_mtool_template(
     fill_notes: bool = Form(default=True),
     create_missing_notes: bool = Form(default=False),
     notes_targets: str | None = Form(default=None),
+    notes_styling: str = Form(default="styled"),
 ):
     """Patch an uploaded empty mTool template from the run's facts.
 
@@ -197,6 +213,10 @@ async def patch_mtool_template(
         raise HTTPException(
             status_code=422,
             detail="Run has no fillable facts (nothing to write).")
+
+    # Notes styling mode: "styled" (default) or "none" (diagnostic). Validated
+    # here so a typo fails loudly, before any upload is read.
+    notes_decorate = _resolve_notes_decorate(notes_styling)
 
     # Read in bounded chunks and abort the moment we exceed the cap, so an
     # oversized upload never fully materialises in memory (Content-Length can
@@ -294,7 +314,8 @@ async def patch_mtool_template(
             try:
                 notes_doc = build_notes_fill_doc(
                     server.AUDIT_DB_PATH, run_id,
-                    style=_resolve_notes_style(run))
+                    style=_resolve_notes_style(run),
+                    decorate=notes_decorate)
                 # Operator-chosen placements for ambiguous/near-miss notes
                 # (the preview's decision UI). 422s on a malformed payload —
                 # a bad explicit target must fail loudly, not fall back to
@@ -323,11 +344,19 @@ async def patch_mtool_template(
                         # sacrificed). Distinct from `oversize` unresolved
                         # (skipped entirely). The agent/operator reads this to
                         # know which notes need their styling simplified.
-                        _ncounts = notes_doc.get("meta", {}).get("counts", {})
+                        _nmeta = notes_doc.get("meta", {})
+                        _ncounts = _nmeta.get("counts", {})
                         notes_report["formatting_dropped"] = _ncounts.get(
                             "formatting_dropped", 0)
                         notes_report["formatting_reduced"] = _ncounts.get(
                             "formatting_reduced", 0)
+                        notes_report["formatting_compacted"] = _ncounts.get(
+                            "formatting_compacted", 0)
+                        # Honest labelling: a deliberately-unstyled diagnostic
+                        # fill must be visible in the report, not mistaken for
+                        # a styling bug.
+                        notes_report["styling_disabled"] = _nmeta.get(
+                            "styling_disabled", False)
                         final = notes_out
             except HTTPException:
                 # A malformed notes_targets is a caller error (422), not a
@@ -430,6 +459,7 @@ async def preview_mtool_notes(
     template: UploadFile = File(...),
     create_missing_notes: bool = Form(default=False),
     notes_targets: str | None = Form(default=None),
+    notes_styling: str = Form(default="styled"),
 ):
     """Dry-run the prose-notes fill against an uploaded template and return the
     plan WITHOUT writing anything — the notes diagnostic the operator runs
@@ -442,10 +472,15 @@ async def preview_mtool_notes(
     the concepts aren't popup-backed yet (turn on create-missing or add the
     text blocks in mTool); *many slots but notes still unresolved* -> the
     labels differ from mTool's (a matching problem, not a missing-slot one).
+
+    ``notes_styling`` mirrors the patch endpoint so the plan's ``counts``
+    (including the size-degradation tiers) reflect the styling the operator
+    actually chose — a "no styling" preview must not report styled tiers.
     """
     run, *_ = _load_fillable_run(run_id)  # 404/409 gate, same as the patch endpoint
     notes_doc = build_notes_fill_doc(
-        server.AUDIT_DB_PATH, run_id, style=_resolve_notes_style(run))
+        server.AUDIT_DB_PATH, run_id, style=_resolve_notes_style(run),
+        decorate=_resolve_notes_decorate(notes_styling))
     # Re-preview honours the operator's placements so the plan updates as
     # decisions are made (same seam the patch endpoint applies).
     _apply_notes_targets(notes_doc, notes_targets)
@@ -655,6 +690,9 @@ def _notes_report_block(notes_report: dict | None) -> dict | None:
         return None
     return {
         "status": notes_report["status"],
+        # True on the diagnostic "no styling" fill — the modal labels the
+        # result so a deliberately-plain fill can't be misread as a bug.
+        "styling_disabled": notes_report.get("styling_disabled", False),
         "counts": {
             "written": len(notes_report.get("footnotes_written", [])),
             "created": len(notes_report.get("footnotes_created", [])),
@@ -666,6 +704,9 @@ def _notes_report_block(notes_report: dict | None) -> dict | None:
             "formatting_dropped": notes_report.get("formatting_dropped", 0),
             # notes kept most formatting but dropped cosmetic props to fit.
             "formatting_reduced": notes_report.get("formatting_reduced", 0),
+            # notes on the compact tier: same visible formatting, slimmer
+            # styling so a big table fits Excel's cell limit.
+            "formatting_compacted": notes_report.get("formatting_compacted", 0),
         },
         "unresolved": [
             {"label": e.get("label"), "detail": e.get("detail")}

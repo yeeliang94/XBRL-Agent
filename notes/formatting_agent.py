@@ -536,15 +536,16 @@ def collect_size_signals(
     cells: list[Any], theme: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """Deterministic mTool size signals for the formatter agent (handoff
-    item 2). Re-runs the SAME full → lite → flat → oversize ladder the mTool
-    exporter uses (:func:`mtool.notes_exporter._resolve_note_html`, sized
-    against Excel's 32,767-char cell limit with the run's resolved theme), so
-    the agent is HANDED the verdicts instead of re-deriving size math —
-    deterministic code owns what-fits, the agent owns what-to-do.
+    item 2). Re-runs the SAME full → compact → lite → flat → oversize ladder
+    the mTool exporter uses (:func:`mtool.notes_exporter._resolve_note_html`,
+    sized against Excel's 32,767-char cell limit with the run's resolved
+    theme), so the agent is HANDED the verdicts instead of re-deriving size
+    math — deterministic code owns what-fits, the agent owns what-to-do.
 
     Returns one entry per flagged cell: ``{row, label, tier}`` with tier in
-    ``lite`` / ``flat`` / ``oversize``. Unflagged (``full``) cells are omitted
-    — they need no size attention.
+    ``lite`` / ``flat`` / ``oversize``. Unflagged cells are omitted — ``full``
+    needs no size attention and neither does ``compact`` (same visible
+    formatting, slimmer styling; docs/PLAN-mtool-compact-decoration.md).
     """
     style = NotesTableStyle.from_theme(theme)
     signals: list[dict[str, Any]] = []

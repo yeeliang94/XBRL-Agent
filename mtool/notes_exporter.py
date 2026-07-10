@@ -78,8 +78,9 @@ def build_notes_fill_doc(
     footnotes: list[dict[str, Any]] = []
     skipped_empty = 0
     skipped_no_label = 0
-    formatting_reduced = 0   # "lite" tier — cosmetic props dropped
-    formatting_dropped = 0   # "flat" tier — all styling dropped
+    formatting_compacted = 0  # "compact" tier — same look, slimmer styling
+    formatting_reduced = 0    # "lite" tier — cosmetic props dropped
+    formatting_dropped = 0    # "flat" tier — all styling dropped
     for r in rows:
         html = (r["html"] or "").strip()
         label = (r["label"] or "").strip()
@@ -91,9 +92,12 @@ def build_notes_fill_doc(
             continue
         # Decorate the style-free DB HTML so mTool's TX27 editor renders the
         # formatting (borders/fills/font/alignment) — see the module docstring.
-        # `decorate=False` keeps the raw HTML (tests / debug).
+        # `decorate=False` keeps the raw HTML (the "no styling" diagnostic
+        # toggle on the fill endpoint, plus tests / debug).
         out_html, tier = _resolve_note_html(r["html"], style, decorate)
-        if tier == "lite":
+        if tier == "compact":
+            formatting_compacted += 1
+        elif tier == "lite":
             formatting_reduced += 1
         elif tier == "flat":
             formatting_dropped += 1
@@ -106,7 +110,7 @@ def build_notes_fill_doc(
         # Record only the size-forced tiers (full/raw notes stay unannotated so
         # the common case is unchanged); back-compat: `formatting_dropped` bool
         # still marks the flat tier.
-        if tier in ("lite", "flat"):
+        if tier in ("compact", "lite", "flat"):
             entry["format_tier"] = tier
         if tier == "flat":
             entry["formatting_dropped"] = True
@@ -114,16 +118,23 @@ def build_notes_fill_doc(
 
     meta = {
         "run_id": run_id,
+        # Honest labelling for the diagnostic no-styling fill: consumers (the
+        # patch report, the modal) surface this so a deliberately-plain fill
+        # can't be misread as a formatting bug.
+        "styling_disabled": not decorate,
         "counts": {
             "notes": len(footnotes),
             "skipped_empty": skipped_empty,
             "skipped_no_label": skipped_no_label,
-            # Deterministic size signals (full → lite → flat degradation ladder):
+            # Deterministic size signals (full → compact → lite → flat ladder):
+            #   formatting_compacted = same visible formatting, slimmer
+            #     per-cell styling (table-level attrs carry the grid).
             #   formatting_reduced = kept borders/font/align, dropped cosmetics.
             #   formatting_dropped = written FLAT; the note's styling is too
             #     heavy and should be simplified. (A note too big even flat is
             #     not counted here — the fill guard skips it as `oversize`,
             #     meaning the CONTENT must be split, not the styling.)
+            "formatting_compacted": formatting_compacted,
             "formatting_reduced": formatting_reduced,
             "formatting_dropped": formatting_dropped,
         },
@@ -136,19 +147,24 @@ def _resolve_note_html(
 ) -> tuple[str, str]:
     """Pick the HTML to emit for one note, trading formatting for size only
     when forced. Returns ``(html, tier)`` where tier is one of
-    ``full`` / ``lite`` / ``flat`` / ``raw`` / ``oversize``.
+    ``full`` / ``compact`` / ``lite`` / ``flat`` / ``raw`` / ``oversize``.
 
     Ladder — CONTENT is never lost to formatting:
-      * ``full``  — decorated HTML fits Excel's cell limit.
-      * ``lite``  — full is over, but a lighter decoration (cosmetic props
-        dropped, borders/font/alignment kept) fits.
-      * ``flat``  — even lite is over, but the UNDECORATED HTML fits; the note
-        renders plain but its content + the workbook stay intact.
+      * ``full``    — decorated HTML fits Excel's cell limit.
+      * ``compact`` — full is over, but the compact decoration (table-level
+        attrs carry the grid/padding; per-cell styles only where cells differ
+        — same visible formatting, ~1/3 the characters) fits. Roughly triples
+        the fully-styled table ceiling (docs/PLAN-mtool-compact-decoration.md).
+      * ``lite``    — compact is over too, but a lighter decoration (cosmetic
+        props dropped, borders/font/alignment kept) fits.
+      * ``flat``    — even lite is over, but the UNDECORATED HTML fits; the
+        note renders plain but its content + the workbook stay intact.
       * ``oversize`` — too big even flat: emit ``raw`` (smallest, honest
         payload size) and let the fill's hard guard
         (:data:`mtool.offline_fill.EXCEL_CELL_CHAR_LIMIT`) skip + flag it — the
         signal that the CONTENT must be split, not the styling simplified.
-      * ``raw``   — decoration disabled (tests / debug).
+      * ``raw``   — decoration disabled (the fill's "no styling" diagnostic
+        toggle, plus tests / debug).
     Sizes use the exact wrapped payload (:func:`wrap_footnote_html`) so the
     wrap overhead + Excel's unescaped-length semantics are accounted for."""
     if not decorate:
@@ -160,6 +176,13 @@ def _resolve_note_html(
     decorated = decorate_notes_html(raw, style)
     if _fits(decorated):
         return decorated, "full"
+    compact = decorate_notes_html(raw, style, compact=True)
+    # Compact only helps when it actually differs from full — a compact-
+    # INELIGIBLE note (user-styled cells / border-none theme) decorates
+    # byte-identical to full, so it can't fit either; skip straight to lite
+    # instead of re-testing the same over-limit payload under a "compact" label.
+    if compact != decorated and _fits(compact):
+        return compact, "compact"
     lite = decorate_notes_html(raw, style, lite=True)
     if _fits(lite):
         return lite, "lite"

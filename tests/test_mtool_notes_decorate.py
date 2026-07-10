@@ -382,3 +382,131 @@ def test_from_theme_prose_fields_default_to_unset():
     assert bad.heading_weight is None
     assert bad.list_marker is None
     assert bad.totals_double_underline is False
+
+
+# --- compact tier (mTool-only; docs/PLAN-mtool-compact-decoration.md) --------
+def test_compact_body_cells_carry_no_style_at_all():
+    """The whole point of the tier: a plain left-aligned body cell rides on
+    the table's legacy attrs + renderer defaults and gets ZERO per-cell style."""
+    out = decorate_notes_html(
+        "<table><tbody><tr><td>Land</td><td>1,595</td></tr></tbody></table>",
+        compact=True)
+    # The label cell has no style attribute at all.
+    assert re.search(r'<td(?![^>]*style=)[^>]*>Land</td>', out)
+    # The numeric cell carries ONLY the right-alignment.
+    assert re.search(r'<td[^>]*style="text-align: right;"[^>]*>1,595<', out)
+    # No per-cell boilerplate anywhere.
+    assert "border: 1px solid" not in out
+    assert not re.search(r'<td[^>]*style="[^"]*padding', out)
+    assert "vertical-align: top" not in out
+
+
+def test_compact_table_keeps_legacy_attrs_and_hoisted_font():
+    """The grid + padding move to the table-level legacy attributes and the
+    hoisted (inheritable) font stays on the table element."""
+    out = decorate_notes_html(
+        "<table><tbody><tr><td>Land</td><td>1,595</td></tr></tbody></table>",
+        compact=True)
+    assert re.search(r'<table[^>]*border="1"', out)
+    assert re.search(r'<table[^>]*cellpadding="4"', out)
+    assert re.search(r'<table[^>]*cellspacing="0"', out)
+    assert re.search(r'<table[^>]*style="[^"]*font-family: Arial', out)
+
+
+def test_compact_th_keeps_fill_weight_and_explicit_align():
+    """<th> defaults to CENTER in most renderers, so compact must still write
+    an explicit alignment — plus the header fill + weight."""
+    out = decorate_notes_html(
+        "<table><thead><tr><th>Item</th><th>2024</th></tr></thead></table>",
+        compact=True)
+    assert re.search(r'<th[^>]*style="[^"]*background: #f3f4f6', out)
+    assert re.search(r'<th[^>]*style="[^"]*font-weight: 600', out)
+    assert re.search(r'<th[^>]*style="[^"]*text-align: left[^"]*">Item<', out)
+    assert re.search(r'<th[^>]*style="[^"]*text-align: right[^"]*">2024<', out)
+
+
+def test_compact_totals_rule_still_lands_on_amount_cells():
+    out = decorate_notes_html(
+        "<table><tbody>"
+        "<tr><td>Revenue</td><td>10,000</td></tr>"
+        "<tr><td>Total</td><td>19,500</td></tr>"
+        "</tbody></table>",
+        NotesTableStyle(totals_double_underline=True), compact=True)
+    assert re.search(
+        r'<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">19,500<',
+        out)
+    assert not re.search(r'<td[^>]*style="[^"]*3px double[^"]*">10,000<', out)
+
+
+def test_compact_skips_table_with_user_owned_cell_border():
+    """A table where any cell carries a user (WYSIWYG/sidecar) border keeps
+    the FULL per-cell treatment — a table-level grid would fight the user's
+    deliberate styling. The user's style itself always survives."""
+    out = decorate_notes_html(
+        '<table><tbody><tr>'
+        '<td style="border: 2px solid #000">A</td><td>1,000</td>'
+        '</tr></tbody></table>', compact=True)
+    assert "2px solid #000" in out                      # user style survives
+    # Sibling cell got the full per-cell treatment, not the compact one.
+    assert re.search(r'<td[^>]*style="[^"]*border: 1px solid #999', out)
+    assert re.search(r'<td[^>]*style="[^"]*padding: 4px 8px', out)
+
+
+def test_compact_skips_table_with_user_owned_cell_fill():
+    out = decorate_notes_html(
+        '<table><tbody><tr>'
+        '<td style="background-color: #ffff00">A</td><td>1,000</td>'
+        '</tr></tbody></table>', compact=True)
+    assert "background-color: #ffff00" in out           # user fill survives
+    assert re.search(r'<td[^>]*style="[^"]*border: 1px solid #999', out)
+
+
+def test_compact_only_compacts_the_eligible_sibling_table():
+    """Per-TABLE decision: a user-styled table keeps the full form while a
+    plain sibling table in the same note compacts."""
+    out = decorate_notes_html(
+        '<table><tbody><tr><td style="border: 2px solid #000">A</td>'
+        '</tr></tbody></table>'
+        '<table><tbody><tr><td>Plain</td><td>1,000</td></tr></tbody></table>',
+        compact=True)
+    # The plain table's cells are compact (bare label cell)…
+    assert re.search(r'<td(?![^>]*style=)[^>]*>Plain</td>', out)
+    # …while the user-styled table's sibling decoration is the full form.
+    assert "2px solid #000" in out
+
+
+def test_compact_border_none_theme_keeps_full_cell_treatment():
+    """borderStyle 'none' suppresses the table attrs, so there is nothing for
+    compact cells to inherit — those tables keep the full per-cell form
+    (which for border-none means padding, no grid)."""
+    out = decorate_notes_html(
+        "<table><tbody><tr><td>x</td></tr></tbody></table>",
+        NotesTableStyle(border_style="none"), compact=True)
+    assert not re.search(r'<table[^>]*border="1"', out)
+    assert re.search(r'<td[^>]*style="[^"]*padding: 4px 8px', out)
+
+
+def test_compact_whiteout_still_runs_on_cleared_borders():
+    """A formatter-cleared (hidden) border still translates to white in
+    compact mode — the cell owns a border, so its table isn't compacted, and
+    the TX grey-line accommodation must keep working."""
+    out = decorate_notes_html(
+        '<table><tbody><tr><td style="border: none">x</td></tr></tbody></table>',
+        compact=True)
+    assert "border: none" not in out
+    assert "1px solid #ffffff" in out.lower()
+
+
+def test_compact_is_dramatically_smaller_than_full_and_same_text():
+    from bs4 import BeautifulSoup
+    html = ("<table><tbody>"
+            + "".join("<tr><td>Item</td>"
+                      + "".join("<td>1,234</td>" for _ in range(5)) + "</tr>"
+                      for _ in range(50))
+            + "</tbody></table>")
+    full = decorate_notes_html(html)
+    compact = decorate_notes_html(html, compact=True)
+    assert len(compact) < len(full) / 2               # the size win is real
+    # Content is untouched — identical rendered text.
+    assert (BeautifulSoup(compact, "html.parser").get_text()
+            == BeautifulSoup(full, "html.parser").get_text())
