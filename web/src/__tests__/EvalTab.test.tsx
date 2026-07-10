@@ -66,4 +66,47 @@ describe("EvalTab", () => {
     render(<EvalTab runId={42} />);
     await waitFor(() => expect(screen.getByTestId("eval-no-score")).toBeTruthy());
   });
+
+  test("renders the failure taxonomy when present, only non-zero rows", () => {
+    render(
+      <EvalTab
+        runId={42}
+        initialScore={{
+          ...score,
+          taxonomy: { sign_flip: 2, scale: 3, period_swap: 0, unaddressed: 5 },
+        }}
+      />,
+    );
+    const tax = screen.getByTestId("eval-taxonomy");
+    expect(tax.textContent).toContain("Sign flipped");
+    expect(tax.textContent).toContain("Not reached");
+    // A zero-count diagnosis (period_swap) is omitted.
+    expect(tax.textContent).not.toContain("Year swapped");
+  });
+
+  test("renders per-statement accuracy when present", () => {
+    render(
+      <EvalTab
+        runId={42}
+        initialScore={{
+          ...score,
+          per_statement: {
+            SOFP: { gold_cells: 10, matched: 9 },
+            SOCF: { gold_cells: 8, matched: 4 },
+          },
+        }}
+      />,
+    );
+    const ps = screen.getByTestId("eval-per-statement");
+    expect(ps.textContent).toContain("SOFP");
+    expect(ps.textContent).toContain("90%");
+    expect(ps.textContent).toContain("SOCF");
+    expect(ps.textContent).toContain("50%");
+  });
+
+  test("no taxonomy/per-statement sections on a legacy score", () => {
+    render(<EvalTab runId={42} initialScore={score} />);
+    expect(screen.queryByTestId("eval-taxonomy")).toBeNull();
+    expect(screen.queryByTestId("eval-per-statement")).toBeNull();
+  });
 });

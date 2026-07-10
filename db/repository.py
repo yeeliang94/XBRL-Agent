@@ -2009,6 +2009,19 @@ def _row_get(row: sqlite3.Row, name: str, default=0):
     return value if value is not None else default
 
 
+def _parse_json_dict(raw: Any) -> Optional[dict[str, Any]]:
+    """Hydrate a JSON blob to a dict, or None if empty/corrupt (v30 eval
+    taxonomy + per-statement columns). A bad blob degrades to None rather than
+    crashing a scorecard read."""
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def fetch_agent_turns(conn: sqlite3.Connection, run_agent_id: int) -> list[dict]:
     """Per-turn telemetry rows for one agent, ordered by turn index (v8)."""
     rows = conn.execute(
@@ -2425,10 +2438,17 @@ def save_eval_score(
     makes a re-grade overwrite the prior row.
     """
     now = _now()
+    # v30: taxonomy + per-statement breakdown persisted as JSON. Duck-typed:
+    # a card built by an older path (no taxonomy attr) serialises as NULL.
+    taxonomy = getattr(card, "taxonomy", None) or None
+    per_statement = getattr(card, "per_statement", None) or None
+    taxonomy_json = json.dumps(taxonomy) if taxonomy else None
+    per_statement_json = json.dumps(per_statement) if per_statement else None
     conn.execute(
         "INSERT INTO eval_scores(run_id, benchmark_id, gold_cells, "
         "matched_cells, missing_cells, mismatch_cells, extra_cells, "
-        "scale_mismatch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "scale_mismatch, created_at, taxonomy_json, per_statement_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(run_id, benchmark_id) DO UPDATE SET "
         "gold_cells = excluded.gold_cells, "
         "matched_cells = excluded.matched_cells, "
@@ -2436,12 +2456,14 @@ def save_eval_score(
         "mismatch_cells = excluded.mismatch_cells, "
         "extra_cells = excluded.extra_cells, "
         "scale_mismatch = excluded.scale_mismatch, "
-        "created_at = excluded.created_at",
+        "created_at = excluded.created_at, "
+        "taxonomy_json = excluded.taxonomy_json, "
+        "per_statement_json = excluded.per_statement_json",
         (
             run_id, benchmark_id,
             int(card.gold_cells), int(card.matched), int(card.missing),
             int(card.mismatch), int(card.extra), int(card.scale_mismatch),
-            now,
+            now, taxonomy_json, per_statement_json,
         ),
     )
 
@@ -2462,7 +2484,8 @@ def fetch_eval_score(
     try:
         row = conn.execute(
             "SELECT gold_cells, matched_cells, missing_cells, mismatch_cells, "
-            "extra_cells, scale_mismatch, created_at "
+            "extra_cells, scale_mismatch, created_at, taxonomy_json, "
+            "per_statement_json "
             "FROM eval_scores WHERE run_id = ? AND benchmark_id = ?",
             (run_id, benchmark_id),
         ).fetchone()
@@ -2482,6 +2505,9 @@ def fetch_eval_score(
         "scale_mismatch": int(row["scale_mismatch"]),
         "score": (matched / gold_cells) if gold_cells > 0 else 0.0,
         "created_at": row["created_at"],
+        # v30 — NULL on legacy scorecards; the UI degrades gracefully.
+        "taxonomy": _parse_json_dict(_row_get(row, "taxonomy_json")),
+        "per_statement": _parse_json_dict(_row_get(row, "per_statement_json")),
     }
 
 

@@ -2,7 +2,20 @@ import { useEffect, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { fetchRunEval } from "../lib/api";
-import type { EvalScoreJson } from "../lib/types";
+import type { EvalScoreJson, EvalTaxonomy } from "../lib/types";
+
+// Plain-language labels for each diagnosed failure mode (docs/PLAN-evals-workspace.md).
+// Ordered most-actionable first, matching the grader's priority.
+const TAXONOMY_LABELS: { key: keyof EvalTaxonomy; label: string; hint: string }[] = [
+  { key: "period_swap", label: "Year swapped", hint: "current & prior-year values transposed" },
+  { key: "scope_swap", label: "Column swapped", hint: "group & company values transposed" },
+  { key: "sign_flip", label: "Sign flipped", hint: "right number, wrong +/− direction" },
+  { key: "scale", label: "Scale error", hint: "off by a factor of ~1,000 (thousands misread)" },
+  { key: "misplaced", label: "Wrong row", hint: "right number landed on a different line" },
+  { key: "false_not_disclosed", label: "Wrongly skipped", hint: "we said 'not in the document' but it was" },
+  { key: "unaddressed", label: "Not reached", hint: "we never dealt with this line" },
+  { key: "plain_wrong", label: "Other wrong", hint: "a wrong value with no clearer pattern" },
+];
 
 // ---------------------------------------------------------------------------
 // EvalTab — gold-standard eval scorecard (v16). Lazy-mounted only when the
@@ -83,10 +96,60 @@ export function EvalTab({ runId, initialScore = null }: EvalTabProps) {
         <Metric label="Extras (warning)" value={score.extra_cells} tone="warning" />
         <Metric label="Gold cells" value={score.gold_cells} />
       </div>
+      {renderTaxonomy(score.taxonomy)}
+      {renderPerStatement(score.per_statement)}
       <p style={styles.note}>
         Score = matched / gold cells. Extras (the run filled a cell the gold
         left blank) are surfaced as a warning and are NOT in the denominator.
       </p>
+    </div>
+  );
+}
+
+// The diagnosis breakdown — only shown when the scorecard carries a taxonomy
+// (a run graded after v30) AND at least one failure was diagnosed. A perfect
+// run or a legacy scorecard renders nothing here.
+function renderTaxonomy(taxonomy: EvalTaxonomy | null | undefined) {
+  if (!taxonomy) return null;
+  const rows = TAXONOMY_LABELS.filter((t) => (taxonomy[t.key] ?? 0) > 0);
+  if (rows.length === 0) return null;
+  return (
+    <div data-testid="eval-taxonomy" style={styles.section}>
+      <div style={styles.sectionTitle}>What went wrong</div>
+      <div style={styles.detailGrid}>
+        {rows.map((t) => (
+          <div key={t.key} style={styles.metric} title={t.hint}>
+            <span style={styles.metricValue}>{taxonomy[t.key]}</span>
+            <span style={styles.metricLabel}>{t.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Per-statement accuracy — so a change can be traced to one statement.
+function renderPerStatement(
+  perStatement: Record<string, { gold_cells: number; matched: number }> | null | undefined,
+) {
+  if (!perStatement) return null;
+  const entries = Object.entries(perStatement).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) return null;
+  return (
+    <div data-testid="eval-per-statement" style={styles.section}>
+      <div style={styles.sectionTitle}>Accuracy by statement</div>
+      <div style={styles.detailGrid}>
+        {entries.map(([stmt, b]) => (
+          <div key={stmt} style={styles.metric}>
+            <span style={styles.metricValue}>
+              {b.gold_cells > 0 ? `${Math.round((b.matched / b.gold_cells) * 100)}%` : "—"}
+            </span>
+            <span style={styles.metricLabel}>
+              {stmt} ({b.matched}/{b.gold_cells})
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -143,6 +206,17 @@ const styles = {
   flags: {
     fontFamily: pwc.fontBody,
     fontSize: 14,
+    color: pwc.grey800,
+  } as React.CSSProperties,
+  section: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  sectionTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 13,
+    fontWeight: 600,
     color: pwc.grey800,
   } as React.CSSProperties,
   detailGrid: {
