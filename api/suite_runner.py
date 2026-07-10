@@ -374,6 +374,59 @@ async def stop_suite_run_endpoint(suite_id: int, suite_run_id: int):
     return {"stopping": suite_run_id}
 
 
+@router.get("/api/suites/{suite_id}/results")
+async def suite_results_endpoint(suite_id: int):
+    """Trend data (Step F1): every suite run of this suite with its aggregate
+    scores + the config stamp (date, model, app version, label). Powers the
+    Results score-trend chart."""
+    from db import repository as repo
+    from eval.compare import suite_run_aggregate
+
+    conn = server._open_audit_conn()
+    try:
+        if repo.get_suite(conn, suite_id) is None:
+            raise HTTPException(status_code=404, detail="Suite not found")
+        runs = repo.list_suite_runs(conn, suite_id)
+        points = []
+        for sr in runs:
+            agg = suite_run_aggregate(conn, sr["id"])["aggregate"]
+            points.append({
+                "suite_run_id": sr["id"],
+                "label": sr.get("label", ""),
+                "model": sr.get("model"),
+                "app_version": sr.get("app_version"),
+                "created_at": sr.get("created_at"),
+                "status": sr.get("status"),
+                "mean_accuracy": agg["mean_accuracy"],
+                "mean_consistency": agg["mean_consistency"],
+                "mean_cross_check_pass_rate": agg["mean_cross_check_pass_rate"],
+            })
+    finally:
+        conn.close()
+    # Oldest → newest so the trend reads left-to-right.
+    points.reverse()
+    return {"suite_id": suite_id, "points": points}
+
+
+@router.get("/api/suites/{suite_id}/compare")
+async def compare_suite_runs_endpoint(suite_id: int, a: int, b: int):
+    """Compare two suite runs (Step F2): per-document accuracy deltas, aggregate
+    delta, taxonomy deltas, union handling, gold-changed warning."""
+    from db import repository as repo
+    from eval.compare import compare_suite_runs
+
+    conn = server._open_audit_conn()
+    try:
+        sr_a = repo.get_suite_run(conn, a)
+        sr_b = repo.get_suite_run(conn, b)
+        if sr_a is None or sr_b is None or sr_a["suite_id"] != suite_id or sr_b["suite_id"] != suite_id:
+            raise HTTPException(status_code=404, detail="Suite run not found in this suite")
+        result = compare_suite_runs(conn, a, b)
+    finally:
+        conn.close()
+    return result
+
+
 @router.get("/api/suites/{suite_id}/runs/{suite_run_id}")
 async def get_suite_run_endpoint(suite_id: int, suite_run_id: int):
     """Suite-run detail: status + per-document scorecards + the aggregate."""
