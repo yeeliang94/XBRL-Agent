@@ -235,6 +235,9 @@ class RunSummary:
     # column + sparkline.
     benchmark_id: Optional[int] = None
     eval_score: Optional[float] = None
+    # v30 evals workspace: the build that produced this run, so History/trends
+    # can attribute quality to a version. None on legacy rows.
+    app_version: Optional[str] = None
 
 
 @dataclass
@@ -2258,6 +2261,7 @@ def list_runs(
                     orchestration=run.orchestration,
                     benchmark_id=run.benchmark_id,
                     eval_score=score_by_run.get(run.id),
+                    app_version=run.app_version,
                 )
             )
         return summaries

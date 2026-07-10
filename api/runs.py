@@ -170,6 +170,11 @@ async def get_run_detail_endpoint(run_id: int):
         # scorecard dict (None when not graded).
         "benchmark_id": getattr(run, "benchmark_id", None),
         "eval_score": eval_score,
+        # v30 evals workspace: the build that produced this run (None on legacy
+        # rows), plus the repeat-group linkage when this run is one of N repeats.
+        "app_version": getattr(run, "app_version", None),
+        "repeat_group_id": getattr(run, "repeat_group_id", None),
+        "repeat_index": getattr(run, "repeat_index", None),
         # v22 per-run notes-table style override (docs/PLAN-notes-table-theme.md).
         # None on a run with no override — the Notes tab then uses the firm
         # default from /api/config.

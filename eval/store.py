@@ -347,6 +347,7 @@ def create_benchmark_from_mtool(
     """
     from eval.mtool_ingest import (
         build_catalogue,
+        count_deferred_matrix,
         extract_prose_gold,
         ingest_workbook,
     )
@@ -383,6 +384,13 @@ def create_benchmark_from_mtool(
             "filing standard / level and that the value columns are filled — "
             f"{len(report.unmatched_rows)} labelled row(s) matched no concept."
         )
+
+    # Surface deferred SOCIE/matrix concepts (gotcha #28: counted, never
+    # silently dropped) so a clean-looking grade isn't hiding an uncaptured
+    # statement.
+    report.matrix_deferred = count_deferred_matrix(
+        conn, standard, level, [t for t, _ in template_set]
+    )
 
     now = _now()
     cur = conn.execute(
@@ -426,6 +434,13 @@ def create_benchmark_from_mtool(
             (benchmark_id, note.note_key, note.text, now),
         )
 
+    matrix_note = (
+        f"{report.matrix_deferred} SOCIE/matrix cell(s) were NOT ingested from "
+        "this mTool file (matrix reverse-mapping is deferred). Those slots are "
+        "absent from the gold, so they are not graded — seed a benchmark from a "
+        "run if you need SOCIE coverage."
+        if report.matrix_deferred else None
+    )
     return {
         "id": benchmark_id,
         "ingested": report.fact_count,
@@ -435,6 +450,8 @@ def create_benchmark_from_mtool(
         "sheets_missing": report.sheets_missing,
         "prose_notes_captured": len(prose),
         "scale_warning": report.scale_warning,
+        "matrix_deferred": report.matrix_deferred,
+        "matrix_warning": matrix_note,
         "statements": sorted({s for _, s in template_set}),
         "template_ids": sorted(report.template_ids),
     }
