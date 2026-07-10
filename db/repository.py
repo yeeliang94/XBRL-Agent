@@ -2418,6 +2418,93 @@ def delete_draft_runs(
 
 
 # ---------------------------------------------------------------------------
+# Repeat groups (v30) — consistency scoring across N runs of one document.
+# ---------------------------------------------------------------------------
+
+def create_repeat_group(
+    conn: sqlite3.Connection,
+    *,
+    config: Optional[dict[str, Any]] = None,
+    repeats_requested: int = 1,
+    benchmark_id: Optional[int] = None,
+) -> int:
+    """Create a repeat group and return its id. The N child runs link to it via
+    create_run(repeat_group_id=..., repeat_index=...)."""
+    cur = conn.execute(
+        "INSERT INTO repeat_groups(created_at, config_json, repeats_requested, "
+        "benchmark_id, status) VALUES (?, ?, ?, ?, 'running')",
+        (_now(), json.dumps(config) if config is not None else None,
+         int(repeats_requested), benchmark_id),
+    )
+    return int(cur.lastrowid)
+
+
+def list_repeat_group_run_ids(
+    conn: sqlite3.Connection, group_id: int, *, statuses: Optional[list[str]] = None
+) -> list[int]:
+    """Run ids in a repeat group, ordered by repeat_index. Optionally filtered to
+    a set of statuses (e.g. the finished ones for consistency)."""
+    sql = "SELECT id FROM runs WHERE repeat_group_id = ?"
+    params: list[Any] = [group_id]
+    if statuses:
+        placeholders = ",".join("?" for _ in statuses)
+        sql += f" AND status IN ({placeholders})"
+        params.extend(statuses)
+    sql += " ORDER BY repeat_index"
+    return [r[0] for r in conn.execute(sql, tuple(params)).fetchall()]
+
+
+def save_repeat_group_consistency(
+    conn: sqlite3.Connection,
+    group_id: int,
+    consistency: Optional[dict[str, Any]],
+    status: str,
+) -> None:
+    """Persist the computed consistency result + terminal status on the group."""
+    conn.execute(
+        "UPDATE repeat_groups SET consistency_json = ?, status = ? WHERE id = ?",
+        (json.dumps(consistency) if consistency is not None else None,
+         status, group_id),
+    )
+
+
+def fetch_repeat_group(
+    conn: sqlite3.Connection, group_id: int
+) -> Optional[dict[str, Any]]:
+    """The group row + its child run ids/statuses, or None."""
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT id, created_at, repeats_requested, benchmark_id, status, "
+            "config_json, consistency_json FROM repeat_groups WHERE id = ?",
+            (group_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        children = conn.execute(
+            "SELECT id, status, repeat_index FROM runs "
+            "WHERE repeat_group_id = ? ORDER BY repeat_index",
+            (group_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior_factory
+    return {
+        "id": row["id"],
+        "created_at": row["created_at"],
+        "repeats_requested": row["repeats_requested"],
+        "benchmark_id": row["benchmark_id"],
+        "status": row["status"],
+        "config": _parse_json_dict(row["config_json"]),
+        "consistency": _parse_json_dict(row["consistency_json"]),
+        "runs": [
+            {"id": c["id"], "status": c["status"], "repeat_index": c["repeat_index"]}
+            for c in children
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Gold-standard eval / benchmark (v16) — scorecard persistence.
 # Benchmark + gold-fact CRUD lives in eval/store.py (the eval subsystem owns
 # its own writes); only the per-(run, benchmark) scorecard is persisted here,
