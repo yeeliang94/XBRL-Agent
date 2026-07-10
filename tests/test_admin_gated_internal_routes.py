@@ -1,10 +1,15 @@
 """Server-side admin gate on the internal/QA surfaces (Phase 2 hardening).
 
-The Benchmarks library and the global template-label ("Field labels") editor
-are admin-only in the nav — but hiding the nav item is only UX. These routes
-must enforce ``is_admin`` server-side so a non-admin who hits the URL directly
-still gets a 403. Runs with AUTH_MODE unset so real sessions apply (the rest of
-the suite runs in AUTH_MODE=dev, where the guard is bypassed by design).
+The global template-label ("Field labels") editor is admin-only in the nav —
+but hiding the nav item is only UX. These routes must enforce ``is_admin``
+server-side so a non-admin who hits the URL directly still gets a 403. Runs with
+AUTH_MODE unset so real sessions apply (the rest of the suite runs in
+AUTH_MODE=dev, where the guard is bypassed by design).
+
+NOTE: the Benchmarks library was DELIBERATELY relaxed from admin-only to
+all-authenticated when the Evals workspace opened it to every signed-in user
+(docs/PLAN-evals-workspace.md, decision #6) — its non-admin access is now pinned
+by test_eval_access.py, so those routes are intentionally absent below.
 """
 from __future__ import annotations
 
@@ -43,14 +48,10 @@ def _login(client: TestClient, email: str, password: str) -> None:
     assert r.status_code == 200, r.text
 
 
-# The benchmark-management + template-label routes that must be admin-only.
-# (Per-run surfaces like /api/runs/{id}/concepts and /api/runs/{id}/eval are
-# intentionally NOT gated — everyday users review their own runs there.)
+# The template-label routes that must be admin-only. (Per-run surfaces like
+# /api/runs/{id}/concepts and /api/runs/{id}/eval — and now the whole Benchmarks
+# library — are intentionally NOT gated; everyday users work with them.)
 _GATED = [
-    ("get", "/api/benchmarks"),
-    ("get", "/api/benchmarks/1"),
-    ("get", "/api/benchmarks/1/concepts"),
-    ("delete", "/api/benchmarks/1"),
     ("get", "/api/templates"),
     ("get", "/api/templates/some-template-v1/concepts"),
     ("patch", "/api/concepts/some-uuid/display_label"),
