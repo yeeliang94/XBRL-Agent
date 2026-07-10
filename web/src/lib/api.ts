@@ -247,6 +247,7 @@ function buildRunsQuery(params: RunsFilterParams): string {
   // Use the human-friendly names on the wire.
   if (params.dateFrom) qs.set("from", params.dateFrom);
   if (params.dateTo) qs.set("to", params.dateTo);
+  if (params.includeSuiteChildren) qs.set("include_suite_children", "true");
   if (params.limit != null) qs.set("limit", String(params.limit));
   if (params.offset != null) qs.set("offset", String(params.offset));
   const str = qs.toString();
@@ -432,7 +433,11 @@ export async function fetchPdfPageCount(runId: number): Promise<number | null> {
 // Gold-standard eval / benchmark library (v16)
 // ---------------------------------------------------------------------------
 
-import type { BenchmarkJson, EvalScoreJson, RepeatGroupJson } from "./types";
+import type {
+  BenchmarkJson, EvalScoreJson, RepeatGroupJson,
+  SuiteSummaryJson, SuiteJson, SuiteRunSummaryJson, SuiteRunLaunch,
+  SuiteEstimateJson, SuiteRunDetailJson, SuiteResultsJson, SuiteCompareJson,
+} from "./types";
 
 /** List every benchmark in the library. */
 export async function fetchBenchmarks(): Promise<BenchmarkJson[]> {
@@ -536,6 +541,109 @@ export async function createBenchmarkFromMtool(args: {
   form.append("template_ids", JSON.stringify(args.template_ids));
   if (args.document) form.append("document", args.document);
   return apiFetch("/api/benchmarks/from-mtool", { method: "POST", body: form });
+}
+
+// --- Evals workspace: suites + batch runner + results (Phase E/F) ---
+
+export async function fetchSuites(): Promise<SuiteSummaryJson[]> {
+  const data = await apiFetch<{ suites: SuiteSummaryJson[] }>("/api/suites");
+  return Array.isArray(data?.suites) ? data.suites : [];
+}
+
+export async function createSuite(name: string): Promise<SuiteJson> {
+  return apiFetch("/api/suites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function getSuite(id: number): Promise<SuiteJson> {
+  return apiFetch(`/api/suites/${id}`);
+}
+
+export async function renameSuite(id: number, name: string): Promise<SuiteJson> {
+  return apiFetch(`/api/suites/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteSuite(id: number): Promise<void> {
+  await apiFetch(`/api/suites/${id}`, { method: "DELETE" });
+}
+
+export async function addSuiteDoc(args: {
+  suiteId: number;
+  file: File;
+  label?: string;
+  filing_standard: string;
+  filing_level: string;
+  benchmark_id?: number | null;
+}): Promise<{ doc_id: number; suite: SuiteJson }> {
+  const form = new FormData();
+  form.append("file", args.file);
+  if (args.label) form.append("label", args.label);
+  form.append("filing_standard", args.filing_standard);
+  form.append("filing_level", args.filing_level);
+  if (args.benchmark_id != null) form.append("benchmark_id", String(args.benchmark_id));
+  return apiFetch(`/api/suites/${args.suiteId}/docs`, { method: "POST", body: form });
+}
+
+export async function deleteSuiteDoc(suiteId: number, docId: number): Promise<void> {
+  await apiFetch(`/api/suites/${suiteId}/docs/${docId}`, { method: "DELETE" });
+}
+
+export async function listSuiteRuns(suiteId: number): Promise<SuiteRunSummaryJson[]> {
+  const data = await apiFetch<{ suite_run_list: SuiteRunSummaryJson[] }>(
+    `/api/suites/${suiteId}/runs`,
+  );
+  return Array.isArray(data?.suite_run_list) ? data.suite_run_list : [];
+}
+
+export async function estimateSuiteRun(
+  suiteId: number, launch: SuiteRunLaunch,
+): Promise<SuiteEstimateJson> {
+  return apiFetch(`/api/suites/${suiteId}/estimate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(launch),
+  });
+}
+
+export async function launchSuiteRun(
+  suiteId: number, launch: SuiteRunLaunch,
+): Promise<{ suite_run_id: number; status: string }> {
+  return apiFetch(`/api/suites/${suiteId}/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(launch),
+  });
+}
+
+export async function resumeSuiteRun(suiteId: number, suiteRunId: number): Promise<void> {
+  await apiFetch(`/api/suites/${suiteId}/runs/${suiteRunId}/resume`, { method: "POST" });
+}
+
+export async function stopSuiteRun(suiteId: number, suiteRunId: number): Promise<void> {
+  await apiFetch(`/api/suites/${suiteId}/runs/${suiteRunId}/stop`, { method: "POST" });
+}
+
+export async function getSuiteRun(
+  suiteId: number, suiteRunId: number,
+): Promise<SuiteRunDetailJson> {
+  return apiFetch(`/api/suites/${suiteId}/runs/${suiteRunId}`);
+}
+
+export async function fetchSuiteResults(suiteId: number): Promise<SuiteResultsJson> {
+  return apiFetch(`/api/suites/${suiteId}/results`);
+}
+
+export async function compareSuiteRuns(
+  suiteId: number, a: number, b: number,
+): Promise<SuiteCompareJson> {
+  return apiFetch(`/api/suites/${suiteId}/compare?a=${a}&b=${b}`);
 }
 
 /** Delete a benchmark (cascades to its templates + gold facts + scores). */

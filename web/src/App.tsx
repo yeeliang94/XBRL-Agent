@@ -16,6 +16,7 @@ import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
+import { SuitesPage } from "./pages/SuitesPage";
 import "./index.css";
 
 // ---------------------------------------------------------------------------
@@ -180,6 +181,7 @@ export default function App() {
     if (!user || user.is_admin) return;
     const onAdminOnly =
       state.view === "benchmarks" ||
+      state.view === "suites" ||
       (state.view === "concepts" && state.selectedRunId == null);
     if (onAdminOnly) {
       dispatch({ type: "SET_VIEW", payload: "extract" });
@@ -279,6 +281,10 @@ export default function App() {
       expected = state.selectedRunId != null
         ? `/benchmarks/${state.selectedRunId}`
         : "/benchmarks";
+    } else if (state.view === "suites") {
+      // Evals workspace — internal navigation lives inside the page, so the
+      // top-level URL is the singleton /evals.
+      expected = "/evals";
     } else if (state.view === "settings") {
       // Singleton settings surface — no entity id rides along.
       expected = "/settings";
@@ -660,6 +666,9 @@ export default function App() {
               dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
             }
           />
+        ) : state.view === "suites" ? (
+          // Evals workspace (Phase E/F): suites, batch runner, trends + compare.
+          <SuitesPage />
         ) : state.view === "concepts" ? (
           // `/concepts/{id}` is now an alias that opens the unified run page
           // on the Values tab (the standalone full-page Concepts surface was

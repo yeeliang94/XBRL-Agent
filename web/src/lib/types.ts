@@ -805,6 +805,147 @@ export interface ConsistencyJson {
   unanimous_wrong: number | null;
 }
 
+// --- Evals workspace: suites + batch runner + results (Phase E/F) ---
+
+export interface SuiteSummaryJson {
+  id: number;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  doc_count: number;
+  run_count: number;
+}
+
+export interface SuiteDocJson {
+  id: number;
+  label: string;
+  source_filename: string;
+  filing_standard: string;
+  filing_level: string;
+  benchmark_id: number | null;
+  created_at: string;
+}
+
+export interface SuiteJson {
+  id: number;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  docs: SuiteDocJson[];
+}
+
+export interface SuiteRunLaunch {
+  label?: string;
+  model?: string | null;
+  statements?: string[];
+  variants?: Record<string, string>;
+  use_scout?: boolean;
+  notes_to_run?: string[];
+  repeats?: number;
+}
+
+export interface SuiteRunSummaryJson {
+  id: number;
+  suite_id: number;
+  label: string;
+  model: string | null;
+  app_version: string | null;
+  status: string;
+  created_at: string;
+  ended_at: string | null;
+}
+
+export interface SuiteEstimateJson {
+  documents: number;
+  repeats: number;
+  extraction_runs: number;
+  avg_run_seconds: number | null;
+  estimated_wall_seconds: number | null;
+  concurrency: number;
+}
+
+export interface DocumentScorecardJson {
+  run_id: number;
+  label: string;
+  status: string;
+  failed: boolean;
+  accuracy: number | null;
+  gold_cells: number;
+  matched_cells: number;
+  taxonomy: Record<string, number>;
+  per_statement: Record<string, { gold_cells: number; matched: number }>;
+  consistency: number | null;
+  cross_check_pass_rate: number | null;
+  reviewer_flags: number;
+  failed_agents: number;
+  total_tokens: number;
+  duration_s: number | null;
+  notes_coverage: number | null;
+  notes_coverage_available: boolean;
+}
+
+export interface SuiteAggregateJson {
+  documents_total: number;
+  documents_graded: number;
+  documents_failed: number;
+  coverage_note: string;
+  mean_accuracy: number | null;
+  pooled_accuracy: number | null;
+  pooled_matched: number;
+  pooled_gold: number;
+  worst_document: DocumentScorecardJson | null;
+  taxonomy_totals: Record<string, number>;
+  mean_consistency: number | null;
+  mean_notes_coverage: number | null;
+  mean_cross_check_pass_rate: number | null;
+}
+
+export interface SuiteRunDetailJson {
+  suite_run: SuiteRunSummaryJson & { config?: Record<string, unknown> | null };
+  documents: DocumentScorecardJson[];
+  aggregate: SuiteAggregateJson;
+}
+
+export interface SuiteResultPointJson {
+  suite_run_id: number;
+  label: string;
+  model: string | null;
+  app_version: string | null;
+  created_at: string;
+  status: string;
+  mean_accuracy: number | null;
+  mean_consistency: number | null;
+  mean_cross_check_pass_rate: number | null;
+}
+
+export interface SuiteResultsJson {
+  suite_id: number;
+  points: SuiteResultPointJson[];
+}
+
+export interface SuiteCompareDocJson {
+  doc_id: number;
+  label: string;
+  in_both: boolean;
+  accuracy_a: number | null;
+  accuracy_b: number | null;
+  delta: number | null;
+  gold_changed: boolean;
+}
+
+export interface SuiteCompareJson {
+  suite_run_a: number;
+  suite_run_b: number;
+  documents: SuiteCompareDocJson[];
+  aggregate_delta: number | null;
+  mean_accuracy_a: number | null;
+  mean_accuracy_b: number | null;
+  common_documents: number;
+  only_in_one: number;
+  taxonomy_delta: Record<string, number>;
+  gold_changed_any: boolean;
+}
+
 // Gold-standard eval (v16) scorecard, as returned by GET /api/runs/{id}/eval
 // and embedded in the run detail. `score` = matched / gold_cells in [0, 1].
 export interface EvalScoreJson {
@@ -855,6 +996,8 @@ export interface RunsFilterParams {
   standard?: FilingStandard;
   dateFrom?: string;
   dateTo?: string;
+  /** Evals workspace (E6): include suite child runs (hidden by default). */
+  includeSuiteChildren?: boolean;
   limit?: number;
   offset?: number;
 }
