@@ -359,7 +359,25 @@ green at every phase boundary.
   type check for the changed annotation if the repository has no global type
   gate); `pip check` clean; import smoke for every provider path.
 
-### Phase U3 — Verification beyond the suite
+### Phase U3 — Verification beyond the suite — 🟩 AUTOMATABLE ITEMS DONE 2026-07-12 (two operator gates open)
+
+> **V2 live smoke PASSED** (run 002/run-id 221: SOFP on FINCO via 2.9.0 —
+> extraction ok, cross-checks + reviewer, merged filled.xlsx; telemetry
+> 547,493 tokens across 24 per-turn rows + 160,849 reviewer — item 4's
+> non-zero check ✅ on V2). **Live E2E PASSED** (2m38s, Gemini flash
+> through the coordinator) — after U3 caught a REAL V2 break the mocked
+> suite could not see: `tests/test_e2e.py` hardcoded
+> `google-gla:gemini-2.0-flash`, the exact prefix V2 removed; fixed to
+> `google:gemini-3.5-flash`. **Vision-inventory live test PASSED**
+> (partial scanned-PDF-path coverage). Failure-path drills: covered by
+> the mocked lifecycle/wallclock/cancel suites, green on V2; live
+> forced-timeout drill optional.
+> **Operator gates still open (the only U3 remainder):**
+> (1) Windows enterprise-box run (item 5, gotcha #5 truststore path);
+> (2) benchmark-threshold sign-off + gold-benchmark scorecard anchor
+> (go/no-go section) — needs a saved benchmark run via the web workspace;
+> (3) MPERS live smokes skip without `MPERS_TEST_PDF` — set it to an
+> MPERS sample and run `pytest -m live tests/test_mpers_wiring.py`.
 
 The suite proves API compatibility; these prove *behavior* didn't drift:
 
