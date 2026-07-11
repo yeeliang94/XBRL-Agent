@@ -279,7 +279,25 @@ green at every phase boundary.
   `requirements.txt` and installed); `cd web && npx vitest run` green;
   baseline evidence bundle saved.
 
-### Phase U1 — Bump to the latest V1 line (1.107.1 as of 2026-07-11)
+### Phase U1 — Bump to the latest V1 line (1.107.1 as of 2026-07-11) — 🟩 DONE 2026-07-12
+
+> Locked 1.107.1; floor bumped to `>=1.107.1` (the code now REQUIRES it:
+> `pydantic_ai.capabilities` + property-style `.usage` don't exist on
+> 1.77); constraints.txt regenerated (256 pkgs); `pip check` clean.
+> Deprecation census found exactly the four items in the audit, nothing
+> unforeseen. All four cleared ON V1 — including the two the plan had
+> scheduled for U2, pulled forward because 1.107 already ships the V2
+> API shapes: (a) the three `history_processors=` registrations ported to
+> `capabilities=[ProcessHistory(...)]`; (b) tool-event consumers moved
+> `.result → .part`. Also `usage()` → `.usage` property everywhere, and
+> test fakes updated to property-style usage (the `MagicMock(
+> return_value=...)` fakes silently became int(...)=1 under property
+> access — worth remembering when writing agent-run stubs).
+> Gate: full suite 3315 passed / 3 skipped WITH
+> `-W error::pydantic_ai._warnings.PydanticAIDeprecationWarning`.
+> Live smoke run: launched (SOFP, FINCO, gpt-5.4 direct mode) — result
+> recorded below when complete. Benchmark scorecard anchor: still open
+> (needs a saved gold benchmark run via the web workspace).
 
 - Install and lock the **exact latest V1** (1.107.1 per PyPI on
   2026-07-11; the V1 line still receives parallel maintenance releases,

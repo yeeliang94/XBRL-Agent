@@ -308,6 +308,7 @@ def _build_vision_agent(model: Model) -> Agent[None, _VisionBatch]:
         # Phase 2: the static vision system prompt caches across the up-to-5
         # parallel scan batches that share it.
         model_settings=build_model_settings(model, cache_key="xbrl-scout-vision"),
+        end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 
 
@@ -326,7 +327,7 @@ async def _scan_batch(
 
     Returns the full PydanticAI run result (not just `.output`) so the
     orchestrator can access both the parsed batch via `result.output`
-    and per-call token usage via `result.usage()` for cost telemetry.
+    and per-call token usage via `result.usage` for cost telemetry.
 
     Retries once on any exception — transient proxy errors and malformed
     structured output are both far more common than truly permanent
@@ -415,14 +416,14 @@ async def _vision_inventory(
         return []
 
     # Cost-visibility telemetry (Phase 5 Step 5.1). Sum token usage across
-    # successful batches. `result.usage()` is the PydanticAI idiom; we
+    # successful batches. `result.usage` is the PydanticAI idiom; we
     # swallow AttributeError so an older-than-expected SDK can't brick
     # the inventory over a log line.
     total_input = 0
     total_output = 0
     for r in successful:
         try:
-            u = r.usage()
+            u = r.usage
             total_input += getattr(u, "input_tokens", 0) or 0
             total_output += getattr(u, "output_tokens", 0) or 0
         except Exception:  # noqa: BLE001 — telemetry never fails the call; CancelledError propagates anyway (BaseException)

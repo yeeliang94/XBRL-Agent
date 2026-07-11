@@ -873,7 +873,7 @@ async def _invoke_single_notes_agent_once(
     _agent_tokens = 0
     _agent_cost = 0.0
     try:
-        _u = agent_run.usage()
+        _u = agent_run.usage
         _prompt = int(_u.request_tokens or 0)
         _completion = int(_u.response_tokens or 0)
         _agent_tokens = int(_u.total_tokens or 0)

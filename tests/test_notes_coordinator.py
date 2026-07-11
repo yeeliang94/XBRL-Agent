@@ -202,6 +202,7 @@ class _FakeAgentRun:
     def __init__(self):
         self.result = object()
 
+    @property
     def usage(self):
         class U:
             total_tokens = 0

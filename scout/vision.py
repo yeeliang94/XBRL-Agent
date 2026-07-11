@@ -99,6 +99,7 @@ async def extract_toc_via_vision(
         model,
         output_type=VisionTocResult,
         system_prompt=_TOC_EXTRACTION_PROMPT,
+        end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 
     # Build the user message: images interleaved with page labels

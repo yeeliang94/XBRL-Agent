@@ -60,6 +60,7 @@ def _make_slow_turning_agent(node_delay: float, tokens_per_turn: int = 10):
         result = None
         ctx = SimpleNamespace(state=SimpleNamespace(message_history=[]))
 
+        @property
         def usage(self):
             return _usage(state["turns"] * tokens_per_turn)
 
@@ -205,6 +206,7 @@ async def test_token_budget_zero_never_fires():
         def __init__(self):
             self._n = 0
 
+        @property
         def usage(self):
             return _usage(10_000_000)  # huge spend — must not matter
 
@@ -239,6 +241,7 @@ async def test_token_budget_raises_at_turn_boundary():
         def __init__(self):
             self._n = 0
 
+        @property
         def usage(self):
             return _usage(self._n * 10)
 

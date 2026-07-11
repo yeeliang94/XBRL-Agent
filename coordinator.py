@@ -116,7 +116,7 @@ def _safe_usage_backfill(agent_run, model, label: str) -> tuple[int, float]:
     path backfilled). Returns (0, 0.0) when usage is unreachable.
     """
     try:
-        u = agent_run.usage()
+        u = agent_run.usage
         prompt = int(u.input_tokens or 0)
         completion = int(u.output_tokens or 0)
         return int(u.total_tokens or 0), estimate_cost(prompt, completion, 0, model)
@@ -247,7 +247,7 @@ class AgentResult:
     # was accepted and is flagged for human review. status stays "succeeded"
     # (the extraction DID finalise); this string carries the reason.
     flag: Optional[str] = None
-    # End-of-run usage from `agent_run.usage()`. This is the aggregate the
+    # End-of-run usage from `agent_run.usage`. This is the aggregate the
     # coordinator captures on every exit path so server.py can persist into
     # run_agents.total_tokens / total_cost.
     total_tokens: int = 0

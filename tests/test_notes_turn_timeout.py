@@ -117,6 +117,7 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
         def __aiter__(self): return _SlowIterable()
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
+        @property
         def usage(self):
             class U:  # noqa: D401 — tiny value object
                 total_tokens = 0
@@ -180,6 +181,7 @@ async def test_single_agent_stall_before_write_raises(tmp_path, monkeypatch):
         def __aiter__(self): return _SlowIterable()
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
+        @property
         def usage(self):
             class U:
                 total_tokens = 0

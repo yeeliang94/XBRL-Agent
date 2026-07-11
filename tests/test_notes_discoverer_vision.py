@@ -222,10 +222,15 @@ class _StubUsage:
 
 
 class _StubResult:
-    """Minimal AgentRunResult stand-in exposing both .output and .usage()."""
+    """Minimal AgentRunResult stand-in exposing .output and .usage.
+
+    ``usage`` is a property (pydantic-ai 1.107+/V2 idiom — the method form
+    is deprecated; live code reads ``result.usage`` without parentheses).
+    """
     def __init__(self, output: _VisionBatch):
         self.output = output
 
+    @property
     def usage(self) -> _StubUsage:
         return _StubUsage()
 

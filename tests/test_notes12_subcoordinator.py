@@ -911,6 +911,7 @@ class TestSubAgentSavesTrace:
                     raise raise_exc
                 raise StopAsyncIteration
 
+            @property
             def usage(self):
                 return _Usage()
 
