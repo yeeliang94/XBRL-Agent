@@ -146,6 +146,7 @@ def create_notes_formatter_agent(
         deps_type=NotesFormatterDeps,
         system_prompt=base_prompt,
         model_settings=build_model_settings(model, cache_key="xbrl-notes-formatter"),
+        end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 
     @agent.tool

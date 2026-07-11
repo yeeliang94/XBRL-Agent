@@ -56,6 +56,7 @@ from scout.standard_detector import detect_filing_standard
 from tools.pdf_viewer import render_pages_to_png_bytes
 from extraction.history_processors import strip_stale_images
 from limit_warner import limit_warning_processor
+from pydantic_ai.capabilities import ProcessHistory
 
 logger = logging.getLogger(__name__)
 
@@ -1127,9 +1128,14 @@ def create_scout_agent(
         # Token-cost reduction: strip stale page-image blobs (from view_pages)
         # out of the outbound request each turn. Pure function over the message
         # list; see extraction/history_processors.py.
-        # limit_warning_processor adds the in-band "wrap up now" nudge
+        # V2-idiom registration (pydantic-ai 1.107+; history_processors= is
+        # deprecated): image stripping, then the in-band "wrap up now" nudge
         # before the iteration/token hard caps fire (limit_warner.py).
-        history_processors=[strip_stale_images, limit_warning_processor],
+        capabilities=[
+            ProcessHistory(strip_stale_images),
+            ProcessHistory(limit_warning_processor),
+        ],
+        end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 
     # --- Tools ---
@@ -1518,7 +1524,7 @@ async def run_scout_streaming(
         usage_out["turn_count"] = model_turn_count
         usage_out["tool_call_count"] = tool_call_count
         try:
-            u = agent_run_obj.usage() if agent_run_obj is not None else None
+            u = agent_run_obj.usage if agent_run_obj is not None else None
             if u is not None:
                 usage_out["prompt_tokens"] = int(u.input_tokens or 0)
                 usage_out["completion_tokens"] = int(u.output_tokens or 0)
@@ -1593,13 +1599,13 @@ async def run_scout_streaming(
                                 })
 
                             elif isinstance(event, FunctionToolResultEvent):
-                                content = event.result.content
+                                content = event.part.content
                                 summary = str(content)[:500] if content else ""
-                                call_id = event.result.tool_call_id
+                                call_id = event.part.tool_call_id
                                 start_t = tool_start_times.pop(call_id, None)
                                 duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
                                 await _emit("tool_result", {
-                                    "tool_name": event.result.tool_name,
+                                    "tool_name": event.part.tool_name,
                                     "tool_call_id": call_id,
                                     "result_summary": summary,
                                     "duration_ms": duration_ms,

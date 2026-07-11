@@ -129,7 +129,7 @@ class SubAgentRunResult:
     performed (0 = first-try success; 1 = one retry, success or failure).
 
     ``prompt_tokens`` / ``completion_tokens`` are captured from
-    ``agent_run.usage()`` at the end of the last attempt. The fan-out
+    ``agent_run.usage`` at the end of the last attempt. The fan-out
     runner aggregates them into the parent cost report (Phase 5.1);
     they stay at 0 when the sub-agent never reached model execution
     (empty batch short-circuit, early cancellation) so the aggregate
@@ -527,7 +527,7 @@ async def _invoke_sub_agent_once(
     """Single attempt at a sub-agent run.
 
     Returns ``(payloads, prompt_tokens, completion_tokens, coverage)``
-    — the usage counts come from the final `agent_run.usage()` read,
+    — the usage counts come from the final `agent_run.usage` read,
     consistent with how `token_update` events are already emitted
     during the run. Callers (Phase 5.1) aggregate these into the
     parent cost report so `NOTES_LIST_OF_NOTES_cost_report.txt`
@@ -723,13 +723,13 @@ async def _invoke_sub_agent_once(
                                 })
                                 tool_start[namespaced_id] = time.monotonic()
                             elif isinstance(event, FunctionToolResultEvent):
-                                content = event.result.content
+                                content = event.part.content
                                 summary = str(content)[:800] if content else ""
-                                namespaced_id = f"{sub_agent_id}:{event.result.tool_call_id}"
+                                namespaced_id = f"{sub_agent_id}:{event.part.tool_call_id}"
                                 start_t = tool_start.pop(namespaced_id, None)
                                 duration_ms = int((time.monotonic() - start_t) * 1000) if start_t else 0
                                 await _emit("tool_result", {
-                                    "tool_name": event.result.tool_name,
+                                    "tool_name": event.part.tool_name,
                                     "tool_call_id": namespaced_id,
                                     "result_summary": summary,
                                     "duration_ms": duration_ms,
@@ -762,7 +762,7 @@ async def _invoke_sub_agent_once(
                         })
                         thinking_counter += 1
 
-                usage = agent_run.usage()
+                usage = agent_run.usage
                 total = usage.total_tokens or 0
                 prompt_t = usage.input_tokens or 0
                 completion_t = usage.output_tokens or 0
@@ -793,7 +793,7 @@ async def _invoke_sub_agent_once(
     # entered a model_request_node (empty batch short-circuit, cancel
     # before first turn) we'd still have prompt_t=completion_t=0 from
     # the locals above — ``try/except NameError`` would be overkill.
-    final_usage = agent_run.usage()
+    final_usage = agent_run.usage
     final_prompt = int(final_usage.input_tokens or 0)
     final_completion = int(final_usage.output_tokens or 0)
     if usage_out is not None:

@@ -30,9 +30,10 @@ def _make_mock_agent_iter(mock_result=None, side_effect=None):
         # Make iter() return an AgentRun that yields no nodes (agent completes immediately)
         mock_run = MagicMock()
         mock_run.result = mock_result or MagicMock(output="done")
-        mock_run.usage = MagicMock(return_value=MagicMock(
+        # .usage is a property on pydantic-ai 1.107+ — assign the value.
+        mock_run.usage = MagicMock(
             input_tokens=100, output_tokens=50, total_tokens=150,
-        ))
+        )
 
         # __aiter__ yields nothing — simulates an agent that completes without tool calls
         async def empty_aiter(self_ignored=None):
@@ -244,9 +245,10 @@ def _make_node_yielding_agent(n_nodes: int, total_tokens: int = 150):
     mock_agent = MagicMock()
     mock_run = MagicMock()
     mock_run.result = MagicMock(output="done")
-    mock_run.usage = MagicMock(return_value=MagicMock(
+    # .usage is a property on pydantic-ai 1.107+ — assign the value.
+    mock_run.usage = MagicMock(
         input_tokens=100, output_tokens=50, total_tokens=total_tokens,
-    ))
+    )
 
     async def many_nodes(self_ignored=None):
         for _ in range(n_nodes):

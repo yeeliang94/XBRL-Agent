@@ -31,6 +31,7 @@ class _SlowTurningRun:
     result = None
     ctx = SimpleNamespace(state=SimpleNamespace(message_history=[]))
 
+    @property
     def usage(self):
         return _usage()
 

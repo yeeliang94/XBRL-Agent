@@ -917,6 +917,7 @@ def create_notes_reviewer_agent(
         deps_type=NotesReviewerDeps,
         system_prompt=system_prompt,
         model_settings=build_model_settings(model, cache_key="xbrl-notes-reviewer"),
+        end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 
     # -------------------- read tools --------------------

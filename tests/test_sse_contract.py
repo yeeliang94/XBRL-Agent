@@ -57,7 +57,7 @@ class TestEventContract:
         mock_tool_result_part.content = "Template has 30 fields..."
 
         tool_call_event = FunctionToolCallEvent(part=mock_tool_call_part)
-        tool_result_event = FunctionToolResultEvent(result=mock_tool_result_part)
+        tool_result_event = FunctionToolResultEvent(part=mock_tool_result_part)
 
         text_delta = PartDeltaEvent(index=0, delta=TextPartDelta(content_delta="hello"))
         thinking_delta = PartDeltaEvent(index=0, delta=ThinkingPartDelta(content_delta="thinking..."))
@@ -226,7 +226,7 @@ class TestEventContract:
 
         from pydantic_ai.messages import FunctionToolCallEvent
         tool_call_event = FunctionToolCallEvent(part=mock_tool_call_part)
-        tool_result_event = FunctionToolResultEvent(result=mock_result_part)
+        tool_result_event = FunctionToolResultEvent(part=mock_result_part)
 
         @asynccontextmanager
         async def mock_tool_stream(ctx):

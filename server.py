@@ -963,6 +963,10 @@ _PROVIDER_PREFIXES: tuple[str, ...] = (
     "openai.",
     "google-gla:",
     "google-vertex:",
+    # V2 renamed the google-gla:/google-vertex: model prefixes to google:.
+    # Listed AFTER the longer legacy spellings (longest match first); the
+    # legacy forms stay for stored runs and inbound configs (plan B.3.3).
+    "google:",
 )
 
 
@@ -1761,7 +1765,7 @@ async def _run_reviewer_pass(
     )
     try:
         from pricing import estimate_cost as _ec
-        _u = agent_run.usage()
+        _u = agent_run.usage
         outcome["total_tokens"] = int(_u.total_tokens or 0)
         outcome["prompt_tokens"] = _in_tokens(_u)
         outcome["completion_tokens"] = _out_tokens(_u)

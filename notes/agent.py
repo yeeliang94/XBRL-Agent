@@ -43,6 +43,7 @@ from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from tools.template_reader import TemplateField, read_template as _read_template_impl
 from extraction.history_processors import strip_stale_images
 from limit_warner import limit_warning_processor
+from pydantic_ai.capabilities import ProcessHistory
 
 logger = logging.getLogger(__name__)
 
@@ -1342,9 +1343,14 @@ def create_notes_agent(
         # view_pdf_pages) out of the outbound request each turn. Transport
         # hygiene only — the notes all-LLM-judgement design (CLAUDE.md #14) is
         # untouched. See extraction/history_processors.py.
-        # limit_warning_processor adds the in-band "wrap up now" nudge
+        # V2-idiom registration (pydantic-ai 1.107+; history_processors= is
+        # deprecated): image stripping, then the in-band "wrap up now" nudge
         # before the iteration/token hard caps fire (limit_warner.py).
-        history_processors=[strip_stale_images, limit_warning_processor],
+        capabilities=[
+            ProcessHistory(strip_stale_images),
+            ProcessHistory(limit_warning_processor),
+        ],
+        end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 
     # --- Tools ---

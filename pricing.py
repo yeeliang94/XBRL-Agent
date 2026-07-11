@@ -113,6 +113,8 @@ def _normalize(name: str) -> str:
         "vertex_ai.",
         "google-gla:",
         "google-vertex:",
+        # V2 spelling; after the longer legacy forms (longest match first).
+        "google:",
     ):
         if name.startswith(prefix):
             return name[len(prefix):]

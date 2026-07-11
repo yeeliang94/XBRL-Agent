@@ -5,7 +5,7 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
-pydantic-ai>=1.77.0
+pydantic-ai>=1.107.1
 openpyxl>=3.1.0
 # RUN-REVIEW P0-3 (2026-04-26): pure-Python Excel formula evaluator
 # used by tools/recalc.py to write cached values into merged workbooks

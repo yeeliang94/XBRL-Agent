@@ -283,7 +283,7 @@ async def run_agent_loop(
     """Drive an already-open ``agent.iter()`` run, streaming events via ``emit``.
 
     ``agent_run`` is the value of ``async with agent.iter(...) as agent_run``;
-    the caller opens it (so it can use ``agent_run.result`` / ``.usage()``
+    the caller opens it (so it can use ``agent_run.result`` / ``.usage``
     afterwards) and hands it here. This function:
 
       * iterates nodes with a per-turn timeout (``spec.turn_timeout``),
@@ -391,15 +391,15 @@ async def run_agent_loop(
                         })
                         tool_start_times[event.part.tool_call_id] = time.monotonic()
                     elif isinstance(event, FunctionToolResultEvent):
-                        content = event.result.content
+                        content = event.part.content
                         summary = str(content)[:800] if content else ""
-                        call_id = event.result.tool_call_id
+                        call_id = event.part.tool_call_id
                         start_t = tool_start_times.pop(call_id, None)
                         duration_ms = (
                             int((time.monotonic() - start_t) * 1000) if start_t else 0
                         )
                         await emit("tool_result", {
-                            "tool_name": event.result.tool_name,
+                            "tool_name": event.part.tool_name,
                             "tool_call_id": call_id,
                             "result_summary": summary,
                             "duration_ms": duration_ms,
@@ -438,7 +438,7 @@ async def run_agent_loop(
                 thinking_counter += 1
 
         # Emit token usage after each node completes.
-        usage = agent_run.usage()
+        usage = agent_run.usage
         total = int(usage.total_tokens or 0)
         prompt_t = _in_tokens(usage)
         completion_t = _out_tokens(usage)

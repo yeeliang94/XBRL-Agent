@@ -46,10 +46,11 @@ def _make_succeeding_agent(filled_path: str):
     mock_agent = MagicMock()
     run = MagicMock()
     run.result = MagicMock(output="done")
-    run.usage = MagicMock(return_value=SimpleNamespace(
+    # .usage is a property on pydantic-ai 1.107+ — assign the value.
+    run.usage = SimpleNamespace(
         total_tokens=15, input_tokens=10, output_tokens=5,
         cache_read_tokens=0, cache_write_tokens=0,
-    ))
+    )
 
     async def empty_aiter(_self=None):
         return
@@ -307,9 +308,10 @@ async def test_failed_transient_attempt_usage_accumulates(tmp_path):
             mock_agent = MagicMock()
             run = MagicMock()
             run.result = None
-            run.usage = MagicMock(return_value=SimpleNamespace(
+            # .usage is a property on pydantic-ai 1.107+ — assign the value.
+            run.usage = SimpleNamespace(
                 total_tokens=1000, input_tokens=900, output_tokens=100,
-            ))
+            )
 
             def _raise_aiter(_self=None):
                 raise httpx.ConnectError("dropped mid-run")

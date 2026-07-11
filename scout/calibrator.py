@@ -111,6 +111,7 @@ async def _validate_page_via_llm(
         model,
         output_type=_PageValidationResult,
         system_prompt=_VALIDATION_PROMPT.format(statement_name=statement_name),
+        end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 
     result = await agent.run([

@@ -33,6 +33,7 @@ from extraction.history_processors import (
     strip_duplicate_template,
 )
 from limit_warner import limit_warning_processor
+from pydantic_ai.capabilities import ProcessHistory
 from prompts import render_prompt
 
 logger = logging.getLogger(__name__)
@@ -702,15 +703,17 @@ def create_extraction_agent(
         # The `_ctx` variants are token-aware (Plan 2): once cumulative usage
         # crosses the soft watermark they escalate to aggressive trimming. See
         # extraction/history_processors.py and docs/Archive/PLAN-token-cost-reduction.md.
-        history_processors=[
-            strip_stale_images_ctx,
-            strip_duplicate_template,
-            compact_old_text_results_ctx,
-            # In-band "wrap up now" nudge before the iteration/token hard
-            # caps fire (limit_warner.py) — registered LAST so it rides on
-            # the post-compaction request that is actually sent.
-            limit_warning_processor,
+        # V2-idiom registration (pydantic-ai 1.107+): each processor wraps
+        # in a ProcessHistory capability; `Agent(history_processors=)` is
+        # deprecated and removed in V2. Order preserved — the limit warner
+        # runs LAST so it rides on the post-compaction request.
+        capabilities=[
+            ProcessHistory(strip_stale_images_ctx),
+            ProcessHistory(strip_duplicate_template),
+            ProcessHistory(compact_old_text_results_ctx),
+            ProcessHistory(limit_warning_processor),
         ],
+        end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 
     # --- Tools ---
