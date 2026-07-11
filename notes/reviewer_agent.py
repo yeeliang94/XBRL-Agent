@@ -63,6 +63,8 @@ from notes.coverage_checklist import (
     build_draft_checklist,
 )
 
+from tools.guard_result import GuardResult
+
 logger = logging.getLogger(__name__)
 
 # The reviewer only ever writes PROSE sheets (10/11/12). Numeric notes (13/14)
@@ -237,6 +239,15 @@ def classify_notes_fix_guard(
         )
 
     return None, None
+
+
+def evaluate_notes_fix_guard(**kwargs) -> "GuardResult":
+    """`classify_notes_fix_guard` lifted into the shared GuardResult contract
+    (tools/guard_result.py, Harness-learnings Item 2). The classifier stays
+    exported and pinned; rejections become budgeted `retry` verdicts with the
+    same message text, `kind` carries the tally slug."""
+    kind, msg = classify_notes_fix_guard(**kwargs)
+    return GuardResult.from_kind_message(kind, msg, fallback_kind="ungrounded")
 
 
 def _tally(deps: Optional[NotesReviewerDeps], kind: str) -> None:
@@ -1182,13 +1193,13 @@ def create_notes_reviewer_agent(
                     "Author any note that has a real disclosure.")
         if not note_nums:
             return "rejected: note_nums is required (pass a non-empty list)."
-        kind, msg = classify_notes_fix_guard(
+        verdict = evaluate_notes_fix_guard(
             action="resolve", source_pages=source_pages,
             viewed_pages=ctx.deps.viewed_pages,
         )
-        if msg is not None:
-            _tally(ctx.deps, kind or "ungrounded")
-            return msg
+        if not verdict.allowed:
+            _tally(ctx.deps, verdict.kind)
+            return verdict.message
         outcomes = [
             _record_coverage_note(
                 ctx, note_num=n, verdict=v, source_pages=source_pages,
@@ -1240,13 +1251,13 @@ def create_notes_reviewer_agent(
                     f"'{SUBNOTE_MISSING}'.")
         if not subnote_refs:
             return "rejected: subnote_refs is required (pass a non-empty list)."
-        kind, msg = classify_notes_fix_guard(
+        verdict = evaluate_notes_fix_guard(
             action="verify", source_pages=source_pages,
             viewed_pages=ctx.deps.viewed_pages,
         )
-        if msg is not None:
-            _tally(ctx.deps, kind or "ungrounded")
-            return msg
+        if not verdict.allowed:
+            _tally(ctx.deps, verdict.kind)
+            return verdict.message
         outcomes = [
             _record_subnote(
                 ctx, note_num=note_num, subnote_ref=ref, verdict=v, reason=reason,
@@ -1284,15 +1295,15 @@ def create_notes_reviewer_agent(
         if action == "author" and note_num is not None:
             _nums, _ = load_inventory_from_db(ctx.deps.run_id, ctx.deps.db_path)
             note_in_inventory = int(note_num) in set(_nums)
-        kind, msg = classify_notes_fix_guard(
+        verdict = evaluate_notes_fix_guard(
             action=action, source_pages=source_pages,
             viewed_pages=ctx.deps.viewed_pages,
             target_node=target_node, target_occupied=target_occupied,
             note_in_inventory=note_in_inventory,
         )
-        if msg is not None:
-            _tally(ctx.deps, kind or "ungrounded")
-            return msg
+        if not verdict.allowed:
+            _tally(ctx.deps, verdict.kind)
+            return verdict.message
         return None
 
     def _do_write(
@@ -1472,13 +1483,13 @@ def create_notes_reviewer_agent(
             if sheet not in PROSE_SHEETS:
                 return (f"rejected: {sheet!r} is not a prose notes sheet.")
             # Grounding still required for a deletion (cite where the dup was seen).
-            kind, msg = classify_notes_fix_guard(
+            verdict = evaluate_notes_fix_guard(
                 action="clear", source_pages=source_pages,
                 viewed_pages=ctx.deps.viewed_pages,
             )
-            if msg is not None:
-                _tally(ctx.deps, kind or "ungrounded")
-                return msg
+            if not verdict.allowed:
+                _tally(ctx.deps, verdict.kind)
+                return verdict.message
             if not _cell_is_occupied(ctx.deps.db_path, ctx.deps.run_id, sheet, row):
                 return f"rejected: {sheet} row {row} is already empty."
             _ensure_snapshot(ctx)

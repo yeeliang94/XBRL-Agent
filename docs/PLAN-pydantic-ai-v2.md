@@ -557,7 +557,20 @@ wording, and a run that saves successfully post-warning. Existing
 **Effort:** S–M. **Risk:** low — additive; worst case the model ignores
 the nudge and today's hard cap still fires.
 
-#### Item 2 — One structured verdict contract for all guards ("GuardResult")
+#### Item 2 — One structured verdict contract for all guards ("GuardResult") — 🟩 DONE (first two adoptions) 2026-07-12
+
+> Shipped `tools/guard_result.py`: frozen dataclass, closed
+> allow/retry/block/replace vocabulary validated at construction, plus a
+> `from_kind_message` bridge for legacy classifier tuples. Adopted in the
+> two chattiest guards with byte-identical messages (all pinned guard
+> tests pass unchanged): (1) the reviewer grounding gate — new
+> `evaluate_notes_fix_guard` wrapper, `classify_notes_fix_guard` stays
+> exported/pinned, all 4 call sites converted, tallies now key off
+> `verdict.kind`; (2) `fill_workbook`'s formula-cell + abstract-row
+> refusals now construct `GuardResult.retry` with stable kinds
+> (`formula_cell`, `abstract_row`). Remaining guards (format gate,
+> save-gate, double-booking advisory) adopt opportunistically — one guard
+> per commit. Pinned by `tests/test_guard_result.py`.
 
 **Problem:** we have ~6 deterministic guards (abstract-row +
 formula-cell + double-booking in `tools/fill_workbook.py:340-480`;

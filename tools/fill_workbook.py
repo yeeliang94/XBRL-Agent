@@ -8,6 +8,7 @@ import openpyxl
 from pydantic import BaseModel, StringConstraints
 
 from utils.workbook_io import atomic_save_workbook
+from tools.guard_result import GuardResult
 from tools.section_headers import (
     discover_section_headers,
     header_set,
@@ -347,9 +348,11 @@ def fill_workbook(
 
         # Never overwrite formula cells
         if cell.value is not None and str(cell.value).startswith("="):
-            errors.append(
-                f"Refusing to overwrite formula cell {mapping.sheet}!{cell.coordinate}: {cell.value}"
+            verdict = GuardResult.retry(
+                f"Refusing to overwrite formula cell {mapping.sheet}!{cell.coordinate}: {cell.value}",
+                kind="formula_cell",
             )
+            errors.append(verdict.message)
             continue
 
         # Bug A (2026-04-26): refuse writes to abstract section-header rows.
@@ -367,15 +370,17 @@ def fill_workbook(
         )
         if target_entry is not None and target_entry.is_header:
             label_text = ws.cell(row=target_row, column=1).value
-            errors.append(
+            verdict = GuardResult.retry(
                 f"Refusing to write to {mapping.sheet}!{cell.coordinate}: "
                 f"row {target_row} ('{label_text}') is an XBRL abstract "
                 f"section header, not a data-entry cell. Write to a leaf "
                 f"row under it (call read_template() and look for non-"
                 f"[ABSTRACT] rows in this section), or roll the value up "
                 f"into the nearest matching leaf. Never plug a residual "
-                f"into a catch-all to make totals reconcile."
+                f"into a catch-all to make totals reconcile.",
+                kind="abstract_row",
             )
+            errors.append(verdict.message)
             continue
 
         cell.value = mapping.value
