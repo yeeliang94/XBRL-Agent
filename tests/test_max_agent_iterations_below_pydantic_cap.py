@@ -21,15 +21,35 @@ import os
 import pytest
 
 
-# Pydantic-ai 1.77's default ``UsageLimits.request_limit`` is 50 — see
-# the smoking-gun screenshot in
-# docs/Archive/PLAN-stop-and-validation-visibility.md. We never set explicit
-# UsageLimits anywhere in the codebase, so this default is what every
-# agent inherits. The buffer below it (5+ turns) absorbs the request
-# overhead pydantic-ai itself spends on tool-call book-keeping inside a
-# single iteration node.
+# Pydantic-ai's default ``UsageLimits.request_limit`` is 50 — first seen
+# on 1.77 (smoking-gun screenshot in
+# docs/Archive/PLAN-stop-and-validation-visibility.md) and RE-VERIFIED
+# unchanged on V2 (2.9.0) at the 2026-07-12 upgrade (docs/
+# PLAN-pydantic-ai-v2.md, U2 gate). We never set explicit UsageLimits
+# anywhere in the codebase, so this default is what every agent inherits.
+# The buffer below it (5+ turns) absorbs the request overhead pydantic-ai
+# itself spends on tool-call book-keeping inside a single iteration node.
+# ``test_pydantic_ai_default_request_limit_is_what_we_pinned`` asserts the
+# installed library still matches, so a future bump can't rot silently.
 PYDANTIC_AI_SILENT_REQUEST_LIMIT = 50
 SAFE_BUFFER = 5
+
+
+def test_pydantic_ai_default_request_limit_is_what_we_pinned():
+    """The installed pydantic-ai's real default must equal our pinned
+    constant — if a future release changes it, this fails loudly and the
+    buffer math above gets re-derived instead of silently rotting."""
+    import inspect
+
+    from pydantic_ai.usage import UsageLimits
+
+    actual = inspect.signature(UsageLimits).parameters["request_limit"].default
+    assert actual == PYDANTIC_AI_SILENT_REQUEST_LIMIT, (
+        f"pydantic-ai's UsageLimits.request_limit default changed to "
+        f"{actual!r} (we pinned {PYDANTIC_AI_SILENT_REQUEST_LIMIT}). "
+        f"Re-derive MAX_AGENT_ITERATIONS and the clamp ceiling in "
+        f"agent_tracing.py against the new value."
+    )
 
 
 def test_max_agent_iterations_stays_below_pydantic_silent_cap():

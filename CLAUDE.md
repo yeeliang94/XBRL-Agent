@@ -175,13 +175,34 @@ Windows defaults to `charmap` codec which crashes on Unicode text from PDFs.
 `start.bat` sets this; if running manually: `set PYTHONUTF8=1 && python server.py`.
 `write_text(..., encoding="utf-8")` is used as a safety net throughout.
 
-### 2. pydantic-ai pinned `>=1.77.0`
+### 2. pydantic-ai on the V2 line (floor `>=1.107.1`, pinned by `constraints.txt`)
+
+Upgraded 2026-07-12 (docs/PLAN-pydantic-ai-v2.md; V1→V2 flip verified by
+the full suite + a live SOFP run). `constraints.txt` is the reproducible
+pin (`pip install -r requirements.txt -c constraints.txt`); the code runs
+on 1.107.1 and 2.x — both expose the same post-deprecation API surface.
 
 - `Agent._function_tools` does not exist — cannot monkey-patch tools.
 - Use `OpenAIChatModel(name, provider=OpenAIProvider(...))`; `OpenAIModel`
   is a deprecated alias.
 - Tool event streaming uses `agent.iter()` + `node.stream()` — no
-  `event_callback` or monkey-patching.
+  `event_callback` or monkey-patching. Tool-result events expose the part
+  as `event.part` (`.result` was removed in V2).
+- History processors register as `capabilities=[ProcessHistory(fn), ...]`
+  (`Agent(history_processors=)` was removed in V2); ctx-taking processors
+  still need the real `RunContext` annotation on the first param.
+- `agent_run.usage` / `result.usage` are properties — no parentheses.
+  Test fakes must expose usage as an attribute/property, NEVER a
+  `MagicMock(return_value=...)` callable (property access turns that into
+  `int(MagicMock()) == 1` and telemetry silently reads 1 token).
+- Every live `Agent(...)` pins `end_strategy="early"` — V2's default is
+  `'graceful'` (same-batch function tools run AFTER a successful terminal
+  tool). Do not drop the pin without an eval-suite comparison (plan B.3.1).
+- The Google model-string prefix is `google:` on V2 (`google-gla:` was
+  removed); the server/pricing prefix tables carry both spellings.
+- V2's silent `UsageLimits.request_limit` default is still 50 — gotcha #18
+  unchanged, now asserted directly by
+  `tests/test_max_agent_iterations_below_pydantic_cap.py`.
 
 ### 3. XBRL templates derived from SSM linkbase
 
