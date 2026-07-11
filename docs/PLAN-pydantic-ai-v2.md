@@ -1,8 +1,13 @@
 # PLAN — Pydantic AI V2: context, upgrade plan, and Harness learnings
 
-**Status:** PEER-REVIEWED PROPOSAL (2026-07-12). Research capture + implementation plan.
-No code change yet. Supersedes the earlier `PLAN-harness-learnings.md`
-(folded in as Part D).
+**Status:** IMPLEMENTED (2026-07-12) — all automatable phases landed the
+same day: U0→U3 (pydantic-ai 1.77 → **2.9.0**, live-verified) and Harness
+patterns A–E (limit warnings, compaction economics, oversized clamp,
+GuardResult, retry salvage, write fingerprints). Full suite 3352 passed /
+3 skipped. **Open operator gates:** Windows enterprise-box run; benchmark
+scorecard anchor + threshold sign-off; MPERS live smoke
+(`MPERS_TEST_PDF`). Per-phase details in the 🟩 notes throughout.
+Supersedes the earlier `PLAN-harness-learnings.md` (folded in as Part D).
 
 **Review note (2026-07-12, resolved after verification):** a peer review
 validated this plan against the official V2 announcement, upgrade guide, PyPI
@@ -720,7 +725,18 @@ exemptions honored.
 is clamping a payload the agent still needed, which the exemptions +
 generous threshold address.
 
-#### Item 5 — Optimistic-concurrency fingerprints on shared writes
+#### Item 5 — Optimistic-concurrency fingerprints on shared writes — 🟩 DONE (advisory mode) 2026-07-12
+
+> Shipped ADVISORY-ONLY per this plan's own F.4 proposal:
+> `notes/fingerprint.py` (12-hex sha256 content fingerprints) +
+> collision detection in `persist_notes_cells` — two writers landing
+> DIFFERENT content on the same (sheet, row) in one batch (the Sheet-12
+> fan-out's silent last-write-wins case) now logs a loud warning with
+> both fingerprints; identical re-sends (the sink's replace case) never
+> warn; outcome unchanged. `XBRL_WRITE_FRESHNESS=off` silences.
+> Enforcement (refuse + retry) stays evidence-gated — flip after a real
+> collision shows up in logs. Pinned by
+> `tests/test_write_fingerprints.py`.
 
 **Problem:** up to 5 Sheet-12 sub-agents write concurrently into shared
 state. Gotcha #22 gives us *physical* safety (io_lock + atomic save —
