@@ -42,6 +42,7 @@ from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from tools.template_reader import TemplateField, read_template as _read_template_impl
 from extraction.history_processors import strip_stale_images
+from limit_warner import limit_warning_processor
 
 logger = logging.getLogger(__name__)
 
@@ -1341,7 +1342,9 @@ def create_notes_agent(
         # view_pdf_pages) out of the outbound request each turn. Transport
         # hygiene only — the notes all-LLM-judgement design (CLAUDE.md #14) is
         # untouched. See extraction/history_processors.py.
-        history_processors=[strip_stale_images],
+        # limit_warning_processor adds the in-band "wrap up now" nudge
+        # before the iteration/token hard caps fire (limit_warner.py).
+        history_processors=[strip_stale_images, limit_warning_processor],
     )
 
     # --- Tools ---

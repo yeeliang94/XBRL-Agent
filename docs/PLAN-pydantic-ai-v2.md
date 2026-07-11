@@ -438,7 +438,25 @@ Ordered by (value ÷ effort). Each is independently shippable and lists the
 invariants (CLAUDE.md gotchas) it brushes. Harness refs are to
 `pydantic_ai_harness/` @ `310ffad`; ours to repo root.
 
-#### Item 1 — In-band limit warnings before hard caps ("LimitWarner") — TOP PICK
+#### Item 1 — In-band limit warnings before hard caps ("LimitWarner") — TOP PICK — 🟩 DONE 2026-07-12
+
+> Shipped as `limit_warner.py` + `tests/test_limit_warnings.py` (11 tests)
+> on `feat/limit-warnings`; full suite 3315 passed. Four deviations from
+> the sketch below, all noted deliberately:
+> (1) implemented as a **ctx-aware history processor** (the pydantic-ai
+> 1.x-blessed pre-request seam, same as the compaction wrappers), not
+> runner-loop injection — the runner cannot modify the request pipeline
+> without unsupported state mutation; the module stays pure.
+> (2) the warning is appended **into the last ModelRequest's parts**, not
+> as a standalone message — immune to provider role-alternation rules.
+> (3) **wall-clock** is not warned about (the processor cannot see the
+> runner's per-run deadline) — iterations + token budget only; wallclock
+> nudge deferred.
+> (4) coverage is the **face / notes (incl. Sheet-12 sub-agents) / scout**
+> factories; the reviewer/formatter agents have their own dynamic caps and
+> do not share these factories — "inherit for free" below assumed
+> runner-loop injection and was wrong; extending to them is a follow-up.
+> Kill switch: `XBRL_LIMIT_WARNINGS` (default on).
 
 **Problem (plain language):** when one of our agents hits its iteration
 cap, wall-clock limit, or token budget, we kill it mid-thought. Whatever
