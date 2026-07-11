@@ -295,9 +295,12 @@ green at every phase boundary.
 > access — worth remembering when writing agent-run stubs).
 > Gate: full suite 3315 passed / 3 skipped WITH
 > `-W error::pydantic_ai._warnings.PydanticAIDeprecationWarning`.
-> Live smoke run: launched (SOFP, FINCO, gpt-5.4 direct mode) — result
-> recorded below when complete. Benchmark scorecard anchor: still open
-> (needs a saved gold benchmark run via the web workspace).
+> Live smoke run: 🟩 PASSED (run 220 — SOFP on FINCO, gpt-5.4 direct
+> mode): extraction ok, cross-checks + reviewer pass ran, merged
+> filled.xlsx, Success: True. Telemetry proof: 626,086 tokens on the
+> SOFP agent across 18 per-turn rows + 159,745 on the reviewer — the
+> silent-zero trap is closed end-to-end. Benchmark scorecard anchor:
+> still open (needs a saved gold benchmark run via the web workspace).
 
 - Install and lock the **exact latest V1** (1.107.1 per PyPI on
   2026-07-11; the V1 line still receives parallel maintenance releases,
@@ -315,7 +318,24 @@ green at every phase boundary.
   (`python run.py data/FINCO-….pdf --statements SOFP` with a real key);
   `pip check` clean; resolved dependency snapshot committed.
 
-### Phase U2 — Flip to V2
+### Phase U2 — Flip to V2 — 🟩 DONE 2026-07-12
+
+> Locked 2.9.0 via constraints.txt (floor stays `>=1.107.1` — the code
+> deliberately runs on BOTH 1.107.1 and 2.x, the best rollback story).
+> **The flip itself was a non-event: the full suite passed on 2.9.0 with
+> zero code changes** — clearing every deprecation on V1 first (U1) did
+> its job. U2 verifications, all confirmed against the installed 2.9.0:
+> gotcha #18's `request_limit` default is STILL 50 (our 40-cap safe; now
+> asserted directly by a new pinning test); all three provider paths
+> construct; `google-gla:` is REMOVED in V2 (`Unknown provider`) while
+> `google:` parses — the U1 prefix-table addition was necessary.
+> `Agent[None, _VisionBatch]` annotations kept as-is: the vision agent
+> genuinely has no deps, so `None` is the real contract and stays valid
+> on V2 (B.2 item 5 resolved as no-change). prepare_tools /
+> capture_run_messages / model-profile / sequential greps re-run: still
+> zero usage. CLAUDE.md gotcha #2 rewritten for the V2 reality.
+> Gate: 3316 passed / 3 skipped on 2.9.0; pip check clean; V2 live smoke
+> recorded below.
 
 - Select one exact V2 minor after reviewing its release notes (2.9.0 is
   latest per PyPI on 2026-07-11; releases land weekly, so reconfirm at

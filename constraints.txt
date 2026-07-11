@@ -134,7 +134,7 @@ numpy-financial==1.0.0
 oauthlib==3.3.1
 omegaconf==2.3.1
 onnxruntime==1.27.0
-openai==2.30.0
+openai==2.45.0
 openapi-pydantic==0.5.1
 opencv-python==4.13.0.92
 opencv-python-headless==4.13.0.92
@@ -168,10 +168,10 @@ pyasn1_modules==0.4.2
 pyclipper==1.4.0
 pycparser==3.0
 pydantic==2.12.5
-pydantic-ai==1.107.1
-pydantic-ai-slim==1.107.1
-pydantic-evals==1.107.1
-pydantic-graph==1.107.1
+pydantic-ai==2.9.0
+pydantic-ai-slim==2.9.0
+pydantic-evals==2.9.0
+pydantic-graph==2.9.0
 pydantic-handlebars==0.1.0
 pydantic-settings==2.14.1
 pydantic_core==2.41.5
