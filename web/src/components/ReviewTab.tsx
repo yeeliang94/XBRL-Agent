@@ -86,6 +86,14 @@ function fmt(v: number | null): string {
   return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+function flagDecisionSummary(flag: FlagRow): string {
+  const target = flag.target_sheet && flag.target_row != null
+    ? `${flag.target_sheet} row ${flag.target_row}`
+    : "the affected figure";
+  const evidence = flag.pdf_page != null ? ` against source PDF page ${flag.pdf_page}` : " against the source PDF";
+  return `The AI review could not safely resolve ${target}. Review it${evidence} and decide whether the extracted figure should change.`;
+}
+
 /**
  * Surface the server's `detail` on a non-2xx response instead of a bare
  * "HTTP 422". The reviewer endpoints return actionable messages (input-cap
@@ -413,7 +421,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
                   />
                   {flagKindLabel(f.category)}
                 </span>
-                <span style={styles.dim}>{humanize(f.status)}</span>
+                <span style={styles.dim}>{f.status === "open" ? "Needs your decision" : humanize(f.status)}</span>
                 {f.target_sheet && f.target_row != null && onSelectTarget && (
                   <button
                     type="button"
@@ -424,7 +432,13 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
                   </button>
                 )}
               </div>
-              <p style={styles.flagReason}>{f.reasoning}</p>
+              <p style={styles.flagReason}>{flagDecisionSummary(f)}</p>
+              {f.reasoning && (
+                <details style={styles.technicalDetails}>
+                  <summary>Show technical details</summary>
+                  <p>{f.reasoning}</p>
+                </details>
+              )}
               {f.applied_fix && (
                 <p style={styles.dim}>Applied fix: {f.applied_fix}</p>
               )}
@@ -434,7 +448,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
                 <div style={styles.answerRow}>
                   <textarea
                     style={styles.answerBox}
-                    placeholder="Answer / guidance for this flag…"
+                    placeholder="Record your decision or guidance…"
                     value={answers[f.id] || ""}
                     onChange={(e) =>
                       setAnswers((a) => ({ ...a, [f.id]: e.target.value }))
@@ -447,7 +461,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
                     onClick={() => answerFlag(f.id)}
                     disabled={!(answers[f.id] || "").trim()}
                   >
-                    Save
+                    Save decision
                   </button>
                 </div>
               )}
@@ -458,6 +472,9 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
 
       {/* Guidance + re-review */}
       <h3 style={styles.h3}>Run AI review again</h3>
+      <p style={styles.dim}>
+        The reviewer will recheck open issues against the PDF and may update saved figures when the evidence supports a safe correction.
+      </p>
       <textarea
         style={styles.guidanceBox}
         placeholder="Optional guidance for the next pass (e.g. 'the PPE note is on page 44')…"
@@ -612,6 +629,12 @@ const styles = {
     borderColor: pwc.error,
   } as const,
   flagReason: { color: pwc.grey800, fontSize: 13, margin: `${pwc.space.xs}px 0` },
+  technicalDetails: {
+    color: pwc.grey500,
+    fontSize: 12,
+    marginTop: pwc.space.xs,
+    overflowWrap: "anywhere" as const,
+  } as const,
   answerGiven: { color: pwc.successText, fontSize: 13, margin: 0 },
   answerRow: { display: "flex", gap: pwc.space.sm, alignItems: "flex-start" },
   answerBox: {

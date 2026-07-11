@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 
 // Reusable page title chrome. Keep it quiet: title, optional actions, and a
 // rule. Extra explanatory copy belongs in task-specific empty/error states.
@@ -58,31 +59,15 @@ const styles: Record<string, CSSProperties> = {
     marginBottom: pwc.space.sm,
   },
   title: {
-    fontFamily: pwc.fontHeading,
-    // Semibold per the design system (titles/headings at 600; hierarchy from
-    // size + weight). Slightly under the reference's 38px because this app
-    // keeps a global brand bar above the page, so the title shouldn't compete.
-    fontSize: 32,
-    fontWeight: pwc.weight.semibold,
+    ...ui.pageTitle,
     letterSpacing: 0,
-    lineHeight: 1.1,
-    color: pwc.grey900,
-    margin: 0,
   },
   titleCompact: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 22,
-    fontWeight: pwc.weight.semibold,
+    ...ui.pageTitleCompact,
     letterSpacing: 0,
-    lineHeight: 1.2,
-    color: pwc.grey900,
-    margin: 0,
   },
   description: {
-    fontFamily: pwc.fontBody,
-    fontSize: 15,
-    fontWeight: pwc.weight.regular,
-    lineHeight: 1.55,
+    ...ui.bodyText,
     color: pwc.grey500,
     maxWidth: "60ch",
     marginTop: pwc.space.md,

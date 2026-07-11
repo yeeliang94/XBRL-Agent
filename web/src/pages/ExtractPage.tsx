@@ -21,6 +21,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
 import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
 import { isNonAgentTab } from "../lib/agentTabKinds";
+import { TERMS } from "../lib/vocabulary";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
 // from ExtractPage keep working. The single source of truth lives in
@@ -220,8 +221,8 @@ export function ExtractPage({
   return (
     <>
       <PageHeader
-        title="Extract"
-        description="Upload a financial statement (PDF or Word) and the AI fills it into the SSM MBRS template for you to review."
+        title={TERMS.newExtraction}
+        description="Upload an audited financial statement to create an SSM MBRS filing draft for review."
       />
 
       {/* Upload + Run. In the empty landing state the upload card sits in
@@ -358,7 +359,7 @@ export function ExtractPage({
           Reuses the warning palette; these are run-level (no agent tab). */}
       {state.scoutWarnings.length > 0 && (
         <div role="status" data-testid="scout-warnings-banner" style={styles.partialMergeBox}>
-          <h3 style={styles.partialMergeTitle}>Scout warnings</h3>
+          <h3 style={styles.partialMergeTitle}>Document pre-scan warnings</h3>
           <p style={styles.partialMergeMessage}>
             The document scout flagged the following before extraction. These are
             advisory — verify against the PDF; the run still proceeds.

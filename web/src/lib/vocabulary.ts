@@ -9,6 +9,11 @@
 
 /** Named terms used across headings, tabs, buttons, and status sentences. */
 export const TERMS = {
+  // Top-level destinations. Route/state keys intentionally remain extract,
+  // history, and suites so display-language changes cannot break deep links.
+  newExtraction: "New extraction",
+  runs: "Runs",
+  evaluationSuites: "Evaluation suites",
   // The pre-extraction PDF read that suggests statements / formats / notes.
   preScan: "Document pre-scan",
   // The grounded pass that re-checks flagged figures against the PDF.
@@ -27,8 +32,8 @@ export const TERMS = {
   // Review-workspace surface (docs/PLAN-review-workspace.md Phase 5): plain,
   // outcome-first labels in place of engineer vocabulary.
   reviewWorkspaceTitle: "Review extracted results",
-  validateFigures: "Validate figures",
-  validatingFigures: "Validating…",
+  validateFigures: "Rerun checks",
+  validatingFigures: "Checking…",
   documentColumn: "Document",
   needsAttention: "Needs attention",
 } as const;
@@ -139,6 +144,44 @@ const CROSS_CHECK_LABELS: Record<string, string> = {
 
 export function crossCheckLabel(name: string): string {
   return CROSS_CHECK_LABELS[name] ?? humanize(name);
+}
+
+/** Failure copy is deliberately phrased as a discrepancy. Reusing the
+ * positive rule label beside failed values made warnings read as contradictory
+ * (for example, "Equity total agrees … difference 21,329"). */
+const CROSS_CHECK_FAILURE_LABELS: Record<string, string> = {
+  sofp_balance: "Balance sheet discrepancy (assets vs equity + liabilities)",
+  socie_to_sofp_equity: "Equity total differs from the balance sheet",
+  sopl_to_socie_profit: "Profit differs between income statement and equity",
+  soci_to_socie_tci: "Total comprehensive income differs from equity",
+  socf_to_sofp_cash: "Closing cash differs from the balance sheet",
+  socf_articulation: "Cash-flow movements do not reconcile",
+  sore_to_sofp_retained_earnings: "Retained earnings differ from the balance sheet",
+  sopl_attribution_footing: "Profit attribution does not add up",
+  soci_attribution_footing: "Comprehensive income attribution does not add up",
+};
+
+export function crossCheckFailureLabel(name: string): string {
+  return CROSS_CHECK_FAILURE_LABELS[name] ?? `${humanize(name)} discrepancy`;
+}
+
+/** Names the two financial figures compared by a numeric cross-check. The
+ * backend fields are historically called `expected` and `actual`, but neither
+ * side is inherently authoritative; statement names are more honest. */
+const CROSS_CHECK_PARTIES: Record<string, [string, string]> = {
+  sofp_balance: ["Assets", "Equity and liabilities"],
+  socie_to_sofp_equity: ["Changes in equity", "Balance sheet"],
+  sopl_to_socie_profit: ["Income statement", "Changes in equity"],
+  soci_to_socie_tci: ["Comprehensive income", "Changes in equity"],
+  socf_to_sofp_cash: ["Cash-flow statement", "Balance sheet"],
+  socf_articulation: ["Calculated closing cash", "Reported closing cash"],
+  sore_to_sofp_retained_earnings: ["Statement of retained earnings", "Balance sheet"],
+  sopl_attribution_footing: ["Reported profit", "Attribution total"],
+  soci_attribution_footing: ["Reported comprehensive income", "Attribution total"],
+};
+
+export function crossCheckParties(name: string): [string, string] {
+  return CROSS_CHECK_PARTIES[name] ?? ["First figure", "Comparison figure"];
 }
 
 /** Notes-formatter failure taxonomy (`error_type`) → a plain sentence that

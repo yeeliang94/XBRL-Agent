@@ -159,17 +159,19 @@ describe("API client", () => {
     beforeEach(() => mockFetch.mockClear());
 
     test("derives the counts from each filter's server total", async () => {
-      // Four parallel calls, each reading `total` off a limit=1 page.
-      // Order fetchHomeStats issues them: all, draft, completed-this-month,
-      // completed_with_errors-this-month. The last two sum into the month count.
+      // Six parallel calls, each reading `total` off a limit=1 page.
+      // Order: draft, completed-this-month, completed_with_errors-this-month,
+      // completed_with_errors-all-time, correction_exhausted, running.
       mockFetch
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 42, limit: 1, offset: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 3, limit: 1, offset: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 7, limit: 1, offset: 0 }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 2, limit: 1, offset: 0 }) });
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 2, limit: 1, offset: 0 }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 8, limit: 1, offset: 0 }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 1, limit: 1, offset: 0 }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 4, limit: 1, offset: 0 }) });
 
       const stats = await fetchHomeStats();
-      expect(stats).toEqual({ total: 42, drafts: 3, completedThisMonth: 9 });
+      expect(stats).toEqual({ drafts: 3, completedThisMonth: 9, needsReview: 9, active: 4 });
 
       const urls = mockFetch.mock.calls.map((c) => c[0] as string);
       // Drafts call carries the status filter.
@@ -177,7 +179,9 @@ describe("API client", () => {
       // Both completed variants this month carry a first-of-month date floor.
       const completedUrl = urls.find((u) => u.includes("status=completed&"));
       expect(completedUrl ?? urls.find((u) => /status=completed(&|$)/.test(u))).toMatch(/from=\d{4}-\d{2}-01/);
-      expect(urls.some((u) => u.includes("status=completed_with_errors"))).toBe(true);
+      const reviewUrls = urls.filter((u) => u.includes("status=completed_with_errors"));
+      expect(reviewUrls).toHaveLength(2);
+      expect(reviewUrls.some((u) => !u.includes("from="))).toBe(true);
     });
   });
 

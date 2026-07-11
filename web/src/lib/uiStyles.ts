@@ -82,6 +82,112 @@ const alertBase: CSSProperties = {
 };
 
 export const ui = {
+  // --- Typography --------------------------------------------------------
+  // Semantic roles keep page-level hierarchy consistent without pretending
+  // that every product surface has identical density. Components may still
+  // use the compact roles in data-heavy workspaces.
+  pageTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 32,
+    lineHeight: 1.1,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey900,
+    margin: 0,
+  } as CSSProperties,
+  pageTitleCompact: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 22,
+    lineHeight: 1.2,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey900,
+    margin: 0,
+  } as CSSProperties,
+  sectionTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 20,
+    lineHeight: 1.25,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey900,
+    margin: 0,
+  } as CSSProperties,
+  subsectionTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 16,
+    lineHeight: 1.35,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey900,
+    margin: 0,
+  } as CSSProperties,
+  bodyText: {
+    fontFamily: pwc.fontBody,
+    fontSize: 15,
+    lineHeight: 1.55,
+    fontWeight: pwc.weight.regular,
+    color: pwc.grey800,
+  } as CSSProperties,
+  supportingText: {
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    lineHeight: 1.5,
+    fontWeight: pwc.weight.regular,
+    color: pwc.grey700,
+  } as CSSProperties,
+  metadata: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    lineHeight: 1.45,
+    fontWeight: pwc.weight.regular,
+    color: pwc.grey500,
+  } as CSSProperties,
+  financialValue: {
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    lineHeight: 1.45,
+    fontWeight: pwc.weight.regular,
+    color: pwc.grey900,
+    fontVariantNumeric: "tabular-nums",
+    textAlign: "right",
+  } as CSSProperties,
+
+  // --- Layout ------------------------------------------------------------
+  pageForm: {
+    width: "100%",
+    maxWidth: 840,
+    margin: "0 auto",
+  } as CSSProperties,
+  pageWide: {
+    width: "100%",
+    maxWidth: 1440,
+    margin: "0 auto",
+  } as CSSProperties,
+  toolbar: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: pwc.space.md,
+  } as CSSProperties,
+  stickyActionBar: {
+    position: "sticky",
+    bottom: 0,
+    zIndex: 10,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    padding: pwc.space.lg,
+    background: pwc.white,
+    borderTop: `1px solid ${pwc.grey200}`,
+    boxShadow: pwc.shadow.elevated,
+  } as CSSProperties,
+  emptyState: {
+    padding: `${pwc.space.xxl}px ${pwc.space.xl}px`,
+    textAlign: "left",
+    borderTop: `1px solid ${pwc.grey200}`,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    color: pwc.grey700,
+  } as CSSProperties,
+
   card: {
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,

@@ -226,7 +226,7 @@ describe("RunDetailView", () => {
     expect(within(tablist2).getByRole("tab", { name: /^ai review$/i })).toBeTruthy();
   });
 
-  test("renders run config: statements, variants, models, scout flag", () => {
+  test("renders filing-focused run config without advanced model details", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
@@ -237,8 +237,8 @@ describe("RunDetailView", () => {
     expect(screen.getAllByText(/SOPL/).length).toBeGreaterThan(0);
     // Variant renders in plain language now (D2), not the raw "CuNonCu" code.
     expect(screen.getAllByText(/Current \/ Non-current/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/gemini-3-flash-preview/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/scout/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/gemini-3-flash-preview/)).toBeNull();
+    expect(screen.queryByText(/^scout$/i)).toBeNull();
   });
 
   test("renders per-agent status list with both agents", () => {
@@ -467,7 +467,7 @@ describe("RunDetailView", () => {
     expect(onDelete).not.toHaveBeenCalled();
   });
 
-  test("legacy runs (no config captured) show a 'Legacy run' badge", () => {
+  test("older runs identify their limited historical details", () => {
     // Pre-v2 schema rows were backfilled with NULL config / merged path /
     // token counts. The UI already renders the fallback "No run config
     // captured" text, but the badge gives a clear signal to the user that
@@ -479,14 +479,14 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    expect(screen.getByText(/legacy run/i)).toBeTruthy();
+    expect(screen.getByText(/limited historical details/i)).toBeTruthy();
   });
 
   test("new runs (config captured) do NOT show the legacy badge", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
-    expect(screen.queryByText(/legacy run/i)).toBeNull();
+    expect(screen.queryByText(/limited historical details/i)).toBeNull();
   });
 
   test("agent.model rendered as PydanticAI repr is cleaned to the inner id", () => {
@@ -566,7 +566,7 @@ describe("RunDetailView", () => {
 
   // Phase 9.3: legacy runs have no config AND (often) no agents. The
   // view must not crash and must still report status.
-  test("legacy run with no agents and null config renders the legacy badge", () => {
+  test("legacy run with no agents and null config explains its limited details", () => {
     render(
       <RunDetailView
         detail={makeDetail({ config: null, agents: [] })}
@@ -574,7 +574,7 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    expect(screen.getByText(/legacy run/i)).toBeTruthy();
+    expect(screen.getByText(/limited historical details/i)).toBeTruthy();
     clickRunTab(/^activity$/i);
     expect(screen.getByText(/Nothing was recorded for this run yet/i)).toBeTruthy();
   });
@@ -850,7 +850,7 @@ describe("RunDetailView", () => {
     ).toBeTruthy();
   });
 
-  test("Overview metric strip shows the run-level telemetry rollup", () => {
+  test("Activity disclosure shows the run-level telemetry rollup", () => {
     const detail = makeDetail({
       telemetry_rollup: {
         total_tokens: 2000,
@@ -862,13 +862,14 @@ describe("RunDetailView", () => {
       },
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
-    // Overview is the default tab — the strip is visible immediately.
+    fireEvent.click(screen.getByRole("tab", { name: /activity/i }));
+    fireEvent.click(screen.getByText(/performance details/i));
     expect(screen.getByText("2,000")).toBeTruthy();
     // Cost is rounded to cents now, not shown to 4 decimals ($0.0060 → $0.01).
     expect(screen.getByText("$0.01")).toBeTruthy();
   });
 
-  test("Overview leads with outcomes, telemetry demoted below (E1)", () => {
+  test("Overview leads with outcomes and leaves telemetry in Activity", () => {
     const detail = makeDetail({
       cross_checks: [
         { name: "sofp_balance", status: "passed", expected: 1, actual: 1, diff: 0, tolerance: 1, message: "" },
@@ -886,11 +887,9 @@ describe("RunDetailView", () => {
     expect(screen.getByText("Checks passing")).toBeTruthy();
     expect(screen.getByText("1/2")).toBeTruthy();
     expect(screen.getByText("Needs attention")).toBeTruthy();
-    // Outcomes come before the "Total tokens" telemetry in DOM order.
-    const bodyText = container.textContent ?? "";
-    expect(bodyText.indexOf("Checks passing")).toBeLessThan(
-      bodyText.indexOf("Total tokens"),
-    );
+    expect(container.textContent).not.toContain("Total tokens");
+    fireEvent.click(screen.getByRole("tab", { name: /activity/i }));
+    expect(screen.getByText(/performance details/i)).toBeTruthy();
   });
 
   test("initialTab='values' opens the Values tab (the /concepts/{id} alias)", () => {
@@ -915,6 +914,32 @@ describe("RunDetailView", () => {
       const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
       const valuesTab = within(tablist).getByRole("tab", { name: /^figures$/i });
       expect(valuesTab.getAttribute("aria-selected")).toBe("true");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("switching run IDs remounts the Figures workspace", () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ concepts: [] }),
+    })) as unknown as typeof fetch;
+    try {
+      const props = {
+        onDelete: () => {},
+        onDownload: () => {},
+        canonicalEnabled: true,
+        initialTab: "values" as const,
+      };
+      const { rerender } = render(<RunDetailView detail={makeDetail()} {...props} />);
+      fireEvent.click(screen.getByTestId("col-hide-menu"));
+      expect(screen.getByTestId("col-show-menu")).toBeInTheDocument();
+
+      rerender(<RunDetailView detail={makeDetail({ id: 43 })} {...props} />);
+      expect(screen.getByTestId("col-hide-menu")).toBeInTheDocument();
+      expect(screen.queryByTestId("col-show-menu")).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1052,23 +1077,26 @@ describe("RunDetailView", () => {
     expect(banner.textContent).toMatch(/didn.t pass/i);
     // The human-readable check name appears, not the raw id.
     expect(banner.textContent).toMatch(/balance/i);
-    // Download is demoted to a secondary until acknowledged.
-    const download = screen.getByRole("button", { name: /download filled excel/i });
+    expect(banner.textContent).toMatch(/expected 100.*actual 90.*difference 10/i);
+    const download = screen.getByRole("button", { name: /download draft/i });
     expect(download.className).toMatch(/secondary/i);
+    expect(screen.getByRole("button", { name: /review issues/i }).className).toMatch(/primary/i);
   });
 
-  test("acknowledging the error banner restores Download to primary", () => {
+  test("flagged run confirms before downloading an investigation draft", () => {
+    const onDownload = vi.fn();
     render(
       <RunDetailView
         detail={makeDetail({ status: "completed_with_errors" })}
         onDelete={() => {}}
-        onDownload={() => {}}
+        onDownload={onDownload}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /i.ve reviewed these/i }));
-    const download = screen.getByRole("button", { name: /download filled excel/i });
-    expect(download.className).toMatch(/primary/i);
-    expect(download.className).not.toMatch(/secondary/i);
+    fireEvent.click(screen.getByRole("button", { name: /download draft/i }));
+    expect(screen.getByRole("dialog").textContent).toMatch(/not ready to file/i);
+    expect(onDownload).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^download draft$/i }));
+    expect(onDownload).toHaveBeenCalled();
   });
 
   test("clean completed run shows no warning banner and a primary Download", () => {

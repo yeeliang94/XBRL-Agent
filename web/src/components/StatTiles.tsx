@@ -1,6 +1,5 @@
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { runStatusDisplay } from "../lib/runStatus";
 import { AnimatedNumber } from "./AnimatedNumber";
 
 // ---------------------------------------------------------------------------
@@ -17,11 +16,10 @@ import { AnimatedNumber } from "./AnimatedNumber";
 // ---------------------------------------------------------------------------
 
 export interface StatTilesProps {
-  total?: number;
+  needsReview?: number;
+  active?: number;
   drafts?: number;
   completedThisMonth?: number;
-  /** Status string of the most-recent run, or null when there are none. */
-  lastStatus?: string | null;
   /** When provided AND drafts > 0, a "Clear" action shows on the drafts tile
    *  to sweep abandoned drafts (E3). Omitted → no action rendered. */
   onClearDrafts?: () => void;
@@ -36,19 +34,26 @@ function Count({ n }: { n: number | undefined }) {
 }
 
 export function StatTiles({
-  total,
+  needsReview,
+  active,
   drafts,
   completedThisMonth,
-  lastStatus,
   onClearDrafts,
 }: StatTilesProps) {
-  const last = lastStatus ? runStatusDisplay(lastStatus) : null;
   const canClearDrafts = onClearDrafts != null && (drafts ?? 0) > 0;
   return (
     <div style={styles.grid}>
       <div style={styles.tile}>
-        <Count n={total} />
-        <span style={styles.label}>Total runs</span>
+        <Count n={needsReview} />
+        <span style={styles.label}>Needs review</span>
+      </div>
+      <div style={styles.tile}>
+        <Count n={active} />
+        <span style={styles.label}>Active runs</span>
+      </div>
+      <div style={styles.tile}>
+        <Count n={completedThisMonth} />
+        <span style={styles.label}>Completed this month</span>
       </div>
       <div style={styles.tile}>
         <Count n={drafts} />
@@ -67,26 +72,6 @@ export function StatTiles({
           )}
         </span>
       </div>
-      <div style={styles.tile}>
-        <Count n={completedThisMonth} />
-        <span style={styles.label}>Completed this month</span>
-      </div>
-      {/* Visually detached from the three counters — it holds a status chip,
-          not a number, so a subtle neutral surface marks it as a different
-          KIND of tile rather than a broken counter (E4). */}
-      <div style={styles.statusTile}>
-        {last ? (
-          <span style={{ ...ui.badge, alignSelf: "flex-start", borderColor: last.accent }}>
-            <span aria-hidden="true" style={ui.badgeDot(last.accent)} />
-            {last.label}
-          </span>
-        ) : (
-          // null lastStatus (no runs) or undefined (still loading) both show
-          // the neutral dash — the empty/loading state of this tile.
-          <span style={styles.value}>—</span>
-        )}
-        <span style={styles.label}>Last run status</span>
-      </div>
     </div>
   );
 }
@@ -103,17 +88,6 @@ const styles = {
   } as React.CSSProperties,
   tile: {
     ...ui.card,
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: pwc.space.xs,
-    padding: pwc.space.lg,
-    minWidth: 0,
-  } as React.CSSProperties,
-  // The status tile: same card, but a neutral grey surface so it reads as a
-  // distinct "last run" panel next to the three white counter tiles (E4).
-  statusTile: {
-    ...ui.card,
-    background: pwc.grey50,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xs,

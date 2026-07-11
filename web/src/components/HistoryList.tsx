@@ -82,7 +82,7 @@ export function HistoryList({
   }
 
   return (
-    <div style={styles.container}>
+    <div className="runs-table-wrap" style={styles.container}>
       {/* Gold-standard eval (v16): a compact sparkline of eval scores across
           the listed runs (oldest → newest) so improvement is visible at a
           glance. Only shown when ≥2 runs were graded. */}
@@ -93,12 +93,12 @@ export function HistoryList({
             timestamp/status columns. `table-layout: fixed` plus <col>
             widths makes the layout predictable regardless of content. */}
         <colgroup>
-          <col style={{ width: "34%" }} />
-          <col style={{ width: "14%" }} />
-          <col style={{ width: "12%" }} />
+          <col style={{ width: "31%" }} />
+          <col style={{ width: "15%" }} />
           <col style={{ width: "16%" }} />
-          <col style={{ width: "10%" }} />
-          <col style={{ width: "14%" }} />
+          <col style={{ width: "16%" }} />
+          <col style={{ width: "9%" }} />
+          <col style={{ width: "13%" }} />
         </colgroup>
         <thead>
           <tr>
@@ -135,25 +135,13 @@ export function HistoryList({
             // docs/PLAN-design-qa-fixes.md R4. Drafts resume at /run/{id};
             // finished runs open their detail at /history/{id}.
             const runHref = isDraft ? `/run/${run.id}` : `/history/${run.id}`;
-            // Rows act like buttons: focusable with Tab, activatable with
-            // Enter/Space, and announced as interactive to assistive tech.
-            // We keep the <tr> element so the table row/column context is
-            // preserved for screen readers — role="button" layered on top
-            // signals interactivity without losing the table semantics.
+            // The filename is the semantic navigation link. The row click is
+            // only a pointer convenience; keeping native row semantics avoids
+            // corrupting the table header/column structure for screen readers.
             return (
               <tr
                 key={run.id}
-                role="button"
-                tabIndex={0}
-                aria-selected={isSelected}
                 onClick={handleActivate}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    // Space would otherwise scroll the page; suppress that.
-                    e.preventDefault();
-                    handleActivate();
-                  }
-                }}
                 style={isSelected ? styles.rowSelected : styles.row}
               >
                 <td style={styles.tdFilename}>
@@ -161,6 +149,7 @@ export function HistoryList({
                     href={runHref}
                     style={styles.filename}
                     title={run.pdf_filename}
+                    aria-current={isSelected ? "page" : undefined}
                     onClick={(e) => {
                       // Plain click → SPA activate (no full page load). Let
                       // modified clicks (new tab / window) fall through to the
@@ -376,6 +365,8 @@ const styles = {
   } as React.CSSProperties,
   badge: {
     ...ui.badge,
+    maxWidth: "100%",
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   inlineBadge: {
     ...ui.badge,

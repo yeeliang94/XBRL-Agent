@@ -14,6 +14,18 @@ import type { SSEEvent, RunConfigPayload } from "../lib/types";
 
 let captureOnEvent: ((event: SSEEvent) => void) | null = null;
 
+function selectRequiredFormats() {
+  const values = ["CuNonCu", "Function", "BeforeTax", "Indirect", "Default"];
+  const selects = screen.getAllByRole("combobox").filter((element) =>
+    values.some((value) => element.querySelector(`option[value='${value}']`)),
+  ) as HTMLSelectElement[];
+  selects.forEach((select, index) => {
+    if (!select.disabled && !select.value) {
+      fireEvent.change(select, { target: { value: values[index] } });
+    }
+  });
+}
+
 vi.mock("../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
   return {
@@ -91,6 +103,7 @@ describe("App — AgentTimeline integration", () => {
     );
 
     // 3. Click Run — this invokes the mocked SSE factory and captures onEvent.
+    selectRequiredFormats();
     await act(async () => {
       fireEvent.click(runButton);
     });
@@ -200,6 +213,7 @@ describe("App — AgentTimeline integration", () => {
     }, { timeout: 2000 });
 
     // Click Run → handleMultiRun → PATCH rejects.
+    selectRequiredFormats();
     await act(async () => {
       fireEvent.click(runButton);
     });

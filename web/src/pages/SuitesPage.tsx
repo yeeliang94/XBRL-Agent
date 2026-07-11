@@ -5,6 +5,7 @@ import {
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { userMessage } from "../lib/errors";
+import { TERMS } from "../lib/vocabulary";
 import {
   fetchSuites, createSuite, getSuite, addSuiteDoc, deleteSuiteDoc,
   listSuiteRuns, estimateSuiteRun, launchSuiteRun, resumeSuiteRun, stopSuiteRun,
@@ -80,17 +81,19 @@ function SuiteList({ onOpen }: { onOpen: (id: number) => void }) {
   }, [name, onOpen]);
 
   return (
-    <div style={styles.page}>
+    <div className="responsive-page" style={styles.page}>
       <div>
-        <h1 style={styles.title}>Evals — Suites</h1>
+        <h1 style={styles.title}>{TERMS.evaluationSuites}</h1>
         <p style={styles.subtitle}>
           Group documents into a suite, run the whole set as one batch, and track
           accuracy, consistency, and health over time.
         </p>
       </div>
       <div style={styles.card}>
+        <label htmlFor="suite-name" style={ui.fieldLabel}>Suite name</label>
         <div style={styles.formRow}>
           <input
+            id="suite-name"
             data-testid="suite-name"
             style={ui.input}
             placeholder="MFRS Company regression set"
@@ -99,13 +102,19 @@ function SuiteList({ onOpen }: { onOpen: (id: number) => void }) {
           />
           <button data-testid="suite-create" className={uiClass.btnPrimary}
             style={ui.buttonPrimary} onClick={create}>
-            New suite
+            Create suite
           </button>
         </div>
         {error && <span style={styles.error}>{error}</span>}
       </div>
       {suites.length === 0 ? (
-        <p data-testid="suites-empty" style={styles.muted}>No suites yet.</p>
+        <div data-testid="suites-empty" style={ui.emptyState}>
+          <strong>No evaluation suites yet</strong>
+          <span>
+            Create one above, add representative filings, then run them together
+            to compare extraction accuracy, consistency, and run health over time.
+          </span>
+        </div>
       ) : (
         <div style={styles.list}>
           {suites.map((s) => (
@@ -148,7 +157,7 @@ function SuiteDetail({
   if (!suite) return <p style={styles.muted}>Loading suite…</p>;
 
   return (
-    <div style={styles.page}>
+    <div className="responsive-page" style={styles.page}>
       <button style={styles.back} onClick={onBack}>← All suites</button>
       <h1 style={styles.title}>{suite.name}</h1>
       <div style={styles.tabBar}>
@@ -244,10 +253,10 @@ function AddDocForm({
           </select>
         </label>
         <label style={styles.field}>
-          <span style={ui.fieldLabel}>Gold (optional)</span>
+          <span style={ui.fieldLabel}>Reference answers (optional)</span>
           <select data-testid="doc-benchmark" style={ui.select} value={benchmarkId}
             onChange={(e) => setBenchmarkId(e.target.value)}>
-            <option value="">No gold — consistency + health only</option>
+            <option value="">None — measure consistency and health only</option>
             {candidates.map((b) => (
               <option key={b.id} value={String(b.id)}>{b.name}</option>
             ))}
@@ -276,7 +285,7 @@ function DocList({ suite, onRemoved }: { suite: SuiteJson; onRemoved: () => void
           <tr>
             <th style={styles.th}>Document</th>
             <th style={styles.th}>Filing</th>
-            <th style={styles.th}>Gold</th>
+            <th style={styles.th}>Reference answers</th>
             <th style={styles.th}></th>
           </tr>
         </thead>
@@ -341,18 +350,20 @@ function LaunchForm({
           <span style={ui.fieldLabel}>Run label</span>
           <input data-testid="run-label" style={ui.input} placeholder="gpt-5.4 baseline"
             value={label} onChange={(e) => setLabel(e.target.value)} />
+          <span style={styles.fieldHint}>A short name for comparing this result later.</span>
         </label>
         <label style={styles.field}>
-          <span style={ui.fieldLabel}>Repeats per doc</span>
+          <span style={ui.fieldLabel}>Repeats per document</span>
           <select data-testid="run-repeats" style={ui.select} value={repeats}
             onChange={(e) => setRepeats(Number(e.target.value))}>
             {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
+          <span style={styles.fieldHint}>Run each filing more than once to measure consistency.</span>
         </label>
         <label style={{ ...styles.field, flexDirection: "row", alignItems: "center", gap: 8 }}>
           <input data-testid="run-scout" type="checkbox" checked={scout}
             onChange={(e) => setScout(e.target.checked)} />
-          <span style={ui.fieldLabel}>Use scout</span>
+          <span style={ui.fieldLabel}>Use document pre-scan</span>
         </label>
       </div>
       {estimate && (
@@ -454,7 +465,7 @@ function SuiteRunDetail({
   const running = detail.suite_run.status === "running";
 
   return (
-    <div style={styles.page}>
+    <div className="responsive-page" style={styles.page}>
       <button style={styles.back} onClick={onBack}>← Back to suite</button>
       <h1 style={styles.title}>
         Suite run #{suiteRunId} <StatusChip status={detail.suite_run.status} />
@@ -614,7 +625,7 @@ function CompareTable({ compare }: { compare: SuiteCompareJson }) {
       </p>
       {compare.gold_changed_any && (
         <p data-testid="compare-gold-warning" style={styles.warn}>
-          ⚠ Gold changed between these two runs — score moves may reflect the gold
+          Reference answers changed between these runs — score changes may reflect the reference
           edit, not a pipeline change.
         </p>
       )}
@@ -712,6 +723,7 @@ const styles = {
   formRow: { display: "flex", gap: pwc.space.md, alignItems: "center", flexWrap: "wrap" as const } as React.CSSProperties,
   grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: pwc.space.md } as React.CSSProperties,
   field: { display: "flex", flexDirection: "column" as const, gap: pwc.space.xs } as React.CSSProperties,
+  fieldHint: { color: pwc.grey500, fontSize: 12, lineHeight: 1.4 } as React.CSSProperties,
   list: { display: "flex", flexDirection: "column" as const, gap: pwc.space.sm } as React.CSSProperties,
   rowCard: { ...ui.card, padding: pwc.space.lg, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", textAlign: "left" as const, background: pwc.white } as React.CSSProperties,
   rowTitle: { fontFamily: pwc.fontHeading, fontSize: 15, fontWeight: 600, color: pwc.grey900 } as React.CSSProperties,

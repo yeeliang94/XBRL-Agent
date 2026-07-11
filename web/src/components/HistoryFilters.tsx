@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
+import { ui, uiClass } from "../lib/uiStyles";
 import { RUN_STATUS_FILTER_OPTIONS } from "../lib/runStatus";
 import type { FilingStandard, RunsFilterParams } from "../lib/types";
 
@@ -33,6 +33,14 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
 ];
 
 export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
+  const activeCount = [
+    value.q,
+    value.status,
+    value.standard,
+    value.dateFrom,
+    value.dateTo,
+    value.includeSuiteChildren,
+  ].filter(Boolean).length;
   // Local mirror of the search text so the input stays responsive during
   // the debounce window. Kept in sync with incoming `value.q` so resets
   // from the parent (e.g. "clear filters") propagate.
@@ -167,6 +175,22 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
         />
         <span style={styles.labelText}>Show suite runs</span>
       </label>
+
+      <div style={styles.actions}>
+        <span role="status" aria-live="polite" style={styles.activeCount}>
+          {activeCount === 0 ? "No filters applied" : `${activeCount} filter${activeCount === 1 ? "" : "s"} applied`}
+        </span>
+        {activeCount > 0 && (
+          <button
+            type="button"
+            className={uiClass.btnSecondary}
+            style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+            onClick={() => onChange({})}
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -177,6 +201,9 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
 
 const styles = {
   row: {
+    position: "sticky" as const,
+    top: 0,
+    zIndex: 5,
     display: "flex",
     alignItems: "flex-end",
     gap: pwc.space.xl,
@@ -186,6 +213,16 @@ const styles = {
     border: `1px solid ${pwc.grey200}`,
     borderRadius: pwc.radius.lg,
     boxShadow: pwc.shadow.card,
+  } as React.CSSProperties,
+  actions: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    marginLeft: "auto",
+  } as React.CSSProperties,
+  activeCount: {
+    ...ui.metadata,
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   label: {
     display: "flex",

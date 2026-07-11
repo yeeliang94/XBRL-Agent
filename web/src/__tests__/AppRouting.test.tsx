@@ -67,10 +67,10 @@ describe("App routing", () => {
     const { default: App } = await import("../App");
     const { getByRole } = render(<App />);
 
-    fireEvent.click(getByRole("tab", { name: /history/i }));
+    fireEvent.click(getByRole("tab", { name: /runs/i }));
     expect(window.location.pathname).toBe("/history");
 
-    fireEvent.click(getByRole("tab", { name: /extract/i }));
+    fireEvent.click(getByRole("tab", { name: /new extraction/i }));
     expect(window.location.pathname).toBe("/");
   });
 
@@ -79,9 +79,9 @@ describe("App routing", () => {
     const { getByRole } = render(<App />);
 
     // Go to history
-    fireEvent.click(getByRole("tab", { name: /history/i }));
+    fireEvent.click(getByRole("tab", { name: /runs/i }));
     expect(
-      getByRole("tab", { name: /history/i }).getAttribute("aria-selected"),
+      getByRole("tab", { name: /runs/i }).getAttribute("aria-selected"),
     ).toBe("true");
 
     // Simulate the browser popping back to "/". jsdom does not automatically
@@ -94,7 +94,7 @@ describe("App routing", () => {
     });
 
     expect(
-      getByRole("tab", { name: /extract/i }).getAttribute("aria-selected"),
+      getByRole("tab", { name: /new extraction/i }).getAttribute("aria-selected"),
     ).toBe("true");
   });
 
@@ -103,7 +103,7 @@ describe("App routing", () => {
     const { default: App } = await import("../App");
     const { getByRole } = render(<App />);
     expect(
-      getByRole("tab", { name: /history/i }).getAttribute("aria-selected"),
+      getByRole("tab", { name: /runs/i }).getAttribute("aria-selected"),
     ).toBe("true");
   });
 
@@ -135,12 +135,12 @@ describe("App routing", () => {
     expect(window.location.pathname).toBe("/history/42");
 
     // Click Extract → URL must clear back to /.
-    fireEvent.click(getByRole("tab", { name: /extract/i }));
+    fireEvent.click(getByRole("tab", { name: /new extraction/i }));
     await new Promise((r) => setTimeout(r, 0));
     expect(window.location.pathname).toBe("/");
 
     // Click History → URL must be the list (/history), not /history/42.
-    fireEvent.click(getByRole("tab", { name: /history/i }));
+    fireEvent.click(getByRole("tab", { name: /runs/i }));
     await new Promise((r) => setTimeout(r, 0));
     expect(window.location.pathname).toBe("/history");
   });
@@ -422,7 +422,7 @@ describe("App routing", () => {
 
     // Click Extract → fresh, empty box: URL back to "/" and filename gone.
     await act(async () => {
-      fireEvent.click(getByRole("tab", { name: /extract/i }));
+      fireEvent.click(getByRole("tab", { name: /new extraction/i }));
     });
     await new Promise((r) => setTimeout(r, 0));
     expect(window.location.pathname).toBe("/");

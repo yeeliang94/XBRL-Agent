@@ -70,45 +70,35 @@ export function RecentRunsList({
             const isDraft = run.status === "draft";
             const activate = () =>
               isDraft ? onResumeDraft(run.id) : onOpenRun(run.id);
+            const filingProfile = [
+              run.filing_standard?.toUpperCase(),
+              run.filing_level ? run.filing_level.charAt(0).toUpperCase() + run.filing_level.slice(1) : null,
+              run.denomination ? denominationLabel(run.denomination) : null,
+            ].filter(Boolean).join(" · ");
             return (
-              <div
+              <button
+                type="button"
                 key={run.id}
-                role="button"
-                tabIndex={0}
                 onClick={activate}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    activate();
-                  }
-                }}
                 style={styles.card}
               >
                 <div style={styles.cardTop}>
                   <span style={styles.filename} title={run.pdf_filename}>
                     {run.pdf_filename}
                   </span>
-                  <span style={styles.action}>{isDraft ? "Resume" : "View"}</span>
+                  <span style={styles.action}>
+                    {isDraft ? "Resume" : run.status === "completed_with_errors" ? "Review" : "Open"}
+                  </span>
                 </div>
                 <div style={styles.cardMeta}>
                   <span style={{ ...styles.badge, borderColor: display.accent }}>
                     <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
                     {display.label}
                   </span>
-                  {/* Same context chips as History so two runs of the same PDF
-                      are distinguishable at a glance (E4). */}
-                  {run.filing_level === "group" && (
-                    <span style={{ ...styles.inlineBadge, borderColor: pwc.info }}>Group</span>
-                  )}
-                  {run.filing_standard === "mpers" && (
-                    <span style={{ ...styles.inlineBadge, borderColor: pwc.orange500 }}>MPERS</span>
-                  )}
-                  {run.denomination && run.denomination !== "thousands" && (
-                    <span style={styles.inlineBadge}>{denominationLabel(run.denomination)}</span>
-                  )}
+                  {filingProfile && <span style={styles.profile}>{filingProfile}</span>}
                   <span style={styles.date}>{formatDate(run.created_at)}</span>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -151,6 +141,9 @@ const styles = {
     gap: pwc.space.sm,
   } as React.CSSProperties,
   card: {
+    width: "100%",
+    textAlign: "left" as const,
+    fontFamily: pwc.fontBody,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xs,
@@ -159,7 +152,7 @@ const styles = {
     borderRadius: pwc.radius.md,
     background: pwc.white,
     cursor: "pointer",
-    transition: "background 120ms ease",
+    transition: `background ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   cardTop: {
     display: "flex",
@@ -193,8 +186,10 @@ const styles = {
   badge: {
     ...ui.badge,
   } as React.CSSProperties,
-  inlineBadge: {
-    ...ui.badge,
+  profile: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey700,
   } as React.CSSProperties,
   date: {
     fontFamily: pwc.fontBody,

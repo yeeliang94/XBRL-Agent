@@ -93,6 +93,11 @@ const styles = {
     fontSize: 14,
     marginTop: pwc.space.sm,
   } as React.CSSProperties,
+  uploadHint: {
+    fontFamily: pwc.fontBody,
+    color: pwc.grey500,
+    fontSize: 13,
+  } as React.CSSProperties,
 };
 
 export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props) {
@@ -142,7 +147,10 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
           disabled={disabled}
           onFile={handleFile}
         >
-          {uploading && <p style={styles.uploading}>Uploading...</p>}
+          <span style={styles.uploadHint}>
+            PDF or DOCX · up to {MAX_UPLOAD_MB} MB · processed within this application
+          </span>
+          {uploading && <span style={styles.uploading} role="status" aria-live="polite">Uploading…</span>}
         </FileDropzone>
       ) : (
         <div style={styles.fileRow}>
@@ -161,7 +169,7 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
           )}
         </div>
       )}
-      {error && <p style={styles.error}>{error}</p>}
+      {error && <p style={styles.error} role="alert">{error}</p>}
     </div>
   );
 }

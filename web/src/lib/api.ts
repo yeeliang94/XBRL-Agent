@@ -275,9 +275,10 @@ export async function fetchRuns(params: RunsFilterParams): Promise<RunListRespon
  *  most-recent run in `fetchRecentRuns`, so the homepage derives it from
  *  that list rather than paying for a fourth round-trip. */
 export interface HomeStats {
-  total: number;
   drafts: number;
   completedThisMonth: number;
+  needsReview: number;
+  active: number;
 }
 
 /** The few most-recent runs for the landing page, with real RESULTS surfaced
@@ -304,24 +305,29 @@ function currentMonthStart(): string {
   return `${now.getFullYear()}-${month}-01`;
 }
 
-/** Fetch the three headline counts in parallel. Each call asks for a single
+/** Fetch the headline counts in parallel. Each call asks for a single
  *  row (`limit: 1`) purely to read the server's `total` for that filter —
  *  we never use the returned rows, so this stays cheap regardless of how
- *  many runs match. */
+ *  many runs match. Completed-with-errors is counted twice intentionally:
+ *  once with the month floor for throughput, and once without it for the
+ *  all-time review queue. */
 export async function fetchHomeStats(): Promise<HomeStats> {
   const monthStart = currentMonthStart();
-  const [all, drafts, completed, completedWithErrors] = await Promise.all([
-    fetchRuns({ limit: 1 }),
+  const [drafts, completed, completedWithErrorsThisMonth, completedWithErrorsAll, correctionExhausted, running] = await Promise.all([
     fetchRuns({ status: "draft", limit: 1 }),
     fetchRuns({ status: "completed", dateFrom: monthStart, limit: 1 }),
     // A run that finished with advisory errors still finished (UX-QA #10) —
     // count it so "Completed this month" doesn't under-report real work.
     fetchRuns({ status: "completed_with_errors", dateFrom: monthStart, limit: 1 }),
+    fetchRuns({ status: "completed_with_errors", limit: 1 }),
+    fetchRuns({ status: "correction_exhausted", limit: 1 }),
+    fetchRuns({ status: "running", limit: 1 }),
   ]);
   return {
-    total: all.total,
     drafts: drafts.total,
-    completedThisMonth: completed.total + completedWithErrors.total,
+    completedThisMonth: completed.total + completedWithErrorsThisMonth.total,
+    needsReview: completedWithErrorsAll.total + correctionExhausted.total,
+    active: running.total,
   };
 }
 

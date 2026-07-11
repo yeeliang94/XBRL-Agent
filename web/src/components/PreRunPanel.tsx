@@ -1016,13 +1016,18 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
   const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s]);
   const enabledNotes = NOTES_TEMPLATE_TYPES.filter((n) => notesEnabled[n]);
+  const statementsMissingFormats = enabledStmts.filter(
+    (statement) => !variantSelections[statement]?.variant,
+  );
   // PLAN §4 D.2: submitting with no notes selected still runs face-only
   // (current behaviour). Notes-only runs are also allowed so an operator
   // can refill just the notes sheets after an earlier face extraction.
   // Eval testing, when on, requires a benchmark — block Run on a dangling
   // toggle so a run never starts that the user expects to be graded but isn't.
   const canRun =
-    (enabledStmts.length > 0 || enabledNotes.length > 0) && !evalSelectionMissing;
+    (enabledStmts.length > 0 || enabledNotes.length > 0) &&
+    statementsMissingFormats.length === 0 &&
+    !evalSelectionMissing;
 
   return (
     <div style={styles.container}>
@@ -1037,7 +1042,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           gap: pwc.space.md,
         }}
       >
-        <h2 style={styles.heading}>Run Configuration</h2>
+        <h2 style={styles.heading}>Run configuration</h2>
         <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
@@ -1067,7 +1072,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       {/* Filing standard: MFRS (default) or MPERS. Mirrors the Filing Level
           styling below so the two toggles read as a pair. */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Filing Standard</span>
+        <span style={styles.sectionLabel}>Filing standard</span>
         <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
           {(["mfrs", "mpers"] as const).map((standard) => {
             const active = filingStandard === standard;
@@ -1099,7 +1104,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       {/* Filing level: Company or Group */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Filing Level</span>
+        <span style={styles.sectionLabel}>Filing level</span>
         <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
           {(["company", "group"] as const).map((level) => {
             const active = filingLevel === level;
@@ -1342,8 +1347,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               margin: 0,
             }}
           >
-            Couldn't save scout model selection: {scoutModelSaveError}. The
-            next Auto-detect will use the previously persisted model.
+            Couldn't save the pre-scan model selection: {scoutModelSaveError}. The
+            next document scan will use the previously saved model.
           </p>
         )}
         {isDetecting && (
@@ -1356,7 +1361,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   animation: "spin 0.8s linear infinite", flexShrink: 0, display: "inline-block",
                 }} />
                 <span style={{ fontFamily: pwc.fontHeading, fontSize: 13, fontWeight: 600, color: pwc.grey800 }}>
-                  {scoutProgress || "Starting scout..."}
+                  {scoutProgress || "Starting document scan…"}
                 </span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
@@ -1387,6 +1392,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           <div>
             <button
               type="button"
+              aria-label={`Scout log — ${scoutLogOpen ? "hide" : "show"} technical log`}
               onClick={() => setScoutLogOpen((v) => !v)}
               aria-expanded={scoutLogOpen}
               aria-controls="scout-log-region"
@@ -1401,13 +1407,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 cursor: "pointer",
               }}
             >
-              {scoutLogOpen ? "▾ Hide scout log" : `▸ Show scout log (${scoutToolTimeline.length})`}
+              {scoutLogOpen ? "▾ Hide technical log" : `▸ Show technical log (${scoutToolTimeline.length})`}
             </button>
             {scoutLogOpen && (
               <div
                 id="scout-log-region"
                 role="region"
-                aria-label="Scout tool-call timeline"
+                aria-label="Document pre-scan technical timeline"
                 style={{ marginTop: pwc.space.sm }}
               >
                 <AgentTimeline
@@ -1525,19 +1531,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           Advanced settings, or turn grading off.
         </p>
       )}
-      {/* Scan-first soft-warning (UX-QA #5): if no pre-scan has run and no
-          statement format is resolved, the run starts against the fallback
-          Default layout with no confirmation. Nudge the user to scan or pick a
-          format — non-blocking, since an operator can still choose to proceed. */}
-      {canRun && !infopack &&
-        enabledStmts.length > 0 &&
-        enabledStmts.every((s) => !variantSelections[s]?.variant) && (
-          <p role="status" style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.orange700, margin: 0 }}>
-            No statement formats are set yet. Run the document pre-scan above (or
-            pick a format for each statement) so the AI uses the right layout —
-            otherwise it falls back to a default that may not match this document.
-          </p>
-        )}
+      {statementsMissingFormats.length > 0 && (
+        <p role="status" style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.orange700, margin: 0 }}>
+          Choose a format for {statementsMissingFormats.join(", ")} before starting.
+          Scan the document for suggestions, or select each format manually.
+        </p>
+      )}
       <button
         onClick={handleRun}
         disabled={!canRun}

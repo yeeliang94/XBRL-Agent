@@ -51,7 +51,7 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
   };
 
   return (
-    <div style={styles.container}>
+    <div className="responsive-page settings-page" style={styles.container}>
       <h2 style={styles.heading}>Settings</h2>
 
       <div

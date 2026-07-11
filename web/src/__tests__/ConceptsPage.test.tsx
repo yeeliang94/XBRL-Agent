@@ -210,6 +210,25 @@ describe("ConceptsPage", () => {
     expect(leafRow.textContent).toMatch(/pdf p\.1/);
   });
 
+  test("manual edits retain their original evidence page in the source label", async () => {
+    const edited = {
+      ...sampleConcepts,
+      concepts: sampleConcepts.concepts.map((row) =>
+        row.concept_uuid === "leaf-1"
+          ? { ...row, source: "manual edit", evidence: "Page 12, Biological assets 123" }
+          : row,
+      ),
+    };
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return edited;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    const row = await screen.findByTestId("concept-row-leaf-1");
+    expect(row).toHaveTextContent("Manual edit · original source page 12");
+  });
+
   test("lists all templates in run via the selector", async () => {
     const multi = {
       run_id: 42,
@@ -602,6 +621,10 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
+
+    // The exception-led default hides an optional blank. Switch to All for
+    // this visual comparison of mandatory vs optional blank styling.
+    fireEvent.click(await screen.findByTestId("filter-all"));
 
     const mandatoryInput = (await waitFor(() =>
       screen.getByTestId("value-input-mandatory-empty")
@@ -1176,6 +1199,38 @@ describe("ConceptsPage", () => {
     // The old row-count metrics are gone.
     expect(within(strip).queryByText("Fields shown")).toBeNull();
     expect(within(strip).queryByText("Templates")).toBeNull();
+  });
+
+  test("issue navigation clamps when resolved checks shrink the queue", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    const makeCheck = (name: string): CrossCheckResult => ({
+      name,
+      status: "failed",
+      expected: 1,
+      actual: 2,
+      diff: 1,
+      tolerance: 0,
+      message: "Mismatch",
+      target_sheet: "SOFP-CuNonCu",
+      target_row: 10,
+    });
+    const { rerender } = render(
+      <ConceptsPage
+        runId={42}
+        initialCrossChecks={[makeCheck("one"), makeCheck("two"), makeCheck("three")]}
+      />,
+    );
+    await screen.findByRole("button", { name: "Next issue" });
+    fireEvent.click(screen.getByRole("button", { name: "Next issue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next issue" }));
+    expect(screen.getByText("3 / 3")).toBeInTheDocument();
+
+    rerender(<ConceptsPage runId={42} initialCrossChecks={[makeCheck("one")]} />);
+    await waitFor(() => expect(screen.getByText("1 / 1")).toBeInTheDocument());
   });
 
   // Review-workspace Phase 3: technical metadata hidden behind a drawer.

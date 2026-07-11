@@ -37,6 +37,21 @@ const mockSettings: ExtendedSettingsResponse = {
   auto_review: true,
 };
 
+/** Select valid formats for any enabled face statements before exercising the
+ * submit path. Production now blocks ambiguous default-format fallbacks. */
+function startExtraction() {
+  const defaults = ["CuNonCu", "Function", "BeforeTax", "Indirect", "Default"];
+  const selects = screen.getAllByRole("combobox").filter((element) =>
+    defaults.some((value) => element.querySelector(`option[value='${value}']`)),
+  ) as HTMLSelectElement[];
+  selects.forEach((select, index) => {
+    if (!select.disabled && !select.value && defaults[index]) {
+      fireEvent.change(select, { target: { value: defaults[index] } });
+    }
+  });
+  fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+}
+
 describe("PreRunPanel", () => {
   test("renders all major sections", async () => {
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
@@ -108,7 +123,7 @@ describe("PreRunPanel", () => {
     // SOCIE
     fireEvent.change(variantSelects[4], { target: { value: "Default" } });
 
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -156,7 +171,7 @@ describe("PreRunPanel", () => {
       fireEvent.change(variantSelects[3], { target: { value: "Indirect" } });
     }
 
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     if (onRun.mock.calls.length > 0) {
       const config = onRun.mock.calls[0][0];
@@ -209,7 +224,7 @@ describe("PreRunPanel", () => {
       });
       fireEvent.change(select, { target: { value: "9" } });
 
-      fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+      startExtraction();
       expect(onRun).toHaveBeenCalled();
       expect(onRun.mock.calls[0][0].benchmark_id).toBe(9);
     } finally {
@@ -229,7 +244,7 @@ describe("PreRunPanel", () => {
       render(<PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} isAdmin />);
       await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(11));
       const runBtn = screen.getByRole("button", { name: /start extraction/i }) as HTMLButtonElement;
-      expect(runBtn.disabled).toBe(false); // statements selected, eval off
+      expect(runBtn.disabled).toBe(true); // statement formats are still unresolved
 
       fireEvent.click(screen.getByTestId("advanced-toggle"));
       fireEvent.click(screen.getByTestId("eval-toggle"));
@@ -566,7 +581,7 @@ describe("PreRunPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /group/i }));
 
     // Trigger a run
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ filing_level: "group" }),
@@ -584,7 +599,7 @@ describe("PreRunPanel", () => {
       expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ filing_level: "company" }),
@@ -637,7 +652,7 @@ describe("PreRunPanel", () => {
       screen.getByRole("checkbox", { name: /issued capital \(note 13\)/i }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -672,7 +687,7 @@ describe("PreRunPanel", () => {
     }) as HTMLSelectElement;
     fireEvent.change(notes11ModelSelect, { target: { value: "claude-opus-4-6" } });
 
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     // notes_models must include the enabled template with the override, and
     // NOT include templates the user left unchecked (mirrors `models`).
@@ -692,7 +707,7 @@ describe("PreRunPanel", () => {
       expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ notes_to_run: [] }),
@@ -1148,7 +1163,7 @@ describe("PreRunPanel", () => {
 
     // Click MPERS then Run.
     fireEvent.click(screen.getByRole("button", { name: /^MPERS$/ }));
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ filing_standard: "mpers" }),
@@ -1165,7 +1180,7 @@ describe("PreRunPanel", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({ filing_standard: "mfrs" }),
@@ -1212,7 +1227,7 @@ describe("PreRunPanel", () => {
     await waitFor(() => {
       // Toggle state is reflected through the payload to keep the test
       // independent of style-based active-button detection.
-      fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+      startExtraction();
       expect(onRun).toHaveBeenCalledWith(
         expect.objectContaining({ filing_standard: "mpers" }),
       );
@@ -1262,7 +1277,7 @@ describe("PreRunPanel", () => {
 
     // Pin the payload shape too: running after the switch-back must send
     // SOCIE=Default (not blank), matching what the user sees.
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
     expect(onRun).toHaveBeenCalledWith(
       expect.objectContaining({
         filing_standard: "mfrs",
@@ -1341,7 +1356,7 @@ describe("PreRunPanel", () => {
     expect(socieSelect.value).toBe("");
 
     // Runtime payload must not carry the invalid SoRE variant.
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
     const payload = onRun.mock.calls[0][0];
     expect(payload.filing_standard).toBe("mfrs");
     expect(payload.variants.SOCIE).not.toBe("SoRE");
@@ -1384,7 +1399,7 @@ describe("PreRunPanel", () => {
 
     // Click Run; the emitted config must reflect everything the user
     // had before the refresh — no defaults snuck back in.
-    fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
+    startExtraction();
 
     expect(onRun).toHaveBeenCalledTimes(1);
     const cfg = onRun.mock.calls[0][0];

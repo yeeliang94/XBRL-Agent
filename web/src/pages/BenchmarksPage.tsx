@@ -66,7 +66,7 @@ export function BenchmarksPage({ selectedId, onSelectBenchmark }: BenchmarksPage
             {bench && (
               <span style={styles.editorMeta}>
                 {bench.filing_standard.toUpperCase()} · {bench.filing_level} ·{" "}
-                {bench.gold_cell_count} gold cells
+                {bench.gold_cell_count} reference values
               </span>
             )}
           </h1>
@@ -78,12 +78,12 @@ export function BenchmarksPage({ selectedId, onSelectBenchmark }: BenchmarksPage
 
   // List mode.
   return (
-    <div data-testid="benchmarks-page" style={styles.page}>
+    <div data-testid="benchmarks-page" className="responsive-page" style={styles.page}>
       <header style={styles.header}>
         <div>
           <h1 style={styles.title}>Benchmarks</h1>
           <p style={styles.subtitle}>
-            A library of financial statements with human-verified gold answers.
+            A library of financial statements with human-verified reference answers.
             Attach one to a run to score extraction accuracy automatically.
           </p>
         </div>
@@ -165,9 +165,8 @@ function BenchmarkCard({
         <div style={styles.cardName}>{benchmark.name}</div>
         <div style={styles.cardMeta}>
           {benchmark.document && <span>{benchmark.document}</span>}
-          <span style={ui.badge}>{benchmark.filing_standard.toUpperCase()}</span>
-          <span style={ui.badge}>{benchmark.filing_level}</span>
-          <span style={styles.cardCount}>{benchmark.gold_cell_count} gold cells</span>
+          <span>{benchmark.filing_standard.toUpperCase()} · {benchmark.filing_level}</span>
+          <span style={styles.cardCount}>{benchmark.gold_cell_count} reference values</span>
         </div>
         <div style={styles.cardStatements}>
           {benchmark.statements.join(" · ") || "no statements"}
@@ -205,7 +204,7 @@ function BenchmarkCard({
         title={`Delete benchmark ${benchmark.name}?`}
         message={
           <>
-            This permanently removes its gold answers <strong>and the scorecard
+            This permanently removes its reference answers <strong>and the scorecard
             of every run graded against it</strong> (those runs' History score
             reverts to “—”). This can’t be undone.
           </>
@@ -322,7 +321,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             run_id: Number(trimmed),
             name: name.trim(),
           });
-          setOk(`Created "${name.trim()}" — ${res.ingested} gold cells from ${res.statements.join(", ")} (run ${res.source_run_id}).`);
+          setOk(`Created "${name.trim()}" — ${res.ingested} reference values from ${res.statements.join(", ")} (run ${res.source_run_id}).`);
           setName("");
           setRunId("");
           onCreated();
@@ -338,7 +337,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             filing_standard: standard,
             filing_level: level,
           });
-          setOk(`Created "${name.trim()}" — ${res.ingested} gold cells from ${res.statements.join(", ")}.`);
+          setOk(`Created "${name.trim()}" — ${res.ingested} reference values from ${res.statements.join(", ")}.`);
           if (res.warning) setWarning(res.warning);
           setName("");
           setFile(null);
@@ -369,7 +368,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             template_ids: selectedTemplateIds,
           });
           setReport(res);
-          setOk(`Created "${name.trim()}" — ${res.ingested} gold cells captured.`);
+          setOk(`Created "${name.trim()}" — ${res.ingested} reference values captured.`);
           if (res.scale_warning) setWarning(res.scale_warning);
           setName("");
           setFile(null);
@@ -384,15 +383,27 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
     [mode, file, name, runId, standard, level, unit, selectedTemplateIds, onCreated]
   );
 
+  const createDisabledReason = !name.trim()
+    ? "Enter a benchmark name to continue."
+    : mode === "run" && !runId
+      ? "Select a finished run to continue."
+      : mode !== "run" && !file
+        ? "Choose a filled workbook to continue."
+        : mode === "mtool" && !unit
+          ? "Declare the workbook's figure unit to continue."
+          : mode === "mtool" && selectedTemplateIds.length === 0
+            ? "Select at least one statement variant to continue."
+            : null;
+
   return (
     <form
       data-testid="add-benchmark-form"
       onSubmit={submit}
       style={styles.formCard}
-      className={uiClass.card}
     >
       <div style={styles.formTitle}>Add benchmark</div>
-      <div role="radiogroup" aria-label="Gold source" style={styles.modeRow}>
+      <div style={ui.fieldLabel}>Build reference answers from</div>
+      <div role="radiogroup" aria-label="Build reference answers from" style={styles.modeRow}>
         <label style={styles.modeOption}>
           <input
             type="radio"
@@ -426,7 +437,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
       </div>
       <div style={styles.formGrid}>
         <div style={styles.formField}>
-          <label htmlFor="bench-name" style={ui.fieldLabel}>Name</label>
+          <label htmlFor="bench-name" style={ui.fieldLabel}>Name (required)</label>
           <input
             id="bench-name"
             data-testid="bench-name"
@@ -438,7 +449,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
         </div>
         {mode === "run" ? (
           <div style={styles.formField}>
-            <label htmlFor="bench-run-id" style={ui.fieldLabel}>Run</label>
+            <label htmlFor="bench-run-id" style={ui.fieldLabel}>Finished run (required)</label>
             <select
               id="bench-run-id"
               data-testid="bench-run-id"
@@ -456,7 +467,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             <span style={styles.fieldHint}>
               {runOptions.length === 0
                 ? "No finished runs yet — complete an extraction first."
-                : "Standard / level are taken from the run. Edit the gold values afterwards in the benchmark editor."}
+                : "Standard and level come from the run. Review the reference values afterwards in the benchmark editor."}
             </span>
           </div>
         ) : (
@@ -489,7 +500,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             </div>
             <div style={styles.formField}>
               <label htmlFor="bench-file" style={ui.fieldLabel}>
-                {mode === "mtool" ? "Human-filled mTool file (.xlsx)" : "Filled workbook (.xlsx)"}
+                {mode === "mtool" ? "Human-filled mTool file (.xlsx, required)" : "Filled workbook (.xlsx, required)"}
               </label>
               <input
                 id="bench-file"
@@ -502,7 +513,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             </div>
             {mode === "mtool" && (
               <div style={styles.formField}>
-                <label htmlFor="bench-unit" style={ui.fieldLabel}>Figure unit</label>
+                <label htmlFor="bench-unit" style={ui.fieldLabel}>Figure unit (required)</label>
                 <select
                   id="bench-unit"
                   data-testid="bench-unit"
@@ -525,7 +536,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
       </div>
       {mode === "mtool" && (
         <div style={styles.formField} data-testid="bench-template-picker">
-          <label style={ui.fieldLabel}>Statement variants to map against</label>
+          <label style={ui.fieldLabel}>Statement variants to map against (required)</label>
           {templates.length === 0 ? (
             <span style={styles.fieldHint}>
               No templates imported for this filing family yet.
@@ -561,11 +572,17 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
           type="submit"
           data-testid="bench-submit"
           className={uiClass.btnPrimary}
-          style={{ ...ui.buttonPrimary, opacity: busy ? 0.6 : 1 }}
-          disabled={busy}
+          style={{ ...ui.buttonPrimary, opacity: busy || createDisabledReason ? 0.55 : 1 }}
+          disabled={busy || createDisabledReason !== null}
+          aria-describedby={createDisabledReason ? "bench-create-reason" : undefined}
         >
           {busy ? "Ingesting…" : "Create benchmark"}
         </button>
+        {createDisabledReason && !busy && (
+          <span id="bench-create-reason" data-testid="bench-create-reason" style={styles.fieldHint}>
+            {createDisabledReason}
+          </span>
+        )}
         {error && <span data-testid="bench-error" style={styles.formError}>{error}</span>}
         {ok && <span data-testid="bench-ok" style={styles.formOk}>{ok}</span>}
       </div>
@@ -578,7 +595,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
         <div data-testid="bench-ingest-report" style={styles.reportCard}>
           <div style={styles.reportTitle}>Ingest report</div>
           <div style={styles.reportRow}>
-            ✅ {report.ingested} gold cells captured
+            {report.ingested} reference values captured
             {Object.keys(report.matched_by_statement).length > 0 && (
               <span style={styles.fieldHint}>
                 {" "}
@@ -592,15 +609,15 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
           </div>
           {report.prose_notes_captured > 0 && (
             <div style={styles.reportRow}>
-              📝 {report.prose_notes_captured} note prose payloads captured (gold
-              for a future prose-fidelity pass)
+              {report.prose_notes_captured} note prose payloads captured for a
+              future prose-fidelity pass
             </div>
           )}
           {report.unmatched_rows.length > 0 && (
             <div style={styles.reportRow} data-testid="bench-unmatched">
               ⚠️ {report.unmatched_rows.length} row
               {report.unmatched_rows.length === 1 ? "" : "s"} read but not matched
-              to a concept — enter these by hand in the gold editor:
+              to a concept — enter these by hand in the reference editor:
               <ul style={styles.unmatchedList}>
                 {report.unmatched_rows.slice(0, 25).map((r, i) => (
                   <li key={i} style={styles.unmatchedItem}>
@@ -612,7 +629,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             </div>
           )}
           <div style={styles.reportRow}>
-            Review &amp; correct the imported gold below — click the new
+            Review and correct the imported reference values — click the new
             benchmark in the list to open its editor.
           </div>
         </div>

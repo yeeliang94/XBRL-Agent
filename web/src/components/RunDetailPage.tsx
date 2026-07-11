@@ -29,6 +29,8 @@ export interface RunDetailPageProps {
   onBack: () => void;
   onDownload: (runId: number) => void;
   onDelete: (runId: number) => void;
+  /** Return an unstarted run to its editable extraction setup. */
+  onResumeDraft?: (runId: number) => void;
   /** Forwarded to RunDetailView — rescue a run wedged in `running` status
    *  (UX-QA #2). Optional; when absent the abort control is not shown. */
   onForceAbort?: (runId: number) => void;
@@ -51,6 +53,7 @@ export function RunDetailPage({
   onBack,
   onDownload,
   onDelete,
+  onResumeDraft,
   onForceAbort,
   onRegenerateNotes,
   canonicalEnabled = false,
@@ -64,12 +67,12 @@ export function RunDetailPage({
           onClick={onBack}
           className={uiClass.btnGhost}
           style={styles.backButton}
-          aria-label="Back to history"
+          aria-label="Back to runs"
         >
           {/* Unicode left arrow — keeps the button self-contained without
               pulling in an SVG icon and matches the inline-style rule in
               CLAUDE.md gotcha #7. */}
-          ← Back to history
+          ← Back to runs
         </button>
         {/* The run number is NOT repeated here — the detail view's kicker
             ("RUN {id}") already names the run, and two copies of the same
@@ -87,6 +90,7 @@ export function RunDetailPage({
           detail={detail}
           onDownload={onDownload}
           onDelete={onDelete}
+          onResumeDraft={onResumeDraft}
           onForceAbort={onForceAbort}
           onRegenerateNotes={onRegenerateNotes}
           canonicalEnabled={canonicalEnabled}

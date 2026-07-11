@@ -6,12 +6,16 @@ import {
   coverageStatusLabel,
   subNoteStateLabel,
   crossCheckLabel,
+  crossCheckFailureLabel,
   denominationLabel,
   notesFormatErrorMessage,
 } from "../lib/vocabulary";
 
 describe("TERMS", () => {
   test("exposes the renamed plain-English terms", () => {
+    expect(TERMS.newExtraction).toBe("New extraction");
+    expect(TERMS.runs).toBe("Runs");
+    expect(TERMS.evaluationSuites).toBe("Evaluation suites");
     expect(TERMS.preScan).toBe("Document pre-scan");
     expect(TERMS.aiReview).toBe("AI review");
     expect(TERMS.figures).toBe("Figures");
@@ -75,6 +79,15 @@ describe("crossCheckLabel", () => {
   });
   test("unknown names still produce a readable phrase", () => {
     expect(crossCheckLabel("some_new_check")).not.toContain("_");
+  });
+});
+
+describe("crossCheckFailureLabel", () => {
+  test("phrases failed rules as discrepancies rather than positive assertions", () => {
+    expect(crossCheckFailureLabel("socie_to_sofp_equity")).toBe(
+      "Equity total differs from the balance sheet",
+    );
+    expect(crossCheckFailureLabel("some_new_check")).toBe("Some new check discrepancy");
   });
 });
 

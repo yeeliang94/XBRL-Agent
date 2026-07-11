@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 
@@ -39,6 +39,8 @@ export function FileDropzone({
   children,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -53,6 +55,8 @@ export function FileDropzone({
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      dragDepthRef.current = 0;
+      setIsDragging(false);
       if (disabled) return;
       const file = e.dataTransfer.files[0];
       if (file) onFile(file);
@@ -61,21 +65,43 @@ export function FileDropzone({
   );
 
   return (
-    <div
-      data-testid={testId}
-      onDrop={handleDrop}
-      onDragOver={(e) => e.preventDefault()}
-      style={styles.dropZone}
-    >
-      <p style={styles.dropText}>{label}</p>
+    <>
       <button
         type="button"
+        data-testid={testId}
+        onDrop={handleDrop}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          if (!disabled) {
+            dragDepthRef.current += 1;
+            setIsDragging(true);
+          }
+        }}
+        onDragLeave={() => {
+          // Enter/leave events bubble from descendants. A depth counter keeps
+          // the highlight on until the drag has left the whole button.
+          dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+          if (dragDepthRef.current === 0) setIsDragging(false);
+        }}
+        onDragOver={(e) => e.preventDefault()}
         onClick={() => inputRef.current?.click()}
         disabled={disabled}
-        className={uiClass.btnPrimary}
-        style={disabled ? styles.chooseButtonDisabled : styles.chooseButton}
+        aria-label={`${label}. ${buttonLabel}`}
+        style={{
+          ...styles.dropZone,
+          ...(isDragging ? styles.dropZoneDragging : {}),
+          ...(disabled ? styles.dropZoneDisabled : {}),
+        }}
       >
-        {buttonLabel}
+        <span style={styles.dropText}>{label}</span>
+        <span
+          aria-hidden="true"
+          className={uiClass.btnPrimary}
+          style={disabled ? styles.chooseButtonDisabled : styles.chooseButton}
+        >
+          {buttonLabel}
+        </span>
+        {children}
       </button>
       <input
         ref={inputRef}
@@ -86,24 +112,42 @@ export function FileDropzone({
         style={{ display: "none" }}
         aria-label={inputLabel}
       />
-      {children}
-    </div>
+    </>
   );
 }
 
 const styles = {
   dropZone: {
-    border: `2px dashed ${pwc.grey200}`,
+    width: "100%",
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: pwc.space.md,
+    borderWidth: 2,
+    borderStyle: "dashed",
+    borderColor: pwc.grey200,
     borderRadius: pwc.radius.lg,
     padding: pwc.space.xxxl,
     textAlign: "center" as const,
     background: pwc.grey50,
+    cursor: "pointer",
+    fontFamily: pwc.fontBody,
+    transition: `border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}, background ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
+  } as React.CSSProperties,
+  dropZoneDragging: {
+    borderColor: pwc.orange500,
+    background: pwc.orange50,
+  } as React.CSSProperties,
+  dropZoneDisabled: {
+    cursor: "not-allowed",
+    opacity: 0.6,
   } as React.CSSProperties,
   dropText: {
     fontFamily: pwc.fontBody,
     color: pwc.grey700,
     fontSize: 15,
-    marginBottom: pwc.space.md,
+    margin: 0,
   } as React.CSSProperties,
   chooseButton: {
     ...ui.buttonPrimary,

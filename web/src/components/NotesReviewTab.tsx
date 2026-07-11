@@ -504,7 +504,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
           "NOTES REVIEW" heading lives in the parent (RunDetailView) to
           match the AGENTS / CROSS-CHECKS pattern, so no duplicate
           heading + subtitle here. */}
-      <header style={styles.topBar}>
+      {!isEmpty && <header style={styles.topBar}>
         <button
           type="button"
           className={uiClass.btnGhost}
@@ -530,7 +530,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
         >
           Re-extract notes (replaces your edits)
         </button>
-      </header>
+      </header>}
 
       {/* Per-run "Table style" panel: re-themes EVERY table on this run at once
           (editor preview + paste), persisted as the run override. Manual
@@ -575,8 +575,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
 
       {isEmpty && (
         <p style={styles.dim}>
-          No notes content for this run. (Face-statement-only runs skip
-          the notes pipeline.)
+          This run did not include note extraction.
         </p>
       )}
 

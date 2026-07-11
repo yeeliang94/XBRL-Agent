@@ -69,7 +69,7 @@ describe("RunDetailPage", () => {
     // The back button is the user's only path out — assert it's present
     // and labelled accessibly.
     expect(
-      screen.getByRole("button", { name: /back to history/i }),
+      screen.getByRole("button", { name: /back to runs/i }),
     ).toBeInTheDocument();
   });
 
@@ -86,7 +86,7 @@ describe("RunDetailPage", () => {
       />,
     );
     fireEvent.click(
-      screen.getByRole("button", { name: /back to history/i }),
+      screen.getByRole("button", { name: /back to runs/i }),
     );
     expect(onBack).toHaveBeenCalledTimes(1);
   });

@@ -9,6 +9,7 @@ import { RunDetailPage } from "../components/RunDetailPage";
 import type { RunTabKey } from "../components/RunDetailView";
 import { fetchRuns, fetchRunDetail, deleteRun, forceAbortRun, downloadFilledUrl } from "../lib/api";
 import type { RunDetailJson, RunSummaryJson, RunsFilterParams } from "../lib/types";
+import { TERMS } from "../lib/vocabulary";
 
 // ---------------------------------------------------------------------------
 // HistoryPage — top-level view for browsing past extraction runs.
@@ -404,6 +405,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           }}
           onDownload={handleDownload}
           onDelete={handleDelete}
+          onResumeDraft={onResumeDraft}
           onForceAbort={handleForceAbort}
           onRegenerateNotes={handleRegenerateNotes}
         />
@@ -414,7 +416,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
   return (
     <div style={styles.container}>
       <PageHeader
-        title="History"
+        title={TERMS.runs}
         description="Every extraction you've run — open one to review its figures, notes and checks, or download the Excel."
       />
       <HistoryFilters value={filters} onChange={setFilters} />

@@ -247,7 +247,7 @@ describe("ReviewTab", () => {
     fireEvent.change(screen.getByLabelText("Answer flag 9"), {
       target: { value: "the note is on page 44" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save decision/i }));
     await waitFor(() => {
       expect(posts.some((p) => p.url === "/api/runs/7/flags/9/answer")).toBe(true);
     });

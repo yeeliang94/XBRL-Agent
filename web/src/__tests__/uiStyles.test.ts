@@ -34,3 +34,20 @@ describe("ui.thDense / ui.tdDense — one dense table variant", () => {
     expect(ui.thDense.padding).toBe(`${pwc.space.sm}px ${pwc.space.md}px`);
   });
 });
+
+describe("semantic design-system roles", () => {
+  test("financial values use tabular numerals and right alignment", () => {
+    expect(ui.financialValue.fontVariantNumeric).toBe("tabular-nums");
+    expect(ui.financialValue.textAlign).toBe("right");
+  });
+
+  test("form and wide pages have intentional width roles", () => {
+    expect(ui.pageForm.maxWidth).toBe(840);
+    expect(ui.pageWide.maxWidth).toBe(1440);
+  });
+
+  test("the sticky action bar is visually anchored", () => {
+    expect(ui.stickyActionBar.position).toBe("sticky");
+    expect(ui.stickyActionBar.bottom).toBe(0);
+  });
+});

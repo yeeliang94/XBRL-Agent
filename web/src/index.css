@@ -14,6 +14,7 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  overflow-x: hidden;
 }
 
 * {
@@ -142,7 +143,8 @@ textarea:focus {
   cursor: not-allowed;
 }
 
-/* Card hover lift (design system: subtle raise signals interactivity). */
+/* Interactive-card hover lift. Static cards deliberately omit this class;
+   elevation is an affordance, not decoration. */
 .pwc-card {
   transition: box-shadow .2s ease, transform .2s ease;
 }
@@ -191,4 +193,109 @@ textarea:focus {
 .agent-tab:hover:not([aria-selected="true"]):not([aria-disabled="true"]) {
   background: #FAFAFA; /* grey50 */
   color: #1A1A1A; /* grey900 */
+}
+
+/* Deliberate responsive modes. Inline styles remain the production styling
+   contract; these class hooks only express viewport-dependent composition. */
+@media (max-width: 1000px) {
+  .review-workspace .review-source-column,
+  .review-workspace .review-resize-handle {
+    display: none !important;
+  }
+
+  .review-workspace .review-menu-column {
+    flex-basis: 220px !important;
+    width: 220px !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-header {
+    align-items: stretch !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+    padding: 12px 16px !important;
+  }
+
+  .app-header-left {
+    align-items: flex-start !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+
+  .app-main-nav {
+    gap: 0 !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    overscroll-behavior-inline: contain;
+    scroll-padding-inline: 4px;
+    width: 100% !important;
+  }
+
+  .app-main-nav-tab {
+    flex: 0 0 auto;
+    padding: 8px 12px !important;
+    white-space: nowrap !important;
+  }
+
+  .app-header-right {
+    justify-content: space-between !important;
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+
+  .app-header-right > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-main {
+    min-width: 0 !important;
+    padding: 24px 16px !important;
+    width: 100% !important;
+  }
+
+  .runs-table-wrap {
+    overflow-x: auto !important;
+  }
+
+  .runs-table-wrap table {
+    min-width: 860px;
+  }
+
+  .responsive-page {
+    max-width: 100% !important;
+    min-width: 0 !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+    width: 100% !important;
+  }
+
+  .quality-toolbar {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+
+  .quality-toolbar > * {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* Narrow screens are intended for monitoring and simple actions. The
+     financial editor remains a laptop/wide-screen workflow. */
+  .review-workspace .review-menu-column {
+    display: none !important;
+  }
+
+  .review-workspace {
+    display: block !important;
+  }
+
+  .settings-page {
+    max-width: none !important;
+  }
 }
