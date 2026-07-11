@@ -54,7 +54,7 @@ from scout.notes_discoverer import (
 )
 from scout.standard_detector import detect_filing_standard
 from tools.pdf_viewer import render_pages_to_png_bytes
-from extraction.history_processors import strip_stale_images
+from extraction.history_processors import clamp_oversized_parts, strip_stale_images
 from limit_warner import limit_warning_processor
 from pydantic_ai.capabilities import ProcessHistory
 
@@ -1132,6 +1132,8 @@ def create_scout_agent(
         # deprecated): image stripping, then the in-band "wrap up now" nudge
         # before the iteration/token hard caps fire (limit_warner.py).
         capabilities=[
+            # Fresh-runaway defence first (clamp), then image stripping.
+            ProcessHistory(clamp_oversized_parts),
             ProcessHistory(strip_stale_images),
             ProcessHistory(limit_warning_processor),
         ],

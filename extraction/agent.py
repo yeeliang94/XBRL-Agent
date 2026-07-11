@@ -28,6 +28,7 @@ from tools.pdf_viewer import render_pages_to_png_bytes, count_pdf_pages
 from tools.fill_workbook import fill_workbook as _fill_workbook_impl, FactWrite
 from tools.verifier import verify_statement as _verify_statement_impl
 from extraction.history_processors import (
+    clamp_oversized_parts,
     compact_old_text_results_ctx,
     strip_stale_images_ctx,
     strip_duplicate_template,
@@ -708,6 +709,9 @@ def create_extraction_agent(
         # deprecated and removed in V2. Order preserved — the limit warner
         # runs LAST so it rides on the post-compaction request.
         capabilities=[
+            # Fresh-runaway defence first: a single oversized part is
+            # clamped before the age-based processors measure anything.
+            ProcessHistory(clamp_oversized_parts),
             ProcessHistory(strip_stale_images_ctx),
             ProcessHistory(strip_duplicate_template),
             ProcessHistory(compact_old_text_results_ctx),
