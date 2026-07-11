@@ -32,6 +32,7 @@ from extraction.history_processors import (
     strip_stale_images_ctx,
     strip_duplicate_template,
 )
+from limit_warner import limit_warning_processor
 from prompts import render_prompt
 
 logger = logging.getLogger(__name__)
@@ -705,6 +706,10 @@ def create_extraction_agent(
             strip_stale_images_ctx,
             strip_duplicate_template,
             compact_old_text_results_ctx,
+            # In-band "wrap up now" nudge before the iteration/token hard
+            # caps fire (limit_warner.py) — registered LAST so it rides on
+            # the post-compaction request that is actually sent.
+            limit_warning_processor,
         ],
     )
 

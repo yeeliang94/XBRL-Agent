@@ -55,6 +55,7 @@ from scout.notes_discoverer import (
 from scout.standard_detector import detect_filing_standard
 from tools.pdf_viewer import render_pages_to_png_bytes
 from extraction.history_processors import strip_stale_images
+from limit_warner import limit_warning_processor
 
 logger = logging.getLogger(__name__)
 
@@ -1126,7 +1127,9 @@ def create_scout_agent(
         # Token-cost reduction: strip stale page-image blobs (from view_pages)
         # out of the outbound request each turn. Pure function over the message
         # list; see extraction/history_processors.py.
-        history_processors=[strip_stale_images],
+        # limit_warning_processor adds the in-band "wrap up now" nudge
+        # before the iteration/token hard caps fire (limit_warner.py).
+        history_processors=[strip_stale_images, limit_warning_processor],
     )
 
     # --- Tools ---
