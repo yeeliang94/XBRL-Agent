@@ -108,7 +108,7 @@ describe("ScoutToggle", () => {
       />,
     );
 
-    expect(screen.getByText(/detecting/i)).toBeInTheDocument();
+    expect(screen.getByText(/scanning document/i)).toBeInTheDocument();
   });
 
   test("clicking Auto-detect calls onAutoDetect", () => {

@@ -117,22 +117,16 @@ export function HomeHero({
     }
   }, [load]);
 
-  // Last-run status is derived from the recent list rather than a dedicated
-  // fetch — the newest run is simply the first row.
-  const lastStatus = recent.length > 0 ? recent[0].status : null;
-
   return (
     <div style={styles.stack}>
       {active && (
         <StatTiles
           // While loading (and no prior data) the counts are undefined → the
           // tiles render dashes. On error they also stay undefined.
-          total={error ? undefined : stats?.total}
+          needsReview={error ? undefined : stats?.needsReview}
+          active={error ? undefined : stats?.active}
           drafts={error ? undefined : stats?.drafts}
           completedThisMonth={error ? undefined : stats?.completedThisMonth}
-          // null while loading so the badge doesn't flash a stale status;
-          // resolves to the real status (or null for no-runs) once loaded.
-          lastStatus={isLoading || error ? null : lastStatus}
           onClearDrafts={() => setConfirmClearDrafts(true)}
         />
       )}

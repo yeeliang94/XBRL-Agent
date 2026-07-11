@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -67,6 +67,7 @@ export function AccountTab() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const nextRef = useRef<HTMLInputElement>(null);
 
   // Client-side gate — mirrors the server so the user gets an instant error,
   // but the server is the real authority (it re-checks both).
@@ -82,6 +83,7 @@ export function AccountTab() {
     const ce = clientError();
     if (ce) {
       setError(ce);
+      nextRef.current?.focus();
       return;
     }
     setSaving(true);
@@ -101,9 +103,13 @@ export function AccountTab() {
 
   return (
     <div>
+      <p style={styles.helperText}>
+        Change the password for your signed-in account. Your current password is required.
+      </p>
       <div style={styles.fieldGroup}>
         <label style={styles.label}>Current password</label>
         <input
+          id="account-current-password"
           type="password"
           value={current}
           onChange={(e) => setCurrent(e.target.value)}
@@ -116,19 +122,23 @@ export function AccountTab() {
       <div style={styles.fieldGroup}>
         <label style={styles.label}>New password</label>
         <input
+          id="account-new-password"
+          ref={nextRef}
           type="password"
           value={next}
           onChange={(e) => setNext(e.target.value)}
           autoComplete="new-password"
           aria-label="New password"
+          aria-describedby="account-password-requirements account-password-error"
           style={styles.input}
         />
-        <p style={styles.helperText}>At least {MIN_LEN} characters.</p>
+        <p id="account-password-requirements" style={styles.helperText}>At least {MIN_LEN} characters.</p>
       </div>
 
       <div style={styles.fieldGroup}>
         <label style={styles.label}>Confirm new password</label>
         <input
+          id="account-confirm-password"
           type="password"
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
@@ -138,8 +148,8 @@ export function AccountTab() {
         />
       </div>
 
-      {error && <p style={styles.errorText}>{error}</p>}
-      {success && <p style={styles.successText}>Password changed.</p>}
+      {error && <p id="account-password-error" style={styles.errorText} role="alert">{error}</p>}
+      {success && <p style={styles.successText} role="status" aria-live="polite">Password changed.</p>}
 
       <div style={styles.actions}>
         <button
@@ -148,7 +158,7 @@ export function AccountTab() {
           className={uiClass.btnPrimary}
           style={styles.saveButton}
         >
-          {saving ? "Saving..." : "Change password"}
+          {saving ? "Changing…" : "Change password"}
         </button>
       </div>
     </div>

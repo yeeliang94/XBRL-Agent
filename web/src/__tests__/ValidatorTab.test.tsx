@@ -19,7 +19,7 @@ describe("ValidatorTab", () => {
     // Check names render as plain language (D1); the raw snake_case id stays
     // available as the cell's title tooltip.
     expect(screen.getByText(/balance sheet balances/i)).toBeTruthy();
-    expect(screen.getByText(/profit agrees between income statement and equity/i)).toBeTruthy();
+    expect(screen.getByText(/profit differs between income statement and equity/i)).toBeTruthy();
     expect(screen.getByText(/total comprehensive income agrees with equity/i)).toBeTruthy();
     expect(screen.getByText(/closing cash agrees with the balance sheet/i)).toBeTruthy();
     expect(screen.getByTitle("sofp_balance")).toBeTruthy();
@@ -88,7 +88,7 @@ describe("ValidatorTab", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
     const naRow = screen.getByTitle("socf_to_sofp_cash").closest("tr")!;
-    expect(naRow.textContent).toContain("N/A");
+    expect(naRow.textContent).toContain("Not applicable");
   });
 
   test("empty cross-checks shows placeholder", () => {

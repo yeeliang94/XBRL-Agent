@@ -87,13 +87,25 @@ describe("SettingsModal — P3 enhancements", () => {
     const { saveSettings } = renderModal();
     await waitFor(() => expect(screen.getByDisplayValue(defaultSettings.model)).toBeInTheDocument());
 
-    // Press Enter on the form
+    // Make a valid change, then press Enter on the form.
     const input = screen.getByDisplayValue(defaultSettings.model);
+    fireEvent.change(input, { target: { value: "vertex_ai.gemini-3-pro-preview" } });
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
     fireEvent.keyDown(input, { key: "Enter" });
 
     await waitFor(() => {
       expect(saveSettings).toHaveBeenCalled();
     });
+  });
+
+  test("main Save is disabled until shared settings change", async () => {
+    renderModal();
+    const input = await screen.findByDisplayValue(defaultSettings.model);
+    const save = screen.getByRole("button", { name: /save shared settings/i });
+    expect(save).toBeDisabled();
+    fireEvent.change(input, { target: { value: "vertex_ai.gemini-3-pro-preview" } });
+    expect(save).toBeEnabled();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
   });
 
   test("Notes table style section persists the firm default to the server", async () => {
@@ -103,6 +115,7 @@ describe("SettingsModal — P3 enhancements", () => {
       notes_table_style: { borderStyle: "single" },
     });
     const border = await screen.findByLabelText("Table border style");
+    expect(screen.getByLabelText("Notes table style preview")).toBeInTheDocument();
     expect((border as HTMLSelectElement).value).toBe("single"); // seeded from server
 
     fireEvent.change(border, { target: { value: "none" } });

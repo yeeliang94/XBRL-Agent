@@ -135,4 +135,12 @@ describe("HistoryFilters", () => {
     fireEvent.change(select, { target: { value: "" } });
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ standard: undefined }));
   });
+
+  test("shows active-filter count and clears all filters", () => {
+    const onChange = vi.fn<(next: RunsFilterParams) => void>();
+    render(<HistoryFilters value={{ q: "FINCO", status: "completed" }} onChange={onChange} />);
+    expect(screen.getByText("2 filters applied")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /clear filters/i }));
+    expect(onChange).toHaveBeenCalledWith({});
+  });
 });

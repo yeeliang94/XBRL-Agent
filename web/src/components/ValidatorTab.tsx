@@ -1,6 +1,10 @@
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
-import { crossCheckLabel } from "../lib/vocabulary";
+import {
+  crossCheckFailureLabel,
+  crossCheckLabel,
+  crossCheckParties,
+} from "../lib/vocabulary";
 import type { CrossCheckResult } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -34,7 +38,7 @@ const STATUS_DISPLAY: Record<
   // from success/error.
   warning: { label: "Warning", accent: pwc.warning },
   pending: { label: "Pending", accent: pwc.warning },
-  not_applicable: { label: "N/A", accent: pwc.grey500 },
+  not_applicable: { label: "Not applicable", accent: pwc.grey500 },
 };
 
 // One number convention for the Expected/Actual/Diff cells (UX-QA #9): grouped
@@ -66,7 +70,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
 
   return (
     <div style={embedded ? styles.embeddedContainer : styles.container}>
-      {!embedded && <h3 style={styles.heading}>Cross-Check Results</h3>}
+      {!embedded && <h3 style={styles.heading}>Cross-check results</h3>}
       {partial && (
         <p style={{ fontFamily: pwc.fontBody, fontSize: 13, color: pwc.warningText, margin: `0 0 ${pwc.space.md}px 0` }}>
           Group filing: cross-checks currently validate consolidated (Group) figures only. Standalone (Company) columns are not yet checked.
@@ -76,17 +80,20 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
         <table style={styles.table}>
           <thead>
             <tr>
-              <th style={styles.th}>Check Name</th>
+              <th style={styles.th}>Check</th>
               <th style={styles.th}>Status</th>
-              <th style={{ ...styles.th, textAlign: "right" }}>Expected</th>
-              <th style={{ ...styles.th, textAlign: "right" }}>Actual</th>
-              <th style={{ ...styles.th, textAlign: "right" }}>Diff</th>
-              <th style={styles.th}>Message</th>
+              <th style={styles.th}>Compared figures</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Difference</th>
+              <th style={styles.th}>Explanation</th>
             </tr>
           </thead>
           <tbody>
             {numericChecks.map((check, i) => {
               const display = STATUS_DISPLAY[check.status];
+              const [firstName, secondName] = crossCheckParties(check.name);
+              const checkLabel = check.status === "failed"
+                ? crossCheckFailureLabel(check.name)
+                : crossCheckLabel(check.name);
               const isMuted = check.status === "not_applicable";
               // Clickable only when the host wired a handler AND this check
               // carries a resolved target cell.
@@ -123,7 +130,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                   <td style={styles.td}>
                     {/* Plain-language check name; the raw snake_case id stays
                         available as a tooltip for anyone who needs it (D1). */}
-                    <span title={check.name}>{crossCheckLabel(check.name)}</span>
+                    <span title={check.name}>{checkLabel}</span>
                   </td>
                   <td style={styles.td}>
                     {/* Keyed on status so a live pending→passed/failed flip
@@ -141,17 +148,29 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                       {display.label}
                     </span>
                   </td>
-                  <td style={{ ...styles.td, textAlign: "right", fontFamily: pwc.fontMono }}>
-                    {fmtCheckAmount(check.expected)}
+                  <td style={styles.td}>
+                    <div style={styles.figurePair}>
+                      <span>{firstName}: <strong>{fmtCheckAmount(check.expected)}</strong></span>
+                      <span>{secondName}: <strong>{fmtCheckAmount(check.actual)}</strong></span>
+                    </div>
                   </td>
-                  <td style={{ ...styles.td, textAlign: "right", fontFamily: pwc.fontMono }}>
-                    {fmtCheckAmount(check.actual)}
-                  </td>
-                  <td style={{ ...styles.td, textAlign: "right", fontFamily: pwc.fontMono }}>
+                  <td style={{ ...styles.td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                     {fmtCheckAmount(check.diff)}
                   </td>
                   <td style={{ ...styles.td, fontSize: 13, color: pwc.grey700 }}>
-                    {check.message}
+                    {check.status === "not_applicable" ? (
+                      <span>This check does not apply to the selected filing standard or available disclosures.</span>
+                    ) : check.status === "failed" ? (
+                      <span>{firstName} and {secondName.toLowerCase()} differ. Review the linked figures before filing.</span>
+                    ) : (
+                      <span>{firstName} and {secondName.toLowerCase()} agree.</span>
+                    )}
+                    {check.message && (
+                      <details style={styles.technicalDetails}>
+                        <summary>Technical details</summary>
+                        <code>{check.message}</code>
+                      </details>
+                    )}
                   </td>
                 </tr>
               );
@@ -162,7 +181,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
 
       {warningChecks.length > 0 && (
         <div style={styles.warningsSection}>
-          <h4 style={styles.subheading}>Advisory Warnings</h4>
+          <h4 style={styles.subheading}>Advisory warnings</h4>
           <p style={styles.warningsIntro}>
             Non-blocking signals from post-run consistency checks — worth a human glance but did not fail the run.
           </p>
@@ -219,6 +238,17 @@ const styles = {
     borderCollapse: "collapse" as const,
     fontSize: 14,
     fontFamily: pwc.fontBody,
+  } as React.CSSProperties,
+  figurePair: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 2,
+    fontVariantNumeric: "tabular-nums",
+  } as React.CSSProperties,
+  technicalDetails: {
+    marginTop: pwc.space.xs,
+    color: pwc.grey500,
+    overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
   th: {
     textAlign: "left" as const,

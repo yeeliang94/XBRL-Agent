@@ -38,14 +38,14 @@ const sampleList = {
 };
 
 describe("BenchmarksPage", () => {
-  test("lists benchmarks with their gold-cell count", async () => {
+  test("lists benchmarks with their verified-value count", async () => {
     mockFetch((url) => {
       if (url === "/api/benchmarks") return sampleList;
       return {};
     });
     render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
     expect(await screen.findByText("FINCO 2021 MFRS Company")).toBeTruthy();
-    expect(screen.getByText("42 gold cells")).toBeTruthy();
+    expect(screen.getByText("42 reference values")).toBeTruthy();
     expect(screen.getByText(/SOFP · SOPL/)).toBeTruthy();
   });
 
@@ -108,8 +108,8 @@ describe("BenchmarksPage", () => {
     fireEvent.change(screen.getByTestId("bench-name"), {
       target: { value: "My benchmark" },
     });
-    fireEvent.click(screen.getByTestId("bench-submit"));
-    expect(await screen.findByTestId("bench-error")).toHaveTextContent(/workbook/i);
+    expect(screen.getByTestId("bench-submit")).toBeDisabled();
+    expect(screen.getByTestId("bench-create-reason")).toHaveTextContent(/workbook/i);
   });
 
   test("from-run mode (default) picks a run, then posts to /from-run", async () => {
@@ -138,10 +138,10 @@ describe("BenchmarksPage", () => {
     render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
     await screen.findByTestId("add-benchmark-form");
 
-    // Name but no run selected → validation error.
+    // Name but no run selected → the disabled action explains what's missing.
     fireEvent.change(screen.getByTestId("bench-name"), { target: { value: "From run 159" } });
-    fireEvent.click(screen.getByTestId("bench-submit"));
-    expect(await screen.findByTestId("bench-error")).toHaveTextContent(/run/i);
+    expect(screen.getByTestId("bench-submit")).toBeDisabled();
+    expect(screen.getByTestId("bench-create-reason")).toHaveTextContent(/run/i);
     expect(calls.some((c) => c.url === "/api/benchmarks/from-run")).toBe(false);
 
     // The picker lists the finished run; selecting it and submitting posts.
@@ -149,7 +149,7 @@ describe("BenchmarksPage", () => {
       expect(screen.getByTestId("bench-run-id")).toHaveTextContent(/FINCO\.pdf/));
     fireEvent.change(screen.getByTestId("bench-run-id"), { target: { value: "159" } });
     fireEvent.click(screen.getByTestId("bench-submit"));
-    expect(await screen.findByTestId("bench-ok")).toHaveTextContent(/102 gold cells/);
+    expect(await screen.findByTestId("bench-ok")).toHaveTextContent(/102 reference values/);
     const post = calls.find((c) => c.url === "/api/benchmarks/from-run");
     expect(post).toBeTruthy();
     expect(JSON.parse(String(post!.init!.body))).toMatchObject({ run_id: 159, name: "From run 159" });
@@ -201,9 +201,9 @@ describe("BenchmarksPage", () => {
     fireEvent.change(screen.getByTestId("bench-name"), { target: { value: "Human FINCO" } });
     const file = new File(["x"], "mtool.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     fireEvent.change(screen.getByTestId("bench-file"), { target: { files: [file] } });
-    // No unit chosen yet → validation error.
-    fireEvent.click(screen.getByTestId("bench-submit"));
-    expect(await screen.findByTestId("bench-error")).toHaveTextContent(/unit/i);
+    // No unit chosen yet → the action remains disabled with a visible reason.
+    expect(screen.getByTestId("bench-submit")).toBeDisabled();
+    expect(screen.getByTestId("bench-create-reason")).toHaveTextContent(/unit/i);
   });
 
   test("mtool happy path posts to /from-mtool and renders the ingest report", async () => {
@@ -237,7 +237,7 @@ describe("BenchmarksPage", () => {
     fireEvent.click(screen.getByTestId("bench-submit"));
 
     const report = await screen.findByTestId("bench-ingest-report");
-    expect(report).toHaveTextContent(/40 gold cells captured/);
+    expect(report).toHaveTextContent(/40 reference values captured/);
     expect(screen.getByTestId("bench-unmatched")).toHaveTextContent(/Weird custom line/);
     const post = calls.find((c) => c.url === "/api/benchmarks/from-mtool");
     expect(post).toBeTruthy();

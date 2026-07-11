@@ -23,6 +23,18 @@ import {
 const MIN_LEN = 8;
 
 const styles = {
+  helperText: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
+    margin: `0 0 ${pwc.space.lg}px`,
+  } as React.CSSProperties,
+  notice: {
+    ...ui.alertInfo,
+    padding: pwc.space.sm,
+    marginBottom: pwc.space.md,
+    fontSize: 13,
+  } as React.CSSProperties,
   error: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
@@ -98,6 +110,15 @@ const styles = {
     textTransform: "uppercase" as const,
     letterSpacing: "0.04em",
   } as React.CSSProperties,
+  youLabel: {
+    ...ui.badge,
+    marginLeft: pwc.space.sm,
+  } as React.CSSProperties,
+  resetTarget: {
+    color: pwc.grey700,
+    fontSize: 12,
+    maxWidth: 180,
+  } as React.CSSProperties,
 };
 
 interface UsersTabProps {
@@ -122,6 +143,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
   // Inline reset-password target (the row currently being reset, by email)
   const [resetTarget, setResetTarget] = useState<string | null>(null);
   const [resetValue, setResetValue] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
   // One shared confirm dialog for the one-click account actions (disable/
   // enable, make/revoke admin) — they change who can sign in or administer the
   // tool, so they confirm like every other consequential action.
@@ -144,6 +166,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
   // guard) to the shared inline banner.
   const run = useCallback(async (fn: () => Promise<unknown>) => {
     setError(null);
+    setNotice(null);
     setBusy(true);
     try {
       await fn();
@@ -183,12 +206,17 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
       await adminResetPassword(email, resetValue);
       setResetTarget(null);
       setResetValue("");
+      setNotice(`Password updated for ${email}.`);
     });
   }, [resetValue, run]);
 
   return (
     <div>
+      <p style={styles.helperText}>
+        Manage who can sign in and who can change shared settings. Changes apply immediately.
+      </p>
       {error && <p style={styles.error} role="alert">{error}</p>}
+      {notice && <p style={styles.notice} role="status" aria-live="polite">{notice}</p>}
 
       <table style={styles.table}>
         <thead>
@@ -208,9 +236,11 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
             return (
             <tr key={u.email}>
               <td style={styles.td}>{u.email}</td>
-              <td style={styles.td}>{u.display_name}</td>
-              <td style={styles.td}>{u.disabled ? "disabled" : "active"}</td>
-              <td style={styles.td}>{u.is_admin ? "admin" : "user"}</td>
+              <td style={styles.td}>
+                {u.display_name}{isSelf && <span style={styles.youLabel}>You</span>}
+              </td>
+              <td style={styles.td}>{u.disabled ? "Disabled" : "Active"}</td>
+              <td style={styles.td}>{u.is_admin ? "Administrator" : "Standard user"}</td>
               <td style={styles.td}>
                 {!isSelf && (
                   <button
@@ -252,6 +282,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
                 )}
                 {resetTarget === u.email ? (
                   <span style={{ display: "inline-flex", gap: pwc.space.xs, alignItems: "center" }}>
+                    <span style={styles.resetTarget}>New password for {u.email}</span>
                     <input
                       type="password"
                       value={resetValue}
@@ -267,7 +298,15 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
                       disabled={busy}
                       onClick={() => handleResetSubmit(u.email)}
                     >
-                      Set
+                      Set new password
+                    </button>
+                    <button
+                      type="button"
+                      className={uiClass.btnSubtle}
+                      style={styles.actionBtn}
+                      onClick={() => { setResetTarget(null); setResetValue(""); }}
+                    >
+                      Cancel
                     </button>
                   </span>
                 ) : (
@@ -338,7 +377,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
               checked={newIsAdmin}
               onChange={(e) => setNewIsAdmin(e.target.checked)}
             />
-            Admin
+            Administrator
           </label>
           <button
             className={uiClass.btnPrimary}

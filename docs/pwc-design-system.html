@@ -8,8 +8,8 @@
   /* =========================================================
      XBRL AGENT — APPLICATION DESIGN SYSTEM
      -----------------------------------------------------------
-     This document is the visual spec for the web UI. It is a
-     1:1 mirror of the live token sources:
+     This document is the behavioural and visual specification for the web
+     UI. Production values are implemented in:
 
          web/src/lib/theme.ts      → the `pwc` token object
          web/src/lib/uiStyles.ts   → the `ui` / `uiClass` primitives
@@ -20,9 +20,8 @@
      variables (gotcha #7: inline styles only). Each property is
      named to match its `pwc.*` token so the vocabulary is shared.
 
-     EDITING THIS DOC: change a value here, then apply the same
-     value to the mapped `pwc.*` / `ui.*` entry (see the Token Map
-     at the bottom). Doc and code must change in lockstep.
+     EDITING THIS DOC: specification, production implementation, and parity
+     tests move together. The Token Map at the bottom names each owner.
      ========================================================= */
   :root {
     /* ---- Brand orange (pwc.orange*) ---- */
@@ -253,11 +252,14 @@
   .badge-brand   { border-color: var(--orange-500); }
   .badge-brand .dot { background: var(--orange-500); }
   .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .status-inline { display:inline-flex; align-items:center; gap:7px; color:var(--text-body); font-size:13px; }
 
   /* ---------- Cards (mirror ui.card + .pwc-card hover) ---------- */
   .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px,1fr)); gap: var(--s-lg); }
   .ui-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-xl); box-shadow: var(--shadow-card); transition: box-shadow .2s, transform .2s; }
   .ui-card:hover { box-shadow: var(--shadow-elevated); transform: translateY(-2px); }
+  .ui-card-static { transition:none; }
+  .ui-card-static:hover { box-shadow:var(--shadow-card); transform:none; }
   .ui-card .k { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 8px; }
   .ui-card .v { font-size: 30px; font-weight: var(--fw-regular); letter-spacing: -.5px; color: var(--text); }
   .ui-card .delta { font-size: 13px; margin-top: 6px; color: var(--success-text); }
@@ -344,6 +346,8 @@
       <a href="#typography">Typography</a>
       <a href="#spacing">Spacing &amp; radius</a>
       <a href="#elevation">Elevation</a>
+      <a href="#layouts">Layouts &amp; density</a>
+      <a href="#motion">Motion</a>
     </nav>
     <nav class="nav-group">
       <h4>Components</h4>
@@ -352,12 +356,14 @@
       <a href="#badges">Badges &amp; status</a>
       <a href="#cards">Cards</a>
       <a href="#table">Tables</a>
+      <a href="#financial">Financial data</a>
       <a href="#alerts">Alerts</a>
       <a href="#tabs">Tabs &amp; nav</a>
     </nav>
     <nav class="nav-group">
       <h4>Reference</h4>
       <a href="#a11y">Accessibility</a>
+      <a href="#content">Content &amp; states</a>
       <a href="#tokenmap">Token map (doc ↔ code)</a>
     </nav>
   </aside>
@@ -368,7 +374,7 @@
     <header class="page-head">
       <div class="eyebrow">Application UI Standards</div>
       <h1>XBRL Agent Design System</h1>
-      <p>The single visual reference for the web UI. Built on PwC's black-and-orange brand foundation — restrained typography, light surfaces, disciplined accent use. Every token here maps 1:1 to <code class="inline">web/src/lib/theme.ts</code> and <code class="inline">web/src/lib/uiStyles.ts</code>, which are the live source of truth.</p>
+      <p>The behavioural and visual specification for the web UI. Built on PwC's black-and-orange brand foundation — restrained typography, light surfaces, disciplined accent use. Production values live in <code class="inline">web/src/lib/theme.ts</code>, <code class="inline">web/src/lib/uiStyles.ts</code>, and <code class="inline">web/src/index.css</code>; parity tests keep specification and implementation aligned.</p>
     </header>
 
     <!-- OVERVIEW -->
@@ -379,7 +385,7 @@
         <p>This document has two jobs: define the visual language (<em>Foundations</em> + <em>Components</em>), and tell AI developers exactly how to use it in this codebase. Because the app forbids CSS frameworks (gotcha #7), the components here are documented with the <strong>inline-style + token-object pattern the app actually uses</strong>, not CSS classes.</p>
       </div>
       <div class="note-box">
-        <strong>Source of truth:</strong> the live tokens live in <code class="inline">web/src/lib/theme.ts</code> (the <code class="inline">pwc</code> object) and <code class="inline">web/src/lib/uiStyles.ts</code> (the <code class="inline">ui</code> / <code class="inline">uiClass</code> primitives); hover &amp; focus rules live in <code class="inline">web/src/index.css</code>. The CSS variables in this file exist only to render the page. When you change a value here, apply the same change to the mapped token (see the <a href="#tokenmap">Token map</a>) — doc and code must move together. Several frontend tests assert exact <code class="inline">rgb()</code> values, so a token change needs its pinning test updated in the same commit.
+        <strong>Governance:</strong> this document owns behavioural and visual rules; <code class="inline">theme.ts</code>, <code class="inline">uiStyles.ts</code>, and <code class="inline">index.css</code> own production implementation; tests own parity. A rule or value change updates all three layers in one change set. The CSS variables here exist only to render this reference.
       </div>
     </section>
 
@@ -391,7 +397,7 @@
         <p>The load-bearing conventions. Adhering to the design system means following these — not just picking nice colors.</p>
       </div>
       <div class="rules">
-        <div class="rule-item"><span class="num">01</span><span class="txt"><strong>Inline styles only.</strong> No Tailwind, no CSS-in-JS, no <code class="inline">className</code>-based styling (Tailwind broke on Windows — gotcha #7). Style with <code class="inline">style={{…}}</code> objects.</span></div>
+        <div class="rule-item"><span class="num">01</span><span class="txt"><strong>Inline values; narrow state hooks.</strong> Layout, colour, type, spacing, and geometry use inline <code class="inline">style={{…}}</code> objects. Do not use Tailwind or a class-based utility system. A shared <code class="inline">uiClass.*</code> hook is allowed only for hover, focus, animation, editor styling, or another state inline styles cannot express.</span></div>
         <div class="rule-item"><span class="num">02</span><span class="txt"><strong>Tokens, never literals.</strong> Import <code class="inline">{ pwc }</code> from <code class="inline">lib/theme</code> and reference <code class="inline">pwc.orange500</code>, <code class="inline">pwc.grey200</code>, etc. Never hard-code a hex, px radius, or font stack.</span></div>
         <div class="rule-item"><span class="num">03</span><span class="txt"><strong>Reuse the primitives.</strong> Spread <code class="inline">ui.buttonPrimary</code>, <code class="inline">ui.card</code>, <code class="inline">ui.input</code>… from <code class="inline">lib/uiStyles</code> instead of rebuilding a button. Extend with a spread, don't fork.</span></div>
         <div class="rule-item"><span class="num">04</span><span class="txt"><strong>Hover/focus needs a class hook.</strong> Inline styles can't express <code class="inline">:hover</code>. Add the matching <code class="inline">uiClass.*</code> (e.g. <code class="inline">className={uiClass.btnPrimary}</code>) so the rule in <code class="inline">index.css</code> applies. Form-control focus rings are global — no class needed.</span></div>
@@ -399,6 +405,8 @@
         <div class="rule-item"><span class="num">06</span><span class="txt"><strong>Status colour is functional, not brand.</strong> Use success/error/warning/info only for state, and apply it as an accent — dot, icon, left-border, or dark text — on a neutral surface. Avoid coloured fills; reserve the soft-tint tokens for rare emphasis.</span></div>
         <div class="rule-item"><span class="num">07</span><span class="txt"><strong>Stay on the scale.</strong> Spacing from <code class="inline">pwc.space</code> (4px base), radius from <code class="inline">pwc.radius</code>, shadow from <code class="inline">pwc.shadow</code>. No arbitrary values.</span></div>
         <div class="rule-item"><span class="num">08</span><span class="txt"><strong>Two text weights.</strong> Regular 400 + Semibold 600 carry all text (Medium 500 only on controls). No Light 300 — it reads as a different typeface — and never 700+. Hierarchy comes from size, not a wide weight range.</span></div>
+        <div class="rule-item"><span class="num">09</span><span class="txt"><strong>Evidence before AI plumbing.</strong> Financial data, checks, source evidence, and filing state lead. Models, agents, tokens, and tool calls live in advanced or activity views.</span></div>
+        <div class="rule-item"><span class="num">10</span><span class="txt"><strong>Choose the lightest structure.</strong> Use alignment, type, spacing, and dividers before adding a bordered group or card. Elevation signals interactivity, not decoration.</span></div>
       </div>
     </section>
 
@@ -449,10 +457,12 @@
         <p>Four ideas behind every decision.</p>
       </div>
       <div class="principle-grid">
+        <div class="principle"><h4>Evidence first</h4><p>Financial data and its source are the primary visual objects. AI plumbing stays backstage.</p></div>
         <div class="principle"><h4>Light &amp; open</h4><p>White surfaces, soft borders, generous spacing. Weight comes from space, not heavy fills.</p></div>
         <div class="principle"><h4>Restrained type</h4><p>Two weights — regular and semibold — carry the interface. Size, not many weights, creates hierarchy.</p></div>
         <div class="principle"><h4>Orange with intent</h4><p>The signature orange marks the single most important action or status in a view — never decoration.</p></div>
         <div class="principle"><h4>Quietly consistent</h4><p>One radius scale, one spacing rhythm, one shadow family. Predictability is the feature.</p></div>
+        <div class="principle"><h4>Density follows the task</h4><p>Setup flows breathe; review tables stay compact, aligned, and precise.</p></div>
       </div>
     </section>
 
@@ -569,6 +579,39 @@
       </div>
     </section>
 
+    <!-- LAYOUTS -->
+    <section id="layouts">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Layouts &amp; density</h2>
+        <p>Width and density follow the job. Do not centre every workflow in the same card or spread every form across the viewport.</p>
+      </div>
+      <div class="rules">
+        <div class="rule-item"><span class="num">L1</span><span class="txt"><strong>Form page.</strong> A constrained readable column for setup and account forms. Use <code class="inline">ui.pageForm</code>.</span></div>
+        <div class="rule-item"><span class="num">L2</span><span class="txt"><strong>List page.</strong> A wide table or object list with sticky filters and stable columns. Use <code class="inline">ui.pageWide</code>.</span></div>
+        <div class="rule-item"><span class="num">L3</span><span class="txt"><strong>Run report.</strong> Full-width outcome header, section tabs, then task-specific content. Readiness comes before telemetry.</span></div>
+        <div class="rule-item"><span class="num">L4</span><span class="txt"><strong>Review workspace.</strong> Collapsible document navigation, financial grid, and source evidence panes. Preserve working context when panes change.</span></div>
+        <div class="rule-item"><span class="num">L5</span><span class="txt"><strong>Grouping.</strong> Prefer section spacing, then a bordered group, then a static card. Use an interactive card only for a selectable or navigable object.</span></div>
+      </div>
+      <div class="note-box"><strong>Responsive contract:</strong> wide screens show the complete review workspace; laptops may collapse side panes; narrow screens retain monitoring and simple actions rather than pretending the financial grid is comfortably editable.</div>
+    </section>
+
+    <!-- MOTION -->
+    <section id="motion">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Motion</h2>
+        <p>Motion explains state or spatial continuity. It is never decoration and never competes with financial review.</p>
+      </div>
+      <div class="rules">
+        <div class="rule-item"><span class="num">M1</span><span class="txt">Use only <code class="inline">pwc.motion.duration</code> and <code class="inline">pwc.motion.easing</code>.</span></div>
+        <div class="rule-item"><span class="num">M2</span><span class="txt">Prefer opacity and transform; avoid layout-shifting animation.</span></div>
+        <div class="rule-item"><span class="num">M3</span><span class="txt">Do not animate financial values while they are being reviewed or edited.</span></div>
+        <div class="rule-item"><span class="num">M4</span><span class="txt">Only interactive cards lift. Static groups and metric tiles remain still.</span></div>
+        <div class="rule-item"><span class="num">M5</span><span class="txt">Every transition has an immediate equivalent under <code class="inline">prefers-reduced-motion</code>.</span></div>
+      </div>
+    </section>
+
     <!-- BUTTONS -->
     <section id="buttons">
       <div class="section-head">
@@ -612,7 +655,7 @@
             <div class="field"><label>Filing standard</label>
               <select class="select"><option>MFRS</option><option>MPERS</option></select></div>
             <div class="field"><label>Model</label>
-              <input class="input" type="text" placeholder="gpt-5.4"></div>
+              <select class="select"><option>GPT-5.4</option><option>Claude Sonnet</option></select></div>
             <div class="field"><label>Output name</label>
               <input class="input input-error" type="text" value="run 001/">
               <div class="hint" style="color:var(--error)">Name can't contain a slash.</div></div>
@@ -641,10 +684,12 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Badges &amp; status</h2>
-        <p>Compact state indicators as outline pills — a transparent fill with a thin status-coloured border and matching dot, label kept neutral. Lighter on the page than filled chips, and the whole row still reads as one consistent family.</p>
+        <p>Use the quietest treatment that communicates the state. Ordinary metadata stays plain; routine status uses a dot and text; outline badges are reserved for compact, high-value state identification; actionable risk uses an alert.</p>
       </div>
       <div class="panel">
         <div class="demo-row">
+          <span>Company · MFRS · RM '000</span>
+          <span class="status-inline"><span class="dot" style="background:var(--info)"></span>Running</span>
           <span class="badge badge-neutral"><span class="dot"></span>Draft</span>
           <span class="badge badge-success"><span class="dot"></span>Completed</span>
           <span class="badge badge-warning"><span class="dot"></span>Completed with errors</span>
@@ -655,6 +700,7 @@
         <pre>&lt;span style={ui.badgeSuccess}&gt;Completed&lt;/span&gt;
 &lt;span style={ui.badgeError}&gt;Failed&lt;/span&gt;</pre>
       </div>
+      <div class="note-box"><strong>Do not badge ordinary metadata.</strong> Filing standard, filing level, denomination, dates and model names normally render as aligned text. A badge earns its border only when the state must be identified at a glance.</div>
     </section>
 
     <!-- CARDS -->
@@ -662,14 +708,18 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Cards</h2>
-        <p>The primary container for grouped content and metrics. A subtle hover lift signals interactivity (add <code class="inline">uiClass.card</code>).</p>
+        <p>A card represents a distinct object. It is not the default wrapper for every section. Static cards remain still; only selectable or navigable cards receive the hover/focus treatment.</p>
       </div>
       <div class="card-grid">
-        <div class="ui-card"><div class="k">Statements extracted</div><div class="v">5 / 5</div><div class="delta">▲ all agents succeeded</div></div>
-        <div class="ui-card"><div class="k">Cross-checks passed</div><div class="v">11 / 12</div><div class="delta down">▼ 1 imbalance flagged</div></div>
-        <div class="ui-card"><div class="k">Tokens used</div><div class="v">214k</div><div class="delta">▲ within budget</div></div>
+        <div class="ui-card ui-card-static"><div class="k">Static summary</div><div class="v">11 / 12</div><div class="delta down">1 imbalance requires review</div></div>
+        <div class="ui-card"><div class="k">Interactive run</div><div class="v">FINCO 2024</div><div class="delta">Open review</div></div>
       </div>
-      <pre>&lt;div style={ui.card} className={uiClass.card}&gt;…&lt;/div&gt;</pre>
+      <pre><span class="c">// Static object: no hover class.</span>
+&lt;div style={ui.card}&gt;…&lt;/div&gt;
+
+<span class="c">// Selectable object: state hook signals interactivity.</span>
+&lt;button style={ui.card} className={uiClass.card}&gt;…&lt;/button&gt;</pre>
+      <div class="note-box"><strong>Grouping order:</strong> section spacing → divider → bordered group → static card → interactive card. Stop at the lightest structure that makes the relationship clear.</div>
     </section>
 
     <!-- TABLE -->
@@ -691,6 +741,32 @@
         </table>
       </div>
       <div class="note-box"><strong>Local convention:</strong> table headers keep <code class="inline">letterSpacing: 0</code> (<code class="inline">ui.th</code>) — the workspace overrides the design-system's .8px tracking. Rows take <code class="inline">className="pwc-table-row"</code> for the hover.</div>
+    </section>
+
+    <!-- FINANCIAL DATA -->
+    <section id="financial">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Financial data</h2>
+        <p>The review grid is a domain component, not a generic table. Alignment, period labels, row type, edit state, and evidence must remain scannable together.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Line item</th><th style="text-align:right">FY 2024</th><th style="text-align:right">FY 2023</th><th>State</th><th>Evidence</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Total assets</strong></td><td style="text-align:right;font-variant-numeric:tabular-nums">1,002,593</td><td style="text-align:right;font-variant-numeric:tabular-nums">984,720</td><td><span class="status-inline"><span class="dot" style="background:var(--grey-500)"></span>Calculated</span></td><td>Formula</td></tr>
+            <tr><td>Loss before tax</td><td style="text-align:right;font-variant-numeric:tabular-nums">(20,667)</td><td style="text-align:right;font-variant-numeric:tabular-nums">(21,319)</td><td><span class="status-inline"><span class="dot" style="background:var(--success)"></span>Extracted</span></td><td>Page 15</td></tr>
+            <tr><td>Other investment</td><td style="text-align:right;font-variant-numeric:tabular-nums">40,000</td><td style="text-align:right;font-variant-numeric:tabular-nums">—</td><td><span class="status-inline"><span class="dot" style="background:var(--warning)"></span>No source</span></td><td>Review</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="rules" style="margin-top:var(--s-lg)">
+        <div class="rule-item"><span class="num">F1</span><span class="txt">Name comparative periods explicitly; never show bare CY/PY when years are known.</span></div>
+        <div class="rule-item"><span class="num">F2</span><span class="txt">Right-align values with tabular numerals and accounting-parentheses display for negatives.</span></div>
+        <div class="rule-item"><span class="num">F3</span><span class="txt">Differentiate extracted, edited, calculated, zero, blank, not applicable, and unavailable states with text or shape as well as colour.</span></div>
+        <div class="rule-item"><span class="num">F4</span><span class="txt">Keep totals, section rows, and mandatory fields structurally distinct from editable leaf rows.</span></div>
+        <div class="rule-item"><span class="num">F5</span><span class="txt">Selecting a value should reveal its evidence without losing table position or active filters.</span></div>
+      </div>
     </section>
 
     <!-- ALERTS -->
@@ -717,24 +793,23 @@
       <div class="panel">
         <h3 class="sub-label">Top nav — <code class="inline">TopNav.tsx</code></h3>
         <div class="tabbar">
-          <button class="tab active">Extract</button>
-          <button class="tab">History</button>
-          <button class="tab">Template</button>
+          <button class="tab active">New extraction</button>
+          <button class="tab">Runs</button>
+          <button class="tab">Field labels</button>
           <button class="tab">Benchmarks</button>
-          <button class="tab">Readable Doc</button>
+          <button class="tab">Evaluation suites</button>
         </div>
         <h3 class="sub-label">Run-detail sections</h3>
         <div class="tabbar">
           <button class="tab active">Overview</button>
-          <button class="tab">Agents</button>
+          <button class="tab">Activity</button>
           <button class="tab">Notes</button>
           <button class="tab">Cross-checks</button>
-          <button class="tab">Telemetry</button>
-          <button class="tab">Review</button>
-          <button class="tab">Values</button>
+          <button class="tab">AI review</button>
+          <button class="tab">Figures</button>
         </div>
       </div>
-      <div class="note-box"><strong>Accessibility:</strong> tab bars use <code class="inline">role="tablist"</code> / <code class="inline">role="tab"</code> with <code class="inline">aria-selected</code> and roving-tabindex arrow nav. When multiple tablists coexist, scope tests by the tablist's <code class="inline">aria-label</code> (gotcha #7).</div>
+      <div class="note-box"><strong>Semantics:</strong> top-level destinations are navigation and must expose stable URLs. Run-detail section switchers use <code class="inline">role="tablist"</code> / <code class="inline">role="tab"</code> with <code class="inline">aria-selected</code>, roving tabindex, and arrow navigation. Do not claim keyboard behaviour until it is implemented and tested.</div>
     </section>
 
     <!-- ACCESSIBILITY -->
@@ -751,7 +826,28 @@
         <div class="rule-item"><span class="num">D</span><span class="txt"><strong>Status text contrast.</strong> Use the darker <code class="inline">*Text</code> tokens (<code class="inline">successText</code>/<code class="inline">errorText</code>/<code class="inline">warningText</code>/<code class="inline">infoText</code>) for status labels so they stay AA-legible on neutral surfaces; keep alert body copy at <code class="inline">grey800</code>.</span></div>
         <div class="rule-item"><span class="num">E</span><span class="txt"><strong>Hit targets.</strong> Inputs/selects are 44px min-height, buttons 40px. Labels are real <code class="inline">&lt;label&gt;</code> elements tied to their control.</span></div>
         <div class="rule-item"><span class="num">F</span><span class="txt"><strong>Decorative SVG is hidden.</strong> Brand/decorative marks carry <code class="inline">aria-hidden="true"</code>; meaningful icons get a label.</span></div>
+        <div class="rule-item"><span class="num">G</span><span class="txt"><strong>Errors are associated.</strong> Inline help and validation messages are connected to their control with <code class="inline">aria-describedby</code>; the message explains recovery.</span></div>
+        <div class="rule-item"><span class="num">H</span><span class="txt"><strong>Dynamic work is announced.</strong> Upload, validation, save, filter-result, and run-progress changes use an appropriately polite live region.</span></div>
+        <div class="rule-item"><span class="num">I</span><span class="txt"><strong>Focus survives transitions.</strong> Dialogs trap and return focus; sticky regions never obscure the focused control; dense grids provide a documented keyboard path.</span></div>
+        <div class="rule-item"><span class="num">J</span><span class="txt"><strong>Zoom and motion are tested.</strong> Core tasks remain usable at 200% zoom, and reduced motion reaches the same final state immediately.</span></div>
       </div>
+    </section>
+
+    <!-- CONTENT + STATES -->
+    <section id="content">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Content &amp; component states</h2>
+        <p>Visual consistency includes language and feedback. Components are incomplete until their non-default states are designed.</p>
+      </div>
+      <div class="rules">
+        <div class="rule-item"><span class="num">C1</span><span class="txt"><strong>Lead with the accounting task or consequence.</strong> Describe the discrepancy and the next action; keep internal check names and AI implementation detail secondary.</span></div>
+        <div class="rule-item"><span class="num">C2</span><span class="txt"><strong>Use verbs for actions and nouns for destinations.</strong> Avoid friendly filler, generic AI-product language, and duplicate helper paragraphs.</span></div>
+        <div class="rule-item"><span class="num">C3</span><span class="txt"><strong>State risk directly.</strong> Destructive and filing-risk actions name what happens, what remains, and how the user can recover.</span></div>
+        <div class="rule-item"><span class="num">C4</span><span class="txt"><strong>Design the whole state set.</strong> Specify default, hover, focus, active, disabled, busy, success, error, and empty behaviour where relevant.</span></div>
+        <div class="rule-item"><span class="num">C5</span><span class="txt"><strong>Reuse vocabulary.</strong> Repeated product terms live in the shared vocabulary helpers so labels do not drift across pages.</span></div>
+      </div>
+      <div class="note-box"><strong>Required product patterns:</strong> page header, toolbar, sticky action bar, file drop zone, filter bar, empty state, loading/skeleton, toast, confirm dialog, disclosure, icon button, overflow actions, load-more, split pane, save state, attention queue, and evidence inspector.</div>
     </section>
 
     <!-- TOKEN MAP -->
@@ -767,6 +863,8 @@
           <tbody>
             <tr><td>Color / type / spacing / radius / shadow tokens</td><td><code class="inline">:root</code> CSS vars</td><td><code>web/src/lib/theme.ts</code> — the <code>pwc</code> object</td></tr>
             <tr><td>Component primitives (button, card, input, badge, alert, table)</td><td><code class="inline">.btn</code>, <code class="inline">.ui-card</code>, <code class="inline">.input</code>…</td><td><code>web/src/lib/uiStyles.ts</code> — <code>ui.*</code></td></tr>
+            <tr><td>Semantic typography and page layouts</td><td>Typography + Layouts sections</td><td><code>web/src/lib/uiStyles.ts</code> — typography and page roles</td></tr>
+            <tr><td>Motion durations, easing, and reduced motion</td><td>Motion section</td><td><code>web/src/lib/theme.ts</code> + <code>web/src/index.css</code></td></tr>
             <tr><td>Hover / focus / disabled / scrollbar rules</td><td><code class="inline">:hover</code> / <code class="inline">:focus</code> CSS</td><td><code>web/src/index.css</code> + <code>uiClass.*</code> hooks</td></tr>
             <tr><td>Top navigation shell</td><td>Tabs &amp; navigation section</td><td><code>web/src/components/TopNav.tsx</code></td></tr>
             <tr><td>Page header</td><td>page header chrome</td><td><code>web/src/components/PageHeader.tsx</code></td></tr>
@@ -778,7 +876,7 @@
     </section>
 
     <footer>
-      <p>XBRL Agent Design System · the visual spec for the web UI · tokens mirror <code class="inline">web/src/lib/theme.ts</code> &amp; <code class="inline">web/src/lib/uiStyles.ts</code>. Core orange #FD5108 (Pantone 1655C) per PwC brand standard. Status colors are functional only, not brand. Not an official PwC brand publication.</p>
+      <p>XBRL Agent Design System v2 · updated 11 July 2026 · behavioural specification for the web UI · production implementation in <code class="inline">web/src/lib/theme.ts</code>, <code class="inline">web/src/lib/uiStyles.ts</code>, and <code class="inline">web/src/index.css</code>. Core orange #FD5108 (Pantone 1655C) per PwC brand standard. Status colors are functional only, not brand. Not an official PwC brand publication.</p>
     </footer>
 
   </main>

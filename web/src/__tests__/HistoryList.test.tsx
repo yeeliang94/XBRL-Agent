@@ -168,38 +168,22 @@ describe("HistoryList", () => {
         onRunSelected={() => {}}
       />,
     );
-    const row1 = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
-    const row2 = screen.getByText("ACME-2023.pdf").closest("tr")!;
-    // The two rows should not have identical styling when one is selected
-    expect(row1.getAttribute("aria-selected")).toBe("true");
-    expect(row2.getAttribute("aria-selected")).toBe("false");
+    const link1 = screen.getByRole("link", { name: "FINCO-Audited-2021.pdf" });
+    const link2 = screen.getByRole("link", { name: "ACME-2023.pdf" });
+    expect(link1.getAttribute("aria-current")).toBe("page");
+    expect(link2.getAttribute("aria-current")).toBeNull();
   });
 
   // ---------------------------------------------------------------------------
-  // Keyboard accessibility — rows must be reachable via Tab and activatable
-  // via Enter/Space, not mouse-only. We attach the interactive semantics to
-  // the row itself (tabIndex, role=button, keyboard handlers) so the table
-  // structure stays intact for screen readers' row/column context.
+  // Keyboard accessibility comes from one native filename link per row. The
+  // row retains native table semantics, avoiding duplicate/corrupt headers in
+  // accessibility trees.
   // ---------------------------------------------------------------------------
 
-  test("each row is focusable (tabIndex=0) and has an interactive role", () => {
+  test("each row exposes one native navigation link", () => {
     render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
-    const row1 = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
-    const row2 = screen.getByText("ACME-2023.pdf").closest("tr")!;
-    expect(row1.getAttribute("tabindex")).toBe("0");
-    expect(row2.getAttribute("tabindex")).toBe("0");
-    // A row behaves like a button when activated — either role='button' or
-    // the native row stays and we add only tabIndex + keyboard handlers.
-    // We accept both, but require SOME interactive signal beyond onClick.
-    expect(row1.getAttribute("role")).toBe("button");
-  });
-
-  test("pressing Enter on a focused row fires onRunSelected", () => {
-    const onRunSelected = vi.fn<(id: number) => void>();
-    render(<HistoryList runs={makeRuns()} onRunSelected={onRunSelected} />);
-    const row1 = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
-    fireEvent.keyDown(row1, { key: "Enter" });
-    expect(onRunSelected).toHaveBeenCalledWith(1);
+    expect(screen.getByRole("link", { name: "FINCO-Audited-2021.pdf" }).getAttribute("href")).toBe("/history/1");
+    expect(screen.getByRole("link", { name: "ACME-2023.pdf" }).getAttribute("href")).toBe("/history/2");
   });
 
   test("does not render models in the list row", () => {
@@ -237,23 +221,6 @@ describe("HistoryList", () => {
     const row = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
     // We don't pin the exact placeholder — just that the row is in the DOM.
     expect(row).toBeTruthy();
-  });
-
-  test("pressing Space on a focused row fires onRunSelected", () => {
-    const onRunSelected = vi.fn<(id: number) => void>();
-    render(<HistoryList runs={makeRuns()} onRunSelected={onRunSelected} />);
-    const row2 = screen.getByText("ACME-2023.pdf").closest("tr")!;
-    fireEvent.keyDown(row2, { key: " " });
-    expect(onRunSelected).toHaveBeenCalledWith(2);
-  });
-
-  test("unrelated keys on the row do not fire onRunSelected", () => {
-    const onRunSelected = vi.fn<(id: number) => void>();
-    render(<HistoryList runs={makeRuns()} onRunSelected={onRunSelected} />);
-    const row1 = screen.getByText("FINCO-Audited-2021.pdf").closest("tr")!;
-    fireEvent.keyDown(row1, { key: "a" });
-    fireEvent.keyDown(row1, { key: "ArrowDown" });
-    expect(onRunSelected).not.toHaveBeenCalled();
   });
 
   // E2: standard + level live in their own Standard column (was an inline

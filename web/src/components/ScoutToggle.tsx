@@ -100,6 +100,7 @@ export function ScoutToggle({
       <label style={styles.label}>
         <input
           type="checkbox"
+          aria-label="Use document pre-scan"
           checked={enabled}
           onChange={(e) => onToggle(e.target.checked)}
           style={{
@@ -123,12 +124,12 @@ export function ScoutToggle({
             }}
           />
         </span>
-        Scout
+        Use document pre-scan
       </label>
 
       {enabled && showModelPicker && (
         <select
-          aria-label="Scout model"
+          aria-label="Scout model — pre-scan model"
           value={scoutModel ?? ""}
           disabled={isDetecting}
           onChange={(e) => onScoutModelChange!(e.target.value)}
@@ -145,6 +146,7 @@ export function ScoutToggle({
       {enabled && (
         <button
           onClick={onAutoDetect}
+          aria-label="Auto-detect — scan document"
           disabled={!canAutoDetect || isDetecting}
           className={uiClass.btnSecondary}
           style={styles.detectButton}
@@ -152,10 +154,10 @@ export function ScoutToggle({
           {isDetecting ? (
             <>
               <span style={styles.spinner} />
-              Detecting...
+              Scanning document…
             </>
           ) : (
-            "Auto-detect"
+            "Scan document"
           )}
         </button>
       )}

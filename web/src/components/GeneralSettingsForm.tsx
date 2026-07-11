@@ -167,6 +167,25 @@ const styles = {
     fontSize: 13,
     color: pwc.success,
   } as React.CSSProperties,
+  unsavedBadge: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
+  } as React.CSSProperties,
+  sectionHeading: {
+    marginTop: pwc.space.xxl,
+    marginBottom: pwc.space.lg,
+    paddingTop: pwc.space.lg,
+    borderTop: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  sectionTitle: {
+    ...ui.sectionTitle,
+    margin: 0,
+  } as React.CSSProperties,
+  sectionDescription: {
+    ...ui.supportingText,
+    margin: `${pwc.space.xs}px 0 0`,
+  } as React.CSSProperties,
   // The auto-saving section — a subtle card with a left rule to set it apart
   // from the Save-button-gated fields (C4).
   autoSaveCard: {
@@ -187,6 +206,19 @@ const styles = {
     fontSize: 12,
     fontWeight: pwc.weight.medium,
     color: pwc.success,
+  } as React.CSSProperties,
+  notesPreview: {
+    maxWidth: 360,
+    margin: `${pwc.space.lg}px 0`,
+    padding: pwc.space.md,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  previewCell: {
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    border: `1px solid ${pwc.grey300}`,
+    fontFamily: pwc.fontBody,
+    color: pwc.grey900,
   } as React.CSSProperties,
   loadError: {
     fontFamily: pwc.fontBody,
@@ -218,6 +250,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Displayed errors: only populated after blur to avoid nagging the user
@@ -258,6 +291,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
         setEntityMemory(s.entity_memory !== false);
         if (Array.isArray(s.available_models)) setAvailableModels(s.available_models);
+        setDirty(false);
       })
       .catch((e) => {
         if (!cancelled) setLoadError(userMessage(e));
@@ -276,6 +310,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
 
   // --- Save ---
   const handleSave = useCallback(async () => {
+    if (!dirty) return;
     // Re-run validation against current values (user may have pressed Enter
     // before blur fired, leaving `errors` stale).
     const live = validate({ proxyUrl, apiKey, model });
@@ -295,6 +330,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         entity_memory: entityMemory,
         ...(apiKey ? { api_key: apiKey } : {}),
       });
+      setDirty(false);
       setSaved(true);
       if (savedToastTimerRef.current !== null) {
         clearTimeout(savedToastTimerRef.current);
@@ -308,7 +344,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, saveSettings]);
 
   // --- Test connection ---
   const handleTestConnection = useCallback(async () => {
@@ -367,6 +403,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         </div>
       )}
 
+      <SettingsSectionHeading
+        title="Service connection"
+        description="Advanced shared configuration. Changes affect everyone and future runs."
+      />
       {/* Proxy URL */}
       <div style={styles.fieldGroup}>
         <label style={styles.label} htmlFor="ai-service-address">AI service address</label>
@@ -381,7 +421,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           // empty until the operator types a real address.
           autoComplete="off"
           value={proxyUrl}
-          onChange={(e) => setProxyUrl(e.target.value)}
+          onChange={(e) => { setProxyUrl(e.target.value); setDirty(true); }}
           onBlur={() => validateField("proxyUrl")}
           placeholder="https://genai-sharedservice-emea.pwc.com"
           // Focus the first field on mount so keyboard users land inside the
@@ -422,7 +462,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           // name above, don't treat the two as a sign-in form).
           autoComplete="new-password"
           value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
+          onChange={(e) => { setApiKey(e.target.value); setDirty(true); }}
           onBlur={() => validateField("apiKey")}
           placeholder={readOnly ? "" : "Enter new API key"}
           disabled={readOnly}
@@ -441,6 +481,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         )}
       </div>
 
+      <SettingsSectionHeading
+        title="Extraction behaviour"
+        description="Choose the model used when a new extraction starts. Existing runs are unchanged."
+      />
       {/* Model — a picker of known models (config/models.json) instead of a
           typo-prone free-text field (D4). Falls back to a text input when the
           model list isn't available. */}
@@ -450,7 +494,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           <select
             id="settings-model"
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e) => { setModel(e.target.value); setDirty(true); }}
             disabled={readOnly}
             style={{ ...ui.select, width: "100%" }}
           >
@@ -470,7 +514,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             type="text"
             id="settings-model"
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e) => { setModel(e.target.value); setDirty(true); }}
             onBlur={() => validateField("model")}
             placeholder="openai.gpt-5.4"
             disabled={readOnly}
@@ -492,13 +536,17 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         )}
       </div>
 
+      <SettingsSectionHeading
+        title="Review behaviour"
+        description="These defaults apply to future runs and can increase processing time and usage."
+      />
       {/* Reviewer auto-trigger toggle */}
       <div style={styles.fieldGroup}>
         <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
           <input
             type="checkbox"
             checked={autoReview}
-            onChange={(e) => setAutoReview(e.target.checked)}
+            onChange={(e) => { setAutoReview(e.target.checked); setDirty(true); }}
             disabled={readOnly}
             aria-label="Automatically run the reviewer after extraction"
           />
@@ -516,7 +564,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           <input
             type="checkbox"
             checked={spotCheck}
-            onChange={(e) => setSpotCheck(e.target.checked)}
+            onChange={(e) => { setSpotCheck(e.target.checked); setDirty(true); }}
             disabled={readOnly}
             aria-label="Spot-check runs even when all cross-checks pass"
           />
@@ -529,7 +577,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         </p>
         <select
           value={spotCheckMode}
-          onChange={(e) => setSpotCheckMode(e.target.value === "full" ? "full" : "light")}
+          onChange={(e) => { setSpotCheckMode(e.target.value === "full" ? "full" : "light"); setDirty(true); }}
           disabled={!spotCheck || readOnly}
           style={{ ...ui.input, opacity: spotCheck ? 1 : 0.5, maxWidth: 320 }}
           aria-label="Spot-check depth"
@@ -543,13 +591,17 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         </p>
       </div>
 
+      <SettingsSectionHeading
+        title="Prior-year assistance"
+        description="Controls whether future runs receive advisory context from the same entity's earlier filings."
+      />
       {/* Per-entity advisory memory toggle (item 28) */}
       <div style={styles.fieldGroup}>
         <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
           <input
             type="checkbox"
             checked={entityMemory}
-            onChange={(e) => setEntityMemory(e.target.checked)}
+            onChange={(e) => { setEntityMemory(e.target.checked); setDirty(true); }}
             disabled={readOnly}
             aria-label="Reuse prior-year hints for repeat entities"
           />
@@ -563,6 +615,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         </p>
       </div>
 
+      <SettingsSectionHeading
+        title="Notes appearance"
+        description="This section saves independently and updates the shared default immediately."
+      />
       {/* Notes table style — the firm-wide default theme for notes tables
           (docs/PLAN-notes-table-theme.md). Server-side (shared by everyone),
           persisted via /api/settings; it auto-saves on change, independent of
@@ -612,7 +668,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             <span />
           )}
           <div style={styles.actionsRight}>
-            {saved && <span style={styles.savedBadge}>Saved!</span>}
+            {dirty && !saving && <span style={styles.unsavedBadge} role="status">Unsaved changes</span>}
+            {saved && <span style={styles.savedBadge} role="status" aria-live="polite">Saved</span>}
             {onCancel && (
               <button onClick={onCancel} className={uiClass.btnSecondary} style={styles.cancelButton}>
                 {readOnly ? "Close" : "Cancel"}
@@ -621,16 +678,25 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             {!readOnly && (
               <button
                 onClick={handleSave}
-                disabled={saving || hasErrors}
+                disabled={saving || hasErrors || !dirty}
                 className={uiClass.btnPrimary}
                 style={styles.saveButton}
               >
-                {saving ? "Saving..." : "Save"}
+                {saving ? "Saving…" : "Save shared settings"}
               </button>
             )}
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function SettingsSectionHeading({ title, description }: { title: string; description: string }) {
+  return (
+    <div style={styles.sectionHeading}>
+      <h3 style={styles.sectionTitle}>{title}</h3>
+      <p style={styles.sectionDescription}>{description}</p>
     </div>
   );
 }
@@ -653,6 +719,7 @@ function NotesPasteFormatSection({
   // user can't tell this section persists on change while the rest of the form
   // waits for the Save button (the "mixed save model" confusion, C4).
   const [justSaved, setJustSaved] = useState(false);
+  const [savingAppearance, setSavingAppearance] = useState(false);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last value the SERVER confirmed — restored if a save fails so the UI never
   // shows (or copies) an unsaved theme that a refresh would silently revert
@@ -685,6 +752,7 @@ function NotesPasteFormatSection({
   const update = useCallback(
     (next: ClipboardFormatOptions) => {
       setFmt(next); // optimistic — keep the input controlled + preview live
+      setSavingAppearance(true);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         // Clamp/validate BEFORE sending so an interim out-of-range value never
@@ -694,12 +762,14 @@ function NotesPasteFormatSection({
           .then(() => {
             lastSavedRef.current = clean;
             setSaveError(null);
+            setSavingAppearance(false);
             // Flash a brief "Saved" so the auto-save is legible.
             setJustSaved(true);
             if (savedTimer.current) clearTimeout(savedTimer.current);
             savedTimer.current = setTimeout(() => setJustSaved(false), 2000);
           })
           .catch(() => {
+            setSavingAppearance(false);
             setSaveError("Couldn't save the table style — check your connection.");
             setFmt(lastSavedRef.current); // revert to the last confirmed value
           });
@@ -727,12 +797,12 @@ function NotesPasteFormatSection({
         <span
           style={{
             ...styles.autoSaveChip,
-            visibility: justSaved ? "visible" : "hidden",
+            visibility: savingAppearance || justSaved ? "visible" : "hidden",
           }}
           role="status"
           aria-live="polite"
         >
-          ✓ Saved
+          {savingAppearance ? "Saving…" : "Saved"}
         </span>
       </div>
       <p style={styles.helperText}>
@@ -747,6 +817,31 @@ function NotesPasteFormatSection({
           {saveError}
         </p>
       )}
+      <div style={styles.notesPreview} aria-label="Notes table style preview">
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            fontSize: `${fmt.fontSizePt}pt`,
+            border: fmt.borderStyle === "none"
+              ? "none"
+              : `${fmt.borderStyle === "double" ? 3 : 1}px ${fmt.borderStyle === "double" ? "double" : "solid"} ${fmt.borderColor || pwc.grey300}`,
+          }}
+        >
+          <thead>
+            <tr style={{ background: fmt.headerFill === "transparent" ? pwc.white : (fmt.headerFill || pwc.grey100) }}>
+              <th style={styles.previewCell}>Revenue</th>
+              <th style={{ ...styles.previewCell, textAlign: "right" }}>2025</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={styles.previewCell}>Contract income</td>
+              <td style={{ ...styles.previewCell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>1,250,000</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <ClipboardFormatControls value={fmt} onChange={update} idPrefix="settings-fmt" />
     </div>
   );

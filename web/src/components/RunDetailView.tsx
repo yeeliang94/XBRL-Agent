@@ -28,8 +28,8 @@ import {
 } from "../lib/buildToolTimeline";
 import { displayModelId } from "../lib/modelId";
 import { notesTabLabel } from "../lib/appReducer";
-import { formatCost } from "../lib/numberFormat";
-import { denominationLabel, pseudoAgentLabel, variantLabel, crossCheckLabel } from "../lib/vocabulary";
+import { formatAccounting, formatCost } from "../lib/numberFormat";
+import { denominationLabel, pseudoAgentLabel, variantLabel, crossCheckFailureLabel } from "../lib/vocabulary";
 import { isNotes12StatementType } from "../lib/notes";
 import { statementCodeSubtitle, statementCodeOrder } from "../lib/sheetLabels";
 
@@ -46,6 +46,8 @@ export interface RunDetailViewProps {
   detail: RunDetailJson;
   onDownload: (runId: number) => void;
   onDelete: (runId: number) => void;
+  /** Resume configuration for an unstarted draft. */
+  onResumeDraft?: (runId: number) => void;
   /** Rescue a run wedged in `running` status (UX-QA #2). When provided and the
    *  run is `running`, an "Abort run" control replaces the disabled Delete so a
    *  dead run isn't a dead-end. Optional — absent for callers that can't act. */
@@ -104,19 +106,6 @@ function ConfigBlock({
         .join(", "),
     });
   }
-  const models = (config.models ?? {}) as Record<string, string>;
-  if (Object.keys(models).length > 0) {
-    entries.push({
-      label: "Model overrides",
-      value: Object.entries(models)
-        .map(([k, v]) => `${k}: ${displayModelId(v)}`)
-        .join(", "),
-    });
-  }
-  entries.push({
-    label: "Scout",
-    value: config.use_scout ? "Enabled" : "Disabled",
-  });
   entries.push({
     label: "Filing level",
     value: (config.filing_level === "group" ? "Group" : "Company"),
@@ -370,7 +359,7 @@ function writeRunTabToUrl(key: RunTabKey): void {
 }
 
 export function RunDetailView({
-  detail, onDownload, onDelete, onForceAbort, onRegenerateNotes,
+  detail, onDownload, onDelete, onResumeDraft, onForceAbort, onRegenerateNotes,
   canonicalEnabled = false, initialTab = "overview",
 }: RunDetailViewProps) {
   // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
@@ -403,10 +392,10 @@ export function RunDetailView({
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Abort confirmation for a wedged `running` run (UX-QA #2).
   const [confirmAbort, setConfirmAbort] = useState(false);
-  // Whether the user has acknowledged the "completed with errors" warning
-  // banner (UX-QA #1). Until they do, Download stays a secondary (not primary)
-  // action so the tool doesn't invite filing failed-check data at a glance.
-  const [errorAck, setErrorAck] = useState(false);
+  // A flagged workbook remains available to expert users for investigation,
+  // but the action is explicitly a draft download and confirms the filing
+  // risk at action time. This is not persistent review sign-off.
+  const [confirmDraftDownload, setConfirmDraftDownload] = useState(false);
 
   // Step 8/12 — clicking a failed cross-check drives the source-PDF pane to
   // the cited page(s) of the cell it targets. We resolve (target_sheet,
@@ -459,6 +448,9 @@ export function RunDetailView({
 
   const canDownload = !!detail.merged_workbook_path;
   const isRunning = detail.status === "running";
+  const isDraft = detail.status === "draft";
+  const isFailed = detail.status === "failed";
+  const isAborted = detail.status === "aborted";
   // A finished-but-flagged run (UX-QA #1): it completed AND offers a download,
   // but a consistency check failed — so the page must NOT look like a clean run.
   // `failed` is excluded (it has no workbook to download and already reads as a
@@ -467,9 +459,17 @@ export function RunDetailView({
   const isErrorOutcome =
     detail.status === "completed_with_errors" ||
     detail.status === "correction_exhausted";
-  const failingCheckNames = (detail.cross_checks ?? [])
-    .filter((c) => c.status === "failed")
-    .map((c) => crossCheckLabel(c.name));
+  const isInvestigationOutcome = isErrorOutcome || isFailed || isAborted;
+  const failingChecks = (detail.cross_checks ?? [])
+    .filter((c) => c.status === "failed");
+  const failingCheckSummaries = failingChecks.map((c) => {
+    const values = [
+      c.expected != null ? `expected ${formatAccounting(c.expected)}` : null,
+      c.actual != null ? `actual ${formatAccounting(c.actual)}` : null,
+      c.diff != null ? `difference ${formatAccounting(c.diff)}` : null,
+    ].filter(Boolean);
+    return `${crossCheckFailureLabel(c.name)}${values.length ? ` — ${values.join(", ")}` : ""}`;
+  });
   // mTool fill needs a completed run (facts must be final) — same gate the
   // backend enforces (api/mtool.py _FILLABLE_STATUSES).
   const canFillMtool =
@@ -486,6 +486,13 @@ export function RunDetailView({
   // returns 409 for this case, but disabling the button in the UI means
   // the bad click is impossible in the normal flow.
   const canDelete = detail.status !== "running";
+  const filingProfile = [
+    typeof detail.config?.filing_standard === "string"
+      ? detail.config.filing_standard.toUpperCase()
+      : "MFRS",
+    detail.config?.filing_level === "group" ? "Group" : "Company",
+    denominationLabel(detail.config?.denomination as string | undefined),
+  ].join(" · ");
 
   const handleDelete = () => {
     // Open the shared confirm dialog; the actual delete fires on confirm.
@@ -514,13 +521,15 @@ export function RunDetailView({
       ? [{ key: "eval" as RunTabKey, label: "Eval" }]
       : []),
   ];
+  const availableTabs = isDraft
+    ? tabs.filter((item) => item.key === "overview")
+    : tabs;
 
   // Clamp to a renderable tab. `initialTab="values"` (the /concepts/{id}
   // alias) can point at a tab that isn't available when canonical mode is off
   // or still loading — without this, no tab is active and no panel renders,
   // leaving a blank page below the tab bar (peer-review [6]).
-  const activeTab: RunTabKey = tabs.some((t) => t.key === tab) ? tab : "overview";
-
+  const activeTab: RunTabKey = availableTabs.some((t) => t.key === tab) ? tab : "overview";
   const rollup = detail.telemetry_rollup;
 
   // Outcome summary for the Overview strip (E1). Cross-check status can carry
@@ -561,13 +570,13 @@ export function RunDetailView({
   const tabBarRef = useRef<HTMLDivElement>(null);
   const onTabKeyDown = (e: React.KeyboardEvent, index: number) => {
     let next = index;
-    if (e.key === "ArrowRight") next = (index + 1) % tabs.length;
-    else if (e.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+    if (e.key === "ArrowRight") next = (index + 1) % availableTabs.length;
+    else if (e.key === "ArrowLeft") next = (index - 1 + availableTabs.length) % availableTabs.length;
     else if (e.key === "Home") next = 0;
-    else if (e.key === "End") next = tabs.length - 1;
+    else if (e.key === "End") next = availableTabs.length - 1;
     else return;
     e.preventDefault();
-    selectTab(tabs[next].key);
+    selectTab(availableTabs[next].key);
     const btns =
       tabBarRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
     btns?.[next]?.focus();
@@ -579,50 +588,69 @@ export function RunDetailView({
         <div style={styles.headerText}>
           <div style={styles.kicker}>Run {detail.id}</div>
           <h3 style={styles.filename}>{detail.pdf_filename}</h3>
+          <div style={styles.filingProfile}>{filingProfile}</div>
           <div style={styles.metaRow}>
             {statusBadge(runStatusDisplay(detail.status))}
             {isLegacy && (
               <span
                 style={styles.legacyBadge}
-                title="This run was recorded before the v2 schema — run config, merged workbook path, and token counts were not captured."
+                title="Some configuration and performance details were not recorded for this older run."
               >
-                Legacy run (pre-v2)
+                Limited historical details
               </span>
             )}
             <span style={styles.dim}>
               {new Date(detail.created_at).toLocaleString()}
             </span>
           </div>
-          {/* AI disclaimer — one persistent line on the run report (Phase 6). */}
-          <p style={styles.aiDisclaimer} role="note">
-            Figures were extracted by AI — verify against the source PDF before filing.
-          </p>
+          {!isDraft && (canDownload || detail.status === "completed" || isErrorOutcome) && (
+            <p style={styles.aiDisclaimer} role="note">
+              Figures were extracted by AI — verify against the source PDF before filing.
+            </p>
+          )}
         </div>
         <div style={styles.actions}>
-          {(() => {
-            // Demote Download to a secondary until the user acknowledges the
-            // error banner, so a completed-with-errors run doesn't lead with a
-            // filled primary button inviting a (possibly wrong) filing (#1).
-            const demote = isErrorOutcome && !errorAck;
-            return (
-              <button
-                type="button"
-                onClick={() => onDownload(detail.id)}
-                disabled={!canDownload}
-                className={demote ? uiClass.btnSecondary : uiClass.btnPrimary}
-                style={demote ? ui.buttonSecondary : ui.buttonPrimary}
-                title={
-                  canDownload
-                    ? demote
-                      ? "Review the failing checks above before downloading"
-                      : "Download the completed Excel file"
-                    : "The Excel file isn't ready (the run stopped before it was assembled)"
-                }
-              >
-                Download filled Excel
-              </button>
-            );
-          })()}
+          {isDraft && onResumeDraft ? (
+            <button
+              type="button"
+              onClick={() => onResumeDraft(detail.id)}
+              className={uiClass.btnPrimary}
+              style={ui.buttonPrimary}
+            >
+              Resume setup
+            </button>
+          ) : isErrorOutcome ? (
+            <button
+              type="button"
+              onClick={() => selectTab("checks")}
+              className={uiClass.btnPrimary}
+              style={ui.buttonPrimary}
+            >
+              Review issues
+            </button>
+          ) : null}
+          {!isDraft && <button
+            type="button"
+            onClick={() => isInvestigationOutcome ? setConfirmDraftDownload(true) : onDownload(detail.id)}
+            disabled={!canDownload}
+            className={isInvestigationOutcome ? uiClass.btnSecondary : uiClass.btnPrimary}
+            style={isInvestigationOutcome ? ui.buttonSecondary : ui.buttonPrimary}
+            title={
+              canDownload
+                ? isInvestigationOutcome
+                  ? "Download an investigation draft with unresolved checks"
+                  : "Download the completed Excel file"
+                : "The Excel file isn't ready (the run stopped before it was assembled)"
+            }
+          >
+            {isFailed
+              ? "Download partial workbook"
+              : isAborted
+                ? "Download investigation draft"
+                : isErrorOutcome
+                  ? "Download draft"
+                : "Download filled Excel"}
+          </button>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
           <button
@@ -690,10 +718,9 @@ export function RunDetailView({
               This run finished, but a consistency check didn’t pass.
             </strong>
             <span style={styles.errorBannerText}>
-              {failingCheckNames.length > 0 ? (
+              {failingCheckSummaries.length > 0 ? (
                 <>
-                  Review before filing:{" "}
-                  {failingCheckNames.join(", ")}.
+                  {failingCheckSummaries.join("; ")}.
                 </>
               ) : (
                 <>Review the cross-checks before downloading or filing this run.</>
@@ -709,21 +736,64 @@ export function RunDetailView({
             >
               View cross-checks
             </button>
-            {!errorAck && (
-              <button
-                type="button"
-                onClick={() => setErrorAck(true)}
-                className={uiClass.btnGhost}
-                style={ui.buttonGhost}
-              >
-                I’ve reviewed these
-              </button>
-            )}
           </div>
         </div>
       )}
 
+      {(isFailed || isAborted) && (
+        <div style={styles.errorBanner} role="alert">
+          <div style={styles.errorBannerBody}>
+            <strong style={styles.errorBannerTitle}>
+              {isFailed ? "This extraction did not finish." : "This extraction was stopped."}
+            </strong>
+            <span style={styles.errorBannerText}>
+              {canDownload
+                ? "A partial workbook was preserved for investigation. Review Activity before relying on any figures."
+                : "No workbook was assembled. Open Activity for details, then start a new extraction when the issue is resolved."}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => selectTab("agents")}
+            className={uiClass.btnSecondary}
+            style={ui.buttonSecondary}
+          >
+            View activity
+          </button>
+        </div>
+      )}
+
+      {isDraft && (
+        <div style={ui.alertInfo} role="status">
+          Setup has not been completed. Resume setup to choose statement formats and start extraction.
+        </div>
+      )}
+
       <MtoolFillModal runId={detail.id} open={mtoolOpen} onClose={() => setMtoolOpen(false)} />
+
+      <ConfirmDialog
+        isOpen={confirmDraftDownload}
+        title={isFailed ? "Download partial workbook?" : "Download investigation draft?"}
+        message={
+          <>
+            {isFailed || isAborted ? (
+              <>This workbook was produced by a run that did not finish normally. Download it only for investigation; it is not ready to file.</>
+            ) : (
+              <>This workbook has <strong>{failingChecks.length} unresolved check{failingChecks.length === 1 ? "" : "s"}</strong>. Download it only to investigate or continue review; it is not ready to file.</>
+            )}
+          </>
+        }
+        confirmLabel={isFailed
+          ? "Download partial workbook"
+          : isErrorOutcome
+            ? "Download draft"
+            : "Download investigation draft"}
+        onConfirm={() => {
+          setConfirmDraftDownload(false);
+          onDownload(detail.id);
+        }}
+        onCancel={() => setConfirmDraftDownload(false)}
+      />
 
       <ConfirmDialog
         isOpen={confirmAbort}
@@ -769,7 +839,7 @@ export function RunDetailView({
         role="tablist"
         aria-label="Run detail sections"
       >
-        {tabs.map((t, i) => {
+        {availableTabs.map((t, i) => {
           const active = t.key === activeTab;
           return (
             <button
@@ -827,18 +897,6 @@ export function RunDetailView({
           </div>
           <h4 style={styles.sectionHeading}>Run configuration</h4>
           <ConfigBlock config={detail.config} />
-          {rollup && (
-            <>
-              <h4 style={styles.sectionHeading}>Performance</h4>
-              <div style={styles.metricStrip}>
-                <MetricTile label="Total tokens" value={rollup.total_tokens.toLocaleString()} />
-                <MetricTile label="Est. cost" value={formatCost(rollup.total_cost)} />
-                <MetricTile label="Turns" value={String(rollup.turn_count)} />
-                <MetricTile label="Tool calls" value={String(rollup.tool_call_count)} />
-                <MetricTile label="Agents" value={String(detail.agents.length)} />
-              </div>
-            </>
-          )}
           {detail.repeat_group_id != null && (
             <ConsistencyPanel groupId={detail.repeat_group_id} />
           )}
@@ -869,6 +927,15 @@ export function RunDetailView({
           <details style={styles.perfDetails} data-testid="run-detail-telemetry">
             <summary style={styles.perfSummary}>Performance details</summary>
             <div style={{ marginTop: pwc.space.md }}>
+              {rollup && (
+                <div style={styles.metricStrip}>
+                  <MetricTile label="Total tokens" value={rollup.total_tokens.toLocaleString()} />
+                  <MetricTile label="Est. cost" value={formatCost(rollup.total_cost)} />
+                  <MetricTile label="Turns" value={String(rollup.turn_count)} />
+                  <MetricTile label="Tool calls" value={String(rollup.tool_call_count)} />
+                  <MetricTile label="Agents" value={String(detail.agents.length)} />
+                </div>
+              )}
               <AgentTelemetryPanel detail={detail} />
             </div>
           </details>
@@ -919,6 +986,7 @@ export function RunDetailView({
               revamp (docs/PLAN-review-workspace.md Phase 1). The run's stored
               cross-checks seed the outcome strip's "Checks passing" (Phase 3). */}
           <ConceptsPage
+            key={detail.id}
             runId={detail.id}
             initialCrossChecks={crossChecksForValidator(detail.cross_checks)}
             onRegenerateNotes={onRegenerateNotes}
@@ -1012,6 +1080,11 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
+    marginTop: pwc.space.xs,
+  } as React.CSSProperties,
+  filingProfile: {
+    ...ui.metadata,
+    color: pwc.grey700,
     marginTop: pwc.space.xs,
   } as React.CSSProperties,
   dim: {

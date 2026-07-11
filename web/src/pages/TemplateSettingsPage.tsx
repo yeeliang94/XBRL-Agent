@@ -133,7 +133,7 @@ export function TemplateSettingsPage() {
   );
 
   return (
-    <div data-testid="template-settings-page" style={styles.page}>
+    <div data-testid="template-settings-page" className="responsive-page" style={styles.page}>
       <PageHeader
         title="Field labels"
         description="Rename how individual template line items are labelled on screen. This doesn't change the XBRL — only the display text."
@@ -157,7 +157,7 @@ export function TemplateSettingsPage() {
         </div>
       ) : (
         <>
-      <div style={styles.toolbar}>
+      <div className="quality-toolbar" style={styles.toolbar}>
         <label htmlFor="ts-template" style={ui.fieldLabel}>
           Template
         </label>
@@ -176,7 +176,7 @@ export function TemplateSettingsPage() {
                   value={t.template_id}
                   title={t.template_id}
                 >
-                  {templatePickerLabel(t.template_id)}
+                  {group.label} · {templatePickerLabel(t.template_id)}
                 </option>
               ))}
             </optgroup>
@@ -281,7 +281,7 @@ function TemplateConceptRow({
         lineHeight: 1.55,
       }}
     >
-      <div title={`canonical: ${concept.canonical_label}`}>
+      <div>
         {editing ? (
           <input
             data-testid={`ts-rename-input-${concept.concept_uuid}`}
@@ -302,28 +302,49 @@ function TemplateConceptRow({
             style={{ ...ui.input, width: "100%" }}
           />
         ) : (
-          <span>
-            {label}
+          <div>
+            <div style={styles.labelLine}>
+              <span style={styles.labelKey}>Original</span>
+              <span>{concept.canonical_label}</span>
+            </div>
+            {concept.display_label && (
+              <div style={styles.labelLine}>
+                <span style={styles.labelKey}>Custom</span>
+                <span>
+                  {label}
             {/* Flag a customised label so it's easy to spot what's been
                 changed from the taxonomy default (E8). */}
-            {concept.display_label && (
-              <span style={styles.editedChip} data-testid={`ts-edited-${concept.concept_uuid}`}>
-                edited
-              </span>
+                  <span style={styles.editedChip} data-testid={`ts-edited-${concept.concept_uuid}`}>
+                    edited
+                  </span>
+                </span>
+              </div>
             )}
-          </span>
+          </div>
         )}
       </div>
       <div style={{ display: "flex", gap: pwc.space.sm, justifyContent: "flex-end" }}>
         {!isAbstract && !editing && (
-          <button
-            data-testid={`ts-rename-btn-${concept.concept_uuid}`}
-            onClick={startEditing}
-            className={uiClass.btnSecondary}
-            style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
-          >
-            Rename
-          </button>
+          <>
+            {concept.display_label && (
+              <button
+                data-testid={`ts-reset-btn-${concept.concept_uuid}`}
+                onClick={() => void onRename(concept.concept_uuid, null)}
+                className={uiClass.btnSubtle}
+                style={{ ...ui.buttonSubtle, ...ui.buttonSm }}
+              >
+                Reset
+              </button>
+            )}
+            <button
+              data-testid={`ts-rename-btn-${concept.concept_uuid}`}
+              onClick={startEditing}
+              className={uiClass.btnSecondary}
+              style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+            >
+              Rename
+            </button>
+          </>
         )}
         {editing && (
           <>
@@ -390,6 +411,19 @@ const styles = {
     border: `1px solid ${pwc.grey300}`,
     borderRadius: 3,
     verticalAlign: "middle",
+  } as React.CSSProperties,
+  labelLine: {
+    display: "grid",
+    gridTemplateColumns: "64px minmax(0, 1fr)",
+    gap: pwc.space.sm,
+    alignItems: "baseline",
+  } as React.CSSProperties,
+  labelKey: {
+    color: pwc.grey500,
+    fontSize: 12,
+    fontWeight: pwc.weight.medium,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.04em",
   } as React.CSSProperties,
   tableWrap: {
     ...ui.card,

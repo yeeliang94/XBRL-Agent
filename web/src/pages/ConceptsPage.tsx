@@ -129,6 +129,38 @@ export interface ConceptsPageProps {
 }
 
 type Period = "CY" | "PY";
+type RowFilter = "review" | "attention" | "extracted" | "edited" | "calculated" | "no_source" | "blank" | "all";
+const ROW_FILTERS: Array<{ value: RowFilter; label: string }> = [
+  { value: "review", label: "Review relevant" },
+  { value: "attention", label: "Needs attention" },
+  { value: "extracted", label: "Extracted" },
+  { value: "edited", label: "Edited" },
+  { value: "calculated", label: "Calculated" },
+  { value: "no_source", label: "No source" },
+  { value: "blank", label: "Blank" },
+  { value: "all", label: "All" },
+];
+
+interface WorkspacePreferences {
+  searchQuery?: string;
+  rowFilter?: RowFilter;
+  activeTemplate?: string | null;
+  activeSheet?: string | null;
+  selectedConceptUuid?: string | null;
+  menuWidth?: number;
+  pdfWidth?: number;
+  menuCollapsed?: boolean;
+  pdfCollapsed?: boolean;
+}
+
+function readWorkspacePreferences(runId: number | null): WorkspacePreferences {
+  if (runId == null || typeof window === "undefined" || import.meta.env.MODE === "test") return {};
+  try {
+    return JSON.parse(window.sessionStorage.getItem(`xbrl-review:${runId}`) ?? "{}") as WorkspacePreferences;
+  } catch {
+    return {};
+  }
+}
 
 function valueEditKey(uuid: string, period: Period): string {
   return `${uuid}:${period}`;
@@ -170,6 +202,14 @@ function displaySource(source: string | null | undefined): string {
   return source.trim().toLowerCase() === "cascade" ? "" : source;
 }
 
+function displayConceptSource(row: ConceptRow): string {
+  const source = displaySource(row.source);
+  if (source.trim().toLowerCase() !== "manual edit") return source;
+  const pages = parseEvidencePages(row.evidence);
+  if (pages.length === 0) return "Manual edit";
+  return `Manual edit · original source page${pages.length === 1 ? "" : "s"} ${pages.join(", ")}`;
+}
+
 function treeColumns(showPeriods: boolean): string {
   return showPeriods
     ? "minmax(260px, 1fr) minmax(130px, 160px) minmax(130px, 160px) 120px minmax(120px, 180px)"
@@ -183,6 +223,7 @@ export function ConceptsPage({
   initialCrossChecks,
   onRegenerateNotes,
 }: ConceptsPageProps) {
+  const initialWorkspace = useRef<WorkspacePreferences>(readWorkspacePreferences(runId));
   // Gold-standard eval (v16): in benchmark mode we read/write gold facts; the
   // run-only effects (edited_count, conflicts, recheck) all short-circuit on
   // `runId == null`, which is exactly the state in benchmark mode, so they stay
@@ -195,15 +236,17 @@ export function ConceptsPage({
   // didn't capture them — the headers stay plain "CY" / "PY".
   const [reportingCy, setReportingCy] = useState<string | null>(null);
   const [reportingPy, setReportingPy] = useState<string | null>(null);
-  const [activeTemplate, setActiveTemplate] = useState<string | null>(null);
+  const [activeTemplate, setActiveTemplate] = useState<string | null>(initialWorkspace.current.activeTemplate ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Phase 2 (step 2.10): cross-template search.  We keep the search
   // index in the page rather than re-querying so multi-statement
   // navigation stays snappy on slow networks.
-  const [searchQuery, setSearchQuery] = useState("");
-  // Filter to only values that cite no source page (UX-QA #6) — the rows most
-  // needing a manual eyeball against the PDF.
-  const [showOnlyNoSource, setShowOnlyNoSource] = useState(false);
+  const [searchQuery, setSearchQuery] = useState(initialWorkspace.current.searchQuery ?? "");
+  // Exception-led default: reviewers start with values that carry evidence,
+  // edits, mandatory relevance, or an issue instead of hundreds of blank
+  // taxonomy rows. "All" remains one click away for expert inspection.
+  const [rowFilter, setRowFilter] = useState<RowFilter>(initialWorkspace.current.rowFilter ?? "review");
+  const [attentionIndex, setAttentionIndex] = useState(0);
   // Phase 4 step 4.12 — Group runs toggle between Company / Group
   // value columns.  Defaults to Company; the toggle is rendered only
   // when at least one concept carries facts in both scopes.
@@ -236,7 +279,7 @@ export function ConceptsPage({
   const [crossChecks, setCrossChecks] = useState<CrossCheckResult[]>([]);
   // Sub-sheet filter (M3 nested nav): when set, the tree shows only this
   // render_sheet within the active template. null = all sheets of the template.
-  const [activeSheet, setActiveSheet] = useState<string | null>(null);
+  const [activeSheet, setActiveSheet] = useState<string | null>(initialWorkspace.current.activeSheet ?? null);
   // Notes sub-tabs: the notes sheet names present for this run (in MBRS slot
   // order), and which one the reviewer has selected. The names let the
   // SheetNavigator expand Notes into per-sheet sub-tabs (mirroring the face
@@ -279,15 +322,39 @@ export function ConceptsPage({
   // 3-column workspace layout: the Menu and Source PDF columns are both
   // resizable (drag handle) and hideable (collapse to a thin rail). The
   // Results column flexes to fill the rest.
-  const [menuWidth, setMenuWidth] = useState(280);
+  const [menuWidth, setMenuWidth] = useState(initialWorkspace.current.menuWidth ?? 280);
   // Wider default so the source PDF is actually readable at rest (UX-QA #7f) —
   // still user-resizable/collapsible for reviewers who want more table room.
-  const [pdfWidth, setPdfWidth] = useState(520);
-  const [menuCollapsed, setMenuCollapsed] = useState(false);
-  const [pdfCollapsed, setPdfCollapsed] = useState(false);
+  const [pdfWidth, setPdfWidth] = useState(initialWorkspace.current.pdfWidth ?? 520);
+  const [menuCollapsed, setMenuCollapsed] = useState(initialWorkspace.current.menuCollapsed ?? false);
+  const [pdfCollapsed, setPdfCollapsed] = useState(initialWorkspace.current.pdfCollapsed ?? false);
   const [selectedConceptUuid, setSelectedConceptUuid] = useState<string | null>(
-    null
+    initialWorkspace.current.selectedConceptUuid ?? null
   );
+
+  // Preserve review context when the user briefly visits another run tab and
+  // returns. Session scope avoids leaking preferences across browsers/users;
+  // no review or acknowledgement state is persisted.
+  useEffect(() => {
+    if (runId == null || import.meta.env.MODE === "test") return;
+    const prefs: WorkspacePreferences = {
+      searchQuery,
+      rowFilter,
+      activeTemplate,
+      activeSheet,
+      selectedConceptUuid,
+      menuWidth,
+      pdfWidth,
+      menuCollapsed,
+      pdfCollapsed,
+    };
+    try {
+      window.sessionStorage.setItem(`xbrl-review:${runId}`, JSON.stringify(prefs));
+    } catch {
+      // Storage can be unavailable in locked-down browsers; review remains
+      // fully usable in-memory, so persistence failure is intentionally quiet.
+    }
+  }, [runId, searchQuery, rowFilter, activeTemplate, activeSheet, selectedConceptUuid, menuWidth, pdfWidth, menuCollapsed, pdfCollapsed]);
   // Abort an in-flight recheck on unmount AND on runId change — otherwise a
   // slow /recheck from run A can land its results onto run B (this component
   // re-renders rather than remounts when runId changes; the other fetches on
@@ -322,8 +389,14 @@ export function ConceptsPage({
         setConcepts(data.concepts || []);
         setReportingCy(data.reporting_period_cy ?? null);
         setReportingPy(data.reporting_period_py ?? null);
-        const firstTemplate = (data.concepts || [])[0]?.template_id || null;
-        setActiveTemplate(firstTemplate);
+        const loaded = (data.concepts || []) as ConceptRow[];
+        const firstTemplate = loaded[0]?.template_id || null;
+        const preferred = initialWorkspace.current.activeTemplate;
+        setActiveTemplate(
+          preferred && loaded.some((row) => row.template_id === preferred)
+            ? preferred
+            : firstTemplate,
+        );
       })
       .catch((err) => {
         // AbortError is expected on cleanup — don't surface it.
@@ -586,24 +659,32 @@ export function ConceptsPage({
     return map;
   }, [concepts]);
 
+  // Cross-check state is needed both by the outcome strip and the row filter,
+  // so derive it before constructing the visible table rows.
+  const effectiveChecks = useMemo(
+    () => (crossChecks.length > 0 ? crossChecks : initialCrossChecks ?? []),
+    [crossChecks, initialCrossChecks],
+  );
+  const checksPassing = effectiveChecks.filter((c) => c.status === "passed").length;
+  const checksGraded = effectiveChecks.filter(
+    (c) => c.status === "passed" || c.status === "failed",
+  ).length;
+  const advisoryCount = effectiveChecks.filter((c) => c.status === "warning").length;
+  const failingChecks = useMemo(
+    () => effectiveChecks.filter(
+      (c) => c.status === "failed" || c.status === "warning",
+    ),
+    [effectiveChecks],
+  );
+  const actionableChecks = useMemo(
+    () => failingChecks.filter((c) => c.target_sheet && c.target_row != null),
+    [failingChecks],
+  );
+
   // Search overrides the template filter (matches happen across all
   // templates so a user can hop between statements via the result
   // list).  Empty query falls back to the active-template view.
   const notesActive = activeTemplate === NOTES_KEY;
-  const q = searchQuery.trim().toLowerCase();
-  const baseRows = q
-    ? concepts.filter((c) => {
-        const canon = c.canonical_label.toLowerCase();
-        const disp = (c.display_label || "").toLowerCase();
-        return canon.includes(q) || disp.includes(q);
-      })
-    : activeTemplate
-    ? concepts.filter(
-        (c) =>
-          c.template_id === activeTemplate &&
-          (activeSheet == null || c.render_sheet === activeSheet)
-      )
-    : concepts;
 
   // Detect Group runs by the presence of ANY concept with Group-side
   // facts.  Phase-1 Company runs have no Group entry; the toggle stays
@@ -620,13 +701,73 @@ export function ConceptsPage({
       Object.values(c.scope_facts).some((periods) => periods?.PY !== undefined)
   );
 
-  // "Show only unverified" narrows to values with no cited source page. A
-  // parent whose children are all sourced simply drops out — this is a review
-  // aid, not the structural tree, so a flat filtered list is fine.
-  const filtered = showOnlyNoSource
-    ? baseRows.filter(rowLacksSource)
-    : baseRows;
-  const noSourceCount = baseRows.filter(rowLacksSource).length;
+  const { filtered, noSourceCount } = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const baseRows = q
+      ? concepts.filter((c) => {
+          const canon = c.canonical_label.toLowerCase();
+          const disp = (c.display_label || "").toLowerCase();
+          return canon.includes(q) || disp.includes(q);
+        })
+      : activeTemplate
+        ? concepts.filter(
+            (c) =>
+              c.template_id === activeTemplate &&
+              (activeSheet == null || c.render_sheet === activeSheet),
+          )
+        : concepts;
+
+    const rowHasValue = (row: ConceptRow) => {
+      if (row.value != null) return true;
+      return Object.values(row.scope_facts ?? {}).some(
+        (periods) => periods?.CY != null || periods?.PY != null,
+      );
+    };
+    const rowWasEdited = (row: ConceptRow) =>
+      row.source?.trim().toLowerCase() === "manual edit" ||
+      editStatus[valueEditKey(row.concept_uuid, "CY")] === "saved" ||
+      editStatus[valueEditKey(row.concept_uuid, "PY")] === "saved";
+    const rowHasIssue = (row: ConceptRow) =>
+      actionableChecks.some(
+        (check) =>
+          check.target_sheet === row.render_sheet &&
+          check.target_row === row.render_row,
+      );
+    const matchesRowFilter = (row: ConceptRow) => {
+      if (rowFilter === "all") return true;
+      if (row.kind === "ABSTRACT") return false;
+      if (rowFilter === "attention") return rowHasIssue(row) || rowLacksSource(row);
+      if (rowFilter === "extracted") return row.kind !== "COMPUTED" && rowHasValue(row);
+      if (rowFilter === "edited") return rowWasEdited(row);
+      if (rowFilter === "calculated") return row.kind === "COMPUTED" && rowHasValue(row);
+      if (rowFilter === "no_source") return rowLacksSource(row);
+      if (rowFilter === "blank") return Boolean(row.editable) && !rowHasValue(row);
+      return rowHasValue(row) || rowWasEdited(row) || rowHasIssue(row) || rowLacksSource(row) || isMandatoryConcept(row);
+    };
+
+    const directMatches = baseRows.filter(matchesRowFilter);
+    const visibleUuids = new Set(directMatches.map((row) => row.concept_uuid));
+    const byUuid = new Map(concepts.map((row) => [row.concept_uuid, row]));
+    for (const row of directMatches) {
+      let parent = row.parent_uuid;
+      while (parent) {
+        visibleUuids.add(parent);
+        parent = byUuid.get(parent)?.parent_uuid ?? null;
+      }
+    }
+    return {
+      filtered: baseRows.filter((row) => visibleUuids.has(row.concept_uuid)),
+      noSourceCount: baseRows.filter(rowLacksSource).length,
+    };
+  }, [concepts, searchQuery, activeTemplate, activeSheet, rowFilter, editStatus, actionableChecks]);
+
+  useEffect(() => {
+    setAttentionIndex((current) =>
+      actionableChecks.length === 0
+        ? 0
+        : Math.min(current, actionableChecks.length - 1),
+    );
+  }, [actionableChecks.length]);
 
   useEffect(() => {
     if (notesActive) {
@@ -728,29 +869,6 @@ export function ConceptsPage({
     }
   }, []);
 
-  // Outcome strip (review-workspace Phase 3): "Checks passing X/Y". A manual
-  // re-run's fresh results win over the run's stored baseline.
-  const effectiveChecks =
-    crossChecks.length > 0 ? crossChecks : initialCrossChecks ?? [];
-  const checksPassing = effectiveChecks.filter(
-    (c) => c.status === "passed",
-  ).length;
-  // Denominator is the pass/fail numeric checks only — the ones "Validate
-  // figures" actually re-runs. Advisory warnings (note-text consistency) are
-  // counted SEPARATELY so the headline doesn't move when a recheck preserves
-  // them (the "8/11 → 8/8" bug: warnings used to inflate then vanish from the
-  // denominator). See docs/PLAN-design-qa-fixes.md A3.
-  const checksGraded = effectiveChecks.filter(
-    (c) => c.status === "passed" || c.status === "failed",
-  ).length;
-  const advisoryCount = effectiveChecks.filter(
-    (c) => c.status === "warning",
-  ).length;
-  // Failing checks + advisory warnings both feed the Needs-attention queue.
-  const failingChecks = effectiveChecks.filter(
-    (c) => c.status === "failed" || c.status === "warning",
-  );
-
   // Eval (v16): benchmark gold editor — a compact reuse of the same grid,
   // without the run-only chrome (no PDF pane, conflicts, notes, download). Gold
   // LEAF/MATRIX cells are editable; edits PATCH the benchmark facts endpoint.
@@ -758,7 +876,7 @@ export function ConceptsPage({
     if (benchmarkId == null) {
       return (
         <div data-testid="benchmark-gold-empty" style={{ padding: pwc.space.xl }}>
-          <p style={styles.panelMuted}>Select a benchmark to edit its gold values.</p>
+          <p style={styles.panelMuted}>Select a benchmark to edit its reference values.</p>
         </div>
       );
     }
@@ -768,9 +886,12 @@ export function ConceptsPage({
         style={{ display: "flex", flexDirection: "column", gap: pwc.space.lg }}
       >
         {loadError && (
-          <div style={styles.errorBanner}>Failed to load gold values: {loadError}</div>
+          <div style={styles.errorBanner}>Failed to load reference values: {loadError}</div>
         )}
-        <section style={styles.toolbar} aria-label="Gold editor controls">
+        <div style={ui.alertInfo} role="note">
+          Reference-value edits save automatically when you leave a field. Each edited row shows Saving, Saved, or Save failed.
+        </div>
+        <section style={styles.toolbar} aria-label="Reference editor controls">
           {templates.length > 1 && (
             <div style={styles.controlGroup}>
               <label htmlFor="gold-template" style={ui.fieldLabel}>Statement</label>
@@ -856,9 +977,16 @@ export function ConceptsPage({
     (a, b) => a + b,
     0
   );
+  const moveAttention = (delta: number) => {
+    if (actionableChecks.length === 0) return;
+    const next = (attentionIndex + delta + actionableChecks.length) % actionableChecks.length;
+    setAttentionIndex(next);
+    const check = actionableChecks[next];
+    handleSelectTarget(check.target_sheet as string, check.target_row as number);
+  };
 
   const menuColumn = (
-    <div style={{ ...styles.column, flex: `0 0 ${menuWidth}px`, width: menuWidth }}>
+    <div className="review-menu-column" style={{ ...styles.column, flex: `0 0 ${menuWidth}px`, width: menuWidth }}>
       <ColumnHeader
         title={TERMS.documentColumn}
         testId="menu"
@@ -941,7 +1069,7 @@ export function ConceptsPage({
   );
 
   const pdfColumn = (
-    <div style={{ ...styles.column, flex: `0 0 ${pdfWidth}px`, width: pdfWidth }}>
+    <div className="review-source-column" style={{ ...styles.column, flex: `0 0 ${pdfWidth}px`, width: pdfWidth }}>
       <ColumnHeader
         title="Source PDF"
         testId="pdf"
@@ -974,7 +1102,7 @@ export function ConceptsPage({
   );
 
   return (
-    <div data-testid="concepts-page" style={styles.shell}>
+    <div data-testid="concepts-page" className="review-workspace" style={styles.shell}>
       {/* Column 1 — Document (statements, notes checklist, needs-attention) */}
       {menuCollapsed ? (
         <CollapsedRail
@@ -1002,8 +1130,31 @@ export function ConceptsPage({
               <h1 style={styles.pageTitle}>{TERMS.reviewWorkspaceTitle}</h1>
             </div>
             <div style={styles.actionRow}>
+              {actionableChecks.length > 0 && (
+                <div style={styles.issueNav} aria-label="Issue navigation">
+                  <button
+                    type="button"
+                    className={uiClass.btnSecondary}
+                    style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+                    onClick={() => moveAttention(-1)}
+                    aria-label="Previous issue"
+                  >
+                    ←
+                  </button>
+                  <span style={ui.metadata}>{Math.min(attentionIndex + 1, actionableChecks.length)} / {actionableChecks.length}</span>
+                  <button
+                    type="button"
+                    className={uiClass.btnSecondary}
+                    style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+                    onClick={() => moveAttention(1)}
+                    aria-label="Next issue"
+                  >
+                    →
+                  </button>
+                </div>
+              )}
               {recheck.summary && (
-                <span data-testid="recheck-summary" style={styles.recheckSummary}>
+                <span data-testid="recheck-summary" style={styles.recheckSummary} role="status" aria-live="polite">
                   {recheck.summary}
                 </span>
               )}
@@ -1012,6 +1163,7 @@ export function ConceptsPage({
                 className={uiClass.btnSecondary}
                 onClick={onRecheck}
                 disabled={recheck.running}
+                title="Rerun consistency checks using the current saved figures"
                 style={{
                   ...ui.buttonSecondary,
                   cursor: recheck.running ? "default" : "pointer",
@@ -1117,17 +1269,27 @@ export function ConceptsPage({
                 style={{ ...ui.input, width: "100%" }}
               />
             </div>
-            {noSourceCount > 0 && (
-              <label style={styles.noSourceFilterLabel}>
-                <input
-                  type="checkbox"
-                  data-testid="filter-no-source"
-                  checked={showOnlyNoSource}
-                  onChange={(e) => setShowOnlyNoSource(e.target.checked)}
-                />
-                Show only unverified ({noSourceCount} with no source page)
-              </label>
-            )}
+            <div style={styles.rowFilters} role="group" aria-label="Figure rows">
+              {ROW_FILTERS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  data-testid={option.value === "no_source" ? "filter-no-source" : `filter-${option.value}`}
+                  aria-pressed={rowFilter === option.value}
+                  onClick={() => setRowFilter(option.value)}
+                  className={rowFilter === option.value ? uiClass.btnSubtle : uiClass.btnSecondary}
+                  style={{
+                    ...(rowFilter === option.value ? ui.buttonSubtle : ui.buttonSecondary),
+                    ...ui.buttonSm,
+                  }}
+                >
+                  {option.label}{option.value === "no_source" && noSourceCount > 0 ? ` (${noSourceCount})` : ""}
+                </button>
+              ))}
+            </div>
+            <span style={styles.srOnly} role="status" aria-live="polite">
+              {filtered.length} figure row{filtered.length === 1 ? "" : "s"} shown
+            </span>
           </section>
         )}
 
@@ -1351,6 +1513,7 @@ function ResizeHandle({
   };
   return (
     <div
+      className="review-resize-handle"
       role="separator"
       aria-orientation="vertical"
       data-testid={testId}
@@ -1968,7 +2131,7 @@ function ConceptRowView({
               />
             ) : null}
           </div>
-          <div style={styles.sourceCell}>{displaySource(row.source)}</div>
+          <div style={styles.sourceCell}>{displayConceptSource(row)}</div>
         </>
       )}
     </div>
@@ -2308,7 +2471,7 @@ function ConceptEvidenceBody({
           <div>
             <div style={styles.evidenceLabel}>Source</div>
             <div style={styles.evidenceText}>
-              {displaySource(concept.source) || "No source recorded"}
+              {displayConceptSource(concept) || "No source recorded"}
             </div>
           </div>
           <div>
@@ -2495,7 +2658,8 @@ function EditableValueCell({
               : pwc.grey300
           }`,
           borderRadius: pwc.radius.md,
-          fontFamily: pwc.fontMono,
+          fontFamily: pwc.fontBody,
+          fontVariantNumeric: "tabular-nums",
           fontSize: 14,
           background: highlightEmpty ? pwc.orange50 : pwc.white,
         }}
@@ -2670,6 +2834,11 @@ const styles = {
     gap: pwc.space.md,
     flexWrap: "wrap",
   } as React.CSSProperties,
+  issueNav: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
   recheckSummary: {
     fontSize: 12,
     color: pwc.grey700,
@@ -2691,7 +2860,8 @@ const styles = {
     gap: 2,
   } as React.CSSProperties,
   metricValue: {
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
     fontSize: 20,
     fontWeight: pwc.weight.regular,
     color: pwc.grey900,
@@ -2745,6 +2915,24 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xs,
+  } as React.CSSProperties,
+  rowFilters: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.xs,
+    width: "100%",
+  } as React.CSSProperties,
+  srOnly: {
+    position: "absolute" as const,
+    width: 1,
+    height: 1,
+    padding: 0,
+    margin: -1,
+    overflow: "hidden",
+    clip: "rect(0, 0, 0, 0)",
+    whiteSpace: "nowrap" as const,
+    border: 0,
   } as React.CSSProperties,
   segmented: {
     display: "inline-flex",
@@ -2890,6 +3078,9 @@ const styles = {
     background: pwc.grey50,
     color: pwc.grey700,
     borderBottom: `1px solid ${pwc.grey200}`,
+    position: "sticky" as const,
+    top: 0,
+    zIndex: 4,
   } as React.CSSProperties,
   headerCell: {
     fontFamily: pwc.fontHeading,
@@ -2910,7 +3101,8 @@ const styles = {
     justifyContent: "flex-end",
     alignItems: "center",
     minWidth: 0,
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
   } as React.CSSProperties,
   emptyValueBox: {
     display: "inline-block",
@@ -2943,7 +3135,8 @@ const styles = {
     border: `1px solid ${pwc.grey200}`,
     borderRadius: pwc.radius.md,
     background: pwc.grey50,
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
     fontSize: 14,
     color: pwc.grey800,
   } as React.CSSProperties,

@@ -257,7 +257,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     render(<NotesReviewTab runId={42} />);
     await waitFor(() => {
       expect(
-        screen.getByText(/no notes content/i),
+        screen.getByText(/did not include note extraction/i),
       ).toBeInTheDocument();
     });
   });

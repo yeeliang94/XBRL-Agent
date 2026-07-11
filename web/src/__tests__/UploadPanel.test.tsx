@@ -59,7 +59,7 @@ describe("UploadPanel — P1 enhancements", () => {
         startTime={null}
       />,
     );
-    const button = screen.getByRole("button", { name: /choose file/i });
+    const button = screen.getByText("Choose file");
     // jsdom converts hex #FD5108 to rgb
     expect(button.style.backgroundColor).toBe("rgb(253, 81, 8)");
   });
@@ -106,5 +106,23 @@ describe("UploadPanel — P1 enhancements", () => {
     // jsdom converts hex to rgb in style attributes
     expect(dropZone?.getAttribute("style")).toContain("rgb(250, 250, 250)"); // grey50 #FAFAFA
     expect(dropZone?.getAttribute("style")).toContain("rgb(222, 222, 222)"); // grey200 #DEDEDE
+  });
+
+  test("drag highlight stays active while crossing children and clears on exit", () => {
+    render(
+      <UploadPanel onUpload={noop} isRunning={false} filename={null} startTime={null} />,
+    );
+    const dropZone = screen.getByTestId("drop-zone");
+    const child = dropZone.querySelector("span")!;
+
+    fireEvent.dragEnter(dropZone);
+    expect(dropZone.style.backgroundColor).toBe("rgb(255, 245, 237)");
+
+    fireEvent.dragEnter(child);
+    fireEvent.dragLeave(dropZone);
+    expect(dropZone.style.backgroundColor).toBe("rgb(255, 245, 237)");
+
+    fireEvent.dragLeave(child);
+    expect(dropZone.style.backgroundColor).toBe("rgb(250, 250, 250)");
   });
 });

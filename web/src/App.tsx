@@ -2,6 +2,7 @@ import { useReducer, useCallback, useState, useRef, useEffect } from "react";
 import type { RunConfigPayload, NotesTemplateType } from "./lib/types";
 import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES } from "./lib/types";
 import { pwc } from "./lib/theme";
+import { ui, uiClass } from "./lib/uiStyles";
 import { appReducer, bootState, parseRouteFromPath } from "./lib/appReducer";
 import { uploadPdf, abortAll, abortAgent } from "./lib/api";
 import { getAuthMe, logout as apiLogout, refreshAuth } from "./lib/api";
@@ -54,12 +55,8 @@ const styles = {
     margin: 0,
   } as const,
   settingsButton: {
-    padding: pwc.space.sm,
-    color: pwc.grey500,
-    background: "none",
-    border: "none",
-    borderRadius: pwc.radius.md,
-    cursor: "pointer",
+    ...ui.buttonSubtle,
+    ...ui.buttonSm,
   } as const,
   headerRight: {
     display: "flex",
@@ -72,15 +69,9 @@ const styles = {
     color: pwc.grey500,
   } as const,
   logoutButton: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: pwc.weight.medium,
+    ...ui.buttonGhost,
+    ...ui.buttonSm,
     color: pwc.grey700,
-    background: "none",
-    border: "none",
-    borderRadius: pwc.radius.md,
-    cursor: "pointer",
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
   } as const,
   main: {
     maxWidth: 1120,
@@ -570,8 +561,8 @@ export default function App() {
   return (
     <div style={styles.page}>
       {/* Header */}
-      <header style={styles.header}>
-        <div style={styles.headerLeft}>
+      <header className="app-header" style={styles.header}>
+        <div className="app-header-left" style={styles.headerLeft}>
           <h1 style={styles.headerTitle}>XBRL Agent</h1>
           <TopNav
             // The `concepts` view with a run id is the unified run page (a
@@ -612,10 +603,10 @@ export default function App() {
             }}
           />
         </div>
-        <div style={styles.headerRight}>
+        <div className="app-header-right" style={styles.headerRight}>
           {user && <span style={styles.userEmail}>{user.email}</span>}
           {user && user.provider !== "dev" && (
-            <button onClick={handleLogout} style={styles.logoutButton}>
+            <button onClick={handleLogout} style={styles.logoutButton} className={uiClass.btnGhost}>
               Log out
             </button>
           )}
@@ -625,14 +616,17 @@ export default function App() {
               dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
             }}
             style={styles.settingsButton}
+            className={uiClass.btnSubtle}
             aria-label="Settings"
           >
             <SettingsIcon />
+            <span>Settings</span>
           </button>
         </div>
       </header>
 
       <main
+        className="app-main"
         style={
           // Two intentional widths (docs/PLAN-design-qa-fixes.md C3):
           //  • Workspace pages (History, run detail via /concepts/{id}) run

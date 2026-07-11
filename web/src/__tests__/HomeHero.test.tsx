@@ -5,8 +5,8 @@ import { HomeHero } from "../components/HomeHero";
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-// HomeHero fires fetchHomeStats (3 calls) + fetchRecentRuns (1 call) when
-// active. Queue plausible responses for all four.
+// HomeHero fires fetchHomeStats (6 calls) + fetchRecentRuns (1 call) when
+// active. Queue plausible responses for all seven.
 function primeFetch(opts?: { recent?: unknown[]; fail?: boolean }) {
   mockFetch.mockReset();
   if (opts?.fail) {
@@ -19,12 +19,14 @@ function primeFetch(opts?: { recent?: unknown[]; fail?: boolean }) {
   const recent = opts?.recent ?? [
     { id: 5, created_at: "2026-05-20T09:00:00Z", pdf_filename: "RECENT.pdf", status: "completed", session_id: "s5", statements_run: [], models_used: [], duration_seconds: 1, scout_enabled: false, has_merged_workbook: true },
   ];
-  // fetchHomeStats → 3 limit=1 total reads, then fetchRecentRuns → the list.
+  // fetchHomeStats → 6 limit=1 total reads, then fetchRecentRuns → the list.
   mockFetch
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 9, limit: 1, offset: 0 }) })
     .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 2, limit: 1, offset: 0 }) })
     .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 4, limit: 1, offset: 0 }) })
     .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 1, limit: 1, offset: 0 }) })
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 1, limit: 1, offset: 0 }) })
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 2, limit: 1, offset: 0 }) })
     .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: recent, total: recent.length, limit: 20, offset: 0 }) });
 }
 
@@ -43,7 +45,7 @@ describe("HomeHero", () => {
     // Upload child (middle section) is always present.
     expect(screen.getByText("UPLOAD CARD")).toBeTruthy();
     // Stats band on top + history pane at the bottom once the fetches resolve.
-    expect(screen.getByText("Total runs")).toBeTruthy();
+    expect(screen.getByText("Needs review")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("RECENT.pdf")).toBeTruthy());
   });
 
@@ -54,21 +56,23 @@ describe("HomeHero", () => {
       </HomeHero>,
     );
     expect(screen.getByText("UPLOAD CARD")).toBeTruthy();
-    expect(screen.queryByText("Total runs")).toBeNull();
+    expect(screen.queryByText("Needs review")).toBeNull();
     expect(screen.queryByText(/recent runs/i)).toBeNull();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
   test("clearing drafts confirms, calls the bulk-delete endpoint, and refetches (E3)", async () => {
-    // Initial load: total=9, drafts=2, completed=4, then the recent list.
+    // Initial load: drafts=2, completed-this-month=4, then the recent list.
     primeFetch();
-    // After the confirm: the DELETE, then a fresh 5-call reload (4 stats + the
+    // After the confirm: the DELETE, then a fresh 7-call reload (6 stats + the
     // recent list) with 0 drafts.
     mockFetch
       .mockResolvedValueOnce({ ok: true, json: async () => ({ deleted: 2 }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 7, limit: 1, offset: 0 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 4, limit: 1, offset: 0 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 1, offset: 0 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [], total: 0, limit: 20, offset: 0 }) });
 

@@ -1,5 +1,6 @@
 import { pwc } from "../lib/theme";
 import type { AppView } from "../lib/appReducer";
+import { TERMS } from "../lib/vocabulary";
 
 // ---------------------------------------------------------------------------
 // TopNav — SPA-style top navigation with top-level app destinations.
@@ -23,8 +24,8 @@ export interface TopNavProps {
 }
 
 const ITEMS: { id: AppView; label: string; adminOnly?: boolean }[] = [
-  { id: "extract", label: "Extract" },
-  { id: "history", label: "History" },
+  { id: "extract", label: TERMS.newExtraction },
+  { id: "history", label: TERMS.runs },
   // The concept-label editor: renamed from "Template" (which an auditor read
   // as the MBRS Excel template) to "Field labels", and admin-only.
   { id: "concepts", label: "Field labels", adminOnly: true },
@@ -33,7 +34,7 @@ const ITEMS: { id: AppView; label: string; adminOnly?: boolean }[] = [
   { id: "benchmarks", label: "Benchmarks", adminOnly: true },
   // Evals workspace (Phase E/F): suites, batch runner, trends + compare. Shares
   // the QA-surface admin gate with Benchmarks (which it depends on for gold).
-  { id: "suites", label: "Evals", adminOnly: true },
+  { id: "suites", label: TERMS.evaluationSuites, adminOnly: true },
 ];
 
 export function TopNav({ view, onViewChange, showConcepts = true, isAdmin = false }: TopNavProps) {
@@ -44,7 +45,7 @@ export function TopNav({ view, onViewChange, showConcepts = true, isAdmin = fals
     return true;
   });
   return (
-    <nav style={styles.nav} role="tablist" aria-label="Main navigation">
+    <nav className="app-main-nav" style={styles.nav} role="tablist" aria-label="Main navigation">
       {items.map((item) => {
         const active = item.id === view;
         return (
@@ -54,6 +55,7 @@ export function TopNav({ view, onViewChange, showConcepts = true, isAdmin = fals
             role="tab"
             aria-selected={active}
             onClick={() => onViewChange(item.id)}
+            className="app-main-nav-tab"
             // Active and inactive buttons intentionally have distinct style
             // objects so tests can detect the visual difference without
             // hard-coding specific CSS properties.
