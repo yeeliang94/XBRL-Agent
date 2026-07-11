@@ -44,6 +44,8 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    TextPart,
+    ToolCallPart,
     ToolReturnPart,
 )
 
@@ -58,6 +60,10 @@ _PAGE_MARKER_RE = re.compile(r"===\s*Page\s+(\d+)\s*===", re.IGNORECASE)
 # from fill_workbook, which is kept here for back-compat with message
 # histories recorded before the rename). write_notes is the notes write tool.
 _WRITE_TOOL_NAMES = frozenset({"write_facts", "fill_workbook", "write_notes"})
+
+# Replacement text for collapsed duplicate template summaries — also the
+# idempotency sentinel (an already-collapsed copy is never re-replaced).
+_DUPLICATE_TEMPLATE_POINTER = "Template structure already provided above."
 
 # A write counts as a trimming boundary only when it actually COMMITTED data —
 # matched by a success string carrying a non-zero count. The count matters, not
@@ -333,6 +339,76 @@ def _over_soft_watermark(ctx) -> bool:
     return limit > 0 and _cumulative_tokens(ctx) >= limit
 
 
+# Cache-economics additions (Harness-learnings Item 3, docs/PLAN-pydantic-ai-v2.md
+# D.3): every history rewrite changes the outbound prompt bytes and therefore
+# invalidates the provider's prompt cache from the earliest changed message.
+# A rewrite that reclaims only a few hundred characters costs more (full-price
+# re-read of the cached prefix) than it saves, so `compact_old_text_results`
+# can skip the whole edit batch when the total reclaim is below this floor.
+# Chars, not tokens — cheap, deterministic, and proportional (~4 chars/token).
+# DEFAULT 0 = disabled (opt-in first, same philosophy as the token budget):
+# the conservative-path compaction behavior is pinned by
+# tests/test_history_compaction.py and must not change silently; enable via
+# XBRL_COMPACT_MIN_RECLAIM_CHARS once Telemetry evidence supports a floor.
+_DEFAULT_COMPACT_MIN_RECLAIM_CHARS = 0
+
+
+def resolve_min_reclaim_chars() -> int:
+    """``XBRL_COMPACT_MIN_RECLAIM_CHARS``: skip-rewrite floor (0 disables)."""
+    raw = os.environ.get("XBRL_COMPACT_MIN_RECLAIM_CHARS")
+    if raw is None:
+        return _DEFAULT_COMPACT_MIN_RECLAIM_CHARS
+    try:
+        v = int(raw)
+    except ValueError:
+        return 0
+    return v if v > 0 else 0
+
+
+def estimate_outbound_chars(messages: List[ModelMessage]) -> int:
+    """Rough size of the outbound history: total TEXT characters.
+
+    Measures what we are about to re-send (unlike the cumulative
+    ``ctx.usage`` watermark, which is monotonic for the whole run and never
+    releases). TEXT ONLY — image/binary payloads contribute nothing, which
+    is a documented blind spot: the image path has its own stage-aware
+    processor and must never be driven by a size trigger (scanned-PDF
+    thrash fix). ~4 chars/token if a token figure is needed.
+    """
+    total = 0
+    for msg in messages:
+        for part in getattr(msg, "parts", ()):
+            content = getattr(part, "content", None)
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                total += sum(len(c) for c in content if isinstance(c, str))
+    return total
+
+
+def resolve_outbound_escalation_chars() -> int:
+    """``XBRL_SOFT_COMPACT_OUTBOUND_CHARS``: outbound-size escalation trigger.
+
+    DEFAULT 0 = disabled (opt-in first, like the token budget): the
+    cumulative watermark is incident-tuned and stays the primary trigger;
+    this adds a second, size-of-what-we-send trigger for operators to
+    enable once Telemetry evidence supports a threshold.
+    """
+    raw = os.environ.get("XBRL_SOFT_COMPACT_OUTBOUND_CHARS", "")
+    if not raw:
+        return 0
+    try:
+        v = int(raw)
+    except ValueError:
+        return 0
+    return v if v > 0 else 0
+
+
+def _over_outbound_watermark(messages: List[ModelMessage]) -> bool:
+    limit = resolve_outbound_escalation_chars()
+    return limit > 0 and estimate_outbound_chars(messages) >= limit
+
+
 def _model_responses_after(
     messages: List[ModelMessage], message_index: int
 ) -> int:
@@ -371,6 +447,7 @@ def compact_old_text_results(
     *,
     after_turns: int = COMPACT_AFTER_TURNS,
     min_chars: int = COMPACT_MIN_CHARS,
+    min_reclaim: "int | None" = None,
 ) -> List[ModelMessage]:
     """Replace stale, oversized text tool-results with a one-line summary.
 
@@ -415,7 +492,14 @@ def compact_old_text_results(
     for mi, _pi, part in tool_returns:
         last_idx_per_tool[part.tool_name] = mi
 
-    out = messages
+    # Two-pass shape (cache-economics, Item 3): collect the edit batch first,
+    # then apply it ONLY if the total reclaim clears the min-reclaim floor.
+    # Rationale: any rewrite invalidates the provider prompt cache from the
+    # earliest changed message — a tiny reclaim costs more than it saves.
+    # Prior turns' placeholders persist in run state (gotcha #6), so the
+    # batch only ever contains genuinely-new compactions.
+    edits: list[tuple[int, int, ToolReturnPart, str]] = []
+    reclaimed = 0
     for mi, pi, part in tool_returns:
         # Image batches and template summaries are owned by the other two
         # processors; never double-handle them here.
@@ -434,11 +518,23 @@ def compact_old_text_results(
         text = _part_text(part)
         if len(text) < min_chars:
             continue
-        new_part = dataclasses.replace(
-            part, content=_summarize_text_result(part.tool_name, text, turns_ago)
-        )
-        out = _replace_part(out, mi, pi, new_part)
+        summary = _summarize_text_result(part.tool_name, text, turns_ago)
+        reclaimed += max(len(text) - len(summary), 0)
+        edits.append((mi, pi, part, summary))
 
+    if not edits:
+        return messages
+    # min_reclaim=None → env default; callers in AGGRESSIVE mode pass 0 so
+    # the shed-everything escalation is never suppressed by cache economics
+    # (pinned by test_history_processor_escalation — over the watermark the
+    # run is already drowning; the cache is worth less than the reclaim).
+    effective_min = resolve_min_reclaim_chars() if min_reclaim is None else min_reclaim
+    if reclaimed < effective_min:
+        return messages
+
+    out = messages
+    for mi, pi, part, summary in edits:
+        out = _replace_part(out, mi, pi, dataclasses.replace(part, content=summary))
     return out
 
 
@@ -472,11 +568,16 @@ def strip_duplicate_template(messages: List[ModelMessage]) -> List[ModelMessage]
     if len(summary_parts) <= 1:
         return messages
 
-    # Keep the first; replace the rest with a pointer.
+    # Keep the first; replace the rest with a pointer. Copies already
+    # collapsed on a previous turn (the processed history persists back onto
+    # run state, gotcha #6) are skipped so a repeat pass is a true no-op —
+    # same-value replaces still rebuild message objects for nothing.
     out = messages
     for mi, pi, _part in summary_parts[1:]:
+        if _part.content == _DUPLICATE_TEMPLATE_POINTER:
+            continue
         new_part = dataclasses.replace(
-            _part, content="Template structure already provided above."
+            _part, content=_DUPLICATE_TEMPLATE_POINTER
         )
         out = _replace_part(out, mi, pi, new_part)
 
@@ -521,11 +622,119 @@ def strip_stale_images_ctx(
 def compact_old_text_results_ctx(
     ctx: RunContext, messages: List[ModelMessage]
 ) -> List[ModelMessage]:
-    """Token-aware `compact_old_text_results`: tighter thresholds over budget."""
-    if _over_soft_watermark(ctx):
+    """Token-aware `compact_old_text_results`: tighter thresholds over budget.
+
+    Escalates on EITHER trigger: the incident-tuned cumulative watermark, or
+    (opt-in, default off) the outbound-size estimate — see
+    ``resolve_outbound_escalation_chars``. OR-composition means the addition
+    can only escalate more aggressively, never suppress the original trigger.
+    """
+    if _over_soft_watermark(ctx) or _over_outbound_watermark(messages):
         return compact_old_text_results(
             messages,
             after_turns=COMPACT_AGGRESSIVE_AFTER_TURNS,
             min_chars=COMPACT_AGGRESSIVE_MIN_CHARS,
+            min_reclaim=0,  # escalated mode sheds everything — never gated
         )
     return compact_old_text_results(messages)
+
+
+# ---------------------------------------------------------------------------
+# Oversized-part clamp (Harness-learnings Item 4) -----------------------------
+#
+# Everything above targets OLD content (age thresholds). A single FRESH
+# runaway part — a degenerate model response, a giant tool-call argument —
+# has no defence and can alone blow the context budget. This processor
+# clamps any response-side part over the threshold to head + tail with an
+# explicit marker.
+#
+# Scope rules (deliberately narrower than the harness original):
+# - RESPONSE side only (TextPart content, ToolCallPart args inside
+#   ModelResponse). Request-side parts — user prompts, tool RETURNS — are
+#   exempt wholesale: returns belong to the age-based compaction above.
+# - Write-tool call args (_WRITE_TOOL_NAMES) are NEVER clamped: notes write
+#   payloads legitimately run large (raw HTML behind the 30k rendered cap),
+#   and the agent's memory of what it sent must not be corrupted mid-run.
+# - Clamped args stay VALID JSON ({"_clamped": "<head>…<tail>"}) so the
+#   provider never sees malformed function arguments.
+# - Only clamps when the result actually shrinks.
+# - Threshold default 40_000 chars — comfortably above any legitimate notes
+#   payload; only true runaways qualify. ``XBRL_CLAMP_MAX_PART_CHARS``
+#   overrides; 0 disables the processor.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_CLAMP_MAX_PART_CHARS = 40_000
+_CLAMP_KEEP_HEAD = 2000
+_CLAMP_KEEP_TAIL = 2000
+
+
+def resolve_clamp_max_part_chars() -> int:
+    """``XBRL_CLAMP_MAX_PART_CHARS``: per-part clamp threshold (0 disables)."""
+    raw = os.environ.get("XBRL_CLAMP_MAX_PART_CHARS")
+    if raw is None:
+        return _DEFAULT_CLAMP_MAX_PART_CHARS
+    try:
+        v = int(raw)
+    except ValueError:
+        return 0
+    return v if v > 0 else 0
+
+
+def _clamp_text(text: str) -> str:
+    removed = len(text) - _CLAMP_KEEP_HEAD - _CLAMP_KEEP_TAIL
+    return (
+        text[:_CLAMP_KEEP_HEAD]
+        + f"\n[clamped: removed {removed} of {len(text)} characters]\n"
+        + text[-_CLAMP_KEEP_TAIL:]
+    )
+
+
+def clamp_oversized_parts(messages: List[ModelMessage]) -> List[ModelMessage]:
+    """Clamp fresh runaway response-side parts to head+tail with a marker.
+
+    Pure over its inputs like every processor here: rebuilt lists +
+    ``dataclasses.replace``, never in-place mutation.
+    """
+    limit = resolve_clamp_max_part_chars()
+    if limit <= 0:
+        return messages
+
+    out: List[ModelMessage] = []
+    changed_any = False
+    for msg in messages:
+        if not isinstance(msg, ModelResponse):
+            out.append(msg)
+            continue
+        new_parts = []
+        changed = False
+        for part in msg.parts:
+            if isinstance(part, TextPart) and isinstance(part.content, str):
+                text = part.content
+                if len(text) > limit:
+                    clamped = _clamp_text(text)
+                    if len(clamped) < len(text):  # only if it actually shrinks
+                        part = dataclasses.replace(part, content=clamped)
+                        changed = True
+            elif isinstance(part, ToolCallPart):
+                if part.tool_name in _WRITE_TOOL_NAMES:
+                    new_parts.append(part)
+                    continue
+                args = part.args
+                text = args if isinstance(args, str) else None
+                if text is None and isinstance(args, dict):
+                    # Cheap size probe without a full serialize for small args.
+                    text = str(args)
+                if text is not None and len(text) > limit:
+                    clamped = _clamp_text(text)
+                    if len(clamped) < len(text):
+                        # Valid JSON object — providers must never receive
+                        # malformed function arguments.
+                        part = dataclasses.replace(part, args={"_clamped": clamped})
+                        changed = True
+            new_parts.append(part)
+        if changed:
+            out.append(dataclasses.replace(msg, parts=new_parts))
+            changed_any = True
+        else:
+            out.append(msg)
+    return out if changed_any else messages

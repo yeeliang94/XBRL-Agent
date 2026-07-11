@@ -600,7 +600,21 @@ contract test for the verdict type itself.
 behavioral drift while refactoring; mitigated by pinning tests and one
 guard per commit.
 
-#### Item 3 — Cache-aware compaction (min-reclaim gate + real size estimator)
+#### Item 3 — Cache-aware compaction (min-reclaim gate + real size estimator) — 🟩 DONE 2026-07-12
+
+> Shipped on `feat/compaction-economics` with a deliberate posture change:
+> **both new levers default OFF** (`XBRL_COMPACT_MIN_RECLAIM_CHARS`,
+> `XBRL_SOFT_COMPACT_OUTBOUND_CHARS`) after the pinned tests rejected an
+> on-by-default gate — `test_history_compaction` pins the conservative
+> path's exact semantics, and this repo's own opt-in-first philosophy
+> (`resolve_token_budget`) applies. Mechanisms shipped + tested: batch
+> min-reclaim gate (conservative path only — the AGGRESSIVE over-watermark
+> path passes `min_reclaim=0`, shed-everything is never suppressed);
+> `strip_duplicate_template` idempotency (second pass = identity);
+> `estimate_outbound_chars` + OR-composed opt-in escalation trigger (can
+> only escalate MORE, never suppress the incident-tuned cumulative
+> watermark). Image path untouched, as mandated. Pinned by
+> `tests/test_compaction_economics.py`.
 
 **Problem (two related gaps in `extraction/history_processors.py`):**
 1. Once thresholds hit, we rewrite history parts every turn. Every
@@ -651,7 +665,15 @@ post-mortems; change only the text path, one mechanism per commit, and
 measure cache-hit deltas on a benchmark suite run (gotcha #30 gives us
 the scorecards to prove cost impact).
 
-#### Item 4 — Clamp single oversized messages
+#### Item 4 — Clamp single oversized messages — 🟩 DONE 2026-07-12
+
+> Shipped as `clamp_oversized_parts` in `extraction/history_processors.py`,
+> registered FIRST (before the age-based processors) on all three
+> factories. Default threshold 40,000 chars (`XBRL_CLAMP_MAX_PART_CHARS`,
+> 0 disables) — comfortably above legitimate notes payloads. Response-side
+> only; write-tool args and all request-side parts exempt; clamped args
+> stay a valid JSON object; only clamps when it shrinks. Pinned by
+> `tests/test_compaction_economics.py`.
 
 **Problem:** all our compaction targets *old* content (age thresholds).
 A single **fresh** runaway part — a degenerate model response, a giant
