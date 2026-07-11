@@ -1,6 +1,7 @@
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
+import { AnimatedNumber } from "./AnimatedNumber";
 
 // ---------------------------------------------------------------------------
 // StatTiles — the four headline counts on the homepage "home base" column
@@ -26,9 +27,12 @@ export interface StatTilesProps {
   onClearDrafts?: () => void;
 }
 
-/** Show the number, or a dash while it's missing (loading / fetch failed). */
-function fmtCount(n: number | undefined): string {
-  return n == null ? "—" : n.toLocaleString();
+/** Show the number (counting up when it changes), or a dash while it's
+ *  missing (loading / fetch failed). AnimatedNumber shows the value instantly
+ *  on first mount, so a freshly-loaded page never rolls up from zero. */
+function Count({ n }: { n: number | undefined }) {
+  if (n == null) return <span style={styles.value}>—</span>;
+  return <AnimatedNumber value={n} style={styles.value} />;
 }
 
 export function StatTiles({
@@ -43,11 +47,11 @@ export function StatTiles({
   return (
     <div style={styles.grid}>
       <div style={styles.tile}>
-        <span style={styles.value}>{fmtCount(total)}</span>
+        <Count n={total} />
         <span style={styles.label}>Total runs</span>
       </div>
       <div style={styles.tile}>
-        <span style={styles.value}>{fmtCount(drafts)}</span>
+        <Count n={drafts} />
         <span style={styles.labelRow}>
           <span style={styles.label}>Unstarted drafts</span>
           {canClearDrafts && (
@@ -64,7 +68,7 @@ export function StatTiles({
         </span>
       </div>
       <div style={styles.tile}>
-        <span style={styles.value}>{fmtCount(completedThisMonth)}</span>
+        <Count n={completedThisMonth} />
         <span style={styles.label}>Completed this month</span>
       </div>
       {/* Visually detached from the three counters — it holds a status chip,

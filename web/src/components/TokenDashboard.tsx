@@ -1,13 +1,10 @@
 import type { TokenData } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { AnimatedNumber } from "./AnimatedNumber";
 
 interface Props {
   tokens: TokenData | null;
   isRunning: boolean;
-}
-
-function fmt(n: number): string {
-  return n.toLocaleString();
 }
 
 const styles = {
@@ -105,14 +102,17 @@ export function TokenDashboard({ tokens, isRunning }: Props) {
     return <div style={styles.waiting}>Waiting for token data...</div>;
   }
 
+  // Raw numeric values so the live counters COUNT UP as SSE token events land,
+  // rather than snapping. AnimatedNumber shows the value instantly on first
+  // paint, so opening a finished run never rolls up from zero.
   const metrics = [
-    { label: "Prompt", value: fmt(tokens.prompt_tokens) },
-    { label: "Completion", value: fmt(tokens.completion_tokens) },
+    { label: "Prompt", value: tokens.prompt_tokens },
+    { label: "Completion", value: tokens.completion_tokens },
     // Only show thinking tokens when the model actually used them
     ...(tokens.thinking_tokens > 0
-      ? [{ label: "Thinking", value: fmt(tokens.thinking_tokens) }]
+      ? [{ label: "Thinking", value: tokens.thinking_tokens }]
       : []),
-    { label: "Cumulative", value: fmt(tokens.cumulative) },
+    { label: "Cumulative", value: tokens.cumulative },
   ];
 
   return (
@@ -122,7 +122,7 @@ export function TokenDashboard({ tokens, isRunning }: Props) {
           {metrics.map((m) => (
             <div key={m.label} style={styles.metric}>
               <div style={styles.metricLabel}>{m.label}</div>
-              <div style={styles.metricValue}>{m.value}</div>
+              <AnimatedNumber value={m.value} style={styles.metricValue} />
             </div>
           ))}
         </div>
@@ -131,7 +131,12 @@ export function TokenDashboard({ tokens, isRunning }: Props) {
             Est. Cost
             {isRunning && <span style={styles.pulsingDot} />}
           </div>
-          <div style={styles.costValue}>${tokens.cost_estimate.toFixed(4)}</div>
+          <AnimatedNumber
+            value={tokens.cost_estimate}
+            integer={false}
+            format={(n) => `$${n.toFixed(4)}`}
+            style={styles.costValue}
+          />
           <div style={styles.costCaption}>
             Extraction only — the pre-scan and AI review add to the final total
             on the run report.

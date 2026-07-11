@@ -110,6 +110,10 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 14,
     minWidth: 260,
+    // Arrive from the right edge with a fade instead of popping into place.
+    // Entrance only — dismiss stays instant (kept simple on purpose so the
+    // ref-stable auto-dismiss timer is untouched). Reduced-motion zeroes it.
+    animation: `slide-in-right ${pwc.motion.duration.base} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   message: {
     flex: 1,

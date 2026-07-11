@@ -85,6 +85,14 @@ body {
   to { opacity: 1; transform: scale(1); }
 }
 
+/* Toast entrance — slide in from the right edge with a fade (motion-polish).
+   transform/opacity only so it costs nothing; the toast docks top-right, so
+   an 8px rightward start reads as "arriving" without shifting neighbours. */
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 /* Keyboard-accessible focus ring for inline-styled buttons.
    Overrides outline:none set in JS when keyboard-navigating. Brand orange. */
 button:focus-visible {

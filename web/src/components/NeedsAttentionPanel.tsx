@@ -138,6 +138,9 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.sm,
+    // Fade in on reveal / when swapping between the all-clear line and the
+    // queue as checks resolve. Reduced-motion zeroes it (index.css).
+    animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing}`,
   } as const,
   clear: {
     display: "flex",
@@ -145,6 +148,7 @@ const styles = {
     gap: pwc.space.sm,
     color: pwc.grey500,
     fontSize: 13,
+    animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing}`,
   } as const,
   header: {
     fontFamily: pwc.fontHeading,

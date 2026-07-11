@@ -16,6 +16,7 @@ import { MtoolFillModal } from "./MtoolFillModal";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
+import { TabPanelFade } from "./TabPanelFade";
 import { NotesReviewTab } from "./NotesReviewTab";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import { NotesCoveragePanel } from "./NotesCoveragePanel";
@@ -789,6 +790,10 @@ export function RunDetailView({
         })}
       </div>
 
+      {/* One fade wrapper keyed on the active tab: switching tabs remounts it,
+          replaying the shared fade-in so the new panel arrives instead of
+          hard-swapping. The child <section> keeps role="tabpanel". */}
+      <TabPanelFade tabKey={activeTab}>
       {activeTab === "overview" && (
         <section style={styles.section} role="tabpanel">
           {/* Lead with OUTCOMES — the first question is "did it extract
@@ -928,6 +933,7 @@ export function RunDetailView({
           <EvalTab runId={detail.id} initialScore={detail.eval_score ?? null} />
         </section>
       )}
+      </TabPanelFade>
     </div>
   );
 }
@@ -1218,6 +1224,9 @@ const styles = {
     border: `1px solid ${pwc.grey200}`,
     borderRadius: pwc.radius.sm,
     background: pwc.white,
+    // Fade-up as cards render. Keyed by agent.id upstream, so during a live
+    // run only a newly-arrived agent animates; existing cards stay put.
+    animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   // Clickable header serves as the collapse/expand toggle. Styled as a
   // plain block (no button chrome) so it reads as a card row, not a
