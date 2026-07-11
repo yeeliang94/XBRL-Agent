@@ -273,6 +273,10 @@ function EvalSparkline({ runs }: { runs: RunSummaryJson[] }) {
 const rowBase: React.CSSProperties = {
   cursor: "pointer",
   transition: "background 120ms ease",
+  // Calm fade-in as the list renders. Rows are keyed by run.id, so selecting a
+  // row (row → rowSelected) keeps the same node and the same animation string,
+  // meaning it never re-plays; only genuinely new rows (pagination) animate.
+  animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing}`,
 };
 
 const styles = {

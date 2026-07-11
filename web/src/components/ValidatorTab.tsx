@@ -85,7 +85,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
             </tr>
           </thead>
           <tbody>
-            {numericChecks.map((check) => {
+            {numericChecks.map((check, i) => {
               const display = STATUS_DISPLAY[check.status];
               const isMuted = check.status === "not_applicable";
               // Clickable only when the host wired a handler AND this check
@@ -105,6 +105,18 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                   }
                   style={{
                     ...(isMuted ? styles.rowMuted : styles.row),
+                    // Fade-up entrance. React keys rows by check.name, so on a
+                    // LIVE run only a newly-arrived check mounts and animates —
+                    // rows already on screen keep their node and stay put. On
+                    // first paint the batch staggers in (capped so a long list
+                    // doesn't crawl); backwards fill holds opacity 0 during the
+                    // delay so there's no flash. Reduced-motion zeroes it all.
+                    animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing} both`,
+                    // Per-row stagger DELAY (not a duration): 40ms/row, capped
+                    // at 6 rows. Deliberately a plain constant — pwc.motion is a
+                    // duration/easing budget and has no stagger token; the
+                    // fade itself still uses the tokened duration/easing above.
+                    animationDelay: `${Math.min(i, 6) * 40}ms`,
                     cursor: clickable ? "pointer" : "default",
                   }}
                 >
@@ -114,7 +126,17 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                     <span title={check.name}>{crossCheckLabel(check.name)}</span>
                   </td>
                   <td style={styles.td}>
-                    <span style={{ ...styles.badge, borderColor: display.accent }}>
+                    {/* Keyed on status so a live pending→passed/failed flip
+                        remounts the pill and crossfades to the new colour/label
+                        instead of snapping. */}
+                    <span
+                      key={check.status}
+                      style={{
+                        ...styles.badge,
+                        borderColor: display.accent,
+                        animation: `fade-in ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
+                      }}
+                    >
                       <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
                       {display.label}
                     </span>
