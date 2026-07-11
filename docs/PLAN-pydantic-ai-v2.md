@@ -753,7 +753,20 @@ Sheet-12 concurrent scenario.
 **Effort:** M. **Risk:** mid — must not make the happy path chattier
 (hash checks advisory first, enforced once proven in eval runs).
 
-#### Item 6 — Salvage completed work on agent retry
+#### Item 6 — Salvage completed work on agent retry — 🟩 DONE (face, adapted) 2026-07-12
+
+> Shipped on `feat/retry-salvage` with ONE deliberate adaptation the
+> sketch below missed: the coordinator ALREADY wipes a failed attempt's
+> facts before retrying (`_clear_failed_attempt_facts`, peer-review-HIGH
+> 2026-06-12 — stale facts must never silently ship). The naive "reuse
+> what was written" design would reverse that fix, so salvage became:
+> capture a **values-free navigation summary** (sheets/rows/labels the
+> doomed attempt found — LEAF/MATRIX_CELL only, numbers deliberately
+> excluded so they can't anchor the retry) BEFORE the wipe, then inject
+> it into the retry prompt as an advisory scout-hint-style block. The
+> hygiene wipe runs unconditionally; the capture order is source-pinned.
+> Notes-side salvage stays deferred (open question F.6). Pinned by
+> `tests/test_retry_salvage.py` (6 tests, incl. a no-values assertion).
 
 **Problem:** when a face agent fails and its single retry fires
 (`run_agent_with_retries`, `agent_runner.py:512-683`), the fresh attempt

@@ -695,11 +695,19 @@ async def _run_single_agent(
         download renders from the DB). Clear this statement's template-
         scoped facts so the retried attempt is authoritative. Raises on
         failure: shipping stale facts silently is worse than failing the
-        statement (same philosophy as the projection_failed gate)."""
+        statement (same philosophy as the projection_failed gate).
+
+        Salvage addition (Harness-learnings Item 6): BEFORE wiping, capture
+        a values-free navigation summary of what the doomed attempt had
+        found, and hand it to the retry as an advisory prompt block. The
+        wipe still runs unconditionally — the hint carries locations, never
+        numbers, so the hygiene invariant is untouched."""
+        nonlocal salvage_hint
         if run_id is not None and db_path:
             from concept_model.parser import _derive_template_id
             from concept_model.facts_api import clear_facts_for_template
             template_id = _derive_template_id(Path(template_path))
+            salvage_hint = _summarize_discarded_facts(db_path, run_id, template_id)
             cleared = clear_facts_for_template(db_path, run_id, template_id)
             if cleared:
                 logger.info(
@@ -725,6 +733,10 @@ async def _run_single_agent(
                 agent_role, exc_info=True,
             )
 
+    # Item 6: values-free hint from a discarded failed attempt, injected
+    # into the NEXT attempt's prompt (set by _clear_failed_attempt_facts).
+    salvage_hint: Optional[str] = None
+
     async def _attempt(_retry_index: int) -> AgentResult:
         # _run_single_agent_attempt is unchanged — a whole attempt (fresh
         # agent + deps) that returns a structured AgentResult on every path
@@ -746,6 +758,7 @@ async def _run_single_agent(
             denomination=denomination,
             run_id=run_id,
             db_path=db_path,
+            salvage_hint=salvage_hint,
         )
 
     async def _on_retry(total_attempts: int, last_error: Optional[str]) -> None:
@@ -823,6 +836,57 @@ async def _run_single_agent(
     )
 
 
+def _summarize_discarded_facts(
+    db_path: str, run_id: int, template_id: str, cap: int = 15
+) -> Optional[str]:
+    """Advisory navigation hint from a failed attempt's facts, captured
+    BEFORE the retry-hygiene wipe (Harness-learnings Item 6).
+
+    Deliberately excludes VALUES — the failed attempt's numbers are
+    unverified and must not anchor the retry (scout-hint framing
+    discipline, gotcha #13). What survives is pure navigation: which
+    sheets/rows the prior attempt found data for. Best-effort: any error
+    reads as None (the retry just gets no hint).
+    """
+    import sqlite3 as _sqlite3
+
+    try:
+        conn = _sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT n.render_sheet, n.render_row, n.canonical_label
+                FROM run_concept_facts f
+                JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid
+                WHERE f.run_id = ? AND n.template_id = ?
+                  AND n.kind IN ('LEAF', 'MATRIX_CELL')
+                ORDER BY n.render_sheet, n.render_row
+                """,
+                (run_id, template_id),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — advisory only, never block a retry
+        logger.debug("salvage summary skipped", exc_info=True)
+        return None
+    if not rows:
+        return None
+    listed = "\n".join(
+        f"- {sheet} row {row}: {label}" for sheet, row, label in rows[:cap]
+    )
+    more = f"\n- …and {len(rows) - cap} more rows" if len(rows) > cap else ""
+    return (
+        "=== PRIOR ATTEMPT HINTS (advisory — VERIFY against the PDF) ===\n"
+        f"A previous attempt of this statement failed and its {len(rows)} "
+        "written value(s) were DISCARDED (they may have been wrong). It had "
+        "found data for these template rows — treat this purely as "
+        "navigation hints for where the disclosures live; re-read the PDF "
+        "and re-derive every value yourself:\n"
+        f"{listed}{more}\n"
+        "=== END PRIOR ATTEMPT HINTS ==="
+    )
+
+
 async def _run_single_agent_attempt(
     statement_type: StatementType,
     variant: str,
@@ -839,6 +903,7 @@ async def _run_single_agent_attempt(
     denomination: str = "thousands",
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
+    salvage_hint: Optional[str] = None,
 ) -> AgentResult:
     """One whole extraction attempt, streaming events into event_queue.
 
@@ -1058,6 +1123,11 @@ async def _run_single_agent_attempt(
             f"Extract the {statement_type.value} ({variant}) from the PDF "
             f"and fill the template. Follow the strategy in your system prompt."
         )
+        # Item 6: a retry after a discarded failed attempt gets a values-free
+        # navigation hint (advisory, scout-hint framing) — see
+        # _summarize_discarded_facts.
+        if salvage_hint:
+            prompt = f"{prompt}\n\n{salvage_hint}"
 
         await _emit("status", {"phase": "started", "message": f"Starting {agent_role} extraction..."})
 
