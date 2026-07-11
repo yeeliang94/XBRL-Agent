@@ -231,7 +231,10 @@ def test_full_extraction_live(tmp_path):
     config = RunConfig(
         pdf_path=str(pdf_path),
         output_dir=output_dir,
-        model="google-gla:gemini-2.0-flash",
+        # V2 removed the google-gla: prefix (google: is the spelling) and
+        # gemini-2.0-flash is retired — use a current flash model. Caught
+        # live at the 2026-07-12 V2 upgrade's U3 gate (plan doc U3 note).
+        model="google:gemini-3.5-flash",
         statements_to_run={StatementType.SOFP},  # Just SOFP for speed
         variants={StatementType.SOFP: "CuNonCu"},
     )
