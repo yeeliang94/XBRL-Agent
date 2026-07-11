@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from db import repository as repo
+from notes.fingerprint import content_fingerprint, freshness_mode
 from notes.html_to_text import html_to_excel_text
 from notes.writer import evidence_col_for, truncate_with_footer
 
@@ -47,8 +48,31 @@ def persist_notes_cells(
 
     Clobber-then-upsert is done in a single transaction so a crash
     mid-batch cannot leave the DB with a partial replacement.
+
+    Advisory collision detection (Harness-learnings Item 5): two entries
+    in one batch targeting the same (sheet, row) with DIFFERENT content
+    is a silent last-write-wins today — the Sheet-12 fan-out's logical
+    clobber case. We fingerprint and log it loudly (never refuse yet;
+    enforcement is evidence-gated, plan open question F.4).
     """
     cells_list = list(cells_written)
+
+    if freshness_mode() != "off":
+        seen: dict[tuple[str, int], str] = {}
+        for cell in cells_list:
+            coord = (str(cell.get("sheet") or sheet_name), int(cell["row"]))
+            fp = content_fingerprint(str(cell["html"]))
+            prior = seen.get(coord)
+            if prior is not None and prior != fp:
+                logger.warning(
+                    "notes write collision (advisory): %s row %d received "
+                    "differing content from multiple writers in one batch "
+                    "(fingerprints %s -> %s) — last write wins. If this "
+                    "recurs, consider enforcing write freshness "
+                    "(XBRL_WRITE_FRESHNESS).",
+                    coord[0], coord[1], prior, fp,
+                )
+            seen[coord] = fp
 
     # repo.db_session handles pragmas (foreign_keys, journal_mode,
     # busy_timeout), commits on success, and rolls back on exception —
