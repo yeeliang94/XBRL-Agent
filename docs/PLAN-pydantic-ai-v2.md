@@ -240,7 +240,18 @@ Run as its own focused branch (`chore/pydantic-ai-v2`), never bundled with
 feature work. Each phase lands as separate commits; the suite must be
 green at every phase boundary.
 
-### Phase U0 — Preflight (no dep change)
+### Phase U0 — Preflight (no dep change) — 🟩 DONE 2026-07-12
+
+> Completed on `chore/pydantic-ai-v2`. Gate: 3304 passed / 3 skipped
+> (`-n auto`, 56s); `pip check` clean; `constraints.txt` committed;
+> evidence bundle in `docs/BASELINE-pydantic-ai-v2.md`. Two findings:
+> (1) the `agent_runner.py` / `server.py` helpers were ALREADY
+> new-name-first — the only real silent-zero site was
+> `notes/coordinator.py:64-65`, now fixed; (2) we also converted the
+> *direct* old-name reads (coordinator/scout/subcoordinator — B.2 item 3's
+> list) at U0 rather than U1, since the new names are primary on 1.77 —
+> this pulls work forward, nothing is riskier. Benchmark scorecard NOT
+> captured (needs a live run) — carried as an open item to the U1 gate.
 
 - **Record the authoritative interpreter:** all commands in this plan run
   via `./venv/bin/python` (venv-verified pydantic-ai 1.77.0). The bare

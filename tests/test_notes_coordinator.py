@@ -205,8 +205,8 @@ class _FakeAgentRun:
     def usage(self):
         class U:
             total_tokens = 0
-            request_tokens = 0
-            response_tokens = 0
+            input_tokens = 0
+            output_tokens = 0
         return U()
 
     async def __aenter__(self):

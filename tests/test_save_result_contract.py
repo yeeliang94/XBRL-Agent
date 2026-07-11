@@ -177,7 +177,7 @@ def _make_completing_agent_iter():
     mock_run = MagicMock()
     mock_run.result = MagicMock(output="done")
     mock_run.usage = MagicMock(return_value=MagicMock(
-        request_tokens=100, response_tokens=50, total_tokens=150,
+        input_tokens=100, output_tokens=50, total_tokens=150,
     ))
 
     async def empty_aiter(self_ignored=None):

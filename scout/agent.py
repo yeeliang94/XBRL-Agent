@@ -1517,8 +1517,8 @@ async def run_scout_streaming(
         try:
             u = agent_run_obj.usage() if agent_run_obj is not None else None
             if u is not None:
-                usage_out["prompt_tokens"] = int(u.request_tokens or 0)
-                usage_out["completion_tokens"] = int(u.response_tokens or 0)
+                usage_out["prompt_tokens"] = int(u.input_tokens or 0)
+                usage_out["completion_tokens"] = int(u.output_tokens or 0)
                 usage_out["total_tokens"] = int(u.total_tokens or 0)
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("scout usage capture skipped", exc_info=True)

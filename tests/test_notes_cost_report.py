@@ -86,12 +86,12 @@ def test_single_sheet_backfill_increments_token_report():
 
     @dataclass
     class StubUsage:
-        request_tokens: int
-        response_tokens: int
+        input_tokens: int
+        output_tokens: int
 
     report = TokenReport(model="stub")
     _backfill_token_report(
-        report, lambda: StubUsage(request_tokens=1234, response_tokens=567),
+        report, lambda: StubUsage(input_tokens=1234, output_tokens=567),
         template_label="ACC_POLICIES",
     )
     assert report.total_prompt_tokens == 1234
@@ -108,12 +108,12 @@ def test_single_sheet_backfill_handles_none_tokens():
 
     @dataclass
     class StubUsage:
-        request_tokens: object
-        response_tokens: object
+        input_tokens: object
+        output_tokens: object
 
     report = TokenReport(model="stub")
     _backfill_token_report(
-        report, lambda: StubUsage(request_tokens=None, response_tokens=42),
+        report, lambda: StubUsage(input_tokens=None, output_tokens=42),
         template_label="ACC_POLICIES",
     )
     assert report.total_prompt_tokens == 0

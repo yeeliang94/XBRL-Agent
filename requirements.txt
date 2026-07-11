@@ -1,3 +1,6 @@
+# Floors only — the reproducible pin is constraints.txt (pip freeze of the
+# authoritative venv; see docs/PLAN-pydantic-ai-v2.md Phase U0). Install with:
+#   pip install -r requirements.txt -c constraints.txt
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 python-dotenv>=1.0.0

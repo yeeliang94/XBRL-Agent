@@ -103,7 +103,7 @@ class TestEventContract:
         mock_result.all_messages = MagicMock(return_value=[])
         mock_run.result = mock_result
         mock_run.usage = MagicMock(return_value=MagicMock(
-            request_tokens=100, response_tokens=50, total_tokens=150,
+            input_tokens=100, output_tokens=50, total_tokens=150,
         ))
 
         # __aiter__ yields our mock nodes
@@ -241,7 +241,7 @@ class TestEventContract:
         mock_result_obj.all_messages = MagicMock(return_value=[])
         mock_run.result = mock_result_obj
         mock_run.usage = MagicMock(return_value=MagicMock(
-            request_tokens=10, response_tokens=5, total_tokens=15,
+            input_tokens=10, output_tokens=5, total_tokens=15,
         ))
 
         async def node_iter(self_ignored=None):

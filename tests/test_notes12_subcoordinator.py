@@ -885,8 +885,8 @@ class TestSubAgentSavesTrace:
         from token_tracker import TokenReport
 
         class _Usage:
-            request_tokens = 0
-            response_tokens = 0
+            input_tokens = 0
+            output_tokens = 0
             total_tokens = 0
 
         class _State:

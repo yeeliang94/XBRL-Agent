@@ -62,7 +62,7 @@ def _make_agent_with_filled_path(filled_path: str | None):
     mock_run = MagicMock()
     mock_run.result = MagicMock(output="done")
     mock_run.usage = MagicMock(return_value=MagicMock(
-        request_tokens=10, response_tokens=5, total_tokens=15,
+        input_tokens=10, output_tokens=5, total_tokens=15,
     ))
 
     async def empty_aiter(_self=None):
@@ -85,7 +85,7 @@ def _make_agent_that_stalls(stall_seconds: float):
     mock_run = MagicMock()
     mock_run.result = MagicMock(output="never reached")
     mock_run.usage = MagicMock(return_value=MagicMock(
-        request_tokens=0, response_tokens=0, total_tokens=0,
+        input_tokens=0, output_tokens=0, total_tokens=0,
     ))
 
     async def stalled_aiter(_self=None):

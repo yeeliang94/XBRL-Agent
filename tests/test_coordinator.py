@@ -31,7 +31,7 @@ def _make_mock_agent_iter(mock_result=None, side_effect=None):
         mock_run = MagicMock()
         mock_run.result = mock_result or MagicMock(output="done")
         mock_run.usage = MagicMock(return_value=MagicMock(
-            request_tokens=100, response_tokens=50, total_tokens=150,
+            input_tokens=100, output_tokens=50, total_tokens=150,
         ))
 
         # __aiter__ yields nothing — simulates an agent that completes without tool calls
@@ -245,7 +245,7 @@ def _make_node_yielding_agent(n_nodes: int, total_tokens: int = 150):
     mock_run = MagicMock()
     mock_run.result = MagicMock(output="done")
     mock_run.usage = MagicMock(return_value=MagicMock(
-        request_tokens=100, response_tokens=50, total_tokens=total_tokens,
+        input_tokens=100, output_tokens=50, total_tokens=total_tokens,
     ))
 
     async def many_nodes(self_ignored=None):

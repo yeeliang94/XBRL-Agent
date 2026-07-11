@@ -308,7 +308,7 @@ async def test_failed_transient_attempt_usage_accumulates(tmp_path):
             run = MagicMock()
             run.result = None
             run.usage = MagicMock(return_value=SimpleNamespace(
-                total_tokens=1000, request_tokens=900, response_tokens=100,
+                total_tokens=1000, input_tokens=900, output_tokens=100,
             ))
 
             def _raise_aiter(_self=None):

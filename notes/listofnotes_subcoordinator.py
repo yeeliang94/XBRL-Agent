@@ -764,8 +764,8 @@ async def _invoke_sub_agent_once(
 
                 usage = agent_run.usage()
                 total = usage.total_tokens or 0
-                prompt_t = usage.request_tokens or 0
-                completion_t = usage.response_tokens or 0
+                prompt_t = usage.input_tokens or 0
+                completion_t = usage.output_tokens or 0
                 # Keep the caller's failure-path accumulator in sync so the
                 # retry wrapper can report accurate spend if the next
                 # iteration raises.
@@ -794,8 +794,8 @@ async def _invoke_sub_agent_once(
     # before first turn) we'd still have prompt_t=completion_t=0 from
     # the locals above — ``try/except NameError`` would be overkill.
     final_usage = agent_run.usage()
-    final_prompt = int(final_usage.request_tokens or 0)
-    final_completion = int(final_usage.response_tokens or 0)
+    final_prompt = int(final_usage.input_tokens or 0)
+    final_completion = int(final_usage.output_tokens or 0)
     if usage_out is not None:
         usage_out["prompt"] = final_prompt
         usage_out["completion"] = final_completion
