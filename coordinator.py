@@ -117,8 +117,8 @@ def _safe_usage_backfill(agent_run, model, label: str) -> tuple[int, float]:
     """
     try:
         u = agent_run.usage()
-        prompt = int(u.request_tokens or 0)
-        completion = int(u.response_tokens or 0)
+        prompt = int(u.input_tokens or 0)
+        completion = int(u.output_tokens or 0)
         return int(u.total_tokens or 0), estimate_cost(prompt, completion, 0, model)
     except Exception:  # noqa: BLE001 — telemetry is advisory
         logger.debug("agent token backfill skipped for %s", label)

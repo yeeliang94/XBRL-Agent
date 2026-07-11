@@ -61,8 +61,17 @@ def _backfill_token_report(token_report, usage_callable, template_label: str) ->
     """
     try:
         usage = usage_callable()
-        token_report.total_prompt_tokens += int(getattr(usage, "request_tokens", 0) or 0)
-        token_report.total_completion_tokens += int(getattr(usage, "response_tokens", 0) or 0)
+        # New-name-first: input_/output_tokens are the pydantic-ai 1.x
+        # primary API; request_/response_ are deprecated aliases that V2
+        # removes. Old-name-first here silently reported 0 under V2.
+        _prompt = getattr(usage, "input_tokens", None)
+        if _prompt is None:
+            _prompt = getattr(usage, "request_tokens", 0)
+        _completion = getattr(usage, "output_tokens", None)
+        if _completion is None:
+            _completion = getattr(usage, "response_tokens", 0)
+        token_report.total_prompt_tokens += int(_prompt or 0)
+        token_report.total_completion_tokens += int(_completion or 0)
         # Thinking tokens aren't separately tracked by the OpenAI-compat
         # proxy — leaving at 0 keeps the report internally consistent.
     except Exception:  # noqa: BLE001 — cost telemetry is best-effort
