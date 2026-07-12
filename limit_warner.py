@@ -61,8 +61,10 @@ WARNING_MARKER = "[LIMIT WARNING]"
 # harness default; tune from Telemetry-tab evidence (open question F.2 in
 # docs/PLAN-pydantic-ai-v2.md).
 WARN_FRACTION = 0.70
-# Escalate to CRITICAL wording inside the final stretch.
-CRITICAL_REMAINING_ITERATIONS = 3
+# Escalate to CRITICAL wording inside the final stretch. UNITS ARE LOOP
+# STEPS (graph nodes) — a model turn plus its tool batch is ~2 steps, so 5
+# remaining steps leaves the model roughly two turns: finish writes, save.
+CRITICAL_REMAINING_ITERATIONS = 5
 CRITICAL_TOKEN_FRACTION = 0.95
 
 
@@ -116,14 +118,28 @@ def _build_warning(ctx) -> Optional[str]:
     critical = False
 
     # --- Iterations (always tracked; the cap always exists) ---
-    used = int(getattr(usage, "requests", 0) or 0)
-    cap = MAX_AGENT_ITERATIONS
+    # UNIT CONTRACT (2026-07-12 V2-review fix): the hard cap in
+    # agent_runner counts graph NODES (model-request and call-tools nodes
+    # alternate), NOT model requests. Compare like with like: prefer the
+    # live loop counter + per-run cap the runner publishes onto deps;
+    # fall back to a documented nodes≈2×requests approximation for agents
+    # not driven by run_agent_loop (e.g. scout's own loop).
+    deps = getattr(ctx, "deps", None)
+    used = getattr(deps, "_loop_iteration", None)
+    cap = getattr(deps, "_loop_max_iters", None)
+    if used is None:
+        req = int(getattr(usage, "requests", 0) or 0)
+        used = max(2 * req - 1, 0)
+    if not cap:
+        cap = MAX_AGENT_ITERATIONS
+    used = int(used)
+    cap = int(cap)
     if cap > 0 and used / cap >= WARN_FRACTION:
         remaining = max(cap - used, 0)
         pct = int(round(100 * used / cap))
         lines.append(
-            f"Iterations: {used}/{cap} model requests used ({pct}%); "
-            f"{remaining} remaining."
+            f"Turns: {used}/{cap} loop steps used ({pct}%); "
+            f"{remaining} remaining (a model turn + its tools is ~2 steps)."
         )
         if remaining <= CRITICAL_REMAINING_ITERATIONS:
             critical = True

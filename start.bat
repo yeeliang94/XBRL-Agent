@@ -123,7 +123,7 @@ call venv\Scripts\activate.bat
 
 :: Install Python deps
 echo Installing Python dependencies...
-pip install -r requirements.txt -q
+pip install -r requirements.txt -c constraints.txt -q
 
 :: ---- Build frontend (if web/ exists) ----
 if exist "web\package.json" (
@@ -146,7 +146,7 @@ if not exist "venv" (
 )
 call venv\Scripts\activate.bat
 echo Installing Python dependencies...
-pip install -r requirements.txt -q
+pip install -r requirements.txt -c constraints.txt -q
 
 :start_server
 echo.

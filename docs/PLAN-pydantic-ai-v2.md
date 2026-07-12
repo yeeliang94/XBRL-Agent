@@ -9,6 +9,22 @@ scorecard anchor + threshold sign-off; MPERS live smoke
 (`MPERS_TEST_PDF`). Per-phase details in the 🟩 notes throughout.
 Supersedes the earlier `PLAN-harness-learnings.md` (folded in as Part D).
 
+**Post-implementation review fixes (2026-07-12, same day):** a second
+review pass confirmed three HIGH findings, all fixed + regression-pinned:
+(1) notes-agent aggregate telemetry silently zeroed on V2 — the cost
+backfill invoked the now-property `agent_run.usage` as a callable, and the
+bubble-up path still read removed legacy field names (an edit dropped in a
+failed batch); both paths fixed, pinned with REAL `RunUsage` probes in
+`tests/test_notes_usage_v2.py`. (2) limit warnings used the wrong UNIT —
+`usage.requests` (model requests) against a hard cap that counts graph
+NODES (~2× requests), so iteration warnings could never fire; the runner
+now publishes its live node counter + per-run cap onto deps, the warner
+consumes them (with a documented 2×-requests fallback for non-runner
+agents), and an ordering test proves warning-before-cap. (3) neither
+launcher used the constraints lock — `start.sh`/`start.bat` now install
+with `-c constraints.txt`; the Mac-generated lock's win32 gap (docx2pdf)
+is documented and rolls into the Windows operator gate.
+
 **Review note (2026-07-12, resolved after verification):** a peer review
 validated this plan against the official V2 announcement, upgrade guide, PyPI
 release history, and the live call sites. Its genuinely new catches are kept

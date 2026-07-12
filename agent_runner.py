@@ -325,6 +325,16 @@ async def run_agent_loop(
 
     async for node in iter_with_turn_timeout(agent_run, spec.turn_timeout):
         iteration += 1
+        # Publish the LIVE loop counter + cap for the in-band limit warner
+        # (limit_warner.py): the hard cap below counts graph NODES (model +
+        # tool nodes alternate), so any warner keyed on usage.requests would
+        # use the wrong unit and fire after the cap (2026-07-12 V2-review
+        # finding). Generic setattr — best-effort for exotic deps types.
+        try:
+            deps._loop_iteration = iteration
+            deps._loop_max_iters = spec.max_iters
+        except Exception:  # noqa: BLE001 — advisory plumbing only
+            pass
         if spec.set_turn_counter:
             # Let the save-gate (extraction/agent.py) see the real budget.
             deps.turn_counter = iteration
