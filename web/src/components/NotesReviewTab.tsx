@@ -66,7 +66,7 @@ import {
   type BorderSide,
 } from "../lib/cellFormatting";
 import { Indent, indentBlocks, outdentBlocks } from "../lib/notesIndent";
-import { pwc } from "../lib/theme";
+import { pwc, component } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
   fetchNotesCells,
@@ -2454,19 +2454,17 @@ const styles = {
     left: 0,
     right: 0,
     bottom: 0,
-    background: "rgba(17, 24, 39, 0.5)",
+    background: component.dialog.scrim,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     zIndex: 1000,
   } as React.CSSProperties,
   modalCard: {
-    background: pwc.white,
-    borderRadius: 8,
+    ...ui.dialog,
     padding: 20,
     maxWidth: 400,
     width: "90%",
-    boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
   } as React.CSSProperties,
   modalTitle: {
     fontFamily: pwc.fontHeading,

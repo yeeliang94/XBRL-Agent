@@ -32,48 +32,33 @@ interface Props {
   onCancel: () => void;
 }
 
+// Shared dialog/scrim primitives (design-system Elevation: dialogs are the
+// modal-shadow exception). Animations ride the motion tokens; reduced-motion
+// zeroes them globally.
 const styles = {
   overlay: {
-    position: "fixed" as const,
-    inset: 0,
-    zIndex: 50,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: pwc.space.lg,
-    background: "rgba(0,0,0,0.4)",
+    ...ui.scrim,
     // Backdrop fades in alongside the dialog scaling in.
     animation: `dialog-in ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   modal: {
-    background: pwc.white,
-    borderRadius: pwc.radius.lg,
-    boxShadow: pwc.shadow.modal,
-    width: "100%",
+    ...ui.dialog,
     maxWidth: 440,
-    padding: pwc.space.xl,
     // Scale 97%→100% + fade (motion tokens; reduced-motion zeroes it globally).
     animation: `dialog-in ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   heading: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: pwc.weight.semibold,
-    fontSize: 18,
-    color: pwc.grey900,
-    margin: 0,
+    ...ui.dialogTitle,
     marginBottom: pwc.space.md,
   } as React.CSSProperties,
   body: {
-    fontFamily: pwc.fontBody,
-    fontSize: 15,
-    lineHeight: 1.55,
-    color: pwc.grey800,
+    ...ui.bodyText,
     margin: 0,
     marginBottom: pwc.space.xl,
   } as React.CSSProperties,
   actions: {
-    display: "flex",
-    justifyContent: "flex-end",
+    ...ui.dialogActionBar,
+    marginTop: 0,
     gap: pwc.space.sm,
   } as React.CSSProperties,
 };

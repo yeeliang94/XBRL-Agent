@@ -3,6 +3,7 @@ import { ApiError, userMessage } from "../lib/errors";
 import { coverageStatusLabel } from "../lib/vocabulary";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { SkeletonText } from "./Skeleton";
 
 /**
@@ -86,11 +87,11 @@ export function coverageGapRows(rows: CoverageNavRow[]): CoverageNavRow[] {
   );
 }
 
-function statusColor(row: CoverageNavRow): string {
-  if (row.status === "placed") return pwc.success;
-  if (row.status === "skipped") return pwc.grey500;
-  if (RESOLVED_VERDICTS.has(row.reviewer_verdict || "")) return pwc.info;
-  return pwc.error;
+function statusSymbol(row: CoverageNavRow): string {
+  if (row.status === "placed") return STATUS_SYMBOLS.success;
+  if (row.status === "skipped") return STATUS_SYMBOLS.inactive;
+  if (RESOLVED_VERDICTS.has(row.reviewer_verdict || "")) return STATUS_SYMBOLS.inactive;
+  return STATUS_SYMBOLS.attention;
 }
 
 export function NotesCoverageNav({
@@ -209,9 +210,11 @@ export function NotesCoverageNav({
               >
                 <span
                   aria-hidden="true"
-                  style={ui.badgeDot(statusColor(row))}
+                  style={{ ...ui.statusSymbol, width: 14 }}
                   data-testid={`coverage-nav-dot-${row.status}`}
-                />
+                >
+                  {statusSymbol(row)}
+                </span>
                 <span style={styles.num}>{row.note_num}</span>
                 <span style={styles.itemTitle}>
                   {row.title || <span style={styles.dim}>(not in inventory)</span>}

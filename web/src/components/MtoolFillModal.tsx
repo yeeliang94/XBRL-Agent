@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { denominationLabel } from "../lib/vocabulary";
 import { FileDropzone } from "./FileDropzone";
 
@@ -120,26 +121,15 @@ interface Props {
 
 const styles = {
   overlay: {
-    position: "fixed" as const,
-    inset: 0,
-    zIndex: 50,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "rgba(0,0,0,0.4)",
+    ...ui.scrim,
   } as React.CSSProperties,
   modal: {
-    background: pwc.white,
-    borderRadius: pwc.radius.lg,
-    boxShadow: pwc.shadow.modal,
-    width: "100%",
+    ...ui.dialog,
     // Responsive: fill most of the viewport up to a comfortable cap so the
     // notes-preview cell references and column editor stop wrapping (they were
     // cramped at the old fixed 560px).
     maxWidth: "min(1040px, 92vw)",
-    maxHeight: "85vh",
     overflowY: "auto" as const,
-    padding: pwc.space.xl,
   } as React.CSSProperties,
   headerRow: {
     display: "flex",
@@ -206,14 +196,14 @@ const styles = {
  * a collapsible section with a status dot + count so the three outcomes never
  * blur into one undifferentiated list. */
 function PlanSection({
-  dotColor,
+  symbol,
   title,
   count,
   defaultOpen,
   hint,
   children,
 }: {
-  dotColor: string;
+  symbol: string;
   title: string;
   count: number;
   defaultOpen?: boolean;
@@ -234,7 +224,7 @@ function PlanSection({
           color: pwc.grey900,
         }}
       >
-        <span style={ui.badgeDot(dotColor)} />
+        <span aria-hidden="true" style={ui.statusSymbol}>{symbol}</span>
         {title}
         <span style={{ color: pwc.grey500, fontWeight: pwc.weight.regular }}>({count})</span>
       </summary>
@@ -756,15 +746,19 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 {/* One glanceable summary row — the three outcomes at a glance. */}
                 <div style={styles.planSummary}>
                   <span style={styles.planChip}>
-                    <span style={ui.badgeDot(pwc.success)} />
+                    <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.success}</span>
                     {preview.will_fill_existing.length} ready to fill
                   </span>
                   <span style={styles.planChip}>
-                    <span style={ui.badgeDot(createMissingNotes ? pwc.info : pwc.grey500)} />
+                    <span aria-hidden="true" style={ui.statusSymbol}>
+                      {createMissingNotes ? STATUS_SYMBOLS.derived : STATUS_SYMBOLS.inactive}
+                    </span>
                     {preview.will_create.length} will be added
                   </span>
                   <span style={{ ...styles.planChip, color: preview.unresolved.length ? pwc.warningText : pwc.grey900 }}>
-                    <span style={ui.badgeDot(preview.unresolved.length ? pwc.warning : pwc.grey500)} />
+                    <span aria-hidden="true" style={ui.statusSymbol}>
+                      {preview.unresolved.length ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.inactive}
+                    </span>
                     {preview.unresolved.length} need your decision
                   </span>
                 </div>
@@ -787,7 +781,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                     reason and, where the tool found options, a picker. This is
                     the notes twin of the numeric column-layout confirm step. */}
                 <PlanSection
-                  dotColor={pwc.warning}
+                  symbol={STATUS_SYMBOLS.attention}
                   title="Needs your decision"
                   count={preview.unresolved.length}
                   defaultOpen
@@ -869,7 +863,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 </PlanSection>
 
                 <PlanSection
-                  dotColor={createMissingNotes ? pwc.info : pwc.grey500}
+                  symbol={createMissingNotes ? STATUS_SYMBOLS.derived : STATUS_SYMBOLS.inactive}
                   title="Will be added"
                   count={preview.will_create.length}
                   hint="These notes have no spot in the template yet — one is created next to each label."
@@ -884,7 +878,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 </PlanSection>
 
                 <PlanSection
-                  dotColor={pwc.success}
+                  symbol={STATUS_SYMBOLS.success}
                   title="Ready to fill"
                   count={preview.will_fill_existing.length}
                   hint="These match a spot that already exists in the template."

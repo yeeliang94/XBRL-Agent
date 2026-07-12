@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { SettingsResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 import { GeneralSettingsForm } from "./GeneralSettingsForm";
 
 // ---------------------------------------------------------------------------
@@ -23,28 +24,13 @@ interface Props {
 
 const styles = {
   overlay: {
-    position: "fixed" as const,
-    inset: 0,
-    zIndex: 50,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "rgba(0,0,0,0.4)",
+    ...ui.scrim,
   } as React.CSSProperties,
   modal: {
-    background: pwc.white,
-    borderRadius: pwc.radius.lg,
-    boxShadow: pwc.shadow.modal,
-    width: "100%",
-    maxWidth: 480,
-    padding: pwc.space.xl,
+    ...ui.dialog,
   } as React.CSSProperties,
   heading: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: pwc.weight.medium,
-    fontSize: 18,
-    color: pwc.grey900,
-    margin: 0,
+    ...ui.dialogTitle,
     marginBottom: pwc.space.xl,
   } as React.CSSProperties,
 };

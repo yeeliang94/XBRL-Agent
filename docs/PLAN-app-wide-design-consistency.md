@@ -1,11 +1,70 @@
 # Plan — App-Wide Design Consistency
 
-**Status:** Draft — aligned to v3 review language; approval required before implementation  
-**Progress:** `0%`  
+**Status:** Implemented — v3 promoted to production; all seven change sets landed (commits on `main`, 12 July 2026)  
+**Progress:** `100%` (code + tests; see Implementation Notes for the operator verification that remains open)  
 **Created:** 12 July 2026  
 **Updated:** 12 July 2026  
-**Current production specification:** [`docs/pwc-design-system.html`](pwc-design-system.html)  
-**Proposed design target:** [`docs/pwc-design-system-v3-review.html`](pwc-design-system-v3-review.html)
+**Current production specification:** [`docs/pwc-design-system.html`](pwc-design-system.html) (v3, promoted)  
+**Review history:** [`docs/pwc-design-system-v3-review.html`](pwc-design-system-v3-review.html) (retained until the user confirms removal)
+
+## Implementation Notes (12 July 2026)
+
+Implemented as the seven independently reviewable change sets below, one
+commit each (`CS1`–`CS7` in the commit subjects). 75 frontend test files /
+1139 tests green after every change set; no backend, API, route, or
+lifecycle code was touched.
+
+What shipped, by change set:
+
+1. **CS1** — v3 spec promoted into `pwc-design-system.html` (with a page-
+   adoption matrix); three-layer token model (`pwc` globals → `tokens`
+   semantic roles → `component` roles) in `theme.ts`; accessible action
+   colours (#C63D00 / #A83A00) on the primary button; four button roles
+   (Subtle+Ghost → Quiet); flat cards with quiet border/surface hover (no
+   lift); monochrome status symbols (○ ✓ ! × – ◇) in `runStatus.ts`; shared
+   StatusLabel/EmptyState primitives; shared tab, dialog/scrim, bordered
+   group, table-density, page-mode primitives; two-part focus + forced-
+   colors + stat-tile breakpoints in `index.css`; 28px page-title scale;
+   WCAG contrast-matrix test.
+2. **CS2** — TopNav destinations became links with stable URLs and
+   `aria-current`; wordmark demoted from `h1`; dark active text + orange
+   indicator.
+3. **CS3** — New extraction (upload-first, quiet flat stat tiles with ! / –
+   priorities, divided Recent-runs work queue, `Clear drafts` /
+   `Continue setup` renames, compact drop zone) and Runs (1440 list,
+   compact labelled filter toolbar, `Showing N of M runs`, Standard table
+   density, monochrome statuses, visible row actions, conditional Score
+   column, concise dates).
+4. **CS4** — Field labels, Benchmarks (collapsible Add-benchmark setup
+   group), Evaluation suites (shared tabs/status/metrics/tables; separated
+   empty state).
+5. **CS5** — Settings at 840px Form mode with PageHeader + shared tabs;
+   44px controls with 3:1 boundaries; readable helper/status text; Login
+   Sign-in on the accessible action colour.
+6. **CS6** — Run report: shared tab geometry (lazy mounting untouched),
+   monochrome run/agent/check statuses, readable metric tones + tabular
+   numerals, coverage/review status sweep. Reviewer flags and timeline
+   alert rules deliberately keep functional colour (attention surfaces).
+7. **CS7** — All modals on the shared dialog/scrim primitives (no raw
+   backdrops); toast on the elevated-overlap shadow; final monochrome
+   sweep (ResultsView, ConceptsPage value states, coverage nav, mTool
+   modal); adoption matrix flipped to Adopted; this note.
+
+Deliberate scope notes / deviations:
+
+- **Phase 0 screenshot baselines and the Phase 9 manual browser matrix**
+  (zoom, forced-colors, 320px reflow, keyboard walkthrough on live data)
+  were not captured in this automated pass — the regression net is the
+  test suite (1139 tests, including new contrast, status, layout-mode,
+  and behaviour pins). A human visual QA pass over the running app is the
+  remaining acceptance step.
+- ToolCallCard keeps its status hues: it lives in the Technical-details /
+  AI-activity surface where functional colour is in scope by design.
+- Notes cell-formatting palettes, charts (eval sparkline/trend), alerts,
+  and attention rows keep functional colour per the non-goals.
+- `ui.buttonSubtle` / `ui.buttonGhost` remain as deprecated aliases of
+  `ui.buttonQuiet` so unmigrated call sites keep compiling; new code must
+  use the Quiet role.
 
 ## Purpose
 
