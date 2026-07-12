@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { loginPassword } from "../lib/api";
 
@@ -20,7 +20,7 @@ const styles = {
   card: {
     ...ui.card,
     width: "100%",
-    maxWidth: 380,
+    maxWidth: tokens.layout.auth,
     padding: pwc.space.xxl,
     display: "flex",
     flexDirection: "column",

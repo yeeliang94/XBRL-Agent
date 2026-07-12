@@ -1,7 +1,7 @@
 import { useReducer, useCallback, useState, useRef, useEffect } from "react";
 import type { RunConfigPayload, NotesTemplateType } from "./lib/types";
 import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES } from "./lib/types";
-import { pwc } from "./lib/theme";
+import { pwc, tokens } from "./lib/theme";
 import { ui, uiClass } from "./lib/uiStyles";
 import { appReducer, bootState, parseRouteFromPath } from "./lib/appReducer";
 import { uploadPdf, abortAll, abortAgent } from "./lib/api";
@@ -73,8 +73,10 @@ const styles = {
     ...ui.buttonSm,
     color: pwc.grey700,
   } as const,
+  // Standard page mode (design-system Layouts) — the shell owns the
+  // route-level width.
   main: {
-    maxWidth: 1120,
+    maxWidth: tokens.layout.standard,
     margin: "0 auto",
     padding: `${pwc.space.xxl}px ${pwc.space.xl}px`,
     display: "flex",

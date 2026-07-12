@@ -82,4 +82,15 @@ describe("RecentRunsList", () => {
     render(<RecentRunsList {...makeProps({ runs: [], error: "boom" })} />);
     expect(screen.getByText(/couldn't load recent runs/i)).toBeTruthy();
   });
+
+  test("draft rows offer 'Continue setup' and statuses render monochrome (CS3)", () => {
+    render(<RecentRunsList {...makeProps()} />);
+    expect(screen.getByText("Continue setup")).toBeInTheDocument();
+    expect(screen.queryByText("Resume")).toBeNull();
+    // Monochrome status: aria-hidden neutral symbol next to the label.
+    const completed = screen.getByText("Completed");
+    const symbol = completed.parentElement!.parentElement!.querySelector('[aria-hidden="true"]');
+    expect(symbol?.textContent).toBe("\u2713");
+    expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
+  });
 });
