@@ -143,4 +143,18 @@ describe("HistoryFilters", () => {
     fireEvent.click(screen.getByRole("button", { name: /clear filters/i }));
     expect(onChange).toHaveBeenCalledWith({});
   });
+
+  test("no visible 'No filters applied' message when idle (live region stays)", () => {
+    render(<HistoryFilters value={{}} onChange={() => {}} />);
+    expect(screen.queryByText(/no filters applied/i)).toBeNull();
+    // The polite live region is still mounted for announcements.
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    // Clear filters only appears when useful.
+    expect(screen.queryByRole("button", { name: /clear filters/i })).toBeNull();
+  });
+
+  test("search carries a visible Filename label", () => {
+    render(<HistoryFilters value={{}} onChange={() => {}} />);
+    expect(screen.getByText("Filename")).toBeInTheDocument();
+  });
 });

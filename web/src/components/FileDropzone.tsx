@@ -93,6 +93,22 @@ export function FileDropzone({
           ...(disabled ? styles.dropZoneDisabled : {}),
         }}
       >
+        <svg
+          aria-hidden="true"
+          width="28"
+          height="28"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={pwc.grey500}
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="12" y1="12" x2="12" y2="17" />
+          <polyline points="9.5 14.5 12 12 14.5 14.5" />
+        </svg>
         <span style={styles.dropText}>{label}</span>
         <span
           aria-hidden="true"
@@ -117,6 +133,8 @@ export function FileDropzone({
 }
 
 const styles = {
+  // Compact zone (design-consistency plan CS3): strong document affordance
+  // without a marketing-hero footprint.
   dropZone: {
     width: "100%",
     display: "flex",
@@ -126,9 +144,9 @@ const styles = {
     gap: pwc.space.md,
     borderWidth: 2,
     borderStyle: "dashed",
-    borderColor: pwc.grey200,
+    borderColor: pwc.grey300,
     borderRadius: pwc.radius.lg,
-    padding: pwc.space.xxxl,
+    padding: `${pwc.space.xl}px ${pwc.space.xl}px`,
     textAlign: "center" as const,
     background: pwc.grey50,
     cursor: "pointer",

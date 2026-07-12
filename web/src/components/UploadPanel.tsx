@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { userMessage } from "../lib/errors";
 import type { UploadResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 import { ElapsedTimer } from "./ElapsedTimer";
 import { FileDropzone } from "./FileDropzone";
 
@@ -19,11 +20,9 @@ const MAX_UPLOAD_MB = 100;
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 const styles = {
+  // Flat static surface (design system: elevation is reserved for overlap).
   container: {
-    background: pwc.white,
-    borderRadius: pwc.radius.lg,
-    border: `1px solid ${pwc.grey200}`,
-    boxShadow: pwc.shadow.card,
+    ...ui.card,
     padding: pwc.space.xl,
   } as React.CSSProperties,
   fileRow: {
@@ -83,19 +82,19 @@ const styles = {
   } as React.CSSProperties,
   error: {
     fontFamily: pwc.fontBody,
-    color: pwc.error,
+    color: pwc.errorText,
     fontSize: 14,
     marginTop: pwc.space.sm,
   } as React.CSSProperties,
   uploading: {
     fontFamily: pwc.fontBody,
-    color: pwc.grey500,
+    color: pwc.grey700,
     fontSize: 14,
     marginTop: pwc.space.sm,
   } as React.CSSProperties,
   uploadHint: {
     fontFamily: pwc.fontBody,
-    color: pwc.grey500,
+    color: pwc.grey700,
     fontSize: 13,
   } as React.CSSProperties,
 };
@@ -142,13 +141,13 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
       {!filename ? (
         <FileDropzone
           accept=".pdf,.docx"
-          label="Drop a PDF or Word (.docx) file here or click the button below"
+          label="Drop your financial statement here"
           inputLabel="Upload document"
           disabled={disabled}
           onFile={handleFile}
         >
           <span style={styles.uploadHint}>
-            PDF or DOCX · up to {MAX_UPLOAD_MB} MB · processed within this application
+            PDF or Word (.docx) · up to {MAX_UPLOAD_MB} MB · next you'll choose statements and start the extraction
           </span>
           {uploading && <span style={styles.uploading} role="status" aria-live="polite">Uploading…</span>}
         </FileDropzone>

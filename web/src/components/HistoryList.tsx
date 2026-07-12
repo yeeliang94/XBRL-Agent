@@ -1,9 +1,10 @@
-import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
+import { pwc, tokens } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 import { denominationLabel } from "../lib/vocabulary";
 import type { RunSummaryJson } from "../lib/types";
 import { Skeleton } from "./Skeleton";
+import { StatusLabel } from "./StatusLabel";
 
 // ---------------------------------------------------------------------------
 // HistoryList — table of past runs. Stateless: parent owns the list and
@@ -11,6 +12,11 @@ import { Skeleton } from "./Skeleton";
 //
 // The "loading" and "error" states are rendered in-place (same container)
 // so the page layout stays stable when the user types into the filters.
+//
+// Design-system adoption (plan CS4): Standard table density (40px rows),
+// sentence-case headers, monochrome symbol-plus-text status, plain-text
+// filing metadata, a visible per-row action, and a Score column that only
+// renders when the loaded rows actually carry scores.
 // ---------------------------------------------------------------------------
 
 export interface HistoryListProps {
@@ -27,12 +33,12 @@ export interface HistoryListProps {
   onResumeDraft?: (runId: number) => void;
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string): { concise: string; exact: string } {
   // Keep it timezone-local so the user sees "their" time, not UTC.
   // If the date is unparseable we fall back to the raw string.
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
+  if (isNaN(d.getTime())) return { concise: iso, exact: iso };
+  return { concise: d.toLocaleDateString(), exact: d.toLocaleString() };
 }
 
 function formatDuration(seconds: number | null): string {
@@ -41,6 +47,23 @@ function formatDuration(seconds: number | null): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}m ${s}s`;
+}
+
+function statusState(status: string): "inProgress" | "success" | "attention" | "failure" | "inactive" {
+  switch (status) {
+    case "running":
+      return "inProgress";
+    case "completed":
+      return "success";
+    case "completed_with_errors":
+    case "correction_exhausted":
+      return "attention";
+    case "failed":
+    case "aborted":
+      return "failure";
+    default:
+      return "inactive";
+  }
 }
 
 export function HistoryList({
@@ -81,11 +104,15 @@ export function HistoryList({
     );
   }
 
+  // Score column (gold-standard eval, v16) only renders when the loaded
+  // rows contain at least one graded run — an all-blank column is noise.
+  const hasScores = runs.some((r) => r.eval_score != null);
+
   return (
     <div className="runs-table-wrap" style={styles.container}>
-      {/* Gold-standard eval (v16): a compact sparkline of eval scores across
-          the listed runs (oldest → newest) so improvement is visible at a
-          glance. Only shown when ≥2 runs were graded. */}
+      {/* Compact sparkline of eval scores across the listed runs (oldest →
+          newest) so improvement is visible at a glance. Only shown when ≥2
+          runs were graded. */}
       <EvalSparkline runs={runs} />
       <table style={styles.table}>
         {/* Fixed column widths — without these the browser picks column
@@ -93,12 +120,13 @@ export function HistoryList({
             timestamp/status columns. `table-layout: fixed` plus <col>
             widths makes the layout predictable regardless of content. */}
         <colgroup>
-          <col style={{ width: "31%" }} />
+          <col style={{ width: hasScores ? "28%" : "32%" }} />
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "16%" }} />
           <col style={{ width: "15%" }} />
-          <col style={{ width: "16%" }} />
-          <col style={{ width: "16%" }} />
-          <col style={{ width: "9%" }} />
-          <col style={{ width: "13%" }} />
+          {hasScores && <col style={{ width: "8%" }} />}
+          <col style={{ width: "10%" }} />
+          <col style={{ width: hasScores ? "11%" : "15%" }} />
         </colgroup>
         <thead>
           <tr>
@@ -108,14 +136,18 @@ export function HistoryList({
             {/* The filter has a Standard control but the list had no matching
                 column; this carries the run's standard + level (E2). */}
             <th style={styles.th}>Standard</th>
-            {/* Gold-standard eval (v16): the run's benchmark accuracy. */}
-            <th
-              style={{ ...styles.th, textAlign: "right" }}
-              title="Accuracy vs a benchmark's verified answers — blank unless a benchmark was attached"
-            >
-              Score
-            </th>
+            {hasScores && (
+              <th
+                style={{ ...styles.th, textAlign: "right" }}
+                title="Accuracy vs a benchmark's verified answers — blank unless a benchmark was attached"
+              >
+                Score
+              </th>
+            )}
             <th style={{ ...styles.th, textAlign: "right" }}>Duration</th>
+            <th style={styles.th}>
+              <span style={visuallyHidden}>Action</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -135,6 +167,12 @@ export function HistoryList({
             // docs/PLAN-design-qa-fixes.md R4. Drafts resume at /run/{id};
             // finished runs open their detail at /history/{id}.
             const runHref = isDraft ? `/run/${run.id}` : `/history/${run.id}`;
+            const date = formatDate(run.created_at);
+            const actionLabel = isDraft
+              ? "Continue setup"
+              : run.status === "completed_with_errors" || run.status === "correction_exhausted"
+              ? "Review"
+              : "Open";
             // The filename is the semantic navigation link. The row click is
             // only a pointer convenience; keeping native row semantics avoids
             // corrupting the table header/column structure for screen readers.
@@ -142,6 +180,7 @@ export function HistoryList({
               <tr
                 key={run.id}
                 onClick={handleActivate}
+                className={uiClass.tableRow}
                 style={isSelected ? styles.rowSelected : styles.row}
               >
                 <td style={styles.tdFilename}>
@@ -162,24 +201,26 @@ export function HistoryList({
                   >
                     {run.pdf_filename}
                   </a>
-                  {/* Standard + level moved to their own column (E2); only the
-                      denomination tag stays inline (a different axis). */}
+                  {/* Ordinary filing metadata is plain text, not a pill.
+                      Non-default denomination only — "thousands" (RM '000)
+                      is the common case and implied. */}
                   {run.denomination && run.denomination !== "thousands" && (
-                    // Non-default denomination only. "thousands" (RM '000) is
-                    // the common case and implied; a tag on every row is noise.
-                    <span style={styles.inlineBadge}>
+                    <span style={styles.inlineMeta}>
                       {denominationLabel(run.denomination)}
                     </span>
                   )}
                 </td>
                 <td style={styles.td}>
-                  <span style={styles.dim}>{formatDate(run.created_at)}</span>
+                  <span style={styles.dim} title={date.exact}>
+                    {date.concise}
+                  </span>
                 </td>
                 <td style={styles.td}>
-                  <span style={{ ...styles.badge, borderColor: display.accent }}>
-                    <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
-                    {display.label}
-                  </span>
+                  <StatusLabel
+                    state={statusState(run.status)}
+                    symbol={display.symbol}
+                    label={display.label}
+                  />
                 </td>
                 <td style={styles.td}>
                   <span style={styles.dim}>
@@ -188,24 +229,42 @@ export function HistoryList({
                     {run.filing_level === "group" ? "Group" : "Company"}
                   </span>
                 </td>
-                <td style={{ ...styles.td, textAlign: "right" }}>
-                  {run.eval_score != null ? (
-                    <span
-                      data-testid={`history-score-${run.id}`}
-                      style={styles.scoreValue}
-                      title={`Graded against benchmark ${run.benchmark_id}`}
-                    >
-                      {Math.round(run.eval_score * 100)}%
-                    </span>
-                  ) : (
-                    <span
-                      style={styles.dim}
-                      title="Only scored when the run was graded against a benchmark"
-                    >—</span>
-                  )}
-                </td>
+                {hasScores && (
+                  <td style={{ ...styles.td, textAlign: "right" }}>
+                    {run.eval_score != null ? (
+                      <span
+                        data-testid={`history-score-${run.id}`}
+                        style={styles.scoreValue}
+                        title={`Graded against benchmark ${run.benchmark_id}`}
+                      >
+                        {Math.round(run.eval_score * 100)}%
+                      </span>
+                    ) : (
+                      <span
+                        style={styles.dim}
+                        title="Only scored when the run was graded against a benchmark"
+                      >—</span>
+                    )}
+                  </td>
+                )}
                 <td style={{ ...styles.td, textAlign: "right" }}>
                   <span style={styles.dim}>{formatDuration(run.duration_seconds)}</span>
+                </td>
+                <td style={styles.td}>
+                  {/* Visible action; delegates to the same activate path the
+                      row uses — stopPropagation so it never fires twice. */}
+                  <a
+                    href={runHref}
+                    style={styles.actionLink}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+                      e.preventDefault();
+                      handleActivate();
+                    }}
+                  >
+                    {actionLabel}
+                  </a>
                 </td>
               </tr>
             );
@@ -220,7 +279,8 @@ export function HistoryList({
 // EvalSparkline — a tiny inline-SVG trend of eval scores across the listed
 // runs (gold-standard eval, v16). `runs` arrives newest-first; we reverse to
 // chronological so the line reads left→right = oldest→newest. Only rendered
-// when at least two runs were graded.
+// when at least two runs were graded. (Charts keep functional colour — the
+// monochrome rule applies to routine status, not chart marks.)
 // ---------------------------------------------------------------------------
 
 function EvalSparkline({ runs }: { runs: RunSummaryJson[] }) {
@@ -259,9 +319,20 @@ function EvalSparkline({ runs }: { runs: RunSummaryJson[] }) {
 // Styles
 // ---------------------------------------------------------------------------
 
+const visuallyHidden: React.CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
 const rowBase: React.CSSProperties = {
   cursor: "pointer",
-  transition: "background 120ms ease",
   // Calm fade-in as the list renders. Rows are keyed by run.id, so selecting a
   // row (row → rowSelected) keeps the same node and the same animation string,
   // meaning it never re-plays; only genuinely new rows (pagination) animate.
@@ -280,63 +351,57 @@ const styles = {
     // on long content (filenames, model IDs). Without this the browser
     // auto-sizes columns from content and the truncation never kicks in.
     tableLayout: "fixed" as const,
-    fontSize: 15,
+    fontSize: 14,
     fontFamily: pwc.fontBody,
   } as React.CSSProperties,
+  // Standard density (≈40px rows) via the shared table roles.
   th: {
     ...ui.th,
-    fontSize: 14,
-    color: pwc.grey700,
   } as React.CSSProperties,
   td: {
     ...ui.td,
-    padding: `${pwc.space.xl}px ${pwc.space.xl}px`,
     borderBottom: `1px solid ${pwc.grey100}`,
     verticalAlign: "middle" as const,
     overflow: "hidden",
   } as React.CSSProperties,
-  // Gold-standard eval score — mono, brand-orange so it reads as a metric.
+  // Gold-standard eval score — mono for numeric alignment; readable ink.
   scoreValue: {
     fontFamily: pwc.fontMono,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: pwc.weight.medium,
-    color: pwc.orange700,
+    color: pwc.grey900,
   } as React.CSSProperties,
   sparklineWrap: {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
-    padding: `${pwc.space.md}px ${pwc.space.xl}px`,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     borderBottom: `1px solid ${pwc.grey100}`,
     background: pwc.grey50,
   } as React.CSSProperties,
   sparklineLabel: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 600,
-    color: pwc.grey500,
+    ...ui.microLabel,
     textTransform: "uppercase" as const,
   } as React.CSSProperties,
   sparklineValue: {
     fontFamily: pwc.fontMono,
     fontSize: 13,
     fontWeight: pwc.weight.medium,
-    color: pwc.orange700,
+    color: pwc.grey900,
   } as React.CSSProperties,
   // Filename cell gets a left "selection rail" via border-left on the
   // row-selected variant below. Keeping padding identical to other cells
   // so the rail doesn't shift content when a row becomes active.
   tdFilename: {
     ...ui.td,
-    padding: `${pwc.space.xl}px ${pwc.space.xl}px`,
     borderBottom: `1px solid ${pwc.grey100}`,
     verticalAlign: "middle" as const,
     overflow: "hidden",
   } as React.CSSProperties,
   row: { ...rowBase } as React.CSSProperties,
-  // Stronger highlight than orange50: a filled tint plus a thick orange
-  // left border so the user can see at a glance which row spawned the
-  // currently-open detail modal.
+  // Selection: a filled tint plus a thick orange left rail so the user can
+  // see at a glance which row spawned the currently-open detail. (Selection
+  // is an active-state indicator — allowed orange, unlike routine status.)
   rowSelected: {
     ...rowBase,
     background: pwc.orange100,
@@ -353,30 +418,36 @@ const styles = {
     // Single-line truncation: long filenames like
     // "Audited Financial Statements for the FYE 31 December 2022.pdf"
     // used to wrap onto 5+ lines in the old narrow pane. Title attribute
-    // on the parent span exposes the full name on hover.
+    // exposes the full name on hover.
     whiteSpace: "nowrap" as const,
     overflow: "hidden",
     textOverflow: "ellipsis",
   } as React.CSSProperties,
   dim: {
     color: pwc.grey700,
-    fontSize: 14,
+    fontSize: 13,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
-  badge: {
-    ...ui.badge,
-    maxWidth: "100%",
-    whiteSpace: "nowrap" as const,
-  } as React.CSSProperties,
-  inlineBadge: {
-    ...ui.badge,
+  inlineMeta: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey700,
     marginLeft: pwc.space.sm,
-    verticalAlign: "middle",
+  } as React.CSSProperties,
+  actionLink: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    fontWeight: pwc.weight.medium,
+    color: tokens.color.action.primary,
+    textDecoration: "none",
+    whiteSpace: "nowrap" as const,
+    padding: "4px 0",
+    display: "inline-block",
   } as React.CSSProperties,
   placeholder: {
     padding: pwc.space.xl,
     textAlign: "center" as const,
-    color: pwc.grey500,
+    color: pwc.grey700,
     fontFamily: pwc.fontBody,
     fontSize: 14,
     margin: 0,

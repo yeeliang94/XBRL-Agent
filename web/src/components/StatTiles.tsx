@@ -1,5 +1,6 @@
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { AnimatedNumber } from "./AnimatedNumber";
 
 // ---------------------------------------------------------------------------
@@ -11,8 +12,10 @@ import { AnimatedNumber } from "./AnimatedNumber";
 // the fetch failed" and renders as a dash, so a slow/broken stats call
 // degrades to a quiet placeholder instead of blocking the column.
 //
-// `lastStatus` reuses runStatusDisplay() so the "Last run" tile reads with
-// the exact same label + colour as the History list.
+// Design-system adoption (plan CS3): quiet flat ui.statTile metrics, not
+// four elevated cards; actionable counts (Needs review, drafts) lead the
+// row and carry the neutral ! / – symbols — never decorative colour.
+// The four/two/one column breakpoints live on the `stat-tiles` class.
 // ---------------------------------------------------------------------------
 
 export interface StatTilesProps {
@@ -20,8 +23,8 @@ export interface StatTilesProps {
   active?: number;
   drafts?: number;
   completedThisMonth?: number;
-  /** When provided AND drafts > 0, a "Clear" action shows on the drafts tile
-   *  to sweep abandoned drafts (E3). Omitted → no action rendered. */
+  /** When provided AND drafts > 0, a "Clear drafts" action shows on the
+   *  drafts tile to sweep abandoned drafts (E3). Omitted → no action. */
   onClearDrafts?: () => void;
 }
 
@@ -42,10 +45,34 @@ export function StatTiles({
 }: StatTilesProps) {
   const canClearDrafts = onClearDrafts != null && (drafts ?? 0) > 0;
   return (
-    <div style={styles.grid}>
+    <div className="stat-tiles" style={styles.grid}>
+      {/* Actionable work leads: review queue first, unstarted drafts second. */}
       <div style={styles.tile}>
         <Count n={needsReview} />
-        <span style={styles.label}>Needs review</span>
+        <span style={styles.label}>
+          <span aria-hidden="true" style={styles.symbol}>{STATUS_SYMBOLS.attention}</span>
+          Needs review
+        </span>
+      </div>
+      <div style={styles.tile}>
+        <Count n={drafts} />
+        <span style={styles.labelRow}>
+          <span style={styles.label}>
+            <span aria-hidden="true" style={styles.symbol}>{STATUS_SYMBOLS.inactive}</span>
+            Not started
+          </span>
+          {canClearDrafts && (
+            <button
+              type="button"
+              className={uiClass.btnQuiet}
+              style={styles.clearLink}
+              onClick={onClearDrafts}
+              data-testid="clear-drafts"
+            >
+              Clear drafts
+            </button>
+          )}
+        </span>
       </div>
       <div style={styles.tile}>
         <Count n={active} />
@@ -55,43 +82,22 @@ export function StatTiles({
         <Count n={completedThisMonth} />
         <span style={styles.label}>Completed this month</span>
       </div>
-      <div style={styles.tile}>
-        <Count n={drafts} />
-        <span style={styles.labelRow}>
-          <span style={styles.label}>Unstarted drafts</span>
-          {canClearDrafts && (
-            <button
-              type="button"
-              className={uiClass.btnGhost}
-              style={styles.clearLink}
-              onClick={onClearDrafts}
-              data-testid="clear-drafts"
-            >
-              Clear
-            </button>
-          )}
-        </span>
-      </div>
     </div>
   );
 }
 
 const styles = {
-  // Full-width band across the top of the homepage: four tiles in a row.
-  // auto-fit + a minmax floor keeps them on one line on a normal desktop
-  // (the container caps at ~1120px) while wrapping gracefully if the viewport
-  // gets narrow rather than crushing the labels.
+  // Column counts come from the `stat-tiles` class (index.css): four columns
+  // on desktop, two on tablet, one on narrow screens — an intentional
+  // composition instead of auto-fit guesswork.
   grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
     gap: pwc.space.md,
   } as React.CSSProperties,
   tile: {
-    ...ui.card,
+    ...ui.statTile,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xs,
-    padding: pwc.space.lg,
     minWidth: 0,
   } as React.CSSProperties,
   labelRow: {
@@ -101,10 +107,11 @@ const styles = {
     gap: pwc.space.sm,
   } as React.CSSProperties,
   clearLink: {
-    ...ui.buttonGhost,
-    padding: 0,
-    minHeight: 0,
+    ...ui.buttonQuiet,
+    padding: "2px 6px",
+    minHeight: 24,
     fontSize: 12,
+    color: tokens.color.action.primary,
   } as React.CSSProperties,
   value: {
     fontFamily: pwc.fontHeading,
@@ -118,6 +125,13 @@ const styles = {
   label: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.grey500,
+    color: tokens.color.text.secondary,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+  } as React.CSSProperties,
+  symbol: {
+    ...ui.statusSymbol,
+    width: "auto",
   } as React.CSSProperties,
 } as const;

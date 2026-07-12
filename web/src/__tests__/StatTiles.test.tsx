@@ -9,7 +9,7 @@ describe("StatTiles", () => {
     );
     expect(screen.getByText("Needs review")).toBeTruthy();
     expect(screen.getByText("Active runs")).toBeTruthy();
-    expect(screen.getByText("Unstarted drafts")).toBeTruthy();
+    expect(screen.getByText("Not started")).toBeTruthy();
     expect(screen.getByText("Completed this month")).toBeTruthy();
     expect(screen.getByText("42")).toBeTruthy();
     expect(screen.getByText("3")).toBeTruthy();

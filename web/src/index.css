@@ -218,6 +218,12 @@ textarea:focus {
   .recent-run-row {
     flex-wrap: wrap !important;
   }
+
+  /* Sticky filters consume too much vertical space on narrow screens —
+     let the toolbar scroll with the page there. */
+  .history-filters {
+    position: static !important;
+  }
 }
 
 /* Custom scrollbar for agent activity panels */

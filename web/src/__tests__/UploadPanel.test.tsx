@@ -92,7 +92,7 @@ describe("UploadPanel — P1 enhancements", () => {
     expect(screen.getByText(/only pdf or word/i)).toBeInTheDocument();
   });
 
-  test("drag-drop zone uses grey50 background with grey200 dashed border", () => {
+  test("drag-drop zone uses grey50 background with grey300 dashed border", () => {
     const { container } = render(
       <UploadPanel
         onUpload={noop}
@@ -106,7 +106,7 @@ describe("UploadPanel — P1 enhancements", () => {
     expect(dropZone).toBeInTheDocument();
     // jsdom converts hex to rgb in style attributes
     expect(dropZone?.getAttribute("style")).toContain("rgb(250, 250, 250)"); // grey50 #FAFAFA
-    expect(dropZone?.getAttribute("style")).toContain("rgb(222, 222, 222)"); // grey200 #DEDEDE
+    expect(dropZone?.getAttribute("style")).toContain("rgb(201, 201, 201)"); // grey300 #C9C9C9
   });
 
   test("drag highlight stays active while crossing children and clears on exit", () => {

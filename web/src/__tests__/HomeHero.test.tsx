@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { HomeHero } from "../components/HomeHero";
 
 const mockFetch = vi.fn();
@@ -86,7 +86,11 @@ describe("HomeHero", () => {
     fireEvent.click(screen.getByTestId("clear-drafts"));
     // Confirm dialog opens; confirm the sweep.
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /clear drafts/i }));
+    // Scope to the dialog — the drafts tile also carries a "Clear drafts"
+    // action now, so an unscoped query would be ambiguous.
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: /clear drafts/i }),
+    );
 
     // The bulk-delete endpoint was hit with DELETE.
     await waitFor(() => {
@@ -111,5 +115,20 @@ describe("HomeHero", () => {
     // Recent list shows its error placeholder; tiles fall back to dashes.
     await waitFor(() => expect(screen.getByText(/couldn't load recent runs/i)).toBeTruthy());
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(4);
+  });
+
+  test("upload leads the page — rendered before the metrics band (CS3)", async () => {
+    primeFetch();
+    render(
+      <HomeHero active onResumeDraft={noop} onOpenRun={noop} onViewAllRuns={noop}>
+        <div data-testid="upload-card">UPLOAD CARD</div>
+      </HomeHero>,
+    );
+    await waitFor(() => expect(screen.getByText("Needs review")).toBeTruthy());
+    const upload = screen.getByTestId("upload-card");
+    const stats = screen.getByText("Needs review");
+    expect(
+      upload.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
