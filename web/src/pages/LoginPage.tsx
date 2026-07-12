@@ -36,7 +36,7 @@ const styles = {
   subtitle: {
     fontFamily: pwc.fontBody,
     fontSize: 14,
-    color: pwc.grey500,
+    color: pwc.grey700,
     margin: 0,
   } as CSSProperties,
   field: {

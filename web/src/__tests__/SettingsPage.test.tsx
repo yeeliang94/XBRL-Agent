@@ -90,4 +90,20 @@ describe("SettingsPage", () => {
     fireEvent.keyDown(tabs[0], { key: "ArrowRight" });
     expect(tabs[1].getAttribute("aria-selected")).toBe("true");
   });
+
+  test("uses Form mode (840px) with one page-level h1 (CS5)", () => {
+    render(<SettingsPage isAdmin={false} />);
+    const h1 = screen.getByRole("heading", { level: 1, name: "Settings" });
+    expect(h1).toBeInTheDocument();
+    const container = document.querySelector(".settings-page") as HTMLElement;
+    expect(container.style.maxWidth).toBe("840px");
+  });
+
+  test("active tab is dark text + orange indicator, not orange text (CS5)", () => {
+    render(<SettingsPage isAdmin={false} />);
+    const active = screen.getByRole("tab", { name: "General" });
+    expect(active.getAttribute("aria-selected")).toBe("true");
+    expect(active.style.color).toBe("rgb(26, 26, 26)"); // grey900
+    expect(active.style.borderBottom).toContain("rgb(253, 81, 8)"); // orange indicator
+  });
 });

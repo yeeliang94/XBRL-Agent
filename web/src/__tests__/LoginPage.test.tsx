@@ -53,4 +53,16 @@ describe("LoginPage", () => {
     fillAndSubmit();
     await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/too many attempts/i));
   });
+
+  test("Sign in uses the accessible action colour, not signature orange (CS5)", () => {
+    render(<LoginPage onAuthenticated={() => {}} />);
+    const btn = screen.getByRole("button", { name: /sign in/i });
+    expect(btn.style.backgroundColor).toBe("rgb(198, 61, 0)"); // color.action.primary
+  });
+
+  test("stays at the Authentication width (380px card)", () => {
+    render(<LoginPage onAuthenticated={() => {}} />);
+    const form = screen.getByRole("button", { name: /sign in/i }).closest("form")!;
+    expect(form.style.maxWidth).toBe("380px");
+  });
 });
