@@ -38,10 +38,23 @@ from pydantic_ai.messages import (
 import agent_tracing
 
 
-def _ctx(requests: int, total_tokens: int = 0):
-    """Minimal stand-in for RunContext: the processor only reads .usage."""
+def _ctx(steps: int = 0, total_tokens: int = 0, cap: int = None, requests: int = 0):
+    """Minimal RunContext stand-in.
+
+    ``steps``/``cap`` mirror the loop counters run_agent_loop publishes
+    onto deps (_loop_iteration/_loop_max_iters — NODE units, the same
+    units as the hard cap). ``requests`` feeds the fallback path for
+    agents not driven by the shared runner.
+    """
+    import agent_tracing
+
+    deps = SimpleNamespace()
+    if steps:
+        deps._loop_iteration = steps
+        deps._loop_max_iters = cap or agent_tracing.MAX_AGENT_ITERATIONS
     return SimpleNamespace(
-        usage=SimpleNamespace(requests=requests, total_tokens=total_tokens)
+        usage=SimpleNamespace(requests=requests, total_tokens=total_tokens),
+        deps=deps,
     )
 
 
@@ -72,7 +85,7 @@ def _warning_texts(messages):
 
 def test_silent_below_threshold():
     msgs = _history()
-    out = limit_warning_processor(_ctx(requests=5), msgs)
+    out = limit_warning_processor(_ctx(steps=5), msgs)
     assert _warning_texts(out) == []
     # No structural change either — same parts in same order.
     assert [type(m) for m in out] == [type(m) for m in msgs]
@@ -82,7 +95,7 @@ def test_silent_below_threshold():
 def test_urgent_at_threshold():
     cap = agent_tracing.MAX_AGENT_ITERATIONS
     used = int(cap * 0.75)
-    out = limit_warning_processor(_ctx(requests=used), _history())
+    out = limit_warning_processor(_ctx(steps=used), _history())
     warnings = _warning_texts(out)
     assert len(warnings) == 1
     assert "URGENT" in warnings[0]
@@ -93,7 +106,7 @@ def test_urgent_at_threshold():
 
 def test_critical_in_final_stretch():
     cap = agent_tracing.MAX_AGENT_ITERATIONS
-    out = limit_warning_processor(_ctx(requests=cap - 2), _history())
+    out = limit_warning_processor(_ctx(steps=cap - 2), _history())
     warnings = _warning_texts(out)
     assert len(warnings) == 1
     assert "CRITICAL" in warnings[0]
@@ -104,14 +117,14 @@ def test_exactly_one_warning_across_turns():
     """Re-running the processor on already-warned history never stacks."""
     cap = agent_tracing.MAX_AGENT_ITERATIONS
     msgs = _history()
-    first = limit_warning_processor(_ctx(requests=int(cap * 0.75)), msgs)
+    first = limit_warning_processor(_ctx(steps=int(cap * 0.75)), msgs)
     # Next turn: history grows, processor runs again with higher usage.
     grown = [
         *first,
         ModelResponse(parts=[TextPart(content="writing rows")]),
         ModelRequest(parts=[UserPromptPart(content="more tool results")]),
     ]
-    second = limit_warning_processor(_ctx(requests=cap - 1), grown)
+    second = limit_warning_processor(_ctx(steps=cap - 1), grown)
     warnings = _warning_texts(second)
     assert len(warnings) == 1
     # And it reflects the LATEST usage, not the stale first warning.
@@ -125,11 +138,11 @@ def test_exactly_one_warning_across_turns():
 
 def test_token_budget_line_only_when_budget_set(monkeypatch):
     monkeypatch.delenv("XBRL_MAX_TOKENS_PER_AGENT", raising=False)
-    out = limit_warning_processor(_ctx(requests=1, total_tokens=10_000_000), _history())
+    out = limit_warning_processor(_ctx(steps=1, total_tokens=10_000_000), _history())
     assert _warning_texts(out) == []
 
     monkeypatch.setenv("XBRL_MAX_TOKENS_PER_AGENT", "100000")
-    out = limit_warning_processor(_ctx(requests=1, total_tokens=80_000), _history())
+    out = limit_warning_processor(_ctx(steps=1, total_tokens=80_000), _history())
     warnings = _warning_texts(out)
     assert len(warnings) == 1
     assert "Token budget" in warnings[0]
@@ -138,7 +151,7 @@ def test_token_budget_line_only_when_budget_set(monkeypatch):
 
 def test_token_budget_critical(monkeypatch):
     monkeypatch.setenv("XBRL_MAX_TOKENS_PER_AGENT", "100000")
-    out = limit_warning_processor(_ctx(requests=1, total_tokens=96_000), _history())
+    out = limit_warning_processor(_ctx(steps=1, total_tokens=96_000), _history())
     warnings = _warning_texts(out)
     assert len(warnings) == 1
     assert "CRITICAL" in warnings[0]
@@ -153,7 +166,7 @@ def test_kill_switch(monkeypatch):
     monkeypatch.setenv("XBRL_LIMIT_WARNINGS", "0")
     cap = agent_tracing.MAX_AGENT_ITERATIONS
     msgs = _history()
-    out = limit_warning_processor(_ctx(requests=cap - 1), msgs)
+    out = limit_warning_processor(_ctx(steps=cap - 1), msgs)
     assert out is msgs  # disabled path returns the input untouched
 
 
@@ -164,7 +177,7 @@ def test_unexpected_tail_shape_skips_injection():
         ModelRequest(parts=[UserPromptPart(content="extract")]),
         ModelResponse(parts=[TextPart(content="thinking")]),
     ]
-    out = limit_warning_processor(_ctx(requests=cap - 1), msgs)
+    out = limit_warning_processor(_ctx(steps=cap - 1), msgs)
     assert _warning_texts(out) == []
     assert len(out) == 2
 
@@ -173,7 +186,7 @@ def test_purity_inputs_not_mutated():
     cap = agent_tracing.MAX_AGENT_ITERATIONS
     msgs = _history()
     before_parts = list(msgs[-1].parts)
-    limit_warning_processor(_ctx(requests=cap - 1), msgs)
+    limit_warning_processor(_ctx(steps=cap - 1), msgs)
     assert msgs[-1].parts == before_parts  # original request untouched
 
 
@@ -201,3 +214,51 @@ def test_registered_on_all_three_agent_factories():
     for mod in (face_mod, notes_mod, scout_mod):
         src = inspect.getsource(mod)
         assert "limit_warning_processor" in src, mod.__name__
+
+
+# ---------------------------------------------------------------------------
+# Unit contract (2026-07-12 V2-review fix) — node units, warning before cap
+# ---------------------------------------------------------------------------
+
+
+def test_warning_fires_before_hard_cap_in_node_units():
+    """Walk the counter like the real loop (one node at a time): the first
+    warning must arrive strictly BEFORE the iteration the hard cap fires
+    (iteration > max_iters). This is the regression the V2 review caught —
+    a warner keyed on model requests could never fire before a node-based
+    cap."""
+    cap = agent_tracing.MAX_AGENT_ITERATIONS
+    first_warned_at = None
+    for step in range(1, cap + 1):  # the cap raises at step cap+1
+        out = limit_warning_processor(_ctx(steps=step, cap=cap), _history())
+        if _warning_texts(out):
+            first_warned_at = step
+            break
+    assert first_warned_at is not None, "warning never fired before the cap"
+    assert first_warned_at <= cap  # strictly before IterationLimitReached
+    # And with useful headroom: at ~70%, not in the final steps.
+    assert first_warned_at <= int(cap * 0.75)
+
+
+def test_fallback_approximates_nodes_from_requests():
+    """Agents not driven by run_agent_loop (no published counters) fall back
+    to nodes ~= 2*requests - 1 so the unit stays comparable to the cap."""
+    cap = agent_tracing.MAX_AGENT_ITERATIONS
+    # requests such that 2*r-1 >= 0.7*cap  -> warning fires
+    r = (int(cap * 0.7) + 2) // 2 + 1
+    out = limit_warning_processor(_ctx(requests=r), _history())
+    assert _warning_texts(out)
+
+
+def test_runner_publishes_loop_counters():
+    """run_agent_loop publishes _loop_iteration/_loop_max_iters onto deps
+    every node — the warner's primary counter source (source-level pin)."""
+    import inspect
+
+    import agent_runner
+
+    src = inspect.getsource(agent_runner.run_agent_loop)
+    assert "deps._loop_iteration = iteration" in src
+    assert "deps._loop_max_iters = spec.max_iters" in src
+    # published BEFORE the cap check so the warner sees the compared value
+    assert src.index("deps._loop_iteration") < src.index("raise IterationLimitReached")

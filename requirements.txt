@@ -1,6 +1,10 @@
 # Floors only — the reproducible pin is constraints.txt (pip freeze of the
 # authoritative venv; see docs/PLAN-pydantic-ai-v2.md Phase U0). Install with:
 #   pip install -r requirements.txt -c constraints.txt
+# (start.sh / start.bat already pass -c.) KNOWN GAP: constraints.txt is
+# Mac-generated, so win32-only deps (docx2pdf) are absent and install
+# unpinned on Windows — extend the constraints file from the enterprise
+# box at the Windows verification gate (plan U3).
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 python-dotenv>=1.0.0

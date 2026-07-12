@@ -50,9 +50,11 @@ __all__ = ("NOTES_PHASE_MAP",)
 def _backfill_token_report(token_report, usage_callable, template_label: str) -> None:
     """Fold the agent's end-of-run usage into the TokenReport totals.
 
-    ``usage_callable`` is typically ``agent_run.usage`` (callable); we
-    accept the callable rather than the value so tests can stub it
-    without constructing a real usage object. Per CLAUDE.md gotcha #6
+    ``usage_callable`` may be the usage VALUE itself (V2 idiom —
+    ``agent_run.usage`` is a property) or a zero-arg callable returning
+    it (legacy/tests). Accepting both closed the 2026-07-12 V2-review
+    finding where the property value was invoked as a function and the
+    resulting TypeError was swallowed into 0-token cost reports. Per CLAUDE.md gotcha #6
     per-turn counts stay at zero (PydanticAI does counting internally)
     — only the end-of-run aggregate is accurate. The try/except is the
     last line of defence against a surprise usage shape; any failure
@@ -60,7 +62,7 @@ def _backfill_token_report(token_report, usage_callable, template_label: str) ->
     strictly advisory.
     """
     try:
-        usage = usage_callable()
+        usage = usage_callable() if callable(usage_callable) else usage_callable
         # New-name-first: input_/output_tokens are the pydantic-ai 1.x
         # primary API; request_/response_ are deprecated aliases that V2
         # removes. Old-name-first here silently reported 0 under V2.
@@ -874,8 +876,8 @@ async def _invoke_single_notes_agent_once(
     _agent_cost = 0.0
     try:
         _u = agent_run.usage
-        _prompt = int(_u.request_tokens or 0)
-        _completion = int(_u.response_tokens or 0)
+        _prompt = int(_u.input_tokens or 0)
+        _completion = int(_u.output_tokens or 0)
         _agent_tokens = int(_u.total_tokens or 0)
         _agent_cost = estimate_cost(_prompt, _completion, 0, model)
     except Exception:  # noqa: BLE001 — telemetry is best-effort
