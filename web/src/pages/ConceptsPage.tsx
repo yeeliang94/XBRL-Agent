@@ -329,6 +329,13 @@ export function ConceptsPage({
   const [pdfWidth, setPdfWidth] = useState(initialWorkspace.current.pdfWidth ?? 520);
   const [menuCollapsed, setMenuCollapsed] = useState(initialWorkspace.current.menuCollapsed ?? false);
   const [pdfCollapsed, setPdfCollapsed] = useState(initialWorkspace.current.pdfCollapsed ?? false);
+  // Whether the row carrying the CURRENT selection may scroll itself into
+  // view. True only for intentional jumps (row click, reconciliation
+  // conflict, cross-check / coverage focus). The initial auto-selection that
+  // merely feeds the evidence pane must NOT move the page — on the
+  // deep-linked run page it scrolled the document ~2300px down on mount
+  // (design-consistency live-QA follow-up).
+  const scrollSelectionRef = useRef(false);
   const [selectedConceptUuid, setSelectedConceptUuid] = useState<string | null>(
     initialWorkspace.current.selectedConceptUuid ?? null
   );
@@ -618,6 +625,9 @@ export function ConceptsPage({
       // is guaranteed visible regardless of which sub-sheet it lives on.
       setActiveSheet(null);
       setSearchQuery("");
+      // An intentional jump (conflict / cross-check / coverage focus) SHOULD
+      // bring the row into view.
+      scrollSelectionRef.current = true;
       setSelectedConceptUuid(conceptUuid);
     },
     [concepts]
@@ -787,6 +797,8 @@ export function ConceptsPage({
     }
     const firstDataRow =
       filtered.find((r) => r.kind !== "ABSTRACT") || filtered[0];
+    // Automatic fallback selection — keep the page where it is.
+    scrollSelectionRef.current = false;
     setSelectedConceptUuid(firstDataRow.concept_uuid);
   }, [notesActive, filtered, selectedConceptUuid]);
 
@@ -947,6 +959,7 @@ export function ConceptsPage({
             onSelectRow={setSelectedConceptUuid}
             activeScope={activeScope}
             showPeriods={hasPyFacts}
+            scrollOnSelectRef={scrollSelectionRef}
           />
         ) : (
           <ConceptTree
@@ -957,6 +970,7 @@ export function ConceptsPage({
             onSelectRow={setSelectedConceptUuid}
             activeScope={activeScope}
             showPeriods={hasPyFacts}
+            scrollOnSelectRef={scrollSelectionRef}
           />
         )}
       </div>
@@ -1320,6 +1334,7 @@ export function ConceptsPage({
             onSelectRow={setSelectedConceptUuid}
             activeScope={activeScope}
             showPeriods={hasPyFacts}
+            scrollOnSelectRef={scrollSelectionRef}
             cyLabel={reportingCy ? `CY (${reportingCy})` : "CY"}
             pyLabel={reportingPy ? `PY (${reportingPy})` : "PY"}
           />
@@ -1332,6 +1347,7 @@ export function ConceptsPage({
             onSelectRow={setSelectedConceptUuid}
             activeScope={activeScope}
             showPeriods={hasPyFacts}
+            scrollOnSelectRef={scrollSelectionRef}
             cyLabel={reportingCy ? `CY (${reportingCy})` : "CY"}
             pyLabel={reportingPy ? `PY (${reportingPy})` : "PY"}
           />
@@ -1547,6 +1563,7 @@ function ConceptTree({
   onSelectRow,
   activeScope,
   showPeriods,
+  scrollOnSelectRef,
   cyLabel = "CY",
   pyLabel = "PY",
 }: {
@@ -1557,6 +1574,9 @@ function ConceptTree({
   onSelectRow: (uuid: string) => void;
   activeScope: "Company" | "Group";
   showPeriods: boolean;
+  /** May the selected row scroll itself into view? False for the initial
+   *  auto-selection (see the owner ref in ConceptsPage). */
+  scrollOnSelectRef?: React.MutableRefObject<boolean>;
   // Year-labelled column headers ("CY (FY2021)"); default to plain codes.
   cyLabel?: string;
   pyLabel?: string;
@@ -1618,6 +1638,7 @@ function ConceptTree({
           onSelectRow={onSelectRow}
           activeScope={activeScope}
           showPeriods={showPeriods}
+          scrollOnSelectRef={scrollOnSelectRef}
         />
       ))}
     </div>
@@ -1657,6 +1678,7 @@ function ConceptMatrixGrid({
   onSelectRow,
   activeScope,
   showPeriods,
+  scrollOnSelectRef,
   cyLabel = "CY",
   pyLabel = "PY",
 }: {
@@ -1667,6 +1689,9 @@ function ConceptMatrixGrid({
   onSelectRow: (uuid: string) => void;
   activeScope: "Company" | "Group";
   showPeriods: boolean;
+  /** May the selected row scroll itself into view? False for the initial
+   *  auto-selection (see the owner ref in ConceptsPage). */
+  scrollOnSelectRef?: React.MutableRefObject<boolean>;
   // Year-labelled period headers ("CY (FY2021)"); default to plain codes.
   cyLabel?: string;
   pyLabel?: string;
@@ -1726,6 +1751,9 @@ function ConceptMatrixGrid({
   const rowRefs = useRef(new Map<number, HTMLDivElement | null>());
   useEffect(() => {
     if (!selectedUuid) return;
+    // Automatic fallback selections must not move the page (live-QA fix);
+    // only intentional jumps scroll.
+    if (scrollOnSelectRef && !scrollOnSelectRef.current) return;
     for (const [rn, g] of byRow) {
       for (const cell of g.cells.values()) {
         if (cell.uuid === selectedUuid) {
@@ -1734,7 +1762,7 @@ function ConceptMatrixGrid({
         }
       }
     }
-  }, [selectedUuid, byRow]);
+  }, [selectedUuid, byRow, scrollOnSelectRef]);
 
   // Wider columns so an input fits without clipping accountant figures.
   const visiblePeriods: Period[] = showPeriods ? ["CY", "PY"] : ["CY"];
@@ -1894,6 +1922,7 @@ function ConceptRowView({
   onSelectRow,
   activeScope,
   showPeriods,
+  scrollOnSelectRef,
 }: {
   row: ConceptRow;
   depth: number;
@@ -1903,14 +1932,21 @@ function ConceptRowView({
   onSelectRow: (uuid: string) => void;
   activeScope: "Company" | "Group";
   showPeriods: boolean;
+  /** May the selected row scroll itself into view? False for the initial
+   *  auto-selection (see the owner ref in ConceptsPage). */
+  scrollOnSelectRef?: React.MutableRefObject<boolean>;
 }) {
   // M2 — when selection is driven from outside the grid (a reconciliation
   // conflict), bring the row into view. `scrollIntoView` is guarded with `?.`
   // because jsdom doesn't implement it (the test env would otherwise throw).
+  // The initial AUTO-selection must not move the page (live-QA fix) — only
+  // intentional jumps carry scrollOnSelectRef.current === true.
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (selected) rowRef.current?.scrollIntoView?.({ block: "nearest" });
-  }, [selected]);
+    if (!selected) return;
+    if (scrollOnSelectRef && !scrollOnSelectRef.current) return;
+    rowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [selected, scrollOnSelectRef]);
 
   // Phase 5.3 — labels are READ-ONLY in the per-run review; renaming lives
   // on the global Template settings page so there's one coherent place to

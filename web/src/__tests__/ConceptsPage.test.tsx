@@ -1703,4 +1703,35 @@ describe("ConceptsPage", () => {
     expect(calls.some((c) => c.url.includes("/api/runs/"))).toBe(false);
   });
 
+
+  test("initial auto-selection never scrolls; a conflict jump does (live-QA fix)", async () => {
+    // jsdom has no scrollIntoView — install a spy and restore after.
+    const original = Element.prototype.scrollIntoView;
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    try {
+      mockFetch((url) => {
+        if (url.includes("/concepts")) return sampleConcepts;
+        if (url.includes("/conflicts"))
+          return {
+            conflicts: [
+              { id: 1, concept_uuid: "comp-1", kind: "partial_state", residual: null, detail: null, status: "open" },
+            ],
+          };
+        return {};
+      });
+      render(<ConceptsPage runId={42} />);
+      await screen.findByTestId("concept-row-leaf-1");
+      // The automatic first-row selection (feeds the evidence pane) must not
+      // move the page — deep-linked run pages used to land scrolled ~2300px.
+      expect(scrollSpy).not.toHaveBeenCalled();
+
+      // A reconciliation-conflict click IS an intentional jump — the target
+      // row scrolls into view (Review Workspace M2 behaviour preserved).
+      fireEvent.click(await screen.findByTestId("conflict-1"));
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
 });

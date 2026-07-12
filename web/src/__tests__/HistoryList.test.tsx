@@ -340,4 +340,17 @@ describe("HistoryList", () => {
     render(<HistoryList runs={runs} onRunSelected={() => {}} />);
     expect(screen.queryByTestId("history-eval-sparkline")).toBeNull();
   });
+
+  test("denomination tag shares the filename line instead of wrapping under it", () => {
+    const runs = makeRuns();
+    runs[0] = { ...runs[0], denomination: "units" };
+    render(<HistoryList runs={runs} onRunSelected={() => {}} />);
+    const link = screen.getByRole("link", { name: "FINCO-Audited-2021.pdf" });
+    const row = link.parentElement as HTMLElement;
+    // One flex line: link truncates (flex 0 1 auto), tag keeps its width.
+    expect(row.style.display).toBe("flex");
+    const meta = row.children[1] as HTMLElement;
+    expect(meta.textContent).toBe("RM");
+    expect(meta.style.flexShrink).toBe("0");
+  });
 });

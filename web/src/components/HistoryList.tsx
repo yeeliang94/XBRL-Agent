@@ -184,31 +184,36 @@ export function HistoryList({
                 style={isSelected ? styles.rowSelected : styles.row}
               >
                 <td style={styles.tdFilename}>
-                  <a
-                    href={runHref}
-                    style={styles.filename}
-                    title={run.pdf_filename}
-                    aria-current={isSelected ? "page" : undefined}
-                    onClick={(e) => {
-                      // Plain click → SPA activate (no full page load). Let
-                      // modified clicks (new tab / window) fall through to the
-                      // browser's native href handling.
-                      e.stopPropagation();
-                      if (e.metaKey || e.ctrlKey || e.shiftKey) return;
-                      e.preventDefault();
-                      handleActivate();
-                    }}
-                  >
-                    {run.pdf_filename}
-                  </a>
-                  {/* Ordinary filing metadata is plain text, not a pill.
-                      Non-default denomination only — "thousands" (RM '000)
-                      is the common case and implied. */}
-                  {run.denomination && run.denomination !== "thousands" && (
-                    <span style={styles.inlineMeta}>
-                      {denominationLabel(run.denomination)}
-                    </span>
-                  )}
+                  {/* One flex line: the filename truncates, the denomination
+                      tag stays beside it instead of wrapping onto its own
+                      orphaned line under a long name (live-QA follow-up). */}
+                  <div style={styles.filenameRow}>
+                    <a
+                      href={runHref}
+                      style={styles.filename}
+                      title={run.pdf_filename}
+                      aria-current={isSelected ? "page" : undefined}
+                      onClick={(e) => {
+                        // Plain click → SPA activate (no full page load). Let
+                        // modified clicks (new tab / window) fall through to the
+                        // browser's native href handling.
+                        e.stopPropagation();
+                        if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+                        e.preventDefault();
+                        handleActivate();
+                      }}
+                    >
+                      {run.pdf_filename}
+                    </a>
+                    {/* Ordinary filing metadata is plain text, not a pill.
+                        Non-default denomination only — "thousands" (RM '000)
+                        is the common case and implied. */}
+                    {run.denomination && run.denomination !== "thousands" && (
+                      <span style={styles.inlineMeta}>
+                        {denominationLabel(run.denomination)}
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td style={styles.td}>
                   <span style={styles.dim} title={date.exact}>
@@ -407,6 +412,13 @@ const styles = {
     background: pwc.orange100,
     boxShadow: `inset 3px 0 0 0 ${pwc.orange500}`,
   } as React.CSSProperties,
+  // Filename + optional denomination tag share one truncating flex line.
+  filenameRow: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: pwc.space.sm,
+    minWidth: 0,
+  } as React.CSSProperties,
   filename: {
     fontFamily: pwc.fontBody,
     fontWeight: pwc.weight.medium,
@@ -414,11 +426,13 @@ const styles = {
     // Rendered as an <a> for middle-click / open-in-new-tab support, but it
     // should read as a filename, not a blue underlined link.
     textDecoration: "none",
-    display: "block",
     // Single-line truncation: long filenames like
     // "Audited Financial Statements for the FYE 31 December 2022.pdf"
     // used to wrap onto 5+ lines in the old narrow pane. Title attribute
-    // exposes the full name on hover.
+    // exposes the full name on hover. flex 0-1-auto lets the name shrink
+    // while the denomination tag keeps its width.
+    flex: "0 1 auto",
+    minWidth: 0,
     whiteSpace: "nowrap" as const,
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -432,7 +446,8 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 12,
     color: pwc.grey700,
-    marginLeft: pwc.space.sm,
+    flexShrink: 0,
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   actionLink: {
     fontFamily: pwc.fontBody,
