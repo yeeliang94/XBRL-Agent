@@ -119,6 +119,11 @@ export function HomeHero({
 
   return (
     <div style={styles.stack}>
+      {/* Upload leads — it is the page's primary purpose. Rendering it first
+          ALWAYS (active or not) keeps UploadPanel in a stable tree position
+          so it never remounts and loses upload state. */}
+      {children}
+
       {active && (
         <StatTiles
           // While loading (and no prior data) the counts are undefined → the
@@ -130,8 +135,6 @@ export function HomeHero({
           onClearDrafts={() => setConfirmClearDrafts(true)}
         />
       )}
-
-      {children}
 
       {active && (
         <RecentRunsList

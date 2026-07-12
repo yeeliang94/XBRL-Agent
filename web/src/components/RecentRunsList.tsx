@@ -1,19 +1,23 @@
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
 import { denominationLabel } from "../lib/vocabulary";
-import { ui } from "../lib/uiStyles";
+import { ui, uiClass } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
+import { StatusLabel } from "./StatusLabel";
 import type { RunSummaryJson } from "../lib/types";
 
 // ---------------------------------------------------------------------------
-// RecentRunsList — the "pick up where you left off" panel on the homepage
-// home-base column (PLAN-homepage-redesign.md). Stateless: the parent owns
-// fetching and passes the rows in.
+// RecentRunsList — the "pick up where you left off" work queue on the
+// homepage (PLAN-homepage-redesign.md). Stateless: the parent owns fetching
+// and passes the rows in.
 //
 // Drafts route back to /run/{id} (onResumeDraft) so the user can finish
 // configuring and start; everything else opens the run's detail in History
 // (onOpenRun). This mirrors HistoryList's draft-vs-non-draft split so the two
-// surfaces behave identically. Status badges reuse runStatusDisplay() for the
-// same reason.
+// surfaces behave identically.
+//
+// Design-system adoption (plan CS3): a divided list, not nested cards —
+// filename, filing profile, monochrome symbol-plus-text status, concise
+// date, and a visible action per row.
 // ---------------------------------------------------------------------------
 
 export interface RecentRunsListProps {
@@ -25,12 +29,29 @@ export interface RecentRunsListProps {
   onViewAll: () => void;
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string): { concise: string; exact: string } {
   // Local time, matching HistoryList. Fall back to the raw string if the
   // backend ever sends something unparseable.
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
+  if (isNaN(d.getTime())) return { concise: iso, exact: iso };
+  return { concise: d.toLocaleDateString(), exact: d.toLocaleString() };
+}
+
+function statusState(status: string): "inProgress" | "success" | "attention" | "failure" | "inactive" {
+  switch (status) {
+    case "running":
+      return "inProgress";
+    case "completed":
+      return "success";
+    case "completed_with_errors":
+    case "correction_exhausted":
+      return "attention";
+    case "failed":
+    case "aborted":
+      return "failure";
+    default:
+      return "inactive";
+  }
 }
 
 export function RecentRunsList({
@@ -42,7 +63,7 @@ export function RecentRunsList({
   onViewAll,
 }: RecentRunsListProps) {
   return (
-    <div style={styles.panel}>
+    <section style={styles.panel} aria-label="Recent runs">
       <div style={styles.header}>
         <span style={styles.heading}>Recent runs</span>
         {/* "View all" always available — even with zero runs it's a valid
@@ -75,134 +96,124 @@ export function RecentRunsList({
               run.filing_level ? run.filing_level.charAt(0).toUpperCase() + run.filing_level.slice(1) : null,
               run.denomination ? denominationLabel(run.denomination) : null,
             ].filter(Boolean).join(" · ");
+            const date = formatDate(run.created_at);
+            const actionLabel = isDraft
+              ? "Continue setup"
+              : run.status === "completed_with_errors" || run.status === "correction_exhausted"
+              ? "Review"
+              : "Open";
             return (
               <button
                 type="button"
                 key={run.id}
                 onClick={activate}
-                style={styles.card}
+                className={`recent-run-row ${uiClass.tableRow}`}
+                style={styles.row}
               >
-                <div style={styles.cardTop}>
-                  <span style={styles.filename} title={run.pdf_filename}>
-                    {run.pdf_filename}
-                  </span>
-                  <span style={styles.action}>
-                    {isDraft ? "Resume" : run.status === "completed_with_errors" ? "Review" : "Open"}
-                  </span>
-                </div>
-                <div style={styles.cardMeta}>
-                  <span style={{ ...styles.badge, borderColor: display.accent }}>
-                    <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
-                    {display.label}
-                  </span>
-                  {filingProfile && <span style={styles.profile}>{filingProfile}</span>}
-                  <span style={styles.date}>{formatDate(run.created_at)}</span>
-                </div>
+                <span style={styles.filename} title={run.pdf_filename}>
+                  {run.pdf_filename}
+                </span>
+                <StatusLabel
+                  state={statusState(run.status)}
+                  symbol={display.symbol}
+                  label={display.label}
+                />
+                {filingProfile && <span style={styles.profile}>{filingProfile}</span>}
+                <span style={styles.date} title={date.exact}>
+                  {date.concise}
+                </span>
+                <span style={styles.action}>{actionLabel}</span>
               </button>
             );
           })}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
 const styles = {
   panel: {
-    ...ui.card,
     display: "flex",
     flexDirection: "column" as const,
-    padding: pwc.space.lg,
-    gap: pwc.space.md,
+    gap: pwc.space.sm,
   } as React.CSSProperties,
   header: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
+    paddingBottom: pwc.space.sm,
   } as React.CSSProperties,
   heading: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey900,
+    ...ui.subsectionTitle,
+    fontSize: 15,
   } as React.CSSProperties,
   viewAll: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.orange500,
+    color: tokens.color.action.primary,
     background: "none",
     border: "none",
     cursor: "pointer",
-    padding: 0,
+    padding: "4px 6px",
+    minHeight: 24,
   } as React.CSSProperties,
+  // Divided work queue: hairline rules between rows, no nested cards.
   list: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    borderTop: `1px solid ${tokens.color.border.subtle}`,
   } as React.CSSProperties,
-  card: {
+  row: {
     width: "100%",
     textAlign: "left" as const,
     fontFamily: pwc.fontBody,
     display: "flex",
-    flexDirection: "column" as const,
-    gap: pwc.space.xs,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    background: pwc.white,
+    alignItems: "center",
+    gap: pwc.space.lg,
+    padding: `10px ${pwc.space.xs}px`,
+    border: "none",
+    borderBottom: `1px solid ${tokens.color.border.subtle}`,
+    background: "transparent",
     cursor: "pointer",
     transition: `background ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
-  } as React.CSSProperties,
-  cardTop: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.sm,
   } as React.CSSProperties,
   filename: {
     fontFamily: pwc.fontBody,
     fontWeight: pwc.weight.medium,
     fontSize: 14,
     color: pwc.grey900,
-    // Long statement filenames truncate rather than wrapping the card to
+    // Long statement filenames truncate rather than wrapping the row to
     // several lines; full name is on the title attribute.
     whiteSpace: "nowrap" as const,
     overflow: "hidden",
     textOverflow: "ellipsis",
     minWidth: 0,
-  } as React.CSSProperties,
-  action: {
-    fontFamily: pwc.fontBody,
-    fontSize: 13,
-    color: pwc.orange500,
-    flexShrink: 0,
-  } as React.CSSProperties,
-  cardMeta: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-  } as React.CSSProperties,
-  badge: {
-    ...ui.badge,
+    flex: "1 1 240px",
   } as React.CSSProperties,
   profile: {
     fontFamily: pwc.fontBody,
     fontSize: 12,
-    color: pwc.grey700,
+    color: tokens.color.text.secondary,
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   date: {
     fontFamily: pwc.fontBody,
     fontSize: 12,
-    color: pwc.grey500,
+    color: tokens.color.text.secondary,
     whiteSpace: "nowrap" as const,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
+  } as React.CSSProperties,
+  action: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    fontWeight: pwc.weight.medium,
+    color: tokens.color.action.primary,
+    flexShrink: 0,
   } as React.CSSProperties,
   placeholder: {
     margin: 0,
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.grey500,
+    color: tokens.color.text.secondary,
   } as React.CSSProperties,
 } as const;

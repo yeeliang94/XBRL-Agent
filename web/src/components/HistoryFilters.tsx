@@ -90,15 +90,18 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
   }, [qLocal]);
 
   return (
-    <div style={styles.row}>
-      <input
-        type="search"
-        placeholder="Search by filename…"
-        value={qLocal}
-        onChange={(e) => setQLocal(e.target.value)}
-        style={styles.input}
-        aria-label="Search by filename"
-      />
+    <div className="quality-toolbar history-filters" style={styles.row}>
+      <label style={styles.label}>
+        <span style={styles.labelText}>Filename</span>
+        <input
+          type="search"
+          placeholder="Search by filename…"
+          value={qLocal}
+          onChange={(e) => setQLocal(e.target.value)}
+          style={styles.input}
+          aria-label="Search by filename"
+        />
+      </label>
 
       <label style={styles.label}>
         <span style={styles.labelText}>Status</span>
@@ -177,8 +180,11 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
       </label>
 
       <div style={styles.actions}>
+        {/* Live region stays mounted so filter changes keep announcing, but
+            renders nothing when no filters are applied (design-consistency
+            plan CS3: the "No filters applied" message was visual noise). */}
         <span role="status" aria-live="polite" style={styles.activeCount}>
-          {activeCount === 0 ? "No filters applied" : `${activeCount} filter${activeCount === 1 ? "" : "s"} applied`}
+          {activeCount === 0 ? "" : `${activeCount} filter${activeCount === 1 ? "" : "s"} applied`}
         </span>
         {activeCount > 0 && (
           <button
@@ -201,18 +207,14 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
 
 const styles = {
   row: {
+    ...ui.filterToolbar,
     position: "sticky" as const,
     top: 0,
     zIndex: 5,
-    display: "flex",
-    alignItems: "flex-end",
-    gap: pwc.space.xl,
-    flexWrap: "wrap" as const,
-    padding: pwc.space.xl,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.lg,
-    boxShadow: pwc.shadow.card,
+    borderRadius: pwc.radius.md,
   } as React.CSSProperties,
   actions: {
     display: "flex",

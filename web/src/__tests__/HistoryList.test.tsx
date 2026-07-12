@@ -186,6 +186,64 @@ describe("HistoryList", () => {
     expect(screen.getByRole("link", { name: "ACME-2023.pdf" }).getAttribute("href")).toBe("/history/2");
   });
 
+
+  // ---------------------------------------------------------------------------
+  // Design-consistency plan (CS3): monochrome status, visible row actions,
+  // conditional Score column.
+  // ---------------------------------------------------------------------------
+
+  test("status is a neutral symbol + explicit label, no coloured pill", () => {
+    render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
+    const completed = screen.getByText("Completed");
+    const symbol = completed.parentElement!.querySelector('[aria-hidden="true"]');
+    expect(symbol?.textContent).toBe("\u2713");
+    // grey700 symbol — never a status hue.
+    expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
+    const failed = screen.getByText("Failed");
+    expect(failed.parentElement!.querySelector('[aria-hidden="true"]')?.textContent).toBe("\u00d7");
+  });
+
+  test("each row shows a visible action that activates once", () => {
+    const onRunSelected = vi.fn();
+    render(<HistoryList runs={makeRuns()} onRunSelected={onRunSelected} />);
+    const open = screen.getAllByRole("link", { name: "Open" })[0];
+    fireEvent.click(open);
+    // stopPropagation keeps the row's own click handler from double-firing.
+    expect(onRunSelected).toHaveBeenCalledTimes(1);
+    expect(onRunSelected).toHaveBeenCalledWith(1);
+  });
+
+  test("draft rows offer 'Continue setup'; flagged runs offer 'Review'", () => {
+    const runs = makeRuns();
+    runs[0] = { ...runs[0], status: "draft" };
+    runs[1] = { ...runs[1], status: "completed_with_errors" };
+    const onResumeDraft = vi.fn();
+    render(
+      <HistoryList runs={runs} onRunSelected={() => {}} onResumeDraft={onResumeDraft} />,
+    );
+    fireEvent.click(screen.getByRole("link", { name: "Continue setup" }));
+    expect(onResumeDraft).toHaveBeenCalledWith(1);
+    expect(screen.getByRole("link", { name: "Review" })).toBeInTheDocument();
+  });
+
+  test("Score column renders only when loaded rows carry scores", () => {
+    const { rerender } = render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
+    expect(screen.queryByText("Score")).toBeNull();
+    const scored = makeRuns().map((r) =>
+      r.id === 1 ? { ...r, eval_score: 0.87, benchmark_id: 3 } : r,
+    );
+    rerender(<HistoryList runs={scored} onRunSelected={() => {}} />);
+    expect(screen.getByText("Score")).toBeInTheDocument();
+    expect(screen.getByTestId("history-score-1").textContent).toBe("87%");
+  });
+
+  test("concise date with the exact timestamp as supplementary title", () => {
+    render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
+    const d = new Date("2026-04-10T09:30:00Z");
+    const concise = screen.getAllByTitle(d.toLocaleString())[0];
+    expect(concise.textContent).toBe(d.toLocaleDateString());
+  });
+
   test("does not render models in the list row", () => {
     const runs: RunSummaryJson[] = [
       {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
 import { HistoryFilters } from "../components/HistoryFilters";
@@ -372,7 +372,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
   // branch — no manual sessionStorage dance needed for the common case.
   if (selectedId != null) {
     return (
-      <div style={styles.container}>
+      <div style={styles.detailContainer}>
         {regenStatus === "running" && (
           <div role="status" style={styles.regenBanner}>
             Regenerating notes — this usually takes 30-60 seconds. You
@@ -426,9 +426,9 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
         <p role="status" style={styles.resultCount} data-testid="history-result-count">
           {total === 0
             ? "No runs yet"
-            : `${total} run${total === 1 ? "" : "s"}${
-                runs.length < total ? ` · ${runs.length} loaded` : ""
-              }`}
+            : runs.length < total
+            ? `Showing ${runs.length} of ${total} runs`
+            : `${total} run${total === 1 ? "" : "s"}`}
         </p>
       )}
       <HistoryList
@@ -491,10 +491,18 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
 }
 
 const styles = {
+  // Wide-list mode: the Runs table earns 1440px; the selected run detail
+  // (detailContainer) stays unconstrained workspace width.
   container: {
+    ...ui.pageWide,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xxl,
+    gap: pwc.space.lg,
+  } as React.CSSProperties,
+  detailContainer: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.lg,
   } as React.CSSProperties,
   regenBanner: {
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
@@ -515,9 +523,10 @@ const styles = {
     fontSize: 13,
   } as React.CSSProperties,
   loadMoreBtn: {
-    ...ui.buttonGhost,
-    marginTop: pwc.space.md,
+    ...ui.buttonQuiet,
+    marginTop: 0,
     width: "100%",
+    color: tokens.color.action.primary,
   } as React.CSSProperties,
   loadMoreError: {
     marginTop: pwc.space.sm,
@@ -531,13 +540,13 @@ const styles = {
     fontSize: 13,
   } as React.CSSProperties,
   resultCount: {
-    margin: `${pwc.space.xs}px 0`,
+    margin: `0 0 -${pwc.space.sm}px`,
     color: pwc.grey700,
     fontFamily: pwc.fontBody,
     fontSize: 13,
   } as React.CSSProperties,
   draftsSection: {
-    marginTop: pwc.space.lg,
+    marginTop: 0,
   } as React.CSSProperties,
   draftsSummary: {
     cursor: "pointer",
