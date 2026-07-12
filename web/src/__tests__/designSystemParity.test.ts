@@ -173,7 +173,7 @@ describe("tab geometry", () => {
   test("shared underline tab carries dark active text + orange indicator", () => {
     expect(ui.tab.color).toBe(pwc.grey700);
     expect(ui.tabActive.color).toBe(pwc.grey900);
-    expect(ui.tabActive.borderBottomColor).toBe(pwc.orange500);
+    expect(ui.tabActive.borderBottom).toBe(`2px solid ${pwc.orange500}`);
     expect(ui.tabBar.borderBottom).toBe(`1px solid ${pwc.grey200}`);
   });
 });

@@ -79,7 +79,9 @@ describe("ui.tab — shared underline tab", () => {
     expect(ui.tab.padding).toBe("8px 16px");
     expect(ui.tab.borderBottom).toBe("2px solid transparent");
     expect(ui.tab.marginBottom).toBe(-1);
-    expect(ui.tabActive.borderBottomColor).toBe(pwc.orange500);
+    // Full shorthand on purpose — a longhand override leaves a stale solid
+    // border behind when React removes it on deactivation.
+    expect(ui.tabActive.borderBottom).toBe(`2px solid ${pwc.orange500}`);
     expect(uiClass.tab).toBe("pwc-tab");
   });
 });
