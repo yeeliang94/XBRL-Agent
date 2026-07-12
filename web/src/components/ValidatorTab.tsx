@@ -34,7 +34,7 @@ const STATUS_DISPLAY: Record<
   { label: string; symbol: string }
 > = {
   passed: { label: "Passed", symbol: STATUS_SYMBOLS.success },
-  failed: { label: "Failed", symbol: STATUS_SYMBOLS.attention },
+  failed: { label: "Failed", symbol: STATUS_SYMBOLS.failure },
   // Advisory only (Phase 6.1 notes-consistency).
   warning: { label: "Warning", symbol: STATUS_SYMBOLS.attention },
   pending: { label: "Pending", symbol: STATUS_SYMBOLS.inProgress },

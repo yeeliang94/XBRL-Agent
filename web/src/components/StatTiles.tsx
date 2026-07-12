@@ -87,12 +87,10 @@ export function StatTiles({
 }
 
 const styles = {
-  // Column counts come from the `stat-tiles` class (index.css): four columns
-  // on desktop, two on tablet, one on narrow screens — an intentional
-  // composition instead of auto-fit guesswork.
-  grid: {
-    gap: pwc.space.md,
-  } as React.CSSProperties,
+  // Layout (grid columns AND gap) lives entirely on the `stat-tiles` class in
+  // index.css — responsive composition is a state hook, and keeping the gap
+  // there too avoids a second source of truth.
+  grid: {} as React.CSSProperties,
   tile: {
     ...ui.statTile,
     display: "flex",
