@@ -49,7 +49,7 @@ describe("UploadPanel — P1 enhancements", () => {
     expect(screen.queryByText("00:00")).not.toBeInTheDocument();
   });
 
-  test("upload button uses PwC orange500 background", () => {
+  test("upload button uses the accessible primary-action background", () => {
     render(
       <UploadPanel
         onUpload={noop}
@@ -60,8 +60,9 @@ describe("UploadPanel — P1 enhancements", () => {
       />,
     );
     const button = screen.getByText("Choose file");
-    // jsdom converts hex #FD5108 to rgb
-    expect(button.style.backgroundColor).toBe("rgb(253, 81, 8)");
+    // jsdom converts hex to rgb — color.action.primary #C63D00 (design
+    // system v3: signature orange is identity, not a button fill).
+    expect(button.style.backgroundColor).toBe("rgb(198, 61, 0)");
   });
 
   test("accepts a .docx file (converted server-side) and calls onUpload", async () => {

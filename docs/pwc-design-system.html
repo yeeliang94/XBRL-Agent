@@ -3,35 +3,44 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>XBRL Agent — Design System</title>
+<title>XBRL Agent — Application Design System</title>
 <style>
   /* =========================================================
-     XBRL AGENT — APPLICATION DESIGN SYSTEM
+     XBRL AGENT — APPLICATION DESIGN SYSTEM (v3 · production)
      -----------------------------------------------------------
-     This document is the behavioural and visual specification for the web
-     UI. Production values are implemented in:
+     The behavioural and visual specification for the web UI. The
+     production implementation owners are:
 
-         web/src/lib/theme.ts      → the `pwc` token object
+         web/src/lib/theme.ts      → `pwc` global tokens + the `tokens` /
+                                     `component` semantic layers
          web/src/lib/uiStyles.ts   → the `ui` / `uiClass` primitives
-         web/src/index.css         → hover / focus / scrollbar rules
+         web/src/index.css         → hover / focus / responsive state hooks
 
      The CSS custom properties below exist ONLY to render this
      document. They are NOT used by the app — the app has no CSS
      variables (gotcha #7: inline styles only). Each property is
-     named to match its `pwc.*` token so the vocabulary is shared.
+     named to express the global, semantic, and component layers.
 
-     EDITING THIS DOC: specification, production implementation, and parity
-     tests move together. The Token Map at the bottom names each owner.
+     LOCKSTEP RULE: when a shared design rule or token changes, the
+     specification, the production implementation, and the parity tests
+     move in ONE change set. The Token Map at the bottom names each owner.
      ========================================================= */
   :root {
     /* ---- Brand orange (pwc.orange*) ---- */
-    --orange-500: #FD5108;   /* core · Pantone 1655C · primary accent, active, links */
+    --orange-500: #FD5108;   /* signature brand accent · marks, rules, progress, indicators */
     --orange-700: #E0470A;   /* hover / pressed */
     --orange-400: #FE7C39;   /* progress bars, active indicators */
     --orange-300: #FFAA72;
     --orange-200: #FFCDA8;
     --orange-100: #FFE8D4;   /* highlighted-content backgrounds */
     --orange-50:  #FFF5ED;   /* hover bg, focus ring, soft fill */
+
+    /* ---- Semantic action colours. Brand orange remains the identity colour;
+            interactive foregrounds use darker, independently accessible roles. ---- */
+    --action-primary: #C63D00;       /* 5.16:1 with white */
+    --action-primary-hover: #A83A00; /* 6.42:1 with white */
+    --action-quiet-hover: #FFF5ED;
+    --focus-strong: #1A1A1A;
 
     --black: #000000;
     --white: #FFFFFF;
@@ -64,7 +73,7 @@
     --warning-text: #8A6111;  --info-text:  #2C6299;
 
     /* ---- Soft tints — RESERVED for rare emphasis (e.g. highlighting one
-            reconciliation row), NOT the default surface for badges/alerts.
+            reconciliation row), NOT the default surface for status/alerts.
             Light + airy versions of the hues above. ---- */
     --success-bg: #E8F6EF;  --success-border: #C8E9DA;
     --error-bg:   #FCECEC;  --error-border:   #F6D5D6;
@@ -78,8 +87,10 @@
     --border-strong: var(--grey-300);
     --text: var(--grey-900);
     --text-body: var(--grey-800);
-    --text-muted: var(--grey-500);
+    --text-muted: var(--grey-700);
     --text-label: var(--grey-700);
+    --text-placeholder: var(--grey-700);
+    --control-border: var(--grey-500);
 
     /* ---- Typography (pwc.font* / pwc.weight) ---- */
     --font-sans: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
@@ -87,23 +98,28 @@
     --fw-light: 300; --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600;
 
     /* ---- Radius (pwc.radius) ---- */
-    --r-sm: 3px; --r-md: 6px; --r-lg: 10px; --r-pill: 999px;
+    --r-sm: 3px; --r-md: 6px; --r-lg: 8px; --r-xl: 10px; --r-pill: 999px;
 
     /* ---- Spacing (pwc.space — 4px base) ---- */
     --s-xs: 4px;  --s-sm: 8px;  --s-md: 12px; --s-lg: 16px;
     --s-xl: 24px; --s-xxl: 32px; --s-xxxl: 48px; --s-xxxxl: 64px;
 
     /* ---- Elevation (pwc.shadow) ---- */
-    --shadow-card:     0 1px 2px rgba(26,26,25,.04), 0 1px 3px rgba(26,26,25,.06);
+    --shadow-card:     none;
     --shadow-elevated: 0 2px 4px rgba(26,26,25,.04), 0 4px 12px rgba(26,26,25,.07);
     --shadow-modal:    0 8px 28px rgba(26,26,25,.10);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  :where(button, a, summary):focus-visible {
+    outline: 2px solid var(--white);
+    outline-offset: 1px;
+    box-shadow: 0 0 0 4px var(--focus-strong);
+  }
   html { scroll-behavior: smooth; background: var(--bg); }
   body {
     font-family: var(--font-sans); font-weight: var(--fw-regular);
-    color: var(--text-body); background: var(--bg); line-height: 1.6;
+    color: var(--text-body); background: var(--bg); line-height: 1.55;
     -webkit-font-smoothing: antialiased; font-size: 15px;
   }
 
@@ -133,14 +149,19 @@
   .nav-group h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: var(--fw-semibold); padding: 0 var(--s-xl) var(--s-sm); }
   .nav-group a { display: block; padding: 7px var(--s-xl); color: var(--text-muted); text-decoration: none; font-size: 14px; border-left: 2px solid transparent; transition: color .15s ease, background .15s ease, border-color .15s ease; }
   .nav-group a:hover { color: var(--text); background: var(--grey-50); }
-  .nav-group a.active { color: var(--orange-500); border-left-color: var(--orange-500); font-weight: var(--fw-medium); }
+  .nav-group a.active { color: var(--action-primary); border-left-color: var(--orange-500); font-weight: var(--fw-medium); }
 
-  .main { flex: 1; max-width: 1040px; padding: var(--s-xxxl) var(--s-xxxxl); }
-  @media (max-width: 900px){ .sidebar{ display:none; } .main{ padding: var(--s-xl); } }
+  .main { flex: 1; min-width:0; max-width: 1040px; padding: var(--s-xxxl) var(--s-xxxxl); }
+  .mobile-index { display:none; }
+  @media (max-width: 900px){
+    .sidebar{ display:none; }
+    .main{ width:100%; max-width:none; padding:var(--s-xl); }
+    .mobile-index{ display:block; margin-bottom:var(--s-xl); }
+  }
 
   /* ---------- Page header ---------- */
   .page-head { padding-bottom: var(--s-xl); margin-bottom: var(--s-xxxl); border-bottom: 1px solid var(--border); }
-  .page-head .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--orange-500); font-weight: var(--fw-semibold); margin-bottom: var(--s-md); }
+  .page-head .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--action-primary); font-weight: var(--fw-semibold); margin-bottom: var(--s-md); }
   .page-head h1 { font-size: 28px; font-weight: var(--fw-semibold); letter-spacing: -.3px; line-height: 1.2; margin-bottom: var(--s-lg); color: var(--text); }
   .page-head p { font-size: 16px; color: var(--text-muted); max-width: 66ch; font-weight: var(--fw-regular); }
 
@@ -160,7 +181,7 @@
   /* Numbered rule list + neutral note share one inset family. */
   .rules { display: grid; gap: var(--s-sm); }
   .rule-item { display: flex; gap: var(--s-md); align-items: flex-start; padding: var(--s-md) var(--s-lg); background: var(--grey-50); border: 1px solid var(--border); border-radius: var(--r-md); }
-  .rule-item .num { font-family: var(--font-mono); font-size: 12px; color: var(--orange-500); font-weight: var(--fw-semibold); flex-shrink: 0; min-width: 18px; }
+  .rule-item .num { font-family: var(--font-mono); font-size: 12px; color: var(--action-primary); font-weight: var(--fw-semibold); flex-shrink: 0; min-width: 18px; }
   .rule-item .txt { font-size: 14px; color: var(--text-body); }
   .rule-item .txt strong { font-weight: var(--fw-semibold); color: var(--text); }
 
@@ -183,7 +204,7 @@
   .swatch .chip { height: 60px; }
   .swatch .meta { padding: var(--s-md); }
   .swatch .name { font-size: 13px; font-weight: var(--fw-medium); color: var(--text); }
-  .swatch .tok { font-size: 12px; color: var(--orange-700); font-family: var(--font-mono); margin-top: 3px; }
+  .swatch .tok { font-size: 12px; color: var(--action-primary); font-family: var(--font-mono); margin-top: 3px; }
   .swatch .hex { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 1px; }
   .scale-strip { display: flex; border-radius: var(--r-lg); overflow: hidden; border: 1px solid var(--border); }
   .scale-strip .cell { flex: 1; height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 1px; padding-bottom: 6px; font-size: 10px; font-weight: var(--fw-medium); font-family: var(--font-mono); }
@@ -198,31 +219,29 @@
   .t-body    { font-size: 15px; font-weight: var(--fw-regular); color: var(--text-body); }
   .t-strong  { font-size: 15px; font-weight: var(--fw-semibold); color: var(--text); }
   .t-small   { font-size: 13px; font-weight: var(--fw-regular); color: var(--text-muted); }
-  .t-label   { font-size: 11px; font-weight: var(--fw-semibold); text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+  .t-label   { font-size: 11px; font-weight: var(--fw-semibold); letter-spacing: .2px; color: var(--text-muted); }
 
   /* ---------- Buttons (mirror ui.button* + index.css hover) ---------- */
-  .btn { font-family: var(--font-sans); font-size: 15px; font-weight: var(--fw-medium); min-height: 40px; padding: 10px 24px; border-radius: var(--r-lg); border: 1px solid transparent; cursor: pointer; transition: background .15s ease, border-color .15s ease; line-height: 1.2; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
-  .btn-primary { background: var(--orange-500); color: #fff; border-color: var(--orange-500); }
-  .btn-primary:hover { background: var(--orange-700); border-color: var(--orange-700); }
+  .btn { font-family: var(--font-sans); font-size: 15px; font-weight: var(--fw-medium); min-height: 44px; padding: 10px 20px; border-radius: var(--r-md); border: 1px solid transparent; cursor: pointer; transition: background .15s ease, border-color .15s ease; line-height: 1.2; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+  .btn-primary { background: var(--action-primary); color: #fff; border-color: var(--action-primary); }
+  .btn-primary:hover { background: var(--action-primary-hover); border-color: var(--action-primary-hover); }
   .btn-secondary { background: var(--surface); color: var(--grey-900); border-color: var(--border-strong); }
   .btn-secondary:hover { background: var(--grey-50); border-color: var(--grey-300); }
-  .btn-subtle { background: var(--grey-100); color: var(--grey-900); }
-  .btn-subtle:hover { background: var(--grey-200); }
-  .btn-ghost { background: transparent; color: var(--orange-500); }
-  .btn-ghost:hover { background: var(--orange-50); }
-  .btn-danger { background: var(--surface); color: var(--error); border-color: var(--error); }
+  .btn-ghost { background: transparent; color: var(--grey-800); }
+  .btn-ghost:hover { background: var(--grey-100); }
+  .btn-danger { background: var(--surface); color: var(--error-text); border-color: var(--error-text); }
   .btn-danger:hover { background: var(--error-bg); }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
-  .btn-sm { min-height: 36px; padding: 8px 16px; font-size: 14px; }
-  .btn-lg { min-height: 44px; padding: 12px 24px; font-size: 15px; }
+  .btn-sm { min-height: 40px; padding: 8px 14px; font-size: 14px; }
+  .btn-lg { min-height: 48px; padding: 12px 24px; font-size: 15px; }
 
   /* ---------- Form controls (mirror ui.input/select/textarea + index.css focus) ---------- */
   .field { margin-bottom: var(--s-lg); max-width: 360px; }
   .field label { display: block; font-size: 14px; font-weight: var(--fw-medium); color: var(--text-label); margin-bottom: 6px; }
   .field .hint { font-size: 12px; color: var(--text-muted); margin-top: 5px; }
-  .input, .select, .textarea { width: 100%; font-family: inherit; font-size: 15px; line-height: 1.45; min-height: 44px; padding: 11px 16px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--surface); color: var(--grey-900); transition: border-color .15s, box-shadow .15s; }
-  .input:focus, .select:focus, .textarea:focus { outline: none; border-color: var(--orange-500); box-shadow: 0 0 0 3px var(--orange-50); }
-  .input::placeholder { color: var(--grey-300); }
+  .input, .select, .textarea { width: 100%; font-family: inherit; font-size: 15px; line-height: 1.5; min-height: 44px; padding: 10px 14px; border: 1px solid var(--control-border); border-radius: var(--r-md); background: var(--surface); color: var(--grey-900); transition: border-color .15s, box-shadow .15s; }
+  .input:focus, .select:focus, .textarea:focus { outline: 2px solid var(--focus-strong); outline-offset: 1px; border-color: var(--action-primary); box-shadow: 0 0 0 4px var(--orange-50); }
+  .input::placeholder { color: var(--text-placeholder); }
   .textarea { resize: vertical; min-height: 80px; padding: 9px 12px; }
   .input-error { border-color: var(--error); }
   .input-error:focus { box-shadow: 0 0 0 3px var(--error-bg); }
@@ -235,41 +254,29 @@
   .toggle input:checked + .track { background: var(--orange-500); }
   .toggle input:checked + .track::before { transform: translateX(18px); }
 
-  /* ---------- Badges (mirror ui.badge*) ----------
-     Outline pills: transparent fill, a thin status-coloured border + matching
-     dot, neutral label. Lighter on the page than filled chips, and the whole
-     row still reads as one family. */
-  .badge { display: inline-flex; align-items: center; gap: 7px; min-height: 22px; font-size: 12px; font-weight: var(--fw-medium); padding: 3px 11px; border-radius: var(--r-pill); line-height: 1.4; background: transparent; color: var(--grey-800); border: 1px solid var(--grey-300); }
-  .badge .dot { background: var(--grey-500); }
-  .badge-success { border-color: var(--success); }
-  .badge-success .dot { background: var(--success); }
-  .badge-warning { border-color: var(--warning); }
-  .badge-warning .dot { background: var(--warning); }
-  .badge-error   { border-color: var(--error); }
-  .badge-error .dot { background: var(--error); }
-  .badge-info    { border-color: var(--info); }
-  .badge-info .dot { background: var(--info); }
-  .badge-brand   { border-color: var(--orange-500); }
-  .badge-brand .dot { background: var(--orange-500); }
-  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-  .status-inline { display:inline-flex; align-items:center; gap:7px; color:var(--text-body); font-size:13px; }
+  /* ---------- Monochrome status — symbol + explicit text ---------- */
+  .status-preview { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:var(--s-sm) var(--s-xl); }
+  .status-plain { display:inline-flex; align-items:center; gap:7px; color:var(--grey-800); font-size:13px; min-height:24px; }
+  .status-symbol { width:14px; color:var(--grey-700); font-size:13px; font-weight:var(--fw-semibold); text-align:center; }
 
   /* ---------- Cards (mirror ui.card + .pwc-card hover) ---------- */
   .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px,1fr)); gap: var(--s-lg); }
-  .ui-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-xl); box-shadow: var(--shadow-card); transition: box-shadow .2s, transform .2s; }
-  .ui-card:hover { box-shadow: var(--shadow-elevated); transform: translateY(-2px); }
+  .ui-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-xl); box-shadow: none; transition: background .15s, border-color .15s; }
+  .ui-card:hover { background:var(--grey-50); border-color:var(--grey-500); }
   .ui-card-static { transition:none; }
-  .ui-card-static:hover { box-shadow:var(--shadow-card); transform:none; }
+  .ui-card-static:hover { background:var(--surface); border-color:var(--border); }
   .ui-card .k { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 8px; }
-  .ui-card .v { font-size: 30px; font-weight: var(--fw-regular); letter-spacing: -.5px; color: var(--text); }
+  .ui-card .v { font-size: 24px; font-weight: var(--fw-regular); letter-spacing: -.3px; color: var(--text); }
   .ui-card .delta { font-size: 13px; margin-top: 6px; color: var(--success-text); }
   .ui-card .delta.down { color: var(--error-text); }
 
   /* ---------- Table (mirror ui.tableWrap/th/td + .pwc-table-row hover) ---------- */
-  .table-wrap { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+  .table-wrap { border: 1px solid var(--border); border-radius: var(--r-md); overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  thead th { text-align: left; padding: var(--s-lg) var(--s-xl); background: var(--grey-100); font-size: 13px; text-transform: uppercase; letter-spacing: 0; color: var(--grey-500); font-weight: var(--fw-semibold); border-bottom: 1px solid var(--border); }
-  tbody td { padding: var(--s-lg) var(--s-xl); border-bottom: 1px solid var(--border); }
+  thead th { text-align: left; padding: 10px var(--s-lg); background: var(--grey-100); font-size: 13px; letter-spacing: 0; color: var(--grey-700); font-weight: var(--fw-semibold); border-bottom: 1px solid var(--border); white-space:nowrap; }
+  tbody td { padding: 10px var(--s-lg); border-bottom: 1px solid var(--border); }
+  table.dense thead th, table.dense tbody td { padding:6px var(--s-md); }
+  table.comfortable thead th, table.comfortable tbody td { padding:14px var(--s-lg); }
   tbody tr:last-child td { border-bottom: none; }
   tbody tr:hover { background: var(--grey-50); }
 
@@ -289,17 +296,33 @@
   .alert-error .ico { color: var(--error); }
 
   /* ---------- Tabs (mirror TopNav underline tab) ---------- */
-  .tabbar { display: flex; gap: var(--s-sm); border-bottom: 1px solid var(--border); }
+  .tabbar { display: flex; max-width:100%; gap: var(--s-sm); border-bottom: 1px solid var(--border); overflow-x:auto; overscroll-behavior-inline:contain; }
   .tab { padding: 8px 16px; font-size: 15px; font-weight: var(--fw-medium); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; color: var(--grey-700); margin-bottom: -1px; }
   .tab:hover { color: var(--grey-900); }
-  .tab.active { color: var(--orange-500); border-bottom-color: var(--orange-500); }
+  .tab.active { color: var(--grey-900); border-bottom-color: var(--orange-500); }
+  a.tab { text-decoration:none; display:inline-flex; align-items:center; }
+
+  .token-layers { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--s-lg); }
+  .token-layer { border-top:2px solid var(--border); padding-top:var(--s-md); }
+  .token-layer h4 { font-size:14px; color:var(--grey-900); margin-bottom:var(--s-sm); }
+  .token-layer p { font-size:14px; color:var(--grey-700); }
+  .component-checklist { columns:2; column-gap:var(--s-xxl); }
+  .component-checklist li { break-inside:avoid; margin-bottom:var(--s-sm); }
+  @media (max-width:700px){
+    .token-layers{grid-template-columns:1fr;}
+    .component-checklist{columns:1;}
+    .form-demo-grid{grid-template-columns:1fr !important;}
+    .type-row{align-items:flex-start; flex-direction:column; gap:var(--s-xs);}
+    .type-row .label{width:auto;}
+    .type-row .spec{margin-left:0;}
+  }
 
   /* ---------- Code ---------- */
   pre { background: var(--grey-900); color: #e8e8e6; border-radius: var(--r-md); padding: var(--s-lg); overflow-x: auto; font-size: 13px; line-height: 1.6; font-family: var(--font-mono); margin-top: var(--s-md); }
   pre .c { color: #8a8a85; }
   pre .p { color: var(--orange-400); }
   pre .s { color: #9ecb8a; }
-  code.inline { background: var(--grey-100); padding: 1px 6px; border-radius: var(--r-sm); font-family: var(--font-mono); font-size: .9em; color: var(--orange-700); }
+  code.inline { background: var(--grey-100); padding: 1px 6px; border-radius: var(--r-sm); font-family: var(--font-mono); font-size: .9em; color: var(--action-primary); }
 
   /* ---------- Spacing / radius / elevation visuals ---------- */
   .space-demo { display: flex; align-items: flex-end; gap: var(--s-lg); flex-wrap: wrap; }
@@ -313,7 +336,7 @@
 
   /* ---------- Token map table ---------- */
   .map-table td, .map-table th { font-size: 13px; }
-  .map-table td code { font-family: var(--font-mono); font-size: 12px; color: var(--orange-700); }
+  .map-table td code { font-family: var(--font-mono); font-size: 12px; color: var(--action-primary); }
 
   footer { margin-top: var(--s-xxxxl); padding-top: var(--s-xl); border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
 </style>
@@ -343,6 +366,7 @@
     <nav class="nav-group">
       <h4>Foundations</h4>
       <a href="#color">Color</a>
+      <a href="#semantic-tokens">Semantic tokens</a>
       <a href="#typography">Typography</a>
       <a href="#spacing">Spacing &amp; radius</a>
       <a href="#elevation">Elevation</a>
@@ -353,7 +377,7 @@
       <h4>Components</h4>
       <a href="#buttons">Buttons</a>
       <a href="#forms">Form controls</a>
-      <a href="#badges">Badges &amp; status</a>
+      <a href="#badges">Status</a>
       <a href="#cards">Cards</a>
       <a href="#table">Tables</a>
       <a href="#financial">Financial data</a>
@@ -364,6 +388,9 @@
       <h4>Reference</h4>
       <a href="#a11y">Accessibility</a>
       <a href="#content">Content &amp; states</a>
+      <a href="#component-standard">Component standard</a>
+      <a href="#benchmarks">External benchmarks</a>
+      <a href="#adoption">Page adoption</a>
       <a href="#tokenmap">Token map (doc ↔ code)</a>
     </nav>
   </aside>
@@ -371,10 +398,15 @@
   <!-- ================= MAIN ================= -->
   <main class="main">
 
+    <details class="mobile-index note-box">
+      <summary><strong>On this page</strong></summary>
+      <p style="margin-top:var(--s-sm)"><a href="#principles">Principles</a> · <a href="#color">Color</a> · <a href="#semantic-tokens">Tokens</a> · <a href="#typography">Type</a> · <a href="#layouts">Layouts</a> · <a href="#buttons">Components</a> · <a href="#a11y">Accessibility</a></p>
+    </details>
+
     <header class="page-head">
       <div class="eyebrow">Application UI Standards</div>
-      <h1>XBRL Agent Design System</h1>
-      <p>The behavioural and visual specification for the web UI. Built on PwC's black-and-orange brand foundation — restrained typography, light surfaces, disciplined accent use. Production values live in <code class="inline">web/src/lib/theme.ts</code>, <code class="inline">web/src/lib/uiStyles.ts</code>, and <code class="inline">web/src/index.css</code>; parity tests keep specification and implementation aligned.</p>
+      <h1>XBRL Agent Design System v3</h1>
+      <p>The behavioural and visual specification for the web UI. It keeps the PwC black-and-orange identity while strengthening accessibility, semantic hierarchy, financial-data density, responsive behaviour, and component governance.</p>
     </header>
 
     <!-- OVERVIEW -->
@@ -382,10 +414,10 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Overview</h2>
-        <p>This document has two jobs: define the visual language (<em>Foundations</em> + <em>Components</em>), and tell AI developers exactly how to use it in this codebase. Because the app forbids CSS frameworks (gotcha #7), the components here are documented with the <strong>inline-style + token-object pattern the app actually uses</strong>, not CSS classes.</p>
+        <p>This document defines the visual language, task behaviour, responsive expectations, accessibility floor, and governance model for the application. It is deliberately optimized for evidence-led financial work rather than a generic SaaS dashboard.</p>
       </div>
       <div class="note-box">
-        <strong>Governance:</strong> this document owns behavioural and visual rules; <code class="inline">theme.ts</code>, <code class="inline">uiStyles.ts</code>, and <code class="inline">index.css</code> own production implementation; tests own parity. A rule or value change updates all three layers in one change set. The CSS variables here exist only to render this reference.
+        <strong>Governance:</strong> decisions begin here, flow through semantic tokens and component primitives, and end in tested product behaviour. Accessibility and responsive behaviour are part of every component contract, not a final polish pass. The CSS variables here exist only to render this document.
       </div>
     </section>
 
@@ -398,15 +430,15 @@
       </div>
       <div class="rules">
         <div class="rule-item"><span class="num">01</span><span class="txt"><strong>Inline values; narrow state hooks.</strong> Layout, colour, type, spacing, and geometry use inline <code class="inline">style={{…}}</code> objects. Do not use Tailwind or a class-based utility system. A shared <code class="inline">uiClass.*</code> hook is allowed only for hover, focus, animation, editor styling, or another state inline styles cannot express.</span></div>
-        <div class="rule-item"><span class="num">02</span><span class="txt"><strong>Tokens, never literals.</strong> Import <code class="inline">{ pwc }</code> from <code class="inline">lib/theme</code> and reference <code class="inline">pwc.orange500</code>, <code class="inline">pwc.grey200</code>, etc. Never hard-code a hex, px radius, or font stack.</span></div>
+        <div class="rule-item"><span class="num">02</span><span class="txt"><strong>Choose meaning, not a hue.</strong> Components consume semantic roles such as primary action, muted text, subtle border, and success icon. Raw palette tokens are implementation ingredients, not component decisions.</span></div>
         <div class="rule-item"><span class="num">03</span><span class="txt"><strong>Reuse the primitives.</strong> Spread <code class="inline">ui.buttonPrimary</code>, <code class="inline">ui.card</code>, <code class="inline">ui.input</code>… from <code class="inline">lib/uiStyles</code> instead of rebuilding a button. Extend with a spread, don't fork.</span></div>
         <div class="rule-item"><span class="num">04</span><span class="txt"><strong>Hover/focus needs a class hook.</strong> Inline styles can't express <code class="inline">:hover</code>. Add the matching <code class="inline">uiClass.*</code> (e.g. <code class="inline">className={uiClass.btnPrimary}</code>) so the rule in <code class="inline">index.css</code> applies. Form-control focus rings are global — no class needed.</span></div>
-        <div class="rule-item"><span class="num">05</span><span class="txt"><strong>One primary action per view.</strong> Orange marks the single most important action or status. Everything else is neutral. Orange is never decoration.</span></div>
+        <div class="rule-item"><span class="num">05</span><span class="txt"><strong>One dominant action per decision region.</strong> A page may contain several workflows, but locally competing primary actions are not allowed. Brand orange supports identity and indication; accessible action roles carry interactive text and fills.</span></div>
         <div class="rule-item"><span class="num">06</span><span class="txt"><strong>Status colour is functional, not brand.</strong> Use success/error/warning/info only for state, and apply it as an accent — dot, icon, left-border, or dark text — on a neutral surface. Avoid coloured fills; reserve the soft-tint tokens for rare emphasis.</span></div>
-        <div class="rule-item"><span class="num">07</span><span class="txt"><strong>Stay on the scale.</strong> Spacing from <code class="inline">pwc.space</code> (4px base), radius from <code class="inline">pwc.radius</code>, shadow from <code class="inline">pwc.shadow</code>. No arbitrary values.</span></div>
-        <div class="rule-item"><span class="num">08</span><span class="txt"><strong>Two text weights.</strong> Regular 400 + Semibold 600 carry all text (Medium 500 only on controls). No Light 300 — it reads as a different typeface — and never 700+. Hierarchy comes from size, not a wide weight range.</span></div>
+        <div class="rule-item"><span class="num">07</span><span class="txt"><strong>Stay on the scale and use its roles.</strong> A 4px base underpins spacing, but page, section, field, toolbar, and table-density roles determine which step is appropriate.</span></div>
+        <div class="rule-item"><span class="num">08</span><span class="txt"><strong>Compact, readable type.</strong> Regular 400 + Semibold 600 carry product text; Medium 500 is reserved for controls. Normal UI copy is 15px, supporting and data text is 13–14px, and 11px labels remain short, high-contrast, and exceptional.</span></div>
         <div class="rule-item"><span class="num">09</span><span class="txt"><strong>Evidence before AI plumbing.</strong> Financial data, checks, source evidence, and filing state lead. Models, agents, tokens, and tool calls live in advanced or activity views.</span></div>
-        <div class="rule-item"><span class="num">10</span><span class="txt"><strong>Choose the lightest structure.</strong> Use alignment, type, spacing, and dividers before adding a bordered group or card. Elevation signals interactivity, not decoration.</span></div>
+        <div class="rule-item"><span class="num">10</span><span class="txt"><strong>Choose the lightest structure.</strong> Use alignment, type, spacing, and dividers before adding a bordered group or card. Static surfaces stay flat; elevation is reserved for overlap.</span></div>
       </div>
     </section>
 
@@ -419,8 +451,8 @@
       </div>
       <div class="panel">
         <h3 class="sub-label">A button</h3>
-        <pre><span class="c">// import the token object + the shared primitives</span>
-<span class="p">import</span> { pwc } <span class="p">from</span> <span class="s">"../lib/theme"</span>;
+        <pre><span class="c">// import semantic tokens + shared component primitives</span>
+<span class="p">import</span> { tokens } <span class="p">from</span> <span class="s">"../lib/theme"</span>;
 <span class="p">import</span> { ui, uiClass } <span class="p">from</span> <span class="s">"../lib/uiStyles"</span>;
 
 <span class="c">// spread the variant; add the uiClass for the hover rule in index.css</span>
@@ -432,18 +464,17 @@
 &lt;button style={{ ...ui.buttonSecondary, ...ui.buttonSm }} className={uiClass.btnSecondary}&gt;
   Cancel
 &lt;/button&gt;</pre>
-        <h3 class="sub-label">A one-off element from raw tokens</h3>
-        <pre><span class="c">// when no primitive fits, build inline from pwc.* — never literals</span>
+        <h3 class="sub-label">A one-off element from semantic roles</h3>
+        <pre><span class="c">// when no primitive fits, compose by purpose — never visual resemblance</span>
 &lt;div style={{
-  padding: pwc.space.lg,
-  background: pwc.white,
-  border: <span class="s">`1px solid ${pwc.grey200}`</span>,
-  borderRadius: pwc.radius.lg,
-  boxShadow: pwc.shadow.card,
-  color: pwc.grey900,
+  padding: tokens.space.inset,
+  background: tokens.surface.default,
+  border: <span class="s">`1px solid ${tokens.color.border.subtle}`</span>,
+  borderRadius: tokens.radius.panel,
+  color: tokens.color.text.primary,
 }}&gt;…&lt;/div&gt;</pre>
         <div class="do-dont">
-          <div class="dd good"><div class="h">Do</div><p><code class="inline">background: pwc.orange500</code> · spread <code class="inline">ui.card</code> · add <code class="inline">uiClass.card</code> for the hover lift.</p></div>
+          <div class="dd good"><div class="h">Do</div><p>Choose <code class="inline">color.action.primary</code> for a primary action · spread <code class="inline">ui.card</code> for a distinct object · add an interaction hook only when the object is navigable.</p></div>
           <div class="dd bad"><div class="h">Don't</div><p><code class="inline">className="bg-orange-500"</code> · <code class="inline">style={{background:'#FD5108'}}</code> · re-deriving a button's padding by hand.</p></div>
         </div>
       </div>
@@ -454,14 +485,14 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Design principles</h2>
-        <p>Four ideas behind every decision.</p>
+        <p>Six ideas behind every decision.</p>
       </div>
       <div class="principle-grid">
         <div class="principle"><h4>Evidence first</h4><p>Financial data and its source are the primary visual objects. AI plumbing stays backstage.</p></div>
         <div class="principle"><h4>Light &amp; open</h4><p>White surfaces, soft borders, generous spacing. Weight comes from space, not heavy fills.</p></div>
         <div class="principle"><h4>Restrained type</h4><p>Two weights — regular and semibold — carry the interface. Size, not many weights, creates hierarchy.</p></div>
-        <div class="principle"><h4>Orange with intent</h4><p>The signature orange marks the single most important action or status in a view — never decoration.</p></div>
-        <div class="principle"><h4>Quietly consistent</h4><p>One radius scale, one spacing rhythm, one shadow family. Predictability is the feature.</p></div>
+        <div class="principle"><h4>Orange with intent</h4><p>Signature orange expresses identity and indication; accessible semantic roles carry actions and readable status text.</p></div>
+        <div class="principle"><h4>Quietly consistent</h4><p>One compact type rhythm, one spacing system, restrained radii, and flat surfaces. Predictability is the feature.</p></div>
         <div class="principle"><h4>Density follows the task</h4><p>Setup flows breathe; review tables stay compact, aligned, and precise.</p></div>
       </div>
     </section>
@@ -471,18 +502,18 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Color</h2>
-        <p>Orange leads as the single signature accent. White carries backgrounds; greys handle structure. The status hues are a muted, warm-neutral family that sits quietly beside the orange — applied as dots, icons, left-borders and dark text, not as coloured fills.</p>
+        <p>Orange is the signature brand accent. White and neutral greys carry the working interface; clean functional hues communicate state sparingly. Brand identity, interactive contrast, and status meaning are separate token roles even when they appear visually related.</p>
       </div>
 
       <h3 class="sub-label">Brand orange — <code class="inline">pwc.orange*</code></h3>
       <div class="swatch-grid">
         <div class="swatch"><div class="chip" style="background:var(--orange-500)"></div><div class="meta"><div class="name">Core</div><div class="tok">orange500</div><div class="hex">#FD5108 · PMS 1655C</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--orange-700)"></div><div class="meta"><div class="name">Hover / pressed</div><div class="tok">orange700</div><div class="hex">#E0470A</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--orange-700)"></div><div class="meta"><div class="name">Dark brand shade</div><div class="tok">orange700</div><div class="hex">#E0470A</div></div></div>
         <div class="swatch"><div class="chip" style="background:var(--orange-400)"></div><div class="meta"><div class="name">Active indicator</div><div class="tok">orange400</div><div class="hex">#FE7C39</div></div></div>
         <div class="swatch"><div class="chip" style="background:var(--orange-300)"></div><div class="meta"><div class="name">Tint</div><div class="tok">orange300</div><div class="hex">#FFAA72</div></div></div>
         <div class="swatch"><div class="chip" style="background:var(--orange-200)"></div><div class="meta"><div class="name">Tint</div><div class="tok">orange200</div><div class="hex">#FFCDA8</div></div></div>
         <div class="swatch"><div class="chip" style="background:var(--orange-100)"></div><div class="meta"><div class="name">Highlight bg</div><div class="tok">orange100</div><div class="hex">#FFE8D4</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--orange-50); border-bottom:1px solid var(--border)"></div><div class="meta"><div class="name">Soft / focus ring</div><div class="tok">orange50</div><div class="hex">#FFF5ED</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--orange-50); border-bottom:1px solid var(--border)"></div><div class="meta"><div class="name">Soft brand tint</div><div class="tok">orange50</div><div class="hex">#FFF5ED</div></div></div>
       </div>
 
       <h3 class="sub-label">Core neutrals</h3>
@@ -502,20 +533,42 @@
         <div class="cell" style="background:var(--grey-800); color:#fff"><span>grey800</span><span>2D2D2D</span></div>
         <div class="cell" style="background:var(--grey-900); color:#fff"><span>grey900</span><span>1A1A1A</span></div>
       </div>
-      <div class="note-box"><strong>Role map:</strong> page bg = <code class="inline">grey50</code> · card/header bg = <code class="inline">grey100</code> · border = <code class="inline">grey200</code> · strong/control border = <code class="inline">grey300</code> · muted text = <code class="inline">grey500</code> · field label = <code class="inline">grey700</code> · body text = <code class="inline">grey800</code> · headings = <code class="inline">grey900</code>.</div>
+      <div class="note-box"><strong>Role map:</strong> page bg = <code class="inline">grey50</code> · inset/header bg = <code class="inline">grey100</code> · subtle border = <code class="inline">grey200</code> · control border = <code class="inline">grey500</code> · secondary text = <code class="inline">grey700</code> · body text = <code class="inline">grey800</code> · headings = <code class="inline">grey900</code>. Grey300 remains decorative or disabled only.</div>
 
-      <h3 class="sub-label">Status — base hues <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--grey-500)">(dots · icons · left-borders)</span></h3>
+      <h3 class="sub-label">Accessible interaction roles</h3>
+      <div class="swatch-grid">
+        <div class="swatch"><div class="chip" style="background:var(--orange-500)"></div><div class="meta"><div class="name">Brand accent</div><div class="tok">color.brand.accent</div><div class="hex">#FD5108 · marks, rules, indicators</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--action-primary)"></div><div class="meta"><div class="name">Primary action</div><div class="tok">color.action.primary</div><div class="hex">#C63D00 · 5.16:1 with white</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--action-primary-hover)"></div><div class="meta"><div class="name">Primary hover</div><div class="tok">color.action.primary.hover</div><div class="hex">#A83A00 · 6.42:1 with white</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--grey-700)"></div><div class="meta"><div class="name">Muted readable text</div><div class="tok">color.text.secondary</div><div class="hex">#5E5E5E · 6.48:1 with white</div></div></div>
+      </div>
+
+      <h3 class="sub-label">Functional hues <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--grey-700)">(alerts · charts · rare exception accents)</span></h3>
       <div class="swatch-grid">
         <div class="swatch"><div class="chip" style="background:var(--success)"></div><div class="meta"><div class="name">Success</div><div class="tok">success</div><div class="hex">#1FAB76</div></div></div>
         <div class="swatch"><div class="chip" style="background:var(--error)"></div><div class="meta"><div class="name">Error</div><div class="tok">error</div><div class="hex">#E5484D</div></div></div>
         <div class="swatch"><div class="chip" style="background:var(--warning)"></div><div class="meta"><div class="name">Warning</div><div class="tok">warning</div><div class="hex">#EFA417</div></div></div>
         <div class="swatch"><div class="chip" style="background:var(--info)"></div><div class="meta"><div class="name">Info</div><div class="tok">info</div><div class="hex">#3E84CC</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--thinking)"></div><div class="meta"><div class="name">Thinking</div><div class="tok">thinking</div><div class="hex">#8B5CF6</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--thinking)"></div><div class="meta"><div class="name">AI activity · technical details only</div><div class="tok">thinking</div><div class="hex">#8B5CF6</div></div></div>
       </div>
 
-      <h3 class="sub-label">Status — applied as accents, not fills</h3>
-      <div class="note-box"><strong>Status colour is an accent, not a surface.</strong> Carry it with a coloured dot, icon, left-border, or dark text on a neutral surface — never a coloured background. This keeps the UI calm and lets the orange stay the loudest colour in any view. Bright base hues drive the small accents — dots, icons, left-borders. The darker <code class="inline">*Text</code> tokens are for the rare bit of coloured status <em>text</em> that needs contrast (card deltas, inline messages, do/don't headers) — <code class="inline">successText #157A53</code> · <code class="inline">errorText #C0303A</code> · <code class="inline">warningText #8A6111</code> · <code class="inline">infoText #2C6299</code>. Badge labels stay neutral.</div>
-      <div class="note-box"><strong>Soft tints still exist, but are reserved for rare emphasis</strong> (e.g. highlighting one reconciliation row) and are intentionally desaturated — close to neutral, not vivid. They are no longer the default surface for badges or alerts.</div>
+      <h3 class="sub-label">Functional colour — optional and exceptional</h3>
+      <div class="note-box"><strong>Routine status does not require colour.</strong> Prefer explicit text and neutral symbols. When functional colour materially improves urgency or differentiation, confine it to an alert icon, attention rule, chart mark, or rare highlighted row. Darker <code class="inline">*Text</code> roles carry any readable coloured label.</div>
+      <div class="note-box"><strong>Soft tints still exist, but are reserved for rare emphasis</strong> (e.g. highlighting one reconciliation row) and are intentionally desaturated — close to neutral, not vivid. They are never the default status or alert surface.</div>
+    </section>
+
+    <section id="semantic-tokens">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Semantic token architecture</h2>
+        <p>Values, meanings, and component decisions are separate layers. This keeps the product accessible and lets the visual identity evolve without search-and-replace styling.</p>
+      </div>
+      <div class="token-layers">
+        <div class="token-layer"><h4>1 · Global values</h4><p>Raw ingredients such as <code class="inline">orange500</code>, <code class="inline">grey700</code>, spacing steps, radius values, and motion durations.</p></div>
+        <div class="token-layer"><h4>2 · Semantic roles</h4><p>Purpose-led aliases such as <code class="inline">color.text.secondary</code>, <code class="inline">color.action.primary</code>, <code class="inline">surface.canvas</code>, and <code class="inline">space.section</code>.</p></div>
+        <div class="token-layer"><h4>3 · Component roles</h4><p>Stable decisions such as <code class="inline">button.primary.background.hover</code>, <code class="inline">table.header.surface</code>, and <code class="inline">dialog.scrim</code>.</p></div>
+      </div>
+      <div class="note-box"><strong>Selection rule:</strong> choose a token because its name matches the purpose, never because its current hex or pixel value happens to look right.</div>
     </section>
 
     <!-- TYPOGRAPHY -->
@@ -523,18 +576,19 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Typography</h2>
-        <p>A single Helvetica Neue family (<code class="inline">pwc.fontHeading</code> = <code class="inline">pwc.fontBody</code>) and a deliberately short scale — <strong>five sizes, two text weights</strong>. Size does the work: Regular 400 for body and data, Semibold 600 for titles, headings, emphasis and labels. There is no light weight — a wide weight jump reads as a different typeface.</p>
+        <p>A compact Helvetica Neue scale optimized for a desktop financial workspace. Regular 400 and Semibold 600 carry product text; Medium 500 is reserved for controls. Smaller roles retain strong contrast and generous line height rather than becoming faint or compressed.</p>
       </div>
       <div class="panel">
         <div class="type-row"><span class="label">Title</span><span class="t-title">Run detail</span><span class="spec">28px / 600</span></div>
         <div class="type-row"><span class="label">Heading</span><span class="t-heading">Cross-checks</span><span class="spec">20px / 600</span></div>
         <div class="type-row"><span class="label">Body</span><span class="t-body">Each agent fills its statement template in parallel.</span><span class="spec">15px / 400</span></div>
         <div class="type-row"><span class="label">Body emphasis</span><span class="t-strong">Total non-current assets</span><span class="spec">15px / 600</span></div>
-        <div class="type-row"><span class="label">Small</span><span class="t-small">Last updated 2 minutes ago · gpt-5.4</span><span class="spec">13px / 400</span></div>
-        <div class="type-row"><span class="label">Label</span><span class="t-label">Filing standard · MFRS</span><span class="spec">11px / 600</span></div>
+        <div class="type-row"><span class="label">Supporting</span><span class="t-small">Last updated 2 minutes ago · gpt-5.4</span><span class="spec">13px / 400</span></div>
+        <div class="type-row"><span class="label">Data / metadata</span><span style="font-size:13px;color:var(--grey-700)">FY 2024 · Company · RM '000</span><span class="spec">13–14px / 400</span></div>
+        <div class="type-row"><span class="label">Label</span><span class="t-label">Filing standard · MFRS</span><span class="spec">11–12px / 600 · sentence case</span></div>
         <div class="type-row"><span class="label">Mono</span><span class="t-body" style="font-family:var(--font-mono);font-size:13px">SOFP-Sub-CuNonCu!B12 = 1,595</span><span class="spec">SF Mono</span></div>
       </div>
-      <div class="note-box"><strong>Five sizes, two text weights — that's the whole scale.</strong> 28 Title · 20 Heading · 15 Body · 13 Small · 11 Label, plus mono for cell refs &amp; code. Text weights: <strong>Regular 400</strong> (body, data) + <strong>Semibold 600</strong> (titles, headings, emphasis, labels). Medium 500 appears only on interactive controls (buttons, tabs, nav); <strong>Light 300 is not used</strong> (it read as a different typeface) and never 700+. The same 11/600 uppercase <strong>Label</strong> does all small-caps work (eyebrows, table headers, card keys, nav headers), so there's one micro-label, not five. UI primitives keep fixed control sizes (button/input 15, field label 14, badge 12) — component constants, not extra scale steps.</div>
+      <div class="note-box"><strong>Compact semantic scale:</strong> 28 Page title · 22 Workspace title · 18–20 Section · 15 Body/control · 13–14 Data/support · 11–12 Metadata/label. Use sentence case by default. Small text uses <code class="inline">grey700</code> or darker; uppercase 11px is reserved for brief eyebrows, never long instructions.</div>
     </section>
 
     <!-- SPACING -->
@@ -560,9 +614,11 @@
       <div class="demo-row">
         <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-sm)"></div><div class="lbl">sm · 3px</div></div>
         <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-md)"></div><div class="lbl">md · 6px</div></div>
-        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-lg)"></div><div class="lbl">lg · 10px (buttons, inputs, cards)</div></div>
-        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-pill)"></div><div class="lbl">pill (badges, toggles)</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-lg)"></div><div class="lbl">lg · 8px (cards, panels)</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-xl)"></div><div class="lbl">xl · 10px (large feature surfaces only)</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-pill)"></div><div class="lbl">pill (toggles and exceptional compact tags)</div></div>
       </div>
+      <div class="note-box"><strong>Role guidance:</strong> 3px for cells and compact references · 6px for buttons, inputs, and alerts · 8px for cards and panels · 10px only for large feature surfaces. Avoid a uniformly rounded-everywhere SaaS appearance.</div>
     </section>
 
     <!-- ELEVATION -->
@@ -570,11 +626,11 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Elevation</h2>
-        <p>Soft, low-contrast shadows (<code class="inline">pwc.shadow</code>) — depth felt, not seen. Three levels only.</p>
+        <p>Depth communicates overlap, not importance. Ordinary sections and cards are flat; sticky regions, menus, and dialogs use restrained shadows only when they sit above another surface.</p>
       </div>
       <div class="demo-row" style="gap:var(--s-xl)">
-        <div style="text-align:center"><div style="width:120px;height:80px;background:var(--surface);border-radius:var(--r-md);box-shadow:var(--shadow-card)"></div><div class="lbl">shadow.card — resting cards</div></div>
-        <div style="text-align:center"><div style="width:120px;height:80px;background:var(--surface);border-radius:var(--r-md);box-shadow:var(--shadow-elevated)"></div><div class="lbl">shadow.elevated — hover lift</div></div>
+        <div style="text-align:center"><div style="width:120px;height:80px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);box-shadow:var(--shadow-card)"></div><div class="lbl">flat — ordinary surface</div></div>
+        <div style="text-align:center"><div style="width:120px;height:80px;background:var(--surface);border-radius:var(--r-md);box-shadow:var(--shadow-elevated)"></div><div class="lbl">elevated — sticky / popover</div></div>
         <div style="text-align:center"><div style="width:120px;height:80px;background:var(--surface);border-radius:var(--r-md);box-shadow:var(--shadow-modal)"></div><div class="lbl">shadow.modal — overlays</div></div>
       </div>
     </section>
@@ -594,6 +650,8 @@
         <div class="rule-item"><span class="num">L5</span><span class="txt"><strong>Grouping.</strong> Prefer section spacing, then a bordered group, then a static card. Use an interactive card only for a selectable or navigable object.</span></div>
       </div>
       <div class="note-box"><strong>Responsive contract:</strong> wide screens show the complete review workspace; laptops may collapse side panes; narrow screens retain monitoring and simple actions rather than pretending the financial grid is comfortably editable.</div>
+      <div class="note-box"><strong>Density contract:</strong> setup and explanation surfaces use comfortable spacing; operational lists use standard density; financial grids offer compact and standard modes. Density changes row height and padding, never typography contrast or target accessibility.</div>
+      <div class="note-box"><strong>Viewport modes:</strong> mobile = monitor, approve, read evidence, and take simple actions · tablet = simplified grid with one contextual pane · laptop = primary review workspace · wide desktop = full grid plus navigation and evidence panes.</div>
     </section>
 
     <!-- MOTION -->
@@ -617,15 +675,14 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Buttons</h2>
-        <p>One primary action per view, carried by orange. Everything else recedes to neutral. Destructive actions stay quiet (outline) until hovered.</p>
+        <p>One dominant action per decision region. Primary actions use an accessible dark-orange role; supporting actions remain neutral. Destructive actions stay quiet in ordinary contexts and become explicit at final confirmation.</p>
       </div>
       <div class="panel">
         <h3 class="sub-label">Variants — <code class="inline">ui.button*</code></h3>
         <div class="demo-row">
           <button class="btn btn-primary">Primary</button>
           <button class="btn btn-secondary">Secondary</button>
-          <button class="btn btn-subtle">Subtle</button>
-          <button class="btn btn-ghost">Ghost</button>
+          <button class="btn btn-ghost">Quiet</button>
           <button class="btn btn-danger">Danger</button>
           <button class="btn btn-primary" disabled>Disabled</button>
         </div>
@@ -635,11 +692,11 @@
           <button class="btn btn-primary">Default</button>
           <button class="btn btn-primary btn-lg">Large</button>
         </div>
-        <pre><span class="c">// variant + hover class. minHeight 40, radius lg (10px), padding 10/24.</span>
+        <pre><span class="c">// Four purposeful variants. Default target 44px; compact target 40px.</span>
 &lt;button style={ui.buttonPrimary} className={uiClass.btnPrimary}&gt;Run&lt;/button&gt;
 &lt;button style={ui.buttonDanger}  className={uiClass.btnDanger}&gt;Stop all&lt;/button&gt;</pre>
       </div>
-      <div class="note-box"><strong>Pairing rule:</strong> every button needs both <code class="inline">style={ui.buttonX}</code> (geometry + color) and <code class="inline">className={uiClass.btnX}</code> (the hover/disabled rule in <code class="inline">index.css</code>). Without the class, the button has no hover state.</div>
+      <div class="note-box"><strong>Variant rule:</strong> Primary = commits the local workflow · Secondary = alternate or reversible action · Quiet = low-priority toolbar/navigation action · Destructive = names an irreversible consequence. Do not introduce a fifth visual variant to solve spacing or hierarchy.</div>
     </section>
 
     <!-- FORMS -->
@@ -647,60 +704,59 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Form controls</h2>
-        <p>Clear labels, soft borders, and a global orange focus ring tie inputs to the brand without shouting. Min height 44px for comfortable targets.</p>
+        <p>Readable labels, perceptible control boundaries, and a two-part focus treatment prioritize completion over decoration. Controls are 44px minimum; help and recovery copy is programmatically associated.</p>
       </div>
       <div class="panel">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s-xl)">
+        <div class="form-demo-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s-xl)">
           <div>
-            <div class="field"><label>Filing standard</label>
-              <select class="select"><option>MFRS</option><option>MPERS</option></select></div>
-            <div class="field"><label>Model</label>
-              <select class="select"><option>GPT-5.4</option><option>Claude Sonnet</option></select></div>
-            <div class="field"><label>Output name</label>
-              <input class="input input-error" type="text" value="run 001/">
-              <div class="hint" style="color:var(--error)">Name can't contain a slash.</div></div>
+            <div class="field"><label for="standard-demo">Filing standard</label>
+              <select id="standard-demo" class="select"><option>MFRS</option><option>MPERS</option></select></div>
+            <div class="field"><label for="model-demo">Model</label>
+              <select id="model-demo" class="select"><option>GPT-5.4</option><option>Claude Sonnet</option></select></div>
+            <div class="field"><label for="output-demo">Output name</label>
+              <input id="output-demo" class="input input-error" type="text" value="run 001/" aria-describedby="output-error" aria-invalid="true">
+              <div id="output-error" class="hint" style="color:var(--error-text)">Remove the slash from the output name.</div></div>
           </div>
           <div>
-            <div class="field"><label>Reviewer notes</label>
-              <textarea class="textarea" placeholder="Add context…"></textarea></div>
+            <div class="field"><label for="notes-demo">Reviewer notes <span style="font-weight:400">(optional)</span></label>
+              <textarea id="notes-demo" class="textarea" placeholder="Add context for the reviewer"></textarea></div>
             <div class="field">
               <div class="checkbox-row"><input type="checkbox" checked id="c1"><label for="c1" style="margin:0;font-weight:400">Run cross-checks</label></div>
               <div class="checkbox-row"><input type="checkbox" id="c2"><label for="c2" style="margin:0;font-weight:400">Attach benchmark</label></div>
               <div class="checkbox-row" style="margin-top:14px">
-                <label class="toggle"><input type="checkbox" checked><span class="track"></span></label>
-                <span>Auto-review on failures</span>
+                <label class="toggle" for="auto-review-demo"><input id="auto-review-demo" type="checkbox" checked><span class="track"></span></label>
+                <label for="auto-review-demo" style="margin:0;font-weight:400">Auto-review on failures</label>
               </div>
             </div>
           </div>
         </div>
-        <pre><span class="c">// focus ring is GLOBAL (index.css) — inputs need no className.</span>
-&lt;label style={ui.fieldLabel}&gt;Model&lt;/label&gt;
-&lt;input style={ui.input} placeholder=<span class="s">"gpt-5.4"</span> /&gt;</pre>
+        <pre><span class="c">// Labels, help, and recovery are part of the component contract.</span>
+&lt;label htmlFor=<span class="s">"model"</span> style={ui.fieldLabel}&gt;Model&lt;/label&gt;
+&lt;input id=<span class="s">"model"</span> style={ui.input} aria-describedby=<span class="s">"model-help"</span> /&gt;</pre>
       </div>
+      <div class="note-box"><strong>Choice rule:</strong> Checkbox = include or select an option before submission. Switch = an immediate on/off setting whose effect happens when changed. Never use a switch merely because it looks more modern.</div>
     </section>
 
-    <!-- BADGES -->
+    <!-- STATUS -->
     <section id="badges">
       <div class="section-head">
         <div class="rule"></div>
-        <h2>Badges &amp; status</h2>
-        <p>Use the quietest treatment that communicates the state. Ordinary metadata stays plain; routine status uses a dot and text; outline badges are reserved for compact, high-value state identification; actionable risk uses an alert.</p>
+        <h2>Status</h2>
+        <p>Routine status uses a neutral symbol plus explicit text. Shape improves scanning, text carries the meaning, and no status hue competes with financial data or the primary action.</p>
       </div>
       <div class="panel">
-        <div class="demo-row">
-          <span>Company · MFRS · RM '000</span>
-          <span class="status-inline"><span class="dot" style="background:var(--info)"></span>Running</span>
-          <span class="badge badge-neutral"><span class="dot"></span>Draft</span>
-          <span class="badge badge-success"><span class="dot"></span>Completed</span>
-          <span class="badge badge-warning"><span class="dot"></span>Completed with errors</span>
-          <span class="badge badge-error"><span class="dot"></span>Failed</span>
-          <span class="badge badge-info"><span class="dot"></span>Running</span>
-          <span class="badge badge-brand"><span class="dot"></span>Reviewer</span>
+        <div class="status-preview">
+          <span class="status-plain"><span class="status-symbol" aria-hidden="true">○</span>Running</span>
+          <span class="status-plain"><span class="status-symbol" aria-hidden="true">✓</span>Completed</span>
+          <span class="status-plain"><span class="status-symbol" aria-hidden="true">!</span>Needs review</span>
+          <span class="status-plain"><span class="status-symbol" aria-hidden="true">×</span>Failed</span>
+          <span class="status-plain"><span class="status-symbol" aria-hidden="true">–</span>Not started</span>
+          <span class="status-plain"><span class="status-symbol" aria-hidden="true">◇</span>Calculated</span>
         </div>
-        <pre>&lt;span style={ui.badgeSuccess}&gt;Completed&lt;/span&gt;
-&lt;span style={ui.badgeError}&gt;Failed&lt;/span&gt;</pre>
+        <pre><span class="c">// Symbols are neutral and aria-hidden; explicit text remains the accessible name.</span>
+&lt;span style={ui.status}&gt;&lt;span aria-hidden=<span class="s">"true"</span>&gt;✓&lt;/span&gt;Completed&lt;/span&gt;</pre>
       </div>
-      <div class="note-box"><strong>Do not badge ordinary metadata.</strong> Filing standard, filing level, denomination, dates and model names normally render as aligned text. A badge earns its border only when the state must be identified at a glance.</div>
+      <div class="note-box"><strong>Status hierarchy:</strong> routine status stays monochrome · ordinary metadata remains plain text · actionable risk expands into an alert or attention row with recovery guidance · functional color is optional and confined to that exceptional treatment.</div>
     </section>
 
     <!-- CARDS -->
@@ -708,18 +764,18 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Cards</h2>
-        <p>A card represents a distinct object. It is not the default wrapper for every section. Static cards remain still; only selectable or navigable cards receive the hover/focus treatment.</p>
+        <p>A card represents a distinct object. It is not the default wrapper for a section or metric. Static groups remain flat; only selectable or navigable cards receive a border/surface interaction treatment.</p>
       </div>
       <div class="card-grid">
         <div class="ui-card ui-card-static"><div class="k">Static summary</div><div class="v">11 / 12</div><div class="delta down">1 imbalance requires review</div></div>
-        <div class="ui-card"><div class="k">Interactive run</div><div class="v">FINCO 2024</div><div class="delta">Open review</div></div>
+        <button type="button" class="ui-card" style="font:inherit;text-align:left;cursor:pointer"><div class="k">Interactive run</div><div class="v">FINCO 2024</div><div class="delta">Open review</div></button>
       </div>
       <pre><span class="c">// Static object: no hover class.</span>
 &lt;div style={ui.card}&gt;…&lt;/div&gt;
 
 <span class="c">// Selectable object: state hook signals interactivity.</span>
 &lt;button style={ui.card} className={uiClass.card}&gt;…&lt;/button&gt;</pre>
-      <div class="note-box"><strong>Grouping order:</strong> section spacing → divider → bordered group → static card → interactive card. Stop at the lightest structure that makes the relationship clear.</div>
+      <div class="note-box"><strong>Grouping order:</strong> alignment and spacing → divider → inset surface → bordered object → interactive card. Stop at the lightest structure that makes the relationship clear. Never nest a card solely to create padding.</div>
     </section>
 
     <!-- TABLE -->
@@ -727,20 +783,21 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Tables</h2>
-        <p>Dense, scannable data with uppercase column labels, hairline dividers, and a quiet hover row.</p>
+        <p>Dense, scannable data with sentence-case column labels, hairline dividers, explicit alignment, and density chosen for the task.</p>
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Statement</th><th>Agent</th><th>Turns</th><th>Status</th></tr></thead>
+          <thead><tr><th>Statement</th><th>Agent</th><th style="text-align:right">Turns</th><th>Status</th></tr></thead>
           <tbody>
-            <tr class="pwc-table-row"><td>SOFP</td><td>gpt-5.4</td><td>14</td><td><span class="badge badge-success"><span class="dot"></span>Completed</span></td></tr>
-            <tr class="pwc-table-row"><td>SOPL</td><td>gpt-5.4</td><td>22</td><td><span class="badge badge-warning"><span class="dot"></span>Flagged</span></td></tr>
-            <tr class="pwc-table-row"><td>SOCF</td><td>gpt-5.4</td><td>18</td><td><span class="badge badge-info"><span class="dot"></span>Running</span></td></tr>
-            <tr class="pwc-table-row"><td>SOCIE</td><td>gpt-5.4</td><td>—</td><td><span class="badge badge-error"><span class="dot"></span>Failed</span></td></tr>
+            <tr class="pwc-table-row"><td>SOFP</td><td>gpt-5.4</td><td style="text-align:right;font-variant-numeric:tabular-nums">14</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">✓</span>Completed</span></td></tr>
+            <tr class="pwc-table-row"><td>SOPL</td><td>gpt-5.4</td><td style="text-align:right;font-variant-numeric:tabular-nums">22</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">!</span>Needs review</span></td></tr>
+            <tr class="pwc-table-row"><td>SOCF</td><td>gpt-5.4</td><td style="text-align:right;font-variant-numeric:tabular-nums">18</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">○</span>Running</span></td></tr>
+            <tr class="pwc-table-row"><td>SOCIE</td><td>gpt-5.4</td><td style="text-align:right">—</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">×</span>Failed</span></td></tr>
           </tbody>
         </table>
       </div>
-      <div class="note-box"><strong>Local convention:</strong> table headers keep <code class="inline">letterSpacing: 0</code> (<code class="inline">ui.th</code>) — the workspace overrides the design-system's .8px tracking. Rows take <code class="inline">className="pwc-table-row"</code> for the hover.</div>
+      <div class="note-box"><strong>Density modes:</strong> Compact 28–32px rows for financial review · Standard 40px rows for operational lists · Comfortable 48px rows for setup and two-line content. A table's header and body use the same density.</div>
+      <div class="note-box"><strong>Required behaviour:</strong> sticky header when vertically scrolling · frozen identifier column where horizontal context matters · keyboard-visible row/cell focus · selected, edited, calculated, and validation states · explicit horizontal overflow rather than clipped columns.</div>
     </section>
 
     <!-- FINANCIAL DATA -->
@@ -748,24 +805,27 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Financial data</h2>
-        <p>The review grid is a domain component, not a generic table. Alignment, period labels, row type, edit state, and evidence must remain scannable together.</p>
+        <p>The review grid is a domain component, not a generic table. Alignment, period, entity scope, denomination, row type, edit state, and evidence must remain scannable together.</p>
       </div>
+      <div style="display:flex;justify-content:space-between;gap:var(--s-lg);flex-wrap:wrap;margin-bottom:var(--s-sm);font-size:13px;color:var(--grey-700)"><span>Company · MFRS</span><span>RM '000 · FY 2024 and FY 2023</span></div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Line item</th><th style="text-align:right">FY 2024</th><th style="text-align:right">FY 2023</th><th>State</th><th>Evidence</th></tr></thead>
           <tbody>
-            <tr><td><strong>Total assets</strong></td><td style="text-align:right;font-variant-numeric:tabular-nums">1,002,593</td><td style="text-align:right;font-variant-numeric:tabular-nums">984,720</td><td><span class="status-inline"><span class="dot" style="background:var(--grey-500)"></span>Calculated</span></td><td>Formula</td></tr>
-            <tr><td>Loss before tax</td><td style="text-align:right;font-variant-numeric:tabular-nums">(20,667)</td><td style="text-align:right;font-variant-numeric:tabular-nums">(21,319)</td><td><span class="status-inline"><span class="dot" style="background:var(--success)"></span>Extracted</span></td><td>Page 15</td></tr>
-            <tr><td>Other investment</td><td style="text-align:right;font-variant-numeric:tabular-nums">40,000</td><td style="text-align:right;font-variant-numeric:tabular-nums">—</td><td><span class="status-inline"><span class="dot" style="background:var(--warning)"></span>No source</span></td><td>Review</td></tr>
+            <tr><td><strong>Total assets</strong></td><td style="text-align:right;font-variant-numeric:tabular-nums">1,002,593</td><td style="text-align:right;font-variant-numeric:tabular-nums">984,720</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">◇</span>Calculated</span></td><td>Formula</td></tr>
+            <tr><td>Loss before tax</td><td style="text-align:right;font-variant-numeric:tabular-nums">(20,667)</td><td style="text-align:right;font-variant-numeric:tabular-nums">(21,319)</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">✓</span>Extracted</span></td><td>Page 15</td></tr>
+            <tr><td>Other investment</td><td style="text-align:right;font-variant-numeric:tabular-nums">40,000</td><td style="text-align:right;font-variant-numeric:tabular-nums">—</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">!</span>No source</span></td><td>Review</td></tr>
           </tbody>
         </table>
       </div>
       <div class="rules" style="margin-top:var(--s-lg)">
         <div class="rule-item"><span class="num">F1</span><span class="txt">Name comparative periods explicitly; never show bare CY/PY when years are known.</span></div>
         <div class="rule-item"><span class="num">F2</span><span class="txt">Right-align values with tabular numerals and accounting-parentheses display for negatives.</span></div>
-        <div class="rule-item"><span class="num">F3</span><span class="txt">Differentiate extracted, edited, calculated, zero, blank, not applicable, and unavailable states with text or shape as well as colour.</span></div>
+        <div class="rule-item"><span class="num">F3</span><span class="txt">Differentiate extracted, edited, calculated, zero, blank, not applicable, and unavailable states with explicit text and, where useful, a neutral symbol. Never depend on colour.</span></div>
         <div class="rule-item"><span class="num">F4</span><span class="txt">Keep totals, section rows, and mandatory fields structurally distinct from editable leaf rows.</span></div>
         <div class="rule-item"><span class="num">F5</span><span class="txt">Selecting a value should reveal its evidence without losing table position or active filters.</span></div>
+        <div class="rule-item"><span class="num">F6</span><span class="txt">Keep currency, scale, entity scope, and comparative periods visible while values are on screen; never make users remember them from a previous step.</span></div>
+        <div class="rule-item"><span class="num">F7</span><span class="txt">Prefer provenance, review state, and validation evidence over generic model-confidence percentages.</span></div>
       </div>
     </section>
 
@@ -788,28 +848,26 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Tabs &amp; navigation</h2>
-        <p>The app shell is a <strong>horizontal top-nav</strong> (not a sidebar — that's just this doc's chrome). Underline tabs, orange for the active item. Run-detail uses the same pattern for its section tabs.</p>
+        <p>The app shell uses horizontal destination links; run detail uses tabs for alternate views of one resource. The active destination is communicated by dark text plus an orange indicator, so brand color is not the only readable signal.</p>
       </div>
       <div class="panel">
         <h3 class="sub-label">Top nav — <code class="inline">TopNav.tsx</code></h3>
         <div class="tabbar">
-          <button class="tab active">New extraction</button>
-          <button class="tab">Runs</button>
-          <button class="tab">Field labels</button>
-          <button class="tab">Benchmarks</button>
-          <button class="tab">Evaluation suites</button>
+          <a class="tab active" href="#tabs" aria-current="page">New extraction</a>
+          <a class="tab" href="#tabs">Runs</a>
+          <a class="tab" href="#tabs">Administration</a>
         </div>
         <h3 class="sub-label">Run-detail sections</h3>
         <div class="tabbar">
           <button class="tab active">Overview</button>
-          <button class="tab">Activity</button>
           <button class="tab">Notes</button>
           <button class="tab">Cross-checks</button>
-          <button class="tab">AI review</button>
+          <button class="tab">Review</button>
           <button class="tab">Figures</button>
+          <button class="tab">Technical details</button>
         </div>
       </div>
-      <div class="note-box"><strong>Semantics:</strong> top-level destinations are navigation and must expose stable URLs. Run-detail section switchers use <code class="inline">role="tablist"</code> / <code class="inline">role="tab"</code> with <code class="inline">aria-selected</code>, roving tabindex, and arrow navigation. Do not claim keyboard behaviour until it is implemented and tested.</div>
+      <div class="note-box"><strong>Semantics:</strong> destinations are links with stable URLs and <code class="inline">aria-current</code>. Tabs switch views of the same resource and use <code class="inline">role="tablist"</code> / <code class="inline">role="tab"</code> / <code class="inline">role="tabpanel"</code>, roving tabindex, and arrow navigation. AI activity, models, token use, and traces belong under Technical details rather than competing with review outcomes.</div>
     </section>
 
     <!-- ACCESSIBILITY -->
@@ -817,19 +875,21 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Accessibility</h2>
-        <p>The conventions the app already implements — keep them when adding UI.</p>
+        <p>The non-negotiable product floor. Each component documents how it meets these requirements; accessibility is not delegated to this section alone.</p>
       </div>
       <div class="rules">
-        <div class="rule-item"><span class="num">A</span><span class="txt"><strong>Visible focus.</strong> Keyboard focus shows a 2px orange <code class="inline">outline</code> on buttons (<code class="inline">:focus-visible</code> in index.css) and a 3px orange-50 ring on form controls. Never remove these.</span></div>
+        <div class="rule-item"><span class="num">A</span><span class="txt"><strong>Visible focus.</strong> Use a two-part indicator that remains perceptible on white, grey, tinted, and high-contrast surfaces. A soft halo may support focus but never carries it alone.</span></div>
         <div class="rule-item"><span class="num">B</span><span class="txt"><strong>ARIA tab pattern.</strong> Navs and section switchers use <code class="inline">role="tablist"/"tab"/"tabpanel"</code> with <code class="inline">aria-selected</code> and arrow-key roving tabindex.</span></div>
-        <div class="rule-item"><span class="num">C</span><span class="txt"><strong>Color is never the only signal.</strong> Status badges carry a text label (and a dot), not just a hue. Don't encode meaning in color alone.</span></div>
-        <div class="rule-item"><span class="num">D</span><span class="txt"><strong>Status text contrast.</strong> Use the darker <code class="inline">*Text</code> tokens (<code class="inline">successText</code>/<code class="inline">errorText</code>/<code class="inline">warningText</code>/<code class="inline">infoText</code>) for status labels so they stay AA-legible on neutral surfaces; keep alert body copy at <code class="inline">grey800</code>.</span></div>
-        <div class="rule-item"><span class="num">E</span><span class="txt"><strong>Hit targets.</strong> Inputs/selects are 44px min-height, buttons 40px. Labels are real <code class="inline">&lt;label&gt;</code> elements tied to their control.</span></div>
+        <div class="rule-item"><span class="num">C</span><span class="txt"><strong>Color is never the only signal.</strong> Status always includes explicit text and may add a neutral symbol or structural treatment. Color is optional, never required to understand the state.</span></div>
+        <div class="rule-item"><span class="num">D</span><span class="txt"><strong>Contrast is encoded in roles.</strong> Normal text meets 4.5:1; large text and essential control boundaries meet 3:1; disabled and decorative content are the only low-contrast exceptions.</span></div>
+        <div class="rule-item"><span class="num">E</span><span class="txt"><strong>Hit targets.</strong> Inputs and important actions are 44px minimum. Compact desktop controls may be 40px when separated; no interactive target falls below the WCAG 24px minimum.</span></div>
         <div class="rule-item"><span class="num">F</span><span class="txt"><strong>Decorative SVG is hidden.</strong> Brand/decorative marks carry <code class="inline">aria-hidden="true"</code>; meaningful icons get a label.</span></div>
         <div class="rule-item"><span class="num">G</span><span class="txt"><strong>Errors are associated.</strong> Inline help and validation messages are connected to their control with <code class="inline">aria-describedby</code>; the message explains recovery.</span></div>
         <div class="rule-item"><span class="num">H</span><span class="txt"><strong>Dynamic work is announced.</strong> Upload, validation, save, filter-result, and run-progress changes use an appropriately polite live region.</span></div>
         <div class="rule-item"><span class="num">I</span><span class="txt"><strong>Focus survives transitions.</strong> Dialogs trap and return focus; sticky regions never obscure the focused control; dense grids provide a documented keyboard path.</span></div>
         <div class="rule-item"><span class="num">J</span><span class="txt"><strong>Zoom and motion are tested.</strong> Core tasks remain usable at 200% zoom, and reduced motion reaches the same final state immediately.</span></div>
+        <div class="rule-item"><span class="num">K</span><span class="txt"><strong>Reflow and high contrast.</strong> Monitoring and simple actions work at 320 CSS px; forced-colors and high-contrast modes preserve boundaries, focus, and state meaning.</span></div>
+        <div class="rule-item"><span class="num">L</span><span class="txt"><strong>Dense grids have a keyboard model.</strong> Document navigation between cells, evidence, edit mode, validation, and frozen regions; do not rely on pointer hover.</span></div>
       </div>
     </section>
 
@@ -850,19 +910,89 @@
       <div class="note-box"><strong>Required product patterns:</strong> page header, toolbar, sticky action bar, file drop zone, filter bar, empty state, loading/skeleton, toast, confirm dialog, disclosure, icon button, overflow actions, load-more, split pane, save state, attention queue, and evidence inspector.</div>
     </section>
 
+    <section id="component-standard">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Definition of a complete component</h2>
+        <p>A visual example is not a component specification. Every production component documents the following before it is considered stable.</p>
+      </div>
+      <div class="panel">
+        <ol class="component-checklist" style="padding-left:var(--s-xl);font-size:14px;color:var(--grey-800)">
+          <li>Purpose and user outcome</li>
+          <li>When to use and when not to use</li>
+          <li>Anatomy and required parts</li>
+          <li>Variants and density</li>
+          <li>Default, hover, focus, active, selected, disabled, busy, success, error, and empty states</li>
+          <li>Interaction and keyboard behaviour</li>
+          <li>Responsive and overflow behaviour</li>
+          <li>Accessibility requirements</li>
+          <li>Content and vocabulary guidance</li>
+          <li>Semantic and component token mapping</li>
+          <li>Examples and anti-patterns</li>
+          <li>Maturity: draft, beta, stable, or deprecated</li>
+        </ol>
+      </div>
+      <div class="note-box"><strong>Acceptance rule:</strong> a component is not stable until its non-default states, keyboard path, narrow-screen behaviour, and accessibility checks are demonstrated and tested.</div>
+    </section>
+
+    <section id="benchmarks">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>External benchmarks</h2>
+        <p>This proposal borrows principles, not visual identity, from mature public systems.</p>
+      </div>
+      <div class="rules">
+        <div class="rule-item"><span class="num">W3C</span><span class="txt"><strong>Accessibility floor.</strong> WCAG 2.2 contrast, reflow, keyboard, focus, and target-size requirements are encoded in component decisions. <a href="https://www.w3.org/TR/WCAG22/">WCAG 2.2</a></span></div>
+        <div class="rule-item"><span class="num">IBM</span><span class="txt"><strong>Data density and state completeness.</strong> Carbon's table system demonstrates explicit row densities, contextual layers, interaction states, and enhancements. <a href="https://carbondesignsystem.com/components/data-table/style/">Carbon data tables</a></span></div>
+        <div class="rule-item"><span class="num">MS</span><span class="txt"><strong>Token architecture.</strong> Fluent separates global values from semantic aliases and builds accessibility and theming into those roles. <a href="https://fluent2.microsoft.design/design-tokens">Fluent 2 tokens</a></span></div>
+        <div class="rule-item"><span class="num">ATL</span><span class="txt"><strong>Purpose-led naming.</strong> Atlassian advises selecting tokens by meaning rather than matching the current value. <a href="https://atlassian.design/foundations/tokens/design-tokens/">Atlassian tokens</a></span></div>
+        <div class="rule-item"><span class="num">GDS</span><span class="txt"><strong>Task clarity and responsive rhythm.</strong> GOV.UK demonstrates readable type, mobile-first layout, responsive spacing, and user-outcome-led component guidance. <a href="https://design-system.service.gov.uk/styles/">GOV.UK Design System</a></span></div>
+      </div>
+    </section>
+
+    <!-- PAGE ADOPTION -->
+    <section id="adoption">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Page adoption status</h2>
+        <p>Which product surfaces have adopted this specification. "Adopted" means the page uses its canonical layout mode, the semantic typography scale, shared primitives, and the monochrome status language, and its focused tests pin that adoption. Update this table in the same change set as the page work (docs/PLAN-app-wide-design-consistency.md).</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Surface</th><th>Layout mode</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Shared foundations (tokens, primitives, state hooks)</td><td>—</td><td>Adopted</td></tr>
+            <tr><td>App shell &amp; top navigation</td><td>—</td><td>Planned — change set 2</td></tr>
+            <tr><td>Login</td><td>Authentication · 380px</td><td>Planned — change set 5</td></tr>
+            <tr><td>New extraction</td><td>Standard · 1120px</td><td>Planned — change set 3</td></tr>
+            <tr><td>Runs (history list)</td><td>Wide list · 1440px</td><td>Planned — change set 3</td></tr>
+            <tr><td>Field labels</td><td>Wide list · 1440px</td><td>Planned — change set 4</td></tr>
+            <tr><td>Benchmarks</td><td>Standard · 1120px</td><td>Planned — change set 4</td></tr>
+            <tr><td>Evaluation suites</td><td>Standard · 1120px</td><td>Planned — change set 4</td></tr>
+            <tr><td>Settings (General / Account / Users)</td><td>Form · 840px</td><td>Planned — change set 5</td></tr>
+            <tr><td>Run report (Overview / Notes / Cross-checks / Review / Telemetry)</td><td>Workspace · full width</td><td>Planned — change set 6</td></tr>
+            <tr><td>Figures workspace (Values / Template)</td><td>Workspace · full width</td><td>Planned — change set 6 · density preserved by design</td></tr>
+            <tr><td>Dialogs, toasts, loading &amp; empty states</td><td>—</td><td>Planned — change set 7</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note-box"><strong>Deliberate exceptions:</strong> the Notes editor's cell-formatting palettes are document-formatting data, not app chrome (gotcha #16) — their literal workbook colours are outside app-token enforcement. Charts, alerts, and attention rules retain functional colour.</div>
+    </section>
+
     <!-- TOKEN MAP -->
     <section id="tokenmap">
       <div class="section-head">
         <div class="rule"></div>
         <h2>Token map — doc ↔ code</h2>
-        <p>Where each thing in this doc lives in the codebase. Edit a value here, then change the mapped entry. This is the "follow-through to code" checklist.</p>
+        <p>Ownership model for the implemented decisions. Semantic aliases and shared component contracts are the normal consumption layer.</p>
       </div>
       <div class="table-wrap">
         <table class="map-table">
           <thead><tr><th>Concept</th><th>This doc</th><th>Code location</th></tr></thead>
           <tbody>
-            <tr><td>Color / type / spacing / radius / shadow tokens</td><td><code class="inline">:root</code> CSS vars</td><td><code>web/src/lib/theme.ts</code> — the <code>pwc</code> object</td></tr>
-            <tr><td>Component primitives (button, card, input, badge, alert, table)</td><td><code class="inline">.btn</code>, <code class="inline">.ui-card</code>, <code class="inline">.input</code>…</td><td><code>web/src/lib/uiStyles.ts</code> — <code>ui.*</code></td></tr>
+            <tr><td>Global color / type / spacing / radius / shadow values</td><td><code class="inline">:root</code> CSS vars</td><td><code>web/src/lib/theme.ts</code> — stable raw values</td></tr>
+            <tr><td>Semantic roles</td><td>Semantic token architecture</td><td><code>web/src/lib/theme.ts</code> — purpose-led aliases</td></tr>
+            <tr><td>Component primitives (button, card, input, status, alert, table, dialog)</td><td>Component sections</td><td><code>web/src/lib/uiStyles.ts</code> — <code>ui.*</code> contracts</td></tr>
             <tr><td>Semantic typography and page layouts</td><td>Typography + Layouts sections</td><td><code>web/src/lib/uiStyles.ts</code> — typography and page roles</td></tr>
             <tr><td>Motion durations, easing, and reduced motion</td><td>Motion section</td><td><code>web/src/lib/theme.ts</code> + <code>web/src/index.css</code></td></tr>
             <tr><td>Hover / focus / disabled / scrollbar rules</td><td><code class="inline">:hover</code> / <code class="inline">:focus</code> CSS</td><td><code>web/src/index.css</code> + <code>uiClass.*</code> hooks</td></tr>
@@ -872,11 +1002,11 @@
           </tbody>
         </table>
       </div>
-      <div class="note-box"><strong>Lockstep rule:</strong> frontend tests assert exact <code class="inline">rgb()</code> values derived from <code class="inline">theme.ts</code>. Changing a token requires updating its pinning test in the same commit (CLAUDE.md gotcha #7).</div>
+      <div class="note-box"><strong>Lockstep rule:</strong> tests verify the correct semantic role at the correct property and state—not merely that a hex value appears somewhere. Contrast, focus, density, responsive composition, and reduced-motion behavior are explicit acceptance checks.</div>
     </section>
 
     <footer>
-      <p>XBRL Agent Design System v2 · updated 11 July 2026 · behavioural specification for the web UI · production implementation in <code class="inline">web/src/lib/theme.ts</code>, <code class="inline">web/src/lib/uiStyles.ts</code>, and <code class="inline">web/src/index.css</code>. Core orange #FD5108 (Pantone 1655C) per PwC brand standard. Status colors are functional only, not brand. Not an official PwC brand publication.</p>
+      <p>XBRL Agent Design System v3 · promoted to the production contract 12 July 2026. Core orange remains the signature identity accent; accessible semantic roles carry interactive text and fills. Routine status may be entirely monochrome; functional hues are optional and exceptional. Not an official PwC brand publication.</p>
     </footer>
 
   </main>

@@ -79,8 +79,11 @@ export const pwc = {
   // system's larger section rhythm (s-7 / s-8).
   space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, xxxl: 48, xxxxl: 64 },
 
-  // Border radius — pill added for badges/toggles.
-  radius: { sm: 3, md: 6, lg: 10, pill: 999 },
+  // Border radius. Role guidance (design-system Spacing & radius): sm for
+  // dense cells / compact references · md for buttons, inputs, alerts ·
+  // lg for cards and panels · xl only for large feature surfaces · pill for
+  // toggles and exceptional compact tags.
+  radius: { sm: 3, md: 6, lg: 8, xl: 10, pill: 999 },
 
   // Shadows — soft, low-contrast, diffuse (design system's three levels).
   shadow: {
@@ -100,5 +103,112 @@ export const pwc = {
     duration: { fast: '150ms', base: '200ms', slow: '250ms' },
     // Decelerate, no overshoot — enterprise-calm, never playful.
     easing: 'cubic-bezier(0.2, 0, 0, 1)',
+  },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Semantic token layer (design-system "Semantic token architecture").
+//
+// Three layers: global values (the raw `pwc` object above) → semantic roles
+// (this `tokens` object) → component roles (`component` below). Page
+// components consume MEANING (`tokens.color.text.secondary`), not palette
+// names, so the visual identity can evolve without a search-and-replace.
+//
+// Selection rule: choose a token because its name matches the purpose, never
+// because its current value happens to look right.
+// ---------------------------------------------------------------------------
+// Accessible action values (plan: app-wide design consistency). Semantic and
+// independently changeable from signature orange.
+const ACTION_PRIMARY = '#C63D00';
+const ACTION_PRIMARY_HOVER = '#A83A00';
+
+export const tokens = {
+  color: {
+    // Signature orange is IDENTITY — marks, rules, progress, active
+    // indicators. It is not the default button fill or small-text colour.
+    brand: {
+      accent: pwc.orange500,
+      indicator: pwc.orange500,
+    },
+    // Accessible interaction roles. Deliberately darker than the signature
+    // orange and independently changeable from it (plan: app-wide design
+    // consistency). Contrast with white: primary 5.16:1 · hover 6.42:1.
+    action: {
+      primary: ACTION_PRIMARY,
+      primaryHover: ACTION_PRIMARY_HOVER,
+      quietHover: pwc.grey100,
+    },
+    text: {
+      primary: pwc.grey900,     // headings, primary content
+      body: pwc.grey800,        // ordinary copy
+      secondary: pwc.grey700,   // helper/metadata text — smallest readable role
+      muted: pwc.grey500,       // decorative/disabled-adjacent ONLY (low contrast)
+      onAction: pwc.white,      // text on a filled primary action
+    },
+    border: {
+      subtle: pwc.grey200,      // hairline dividers, card borders
+      strong: pwc.grey300,      // decorative emphasis borders, disabled
+      control: pwc.grey500,     // essential control boundaries (WCAG 3:1)
+    },
+    focus: {
+      ring: ACTION_PRIMARY,     // form-control focus border
+      halo: pwc.orange50,       // soft supporting halo (never the only signal)
+      strong: pwc.grey900,      // two-part focus outline for buttons/links
+    },
+  },
+  surface: {
+    canvas: pwc.grey50,         // page background
+    default: pwc.white,         // cards, panels, controls
+    sunken: pwc.grey100,        // insets, table headers, alternating rows
+  },
+  space: {
+    inset: pwc.space.md,        // dense inner padding
+    group: pwc.space.lg,        // between related controls
+    section: pwc.space.xxl,     // between page sections
+  },
+  radius: {
+    cell: pwc.radius.sm,        // dense cells, compact references
+    control: pwc.radius.md,     // buttons, inputs, alerts
+    panel: pwc.radius.lg,       // cards, panels, bordered groups
+    feature: pwc.radius.xl,     // large feature surfaces only
+    pill: pwc.radius.pill,
+  },
+  // Canonical task-based page widths (design-system Layouts & density). The
+  // app shell owns the route-level mode; pages must not invent another cap.
+  layout: {
+    auth: 380,                  // Login
+    form: 840,                  // Settings, focused configuration forms
+    standard: 1120,             // New extraction, Benchmarks, Evaluation suites
+    wideList: 1440,             // Runs, Field labels
+    // Workspace mode (run report, Figures, PDF review) is full available width.
+  },
+} as const;
+
+// Component token layer — stable per-component decisions consumed by the
+// shared primitives in uiStyles.ts and the state hooks in index.css.
+export const component = {
+  button: {
+    primary: {
+      background: tokens.color.action.primary,
+      backgroundHover: tokens.color.action.primaryHover,
+      text: tokens.color.text.onAction,
+    },
+    quiet: {
+      backgroundHover: tokens.color.action.quietHover,
+    },
+  },
+  table: {
+    header: {
+      surface: tokens.surface.sunken,
+      text: tokens.color.text.secondary,
+    },
+  },
+  dialog: {
+    scrim: 'rgba(26, 26, 26, 0.45)',
+  },
+  nav: {
+    activeText: tokens.color.text.primary,
+    activeIndicator: tokens.color.brand.indicator,
+    hoverSurface: tokens.surface.canvas,
   },
 } as const;

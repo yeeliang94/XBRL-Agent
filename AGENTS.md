@@ -45,6 +45,13 @@ or reintroduce documented bugs.
 - **Don't convert frontend inline styles back to Tailwind/className.**
   Tailwind v4 doesn't load reliably on Windows; all components use inline
   `style={}` props by design.
+- **Follow the canonical visual specification in
+  [`docs/pwc-design-system.html`](docs/pwc-design-system.html).** Its design
+  language and behavioural rules govern the whole web UI. Production tokens
+  live in `web/src/lib/theme.ts`, shared component and layout primitives in
+  `web/src/lib/uiStyles.ts`, and hover, focus, animation, and responsive state
+  hooks in `web/src/index.css`. Update the specification, implementation, and
+  their pinning tests together whenever a shared design rule or token changes.
 - **Don't re-introduce `allowed_pages` or page-filter logic in scout.** Scout
   page hints are soft guidance only; agents can view any page in the PDF.
   `tests/test_page_hints.py` pins this with negative assertions.
