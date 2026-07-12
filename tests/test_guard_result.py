@@ -110,3 +110,64 @@ def test_fill_workbook_refusals_use_guard_result():
     src = inspect.getsource(fw)
     assert 'kind="formula_cell"' in src
     assert 'kind="abstract_row"' in src
+
+
+def test_fill_workbook_tallies_guard_rejections(tmp_path):
+    """The machine-countable half of the contract: each refusal's kind is
+    counted on FillResult.guard_rejections, not just prose in `errors`."""
+    import openpyxl
+    from openpyxl.styles import PatternFill
+
+    from tools.fill_workbook import fill_workbook
+
+    path = str(tmp_path / "guarded.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOFP"
+    ws["A2"] = "Assets"  # abstract section header (dark navy)
+    ws["A2"].fill = PatternFill(
+        start_color="FF1F3864", end_color="FF1F3864", fill_type="solid"
+    )
+    ws["A3"] = "Cash and cash equivalents"
+    ws["A4"] = "Total assets"
+    ws["B4"] = "=B3"  # formula cell — protected
+    wb.save(path)
+    wb.close()
+
+    result = fill_workbook(
+        path,
+        str(tmp_path / "filled.xlsx"),
+        [
+            {"sheet": "SOFP", "field_label": "Assets", "col": 2, "value": 100},
+            {"sheet": "SOFP", "field_label": "Total assets", "col": 2, "value": 100},
+            {"sheet": "SOFP", "field_label": "Cash and cash equivalents",
+             "col": 2, "value": 100},
+        ],
+    )
+
+    assert result.fields_written == 1  # only the leaf landed
+    assert result.guard_rejections == {"abstract_row": 1, "formula_cell": 1}
+
+
+def test_fill_workbook_guard_rejections_empty_on_clean_run(tmp_path):
+    import openpyxl
+
+    from tools.fill_workbook import fill_workbook
+
+    path = str(tmp_path / "clean.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOFP"
+    ws["A3"] = "Cash and cash equivalents"
+    wb.save(path)
+    wb.close()
+
+    result = fill_workbook(
+        path,
+        str(tmp_path / "filled.xlsx"),
+        [{"sheet": "SOFP", "field_label": "Cash and cash equivalents",
+          "col": 2, "value": 100}],
+    )
+
+    assert result.fields_written == 1
+    assert result.guard_rejections == {}

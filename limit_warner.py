@@ -186,6 +186,14 @@ def limit_warning_processor(
     load-bearing contract as ``strip_stale_images_ctx``).
     """
     if not _enabled():
+        # Disabled mid-run: a warning injected while enabled must not
+        # linger (off means NO warning is live). Clean histories return
+        # the input object untouched — pinned by test_kill_switch.
+        if any(
+            isinstance(m, ModelRequest) and any(_is_warning_part(p) for p in m.parts)
+            for m in messages
+        ):
+            return _strip_warnings(list(messages))
         return messages
 
     out = _strip_warnings(list(messages))

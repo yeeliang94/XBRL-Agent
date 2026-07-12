@@ -853,6 +853,11 @@ def _summarize_discarded_facts(
     try:
         conn = _sqlite3.connect(db_path)
         try:
+            # Same per-connection wait the repo layer uses (db/repository.py):
+            # parallel agents write this DB concurrently, and without a
+            # busy_timeout a momentary writer lock would silently cost the
+            # retry its hint.
+            conn.execute("PRAGMA busy_timeout = 5000")
             rows = conn.execute(
                 """
                 SELECT DISTINCT n.render_sheet, n.render_row, n.canonical_label
@@ -877,9 +882,9 @@ def _summarize_discarded_facts(
     more = f"\n- …and {len(rows) - cap} more rows" if len(rows) > cap else ""
     return (
         "=== PRIOR ATTEMPT HINTS (advisory — VERIFY against the PDF) ===\n"
-        f"A previous attempt of this statement failed and its {len(rows)} "
-        "written value(s) were DISCARDED (they may have been wrong). It had "
-        "found data for these template rows — treat this purely as "
+        "A previous attempt of this statement failed and every value it "
+        "wrote was DISCARDED (they may have been wrong). It had found data "
+        f"for these {len(rows)} template row(s) — treat this purely as "
         "navigation hints for where the disclosures live; re-read the PDF "
         "and re-derive every value yourself:\n"
         f"{listed}{more}\n"

@@ -170,6 +170,18 @@ def test_kill_switch(monkeypatch):
     assert out is msgs  # disabled path returns the input untouched
 
 
+def test_kill_switch_strips_stale_warning_mid_run(monkeypatch):
+    """Flipping the switch OFF after a warning was injected must remove it
+    — 'off' means no warning is live, not 'freeze whatever is there'."""
+    cap = agent_tracing.MAX_AGENT_ITERATIONS
+    with_warning = limit_warning_processor(_ctx(steps=cap - 1), _history())
+    assert _warning_texts(with_warning), "precondition: warning injected"
+
+    monkeypatch.setenv("XBRL_LIMIT_WARNINGS", "0")
+    out = limit_warning_processor(_ctx(steps=cap - 1), with_warning)
+    assert _warning_texts(out) == []
+
+
 def test_unexpected_tail_shape_skips_injection():
     """History not ending in a ModelRequest: warn nothing, break nothing."""
     cap = agent_tracing.MAX_AGENT_ITERATIONS
