@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
 import type { ModelEntry } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
 import { flagKindLabel, humanize } from "../lib/vocabulary";
@@ -269,8 +270,8 @@ export function NotesReviewerPanel({ runId }: Props) {
           </span>
         </button>
         {data.has_reviewer_version ? (
-          <span style={styles.badge} data-testid="notes-reviewer-version-indicator">
-            <span aria-hidden="true" style={ui.badgeDot(pwc.info)} />
+          <span style={ui.status} data-testid="notes-reviewer-version-indicator">
+            <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.derived}</span>
             Reviewer version
           </span>
         ) : (

@@ -67,13 +67,13 @@ export interface RunDetailViewProps {
   initialTab?: RunTabKey;
 }
 
-/** Render a status badge from a precomputed display. Caller picks
+/** Render a monochrome status label from a precomputed display. Caller picks
  *  runStatusDisplay vs agentStatusDisplay so the right vocabulary is used
  *  in each context (run-level vs per-agent enums differ slightly). */
 function statusBadge(display: RunStatusDisplay) {
   return (
-    <span style={{ ...ui.badge, borderColor: display.accent }}>
-      <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
+    <span style={ui.status}>
+      <span aria-hidden="true" style={ui.statusSymbol}>{display.symbol}</span>
       {display.label}
     </span>
   );
@@ -850,6 +850,7 @@ export function RunDetailView({
               // Roving tabindex: only the active tab is in the tab order;
               // arrow keys reach the others (WAI-ARIA tabs pattern).
               tabIndex={active ? 0 : -1}
+              className="pwc-tab"
               onClick={() => selectTab(t.key)}
               onKeyDown={(e) => onTabKeyDown(e, i)}
               style={active ? styles.tabActive : styles.tab}
@@ -1017,7 +1018,7 @@ function MetricTile({
   tone?: "neutral" | "success" | "warning";
 }) {
   const accent =
-    tone === "success" ? pwc.success : tone === "warning" ? pwc.warning : undefined;
+    tone === "success" ? pwc.successText : tone === "warning" ? pwc.warningText : undefined;
   return (
     <div style={styles.metricTile}>
       <div style={{ ...styles.metricValue, ...(accent ? { color: accent } : {}) }}>
@@ -1155,31 +1156,16 @@ const styles = {
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   tab: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
-    color: pwc.grey500,
-    background: "transparent",
-    border: "none",
-    borderBottom: "2px solid transparent",
-    marginBottom: -1,
-    cursor: "pointer",
+    ...ui.tab,
+    fontSize: 14,
     // Crossfade the active-tab indicator + label colour when switching
     // (Phase 7 motion tokens).
     transition: `color ${pwc.motion.duration.fast} ${pwc.motion.easing}, border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   tabActive: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 600,
-    color: pwc.orange500,
-    background: "transparent",
-    border: "none",
-    borderBottom: `2px solid ${pwc.orange500}`,
-    marginBottom: -1,
-    cursor: "pointer",
+    ...ui.tab,
+    ...ui.tabActive,
+    fontSize: 14,
     transition: `color ${pwc.motion.duration.fast} ${pwc.motion.easing}, border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   // Full-bleed panel for the Values (Concepts) tab — its 3-column workspace
@@ -1206,13 +1192,14 @@ const styles = {
     fontSize: 20,
     fontWeight: pwc.weight.regular,
     color: pwc.grey900,
+    fontVariantNumeric: "tabular-nums" as const,
   } as React.CSSProperties,
   metricLabel: {
     fontFamily: pwc.fontBody,
     fontSize: 11,
     textTransform: "uppercase" as const,
     letterSpacing: 0.5,
-    color: pwc.grey500,
+    color: pwc.grey700,
   } as React.CSSProperties,
   section: {
     display: "flex",
@@ -1373,10 +1360,7 @@ const styles = {
     marginLeft: "auto",
   } as React.CSSProperties,
   legacyBadge: {
-    ...ui.badgeNeutral,
-    fontSize: 11,
-    border: `1px solid ${pwc.grey200}`,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.3,
+    ...ui.metadata,
+    fontSize: 12,
   } as React.CSSProperties,
 } as const;

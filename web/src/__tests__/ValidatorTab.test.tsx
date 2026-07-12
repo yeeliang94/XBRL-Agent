@@ -123,10 +123,11 @@ describe("ValidatorTab", () => {
     const warningName = screen.getByText(/income tax policy/);
     expect(warningName.closest("tr")).toBeNull();
 
-    // The "Warning" badge label appears exactly once — guard against
-    // accidentally duplicating it into the numeric table body.
+    // The "Warning" status label appears exactly once — guard against
+    // accidentally duplicating it into the numeric table body. The
+    // monochrome status wraps an aria-hidden "!" symbol before the label.
     const warningLabels = Array.from(container.querySelectorAll("span")).filter(
-      (el) => el.textContent === "Warning",
+      (el) => /^!?Warning$/.test(el.textContent ?? ""),
     );
     expect(warningLabels.length).toBe(1);
   });

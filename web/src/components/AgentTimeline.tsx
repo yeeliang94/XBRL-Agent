@@ -3,7 +3,7 @@ import type { SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { ToolCallCard } from "./ToolCallCard";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
-import { runStatusDisplay } from "../lib/runStatus";
+import { STATUS_SYMBOLS, runStatusDisplay } from "../lib/runStatus";
 
 // AgentTimeline is the single replacement for ChatFeed. It renders one row
 // per tool call via ToolCallCard, plus a terminal row for the final
@@ -151,14 +151,10 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
               />
               <span style={styles.terminalLabel}>Run finished</span>
             </div>
-            <span
-              style={{
-                ...ui.badge,
-                borderColor: hasWarnings ? pwc.warning : pwc.success,
-                flexShrink: 0,
-              }}
-            >
-              <span aria-hidden="true" style={ui.badgeDot(hasWarnings ? pwc.warning : pwc.success)} />
+            <span style={{ ...ui.status, flexShrink: 0 }}>
+              <span aria-hidden="true" style={ui.statusSymbol}>
+                {hasWarnings ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.success}
+              </span>
               {hasWarnings ? `Completed · ${warnings!.length} warning${warnings!.length === 1 ? "" : "s"}` : "Completed"}
             </span>
           </div>
@@ -201,8 +197,8 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
             />
             <span style={styles.terminalLabel}>Run finished</span>
           </div>
-          <span style={{ ...ui.badge, borderColor: display.accent, flexShrink: 0 }}>
-            <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
+          <span style={{ ...ui.status, flexShrink: 0 }}>
+            <span aria-hidden="true" style={ui.statusSymbol}>{display.symbol}</span>
             {display.label}
           </span>
         </div>
@@ -236,8 +232,8 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
           />
           <span style={styles.terminalLabel}>{err ?? "Failed"}</span>
         </div>
-        <span style={{ ...ui.badge, borderColor: pwc.error, flexShrink: 0 }}>
-          <span aria-hidden="true" style={ui.badgeDot(pwc.error)} />
+        <span style={{ ...ui.status, flexShrink: 0 }}>
+          <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.failure}</span>
           Failed
         </span>
       </div>
@@ -257,8 +253,8 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
         />
         <span style={styles.terminalLabel}>{msg}</span>
       </div>
-      <span style={{ ...ui.badge, borderColor: pwc.error, flexShrink: 0 }}>
-        <span aria-hidden="true" style={ui.badgeDot(pwc.error)} />
+      <span style={{ ...ui.status, flexShrink: 0 }}>
+        <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.failure}</span>
         Failed
       </span>
     </div>
