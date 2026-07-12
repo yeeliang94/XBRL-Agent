@@ -335,8 +335,9 @@ describe("SettingsModal — P3 enhancements", () => {
 
     await waitFor(() => {
       const errorText = screen.getByText(/Model name is required/);
-      // Error text should use pwc.error (#E5484D → rgb(229, 72, 77))
-      expect(errorText.getAttribute("style")).toContain("rgb(229, 72, 77)");
+      // Error text uses the readable errorText role (#C0303A → rgb(192, 48, 58))
+      // — the bright error hue is reserved for icons/borders (design system v3).
+      expect(errorText.getAttribute("style")).toContain("rgb(192, 48, 58)");
     });
   });
 });

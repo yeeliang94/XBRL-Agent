@@ -33,19 +33,19 @@ const styles = {
   helperText: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.grey500,
+    color: pwc.grey700,
     marginTop: pwc.space.xs,
   } as React.CSSProperties,
   errorText: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.error,
+    color: pwc.errorText,
     marginTop: pwc.space.sm,
   } as React.CSSProperties,
   successText: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.success,
+    color: pwc.successText,
     marginTop: pwc.space.sm,
   } as React.CSSProperties,
   actions: {

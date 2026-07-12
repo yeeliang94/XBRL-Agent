@@ -38,7 +38,7 @@ const styles = {
   error: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.error,
+    color: pwc.errorText,
     marginBottom: pwc.space.md,
   } as React.CSSProperties,
   table: {
@@ -47,16 +47,12 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 13,
   } as React.CSSProperties,
+  // Shared compact table density (design-system Tables).
   th: {
-    textAlign: "left" as const,
-    padding: pwc.space.sm,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    color: pwc.grey500,
-    fontWeight: 500,
+    ...ui.thDense,
   } as React.CSSProperties,
   td: {
-    padding: pwc.space.sm,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    ...ui.tdDense,
     color: pwc.grey900,
     verticalAlign: "middle" as const,
   } as React.CSSProperties,
@@ -106,7 +102,8 @@ const styles = {
     gap: 2,
     fontFamily: pwc.fontHeading,
     fontSize: 11,
-    color: pwc.grey500,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey700,
     textTransform: "uppercase" as const,
     letterSpacing: "0.04em",
   } as React.CSSProperties,

@@ -1,5 +1,7 @@
 import { useRef, useState } from "react";
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
+import { PageHeader } from "../components/PageHeader";
 import { getSettings, updateSettings, testConnection } from "../lib/api";
 import { GeneralSettingsForm } from "../components/GeneralSettingsForm";
 import { AccountTab } from "../components/AccountTab";
@@ -52,7 +54,10 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
 
   return (
     <div className="responsive-page settings-page" style={styles.container}>
-      <h2 style={styles.heading}>Settings</h2>
+      <PageHeader
+        title="Settings"
+        description="Model and proxy configuration, run defaults, your account, and user management."
+      />
 
       <div
         ref={tabBarRef}
@@ -69,6 +74,7 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
               role="tab"
               aria-selected={active}
               tabIndex={active ? 0 : -1}
+              className="pwc-tab"
               onClick={() => setActiveTab(t.key)}
               onKeyDown={(e) => onTabKeyDown(e, i)}
               style={active ? styles.tabActive : styles.tab}
@@ -105,44 +111,23 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
   );
 }
 
-const tabBase: React.CSSProperties = {
-  padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-  fontFamily: pwc.fontHeading,
-  fontSize: 15,
-  fontWeight: pwc.weight.medium,
-  background: "none",
-  border: "none",
-  borderBottom: "2px solid transparent",
-  cursor: "pointer",
-  outline: "none",
-  color: pwc.grey500,
-};
-
 const styles = {
+  // Form mode (design-system Layouts): 840px, matching the other pages'
+  // task-based widths instead of a bespoke 640 cap.
   container: {
-    maxWidth: 640,
-    margin: "0 auto",
-    padding: pwc.space.xl,
-  } as React.CSSProperties,
-  heading: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: pwc.weight.medium,
-    fontSize: 22,
-    color: pwc.grey900,
-    margin: 0,
-    marginBottom: pwc.space.lg,
+    ...ui.pageForm,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xl,
   } as React.CSSProperties,
   tabBar: {
-    display: "flex",
-    gap: pwc.space.sm,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    marginBottom: pwc.space.xl,
+    ...ui.tabBar,
   } as React.CSSProperties,
-  tab: tabBase,
+  // Shared underline tab geometry; active = dark text + orange indicator.
+  tab: ui.tab,
   tabActive: {
-    ...tabBase,
-    color: pwc.orange500,
-    borderBottom: `2px solid ${pwc.orange500}`,
+    ...ui.tab,
+    ...ui.tabActive,
   } as React.CSSProperties,
   section: {} as React.CSSProperties,
 };

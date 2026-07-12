@@ -78,29 +78,21 @@ const styles = {
   labelExtra: {
     fontFamily: pwc.fontBody,
     fontWeight: 400,
-    color: pwc.grey500,
+    color: pwc.grey700,
     marginLeft: pwc.space.sm,
   } as React.CSSProperties,
+  // Shared control primitive: 44px targets + perceptible (3:1) boundaries.
   input: {
+    ...ui.input,
     width: "100%",
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
     fontSize: 14,
-    color: pwc.grey900,
-    outline: "none",
     boxSizing: "border-box" as const,
   } as React.CSSProperties,
   inputMono: {
+    ...ui.input,
     width: "100%",
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
     fontFamily: pwc.fontMono,
     fontSize: 13,
-    color: pwc.grey900,
-    outline: "none",
     boxSizing: "border-box" as const,
   } as React.CSSProperties,
   inputError: {
@@ -109,13 +101,13 @@ const styles = {
   helperText: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.grey500,
+    color: pwc.grey700,
     marginTop: pwc.space.xs,
   } as React.CSSProperties,
   errorText: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.error,
+    color: pwc.errorText,
     marginTop: pwc.space.xs,
   } as React.CSSProperties,
   actions: {
@@ -165,7 +157,7 @@ const styles = {
   savedBadge: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.success,
+    color: pwc.successText,
   } as React.CSSProperties,
   unsavedBadge: {
     fontFamily: pwc.fontBody,
@@ -205,7 +197,7 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 12,
     fontWeight: pwc.weight.medium,
-    color: pwc.success,
+    color: pwc.successText,
   } as React.CSSProperties,
   notesPreview: {
     maxWidth: 360,
@@ -223,7 +215,7 @@ const styles = {
   loadError: {
     fontFamily: pwc.fontBody,
     fontSize: 14,
-    color: pwc.error,
+    color: pwc.errorText,
     marginBottom: pwc.space.lg,
   } as React.CSSProperties,
 };
