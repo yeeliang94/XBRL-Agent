@@ -66,7 +66,7 @@ const styles = {
   userEmail: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    color: pwc.grey500,
+    color: pwc.grey700,
   } as const,
   logoutButton: {
     ...ui.buttonGhost,
@@ -563,7 +563,9 @@ export default function App() {
       {/* Header */}
       <header className="app-header" style={styles.header}>
         <div className="app-header-left" style={styles.headerLeft}>
-          <h1 style={styles.headerTitle}>XBRL Agent</h1>
+          {/* Brand wordmark — deliberately NOT an h1: each destination owns
+              its single page-level heading (design-system Tabs & navigation). */}
+          <span style={styles.headerTitle}>XBRL Agent</span>
           <TopNav
             // The `concepts` view with a run id is the unified run page (a
             // History activity reached via "Review values" / the /concepts
