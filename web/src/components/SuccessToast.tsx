@@ -106,7 +106,7 @@ const styles = {
     gap: pwc.space.md,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     borderRadius: pwc.radius.md,
-    boxShadow: pwc.shadow.card,
+    boxShadow: pwc.shadow.elevated,
     fontFamily: pwc.fontBody,
     fontSize: 14,
     minWidth: 260,

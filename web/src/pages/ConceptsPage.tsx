@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { NotesReviewTab } from "../components/NotesReviewTab";
 import { NotesCoverageNav } from "../components/NotesCoverageNav";
@@ -2260,14 +2261,18 @@ function StatusBadge({
   label: string;
   tone: "neutral" | "accent" | "error";
 }) {
-  // Outline pill (design-system Badges): border + dot carry the tone, neutral
-  // label. The dot uses grey500 for the neutral tone (grey300 border stays).
-  const accent =
-    tone === "accent" ? pwc.orange500 : tone === "error" ? pwc.error : pwc.grey300;
-  const dot = tone === "neutral" ? pwc.grey500 : accent;
+  // Monochrome value state (design-system Status / Financial rule F3):
+  // neutral symbol + explicit text — never a coloured pill. error → action
+  // required (!), accent (edited/saved) → ✓, neutral (computed etc.) → ◇.
+  const symbol =
+    tone === "error"
+      ? STATUS_SYMBOLS.attention
+      : tone === "accent"
+      ? STATUS_SYMBOLS.success
+      : STATUS_SYMBOLS.derived;
   return (
-    <span style={{ ...ui.badge, borderColor: accent }}>
-      <span aria-hidden="true" style={ui.badgeDot(dot)} />
+    <span style={{ ...ui.status, fontSize: 12 }}>
+      <span aria-hidden="true" style={{ ...ui.statusSymbol, fontSize: 12 }}>{symbol}</span>
       {label.replace(/_/g, " ")}
     </span>
   );

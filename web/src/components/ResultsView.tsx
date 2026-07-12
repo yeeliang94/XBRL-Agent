@@ -384,10 +384,8 @@ function SummaryTab({ complete, runStartTime }: { complete: CompleteData; runSta
                 (complete.success ? "completed" : "failed");
               const display = runStatusDisplay(status);
               return (
-                <span
-                  style={{ ...ui.badge, borderColor: display.accent }}
-                >
-                  <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
+                <span style={ui.status}>
+                  <span aria-hidden="true" style={ui.statusSymbol}>{display.symbol}</span>
                   {display.label}
                 </span>
               );
