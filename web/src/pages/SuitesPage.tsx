@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { userMessage } from "../lib/errors";
-import { TERMS } from "../lib/vocabulary";
+import { TERMS, humanize } from "../lib/vocabulary";
+import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/EmptyState";
+import { StatusLabel, type StatusState } from "../components/StatusLabel";
 import {
   fetchSuites, createSuite, getSuite, addSuiteDoc, deleteSuiteDoc,
   listSuiteRuns, estimateSuiteRun, launchSuiteRun, resumeSuiteRun, stopSuiteRun,
@@ -82,14 +85,12 @@ function SuiteList({ onOpen }: { onOpen: (id: number) => void }) {
 
   return (
     <div className="responsive-page" style={styles.page}>
-      <div>
-        <h1 style={styles.title}>{TERMS.evaluationSuites}</h1>
-        <p style={styles.subtitle}>
-          Group documents into a suite, run the whole set as one batch, and track
-          accuracy, consistency, and health over time.
-        </p>
-      </div>
-      <div style={styles.card}>
+      <PageHeader
+        title={TERMS.evaluationSuites}
+        description="Group documents into a suite, run the whole set as one batch, and track accuracy, consistency, and health over time."
+      />
+      <div style={styles.createGroup}>
+        <div style={styles.cardTitle}>Create a suite</div>
         <label htmlFor="suite-name" style={ui.fieldLabel}>Suite name</label>
         <div style={styles.formRow}>
           <input
@@ -108,12 +109,11 @@ function SuiteList({ onOpen }: { onOpen: (id: number) => void }) {
         {error && <span style={styles.error}>{error}</span>}
       </div>
       {suites.length === 0 ? (
-        <div data-testid="suites-empty" style={ui.emptyState}>
-          <strong>No evaluation suites yet</strong>
-          <span>
-            Create one above, add representative filings, then run them together
-            to compare extraction accuracy, consistency, and run health over time.
-          </span>
+        <div data-testid="suites-empty">
+          <EmptyState
+            title="No evaluation suites yet"
+            explanation="Create one above, add representative filings, then run them together to compare extraction accuracy, consistency, and run health over time."
+          />
         </div>
       ) : (
         <div style={styles.list}>
@@ -121,6 +121,7 @@ function SuiteList({ onOpen }: { onOpen: (id: number) => void }) {
             <button
               key={s.id}
               data-testid={`suite-card-${s.id}`}
+              className={uiClass.card}
               style={styles.rowCard}
               onClick={() => onOpen(s.id)}
             >
@@ -159,7 +160,7 @@ function SuiteDetail({
   return (
     <div className="responsive-page" style={styles.page}>
       <button style={styles.back} onClick={onBack}>← All suites</button>
-      <h1 style={styles.title}>{suite.name}</h1>
+      <h1 style={ui.pageTitleCompact}>{suite.name}</h1>
       <div style={styles.tabBar}>
         <TabBtn active={tab === "setup"} onClick={() => setTab("setup")} testid="suite-tab-setup">
           Documents &amp; runs
@@ -467,13 +468,13 @@ function SuiteRunDetail({
   return (
     <div className="responsive-page" style={styles.page}>
       <button style={styles.back} onClick={onBack}>← Back to suite</button>
-      <h1 style={styles.title}>
+      <h1 style={{ ...ui.pageTitleCompact, display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap" }}>
         Suite run #{suiteRunId} <StatusChip status={detail.suite_run.status} />
         {running && (
           <button
             data-testid="suite-run-detail-stop"
-            className={uiClass.btnPrimary}
-            style={{ ...ui.buttonPrimary, marginLeft: pwc.space.md, opacity: stopping ? 0.6 : 1 }}
+            className={uiClass.btnDanger}
+            style={{ ...ui.buttonDanger, ...ui.buttonSm, marginLeft: pwc.space.md, opacity: stopping ? 0.6 : 1 }}
             disabled={stopping}
             onClick={() => {
               setStopping(true);
@@ -683,25 +684,32 @@ function TabBtn({ active, onClick, children, testid }: {
   active: boolean; onClick: () => void; children: React.ReactNode; testid: string;
 }) {
   return (
-    <button data-testid={testid} onClick={onClick} style={{
-      fontFamily: pwc.fontHeading, fontSize: 14, fontWeight: active ? 600 : 500,
-      padding: "8px 16px", border: "none", borderBottom: `2px solid ${active ? pwc.orange500 : "transparent"}`,
-      background: "none", color: active ? pwc.grey900 : pwc.grey500, cursor: "pointer",
-    }}>{children}</button>
+    <button
+      data-testid={testid}
+      onClick={onClick}
+      className={uiClass.tab}
+      aria-selected={active}
+      style={active ? { ...ui.tab, ...ui.tabActive } : ui.tab}
+    >
+      {children}
+    </button>
   );
 }
 
 function StatusChip({ status }: { status: string }) {
-  const tone =
-    status === "complete" || status === "completed" ? pwc.successText :
-    status === "failed" ? pwc.errorText :
-    status === "running" ? pwc.orange500 : pwc.grey700;
-  return (
-    <span style={{
-      display: "inline-block", fontSize: 12, fontWeight: 600, color: tone,
-      border: `1px solid ${tone}`, borderRadius: pwc.radius.sm, padding: "1px 8px",
-    }}>{status}</span>
-  );
+  // Raw suite/run enums → explicit human label + canonical neutral symbol
+  // (design-system Status: no coloured dot, border, pill, or fill).
+  const state: StatusState =
+    status === "complete" || status === "completed" ? "success" :
+    status === "failed" ? "failure" :
+    status === "running" ? "inProgress" :
+    status === "partial" || status === "completed_with_errors" ? "attention" :
+    "inactive";
+  const label =
+    status === "complete" ? "Completed" :
+    status === "partial" ? "Partial — resume to finish" :
+    humanize(status);
+  return <StatusLabel state={state} label={label} />;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -714,32 +722,32 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 const styles = {
-  page: { display: "flex", flexDirection: "column" as const, gap: pwc.space.xl } as React.CSSProperties,
-  title: { fontFamily: pwc.fontHeading, fontSize: 24, fontWeight: pwc.weight.medium, color: pwc.grey900, margin: 0 } as React.CSSProperties,
-  subtitle: { margin: `${pwc.space.sm}px 0 0`, color: pwc.grey700, fontSize: 14, maxWidth: 640, lineHeight: 1.5 } as React.CSSProperties,
+  page: { ...ui.pageStandard, display: "flex", flexDirection: "column" as const, gap: pwc.space.xl } as React.CSSProperties,
   back: { alignSelf: "flex-start", background: "none", border: "none", color: pwc.grey700, cursor: "pointer", fontSize: 13, padding: 0 } as React.CSSProperties,
   card: { ...ui.card, padding: pwc.space.xl, display: "flex", flexDirection: "column" as const, gap: pwc.space.md } as React.CSSProperties,
-  cardTitle: { fontFamily: pwc.fontHeading, fontSize: 15, fontWeight: 600, color: pwc.grey900 } as React.CSSProperties,
+  // Compact bordered setup group — related controls, not another equal card.
+  createGroup: { ...ui.borderedGroup, display: "flex", flexDirection: "column" as const, gap: pwc.space.sm, maxWidth: 560 } as React.CSSProperties,
+  cardTitle: { ...ui.subsectionTitle, fontSize: 15 } as React.CSSProperties,
   formRow: { display: "flex", gap: pwc.space.md, alignItems: "center", flexWrap: "wrap" as const } as React.CSSProperties,
   grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: pwc.space.md } as React.CSSProperties,
   field: { display: "flex", flexDirection: "column" as const, gap: pwc.space.xs } as React.CSSProperties,
-  fieldHint: { color: pwc.grey500, fontSize: 12, lineHeight: 1.4 } as React.CSSProperties,
+  fieldHint: { color: pwc.grey700, fontSize: 12, lineHeight: 1.4 } as React.CSSProperties,
   list: { display: "flex", flexDirection: "column" as const, gap: pwc.space.sm } as React.CSSProperties,
   rowCard: { ...ui.card, padding: pwc.space.lg, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", textAlign: "left" as const, background: pwc.white } as React.CSSProperties,
   rowTitle: { fontFamily: pwc.fontHeading, fontSize: 15, fontWeight: 600, color: pwc.grey900 } as React.CSSProperties,
-  rowMeta: { fontSize: 13, color: pwc.grey500 } as React.CSSProperties,
-  tabBar: { display: "flex", gap: pwc.space.sm, borderBottom: `1px solid ${pwc.grey200}` } as React.CSSProperties,
+  rowMeta: { fontSize: 13, color: pwc.grey700 } as React.CSSProperties,
+  tabBar: { ...ui.tabBar } as React.CSSProperties,
   metricStrip: { display: "flex", gap: pwc.space.md, flexWrap: "wrap" as const } as React.CSSProperties,
-  metric: { ...ui.card, padding: pwc.space.lg, display: "flex", flexDirection: "column" as const, gap: 2, minWidth: 140 } as React.CSSProperties,
-  metricValue: { fontFamily: pwc.fontMono, fontSize: 22, color: pwc.grey900 } as React.CSSProperties,
-  metricLabel: { fontFamily: pwc.fontHeading, fontSize: 12, fontWeight: 500, color: pwc.grey500 } as React.CSSProperties,
+  metric: { ...ui.statTile, display: "flex", flexDirection: "column" as const, gap: 2, minWidth: 140 } as React.CSSProperties,
+  metricValue: { fontFamily: pwc.fontHeading, fontWeight: pwc.weight.regular, fontSize: 22, color: pwc.grey900 } as React.CSSProperties,
+  metricLabel: { fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey700 } as React.CSSProperties,
   tableWrap: { overflowX: "auto" as const, border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md } as React.CSSProperties,
   table: { borderCollapse: "collapse" as const, width: "100%", fontSize: 13 } as React.CSSProperties,
-  th: { textAlign: "left" as const, padding: "8px 12px", fontFamily: pwc.fontHeading, fontSize: 12, fontWeight: 600, color: pwc.grey700, background: pwc.grey100, borderBottom: `1px solid ${pwc.grey200}` } as React.CSSProperties,
-  thNum: { textAlign: "right" as const, padding: "8px 12px", fontFamily: pwc.fontHeading, fontSize: 12, fontWeight: 600, color: pwc.grey700, background: pwc.grey100, borderBottom: `1px solid ${pwc.grey200}` } as React.CSSProperties,
-  td: { padding: "8px 12px", borderBottom: `1px solid ${pwc.grey100}`, color: pwc.grey800 } as React.CSSProperties,
-  tdNum: { padding: "8px 12px", borderBottom: `1px solid ${pwc.grey100}`, color: pwc.grey800, textAlign: "right" as const, fontFamily: pwc.fontMono } as React.CSSProperties,
-  linkBtn: { background: "none", border: "none", color: pwc.orange500, cursor: "pointer", fontSize: 13, padding: "0 8px 0 0" } as React.CSSProperties,
+  th: { ...ui.thDense } as React.CSSProperties,
+  thNum: { ...ui.thDense, textAlign: "right" as const } as React.CSSProperties,
+  td: { ...ui.tdDense, color: pwc.grey800 } as React.CSSProperties,
+  tdNum: { ...ui.tdDense, color: pwc.grey800, textAlign: "right" as const, fontFamily: pwc.fontMono, fontVariantNumeric: "tabular-nums" } as React.CSSProperties,
+  linkBtn: { background: "none", border: "none", color: tokens.color.action.primary, cursor: "pointer", fontSize: 13, padding: "4px 8px 4px 0" } as React.CSSProperties,
   estimate: { fontSize: 13, color: pwc.grey700, background: pwc.grey50, padding: pwc.space.md, borderRadius: pwc.radius.sm } as React.CSSProperties,
   error: { color: pwc.errorText, fontSize: 13 } as React.CSSProperties,
   warn: { color: pwc.grey800, fontSize: 13, borderLeft: `3px solid ${pwc.warning}`, paddingLeft: pwc.space.md } as React.CSSProperties,

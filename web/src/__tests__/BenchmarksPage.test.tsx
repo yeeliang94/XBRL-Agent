@@ -246,4 +246,21 @@ describe("BenchmarksPage", () => {
       JSON.stringify(["mfrs-company-sofp-cunoncu-v1"]),
     );
   });
+
+  test("Add benchmark collapses when a library exists; open when empty (CS4)", async () => {
+    mockFetch((url) => (url === "/api/benchmarks" ? { benchmarks: [] } : {}));
+    const { unmount } = render(
+      <BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />,
+    );
+    await screen.findByTestId("benchmarks-empty");
+    const openDetails = screen.getByText("Add benchmark").closest("details")!;
+    expect(openDetails.hasAttribute("open")).toBe(true);
+    unmount();
+
+    mockFetch((url) => (url === "/api/benchmarks" ? sampleList : {}));
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    await screen.findByTestId("benchmark-card-1");
+    const closedDetails = screen.getByText("Add benchmark").closest("details")!;
+    expect(closedDetails.hasAttribute("open")).toBe(false);
+  });
 });

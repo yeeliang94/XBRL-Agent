@@ -106,4 +106,34 @@ describe("SuitesPage", () => {
     expect(screen.getByTestId("compare-a")).toBeTruthy();
     expect(screen.getByTestId("compare-b")).toBeTruthy();
   });
+
+  test("empty state separates title, explanation, and the create action (CS4)", async () => {
+    mockRoutes((url) => (url === "/api/suites" ? { suites: [] } : {}));
+    render(<SuitesPage />);
+    const empty = await screen.findByTestId("suites-empty");
+    const title = screen.getByText("No evaluation suites yet");
+    // Title and explanation are distinct elements — no run-together text.
+    expect(title.textContent).toBe("No evaluation suites yet");
+    expect(empty.textContent).toContain("Create one above");
+    expect(screen.getByTestId("suite-create")).toBeTruthy();
+  });
+
+  test("suite-run status renders as monochrome symbol + human label (CS4)", async () => {
+    mockRoutes((url) => {
+      if (url === "/api/suites") return { suites: [{ id: 1, name: "S", created_at: "", updated_at: "", doc_count: 1, run_count: 1 }] };
+      if (url === "/api/suites/1") return { id: 1, name: "S", created_at: "", updated_at: "", docs: [] };
+      if (url === "/api/suites/1/runs")
+        return { suite_run_list: [{ id: 7, suite_id: 1, label: "", status: "partial", created_at: "2026-07-01T00:00:00Z" }] };
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      return {};
+    });
+    render(<SuitesPage />);
+    fireEvent.click(await screen.findByTestId("suite-card-1"));
+    const row = await screen.findByTestId("suite-run-7");
+    // Raw enum "partial" is translated, and the symbol is neutral aria-hidden.
+    expect(row.textContent).toContain("Partial — resume to finish");
+    const symbol = row.querySelector('[aria-hidden="true"]');
+    expect(symbol?.textContent).toBe("!");
+    expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
+  });
 });
