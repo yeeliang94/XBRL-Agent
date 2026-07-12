@@ -7,6 +7,8 @@ import type { RunSummaryJson } from "../lib/types";
 import type { BenchmarkJson } from "../lib/types";
 import { ConceptsPage } from "./ConceptsPage";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/EmptyState";
 
 // ---------------------------------------------------------------------------
 // BenchmarksPage — gold-standard eval library (v16).
@@ -77,28 +79,32 @@ export function BenchmarksPage({ selectedId, onSelectBenchmark }: BenchmarksPage
   }
 
   // List mode.
+  const hasBenchmarks = benchmarks.length > 0;
   return (
     <div data-testid="benchmarks-page" className="responsive-page" style={styles.page}>
-      <header style={styles.header}>
-        <div>
-          <h1 style={styles.title}>Benchmarks</h1>
-          <p style={styles.subtitle}>
-            A library of financial statements with human-verified reference answers.
-            Attach one to a run to score extraction accuracy automatically.
-          </p>
-        </div>
-      </header>
+      <PageHeader
+        title="Benchmarks"
+        description="A library of financial statements with human-verified reference answers. Attach one to a run to score extraction accuracy automatically."
+      />
 
-      <AddBenchmarkForm onCreated={refresh} />
+      {/* Setup group: open and primary in the empty state; collapsed once a
+          library exists so the list leads. Uncontrolled <details> keeps the
+          user's toggle. */}
+      <details style={styles.addGroup} open={hasBenchmarks ? undefined : true}>
+        <summary style={styles.addSummary}>Add benchmark</summary>
+        <AddBenchmarkForm onCreated={refresh} />
+      </details>
 
       {loadError && (
-        <div style={styles.errorBanner}>Failed to load benchmarks: {loadError}</div>
+        <div role="alert" style={styles.errorBanner}>Failed to load benchmarks: {loadError}</div>
       )}
 
       {benchmarks.length === 0 ? (
-        <div data-testid="benchmarks-empty" style={styles.emptyCard}>
-          No benchmarks yet. Upload a human-filled MBRS template workbook above
-          to create your first one.
+        <div data-testid="benchmarks-empty">
+          <EmptyState
+            title="No benchmarks yet"
+            explanation="Seed reference answers from a finished run (recommended) or upload a human-filled MBRS template workbook above to create your first one."
+          />
         </div>
       ) : (
         <div style={styles.list}>
@@ -401,7 +407,6 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
       onSubmit={submit}
       style={styles.formCard}
     >
-      <div style={styles.formTitle}>Add benchmark</div>
       <div style={ui.fieldLabel}>Build reference answers from</div>
       <div role="radiogroup" aria-label="Build reference answers from" style={styles.modeRow}>
         <label style={styles.modeOption}>
@@ -640,41 +645,25 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
 
 const styles = {
   page: {
+    ...ui.pageStandard,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xl,
   } as React.CSSProperties,
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
+  addGroup: {
+    ...ui.borderedGroup,
+    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
   } as React.CSSProperties,
-  title: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 24,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
-    margin: 0,
-  } as React.CSSProperties,
-  subtitle: {
-    margin: `${pwc.space.sm}px 0 0`,
-    color: pwc.grey700,
-    fontSize: 14,
-    maxWidth: 640,
-    lineHeight: 1.5,
+  addSummary: {
+    ...ui.subsectionTitle,
+    fontSize: 15,
+    cursor: "pointer",
   } as React.CSSProperties,
   formCard: {
-    ...ui.card,
-    padding: pwc.space.xl,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.lg,
-  } as React.CSSProperties,
-  formTitle: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 16,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
+    paddingTop: pwc.space.lg,
   } as React.CSSProperties,
   formGrid: {
     display: "grid",
@@ -774,13 +763,6 @@ const styles = {
     color: pwc.grey800,
     fontSize: 13,
   } as React.CSSProperties,
-  emptyCard: {
-    ...ui.card,
-    padding: pwc.space.xxl,
-    textAlign: "center" as const,
-    color: pwc.grey700,
-    fontSize: 14,
-  } as React.CSSProperties,
   list: {
     display: "flex",
     flexDirection: "column" as const,
@@ -826,7 +808,7 @@ const styles = {
     alignItems: "center",
   } as React.CSSProperties,
   cardStatements: {
-    color: pwc.grey500,
+    color: pwc.grey700,
     fontSize: 13,
   } as React.CSSProperties,
   editorHeader: {
@@ -836,11 +818,7 @@ const styles = {
     marginBottom: pwc.space.lg,
   } as React.CSSProperties,
   editorTitle: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 20,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
-    margin: 0,
+    ...ui.pageTitleCompact,
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,

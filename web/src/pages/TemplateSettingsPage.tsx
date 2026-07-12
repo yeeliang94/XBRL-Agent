@@ -139,8 +139,9 @@ export function TemplateSettingsPage() {
         description="Rename how individual template line items are labelled on screen. This doesn't change the XBRL — only the display text."
       />
       {error && (
-        <div style={{ color: pwc.error, marginBottom: pwc.space.md }}>
-          {error}
+        <div role="alert" style={ui.alertError}>
+          <span aria-hidden="true" style={ui.alertIcon(pwc.error)}>✕</span>
+          <div>{error}</div>
         </div>
       )}
       {loading ? (
@@ -182,7 +183,11 @@ export function TemplateSettingsPage() {
             </optgroup>
           ))}
         </select>
+        <label htmlFor="ts-search" style={ui.fieldLabel}>
+          Search
+        </label>
         <input
+          id="ts-search"
           type="search"
           data-testid="ts-search"
           value={query}
@@ -314,8 +319,9 @@ function TemplateConceptRow({
                   {label}
             {/* Flag a customised label so it's easy to spot what's been
                 changed from the taxonomy default (E8). */}
-                  <span style={styles.editedChip} data-testid={`ts-edited-${concept.concept_uuid}`}>
-                    edited
+                  <span style={styles.edited} data-testid={`ts-edited-${concept.concept_uuid}`}>
+                    <span aria-hidden="true" style={ui.statusSymbol}>✓</span>
+                    Edited
                   </span>
                 </span>
               </div>
@@ -330,8 +336,8 @@ function TemplateConceptRow({
               <button
                 data-testid={`ts-reset-btn-${concept.concept_uuid}`}
                 onClick={() => void onRename(concept.concept_uuid, null)}
-                className={uiClass.btnSubtle}
-                style={{ ...ui.buttonSubtle, ...ui.buttonSm }}
+                className={uiClass.btnQuiet}
+                style={{ ...ui.buttonQuiet, ...ui.buttonSm }}
               >
                 Reset
               </button>
@@ -351,8 +357,8 @@ function TemplateConceptRow({
             <button
               data-testid={`ts-rename-cancel-${concept.concept_uuid}`}
               onClick={cancel}
-              className={uiClass.btnSubtle}
-              style={{ ...ui.buttonSubtle, ...ui.buttonSm }}
+              className={uiClass.btnQuiet}
+              style={{ ...ui.buttonQuiet, ...ui.buttonSm }}
             >
               Cancel
             </button>
@@ -372,16 +378,17 @@ function TemplateConceptRow({
 }
 
 const styles = {
+  // Wide-list mode (design-system Layouts): shared 1440px cap, no bespoke
+  // clamp-based padding.
   page: {
-    padding: `${pwc.space.lg}px calc(clamp(${pwc.space.xxl}px, 3vw, ${pwc.space.xxxl}px) - ${pwc.space.lg}px)`,
+    ...ui.pageWide,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xxl,
+    gap: pwc.space.xl,
   } as React.CSSProperties,
   toolbar: {
-    display: "flex",
+    ...ui.filterToolbar,
     alignItems: "center",
-    gap: pwc.space.lg,
   } as React.CSSProperties,
   legend: {
     display: "flex",
@@ -398,19 +405,15 @@ const styles = {
     height: 14,
     background: pwc.grey100,
     border: `1px solid ${pwc.grey300}`,
-    borderRadius: 2,
+    borderRadius: pwc.radius.sm,
     flexShrink: 0,
   } as React.CSSProperties,
-  editedChip: {
+  // Neutral edited marker: standard symbol + explicit label, no chip.
+  edited: {
+    ...ui.status,
     marginLeft: pwc.space.sm,
-    padding: `1px ${pwc.space.xs}px`,
-    fontSize: 11,
-    fontWeight: pwc.weight.medium,
+    fontSize: 12,
     color: pwc.grey700,
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: 3,
-    verticalAlign: "middle",
   } as React.CSSProperties,
   labelLine: {
     display: "grid",
@@ -419,7 +422,7 @@ const styles = {
     alignItems: "baseline",
   } as React.CSSProperties,
   labelKey: {
-    color: pwc.grey500,
+    color: pwc.grey700,
     fontSize: 12,
     fontWeight: pwc.weight.medium,
     textTransform: "uppercase" as const,
