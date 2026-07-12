@@ -2,7 +2,52 @@
 
 **Audited source:** `docs/pwc-design-system.html`  
 **Compared with:** `web/src/lib/theme.ts`, `web/src/lib/uiStyles.ts`, `web/src/index.css`, `PageHeader.tsx`, `TopNav.tsx`, and the current UI/UX implementation plans  
-**Date:** 11 July 2026
+**Date:** 11 July 2026  
+**Status update:** 12 July 2026 — recommendations incorporated into the v3 specification
+
+## Implementation Status (12 July 2026)
+
+The v3 design system (`docs/pwc-design-system.html`, promoted from the v3
+review draft) incorporates this audit's recommendations. The findings below
+are retained as the audit trail; they no longer describe gaps in the
+specification:
+
+- **Governance / source-of-truth (P0)** — resolved. The spec header now
+  states the three-layer model (specification → implementation → parity
+  tests) and the lockstep rule.
+- **Inline-style rule (P0)** — resolved. Rule 01 states the narrow
+  distinction: inline values, `uiClass.*` hooks only for states inline
+  styles cannot express.
+- **Cards as default composition (P1)** — resolved. The Cards section and
+  Layouts rule L5 document the grouping order; only interactive cards get
+  the hover hook, and cards never lift.
+- **Badge appropriateness (P1)** — resolved and superseded: routine status
+  is now the monochrome symbol-plus-text language (Status section); outline
+  badges are reserved for exceptional compact identification.
+- **Application layout patterns (P1)** — resolved. Layouts & density section
+  documents the canonical page modes and responsive/viewport contracts.
+- **Financial-data patterns (P1)** — resolved. The Financial data section
+  (rules F1–F7) is present.
+- **Typography drift (P1)** — resolved. The compact semantic scale
+  (28/22/20/15/13–14/11–12) is specified and implemented in `ui.*` roles.
+- **Motion guidance (P1)** — resolved. Motion section (M1–M5) is present.
+- **Navigation semantics (P1)** — resolved in the spec (destinations are
+  links; tabs are alternate views of one resource); production adoption is
+  tracked in the spec's Page adoption matrix.
+- **Accessibility acceptance criteria (P1)** — resolved. Rules A–L cover
+  focus, contrast roles, targets, announcements, zoom, reflow, and
+  forced-colors.
+- **Component/state coverage & content principles (P2)** — resolved. The
+  Content & states section lists the required product patterns and the
+  complete-component contract defines the 12-point standard.
+- **Specification parity tests (P2)** — resolved.
+  `designSystemParity.test.ts`, `uiStyles.test.ts`, `cssTokens.test.ts`, and
+  `contrastMatrix.test.ts` pin tokens, primitives, state hooks, and contrast
+  contracts.
+
+Page-level adoption status lives in the specification's **Page adoption**
+section and is updated per change set of
+`docs/PLAN-app-wide-design-consistency.md`.
 
 ## Executive Summary
 

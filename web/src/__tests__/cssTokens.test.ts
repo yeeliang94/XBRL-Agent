@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, test, expect } from "vitest";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
 
 // Read the CSS files at test time. Paths are relative to the vitest cwd (the
 // web/ package root). `fs` is typed by src/node-shims.d.ts so this compiles
@@ -18,18 +18,16 @@ import { pwc } from "../lib/theme";
 const indexCss = readFileSync("src/index.css", "utf8").toUpperCase();
 const notesCss = readFileSync("src/components/NotesReviewTab.css", "utf8").toUpperCase();
 
-// token name -> the colour value the CSS file must contain
+// pwc token name -> the colour value index.css must contain
 const INDEX_TOKENS = [
-  "orange500", // focus ring border + :focus-visible
-  "orange700", // primary button hover
-  "orange50", // focus ring shadow + ghost hover
-  "grey50", // body bg, secondary hover, row/tab hover
-  "grey200", // subtle button hover
+  "orange50", // form-control focus halo
+  "grey50", // body bg, secondary/quiet-surface hover, row/tab hover
+  "grey100", // quiet button hover
   "grey300", // secondary hover border + scrollbar thumb
-  "grey500", // scrollbar thumb hover
-  "grey900", // body text + agent-tab hover text
+  "grey500", // scrollbar thumb hover + interactive-card hover border
+  "grey900", // body text, two-part focus outline, hover text
   "errorBg", // danger button hover background
-  "error", // danger button hover border
+  "errorText", // danger button hover border
 ] as const;
 
 const NOTES_TOKENS = [
@@ -48,5 +46,20 @@ describe("CSS interaction colours stay in sync with theme tokens", () => {
 
   test.each(NOTES_TOKENS)("NotesReviewTab.css uses theme token %s", (token) => {
     expect(notesCss).toContain((pwc[token] as string).toUpperCase());
+  });
+
+  test("index.css primary-button hover uses the semantic action hover role", () => {
+    expect(indexCss).toContain(tokens.color.action.primaryHover.toUpperCase());
+  });
+
+  test("index.css form-control focus border uses the semantic action role", () => {
+    expect(indexCss).toContain(tokens.color.action.primary.toUpperCase());
+  });
+
+  test("interactive cards respond with border/surface, never a lift", () => {
+    const cardHover = indexCss.slice(indexCss.indexOf(".PWC-CARD"));
+    const hoverBlock = cardHover.slice(0, cardHover.indexOf("}") + 400);
+    expect(hoverBlock).not.toContain("TRANSLATEY(-");
+    expect(indexCss).not.toContain("TRANSFORM: TRANSLATEY(-2PX)");
   });
 });

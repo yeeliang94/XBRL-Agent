@@ -12,20 +12,42 @@ import { humanize } from "./vocabulary";
 //       running | succeeded | failed | cancelled
 //     (`coordinator.py:74,429`).
 //
-// The frontend's old hard-coded color maps only knew completed|running|
-// failed|aborted, so any non-matching status fell through to a muted grey
-// "raw enum" badge — visually inconsistent and confusing for users.
-//
-// This module is the single source of truth for status → label/color
+// This module is the single source of truth for status → label/symbol
 // mapping. Any new status added on the backend should be added here too.
+//
+// Design-system Status: routine status is MONOCHROME — a neutral symbol plus
+// explicit text, never a coloured dot, pill, border, or fill. The canonical
+// symbol families are:
+//   ○  in progress
+//   ✓  successful / verified / completed / extracted
+//   !  action required / needs review / no source
+//   ×  failed / aborted
+//   –  draft / not started / skipped / unavailable / not applicable
+//   ◇  calculated / derived
+// Add a symbol only for a genuinely different user-facing concept, not every
+// backend enum — the explicit label carries the precise state.
 // ---------------------------------------------------------------------------
+
+export const STATUS_SYMBOLS = {
+  inProgress: "○",
+  success: "✓",
+  attention: "!",
+  failure: "×",
+  inactive: "–",
+  derived: "◇",
+} as const;
+
+export type StatusSymbol = (typeof STATUS_SYMBOLS)[keyof typeof STATUS_SYMBOLS];
 
 export interface RunStatusDisplay {
   label: string;
-  // `accent` is the bright status hue used for the outline badge's border +
-  // dot (design-system Badges: status is an accent, not a fill). `color`/`bg`
-  // are the legacy soft-fill tokens, kept for the rare emphasis surfaces that
-  // still tint a background (not used by the status badges anymore).
+  /** Canonical neutral symbol (aria-hidden in the UI; the label is the
+   *  accessible name). */
+  symbol: StatusSymbol;
+  // `accent` is the bright status hue retained for the EXCEPTIONAL surfaces
+  // that still colour an accent (alerts, attention rules, charts). Routine
+  // status rendering must not use it. `color`/`bg` are the legacy soft-fill
+  // tokens, kept for the rare emphasis surfaces that tint a background.
   accent: string;
   color: string;
   bg: string;
@@ -33,6 +55,7 @@ export interface RunStatusDisplay {
 
 const FALLBACK: RunStatusDisplay = {
   label: "Unknown",
+  symbol: STATUS_SYMBOLS.inactive,
   accent: pwc.grey500,
   color: pwc.grey700,
   bg: pwc.grey100,
@@ -40,30 +63,28 @@ const FALLBACK: RunStatusDisplay = {
 
 const RUN_STATUS_MAP: Record<string, RunStatusDisplay> = {
   // PLAN-persistent-draft-uploads.md (Phase D): drafts are unstarted
-  // uploads. Neutral-grey so they read as "waiting" rather than
-  // success/failure — distinct from `aborted` which shares the neutral dot.
-  draft:                  { label: "Not started",          accent: pwc.grey500,  color: pwc.grey700,   bg: pwc.grey100 },
-  running:                { label: "Running",              accent: pwc.orange500, color: pwc.orange500, bg: pwc.orange50 },
-  completed:              { label: "Completed",            accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
-  completed_with_errors:  { label: "Completed with errors", accent: pwc.warning,  color: pwc.warningText, bg: pwc.warningBg },
+  // uploads — "waiting" rather than success/failure.
+  draft:                  { label: "Not started",           symbol: STATUS_SYMBOLS.inactive,   accent: pwc.grey500,   color: pwc.grey700,     bg: pwc.grey100 },
+  running:                { label: "Running",               symbol: STATUS_SYMBOLS.inProgress, accent: pwc.orange500, color: pwc.orange500,   bg: pwc.orange50 },
+  completed:              { label: "Completed",             symbol: STATUS_SYMBOLS.success,    accent: pwc.success,   color: pwc.success,     bg: pwc.successBg },
+  completed_with_errors:  { label: "Completed with errors", symbol: STATUS_SYMBOLS.attention,  accent: pwc.warning,   color: pwc.warningText, bg: pwc.warningBg },
   // RUN-REVIEW P0-1 (2026-04-26): correction agent hit its turn budget
-  // without converging. Carries the red (error) accent so the "needs a human"
-  // runs read as more urgent than amber completed_with_errors; the distinct
-  // label ("Needs review" vs "Failed") keeps it apart from a hard failure.
-  correction_exhausted:   { label: "Needs review",         accent: pwc.error,     color: pwc.errorText,   bg: pwc.warningBg },
-  failed:                 { label: "Failed",               accent: pwc.error,     color: pwc.error,     bg: pwc.errorBg },
-  aborted:                { label: "Aborted",              accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
+  // without converging — needs a human. The distinct label keeps it apart
+  // from a hard failure.
+  correction_exhausted:   { label: "Needs review",          symbol: STATUS_SYMBOLS.attention,  accent: pwc.error,     color: pwc.errorText,   bg: pwc.warningBg },
+  failed:                 { label: "Failed",                symbol: STATUS_SYMBOLS.failure,    accent: pwc.error,     color: pwc.error,       bg: pwc.errorBg },
+  aborted:                { label: "Aborted",               symbol: STATUS_SYMBOLS.failure,    accent: pwc.grey500,   color: pwc.grey700,     bg: pwc.grey100 },
 };
 
 const AGENT_STATUS_MAP: Record<string, RunStatusDisplay> = {
-  running:    { label: "Running",   accent: pwc.orange500, color: pwc.orange500, bg: pwc.orange50 },
+  running:    { label: "Running",   symbol: STATUS_SYMBOLS.inProgress, accent: pwc.orange500, color: pwc.orange500, bg: pwc.orange50 },
   // Coordinator-emitted "succeeded" is the per-agent equivalent of run-level
   // "completed" — render as Completed so the UI uses one consistent verb.
-  succeeded:  { label: "Completed", accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
-  completed:  { label: "Completed", accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
-  failed:     { label: "Failed",    accent: pwc.error,     color: pwc.error,     bg: pwc.errorBg },
-  cancelled:  { label: "Cancelled", accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
-  aborted:    { label: "Aborted",   accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
+  succeeded:  { label: "Completed", symbol: STATUS_SYMBOLS.success,    accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
+  completed:  { label: "Completed", symbol: STATUS_SYMBOLS.success,    accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
+  failed:     { label: "Failed",    symbol: STATUS_SYMBOLS.failure,    accent: pwc.error,     color: pwc.error,     bg: pwc.errorBg },
+  cancelled:  { label: "Cancelled", symbol: STATUS_SYMBOLS.failure,    accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
+  aborted:    { label: "Aborted",   symbol: STATUS_SYMBOLS.failure,    accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
 };
 
 /** Look up a run-level status. Unknown values get a clearly-labeled fallback

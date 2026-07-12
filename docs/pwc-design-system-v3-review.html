@@ -3,27 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>XBRL Agent — Application Design System</title>
+<title>XBRL Agent — Design System v3 Review Draft</title>
 <style>
   /* =========================================================
-     XBRL AGENT — APPLICATION DESIGN SYSTEM (v3 · production)
+     XBRL AGENT — APPLICATION DESIGN SYSTEM
      -----------------------------------------------------------
-     The behavioural and visual specification for the web UI. The
-     production implementation owners are:
+     REVIEW DRAFT: proposed behavioural and visual specification for the web
+     UI. It intentionally does not change the current production owners:
 
-         web/src/lib/theme.ts      → `pwc` global tokens + the `tokens` /
-                                     `component` semantic layers
+         web/src/lib/theme.ts      → the `pwc` token object
          web/src/lib/uiStyles.ts   → the `ui` / `uiClass` primitives
-         web/src/index.css         → hover / focus / responsive state hooks
+         web/src/index.css         → hover / focus / scrollbar rules
 
      The CSS custom properties below exist ONLY to render this
      document. They are NOT used by the app — the app has no CSS
      variables (gotcha #7: inline styles only). Each property is
-     named to express the global, semantic, and component layers.
+     named to express the proposed global, semantic, and component layers.
 
-     LOCKSTEP RULE: when a shared design rule or token changes, the
-     specification, the production implementation, and the parity tests
-     move in ONE change set. The Token Map at the bottom names each owner.
+     AFTER APPROVAL: specification, production implementation, and parity
+     tests move together. The Token Map at the bottom names each owner.
      ========================================================= */
   :root {
     /* ---- Brand orange (pwc.orange*) ---- */
@@ -164,6 +162,7 @@
   .page-head .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--action-primary); font-weight: var(--fw-semibold); margin-bottom: var(--s-md); }
   .page-head h1 { font-size: 28px; font-weight: var(--fw-semibold); letter-spacing: -.3px; line-height: 1.2; margin-bottom: var(--s-lg); color: var(--text); }
   .page-head p { font-size: 16px; color: var(--text-muted); max-width: 66ch; font-weight: var(--fw-regular); }
+  .draft-banner { background:var(--orange-50); border:1px solid var(--orange-200); border-left:3px solid var(--orange-500); border-radius:var(--r-md); padding:var(--s-md) var(--s-lg); margin-bottom:var(--s-xl); font-size:14px; color:var(--grey-800); }
 
   /* ---------- Sections ---------- */
   section { margin-bottom: var(--s-xxxl); scroll-margin-top: var(--s-xl); }
@@ -390,7 +389,6 @@
       <a href="#content">Content &amp; states</a>
       <a href="#component-standard">Component standard</a>
       <a href="#benchmarks">External benchmarks</a>
-      <a href="#adoption">Page adoption</a>
       <a href="#tokenmap">Token map (doc ↔ code)</a>
     </nav>
   </aside>
@@ -404,10 +402,12 @@
     </details>
 
     <header class="page-head">
-      <div class="eyebrow">Application UI Standards</div>
+      <div class="eyebrow">Application UI Standards · Review Draft</div>
       <h1>XBRL Agent Design System v3</h1>
-      <p>The behavioural and visual specification for the web UI. It keeps the PwC black-and-orange identity while strengthening accessibility, semantic hierarchy, financial-data density, responsive behaviour, and component governance.</p>
+      <p>A proposed evolution of the behavioural and visual specification for the web UI. It keeps the PwC black-and-orange identity while strengthening accessibility, semantic hierarchy, financial-data density, responsive behaviour, and component governance.</p>
     </header>
+
+    <div class="draft-banner"><strong>Review status:</strong> proposed design direction only. This copy does not replace the current production specification until its decisions are approved and the mapped implementation and tests are updated.</div>
 
     <!-- OVERVIEW -->
     <section id="overview">
@@ -417,7 +417,7 @@
         <p>This document defines the visual language, task behaviour, responsive expectations, accessibility floor, and governance model for the application. It is deliberately optimized for evidence-led financial work rather than a generic SaaS dashboard.</p>
       </div>
       <div class="note-box">
-        <strong>Governance:</strong> decisions begin here, flow through semantic tokens and component primitives, and end in tested product behaviour. Accessibility and responsive behaviour are part of every component contract, not a final polish pass. The CSS variables here exist only to render this document.
+        <strong>Governance:</strong> decisions begin here, flow through semantic tokens and component primitives, and end in tested product behaviour. Accessibility and responsive behaviour are part of every component contract, not a final polish pass. The CSS variables here exist only to render this review copy.
       </div>
     </section>
 
@@ -950,41 +950,12 @@
       </div>
     </section>
 
-    <!-- PAGE ADOPTION -->
-    <section id="adoption">
-      <div class="section-head">
-        <div class="rule"></div>
-        <h2>Page adoption status</h2>
-        <p>Which product surfaces have adopted this specification. "Adopted" means the page uses its canonical layout mode, the semantic typography scale, shared primitives, and the monochrome status language, and its focused tests pin that adoption. Update this table in the same change set as the page work (docs/PLAN-app-wide-design-consistency.md).</p>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Surface</th><th>Layout mode</th><th>Status</th></tr></thead>
-          <tbody>
-            <tr><td>Shared foundations (tokens, primitives, state hooks)</td><td>—</td><td>Adopted</td></tr>
-            <tr><td>App shell &amp; top navigation</td><td>—</td><td>Planned — change set 2</td></tr>
-            <tr><td>Login</td><td>Authentication · 380px</td><td>Planned — change set 5</td></tr>
-            <tr><td>New extraction</td><td>Standard · 1120px</td><td>Planned — change set 3</td></tr>
-            <tr><td>Runs (history list)</td><td>Wide list · 1440px</td><td>Planned — change set 3</td></tr>
-            <tr><td>Field labels</td><td>Wide list · 1440px</td><td>Planned — change set 4</td></tr>
-            <tr><td>Benchmarks</td><td>Standard · 1120px</td><td>Planned — change set 4</td></tr>
-            <tr><td>Evaluation suites</td><td>Standard · 1120px</td><td>Planned — change set 4</td></tr>
-            <tr><td>Settings (General / Account / Users)</td><td>Form · 840px</td><td>Planned — change set 5</td></tr>
-            <tr><td>Run report (Overview / Notes / Cross-checks / Review / Telemetry)</td><td>Workspace · full width</td><td>Planned — change set 6</td></tr>
-            <tr><td>Figures workspace (Values / Template)</td><td>Workspace · full width</td><td>Planned — change set 6 · density preserved by design</td></tr>
-            <tr><td>Dialogs, toasts, loading &amp; empty states</td><td>—</td><td>Planned — change set 7</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="note-box"><strong>Deliberate exceptions:</strong> the Notes editor's cell-formatting palettes are document-formatting data, not app chrome (gotcha #16) — their literal workbook colours are outside app-token enforcement. Charts, alerts, and attention rules retain functional colour.</div>
-    </section>
-
     <!-- TOKEN MAP -->
     <section id="tokenmap">
       <div class="section-head">
         <div class="rule"></div>
         <h2>Token map — doc ↔ code</h2>
-        <p>Ownership model for the implemented decisions. Semantic aliases and shared component contracts are the normal consumption layer.</p>
+        <p>Proposed ownership model for implementing the approved decisions. Semantic aliases and shared component contracts become the normal consumption layer.</p>
       </div>
       <div class="table-wrap">
         <table class="map-table">
@@ -1006,7 +977,7 @@
     </section>
 
     <footer>
-      <p>XBRL Agent Design System v3 · promoted to the production contract 12 July 2026. Core orange remains the signature identity accent; accessible semantic roles carry interactive text and fills. Routine status may be entirely monochrome; functional hues are optional and exceptional. Not an official PwC brand publication.</p>
+      <p>XBRL Agent Design System v3 review draft · 12 July 2026 · proposed behavioural and visual specification for the web UI. Core orange remains the signature identity accent; accessible semantic roles carry interactive text and fills. Routine status may be entirely monochrome; functional hues are optional and exceptional. Not an official PwC brand publication and not yet the production contract.</p>
     </footer>
 
   </main>

@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
 // Reusable page title chrome. Keep it quiet: title, optional actions, and a
@@ -52,10 +52,10 @@ const styles: Record<string, CSSProperties> = {
   eyebrow: {
     fontFamily: pwc.fontHeading,
     fontSize: 11,
-    fontWeight: pwc.weight.medium,
+    fontWeight: pwc.weight.semibold,
     textTransform: "uppercase",
     letterSpacing: 0,
-    color: pwc.orange500,
+    color: tokens.color.action.primary,
     marginBottom: pwc.space.sm,
   },
   title: {
@@ -68,7 +68,7 @@ const styles: Record<string, CSSProperties> = {
   },
   description: {
     ...ui.bodyText,
-    color: pwc.grey500,
+    color: tokens.color.text.secondary,
     maxWidth: "60ch",
     marginTop: pwc.space.md,
     marginBottom: 0,

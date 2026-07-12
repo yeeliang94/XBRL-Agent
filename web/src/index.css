@@ -94,68 +94,130 @@ body {
   to { opacity: 1; transform: translateX(0); }
 }
 
-/* Keyboard-accessible focus ring for inline-styled buttons.
-   Overrides outline:none set in JS when keyboard-navigating. Brand orange. */
-button:focus-visible {
-  outline: 2px solid #FD5108 !important;
-  outline-offset: 2px;
+/* Two-part keyboard focus for inline-styled buttons and links (design system
+   Accessibility rule A): a light outline plus a dark halo stays perceptible
+   on white, grey, and tinted surfaces. Overrides outline:none set in JS. */
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #FFFFFF !important;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px #1A1A1A !important; /* grey900 focus-strong */
 }
 
-/* Orange focus ring on every form control (design system spec). Applied at
-   the element level so components need no className. !important is required
+/* Focused controls scrolled into view must clear sticky headers/action bars
+   (sticky regions never obscure the focused control). */
+:focus-visible {
+  scroll-margin-block: 96px;
+}
+
+/* Form-control focus (design system spec): dark two-part outline, accessible
+   action-colour border, soft brand halo as support only. Applied at the
+   element level so components need no className. !important is required
    because inline border-color (set from theme tokens) otherwise wins over a
    stylesheet :focus rule on specificity. */
 input:focus,
 select:focus,
 textarea:focus {
-  outline: none;
-  border-color: #FD5108 !important;
-  box-shadow: 0 0 0 3px #FFF5ED !important; /* orange50 soft ring */
+  outline: 2px solid #1A1A1A; /* grey900 focus-strong */
+  outline-offset: 1px;
+  border-color: #C63D00 !important; /* color.action.primary */
+  box-shadow: 0 0 0 4px #FFF5ED !important; /* orange50 soft halo */
 }
 
 /* Button hover states for the shared primitives (lib/uiStyles.ts → uiClass).
    Inline styles can't express :hover, so components add the matching class
-   alongside their inline style object. */
+   alongside their inline style object. Primary uses the accessible action
+   roles (color.action.primary/hover), not signature orange. */
 .pwc-btn-primary:hover:not(:disabled) {
-  background: #E0470A !important; /* orange700 */
-  border-color: #E0470A !important;
+  background: #A83A00 !important; /* button.primary.background.hover */
+  border-color: #A83A00 !important;
 }
 .pwc-btn-secondary:hover:not(:disabled) {
   background: #FAFAFA !important; /* grey50 */
   border-color: #C9C9C9 !important; /* grey300 */
 }
-.pwc-btn-subtle:hover:not(:disabled) {
-  background: #DEDEDE !important; /* grey200 */
-}
-.pwc-btn-ghost:hover:not(:disabled) {
-  background: #FFF5ED !important; /* orange50 */
+.pwc-btn-quiet:hover:not(:disabled) {
+  background: #F4F4F4 !important; /* grey100 — button.quiet.background.hover */
 }
 .pwc-btn-danger:hover:not(:disabled) {
   background: #FCECEC !important; /* errorBg */
-  border-color: #E5484D !important; /* error */
+  border-color: #C0303A !important; /* errorText */
 }
 .pwc-btn-primary:disabled,
 .pwc-btn-secondary:disabled,
-.pwc-btn-subtle:disabled,
-.pwc-btn-ghost:disabled,
+.pwc-btn-quiet:disabled,
 .pwc-btn-danger:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-/* Interactive-card hover lift. Static cards deliberately omit this class;
-   elevation is an affordance, not decoration. */
+/* Interactive-card hover: a quiet border/surface response. Cards never move
+   vertically or gain elevation on hover — static cards omit this class
+   entirely (flat surfaces stay flat). */
 .pwc-card {
-  transition: box-shadow .2s ease, transform .2s ease;
+  transition: background .15s ease, border-color .15s ease;
 }
 .pwc-card:hover {
-  box-shadow: 0 2px 4px rgba(26,26,25,0.04), 0 4px 12px rgba(26,26,25,0.07);
-  transform: translateY(-2px);
+  background: #FAFAFA; /* grey50 */
+  border-color: #7D7D7D; /* grey500 */
 }
 
 /* Quiet table-row hover. */
 .pwc-table-row:hover {
   background: #FAFAFA; /* grey50 */
+}
+
+/* Shared underline tab hover (ui.tab). Skip active tabs so the rule doesn't
+   fight the dark active text + orange indicator. */
+.pwc-tab:hover:not([aria-selected="true"]):not([aria-current="page"]) {
+  color: #1A1A1A; /* grey900 */
+}
+
+/* Inactive top-nav destination hover — quiet surface + readable text. */
+.app-main-nav-tab:hover:not([aria-current="page"]):not([aria-selected="true"]) {
+  background: #FAFAFA; /* grey50 */
+  color: #1A1A1A; /* grey900 */
+}
+
+/* Forced-colors / high-contrast: keep control boundaries and card borders
+   perceptible when backgrounds are stripped; focus falls back to the OS
+   outline automatically. */
+@media (forced-colors: active) {
+  .pwc-btn-primary,
+  .pwc-btn-secondary,
+  .pwc-btn-quiet,
+  .pwc-btn-danger,
+  .pwc-tab {
+    border: 1px solid ButtonBorder;
+  }
+  .pwc-card {
+    border: 1px solid CanvasText;
+  }
+}
+
+/* Stat-tile responsive composition: four / two / one intentional columns. */
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 960px) {
+  .stat-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .stat-tiles {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Narrow recent-run rows: let the work-queue row wrap instead of clipping. */
+@media (max-width: 720px) {
+  .recent-run-row {
+    flex-wrap: wrap !important;
+  }
 }
 
 /* Custom scrollbar for agent activity panels */
