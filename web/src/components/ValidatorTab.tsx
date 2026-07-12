@@ -1,5 +1,6 @@
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
 import {
   crossCheckFailureLabel,
   crossCheckLabel,
@@ -25,20 +26,19 @@ export interface ValidatorTabProps {
 }
 
 // ---------------------------------------------------------------------------
-// Status badge mapping
+// Status mapping — monochrome symbol + explicit text (design-system Status).
 // ---------------------------------------------------------------------------
 
 const STATUS_DISPLAY: Record<
   CrossCheckResult["status"],
-  { label: string; accent: string }
+  { label: string; symbol: string }
 > = {
-  passed: { label: "Passed", accent: pwc.success },
-  failed: { label: "Failed", accent: pwc.error },
-  // Advisory only (Phase 6.1 notes-consistency). Amber so it's distinct
-  // from success/error.
-  warning: { label: "Warning", accent: pwc.warning },
-  pending: { label: "Pending", accent: pwc.warning },
-  not_applicable: { label: "Not applicable", accent: pwc.grey500 },
+  passed: { label: "Passed", symbol: STATUS_SYMBOLS.success },
+  failed: { label: "Failed", symbol: STATUS_SYMBOLS.attention },
+  // Advisory only (Phase 6.1 notes-consistency).
+  warning: { label: "Warning", symbol: STATUS_SYMBOLS.attention },
+  pending: { label: "Pending", symbol: STATUS_SYMBOLS.inProgress },
+  not_applicable: { label: "Not applicable", symbol: STATUS_SYMBOLS.inactive },
 };
 
 // One number convention for the Expected/Actual/Diff cells (UX-QA #9): grouped
@@ -139,12 +139,11 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                     <span
                       key={check.status}
                       style={{
-                        ...styles.badge,
-                        borderColor: display.accent,
+                        ...ui.status,
                         animation: `fade-in ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
                       }}
                     >
-                      <span aria-hidden="true" style={ui.badgeDot(display.accent)} />
+                      <span aria-hidden="true" style={ui.statusSymbol}>{display.symbol}</span>
                       {display.label}
                     </span>
                   </td>
@@ -188,14 +187,10 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
           <ul style={styles.warningList}>
             {warningChecks.map((w) => (
               <li key={w.name} style={styles.warningItem}>
-                <span
-                  style={{
-                    ...styles.badge,
-                    borderColor: STATUS_DISPLAY.warning.accent,
-                    marginRight: pwc.space.sm,
-                  }}
-                >
-                  <span aria-hidden="true" style={ui.badgeDot(STATUS_DISPLAY.warning.accent)} />
+                <span style={{ ...ui.status, marginRight: pwc.space.sm }}>
+                  <span aria-hidden="true" style={ui.statusSymbol}>
+                    {STATUS_DISPLAY.warning.symbol}
+                  </span>
                   {STATUS_DISPLAY.warning.label}
                 </span>
                 <span style={styles.warningName}>{w.name}</span>

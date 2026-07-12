@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
 import type { ModelEntry } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
 import { flagKindLabel, humanize } from "../lib/vocabulary";
@@ -314,8 +315,8 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       {/* Reviewer-version indicator + revert */}
       <div style={styles.headerRow}>
         {data.has_reviewer_version ? (
-          <span style={styles.badge} data-testid="reviewer-version-indicator">
-            <span aria-hidden="true" style={ui.badgeDot(pwc.info)} />
+          <span style={ui.status} data-testid="reviewer-version-indicator">
+            <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.derived}</span>
             Reviewer version
           </span>
         ) : (
@@ -564,10 +565,6 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: pwc.space.md,
-  } as const,
-  badge: {
-    ...ui.badge,
-    borderColor: pwc.info,
   } as const,
   h3: {
     fontFamily: pwc.fontHeading,

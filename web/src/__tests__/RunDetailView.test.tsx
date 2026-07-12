@@ -1202,4 +1202,23 @@ describe("RunDetailView", () => {
     expect(del).toBeDisabled();
     expect(screen.queryByRole("button", { name: /abort run/i })).toBeNull();
   });
+
+  test("run status is a monochrome symbol + label; active tab is dark text + orange indicator (CS6)", () => {
+    render(
+      <RunDetailView detail={makeDetail({ status: "completed" })} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    // Monochrome status: aria-hidden ✓ in grey700 next to the explicit label.
+    const label = screen.getAllByText("Completed")[0];
+    const symbol = label.parentElement!.querySelector('[aria-hidden="true"]');
+    expect(symbol?.textContent).toBe("\u2713");
+    expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
+
+    // Shared tab treatment: dark active text, orange only on the indicator.
+    const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+    const active = within(tablist)
+      .getAllByRole("tab")
+      .find((t) => t.getAttribute("aria-selected") === "true") as HTMLElement;
+    expect(active.style.color).toBe("rgb(26, 26, 26)");
+    expect(active.style.borderBottom).toContain("rgb(253, 81, 8)");
+  });
 });
