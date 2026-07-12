@@ -412,9 +412,12 @@ export const ui = {
     alignItems: "center",
     gap: pwc.space.sm,
   } as CSSProperties,
+  // Full borderBottom SHORTHAND on purpose: ui.tab sets the shorthand, and a
+  // longhand-only override here would leave a stale solid border behind when
+  // React removes the longhand on deactivation (shorthand/longhand mixing).
   tabActive: {
     color: tokens.color.text.primary,
-    borderBottomColor: tokens.color.brand.indicator,
+    borderBottom: `2px solid ${tokens.color.brand.indicator}`,
   } as CSSProperties,
 
   // --- Dialog -------------------------------------------------------------

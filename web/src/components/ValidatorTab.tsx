@@ -245,15 +245,11 @@ const styles = {
     color: pwc.grey500,
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
+  // Sentence-case headers (design-system Tables), compact density.
   th: {
-    textAlign: "left" as const,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    ...ui.thDense,
+    background: "transparent",
     borderBottom: `2px solid ${pwc.grey200}`,
-    fontWeight: 600,
-    color: pwc.grey700,
-    fontSize: 12,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.5,
   } as React.CSSProperties,
   td: {
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
