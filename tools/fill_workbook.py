@@ -85,6 +85,10 @@ class FillResult:
     # entry is {sheet, row, col, value, evidence} with `row` already
     # label-resolved. Empty in legacy mode / on total failure.
     resolved_writes: list[dict] = field(default_factory=list)
+    # Harness Item 2 follow-through: per-kind counts of GuardResult
+    # refusals in this call (e.g. {"abstract_row": 2}) — the machine-
+    # countable side of the verdicts whose messages land in `errors`.
+    guard_rejections: dict[str, int] = field(default_factory=dict)
 
 
 # Default SOCIE evidence column for the MFRS 24-col equity-component matrix.
@@ -267,6 +271,7 @@ def fill_workbook(
 
     wb = openpyxl.load_workbook(template_path)
     errors: list[str] = []
+    guard_rejections: dict[str, int] = {}
     fields_written = 0
     # RUN-REVIEW P1-1: track successful writes so the post-loop double-
     # booking guard only sees mappings that actually landed (skipped
@@ -353,6 +358,11 @@ def fill_workbook(
                 kind="formula_cell",
             )
             errors.append(verdict.message)
+            guard_rejections[verdict.kind] = guard_rejections.get(verdict.kind, 0) + 1
+            logger.warning(
+                "fill_workbook guard rejected (%s): %s!%s",
+                verdict.kind, mapping.sheet, cell.coordinate,
+            )
             continue
 
         # Bug A (2026-04-26): refuse writes to abstract section-header rows.
@@ -381,6 +391,11 @@ def fill_workbook(
                 kind="abstract_row",
             )
             errors.append(verdict.message)
+            guard_rejections[verdict.kind] = guard_rejections.get(verdict.kind, 0) + 1
+            logger.warning(
+                "fill_workbook guard rejected (%s): %s!%s",
+                verdict.kind, mapping.sheet, cell.coordinate,
+            )
             continue
 
         cell.value = mapping.value
@@ -451,6 +466,7 @@ def fill_workbook(
             output_path=output_path,
             errors=errors,
             warnings=warnings,
+            guard_rejections=guard_rejections,
         )
 
     return FillResult(
@@ -460,6 +476,7 @@ def fill_workbook(
         errors=errors,
         warnings=warnings,
         resolved_writes=resolved_writes,
+        guard_rejections=guard_rejections,
     )
 
 

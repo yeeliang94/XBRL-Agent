@@ -241,12 +241,29 @@ def classify_notes_fix_guard(
     return None, None
 
 
-def evaluate_notes_fix_guard(**kwargs) -> "GuardResult":
+def evaluate_notes_fix_guard(
+    *,
+    action: str,
+    source_pages: Optional[List[int]],
+    viewed_pages: set[int],
+    target_node: Optional[dict] = None,
+    target_occupied: bool = False,
+    note_in_inventory: Optional[bool] = None,
+) -> "GuardResult":
     """`classify_notes_fix_guard` lifted into the shared GuardResult contract
     (tools/guard_result.py, Harness-learnings Item 2). The classifier stays
     exported and pinned; rejections become budgeted `retry` verdicts with the
-    same message text, `kind` carries the tally slug."""
-    kind, msg = classify_notes_fix_guard(**kwargs)
+    same message text, `kind` carries the tally slug. The signature mirrors
+    the classifier's exactly so a misspelled argument fails HERE, not one
+    level deeper."""
+    kind, msg = classify_notes_fix_guard(
+        action=action,
+        source_pages=source_pages,
+        viewed_pages=viewed_pages,
+        target_node=target_node,
+        target_occupied=target_occupied,
+        note_in_inventory=note_in_inventory,
+    )
     return GuardResult.from_kind_message(kind, msg, fallback_kind="ungrounded")
 
 
