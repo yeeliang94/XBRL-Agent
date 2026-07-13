@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XBRL Agent — What It Does</title>
+<style>
+  :root {
+    --orange-500:#FD5108; --orange-700:#E0470A; --orange-400:#FE7C39; --orange-300:#FFAA72;
+    --orange-200:#FFCDA8; --orange-100:#FFE8D4; --orange-50:#FFF5ED;
+    --action-primary:#C63D00; --action-primary-hover:#A83A00; --focus-strong:#1A1A1A;
+    --white:#FFFFFF;
+    --grey-50:#FAFAFA; --grey-100:#F4F4F4; --grey-200:#DEDEDE; --grey-300:#C9C9C9;
+    --grey-500:#7D7D7D; --grey-700:#5E5E5E; --grey-800:#2D2D2D; --grey-900:#1A1A1A;
+    --success:#1FAB76; --warning:#EFA417; --error:#E5484D; --info:#3E84CC;
+    --success-text:#157A53; --warning-text:#8A6111; --info-text:#2C6299;
+    --bg:var(--grey-50); --surface:var(--white); --border:var(--grey-200); --border-strong:var(--grey-300);
+    --text:var(--grey-900); --text-body:var(--grey-800); --text-muted:var(--grey-700);
+    --font-sans:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --fw-regular:400; --fw-medium:500; --fw-semibold:600;
+    --r-sm:3px; --r-md:6px; --r-lg:8px; --r-pill:999px;
+    --s-xs:4px; --s-sm:8px; --s-md:12px; --s-lg:16px; --s-xl:24px; --s-xxl:32px; --s-xxxl:48px; --s-xxxxl:64px;
+    --shadow-elevated:0 2px 4px rgba(26,26,25,.04), 0 4px 12px rgba(26,26,25,.07);
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  :where(a,summary,button):focus-visible{outline:2px solid var(--white); outline-offset:1px; box-shadow:0 0 0 4px var(--focus-strong)}
+  html{scroll-behavior:smooth; background:var(--bg)}
+  body{font-family:var(--font-sans); font-weight:var(--fw-regular); color:var(--text-body); background:var(--bg); line-height:1.55; -webkit-font-smoothing:antialiased; font-size:15px}
+
+  /* ---------- Layout shell ---------- */
+  .shell{display:flex; min-height:100vh}
+  .sidebar{width:240px; flex-shrink:0; background:var(--surface); border-right:1px solid var(--border); position:sticky; top:0; height:100vh; overflow-y:auto; padding:var(--s-xl) 0}
+  .brand-lockup{padding:0 var(--s-xl) var(--s-xl); border-bottom:1px solid var(--border); margin-bottom:var(--s-lg)}
+  .brand-lockup .wordmark{font-size:20px; font-weight:var(--fw-semibold); letter-spacing:-.3px; color:var(--text); display:flex; align-items:center; gap:9px}
+  .momentum-mark{width:20px; height:20px; flex-shrink:0}
+  .brand-lockup .sub{font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--text-muted); margin-top:6px}
+  .nav-group{margin-bottom:var(--s-xl)}
+  .nav-group h4{font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--text-muted); font-weight:var(--fw-semibold); padding:0 var(--s-xl) var(--s-sm)}
+  .nav-group a{display:block; padding:7px var(--s-xl); color:var(--text-muted); text-decoration:none; font-size:14px; border-left:2px solid transparent; transition:color .15s,background .15s,border-color .15s}
+  .nav-group a:hover{color:var(--text); background:var(--grey-50)}
+  .nav-group a.active{color:var(--action-primary); border-left-color:var(--orange-500); font-weight:var(--fw-medium)}
+
+  .main{flex:1; min-width:0; max-width:1000px; padding:var(--s-xxxl) var(--s-xxxxl)}
+  .mobile-index{display:none}
+  @media (max-width:900px){
+    .sidebar{display:none}
+    .main{width:100%; max-width:none; padding:var(--s-xl)}
+    .mobile-index{display:block; margin-bottom:var(--s-xl)}
+  }
+
+  /* ---------- Page header ---------- */
+  .page-head{padding-bottom:var(--s-xl); margin-bottom:var(--s-xxl); border-bottom:1px solid var(--border)}
+  .page-head .eyebrow{font-size:11px; text-transform:uppercase; letter-spacing:1.5px; color:var(--action-primary); font-weight:var(--fw-semibold); margin-bottom:var(--s-md)}
+  .page-head h1{font-size:28px; font-weight:var(--fw-semibold); letter-spacing:-.3px; line-height:1.2; margin-bottom:var(--s-lg); color:var(--text)}
+  .page-head p{font-size:16px; color:var(--text-muted); max-width:70ch; font-weight:var(--fw-regular)}
+
+  /* Tech-detail toggle control */
+  .control-bar{display:flex; align-items:center; gap:var(--s-md); margin-top:var(--s-xl); padding:var(--s-md) var(--s-lg); background:var(--grey-50); border:1px solid var(--border); border-radius:var(--r-md); max-width:max-content}
+  .control-bar .lbl{font-size:14px; color:var(--text-body); font-weight:var(--fw-medium)}
+  .toggle{position:relative; width:40px; height:22px; flex-shrink:0}
+  .toggle input{opacity:0; width:0; height:0}
+  .toggle .track{position:absolute; inset:0; background:var(--grey-300); border-radius:var(--r-pill); transition:.2s; cursor:pointer}
+  .toggle .track::before{content:""; position:absolute; height:16px; width:16px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; box-shadow:0 1px 2px rgba(0,0,0,.2)}
+  .toggle input:checked + .track{background:var(--orange-500)}
+  .toggle input:checked + .track::before{transform:translateX(18px)}
+
+  /* ---------- Sections ---------- */
+  section{margin-bottom:var(--s-xxxl); scroll-margin-top:var(--s-xl)}
+  .section-head{margin-bottom:var(--s-xl)}
+  .section-head .rule{width:28px; height:2px; background:var(--orange-500); margin-bottom:var(--s-md)}
+  .section-head h2{font-size:20px; font-weight:var(--fw-semibold); letter-spacing:-.2px; margin-bottom:var(--s-sm); color:var(--text)}
+  .section-head p{color:var(--text-muted); max-width:72ch}
+
+  /* ---------- Audience blocks (monochrome) ---------- */
+  .plain,.tech{border-radius:var(--r-md); padding:var(--s-md) var(--s-lg); margin:var(--s-md) 0}
+  .plain{background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--orange-500)}
+  .tech{background:var(--grey-50); border:1px solid var(--border)}
+  .plain .label,.tech .label{display:block; font-size:11px; letter-spacing:1px; text-transform:uppercase; font-weight:var(--fw-semibold); margin-bottom:var(--s-xs)}
+  .plain .label{color:var(--action-primary)}
+  .tech .label{color:var(--text-muted)}
+  .plain p,.tech p{font-size:14px; color:var(--text-body)}
+  .tech code{background:var(--grey-100); padding:1px 6px; border-radius:var(--r-sm); font-family:var(--font-mono); font-size:.86em; color:var(--action-primary)}
+  body.hide-tech .tech{display:none}
+
+  /* ---------- Cards ---------- */
+  .card-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:var(--s-lg); margin-top:var(--s-lg)}
+  .ui-card{background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); padding:var(--s-xl)}
+  .ui-card h4{font-size:15px; font-weight:var(--fw-semibold); margin-bottom:6px; color:var(--text)}
+  .ui-card p{font-size:14px; color:var(--text-muted)}
+  .ui-card .tech{margin-top:var(--s-md); margin-bottom:0}
+
+  /* ---------- Panel + diagram ---------- */
+  .panel{background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); padding:var(--s-xl); overflow-x:auto}
+  .note-box{background:var(--grey-50); border:1px solid var(--border); border-radius:var(--r-md); padding:var(--s-md) var(--s-lg); font-size:13px; color:var(--text-body); margin-top:var(--s-lg)}
+  .note-box strong{color:var(--text); font-weight:var(--fw-semibold)}
+
+  .flow{display:block; width:100%; height:auto; max-width:640px; margin:0 auto}
+  .flow .t{font:500 14px var(--font-sans); fill:var(--grey-900)}
+  .flow .ts{font:400 12px var(--font-sans); fill:var(--grey-700)}
+  .flow .th{font:600 14px var(--font-sans); fill:var(--grey-900)}
+  .flow .n-plain{fill:#fff; stroke:var(--grey-300); stroke-width:1.2}
+  .flow .n-opt{fill:#fff; stroke:var(--grey-300); stroke-width:1.2; stroke-dasharray:5 4}
+  .flow .n-end{fill:var(--orange-500); stroke:var(--orange-500)}
+  .flow .n-agent{fill:var(--orange-50); stroke:var(--orange-300); stroke-width:1.1}
+  .flow .t-inv{font:500 14px var(--font-sans); fill:#fff}
+  .flow .ts-inv{font:400 12px var(--font-sans); fill:rgba(255,255,255,.85)}
+  .flow .arr{stroke:var(--grey-300); stroke-width:1.5; fill:none; marker-end:url(#ahead)}
+  .flow .leader{stroke:var(--grey-300); stroke-width:1; stroke-dasharray:4 3; fill:none}
+
+  /* ---------- Stages ---------- */
+  .stage{display:flex; gap:var(--s-lg); padding:var(--s-xl); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); margin-bottom:var(--s-md)}
+  .stage .step{flex:0 0 34px; width:34px; height:34px; border-radius:var(--r-pill); border:1.5px solid var(--orange-300); background:var(--orange-50); color:var(--action-primary); font-family:var(--font-mono); font-weight:var(--fw-semibold); font-size:15px; display:flex; align-items:center; justify-content:center}
+  .stage .step.opt{border-style:dashed; border-color:var(--grey-300); background:var(--grey-50); color:var(--grey-500)}
+  .stage-body{flex:1; min-width:0}
+  .stage-body h3{font-size:17px; font-weight:var(--fw-semibold); color:var(--text); margin-bottom:2px; display:flex; align-items:center; flex-wrap:wrap; gap:8px}
+  .tag{font-size:11px; text-transform:uppercase; letter-spacing:.6px; font-weight:var(--fw-semibold); color:var(--text-muted); border:1px solid var(--border); border-radius:var(--r-sm); padding:1px 7px}
+
+  /* ---------- Alert ---------- */
+  .alert{display:flex; gap:var(--s-md); padding:var(--s-lg); border-radius:var(--r-md); background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--grey-300); margin-top:var(--s-lg); align-items:flex-start; font-size:15px; color:var(--text-body)}
+  .alert.warn{border-left-color:var(--warning)}
+  .alert .ico{font-family:var(--font-mono); font-weight:var(--fw-semibold); font-size:15px; flex-shrink:0; color:var(--warning); width:16px; text-align:center}
+  .alert strong{color:var(--text); font-weight:var(--fw-semibold)}
+
+  /* ---------- Glossary ---------- */
+  dl.gloss{display:grid; grid-template-columns:170px 1fr; gap:0; border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; background:var(--surface)}
+  dl.gloss dt{font-weight:var(--fw-semibold); color:var(--text); font-size:14px; padding:var(--s-md) var(--s-lg); background:var(--grey-50); border-bottom:1px solid var(--border); border-right:1px solid var(--border)}
+  dl.gloss dd{margin:0; color:var(--text-muted); font-size:14px; padding:var(--s-md) var(--s-lg); border-bottom:1px solid var(--border)}
+  dl.gloss dt:last-of-type,dl.gloss dd:last-of-type{border-bottom:none}
+  @media (max-width:640px){
+    dl.gloss{grid-template-columns:1fr}
+    dl.gloss dt{border-right:none}
+    dl.gloss dd{border-bottom:1px solid var(--border)}
+  }
+
+  code.inline{background:var(--grey-100); padding:1px 6px; border-radius:var(--r-sm); font-family:var(--font-mono); font-size:.9em; color:var(--action-primary)}
+  .lede{font-size:16px; color:var(--text-muted); max-width:72ch; margin-bottom:var(--s-md)}
+  h3.sub-label{font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--text-muted); font-weight:var(--fw-semibold); margin:var(--s-xl) 0 var(--s-sm)}
+  footer{border-top:1px solid var(--border); padding-top:var(--s-xl); margin-top:var(--s-xxl); color:var(--text-muted); font-size:13px}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="brand-lockup">
+      <div class="wordmark">
+        <svg class="momentum-mark" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="#FD5108" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>XBRL&nbsp;Agent</span>
+      </div>
+      <div class="sub">Product Overview</div>
+    </div>
+    <nav class="nav-group">
+      <h4>On this page</h4>
+      <a href="#nutshell" class="active">In a nutshell</a>
+      <a href="#bigpicture">The big picture</a>
+      <a href="#stages">The stages</a>
+      <a href="#extras">Beyond extraction</a>
+      <a href="#glossary">Glossary</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+
+    <details class="mobile-index note-box">
+      <summary><strong>On this page</strong></summary>
+      <p style="margin-top:var(--s-sm)"><a href="#nutshell">In a nutshell</a> · <a href="#bigpicture">Big picture</a> · <a href="#stages">Stages</a> · <a href="#extras">Beyond extraction</a> · <a href="#glossary">Glossary</a></p>
+    </details>
+
+    <header class="page-head">
+      <div class="eyebrow">Product Overview</div>
+      <h1>XBRL Agent</h1>
+      <p>An AI assistant that reads a company's audited financial statement and fills in the official Malaysian regulatory filing template — automatically. Written for two readers at once: the product/business reader and the engineer. Use the switch to hide the technical detail if you don't need it.</p>
+      <div class="control-bar">
+        <span class="lbl">Show technical details</span>
+        <label class="toggle"><input type="checkbox" id="techToggle" checked><span class="track"></span></label>
+      </div>
+    </header>
+
+    <!-- IN A NUTSHELL -->
+    <section id="nutshell">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>In a nutshell</h2>
+        <p>Malaysian companies must file their results with the regulator (SSM) in a rigid, machine-readable format called XBRL. Doing it by hand means copying hundreds of numbers from a PDF into a strict Excel template — slow, and easy to get wrong. This tool does that copying for you and checks its own work.</p>
+      </div>
+
+      <div class="plain">
+        <span class="label">In plain terms</span>
+        <p>You upload the financial statement (a PDF or Word document). The tool figures out where each number lives, drops it into the right cell of the official template, cross-checks that the numbers add up, and hands you back a finished, downloadable Excel file — with a full audit trail of what it did and why.</p>
+      </div>
+
+      <div class="tech">
+        <span class="label">Technically</span>
+        <p>A standalone extraction agent for Malaysian financial-statement PDFs. Multiple AI agents run <em>concurrently</em> under a coordinator, each responsible for one statement; their results merge into one workbook and a suite of deterministic cross-checks validates consistency. Every figure is stored as a structured "fact" in a database (keyed to its XBRL concept), so verification, review, scoring, and export all read from one canonical source rather than re-parsing spreadsheets.</p>
+      </div>
+
+      <h3 class="sub-label">What it produces</h3>
+      <div class="card-grid">
+        <div class="ui-card">
+          <h4>The five face statements</h4>
+          <p>Balance sheet (SOFP), profit &amp; loss (SOPL), comprehensive income (SOCI), cash flows (SOCF), and changes in equity (SOCIE).</p>
+        </div>
+        <div class="ui-card">
+          <h4>The supplementary notes</h4>
+          <p>Five notes templates — corporate info, the list of notes, and detailed disclosure tables that sit behind the headline numbers.</p>
+        </div>
+        <div class="ui-card">
+          <h4>Two standards, two levels</h4>
+          <p>Works for both <strong>MFRS</strong> and <strong>MPERS</strong> accounting standards, and for <strong>Company</strong>-only or <strong>Group</strong> (consolidated) filings.</p>
+        </div>
+        <div class="ui-card">
+          <h4>A checked, downloadable workbook</h4>
+          <p>A filled Excel template where the totals still recalculate live, plus a report of every consistency check and anything flagged for a human.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- BIG PICTURE -->
+    <section id="bigpicture">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>The big picture</h2>
+        <p>One document goes in; a filled, validated template comes out. In between, the work fans out to several AI agents working in parallel, then converges again for merging and checking.</p>
+      </div>
+
+      <div class="panel">
+        <svg class="flow" viewBox="0 0 680 762" role="img" xmlns="http://www.w3.org/2000/svg">
+          <title>XBRL Agent process flow</title>
+          <desc>A vertical flowchart: a financial statement PDF or Word document is scouted, then a coordinator fans the work out to parallel extraction agents (one per statement) and notes agents (including a Sheet 12 sub-agent fan-out). Their figures land in a facts database, are merged into one workbook, cross-checked, reviewed if needed, and downloaded as a filled template.</desc>
+          <defs>
+            <marker id="ahead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L8,5 L0,10" fill="none" stroke="#C9C9C9" stroke-width="1.5"/>
+            </marker>
+          </defs>
+
+          <rect x="240" y="28" width="200" height="44" rx="8" class="n-end"/>
+          <text x="340" y="48" text-anchor="middle" class="t-inv">Financial statement</text>
+          <text x="340" y="64" text-anchor="middle" class="ts-inv">PDF or Word</text>
+
+          <line x1="340" y1="72" x2="340" y2="96" class="arr"/>
+
+          <rect x="240" y="96" width="200" height="44" rx="8" class="n-opt"/>
+          <text x="340" y="116" text-anchor="middle" class="t">Scout</text>
+          <text x="340" y="132" text-anchor="middle" class="ts">optional — maps the document</text>
+
+          <line x1="340" y1="140" x2="340" y2="164" class="arr"/>
+
+          <rect x="240" y="164" width="200" height="44" rx="8" class="n-plain"/>
+          <text x="340" y="184" text-anchor="middle" class="t">Coordinator</text>
+          <text x="340" y="200" text-anchor="middle" class="ts">splits &amp; tracks the run</text>
+
+          <line x1="340" y1="208" x2="185" y2="232" class="arr"/>
+          <line x1="340" y1="208" x2="495" y2="232" class="arr"/>
+
+          <rect x="48" y="232" width="274" height="136" rx="8" class="n-plain"/>
+          <text x="62" y="254" class="th">Extraction agents</text>
+          <text x="62" y="270" class="ts">one per statement · parallel</text>
+          <rect x="62" y="280" width="76" height="28" rx="6" class="n-agent"/>
+          <text x="100" y="298" text-anchor="middle" class="ts">SOFP</text>
+          <rect x="147" y="280" width="76" height="28" rx="6" class="n-agent"/>
+          <text x="185" y="298" text-anchor="middle" class="ts">SOPL</text>
+          <rect x="232" y="280" width="76" height="28" rx="6" class="n-agent"/>
+          <text x="270" y="298" text-anchor="middle" class="ts">SOCI</text>
+          <rect x="62" y="318" width="76" height="28" rx="6" class="n-agent"/>
+          <text x="100" y="336" text-anchor="middle" class="ts">SOCF</text>
+          <rect x="147" y="318" width="76" height="28" rx="6" class="n-agent"/>
+          <text x="185" y="336" text-anchor="middle" class="ts">SOCIE</text>
+
+          <rect x="358" y="232" width="274" height="136" rx="8" class="n-plain"/>
+          <text x="372" y="254" class="th">Notes agents</text>
+          <text x="372" y="270" class="ts">notes tables · parallel</text>
+          <rect x="372" y="280" width="246" height="28" rx="6" class="n-agent"/>
+          <text x="495" y="298" text-anchor="middle" class="ts">Templates 10–14</text>
+          <rect x="372" y="318" width="246" height="28" rx="6" class="n-agent"/>
+          <text x="495" y="336" text-anchor="middle" class="ts">Sheet 12 → sub-agents</text>
+
+          <line x1="185" y1="368" x2="305" y2="392" class="arr"/>
+          <line x1="495" y1="368" x2="375" y2="392" class="arr"/>
+
+          <rect x="240" y="392" width="200" height="44" rx="8" class="n-plain"/>
+          <text x="340" y="412" text-anchor="middle" class="t">Facts database</text>
+          <text x="340" y="428" text-anchor="middle" class="ts">every figure, stored once</text>
+
+          <line x1="340" y1="436" x2="340" y2="460" class="arr"/>
+
+          <rect x="240" y="460" width="200" height="44" rx="8" class="n-plain"/>
+          <text x="340" y="480" text-anchor="middle" class="t">Merge into workbook</text>
+          <text x="340" y="496" text-anchor="middle" class="ts">one Excel file</text>
+
+          <line x1="340" y1="504" x2="340" y2="528" class="arr"/>
+
+          <rect x="240" y="528" width="200" height="44" rx="8" class="n-plain"/>
+          <text x="340" y="548" text-anchor="middle" class="t">Cross-checks</text>
+          <text x="340" y="564" text-anchor="middle" class="ts">does it all reconcile?</text>
+
+          <line x1="340" y1="572" x2="340" y2="596" class="arr"/>
+
+          <rect x="240" y="596" width="200" height="44" rx="8" class="n-opt"/>
+          <text x="340" y="616" text-anchor="middle" class="t">Reviewer pass</text>
+          <text x="340" y="632" text-anchor="middle" class="ts">fixes or flags issues</text>
+
+          <line x1="340" y1="640" x2="340" y2="664" class="arr"/>
+
+          <rect x="240" y="664" width="200" height="44" rx="8" class="n-end"/>
+          <text x="340" y="684" text-anchor="middle" class="t-inv">Filled template</text>
+          <text x="340" y="700" text-anchor="middle" class="ts-inv">download · validated</text>
+
+          <rect x="48" y="726" width="14" height="12" rx="3" class="n-end"/>
+          <text x="68" y="736" class="ts">Document in / out</text>
+          <rect x="210" y="726" width="14" height="12" rx="3" class="n-agent"/>
+          <text x="230" y="736" class="ts">AI agent</text>
+          <rect x="330" y="726" width="14" height="12" rx="3" class="n-opt"/>
+          <text x="350" y="736" class="ts">Optional step</text>
+          <line x1="470" y1="732" x2="496" y2="732" class="leader"/>
+          <text x="502" y="736" class="ts">Runs if needed</text>
+        </svg>
+        <p class="note-box">The agents in the middle run <strong>in parallel</strong> — one per statement, plus the notes. Everything converges on the facts database, which every later step reads from. Runs on your machine (or a private server); only the document text is sent to the chosen AI model.</p>
+      </div>
+    </section>
+
+    <!-- STAGES -->
+    <section id="stages">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>What happens at each stage</h2>
+        <p>Follow one document from upload to download. Optional stages are marked; two stages run many agents at once.</p>
+      </div>
+
+      <div class="stage">
+        <div class="step">1</div>
+        <div class="stage-body">
+          <h3>Upload &amp; configure</h3>
+          <div class="plain">
+            <span class="label">In plain terms</span>
+            <p>You drop in the financial statement and answer a few setup questions: which accounting standard (MFRS or MPERS), whether it's a Company or Group filing, which statements to extract, and whether to include the notes. Word documents are accepted too — they're converted to a PDF behind the scenes so everything downstream is identical.</p>
+          </div>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p><code>POST /api/upload</code> stores the document as <code>uploaded.pdf</code> in a per-run session directory and inserts a <em>draft</em> <code>runs</code> row (so even abandoned uploads appear in History and the upload is instantly shareable as <code>/run/{id}</code>). A <code>.docx</code> is converted at the door via LibreOffice/Word COM (<code>ingest/word_convert.py</code>); a failed conversion is a clean 422, never a crash. Config (<code>filing_standard</code>, <code>filing_level</code>, statement variants, notes selection) threads end-to-end from <code>RunConfig</code> onward and picks the correct template under <code>XBRL-template-MFRS/</code> or <code>-MPERS/</code>, <code>Company/</code> or <code>Group/</code>.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="step opt">2</div>
+        <div class="stage-body">
+          <h3>Scout the document <span class="tag">Optional</span></h3>
+          <div class="plain">
+            <span class="label">In plain terms</span>
+            <p>Before the heavy lifting, a lightweight "scout" pass skims the whole document to build a map: which page each statement starts on, where the notes are, what currency and units the figures use (thousands? millions?), and the company name and reporting periods. This map is advice, not law — it just gives the extraction agents a running start so they don't have to hunt.</p>
+          </div>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p>The scout produces an <code>Infopack</code>: page hints (<code>face_page</code>, <code>note_pages</code>), a <code>notes_inventory</code> with sub-note hierarchy, per-face-line references, and top-level context (<code>entity_name</code>, periods, <code>currency</code>, <code>scale_unit</code>, <code>consolidation_level</code>). Crucially these are <strong>soft</strong> — agents may read any page; there is no page-restriction enforcement. Every scout-observed field is rendered into prompts with explicit "VERIFY before using" framing (a wrong <code>scale_unit</code> would silently 1000×-inflate every value). Triggered via the Scout button (<code>POST /api/scout</code>), recorded once per run.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="step">3</div>
+        <div class="stage-body">
+          <h3>The coordinator divides the work</h3>
+          <div class="plain">
+            <span class="label">In plain terms</span>
+            <p>A manager component splits the job into independent pieces — one per statement, plus the notes — and launches them all at the same time rather than one after another. It also opens an audit record so that whatever happens next (success, failure, or a user hitting "Stop"), the run is always accounted for.</p>
+          </div>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p><code>run_multi_agent_stream</code> creates the audit row <em>before</em> validation, then wraps the whole body in try/except/finally so every exit path leaves a terminal status (<code>completed</code>, <code>completed_with_errors</code>, <code>failed</code>, <code>aborted</code>) and never a stuck <code>running</code>. It fans N extraction agents and M notes agents onto the event loop, threading <code>run_id</code> + <code>db_path</code> into the tools so writes project live into <code>run_concept_facts</code>.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="step">4</div>
+        <div class="stage-body">
+          <h3>Extraction agents read the statements <span class="tag">Runs in parallel</span></h3>
+          <div class="plain">
+            <span class="label">In plain terms</span>
+            <p>This is the core work. Each agent is an AI given one statement to fill. It reads the relevant PDF pages, matches each line it sees ("Total assets", "Revenue", "Cash and cash equivalents") to the correct row in the template, and writes the number in. It can double-check its own arithmetic with a calculator, look up what a template concept means, and it's told never to fudge a number into a catch-all row just to make a total balance — if something doesn't reconcile, it leaves it and flags it.</p>
+          </div>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p>Each agent uses <code>view_pdf_pages</code>, a batched calculator, a concept-definition lookup, and workbook-writing tools. Two hard guardrails: (1) rows whose column-A cell carries the section-header fill are XBRL-abstract and refuse writes; (2) prompts forbid plugging residuals into "Other…"/catch-all rows to satisfy a total. Values land as facts in <code>run_concept_facts</code>, keyed by <code>concept_uuid</code> + period + entity scope. Agents are capped at 40 iterations (below PydanticAI's silent 50-request limit); every agent — including failures — writes a full request/response trace to disk. On Group filings the agent fills both consolidated and company columns.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="step">5</div>
+        <div class="stage-body">
+          <h3>Notes agents fill the disclosure tables <span class="tag">Runs in parallel</span></h3>
+          <div class="plain">
+            <span class="label">In plain terms</span>
+            <p>Alongside the headline statements, separate agents handle the supplementary notes — the detailed breakdowns (property values, borrowings, related-party dealings, accounting policies). These can be rich, formatted tables, so the notes are written as lightly-styled content that preserves the structure of the original, and a coverage checklist tracks that every note in the document actually landed somewhere.</p>
+          </div>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p>Notes fill MBRS templates 10–14 (MFRS) / 11–15 (MPERS). Discovery is PDF-first (scout inventory), then pure LLM judgement — no deterministic matching or synonym dictionary. Sheet 12 (the list of notes) fans out into model-aware sub-agents. Cells are sanitized HTML stored in <code>notes_cells</code> (the DB is source of truth; the xlsx download re-overlays from it at stream time). Styling travels through a constrained <code>format_ops</code> sidecar so the content channel stays style-free. A post-run coverage checklist reconciles every top-level note against where its content landed and can tip the run to <code>completed_with_errors</code> if a note is missing.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="step">6</div>
+        <div class="stage-body">
+          <h3>Merge into one workbook</h3>
+          <div class="plain">
+            <span class="label">In plain terms</span>
+            <p>All the separate pieces are stitched back together into a single Excel file that matches the official template exactly — with the totals left as live formulas so they still recalculate when someone opens or edits the file.</p>
+          </div>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p><code>_export_canonical_workbooks</code> re-renders each succeeded statement from <code>run_concept_facts</code> (via the exporter) and <code>workbook_merger.py</code> combines them. <code>mark_run_merged</code> writes the download pointer <em>immediately</em> after a successful merge so the file survives even if later steps crash. All workbook saves route through one atomic tmp-file+<code>os.replace</code> helper to survive concurrent readers. Cross-sheet total formulas stay live; the exporter never overwrites the formula cells.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="step">7</div>
+        <div class="stage-body">
+          <h3>Cross-checks validate the numbers</h3>
+          <div class="plain">
+            <span class="label">In plain terms</span>
+            <p>The tool now audits its own output with a battery of accounting sanity checks — does the balance sheet actually balance? Does profit flow correctly into equity? Does the cash-flow statement tie back to the cash on the balance sheet? Each check passes, fails, or is flagged, and you see the results fill in live as they run.</p>
+          </div>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p>A cross-check framework reads facts (default <code>XBRL_FACT_BASED_CHECKS=1</code>) rather than re-opening workbooks, scoped variant-precisely by template ID. Checks declare which standard/level they apply to (e.g. <code>sore_to_sofp_retained_earnings</code> is MPERS-only). On Group filings they run twice — Group columns then Company columns — and report separately. Progress streams as <code>cross_check_start / _result / _complete</code> SSE events so the UI fills rows incrementally.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="step opt">8</div>
+        <div class="stage-body">
+          <h3>The reviewer pass fixes what it can <span class="tag">Automatic</span></h3>
+          <div class="plain">
+            <span class="label">In plain terms</span>
+            <p>If checks fail, a second, more senior AI "reviewer" investigates the root cause — tracing a wrong total back through the sub-tables to the original PDF — and applies grounded corrections. It can only fix things it can justify from the source; anything it can't resolve it raises as a flag for a human. A one-click "Revert to original" always restores the first extraction. Even on a clean run, a light spot-check gives it a sanity read.</p>
+          </div>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p><code>_run_reviewer_pass</code> investigates failing checks + open conflicts down the face→sub→PDF chain and writes through a guarded <code>apply_fixes</code> tool (the same no-plug/no-abstract guard as extraction). Safety is <em>versioning, not write-gating</em>: <code>snapshot_facts</code> runs once before any write, so revert is one click; the pass then re-exports and re-merges. Scoped to the run's <code>{standard}-{level}-</code> family. Gated by <code>XBRL_AUTO_REVIEW</code> (on) and <code>XBRL_SPOT_CHECK</code> (on) for clean runs. Manual re-review runs async on a dedicated thread, tracked in <code>run_review_tasks</code>.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="step">9</div>
+        <div class="stage-body">
+          <h3>Download &amp; review</h3>
+          <div class="plain">
+            <span class="label">In plain terms</span>
+            <p>You get the finished Excel file, plus a full run page: every statement and its agents, the notes, the cross-check results, a telemetry tab (how long it took, how many tokens), and a review workspace where you can see each figure, its evidence from the PDF, and edit anything by hand. Nothing is a black box — every number traces back to a page.</p>
+          </div>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p>The run-detail surface is one tabbed view (<code>RunDetailView.tsx</code>): Overview · Agents · Notes · Cross-checks · Telemetry · Review · Values. The Review/Values tabs read the canonical fact model; evidence citations link to the PDF viewer. Downloads recompute in Excel (live formulas). Verbatim transcripts live on disk and are served on demand, not stored in SQLite.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- EXTRAS -->
+    <section id="extras">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Beyond a single extraction</h2>
+        <p>The same fact model powers several surrounding capabilities.</p>
+      </div>
+
+      <div class="card-grid">
+        <div class="ui-card">
+          <h4>mTool fill</h4>
+          <p><strong>Plain:</strong> pushes the extracted figures straight into SSM's official "mTool" filing template so an operator can validate and generate the XBRL without hand-copying.</p>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p>Offline zip/XML surgery (<code>mtool/offline_fill.py</code>, stdlib-only, no Excel), so it runs server-side and in the cloud. Values emitted verbatim; a button + modal, not a tab.</p>
+          </div>
+        </div>
+        <div class="ui-card">
+          <h4>Evals &amp; benchmarks</h4>
+          <p><strong>Plain:</strong> measures how accurate the tool is by scoring a run against a human-verified "gold" answer, and tracks that accuracy over time and across many documents.</p>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p>Gold stored as facts (same shape as run facts); grading is a set-join on <code>concept_uuid</code> — exact, not a brittle cell-diff. Repeats/consistency, suites, and trend charts sit on top (<code>eval/</code>).</p>
+          </div>
+        </div>
+        <div class="ui-card">
+          <h4>Telemetry &amp; audit trail</h4>
+          <p><strong>Plain:</strong> every run records timing, token usage, tool activity, and a full transcript of what each agent did — so a failure is debuggable and a success is defensible.</p>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p>Per-turn figures derived from cumulative usage deltas; exact timing + tool calls persisted to <code>run_agent_turns</code>. Traces (incl. failures) written to disk per statement.</p>
+          </div>
+        </div>
+        <div class="ui-card">
+          <h4>Accounts &amp; access</h4>
+          <p><strong>Plain:</strong> the web app sits behind email + password login, with an admin who manages who's allowed in. No self-signup.</p>
+          <div class="tech">
+            <span class="label">Technically</span>
+            <p>Server-side revocable sessions, 15-min sliding idle timeout, per-(email,IP) lockout. Every <code>/api/*</code> route is gated (<code>auth/</code> package). Admin role is the privilege boundary, enforced server-side.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="alert warn">
+        <span class="ico">!</span>
+        <div>
+          <strong>A deliberate design choice worth knowing.</strong>
+          The notes pipeline uses pure AI judgement — no hard-coded dictionary of "this label means that row." That keeps it flexible across wildly different report layouts, but it's also why the tool leans so heavily on cross-checks, the reviewer pass, and the human review workspace to catch mistakes rather than assuming the first pass is always right.
+        </div>
+      </div>
+    </section>
+
+    <!-- GLOSSARY -->
+    <section id="glossary">
+      <div class="section-head">
+        <div class="rule"></div>
+        <h2>Glossary</h2>
+        <p>The acronyms, once, in plain language.</p>
+      </div>
+      <dl class="gloss">
+        <dt>XBRL</dt><dd>eXtensible Business Reporting Language — a standard, machine-readable format for financial data. The end product the regulator wants.</dd>
+        <dt>SSM</dt><dd>Suruhanjaya Syarikat Malaysia — the Companies Commission of Malaysia, the regulator you file with.</dd>
+        <dt>MBRS</dt><dd>Malaysian Business Reporting System — SSM's platform and template set for XBRL filings.</dd>
+        <dt>MFRS / MPERS</dt><dd>The two Malaysian accounting standards. MFRS is the full standard (larger entities); MPERS is the simpler one for private entities. The tool supports both.</dd>
+        <dt>Face statements</dt><dd>The five headline financial statements, as opposed to the detailed notes behind them.</dd>
+        <dt>SOFP</dt><dd>Statement of Financial Position — the balance sheet.</dd>
+        <dt>SOPL</dt><dd>Statement of Profit or Loss — the income statement.</dd>
+        <dt>SOCI</dt><dd>Statement of Comprehensive Income.</dd>
+        <dt>SOCF</dt><dd>Statement of Cash Flows.</dd>
+        <dt>SOCIE</dt><dd>Statement of Changes in Equity.</dd>
+        <dt>Notes</dt><dd>The supplementary disclosures — detailed tables and policies that explain the headline numbers.</dd>
+        <dt>Company / Group</dt><dd>Filing level. Company = the single entity; Group = the consolidated parent-plus-subsidiaries view. Group templates carry extra columns.</dd>
+        <dt>Agent</dt><dd>One AI worker with a focused job (e.g. "fill the balance sheet"). Many run at once.</dd>
+        <dt>Scout</dt><dd>A fast preliminary pass that maps the document so the extraction agents start in the right place.</dd>
+        <dt>Cross-check</dt><dd>An automated accounting sanity test (does it balance? does it tie back?).</dd>
+        <dt>Reviewer</dt><dd>A senior AI pass that investigates failed checks and applies grounded fixes, or flags them for a human.</dd>
+        <dt>Fact</dt><dd>One extracted number stored with its meaning (its XBRL concept), period, and scope — the single source of truth everything else reads from.</dd>
+        <dt>mTool</dt><dd>SSM's official desktop template/add-in for producing the final XBRL filing.</dd>
+      </dl>
+    </section>
+
+    <footer>
+      XBRL Agent — internal product overview. Toggle the switch at the top to hide the technical detail for a business-only read.
+    </footer>
+
+  </main>
+</div>
+
+<script>
+  var t = document.getElementById('techToggle');
+  t.addEventListener('change', function(){
+    document.body.classList.toggle('hide-tech', !t.checked);
+  });
+
+  var links = document.querySelectorAll('.nav-group a');
+  var sections = [].map.call(links, function(a){ return document.querySelector(a.getAttribute('href')); }).filter(Boolean);
+  var obs = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('active'); });
+        var active = document.querySelector('.nav-group a[href="#' + e.target.id + '"]');
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(function(s){ obs.observe(s); });
+</script>
+</body>
+</html>
