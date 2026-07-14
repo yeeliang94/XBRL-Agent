@@ -158,7 +158,7 @@ from pathlib import Path
 # 'unstyled' (plain), or NULL (legacy / reviewer-authored). Surfaced so the
 # operator can see which notes fell back to plain and need a manual formatter
 # pass. Nullable ALTER TABLE column. Pinned by tests/test_db_schema_v29.py.
-CURRENT_SCHEMA_VERSION = 32
+CURRENT_SCHEMA_VERSION = 33
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -643,7 +643,15 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         document         TEXT,                      -- source PDF name / ref
         filing_standard  TEXT NOT NULL,             -- 'mfrs' | 'mpers'
         filing_level     TEXT NOT NULL,             -- 'company' | 'group'
-        created_at       TEXT NOT NULL DEFAULT ''
+        created_at       TEXT NOT NULL DEFAULT '',
+        -- v33 (PLAN-evals-hardening Steps 9/14): archive instead of hard-delete
+        -- (historical scores survive), where the gold came from
+        -- ('run' | 'workbook' | 'mtool' | NULL legacy), and whether an
+        -- mTool-derived benchmark's scale has been verified against a real
+        -- human-filled file (0 = show the "scale unverified" badge).
+        is_archived      INTEGER NOT NULL DEFAULT 0,
+        source           TEXT,
+        scale_verified   INTEGER NOT NULL DEFAULT 1
     )
     """,
 
@@ -704,6 +712,11 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- before the taxonomy read NULL and the frontend degrades gracefully.
         taxonomy_json    TEXT,
         per_statement_json TEXT,
+        -- v33 (PLAN-evals-hardening Step 7): content hash of the benchmark's
+        -- gold facts AT GRADE TIME. Comparing it to the current hash detects
+        -- ANY later gold change — edits, deletions, benchmark reassignment —
+        -- which the old timestamp-window heuristic missed. NULL on legacy rows.
+        gold_fingerprint TEXT,
         UNIQUE(run_id, benchmark_id)
     )
     """,
@@ -1328,6 +1341,17 @@ _V31_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # the live suite-doc rows (defaulted, so legacy docs keep today's behaviour).
 _V32_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("eval_suite_docs", "denomination", "TEXT NOT NULL DEFAULT 'thousands'"),
+)
+
+# v32 → v33: gold-change guard + benchmark archive (PLAN-evals-hardening
+# Steps 7-9/14). All additive: legacy scores read a NULL fingerprint (the UI
+# shows "unknown gold version" rather than a false "unchanged"), legacy
+# benchmarks are unarchived with an unknown source and verified scale.
+_V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("eval_scores", "gold_fingerprint", "TEXT"),
+    ("eval_benchmarks", "is_archived", "INTEGER NOT NULL DEFAULT 0"),
+    ("eval_benchmarks", "source", "TEXT"),
+    ("eval_benchmarks", "scale_verified", "INTEGER NOT NULL DEFAULT 1"),
 )
 
 
@@ -2406,6 +2430,40 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (32,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v32 → v33: gold fingerprint + benchmark archive/source. Same
+        # additive, duplicate-tolerant shape as every prior step.
+        if current_version is not None and current_version < 33:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 33:
+                    for table, col_name, col_ddl in _V33_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (33,),
                     )
                 conn.commit()
             except Exception:

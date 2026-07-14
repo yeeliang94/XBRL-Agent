@@ -131,7 +131,7 @@ def create_benchmark_from_workbook(
 
     cur = conn.execute(
         "INSERT INTO eval_benchmarks(name, document, filing_standard, "
-        "filing_level, created_at) VALUES (?, ?, ?, ?, ?)",
+        "filing_level, created_at, source) VALUES (?, ?, ?, ?, ?, 'workbook')",
         (name, document, filing_standard, filing_level, _now()),
     )
     benchmark_id = int(cur.lastrowid)
@@ -259,7 +259,7 @@ def create_benchmark_from_run(
     now = _now()
     cur = conn.execute(
         "INSERT INTO eval_benchmarks(name, document, filing_standard, "
-        "filing_level, created_at) VALUES (?, ?, ?, ?, ?)",
+        "filing_level, created_at, source) VALUES (?, ?, ?, ?, ?, 'run')",
         (name, document or f"seeded from run {run_id}", standard, level, now),
     )
     benchmark_id = int(cur.lastrowid)
@@ -393,9 +393,13 @@ def create_benchmark_from_mtool(
     )
 
     now = _now()
+    # source='mtool' + scale_verified=0: until a real human-filled mTool file
+    # is checked against its PDF (a Windows operator gate), every mTool-derived
+    # benchmark carries the "scale unverified" badge (Step 14).
     cur = conn.execute(
         "INSERT INTO eval_benchmarks(name, document, filing_standard, "
-        "filing_level, created_at) VALUES (?, ?, ?, ?, ?)",
+        "filing_level, created_at, source, scale_verified) "
+        "VALUES (?, ?, ?, ?, ?, 'mtool', 0)",
         (name, document, standard, level, now),
     )
     benchmark_id = int(cur.lastrowid)
@@ -467,14 +471,20 @@ def benchmark_template_ids(conn: sqlite3.Connection, benchmark_id: int) -> list[
     ]
 
 
-def list_benchmarks(conn: sqlite3.Connection) -> list[dict]:
-    """Every benchmark with its template/statement set + gold cell count."""
+def list_benchmarks(
+    conn: sqlite3.Connection, *, include_archived: bool = False
+) -> list[dict]:
+    """Every benchmark with its template/statement set + gold cell count.
+    Archived benchmarks are hidden by default (Step 9) — pass
+    ``include_archived=True`` for the history/filter view."""
     prior = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
+        where = "" if include_archived else "WHERE is_archived = 0 "
         rows = conn.execute(
             "SELECT id, name, document, filing_standard, filing_level, "
-            "created_at FROM eval_benchmarks ORDER BY created_at DESC, id DESC"
+            "created_at, is_archived, source, scale_verified "
+            f"FROM eval_benchmarks {where}ORDER BY created_at DESC, id DESC"
         ).fetchall()
         out: list[dict] = []
         for r in rows:
@@ -500,6 +510,9 @@ def list_benchmarks(conn: sqlite3.Connection) -> list[dict]:
                 "created_at": r["created_at"],
                 "statements": statements,
                 "gold_cell_count": int(gold_count),
+                "is_archived": bool(r["is_archived"]),
+                "source": r["source"],
+                "scale_verified": bool(r["scale_verified"]),
             })
         return out
     finally:
@@ -512,7 +525,8 @@ def get_benchmark(conn: sqlite3.Connection, benchmark_id: int) -> Optional[dict]
     try:
         r = conn.execute(
             "SELECT id, name, document, filing_standard, filing_level, "
-            "created_at FROM eval_benchmarks WHERE id = ?",
+            "created_at, is_archived, source, scale_verified "
+            "FROM eval_benchmarks WHERE id = ?",
             (benchmark_id,),
         ).fetchone()
         if r is None:
@@ -539,6 +553,9 @@ def get_benchmark(conn: sqlite3.Connection, benchmark_id: int) -> Optional[dict]
             "templates": templates,
             "statements": sorted({t["statement_type"] for t in templates}),
             "gold_cell_count": int(gold_count),
+            "is_archived": bool(r["is_archived"]),
+            "source": r["source"],
+            "scale_verified": bool(r["scale_verified"]),
         }
     finally:
         conn.row_factory = prior
@@ -547,10 +564,68 @@ def get_benchmark(conn: sqlite3.Connection, benchmark_id: int) -> Optional[dict]
 def delete_benchmark(conn: sqlite3.Connection, benchmark_id: int) -> bool:
     """Hard-delete a benchmark; CASCADE sweeps its templates + gold + scores.
     Also nulls ``runs.benchmark_id`` on any run that graded against it (the
-    runs FK is ON DELETE SET NULL)."""
+    runs FK is ON DELETE SET NULL).
+
+    Since v33 this is the ADMIN-ONLY true-mistake path — the default delete
+    route archives instead (:func:`archive_benchmark`) so historical scores
+    and trends survive (PLAN-evals-hardening Step 9)."""
     conn.execute("PRAGMA foreign_keys = ON")
     cur = conn.execute("DELETE FROM eval_benchmarks WHERE id = ?", (benchmark_id,))
     return cur.rowcount > 0
+
+
+def archive_benchmark(conn: sqlite3.Connection, benchmark_id: int) -> bool:
+    """Soft-delete: hide the benchmark from pickers but keep its gold, scores
+    and trend history intact (Step 9 — a deleted answer key must not erase
+    every score ever graded against it)."""
+    cur = conn.execute(
+        "UPDATE eval_benchmarks SET is_archived = 1 WHERE id = ?",
+        (benchmark_id,),
+    )
+    return cur.rowcount > 0
+
+
+def unarchive_benchmark(conn: sqlite3.Connection, benchmark_id: int) -> bool:
+    cur = conn.execute(
+        "UPDATE eval_benchmarks SET is_archived = 0 WHERE id = ?",
+        (benchmark_id,),
+    )
+    return cur.rowcount > 0
+
+
+def score_count_for_benchmark(conn: sqlite3.Connection, benchmark_id: int) -> int:
+    """How many historical scores a HARD delete would destroy — surfaced in
+    the confirm dialog before the admin-only true-mistake path."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM eval_scores WHERE benchmark_id = ?",
+        (benchmark_id,),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def gold_fingerprint(conn: sqlite3.Connection, benchmark_id: int) -> str:
+    """Content hash of a benchmark's CURRENT gold facts (Step 7).
+
+    Stamped onto every eval_scores row at grade time; comparing the stamp to
+    the current hash detects any later gold change — edits, deletions, even
+    reassigning the doc to a different benchmark — which the old
+    timestamp-window heuristic missed. Values are hashed via repr(float) so a
+    no-op rewrite of the same number doesn't read as a change.
+    """
+    import hashlib
+
+    rows = conn.execute(
+        "SELECT concept_uuid, period, entity_scope, value, value_status "
+        "FROM gold_concept_facts WHERE benchmark_id = ? "
+        "ORDER BY concept_uuid, period, entity_scope",
+        (benchmark_id,),
+    ).fetchall()
+    h = hashlib.sha256()
+    h.update(f"benchmark:{benchmark_id}\n".encode())
+    for uuid, period, scope, value, status in rows:
+        v = repr(float(value)) if value is not None else ""
+        h.update(f"{uuid}|{period}|{scope}|{v}|{status}\n".encode())
+    return h.hexdigest()
 
 
 def _gold_number(value, value_status: Optional[str]) -> Optional[float]:

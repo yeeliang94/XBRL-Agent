@@ -1,8 +1,12 @@
 """Suite-run trends + comparison (Evals workspace, Step F1/F2).
 
-Everything here recomputes on demand from durable facts (run_concept_facts +
-gold_concept_facts) via the E4 scorecards — no heavyweight new storage. Two
-public entry points:
+Headline accuracy is the score STAMPED at grade time (eval_scores — the PRD's
+"scorecards are stamped at grading time" design); each stamp carries a v33
+gold fingerprint so a later gold edit surfaces as an explicit ``gold_changed``
+/ ``gold_stale`` warning instead of silently comparing apples to oranges.
+Only the slot-level drill-down (:func:`slot_level_diff`) recomputes from
+durable facts (run_concept_facts + gold_concept_facts) on demand. Two public
+entry points:
 
 * :func:`suite_run_aggregate` — one suite run's per-document scorecards + the
   aggregate, keyed by document so trend/compare can line documents up across
@@ -113,9 +117,10 @@ def suite_run_aggregate(conn: sqlite3.Connection, suite_run_id: int) -> dict:
 def _gold_changed_between(
     conn: sqlite3.Connection, benchmark_id: Optional[int], t0: str, t1: str
 ) -> bool:
-    """True if any gold fact for `benchmark_id` was edited between the two suite
-    runs (gold edits are timestamped) — grades can move without a pipeline
-    change, so the compare view warns."""
+    """Legacy timestamp-window heuristic, kept ONLY as the fallback for scores
+    stamped before the v33 fingerprint existed. It cannot see deleted gold
+    rows, edits outside the window, or benchmark reassignment — the
+    fingerprint comparison in :func:`_gold_changed` covers all of those."""
     if benchmark_id is None or not t0 or not t1:
         return False
     lo, hi = (t0, t1) if t0 <= t1 else (t1, t0)
@@ -125,6 +130,30 @@ def _gold_changed_between(
         (benchmark_id, lo, hi),
     ).fetchone()
     return bool(row and row[0])
+
+
+def _gold_changed(
+    conn: sqlite3.Connection,
+    a: Optional[DocumentScorecard],
+    b: Optional[DocumentScorecard],
+    benchmark_id: Optional[int],
+    t_a: str,
+    t_b: str,
+) -> bool:
+    """Did the answer key move under this document's two scores? (Step 7)
+
+    Fingerprint-first: the two stamps differing means A and B were graded
+    against DIFFERENT gold; either stamp being stale means the gold changed
+    again after grading. Catches edits, deletions and reassignment. Falls back
+    to the timestamp heuristic only when neither score carries a fingerprint
+    (legacy rows)."""
+    fp_a = a.gold_fingerprint if a else None
+    fp_b = b.gold_fingerprint if b else None
+    if fp_a or fp_b:
+        if fp_a and fp_b and fp_a != fp_b:
+            return True
+        return bool((a and a.gold_stale) or (b and b.gold_stale))
+    return _gold_changed_between(conn, benchmark_id, t_a, t_b)
 
 
 def compare_suite_runs(
@@ -162,7 +191,7 @@ def compare_suite_runs(
         delta = (acc_b - acc_a) if (acc_a is not None and acc_b is not None) else None
         meta = docs_meta.get(doc_id, {})
         gold_changed = (
-            _gold_changed_between(conn, meta.get("benchmark_id"), t_a, t_b)
+            _gold_changed(conn, a, b, meta.get("benchmark_id"), t_a, t_b)
             if in_both else False
         )
         rows.append({
