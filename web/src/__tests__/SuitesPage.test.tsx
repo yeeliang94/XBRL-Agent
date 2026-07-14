@@ -137,3 +137,68 @@ describe("SuitesPage", () => {
     expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
   });
 });
+
+describe("SuitesPage — complete launch config (Step 13, PLAN-evals-hardening)", () => {
+  function suiteRoutes(onLaunch: (body: Record<string, unknown>) => void) {
+    return (url: string, init?: RequestInit) => {
+      if (url === "/api/suites") return { suites: [{ id: 1, name: "S", created_at: "", updated_at: "", doc_count: 1, run_count: 0 }] };
+      if (url === "/api/suites/1" && (init?.method ?? "GET") === "GET")
+        return { id: 1, name: "S", created_at: "", updated_at: "", docs: [
+          { id: 10, label: "d1", source_filename: "d1.pdf", filing_standard: "mfrs", filing_level: "company", benchmark_id: null, created_at: "", denomination: "millions" },
+        ] };
+      if (url === "/api/suites/1/runs") return { suite_run_list: [] };
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      if (url === "/api/settings") return { model: "openai.gpt-5.4", available_models: [{ id: "claude-fable-5", label: "Claude Fable" }] };
+      if (url === "/api/suites/1/estimate")
+        return { documents: 1, repeats: 1, extraction_runs: 1, avg_run_seconds: 60,
+          estimated_wall_seconds: 60, estimated_tokens: 250_000,
+          estimated_cost_usd: 3.5, cost_range_usd: [2.5, 4.5], concurrency: 3 };
+      if (url === "/api/suites/1/run" && init?.method === "POST") {
+        onLaunch(JSON.parse(String(init.body)));
+        return { suite_run_id: 9, status: "running" };
+      }
+      return {};
+    };
+  }
+
+  test("launch body carries model, statements and notes selections", async () => {
+    let launched: Record<string, unknown> | null = null;
+    mockRoutes(suiteRoutes((b) => { launched = b; }));
+    render(<SuitesPage />);
+    fireEvent.click(await screen.findByTestId("suite-card-1"));
+
+    // Model picker offers the Settings default + configured models.
+    const model = (await screen.findByTestId("run-model")) as HTMLSelectElement;
+    expect(model.options[0].textContent).toContain("openai.gpt-5.4");
+    fireEvent.change(model, { target: { value: "claude-fable-5" } });
+
+    // Drop SOCIE, add one notes template.
+    fireEvent.click(screen.getByTestId("run-stmt-SOCIE"));
+    fireEvent.click(screen.getByTestId("run-note-CORP_INFO"));
+
+    fireEvent.click(screen.getByTestId("run-launch"));
+    await waitFor(() => expect(launched).not.toBeNull());
+    expect(launched!.model).toBe("claude-fable-5");
+    expect(launched!.statements).toEqual(["SOFP", "SOPL", "SOCI", "SOCF"]);
+    expect(launched!.notes_to_run).toEqual(["CORP_INFO"]);
+  });
+
+  test("estimate shows token + cost figures (Step 4)", async () => {
+    mockRoutes(suiteRoutes(() => {}));
+    render(<SuitesPage />);
+    fireEvent.click(await screen.findByTestId("suite-card-1"));
+    const est = await screen.findByTestId("run-estimate");
+    expect(est.textContent).toContain("≈0.3M tokens");
+    expect(est.textContent).toContain("≈$3.50");
+    expect(est.textContent).toContain("$2.50–$4.50");
+  });
+
+  test("doc form offers per-document denomination; non-default shows in the list", async () => {
+    mockRoutes(suiteRoutes(() => {}));
+    render(<SuitesPage />);
+    fireEvent.click(await screen.findByTestId("suite-card-1"));
+    expect(await screen.findByTestId("doc-denomination")).toBeTruthy();
+    const row = screen.getByTestId("doc-row-10");
+    expect(row.textContent).toContain("millions");
+  });
+});

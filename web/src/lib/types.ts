@@ -835,6 +835,8 @@ export interface SuiteDocJson {
   filing_level: string;
   benchmark_id: number | null;
   created_at: string;
+  // v32: how figures are printed in THIS document (per-doc, Step 3).
+  denomination?: string;
 }
 
 export interface SuiteJson {
@@ -873,6 +875,12 @@ export interface SuiteEstimateJson {
   avg_run_seconds: number | null;
   estimated_wall_seconds: number | null;
   concurrency: number;
+  // Step 4: spend estimates from recent same-model runs (null = no history).
+  estimated_tokens?: number | null;
+  estimated_cost_usd?: number | null;
+  tokens_range?: [number, number] | null;
+  cost_range_usd?: [number, number] | null;
+  estimate_sample_size?: number;
 }
 
 export interface DocumentScorecardJson {
