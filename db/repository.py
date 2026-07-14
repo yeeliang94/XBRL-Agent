@@ -2499,9 +2499,15 @@ def fetch_repeat_group(
         ).fetchone()
         if row is None:
             return None
+        # Each child carries its own accuracy (PRD: "each repeat's accuracy
+        # score, so the user sees both 'how right' and 'how stable'") — the
+        # LEFT JOIN reads the stamped eval_scores row when the repeat was
+        # graded, NULL otherwise.
         children = conn.execute(
-            "SELECT id, status, repeat_index FROM runs "
-            "WHERE repeat_group_id = ? ORDER BY repeat_index",
+            "SELECT r.id, r.status, r.repeat_index, "
+            "s.gold_cells, s.matched_cells "
+            "FROM runs r LEFT JOIN eval_scores s ON s.run_id = r.id "
+            "WHERE r.repeat_group_id = ? ORDER BY r.repeat_index",
             (group_id,),
         ).fetchall()
     finally:
@@ -2515,7 +2521,15 @@ def fetch_repeat_group(
         "config": _parse_json_dict(row["config_json"]),
         "consistency": _parse_json_dict(row["consistency_json"]),
         "runs": [
-            {"id": c["id"], "status": c["status"], "repeat_index": c["repeat_index"]}
+            {
+                "id": c["id"],
+                "status": c["status"],
+                "repeat_index": c["repeat_index"],
+                "accuracy": (
+                    (c["matched_cells"] / c["gold_cells"])
+                    if c["gold_cells"] else None
+                ),
+            }
             for c in children
         ],
     }

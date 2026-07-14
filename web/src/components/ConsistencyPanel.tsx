@@ -63,6 +63,8 @@ export function ConsistencyPanel({ groupId }: ConsistencyPanelProps) {
   const finished = group.runs.filter(
     (r) => r.status === "completed" || r.status === "completed_with_errors",
   ).length;
+  // Per-repeat accuracy (PRD: "how right" next to "how stable", Step 11).
+  const gradedRepeats = group.runs.filter((r) => r.accuracy != null);
 
   return (
     <section data-testid="consistency-panel" style={styles.wrap}>
@@ -74,6 +76,16 @@ export function ConsistencyPanel({ groupId }: ConsistencyPanelProps) {
           {group.status === "running" && " (running…)"}
         </span>
       </h4>
+
+      {gradedRepeats.length > 0 && (
+        <div data-testid="consistency-repeat-accuracies" style={styles.repeatStrip}>
+          {gradedRepeats.map((r) => (
+            <span key={r.id} style={styles.repeatChip}>
+              Repeat {(r.repeat_index ?? 0) + 1}: {pct(r.accuracy ?? null)}
+            </span>
+          ))}
+        </div>
+      )}
 
       {!c || !c.available ? (
         <div data-testid="consistency-unavailable" style={styles.card}>
@@ -174,7 +186,17 @@ function DisagreementTable({
             {sorted.map((r, i) => (
               <tr key={i}>
                 <td style={styles.td}>
-                  <code style={styles.code}>{r.key.join(" · ")}</code>
+                  {r.label ? (
+                    // Human line-item name (resolved server-side); the raw
+                    // concept key stays reachable via the tooltip.
+                    <span title={r.key.join(" · ")}>
+                      {[r.sheet, r.label, r.key[1], r.key[2]]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  ) : (
+                    <code style={styles.code}>{r.key.join(" · ")}</code>
+                  )}
                 </td>
                 {kind === "value" ? (
                   <>
@@ -240,6 +262,20 @@ const styles = {
     fontSize: 13,
     fontWeight: 400,
     color: pwc.grey500,
+  } as React.CSSProperties,
+  repeatStrip: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  repeatChip: {
+    fontFamily: pwc.fontMono,
+    fontSize: 12,
+    color: pwc.grey700,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: 2,
+    padding: `2px ${pwc.space.sm}px`,
+    background: pwc.white,
   } as React.CSSProperties,
   card: {
     ...ui.card,
