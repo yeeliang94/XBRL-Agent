@@ -556,7 +556,7 @@ export interface MtoolIngestResult {
     label: string;
     values: Record<string, number>;
   }[];
-  ambiguous: { sheet: string; row?: number; label: string; candidates?: string[] }[];
+  ambiguous: { sheet: string; label: string; detail?: string }[];
   sheets_missing: string[];
   prose_notes_captured: number;
   scale_warning: string | null;

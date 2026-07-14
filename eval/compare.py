@@ -84,12 +84,18 @@ def _suite_run_doc_cards(
         # not whichever repeat happened to have the highest run id. Health
         # signals stay from the representative run; only accuracy averages.
         scored = conn.execute(
+            # Same benchmark as the representative run's score only (a mid-
+            # suite re-attach must not average ratios across two answer keys);
+            # newest first so gold_cells reads from the latest repeat.
             "SELECT s.gold_cells, s.matched_cells FROM eval_scores s "
             "JOIN runs r ON r.id = s.run_id "
             "WHERE r.suite_run_id = ? AND r.session_id = ? "
             "AND r.status IN ('completed','completed_with_errors') "
-            "AND s.gold_cells > 0",
-            (suite_run_id, sessions[doc_id]),
+            "AND s.gold_cells > 0 "
+            "AND s.benchmark_id IN "
+            "(SELECT benchmark_id FROM eval_scores WHERE run_id = ?) "
+            "ORDER BY s.run_id DESC",
+            (suite_run_id, sessions[doc_id], run_id),
         ).fetchall()
         if len(scored) >= 2:
             accs = [m / g for g, m in scored]

@@ -243,7 +243,11 @@ def baseline_prior_score(
 
     sql = (
         "SELECT s.run_id, s.gold_cells, s.matched_cells FROM eval_scores s "
+        "JOIN runs r ON r.id = s.run_id "
         "WHERE s.benchmark_id = ? "
+        # Only a finished run can be a baseline — an aborted run's partial
+        # (low) score would make a real regression pass the gate.
+        "AND r.status IN ('completed','completed_with_errors') "
     )
     params: list = [benchmark_id]
     if model and not allow_config_drift:

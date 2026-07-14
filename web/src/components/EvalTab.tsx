@@ -62,6 +62,7 @@ export function EvalTab({ runId, initialScore = null }: EvalTabProps) {
   // Reviewer contribution (Step 12) — computed since E5, now reachable.
   useEffect(() => {
     let cancelled = false;
+    setLift(null); // never show the previous run's lift under a new run
     fetchReviewerLift(runId)
       .then((l) => {
         if (!cancelled) setLift(l);

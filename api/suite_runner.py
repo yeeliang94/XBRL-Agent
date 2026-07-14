@@ -34,7 +34,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 import server
 from server import RunConfigRequest
@@ -64,6 +64,14 @@ class SuiteRunLaunch(BaseModel):
     use_scout: bool = False
     notes_to_run: list[str] = []
     repeats: int = 1
+
+    @field_validator("repeats")
+    @classmethod
+    def _clamp_repeats(cls, v: int) -> int:
+        # Clamp ONCE at the boundary. The repeat stream also caps at 5, so an
+        # unclamped 10 here would run 5 repeats but judge completion against
+        # 10 — every doc permanently 'failed' while the suite reads complete.
+        return max(1, min(5, int(v or 1)))
 
 
 def _doc_session_id(suite_run_id: int, doc_id: int) -> str:
@@ -229,14 +237,24 @@ async def _launch_one_document(
         await _drain_stream(agen)
     finally:
         server.active_runs.discard(session_id)
-        done, _ = _repeat_progress(suite_run_id, doc["id"])
+        # Best-effort like the rest of the state plumbing: a DB hiccup here
+        # must not mask the run's own exception or leave the doc 'running'.
+        try:
+            done, _ = _repeat_progress(suite_run_id, doc["id"])
+        except Exception:
+            logger.warning("suite %s: could not read repeat progress for doc %s",
+                           suite_run_id, doc["id"], exc_info=True)
+            done = -1
         if done >= repeats:
             _set_doc_state(suite_run_id, doc["id"], "finished")
-        else:
+        elif done >= 0:
             _set_doc_state(
                 suite_run_id, doc["id"], "failed",
                 f"{done} of {repeats} repeat(s) completed",
             )
+        else:
+            _set_doc_state(suite_run_id, doc["id"], "failed",
+                           "could not determine repeat progress")
 
 
 async def _process_documents(
@@ -574,6 +592,20 @@ async def resume_suite_run_endpoint(suite_id: int, suite_run_id: int):
         if sr is None or sr["suite_id"] != suite_id:
             raise HTTPException(status_code=404, detail="Suite run not found")
         launch = sr.get("config") or {}
+        # One live batch per suite applies to Resume too (review follow-up):
+        # resuming an old partial run while a NEWER run of the same suite is
+        # still going would double-spend on the same documents.
+        other = conn.execute(
+            "SELECT id FROM eval_suite_runs WHERE suite_id = ? "
+            "AND status = 'running' AND id != ? LIMIT 1",
+            (suite_id, suite_run_id),
+        ).fetchone()
+        if other is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Another run of this suite (#{other[0]}) is still "
+                       "running. Stop it or wait before resuming this one.",
+            )
         # Atomic flip: only the request that wins the non-running → running
         # transition launches the batch. A read-then-write guard would let two
         # rapid Resume clicks both pass and spawn duplicate batch threads.
