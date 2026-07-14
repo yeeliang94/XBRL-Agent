@@ -114,6 +114,10 @@ export function extractErrorDetail(body: unknown): string | null {
       return arr.map(entryToString).filter(Boolean).join("\n");
     }
     if (typeof d.error === "string" && d.error.trim()) return d.error.trim();
+    // `{detail: {message: "..."}}` — the mTool column-map 422 shape. Without
+    // this the user saw only the generic 422 sentence and never the backend's
+    // actionable instruction (PLAN-evals-hardening Step 14).
+    if (typeof d.message === "string" && d.message.trim()) return d.message.trim();
   }
 
   if (typeof b.message === "string" && b.message.trim()) return b.message.trim();

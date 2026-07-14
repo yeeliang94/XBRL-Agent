@@ -529,16 +529,8 @@ export async function createBenchmarkFromMtool(args: {
   unit: "full" | "thousands";
   template_ids: string[];
   document?: string;
-}): Promise<{
-  ok: boolean;
-  id: number;
-  ingested: number;
-  matched_by_statement: Record<string, number>;
-  unmatched_rows: { sheet: string; row: number; label: string; values: number[] }[];
-  prose_notes_captured: number;
-  scale_warning: string | null;
-  statements: string[];
-}> {
+  column_map?: string;
+}): Promise<MtoolIngestResult> {
   const form = new FormData();
   form.append("file", args.file);
   form.append("name", args.name);
@@ -547,7 +539,31 @@ export async function createBenchmarkFromMtool(args: {
   form.append("unit", args.unit);
   form.append("template_ids", JSON.stringify(args.template_ids));
   if (args.document) form.append("document", args.document);
+  if (args.column_map) form.append("column_map", args.column_map);
   return apiFetch("/api/benchmarks/from-mtool", { method: "POST", body: form });
+}
+
+// Full parity with the backend response (Step 14) — the old inline type
+// silently dropped the matrix-deferral / ambiguity / missing-sheet warnings.
+export interface MtoolIngestResult {
+  ok: boolean;
+  id: number;
+  ingested: number;
+  matched_by_statement: Record<string, number>;
+  unmatched_rows: {
+    sheet: string;
+    row: number;
+    label: string;
+    values: Record<string, number>;
+  }[];
+  ambiguous: { sheet: string; row?: number; label: string; candidates?: string[] }[];
+  sheets_missing: string[];
+  prose_notes_captured: number;
+  scale_warning: string | null;
+  matrix_deferred: number;
+  matrix_warning: string | null;
+  statements: string[];
+  template_ids: string[];
 }
 
 // --- Evals workspace: suites + batch runner + results (Phase E/F) ---
@@ -674,9 +690,16 @@ export async function reGradeRun(
   return apiFetch(`/api/runs/${runId}/re-grade`, { method: "POST" });
 }
 
-/** Delete a benchmark (cascades to its templates + gold facts + scores). */
+/** Archive a benchmark (Step 9): it leaves the pickers but its reference
+ *  answers and every historical score survive. Hard delete is admin-only
+ *  via ?hard=true. */
 export async function deleteBenchmark(id: number): Promise<void> {
   await apiFetch(`/api/benchmarks/${id}`, { method: "DELETE" });
+}
+
+/** Clear the 'scale unverified' badge after the real-file mTool check. */
+export async function markBenchmarkScaleVerified(id: number): Promise<void> {
+  await apiFetch(`/api/benchmarks/${id}/scale-verified`, { method: "POST" });
 }
 
 /** Fetch the scorecard for a run, or null when the run wasn't graded. */

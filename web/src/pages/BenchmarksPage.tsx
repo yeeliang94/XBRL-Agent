@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, createBenchmarkFromMtool, fetchEvalTemplates, deleteBenchmark, fetchRuns } from "../lib/api";
+import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, createBenchmarkFromMtool, fetchEvalTemplates, deleteBenchmark, markBenchmarkScaleVerified, fetchRuns } from "../lib/api";
 import type { RunSummaryJson } from "../lib/types";
 import type { BenchmarkJson } from "../lib/types";
 import { ConceptsPage } from "./ConceptsPage";
@@ -173,6 +173,26 @@ function BenchmarkCard({
           {benchmark.document && <span>{benchmark.document}</span>}
           <span>{benchmark.filing_standard.toUpperCase()} · {benchmark.filing_level}</span>
           <span style={styles.cardCount}>{benchmark.gold_cell_count} reference values</span>
+          {benchmark.source === "mtool" && benchmark.scale_verified === false && (
+            <span
+              data-testid={`benchmark-scale-unverified-${benchmark.id}`}
+              style={styles.scaleBadge}
+              title="Imported from an mTool file. Whether mTool stores the printed (thousands) figure or the full figure hasn't been confirmed against a real filing yet — treat scores against this benchmark as provisional."
+            >
+              ! Scale unverified
+              <button
+                type="button"
+                data-testid={`benchmark-scale-verify-${benchmark.id}`}
+                style={styles.scaleVerifyBtn}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  markBenchmarkScaleVerified(benchmark.id).then(onDeleted).catch(() => {});
+                }}
+              >
+                Mark verified
+              </button>
+            </span>
+          )}
         </div>
         <div style={styles.cardStatements}>
           {benchmark.statements.join(" · ") || "no statements"}
@@ -201,21 +221,22 @@ function BenchmarkCard({
           onClick={onDelete}
           disabled={deleting}
         >
-          {deleting ? "Deleting…" : "Delete"}
+          {deleting ? "Archiving…" : "Archive"}
         </button>
       </div>
     </div>
       <ConfirmDialog
         isOpen={confirmOpen}
-        title={`Delete benchmark ${benchmark.name}?`}
+        title={`Archive benchmark ${benchmark.name}?`}
         message={
           <>
-            This permanently removes its reference answers <strong>and the scorecard
-            of every run graded against it</strong> (those runs' History score
-            reverts to “—”). This can’t be undone.
+            Archiving hides it from the pickers, but <strong>keeps its reference
+            answers and every historical score</strong> — trends and past run
+            grades stay intact. An administrator can still permanently delete
+            it later if it was created by mistake.
           </>
         }
-        confirmLabel="Delete benchmark"
+        confirmLabel="Archive benchmark"
         onConfirm={runDelete}
         onCancel={() => setConfirmOpen(false)}
       />
@@ -241,6 +262,11 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
     { template_id: string; statement: string; variant: string; label: string }[]
   >([]);
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
+  // Column-map fallback (Step 14): when auto-detection can't confidently
+  // find the value columns, the backend 422s asking for an explicit map —
+  // this textarea is the recovery path that used to be unreachable.
+  const [columnMap, setColumnMap] = useState("");
+  const [showColumnMap, setShowColumnMap] = useState(false);
   const [report, setReport] = useState<Awaited<
     ReturnType<typeof createBenchmarkFromMtool>
   > | null>(null);
@@ -372,6 +398,7 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
             filing_level: level,
             unit,
             template_ids: selectedTemplateIds,
+            column_map: columnMap.trim() || undefined,
           });
           setReport(res);
           setOk(`Created "${name.trim()}" — ${res.ingested} reference values captured.`);
@@ -381,12 +408,16 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
           onCreated();
         }
       } catch (err) {
-        setError(userMessage(err));
+        const msg = userMessage(err);
+        setError(msg);
+        if (mode === "mtool" && msg.toLowerCase().includes("column map")) {
+          setShowColumnMap(true);
+        }
       } finally {
         setBusy(false);
       }
     },
-    [mode, file, name, runId, standard, level, unit, selectedTemplateIds, onCreated]
+    [mode, file, name, runId, standard, level, unit, selectedTemplateIds, columnMap, onCreated]
   );
 
   const createDisabledReason = !name.trim()
@@ -572,6 +603,29 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
           )}
         </div>
       )}
+      {mode === "mtool" && showColumnMap && (
+        <div style={styles.formField} data-testid="bench-column-map">
+          <label htmlFor="bench-column-map-input" style={ui.fieldLabel}>
+            Column map (auto-detection was not confident)
+          </label>
+          <span style={styles.fieldHint}>
+            Tell the import which columns hold the labels and values, per
+            sheet. Example for a Company filing:{" "}
+            <code>{'{"SOFP": {"label_column": "D", "columns": {"current_year": "E", "prior_year": "F"}}}'}</code>
+            {" "}(Group filings use group_current_year / group_prior_year /
+            company_current_year / company_prior_year.)
+          </span>
+          <textarea
+            id="bench-column-map-input"
+            data-testid="bench-column-map-input"
+            style={styles.columnMapArea}
+            rows={4}
+            value={columnMap}
+            onChange={(e) => setColumnMap(e.target.value)}
+            placeholder='{"SOFP": {"label_column": "D", "columns": {"current_year": "E", "prior_year": "F"}}}'
+          />
+        </div>
+      )}
       <div style={styles.formActions}>
         <button
           type="submit"
@@ -633,6 +687,33 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
               </ul>
             </div>
           )}
+          {!!report.matrix_warning && (
+            <div style={styles.reportRow} data-testid="bench-matrix-warning">
+              ⚠️ {report.matrix_warning}
+            </div>
+          )}
+          {(report.ambiguous ?? []).length > 0 && (
+            <div style={styles.reportRow} data-testid="bench-ambiguous">
+              ⚠️ {(report.ambiguous ?? []).length} label
+              {(report.ambiguous ?? []).length === 1 ? "" : "s"} appeared on more than
+              one row and {(report.ambiguous ?? []).length === 1 ? "was" : "were"} skipped
+              — check these in the reference editor:
+              <ul style={styles.unmatchedList}>
+                {(report.ambiguous ?? []).slice(0, 25).map((r, i) => (
+                  <li key={i} style={styles.unmatchedItem}>
+                    <code style={styles.code}>{r.sheet}</code> {r.label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(report.sheets_missing ?? []).length > 0 && (
+            <div style={styles.reportRow} data-testid="bench-sheets-missing">
+              ⚠️ Expected statement sheet{(report.sheets_missing ?? []).length === 1 ? "" : "s"} not
+              found in the workbook: {(report.sheets_missing ?? []).join(", ")} — those
+              statements captured no reference values.
+            </div>
+          )}
           <div style={styles.reportRow}>
             Review and correct the imported reference values — click the new
             benchmark in the list to open its editor.
@@ -644,6 +725,33 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
 }
 
 const styles = {
+  scaleBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    border: `1px solid ${pwc.orange700}`,
+    color: pwc.orange700,
+    background: pwc.orange50,
+    fontSize: 12,
+    padding: "1px 6px",
+  } as React.CSSProperties,
+  scaleVerifyBtn: {
+    border: "none",
+    background: "transparent",
+    color: pwc.orange700,
+    fontSize: 12,
+    textDecoration: "underline",
+    cursor: "pointer",
+    padding: 0,
+  } as React.CSSProperties,
+  columnMapArea: {
+    fontFamily: pwc.fontMono,
+    fontSize: 12,
+    border: `1px solid ${pwc.grey300}`,
+    padding: 8,
+    width: "100%",
+    boxSizing: "border-box" as const,
+  } as React.CSSProperties,
   page: {
     ...ui.pageStandard,
     display: "flex",

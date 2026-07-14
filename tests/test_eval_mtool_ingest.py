@@ -301,3 +301,47 @@ def test_matrix_cells_are_deferred_and_counted_not_silently_dropped(tmp_path):
 
     # …but it is COUNTED as deferred, so the omission is visible.
     assert count_deferred_matrix(conn, "mfrs", "company", [_TEMPLATE_ID]) == 1
+
+
+# --- Step 14 (PLAN-evals-hardening) -----------------------------------------
+
+def test_unmatched_rows_carry_the_workbook_row_number(tmp_path):
+    """The UI prints 'row N' for each unmatched line — the backend used to
+    omit the key entirely, rendering 'row undefined'."""
+    path = _mtool_file(tmp_path, [
+        ("Cash and bank balances", 1595, 1420),
+        ("Mystery balancing figure", 42, None),
+    ])
+    catalogue = _catalogue(["Cash and bank balances"])
+    override = {"SOFP": {"label_column": "A",
+                         "columns": {"current_year": "B", "prior_year": "C"}}}
+    report = ingest_workbook(
+        path, catalogue, filing_level="company", column_map_override=override
+    )
+    assert len(report.unmatched_rows) == 1
+    row = report.unmatched_rows[0]
+    assert row["label"] == "Mystery balancing figure"
+    assert row["row"] == 4  # second data row (_mtool_file starts at 3)
+    assert row["sheet"] == "SOFP"
+
+
+def test_full_unit_round_trips_values_verbatim(tmp_path):
+    """The software half of the mTool scale contract: at the 'full' unit
+    (scale identity — the exporter's only shipping default until the Windows
+    real-file recon), ingested gold reproduces the workbook figures verbatim.
+    No hidden multiplier can creep in on either side."""
+    values = [("Cash and bank balances", 1595.0, 1420.0),
+              ("Trade receivables", 800.25, 700.5)]
+    path = _mtool_file(tmp_path, values)
+    catalogue = _catalogue([l for l, _, _ in values])
+    override = {"SOFP": {"label_column": "A",
+                         "columns": {"current_year": "B", "prior_year": "C"}}}
+    report = ingest_workbook(
+        path, catalogue, filing_level="company", unit_scale=1.0,
+        column_map_override=override,
+    )
+    facts = {(f.concept_uuid, f.period): f.value for f in report.facts}
+    for label, cy, py in values:
+        key = f"u_{label.lower()}"
+        assert facts[(key, "CY")] == cy
+        assert facts[(key, "PY")] == py
