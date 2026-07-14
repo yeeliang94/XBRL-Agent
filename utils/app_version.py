@@ -44,6 +44,32 @@ def _from_git() -> str | None:
     return value or None
 
 
+def prompt_state_hash(root: Path | None = None) -> str | None:
+    """Short content hash over the behaviour-bearing surface git-describe can't
+    see (PLAN-evals-hardening Step 16): every prompt file + the pricing/model
+    registry. Two uncommitted prompt experiments both read ``...-dirty`` from
+    git — this suffix tells their trend points apart. Returns None on any I/O
+    failure (provenance must never break a run)."""
+    import hashlib
+
+    base = root or _REPO_ROOT
+    h = hashlib.sha256()
+    try:
+        files = sorted((base / "prompts").rglob("*.md"))
+        files.append(base / "pricing.py")
+        found = False
+        for f in files:
+            if f.is_file():
+                found = True
+                h.update(str(f.relative_to(base)).encode())
+                h.update(f.read_bytes())
+        if not found:
+            return None
+        return h.hexdigest()[:8]
+    except OSError:
+        return None
+
+
 @functools.lru_cache(maxsize=1)
 def get_app_version() -> str:
     """The resolved version string. Cached — resolves at most once per process."""
@@ -62,6 +88,13 @@ def get_app_version() -> str:
 
     git = _from_git()
     if git:
+        # A dirty tree is ambiguous — many different uncommitted prompt states
+        # share one describe string. Disambiguate with the prompt-state hash;
+        # clean builds keep the stable describe output untouched.
+        if git.endswith("-dirty"):
+            ph = prompt_state_hash()
+            if ph:
+                return f"{git}+p{ph}"
         return git
 
     return "unknown"

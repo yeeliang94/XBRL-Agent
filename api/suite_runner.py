@@ -45,6 +45,12 @@ router = APIRouter()
 
 SUITE_CONCURRENCY = 3
 
+# GLOBAL document slots (Step 15): one process-wide cap shared by every live
+# suite run, so two simultaneous suites can't run 6 extractions. A
+# threading.Semaphore (not asyncio) because each batch thread runs its own
+# event loop; waiters poll non-blocking so a Stop can abandon the queue.
+_GLOBAL_SLOTS = threading.BoundedSemaphore(SUITE_CONCURRENCY)
+
 # Per-suite-run cancel flags so Stop can abort remaining launches (the in-flight
 # runs finalize themselves via task_registry / their own finally — gotcha #10).
 _active_batches: dict[int, threading.Event] = {}
@@ -237,18 +243,25 @@ async def _process_documents(
     suite_run_id: int, docs: list[dict], launch: dict,
     api_key: str, proxy_url: str, model_name: str,
 ) -> None:
-    """Run `docs` with a concurrency cap of SUITE_CONCURRENCY, honouring the
-    cancel flag between acquisitions."""
+    """Run `docs` under the GLOBAL SUITE_CONCURRENCY cap (shared across every
+    live suite run — Step 15), honouring the cancel flag between acquisitions."""
     cancel = _active_batches.get(suite_run_id)
-    sem = asyncio.Semaphore(SUITE_CONCURRENCY)
 
     async def _one(doc):
-        async with sem:
+        # Non-blocking poll instead of a blocking acquire: keeps this loop's
+        # thread free and lets a Stop abandon the wait immediately.
+        while not _GLOBAL_SLOTS.acquire(blocking=False):
+            if cancel is not None and cancel.is_set():
+                return
+            await asyncio.sleep(0.1)
+        try:
             if cancel is not None and cancel.is_set():
                 return
             await _launch_one_document(
                 suite_run_id, doc, launch, api_key, proxy_url, model_name
             )
+        finally:
+            _GLOBAL_SLOTS.release()
 
     await asyncio.gather(*[_one(d) for d in docs], return_exceptions=True)
 
@@ -481,6 +494,19 @@ async def launch_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
             raise HTTPException(status_code=404, detail="Suite not found")
         if not suite["docs"]:
             raise HTTPException(status_code=422, detail="Add at least one document first.")
+        # Double-launch guard (Step 15): one live batch per suite. Mirrors the
+        # resume path's atomic non-running → running flip.
+        running = conn.execute(
+            "SELECT id FROM eval_suite_runs WHERE suite_id = ? "
+            "AND status = 'running' LIMIT 1",
+            (suite_id,),
+        ).fetchone()
+        if running is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This suite is already running (suite run #{running[0]}). "
+                       "Stop it or wait for it to finish before launching again.",
+            )
         # Persist the RESOLVED model, never null-meaning-"whatever the
         # environment used" (Step 13) — trends compare runs by model, so the
         # stamp must state what actually ran even when the user left the
