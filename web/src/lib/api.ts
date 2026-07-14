@@ -588,13 +588,15 @@ export async function addSuiteDoc(args: {
   filing_standard: string;
   filing_level: string;
   benchmark_id?: number | null;
-}): Promise<{ doc_id: number; suite: SuiteJson }> {
+  denomination?: string;
+}): Promise<{ doc_id: number; suite: SuiteJson; derived_variants?: Record<string, string> }> {
   const form = new FormData();
   form.append("file", args.file);
   if (args.label) form.append("label", args.label);
   form.append("filing_standard", args.filing_standard);
   form.append("filing_level", args.filing_level);
   if (args.benchmark_id != null) form.append("benchmark_id", String(args.benchmark_id));
+  if (args.denomination) form.append("denomination", args.denomination);
   return apiFetch(`/api/suites/${args.suiteId}/docs`, { method: "POST", body: form });
 }
 

@@ -481,10 +481,19 @@ async def launch_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
             raise HTTPException(status_code=404, detail="Suite not found")
         if not suite["docs"]:
             raise HTTPException(status_code=422, detail="Add at least one document first.")
+        # Persist the RESOLVED model, never null-meaning-"whatever the
+        # environment used" (Step 13) — trends compare runs by model, so the
+        # stamp must state what actually ran even when the user left the
+        # picker on the default.
+        load_dotenv(server.ENV_FILE, override=True)
+        resolved_model = body.model or os.environ.get(
+            "TEST_MODEL", "openai.gpt-5.4"
+        )
         launch = body.model_dump()
+        launch["model"] = resolved_model
         suite_run_id = repo.create_suite_run(
             conn, suite_id=suite_id, label=body.label, config=launch,
-            model=body.model,
+            model=resolved_model,
         )
         # Freeze the corpus BEFORE any execution (Step 2): every queued
         # document has a durable row up front, so a doc that later fails to

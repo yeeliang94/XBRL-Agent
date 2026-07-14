@@ -13,11 +13,14 @@ import {
   fetchSuites, createSuite, getSuite, addSuiteDoc, deleteSuiteDoc,
   listSuiteRuns, estimateSuiteRun, launchSuiteRun, resumeSuiteRun, stopSuiteRun,
   getSuiteRun, fetchSuiteResults, compareSuiteRuns, fetchCompareSlotDiff, fetchBenchmarks,
+  getSettings,
 } from "../lib/api";
 import type {
   SuiteSummaryJson, SuiteJson, SuiteRunSummaryJson, SuiteRunDetailJson,
   SuiteEstimateJson, SuiteResultsJson, SuiteCompareJson, SlotDiffJson, BenchmarkJson,
+  NotesTemplateType,
 } from "../lib/types";
+import { NOTES_TEMPLATE_TYPES, NOTES_TEMPLATE_LABELS } from "../lib/types";
 
 // ---------------------------------------------------------------------------
 // SuitesPage — the Evals workspace (Phase E/F). A corpus of documents run as a
@@ -203,6 +206,7 @@ function AddDocForm({
   const [standard, setStandard] = useState("mfrs");
   const [level, setLevel] = useState("company");
   const [benchmarkId, setBenchmarkId] = useState<string>("");
+  const [denomination, setDenomination] = useState("thousands");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -218,6 +222,7 @@ function AddDocForm({
       await addSuiteDoc({
         suiteId, file, filing_standard: standard, filing_level: level,
         benchmark_id: benchmarkId ? Number(benchmarkId) : null,
+        denomination,
       });
       setFile(null); setBenchmarkId("");
       onAdded();
@@ -226,7 +231,7 @@ function AddDocForm({
     } finally {
       setBusy(false);
     }
-  }, [suiteId, file, standard, level, benchmarkId, onAdded]);
+  }, [suiteId, file, standard, level, benchmarkId, denomination, onAdded]);
 
   return (
     <div style={styles.card}>
@@ -252,6 +257,16 @@ function AddDocForm({
             <option value="company">Company</option>
             <option value="group">Group</option>
           </select>
+        </label>
+        <label style={styles.field}>
+          <span style={ui.fieldLabel}>Figures printed in</span>
+          <select data-testid="doc-denomination" style={ui.select} value={denomination}
+            onChange={(e) => setDenomination(e.target.value)}>
+            <option value="thousands">Thousands (RM'000)</option>
+            <option value="units">Actual RM</option>
+            <option value="millions">Millions (RM mil)</option>
+          </select>
+          <span style={styles.fieldHint}>Per document — a wrong scale silently 1000×'s every figure.</span>
         </label>
         <label style={styles.field}>
           <span style={ui.fieldLabel}>Reference answers (optional)</span>
@@ -294,7 +309,11 @@ function DocList({ suite, onRemoved }: { suite: SuiteJson; onRemoved: () => void
           {suite.docs.map((d) => (
             <tr key={d.id} data-testid={`doc-row-${d.id}`}>
               <td style={styles.td}>{d.label || d.source_filename}</td>
-              <td style={styles.td}>{d.filing_standard.toUpperCase()} · {d.filing_level}</td>
+              <td style={styles.td}>
+                {d.filing_standard.toUpperCase()} · {d.filing_level}
+                {d.denomination && d.denomination !== "thousands" &&
+                  ` · ${d.denomination}`}
+              </td>
               <td style={styles.td}>{d.benchmark_id != null ? "✓" : "—"}</td>
               <td style={styles.td}>
                 <button style={styles.linkBtn}
@@ -310,20 +329,50 @@ function DocList({ suite, onRemoved }: { suite: SuiteJson; onRemoved: () => void
   );
 }
 
+const ALL_STATEMENTS = ["SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"] as const;
+
 function LaunchForm({
   suiteId, docCount, onLaunched,
 }: { suiteId: number; docCount: number; onLaunched: () => void }) {
   const [label, setLabel] = useState("");
   const [repeats, setRepeats] = useState(1);
   const [scout, setScout] = useState(false);
+  // The API accepted model/statements/notes since Step E3 — the form just
+  // never offered them (peer-review Step 13).
+  const [model, setModel] = useState("");
+  const [defaultModel, setDefaultModel] = useState("");
+  const [models, setModels] = useState<{ id: string; label?: string }[]>([]);
+  const [statements, setStatements] = useState<string[]>([...ALL_STATEMENTS]);
+  const [notes, setNotes] = useState<NotesTemplateType[]>([]);
   const [estimate, setEstimate] = useState<SuiteEstimateJson | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    getSettings()
+      .then((s) => {
+        setDefaultModel((s as { model?: string }).model ?? "");
+        const avail = (s as { available_models?: { id: string; label?: string }[] })
+          .available_models;
+        if (Array.isArray(avail)) setModels(avail);
+      })
+      .catch(() => {});
+  }, []);
+
   const launchBody = useMemo(
-    () => ({ label, repeats, use_scout: scout }),
-    [label, repeats, scout],
+    () => ({
+      label,
+      repeats,
+      use_scout: scout,
+      model: model || null,
+      statements,
+      notes_to_run: notes,
+    }),
+    [label, repeats, scout, model, statements, notes],
   );
+
+  const toggle = <T,>(list: T[], v: T): T[] =>
+    list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 
   useEffect(() => {
     if (docCount === 0) { setEstimate(null); return; }
@@ -349,9 +398,24 @@ function LaunchForm({
       <div style={styles.grid}>
         <label style={styles.field}>
           <span style={ui.fieldLabel}>Run label</span>
-          <input data-testid="run-label" style={ui.input} placeholder="gpt-5.4 baseline"
+          <input data-testid="run-label" style={ui.input} placeholder="July regression baseline"
             value={label} onChange={(e) => setLabel(e.target.value)} />
           <span style={styles.fieldHint}>A short name for comparing this result later.</span>
+        </label>
+        <label style={styles.field}>
+          <span style={ui.fieldLabel}>AI model</span>
+          <select data-testid="run-model" style={ui.select} value={model}
+            onChange={(e) => setModel(e.target.value)}>
+            <option value="">
+              {defaultModel ? `Default (${defaultModel})` : "Default (from Settings)"}
+            </option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{m.label || m.id}</option>
+            ))}
+          </select>
+          <span style={styles.fieldHint}>
+            The reviewer model comes from Settings.
+          </span>
         </label>
         <label style={styles.field}>
           <span style={ui.fieldLabel}>Repeats per document</span>
@@ -367,12 +431,51 @@ function LaunchForm({
           <span style={ui.fieldLabel}>Use document pre-scan</span>
         </label>
       </div>
+      <div style={styles.field}>
+        <span style={ui.fieldLabel}>Statements</span>
+        <div style={styles.checkRow}>
+          {ALL_STATEMENTS.map((s) => (
+            <label key={s} style={styles.checkItem}>
+              <input
+                data-testid={`run-stmt-${s}`}
+                type="checkbox"
+                checked={statements.includes(s)}
+                onChange={() => setStatements((cur) => toggle(cur, s))}
+              />
+              <span>{s}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <div style={styles.field}>
+        <span style={ui.fieldLabel}>Notes templates (optional)</span>
+        <div style={styles.checkRow}>
+          {NOTES_TEMPLATE_TYPES.map((n) => (
+            <label key={n} style={styles.checkItem}>
+              <input
+                data-testid={`run-note-${n}`}
+                type="checkbox"
+                checked={notes.includes(n)}
+                onChange={() => setNotes((cur) => toggle(cur, n))}
+              />
+              <span>{NOTES_TEMPLATE_LABELS[n]}</span>
+            </label>
+          ))}
+        </div>
+      </div>
       {estimate && (
         <div data-testid="run-estimate" style={styles.estimate}>
           {estimate.extraction_runs} extraction run{estimate.extraction_runs === 1 ? "" : "s"}
           {" "}({estimate.documents} doc × {estimate.repeats} repeat), 3 at a time
           {estimate.estimated_wall_seconds != null &&
             ` · ≈${Math.ceil(estimate.estimated_wall_seconds / 60)} min`}
+          {estimate.estimated_tokens != null &&
+            ` · ≈${(estimate.estimated_tokens / 1_000_000).toFixed(1)}M tokens`}
+          {estimate.estimated_cost_usd != null &&
+            ` · ≈$${estimate.estimated_cost_usd.toFixed(2)}`}
+          {estimate.cost_range_usd != null &&
+            estimate.cost_range_usd[0] !== estimate.cost_range_usd[1] &&
+            ` ($${estimate.cost_range_usd[0].toFixed(2)}–$${estimate.cost_range_usd[1].toFixed(2)})`}
           . Each run spends real tokens.
         </div>
       )}
@@ -842,6 +945,18 @@ const styles = {
   error: { color: pwc.errorText, fontSize: 13 } as React.CSSProperties,
   warn: { color: pwc.grey800, fontSize: 13, borderLeft: `3px solid ${pwc.warning}`, paddingLeft: pwc.space.md } as React.CSSProperties,
   muted: { color: pwc.grey700, fontSize: 14 } as React.CSSProperties,
+  checkRow: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.lg,
+  } as React.CSSProperties,
+  checkItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 13,
+    color: pwc.grey800,
+  } as React.CSSProperties,
   drillHint: { color: pwc.grey500, fontSize: 12 } as React.CSSProperties,
   slotList: {
     margin: `${pwc.space.xs}px 0 0`,
