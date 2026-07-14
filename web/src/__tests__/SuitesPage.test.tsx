@@ -193,12 +193,73 @@ describe("SuitesPage — complete launch config (Step 13, PLAN-evals-hardening)"
     expect(est.textContent).toContain("$2.50–$4.50");
   });
 
-  test("doc form offers per-document denomination; non-default shows in the list", async () => {
+  test("run detail shows the model, mean-of-N repeats, and failed-to-stage docs", async () => {
+    mockRoutes((url) => {
+      if (url === "/api/suites")
+        return { suites: [{ id: 1, name: "S", created_at: "", updated_at: "", doc_count: 2, run_count: 1 }] };
+      if (url === "/api/suites/1")
+        return { id: 1, name: "S", created_at: "", updated_at: "", docs: [] };
+      if (url === "/api/suites/1/runs")
+        return { suite_run_list: [{ id: 9, suite_id: 1, label: "b", model: "claude-fable-5", app_version: "v1", status: "partial", created_at: "2026-07-10", ended_at: null }] };
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      if (url === "/api/suites/1/runs/9")
+        return {
+          suite_run: { id: 9, suite_id: 1, label: "b", model: "claude-fable-5", app_version: "v1", status: "partial", created_at: "2026-07-10", ended_at: null },
+          documents: [
+            { run_id: 100, doc_id: 10, label: "scored doc", status: "completed", failed: false, repeats_scored: 3, accuracy: 0.9, gold_cells: 10, matched_cells: 9, taxonomy: {}, per_statement: {}, consistency: null, cross_check_pass_rate: 1, reviewer_flags: 0, failed_agents: 0, total_tokens: 0, duration_s: null, notes_coverage: null, notes_coverage_available: false },
+          ],
+          doc_states: [
+            { doc_id: 10, label: "scored doc", state: "finished", error: null, benchmark_id: null },
+            { doc_id: 11, label: "broken doc", state: "failed", error: "Could not stage the document", benchmark_id: null },
+          ],
+          aggregate: { documents_total: 2, documents_graded: 1, documents_failed: 1, coverage_note: "1 of 2", mean_accuracy: 0.9, pooled_accuracy: 0.9, pooled_matched: 9, pooled_gold: 10, worst_document: null, taxonomy_totals: {}, mean_consistency: null, mean_notes_coverage: null, mean_cross_check_pass_rate: 1 },
+        };
+      return {};
+    });
+    render(<SuitesPage />);
+    fireEvent.click(await screen.findByTestId("suite-card-1"));
+    fireEvent.click(await screen.findByText("Scores"));
+
+    // Resolved model is shown, not hidden behind a null default.
+    const model = await screen.findByTestId("suite-run-model");
+    expect(model.textContent).toContain("claude-fable-5");
+    // Repeated accuracy is labelled as a mean of N.
+    expect(screen.getByTestId("scorecard-100").textContent).toContain("mean of 3");
+    // The failed-to-stage document is VISIBLE with its reason, not dropped.
+    const failed = screen.getByTestId("doc-state-11");
+    expect(failed.textContent).toContain("broken doc");
+    expect(failed.textContent).toContain("Could not stage the document");
+    // Coverage counts the frozen corpus (1 of 2), never 0 of 0.
+    expect(screen.getByText("1 of 2")).toBeTruthy();
+  });
+
+  test("doc form offers per-document denomination; the list editor reflects it", async () => {
     mockRoutes(suiteRoutes(() => {}));
     render(<SuitesPage />);
     fireEvent.click(await screen.findByTestId("suite-card-1"));
     expect(await screen.findByTestId("doc-denomination")).toBeTruthy();
-    const row = screen.getByTestId("doc-row-10");
-    expect(row.textContent).toContain("millions");
+    // The list now shows an EDITABLE denomination select reflecting the value.
+    const sel = screen.getByTestId("doc-denomination-10") as HTMLSelectElement;
+    expect(sel.value).toBe("millions");
+  });
+
+  test("a failed denomination save is surfaced, never silent", async () => {
+    // The field exists because a wrong scale silently 1000×'s every figure — a
+    // save that silently didn't stick must show an error, not just snap back.
+    const routes = suiteRoutes(() => {});
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (url: string, init?: RequestInit) => {
+        if (url === "/api/suites/1/docs/10" && init?.method === "PATCH") {
+          return { ok: false, status: 500, json: async () => ({ detail: "boom" }) } as Response;
+        }
+        return { ok: true, status: 200, json: async () => routes(url, init) ?? {} } as Response;
+      },
+    );
+    render(<SuitesPage />);
+    fireEvent.click(await screen.findByTestId("suite-card-1"));
+    const sel = (await screen.findByTestId("doc-denomination-10")) as HTMLSelectElement;
+    fireEvent.change(sel, { target: { value: "units" } });
+    const err = await screen.findByTestId("doc-denomination-error");
+    expect(err.textContent).toContain("Couldn't save the change");
   });
 });

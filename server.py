@@ -6073,10 +6073,12 @@ async def run_repeat_group_stream(
     """Launch N identically-configured runs of one document back-to-back and
     score their agreement (Evals workspace, Step D1 / PRD Flow 2).
 
-    Resume support (PLAN-evals-hardening Step 1): `existing_group_id` +
-    `start_index` (= repeats already completed) let a suite Resume top up ONLY
-    the missing repeats into the SAME group, so consistency is scored over the
-    full requested set instead of a fresh partial group. `should_abort` is
+    Resume support (PLAN-evals-hardening Step 1): `existing_group_id` lets a
+    suite Resume top up ONLY the missing repeat indices (the gaps in the group's
+    finished set) into the SAME group, so consistency is scored over the full
+    requested set instead of a fresh partial group. (`start_index` is a legacy
+    kwarg, retained for back-compat; the gap computation supersedes it.)
+    `should_abort` is
     checked between repeats so a batch Stop reliably prevents the next repeat
     from starting (the in-flight one is cancelled via task_registry as before).
 
@@ -6096,7 +6098,6 @@ async def run_repeat_group_stream(
     import sqlite3
 
     n = max(1, min(5, int(getattr(run_config, "repeats", 1) or 1)))
-    start_index = max(0, min(int(start_index or 0), n))
 
     # Create the group up-front so a crash before the first repeat still leaves
     # an auditable row. config snapshot = the exact request every repeat runs.
@@ -6118,10 +6119,27 @@ async def run_repeat_group_stream(
         finally:
             gconn.close()
 
+    # Which repeat indices still need to run. Fresh run → all of them. Resume →
+    # the GAPS in the group's finished set: a completed set {0, 2} must run {1},
+    # never a blind append from a count (which re-ran 2 and left 1 unfilled when
+    # a middle repeat failed — the peer-review failed-middle-repeat finding). The
+    # legacy `start_index` kwarg is accepted for back-compat but no longer drives
+    # the loop.
+    if existing_group_id is not None and group_id is not None:
+        rconn = sqlite3.connect(str(AUDIT_DB_PATH))
+        try:
+            done_indices = repo.finished_repeat_indices(rconn, group_id)
+        finally:
+            rconn.close()
+        indices_to_run = [i for i in range(n) if i not in done_indices]
+    else:
+        indices_to_run = list(range(n))
+
     # Tell the client the group id + total so the consistency panel can attach
     # and poll (GET /api/repeat-groups/{id}) as repeats land.
     yield {"event": "repeat_group", "data": {
-        "group_id": group_id, "repeats_total": n, "repeat_index": start_index,
+        "group_id": group_id, "repeats_total": n,
+        "repeat_index": indices_to_run[0] if indices_to_run else n,
     }}
 
     def _finalize_group() -> Optional[dict]:
@@ -6145,7 +6163,7 @@ async def run_repeat_group_stream(
     current_agen = None
     finalized = False
     try:
-        for i in range(start_index, n):
+        for i in indices_to_run:
             # A batch Stop between repeats halts the group here — without this
             # check, cancelling the in-flight repeat would let the loop roll
             # straight into the next one (peer-review Step 1 finding).

@@ -41,6 +41,65 @@ def test_resolver_never_raises(monkeypatch):
     assert isinstance(av.get_app_version(), str)
 
 
+def test_untracked_changes_append_prompt_hash(monkeypatch):
+    """Peer-review Step 16: `git describe --dirty` misses untracked prompt files,
+    so a clean describe + untracked changes must still append the prompt hash."""
+    av = _fresh_resolver()
+    monkeypatch.setattr(av, "_static_build_stamp", lambda: None)
+    monkeypatch.setattr(av, "_from_git", lambda: "v1.2.3")  # clean describe
+    monkeypatch.setattr(av, "_git_has_local_changes", lambda: True)  # untracked
+    monkeypatch.setattr(av, "prompt_state_hash", lambda root=None: "abc12345")
+    assert av.get_app_version() == "v1.2.3-dirty+pabc12345"
+
+
+def test_two_prompt_experiments_get_different_versions(monkeypatch):
+    """Peer-review Step 16: the version is no longer cached for the process
+    lifetime on a dirty checkout, so editing a prompt and re-running (same
+    process) yields a DIFFERENT version — not the stale first one. (TTL forced
+    to 0 here; two real experiments are minutes apart, far past the 5s TTL.)"""
+    av = _fresh_resolver()
+    monkeypatch.setattr(av, "_GIT_CACHE_TTL_S", 0.0)
+    monkeypatch.setattr(av, "_static_build_stamp", lambda: None)
+    monkeypatch.setattr(av, "_from_git", lambda: "v1.2.3-dirty")
+    monkeypatch.setattr(av, "_git_has_local_changes", lambda: True)
+    seq = iter(["hashA", "hashB"])
+    monkeypatch.setattr(av, "prompt_state_hash", lambda root=None: next(seq))
+    v1 = av.get_app_version()
+    v2 = av.get_app_version()
+    assert v1 == "v1.2.3-dirty+phashA"
+    assert v2 == "v1.2.3-dirty+phashB"
+    assert v1 != v2
+
+
+def test_git_version_cached_within_ttl(monkeypatch):
+    """Back-to-back calls inside the TTL (e.g. /api/config on every page load)
+    reuse the derived value instead of re-running git + re-hashing prompts."""
+    av = _fresh_resolver()
+    monkeypatch.setattr(av, "_static_build_stamp", lambda: None)
+    calls = {"n": 0}
+
+    def counting_describe():
+        calls["n"] += 1
+        return "v1.2.3"
+
+    monkeypatch.setattr(av, "_from_git", counting_describe)
+    monkeypatch.setattr(av, "_git_has_local_changes", lambda: False)
+    assert av.get_app_version() == "v1.2.3"
+    assert av.get_app_version() == "v1.2.3"
+    assert calls["n"] == 1
+
+
+def test_untracked_changes_without_hash_still_mark_dirty(monkeypatch):
+    """If the prompt-state hash fails on a clean-describe-but-untracked tree,
+    the version must still carry the honest -dirty marker — never read clean."""
+    av = _fresh_resolver()
+    monkeypatch.setattr(av, "_static_build_stamp", lambda: None)
+    monkeypatch.setattr(av, "_from_git", lambda: "v1.2.3")
+    monkeypatch.setattr(av, "_git_has_local_changes", lambda: True)
+    monkeypatch.setattr(av, "prompt_state_hash", lambda root=None: None)
+    assert av.get_app_version() == "v1.2.3-dirty"
+
+
 def test_create_run_stamps_app_version(tmp_path, monkeypatch):
     monkeypatch.setenv("XBRL_APP_VERSION", "test-build-42")
     _fresh_resolver()  # clear cache so create_run's lazy import sees the env

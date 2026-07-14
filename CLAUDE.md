@@ -379,7 +379,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **29**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **33**). `init_db`
 reads the stored version and walks an old DB up **one version at a time**
 through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
 the current schema automatically. `db/schema.py` is the authoritative
@@ -409,7 +409,10 @@ Recent tables/columns, each detailed in its linked gotcha: v11
 · v20 `auth_users.is_admin` (#24) · v22 `runs.notes_table_style` (#16) ·
 v23–v25 notes-reviewer tables + `notes_cell_tombstones` (#16, #27) · v26–v27
 notes-formatter `notes_format_tasks` / `notes_format_snapshots` (#16) · v28
-`notes_coverage_rows` (#27) · v29 `notes_cells.style_source` (#16).
+`notes_coverage_rows` (#27) · v29 `notes_cells.style_source` (#16) · v30–v31
+Evals workspace repeats/taxonomy/gold-prose + suites (#30) · v32
+`eval_suite_run_docs` frozen-corpus snapshot (#30) · v33 gold fingerprint on
+`eval_scores` + benchmark archive flag (#30).
 
 ### 12. Filing level — Company vs Group
 
@@ -1337,12 +1340,26 @@ Load-bearing invariants:
   `partial`). Do NOT reintroduce a separate cancel channel.
 - **Suite batch runner** (`api/suite_runner.py`, Step E3) is a background loop
   (reviewer-pass thread pattern), concurrency **fixed at 3** (decision #2),
-  Resume re-launches only documents without a finished child run (identified by
-  the deterministic `suite-{suite_run}-doc-{doc}` session id), and
+  Resume re-launches only documents whose DISTINCT finished repeats are below
+  the requested count (identified by the deterministic
+  `suite-{suite_run}-doc-{doc}` session id; completion counts distinct repeats
+  via `COALESCE(repeat_index, id)`, never raw rows), and
   `repo.reconcile_stale_suite_runs` retires crash-orphaned `running` suite runs
   at startup (mirrors `reconcile_stale_review_tasks`). Child runs link via
   `runs.suite_run_id`, threaded through `run_multi_agent_stream` /
-  `run_repeat_group_stream`.
+  `run_repeat_group_stream`. **Repeat Resume fills the GAPS** — the missing
+  repeat indices, computed from `repo.finished_repeat_indices` — never a blind
+  append from a count (which duplicated a later index and left an earlier one
+  unfilled when a middle repeat failed; consistency dedups per index via
+  `repo.deduped_repeat_run_ids`). The v32 snapshot freezes each document's
+  BYTES into a run-owned copy (`_copy_source_for_snapshot`, under
+  `output/_suite_snapshots/run_{N}`), so deleting a live suite document can't
+  strand an unfinished Resume. Snapshot copies are never auto-reclaimed —
+  deliberate (Resume may need them indefinitely), same accumulation model as
+  per-run output dirs; cleanup is future housekeeping, don't add it as a side
+  effect. An empty statement list is a
+  notes-only run (preserved, not expanded to all five); a both-empty selection
+  is rejected 422.
 - **History hides suite children by default** (Step E6): `GET /api/runs`
   filters `suite_run_id IS NULL` unless `include_suite_children=true`
   (decision #1). Repeat children are NOT hidden (they're normal History runs).
@@ -1354,8 +1371,14 @@ Load-bearing invariants:
   fuzzy-matched.
 - **Trends + compare recompute on demand from durable facts** (`eval/compare.py`,
   F1/F2) — no heavyweight new storage. Compare unions differing document sets
-  (greyed + excluded from the aggregate delta), and warns when gold was edited
-  between the two runs (gold `updated_at` is timestamped).
+  (greyed + excluded from the aggregate delta), and warns when gold changed
+  between the two runs via a per-run gold FINGERPRINT (v33, `_gold_changed`);
+  the `updated_at` timestamp window is the legacy fallback for pre-v33 scores.
+  Pooled accuracy sums the EXACT repeat matched counts (`matched_for_pool`),
+  never per-doc rounded ints (rounding a 0.5 repeat mean to 0 corrupted it).
+  Suite "N of M" coverage is over the FROZEN corpus (`aggregate_suite(...,
+  corpus_size=)`), so a failed-to-stage document counts toward M and its state
+  + reason surface via the detail endpoint's `doc_states`.
 - **Frontend:** the "Evals" nav surface (`/evals` → `web/src/pages/SuitesPage.tsx`)
   is admin-gated like Benchmarks (which it depends on for gold). Recharts is the
   ONE chart dep (SVG, coexists with the inline-style rule, gotcha #7). The

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, createBenchmarkFromMtool, fetchEvalTemplates, deleteBenchmark, markBenchmarkScaleVerified, fetchRuns } from "../lib/api";
+import { fetchBenchmarks, createBenchmark, createBenchmarkFromRun, createBenchmarkFromMtool, fetchEvalTemplates, deleteBenchmark, unarchiveBenchmark, hardDeleteBenchmark, markBenchmarkScaleVerified, fetchRuns } from "../lib/api";
 import type { RunSummaryJson } from "../lib/types";
 import type { BenchmarkJson } from "../lib/types";
 import { ConceptsPage } from "./ConceptsPage";
@@ -25,16 +25,18 @@ import { EmptyState } from "../components/EmptyState";
 export interface BenchmarksPageProps {
   selectedId: number | null;
   onSelectBenchmark: (id: number | null) => void;
+  isAdmin?: boolean;
 }
 
-export function BenchmarksPage({ selectedId, onSelectBenchmark }: BenchmarksPageProps) {
+export function BenchmarksPage({ selectedId, onSelectBenchmark, isAdmin = false }: BenchmarksPageProps) {
   const [benchmarks, setBenchmarks] = useState<BenchmarkJson[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    fetchBenchmarks()
+    fetchBenchmarks(showArchived)
       .then((bs) => {
         if (!cancelled) setBenchmarks(bs);
       })
@@ -44,7 +46,7 @@ export function BenchmarksPage({ selectedId, onSelectBenchmark }: BenchmarksPage
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, showArchived]);
 
   const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
 
@@ -99,6 +101,16 @@ export function BenchmarksPage({ selectedId, onSelectBenchmark }: BenchmarksPage
         <div role="alert" style={styles.errorBanner}>Failed to load benchmarks: {loadError}</div>
       )}
 
+      <label style={styles.archivedToggle}>
+        <input
+          type="checkbox"
+          data-testid="benchmarks-show-archived"
+          checked={showArchived}
+          onChange={(e) => setShowArchived(e.target.checked)}
+        />
+        <span>Show archived</span>
+      </label>
+
       {benchmarks.length === 0 ? (
         <div data-testid="benchmarks-empty">
           <EmptyState
@@ -112,6 +124,7 @@ export function BenchmarksPage({ selectedId, onSelectBenchmark }: BenchmarksPage
             <BenchmarkCard
               key={b.id}
               benchmark={b}
+              isAdmin={isAdmin}
               onOpen={() => onSelectBenchmark(b.id)}
               onDeleted={refresh}
             />
@@ -124,17 +137,22 @@ export function BenchmarksPage({ selectedId, onSelectBenchmark }: BenchmarksPage
 
 function BenchmarkCard({
   benchmark,
+  isAdmin = false,
   onOpen,
   onDeleted,
 }: {
   benchmark: BenchmarkJson;
+  isAdmin?: boolean;
   onOpen: () => void;
   onDeleted: () => void;
 }) {
   const [deleting, setDeleting] = useState(false);
+  const archived = Boolean(benchmark.is_archived);
   // Use the shared ConfirmDialog (UX-QA #4) instead of window.confirm so every
   // destructive action in the app confirms the same way.
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Separate, sterner confirmation for the admin-only IRREVERSIBLE hard delete.
+  const [hardConfirmOpen, setHardConfirmOpen] = useState(false);
   const runDelete = useCallback(async () => {
     setConfirmOpen(false);
     setDeleting(true);
@@ -149,6 +167,26 @@ function BenchmarkCard({
     e.stopPropagation();
     setConfirmOpen(true);
   }, []);
+  const runUnarchive = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDeleting(true);
+    try {
+      await unarchiveBenchmark(benchmark.id);
+      onDeleted();
+    } catch {
+      setDeleting(false);
+    }
+  }, [benchmark.id, onDeleted]);
+  const runHardDelete = useCallback(async () => {
+    setHardConfirmOpen(false);
+    setDeleting(true);
+    try {
+      await hardDeleteBenchmark(benchmark.id);
+      onDeleted();
+    } catch {
+      setDeleting(false);
+    }
+  }, [benchmark.id, onDeleted]);
 
   return (
     // The ConfirmDialog is a SIBLING of the clickable card, not a child (UX-QA
@@ -168,7 +206,14 @@ function BenchmarkCard({
       }}
     >
       <div style={styles.cardMain}>
-        <div style={styles.cardName}>{benchmark.name}</div>
+        <div style={styles.cardName}>
+          {benchmark.name}
+          {archived && (
+            <span data-testid={`benchmark-archived-${benchmark.id}`} style={styles.archivedBadge}>
+              Archived
+            </span>
+          )}
+        </div>
         <div style={styles.cardMeta}>
           {benchmark.document && <span>{benchmark.document}</span>}
           <span>{benchmark.filing_standard.toUpperCase()} · {benchmark.filing_level}</span>
@@ -213,16 +258,46 @@ function BenchmarkCard({
         >
           Open
         </button>
-        <button
-          type="button"
-          data-testid={`benchmark-delete-${benchmark.id}`}
-          className={uiClass.btnDanger}
-          style={{ ...ui.buttonDanger, opacity: deleting ? 0.6 : 1 }}
-          onClick={onDelete}
-          disabled={deleting}
-        >
-          {deleting ? "Archiving…" : "Archive"}
-        </button>
+        {archived ? (
+          <>
+            <button
+              type="button"
+              data-testid={`benchmark-unarchive-${benchmark.id}`}
+              className={uiClass.btnSecondary}
+              style={{ ...ui.buttonSecondary, opacity: deleting ? 0.6 : 1 }}
+              onClick={runUnarchive}
+              disabled={deleting}
+            >
+              {deleting ? "Working…" : "Unarchive"}
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                data-testid={`benchmark-hard-delete-${benchmark.id}`}
+                className={uiClass.btnDanger}
+                style={{ ...ui.buttonDanger, opacity: deleting ? 0.6 : 1 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setHardConfirmOpen(true);
+                }}
+                disabled={deleting}
+              >
+                Delete permanently
+              </button>
+            )}
+          </>
+        ) : (
+          <button
+            type="button"
+            data-testid={`benchmark-delete-${benchmark.id}`}
+            className={uiClass.btnDanger}
+            style={{ ...ui.buttonDanger, opacity: deleting ? 0.6 : 1 }}
+            onClick={onDelete}
+            disabled={deleting}
+          >
+            {deleting ? "Archiving…" : "Archive"}
+          </button>
+        )}
       </div>
     </div>
       <ConfirmDialog
@@ -239,6 +314,21 @@ function BenchmarkCard({
         confirmLabel="Archive benchmark"
         onConfirm={runDelete}
         onCancel={() => setConfirmOpen(false)}
+      />
+      <ConfirmDialog
+        isOpen={hardConfirmOpen}
+        title={`Permanently delete ${benchmark.name}?`}
+        message={
+          <>
+            This <strong>cannot be undone</strong>. It destroys the reference
+            answers AND every historical score graded against this benchmark —
+            past run grades and trends that used it will lose their comparison.
+            Only do this for a benchmark created by mistake.
+          </>
+        }
+        confirmLabel="Delete permanently"
+        onConfirm={runHardDelete}
+        onCancel={() => setHardConfirmOpen(false)}
       />
     </>
   );
@@ -875,6 +965,25 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.md,
+  } as React.CSSProperties,
+  archivedToggle: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    margin: `${pwc.space.md} 0`,
+    fontSize: 13,
+    color: pwc.grey700,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  archivedBadge: {
+    marginLeft: pwc.space.sm,
+    padding: `2px ${pwc.space.sm}`,
+    fontSize: 11,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey700,
+    background: pwc.grey100,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: 4,
   } as React.CSSProperties,
   card: {
     ...ui.card,

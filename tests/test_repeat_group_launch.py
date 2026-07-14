@@ -38,10 +38,14 @@ def _seed_concept(db_path):
         conn.close()
 
 
-def _fake_stream_factory(db_path, *, values_by_index, fail_on_index=None):
+def _fake_stream_factory(db_path, *, values_by_index, fail_on_index=None,
+                         soft_fail_on_index=None):
     """Build a fake run_multi_agent_stream that marks its child run completed and
     writes a fact. ``values_by_index[i]`` is the number repeat i writes.
     ``fail_on_index`` raises CancelledError for that repeat (abort simulation).
+    ``soft_fail_on_index`` finalizes that repeat as 'aborted' and yields normally
+    (no raise) — the loop then rolls on to the NEXT index, exactly the way a
+    transient mid-run failure leaves a gap (index 0 ✓, 1 ✗, 2 ✓).
 
     The repeat-group stream calls run_multi_agent_stream with existing_run_id, so
     the child row already exists — the fake just finalizes it like the real one.
@@ -53,6 +57,18 @@ def _fake_stream_factory(db_path, *, values_by_index, fail_on_index=None):
         call_indices["n"] += 1
         if fail_on_index is not None and i == fail_on_index:
             raise asyncio.CancelledError()
+        if soft_fail_on_index is not None and i == soft_fail_on_index:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                conn.execute(
+                    "UPDATE runs SET status='aborted' WHERE id=?",
+                    (existing_run_id,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            yield {"event": "run_complete", "data": {"run_id": existing_run_id}}
+            return
         conn = sqlite3.connect(str(db_path))
         try:
             conn.execute(
@@ -230,6 +246,66 @@ def test_resume_tops_up_existing_group(audit, monkeypatch):
     assert len(completed) == 3
     assert group["status"] == "complete"
     assert group["consistency"]["available"] is True
+
+
+def test_resume_fills_gap_not_duplicate_when_middle_repeat_fails(audit, monkeypatch):
+    """Peer-review failed-middle-repeat finding: index 0 ✓, 1 ✗, 2 ✓ on the
+    first pass. Resume must run ONLY the missing index 1 — never re-run 2 (a
+    duplicate) while leaving 1 unfilled — and consistency must score exactly 3
+    distinct repeats, not 4 rows with index 2 double-counted."""
+    # First pass: 0 and 2 succeed, 1 soft-fails (aborted, no raise → loop rolls on).
+    monkeypatch.setattr(
+        server, "run_multi_agent_stream",
+        _fake_stream_factory(audit, values_by_index=[100.0, 0.0, 100.0],
+                             soft_fail_on_index=1),
+    )
+    asyncio.run(_drain(server.run_repeat_group_stream(
+        session_id="s5", session_dir=audit.parent, run_config=_cfg(3),
+        api_key="k", proxy_url="", model_name="m",
+    )))
+
+    conn = sqlite3.connect(str(audit))
+    try:
+        gid = conn.execute("SELECT id FROM repeat_groups").fetchone()[0]
+    finally:
+        conn.close()
+    # After the first pass the group is partial: only 0 and 2 finished.
+    conn = sqlite3.connect(str(audit))
+    try:
+        assert repo.finished_repeat_indices(conn, gid) == {0, 2}
+        assert repo.fetch_repeat_group(conn, gid)["status"] == "partial"
+    finally:
+        conn.close()
+
+    # Resume: the ONLY gap is index 1, so exactly one repeat runs.
+    monkeypatch.setattr(
+        server, "run_multi_agent_stream",
+        _fake_stream_factory(audit, values_by_index=[100.0]),
+    )
+    events = asyncio.run(_drain(server.run_repeat_group_stream(
+        session_id="s5", session_dir=audit.parent, run_config=_cfg(3),
+        api_key="k", proxy_url="", model_name="m",
+        existing_group_id=gid,
+    )))
+    assert [e["event"] for e in events].count("repeat_progress") == 1
+
+    conn = sqlite3.connect(str(audit))
+    conn.row_factory = sqlite3.Row
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM repeat_groups").fetchone()[0] == 1
+        # No index was run twice: index 2 has a single completed row.
+        idx2 = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE repeat_group_id=? AND repeat_index=2 "
+            "AND status='completed'", (gid,),
+        ).fetchone()[0]
+        assert idx2 == 1
+        assert repo.finished_repeat_indices(conn, gid) == {0, 1, 2}
+        group = repo.fetch_repeat_group(conn, gid)
+    finally:
+        conn.close()
+    assert group["status"] == "complete"
+    assert group["consistency"]["available"] is True
+    assert group["consistency"]["n_repeats"] == 3
 
 
 def test_should_abort_prevents_next_repeat(audit, monkeypatch):

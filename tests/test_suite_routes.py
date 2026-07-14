@@ -127,3 +127,27 @@ def test_add_document_with_denomination(client):
         files={"file": ("c.pdf", b"%PDF-1.4 fake", "application/pdf")},
     )
     assert bad.status_code == 400
+
+
+def test_edit_document_denomination(client):
+    """Peer-review Step 9: a document's declared denomination is EDITABLE (a
+    wrong scale silently 1000×'s every figure) — not fix-by-delete-and-re-add."""
+    tc, _ = client
+    sid = tc.post("/api/suites", json={"name": "s"}).json()["id"]
+    doc_id = tc.post(
+        f"/api/suites/{sid}/docs",
+        data={"denomination": "thousands"},
+        files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    ).json()["doc_id"]
+
+    resp = tc.patch(f"/api/suites/{sid}/docs/{doc_id}", json={"denomination": "millions"})
+    assert resp.status_code == 200, resp.text
+    assert tc.get(f"/api/suites/{sid}").json()["docs"][0]["denomination"] == "millions"
+
+    # Junk rejected; unknown doc 404s.
+    assert tc.patch(
+        f"/api/suites/{sid}/docs/{doc_id}", json={"denomination": "lakhs"}
+    ).status_code == 422
+    assert tc.patch(
+        f"/api/suites/{sid}/docs/99999", json={"denomination": "units"}
+    ).status_code == 404

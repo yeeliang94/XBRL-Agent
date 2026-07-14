@@ -113,6 +113,36 @@ def _set_doc_state(suite_run_id: int, doc_id: int, state: str,
                        suite_run_id, doc_id, state, exc_info=True)
 
 
+def _snapshot_source_dir(suite_run_id: int) -> Path:
+    """Where a suite run keeps its OWN copy of each document's bytes."""
+    return server.OUTPUT_DIR / "_suite_snapshots" / f"run_{suite_run_id}"
+
+
+def _copy_source_for_snapshot(suite_run_id: int, doc: dict) -> str:
+    """Freeze a document's BYTES into a run-owned copy and return its path.
+
+    The snapshot froze only metadata + a path string, so deleting the live suite
+    document (which unlinks the managed source file) left a queued/partial run
+    unable to materialize its input on Resume (peer-review finding). Copying the
+    bytes up front makes the frozen corpus truly immutable. Best-effort: if the
+    source is already gone, keep the original path — it'll surface as a failed
+    doc at materialize time exactly as before, never worse."""
+    src = doc.get("source_path", "")
+    if not src or not os.path.exists(src):
+        return src
+    dest_dir = _snapshot_source_dir(suite_run_id)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(src).suffix or ".pdf"
+    dest = dest_dir / f"doc_{doc['id']}{ext}"
+    try:
+        shutil.copy2(src, dest)
+    except OSError:
+        logger.warning("suite run %s: could not snapshot bytes for doc %s",
+                       suite_run_id, doc.get("id"), exc_info=True)
+        return src
+    return str(dest)
+
+
 def _materialize_input(source_path: str, source_filename: str, session_dir: Path) -> None:
     """Place the document's input as session_dir/uploaded.pdf (converting a
     .docx at the door, exactly like the upload endpoint). Raises on failure."""
@@ -136,8 +166,15 @@ def _build_doc_config(launch: dict, doc: dict) -> RunConfigRequest:
     non-default-variant gold MUST extract that variant (gotcha #21/#23)."""
     variants = dict(launch.get("variants") or {})
     variants.update(doc.get("variants") or {})
+    # Preserve an EXPLICIT empty statement list (a notes-only run), rather than
+    # silently expanding it back to all five and launching the maximum paid
+    # workload (peer-review Step 5). Only a genuinely absent key defaults to the
+    # full set; the launch endpoint rejects the both-empty case up front.
+    stmts = launch.get("statements")
+    if stmts is None:
+        stmts = ["SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"]
     return RunConfigRequest(
-        statements=launch.get("statements") or ["SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"],
+        statements=stmts,
         variants=variants,
         use_scout=bool(launch.get("use_scout")),
         notes_to_run=launch.get("notes_to_run") or [],
@@ -165,14 +202,21 @@ async def _drain_stream(agen) -> None:
 
 def _repeat_progress(suite_run_id: int, doc_id: int) -> tuple[int, Optional[int]]:
     """(finished_repeat_count, latest repeat_group_id) for a document's session
-    in this suite run — how Resume knows where a partially-run repeat group
-    stopped so it can top up ONLY the missing repeats into the SAME group."""
+    in this suite run — how Resume knows how many DISTINCT repeats finished so it
+    can top up ONLY the missing ones into the SAME group.
+
+    Counts distinct repeats, not rows: `GROUP BY COALESCE(repeat_index, id)`
+    collapses a duplicated index (e.g. from a legacy buggy resume) to one and
+    still counts a single-run doc (repeat_index NULL) once — so a doc can't read
+    'complete' off duplicate rows while a middle repeat was never filled."""
     session_id = _doc_session_id(suite_run_id, doc_id)
     conn = server._open_audit_conn()
     try:
         finished = conn.execute(
-            "SELECT COUNT(*) FROM runs WHERE suite_run_id = ? AND session_id = ? "
-            "AND status IN ('completed','completed_with_errors')",
+            "SELECT COUNT(*) FROM ("
+            "SELECT 1 FROM runs WHERE suite_run_id = ? AND session_id = ? "
+            "AND status IN ('completed','completed_with_errors') "
+            "GROUP BY COALESCE(repeat_index, id))",
             (suite_run_id, session_id),
         ).fetchone()[0]
         grp = conn.execute(
@@ -225,7 +269,7 @@ async def _launch_one_document(
                 session_id=session_id, session_dir=session_dir,
                 run_config=run_config, api_key=api_key, proxy_url=proxy_url,
                 model_name=model_name, suite_run_id=suite_run_id,
-                existing_group_id=group_id, start_index=done,
+                existing_group_id=group_id,
                 should_abort=(cancel.is_set if cancel is not None else None),
             )
         else:
@@ -293,10 +337,15 @@ def _finished_doc_ids(suite_run_id: int, repeats: int = 1) -> set[int]:
     repeats = max(1, int(repeats or 1))
     conn = server._open_audit_conn()
     try:
+        # DISTINCT repeats per session, not rows: the inner GROUP BY collapses a
+        # duplicated repeat_index to one (and counts a single-run doc once via
+        # its id), so a 2-of-3 doc with a duplicated index isn't read complete.
         rows = conn.execute(
-            "SELECT session_id, COUNT(*) FROM runs WHERE suite_run_id = ? "
+            "SELECT session_id, COUNT(*) FROM ("
+            "SELECT session_id, COALESCE(repeat_index, id) AS k FROM runs "
+            "WHERE suite_run_id = ? "
             "AND status IN ('completed','completed_with_errors') "
-            "GROUP BY session_id",
+            "GROUP BY session_id, k) GROUP BY session_id",
             (suite_run_id,),
         ).fetchall()
     finally:
@@ -327,6 +376,7 @@ def _snapshot_docs(suite_run_id: int, suite_id: int) -> list[dict]:
             if live:
                 for d in live:
                     d["source_sha256"] = _sha256_of(d.get("source_path", ""))
+                    d["source_path"] = _copy_source_for_snapshot(suite_run_id, d)
                 repo.snapshot_suite_run_docs(conn, suite_run_id, live)
                 conn.commit()
                 docs = repo.list_suite_run_docs(conn, suite_run_id)
@@ -419,12 +469,14 @@ def _recent_run_stats(model: Optional[str] = None) -> dict:
             "AND r.started_at != '' AND r.ended_at IS NOT NULL "
         )
         rows: list = []
+        model_filtered = False
         if model:
             rows = conn.execute(
                 base + "AND EXISTS (SELECT 1 FROM run_agents a WHERE "
                 "a.run_id = r.id AND a.model = ?) ORDER BY r.id DESC LIMIT 20",
                 (model,),
             ).fetchall()
+            model_filtered = bool(rows)
         if not rows:
             rows = conn.execute(base + "ORDER BY r.id DESC LIMIT 20").fetchall()
     finally:
@@ -446,6 +498,9 @@ def _recent_run_stats(model: Optional[str] = None) -> dict:
         "tokens_range": (min(tokens), max(tokens)) if tokens else None,
         "cost_range": (min(costs), max(costs)) if costs else None,
         "sample_size": len(rows),
+        # Whether the sample was actually restricted to the requested model, or
+        # fell back to mixed-model history (surfaced so the estimate is honest).
+        "model_filtered": model_filtered,
     }
 
 
@@ -465,7 +520,13 @@ async def estimate_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
     n_docs = len(suite["docs"])
     repeats = max(1, min(5, int(body.repeats or 1)))
     n_runs = n_docs * repeats
-    stats = _recent_run_stats(body.model)
+    # Resolve the default model BEFORE sampling history, exactly as the launch
+    # path does — otherwise the common default-model UI path (model=null) samples
+    # mixed-model history that says nothing about what will actually run
+    # (peer-review Step 6).
+    load_dotenv(server.ENV_FILE, override=True)
+    resolved_model = body.model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    stats = _recent_run_stats(resolved_model)
     avg = stats["avg_seconds"]
     # Wall-clock: documents share the concurrency slots, but a document's
     # repeats run SEQUENTIALLY inside its one slot (run_repeat_group_stream is
@@ -497,6 +558,10 @@ async def estimate_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
             if stats["cost_range"] else None
         ),
         "estimate_sample_size": stats["sample_size"],
+        # The model the estimate assumes + whether the sample was same-model
+        # history or a mixed-model fallback (so the UI can label it honestly).
+        "estimate_model": resolved_model,
+        "estimate_model_filtered": stats["model_filtered"],
         "concurrency": SUITE_CONCURRENCY,
     }
 
@@ -512,6 +577,14 @@ async def launch_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
             raise HTTPException(status_code=404, detail="Suite not found")
         if not suite["docs"]:
             raise HTTPException(status_code=422, detail="Add at least one document first.")
+        # Empty-selection semantics are explicit (peer-review Step 5): a run with
+        # neither statements nor notes has nothing to extract. Reject it rather
+        # than silently expanding [] back to all five statements.
+        if not body.statements and not body.notes_to_run:
+            raise HTTPException(
+                status_code=422,
+                detail="Select at least one statement or notes template to run.",
+            )
         # Double-launch guard (Step 15): one live batch per suite. Mirrors the
         # resume path's atomic non-running → running flip.
         running = conn.execute(
@@ -551,6 +624,9 @@ async def launch_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
         requested_variants = body.variants or {}
         for d in docs:
             d["source_sha256"] = _sha256_of(d.get("source_path", ""))
+            # Freeze the BYTES into a run-owned copy so a later doc deletion
+            # can't strand this run's Resume (peer-review Step 2 finding).
+            d["source_path"] = _copy_source_for_snapshot(suite_run_id, d)
             try:
                 derived = benchmark_variants_for(
                     conn, d.get("benchmark_id"),
@@ -767,24 +843,36 @@ async def get_suite_run_endpoint(suite_id: int, suite_run_id: int):
             raise HTTPException(status_code=404, detail="Suite run not found")
         # One scorecard per DOCUMENT (deduped across resume-retry + repeat rows),
         # so the detail view + trend/compare agree and "N of M" isn't inflated.
-        cards = list(_suite_run_doc_cards(conn, suite_run_id).values())
+        cards_by_doc = _suite_run_doc_cards(conn, suite_run_id)
+        cards = list(cards_by_doc.values())
         # The frozen corpus with per-doc execution state, so a document that
         # never produced a run (e.g. failed to stage) is still visible.
+        frozen = repo.list_suite_run_docs(conn, suite_run_id)
         doc_states = [
             {
                 "doc_id": d["id"], "label": d.get("label", ""),
                 "state": d.get("state", ""), "error": d.get("error"),
                 "benchmark_id": d.get("benchmark_id"),
             }
-            for d in repo.list_suite_run_docs(conn, suite_run_id)
+            for d in frozen
         ]
     finally:
         conn.close()
 
-    aggregate = aggregate_suite(cards)
+    # Stamp each scorecard with its doc id so the frontend can tell which frozen
+    # documents already have a score and render the rest (queued / running /
+    # failed-with-reason) from doc_states — peer-review Step 3.
+    documents = []
+    for doc_id, card in cards_by_doc.items():
+        row = card.to_dict()
+        row["doc_id"] = doc_id
+        documents.append(row)
+    # "N of M" is over the FROZEN corpus, so an all-failed-to-stage run reads
+    # "0 of 3", never a misleading "0 of 0".
+    aggregate = aggregate_suite(cards, corpus_size=len(frozen) or len(cards))
     return {
         "suite_run": {k: v for k, v in sr.items() if k != "runs"},
-        "documents": [c.to_dict() for c in cards],
+        "documents": documents,
         "doc_states": doc_states,
         "aggregate": aggregate,
     }

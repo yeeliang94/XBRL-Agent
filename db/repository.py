@@ -2471,6 +2471,41 @@ def list_repeat_group_run_ids(
     return [r[0] for r in conn.execute(sql, tuple(params)).fetchall()]
 
 
+def finished_repeat_indices(
+    conn: sqlite3.Connection, group_id: int
+) -> set[int]:
+    """The repeat_index values in a group that have at least one terminal-
+    successful run. Resume fills the GAPS in this set (the missing indices) —
+    never blindly appends from a count, which duplicates a later index and
+    leaves an earlier one unfilled when a middle repeat fails."""
+    rows = conn.execute(
+        "SELECT DISTINCT repeat_index FROM runs WHERE repeat_group_id = ? "
+        "AND repeat_index IS NOT NULL "
+        "AND status IN ('completed','completed_with_errors')",
+        (group_id,),
+    ).fetchall()
+    return {int(r[0]) for r in rows}
+
+
+def deduped_repeat_run_ids(
+    conn: sqlite3.Connection, group_id: int, *, statuses: Optional[list[str]] = None
+) -> list[int]:
+    """One run id per repeat_index (the newest attempt), ordered by index and
+    optionally filtered to a set of statuses. Consistency scores over THIS list,
+    not every row, so a duplicated index (e.g. from a legacy buggy resume) is
+    counted once instead of double-weighting one repeat."""
+    sql = "SELECT repeat_index, MAX(id) FROM runs WHERE repeat_group_id = ?"
+    params: list[Any] = [group_id]
+    if statuses:
+        placeholders = ",".join("?" for _ in statuses)
+        sql += f" AND status IN ({placeholders})"
+        params.extend(statuses)
+    sql += (
+        " AND repeat_index IS NOT NULL GROUP BY repeat_index ORDER BY repeat_index"
+    )
+    return [int(r[1]) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+
 def save_repeat_group_consistency(
     conn: sqlite3.Connection,
     group_id: int,
@@ -2626,6 +2661,19 @@ def add_suite_doc(
 
 def delete_suite_doc(conn: sqlite3.Connection, doc_id: int) -> bool:
     cur = conn.execute("DELETE FROM eval_suite_docs WHERE id = ?", (doc_id,))
+    return cur.rowcount > 0
+
+
+def update_suite_doc_denomination(
+    conn: sqlite3.Connection, suite_id: int, doc_id: int, denomination: str
+) -> bool:
+    """Edit a LIVE suite document's declared denomination. Scoped to suite_id so
+    a doc can only be edited through its own suite. Snapshots are frozen and
+    unaffected — only future suite runs pick up the change."""
+    cur = conn.execute(
+        "UPDATE eval_suite_docs SET denomination = ? WHERE id = ? AND suite_id = ?",
+        (denomination, doc_id, suite_id),
+    )
     return cur.rowcount > 0
 
 

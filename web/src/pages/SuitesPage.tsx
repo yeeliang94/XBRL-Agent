@@ -10,7 +10,7 @@ import { PageHeader } from "../components/PageHeader";
 import { EmptyState } from "../components/EmptyState";
 import { StatusLabel, type StatusState } from "../components/StatusLabel";
 import {
-  fetchSuites, createSuite, getSuite, addSuiteDoc, deleteSuiteDoc,
+  fetchSuites, createSuite, getSuite, addSuiteDoc, deleteSuiteDoc, updateSuiteDocDenomination,
   listSuiteRuns, estimateSuiteRun, launchSuiteRun, resumeSuiteRun, stopSuiteRun,
   getSuiteRun, fetchSuiteResults, compareSuiteRuns, fetchCompareSlotDiff, fetchBenchmarks,
   getSettings,
@@ -209,6 +209,7 @@ function AddDocForm({
   const [denomination, setDenomination] = useState("thousands");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [derivedNote, setDerivedNote] = useState<string | null>(null);
 
   const candidates = benchmarks.filter(
     (b) => b.filing_standard === standard && b.filing_level === level,
@@ -216,14 +217,25 @@ function AddDocForm({
 
   const submit = useCallback(async () => {
     setError(null);
+    setDerivedNote(null);
     if (!file) { setError("Choose a PDF or .docx document."); return; }
     setBusy(true);
     try {
-      await addSuiteDoc({
+      const res = await addSuiteDoc({
         suiteId, file, filing_standard: standard, filing_level: level,
         benchmark_id: benchmarkId ? Number(benchmarkId) : null,
         denomination,
       });
+      // Surface the statement variants the attached benchmark's gold implies,
+      // so the operator sees which shape this document will extract as
+      // (peer-review Step 9) instead of the value being silently discarded.
+      const dv = res?.derived_variants;
+      if (dv && Object.keys(dv).length > 0) {
+        setDerivedNote(
+          "Will extract: " +
+            Object.entries(dv).map(([s, v]) => `${s} ${v}`).join(", "),
+        );
+      }
       setFile(null); setBenchmarkId("");
       onAdded();
     } catch (e) {
@@ -284,6 +296,9 @@ function AddDocForm({
           disabled={busy} onClick={submit}>
           {busy ? "Adding…" : "Add document"}
         </button>
+        {derivedNote && (
+          <span style={styles.fieldHint} data-testid="doc-derived-variants">{derivedNote}</span>
+        )}
         {error && <span style={styles.error}>{error}</span>}
       </div>
     </div>
@@ -291,6 +306,10 @@ function AddDocForm({
 }
 
 function DocList({ suite, onRemoved }: { suite: SuiteJson; onRemoved: () => void }) {
+  // A failed denomination save must be VISIBLE — this field exists because a
+  // wrong scale silently 1000×'s every figure, so a save that silently didn't
+  // stick is the same failure mode wearing a different hat.
+  const [saveError, setSaveError] = useState<string | null>(null);
   if (suite.docs.length === 0) {
     return <p style={styles.muted}>No documents yet — add one above.</p>;
   }
@@ -301,6 +320,7 @@ function DocList({ suite, onRemoved }: { suite: SuiteJson; onRemoved: () => void
           <tr>
             <th style={styles.th}>Document</th>
             <th style={styles.th}>Filing</th>
+            <th style={styles.th}>Figures in</th>
             <th style={styles.th}>Reference answers</th>
             <th style={styles.th}></th>
           </tr>
@@ -311,8 +331,25 @@ function DocList({ suite, onRemoved }: { suite: SuiteJson; onRemoved: () => void
               <td style={styles.td}>{d.label || d.source_filename}</td>
               <td style={styles.td}>
                 {d.filing_standard.toUpperCase()} · {d.filing_level}
-                {d.denomination && d.denomination !== "thousands" &&
-                  ` · ${d.denomination}`}
+              </td>
+              <td style={styles.td}>
+                {/* Editable — a wrong scale silently 1000×'s every figure, so it
+                    must be fixable without deleting + re-adding (peer-review). */}
+                <select
+                  data-testid={`doc-denomination-${d.id}`}
+                  style={ui.select}
+                  value={d.denomination || "thousands"}
+                  onChange={(e) => {
+                    setSaveError(null);
+                    updateSuiteDocDenomination(suite.id, d.id, e.target.value)
+                      .then(onRemoved)
+                      .catch((err) => setSaveError(userMessage(err)));
+                  }}
+                >
+                  <option value="thousands">Thousands (RM'000)</option>
+                  <option value="units">Actual RM</option>
+                  <option value="millions">Millions (RM mil)</option>
+                </select>
               </td>
               <td style={styles.td}>{d.benchmark_id != null ? "✓" : "—"}</td>
               <td style={styles.td}>
@@ -325,6 +362,11 @@ function DocList({ suite, onRemoved }: { suite: SuiteJson; onRemoved: () => void
           ))}
         </tbody>
       </table>
+      {saveError && (
+        <p style={styles.error} data-testid="doc-denomination-error" role="alert">
+          Couldn't save the change — the document still has its previous scale. {saveError}
+        </p>
+      )}
     </div>
   );
 }
@@ -482,13 +524,25 @@ function LaunchForm({
             estimate.cost_range_usd[0] !== estimate.cost_range_usd[1] &&
             ` ($${estimate.cost_range_usd[0].toFixed(2)}–$${estimate.cost_range_usd[1].toFixed(2)})`}
           . Each run spends real tokens.
+          {estimate.estimate_model && estimate.estimate_model_filtered === false && (
+            <span style={styles.fieldHint}>
+              {" "}Rough estimate: no recent {estimate.estimate_model} runs, using
+              mixed-model history.
+            </span>
+          )}
         </div>
       )}
       <div style={styles.formRow}>
         <button data-testid="run-launch" className={uiClass.btnPrimary} style={ui.buttonPrimary}
-          disabled={busy || docCount === 0} onClick={launch}>
+          disabled={busy || docCount === 0 || (statements.length === 0 && notes.length === 0)}
+          onClick={launch}>
           {busy ? "Launching…" : "Launch suite run"}
         </button>
+        {statements.length === 0 && notes.length === 0 && (
+          <span style={styles.fieldHint} data-testid="run-nothing-selected">
+            Select at least one statement or notes template.
+          </span>
+        )}
         {error && <span style={styles.error}>{error}</span>}
       </div>
     </div>
@@ -572,6 +626,15 @@ function SuiteRunDetail({
   if (!detail) return <p style={styles.muted}>Loading scores…</p>;
   const agg = detail.aggregate;
   const running = detail.suite_run.status === "running";
+  // Documents that already have a scorecard, so the rest of the frozen corpus
+  // (queued / running / failed-to-stage) can be rendered from doc_states with
+  // their reason — instead of silently vanishing (peer-review Step 3).
+  const scoredDocIds = new Set(
+    detail.documents.map((d) => d.doc_id).filter((x): x is number => x != null),
+  );
+  const unscored = (detail.doc_states ?? []).filter(
+    (s) => !scoredDocIds.has(s.doc_id),
+  );
 
   return (
     <div className="responsive-page" style={styles.page}>
@@ -593,6 +656,9 @@ function SuiteRunDetail({
           </button>
         )}
       </h1>
+      <p style={styles.muted} data-testid="suite-run-model">
+        Model: <strong>{detail.suite_run.model || "—"}</strong>
+      </p>
       <div style={styles.metricStrip}>
         <Metric label="Mean accuracy" value={pct(agg.mean_accuracy)} />
         <Metric label="Documents" value={agg.coverage_note} />
@@ -621,13 +687,37 @@ function SuiteRunDetail({
             {detail.documents.map((d) => (
               <tr key={d.run_id} data-testid={`scorecard-${d.run_id}`}>
                 <td style={styles.td}>{d.label}</td>
-                <td style={styles.tdNum}>{pct(d.accuracy)}</td>
+                <td style={styles.tdNum}>
+                  {pct(d.accuracy)}
+                  {d.repeats_scored && d.repeats_scored > 1 && (
+                    <span style={styles.fieldHint}>
+                      {" "}(mean of {d.repeats_scored})
+                    </span>
+                  )}
+                </td>
                 <td style={styles.tdNum}>{pct(d.consistency)}</td>
                 <td style={styles.tdNum}>{pct(d.cross_check_pass_rate)}</td>
                 <td style={styles.tdNum}>
                   {d.notes_coverage_available ? pct(d.notes_coverage) : "n/a"}
                 </td>
                 <td style={styles.td}><StatusChip status={d.status} /></td>
+              </tr>
+            ))}
+            {/* Frozen-corpus documents that produced no scorecard — visible with
+                their reason instead of silently dropped (peer-review Step 3). */}
+            {unscored.map((s) => (
+              <tr key={`state-${s.doc_id}`} data-testid={`doc-state-${s.doc_id}`}>
+                <td style={styles.td}>{s.label}</td>
+                <td style={styles.tdNum}>—</td>
+                <td style={styles.tdNum}>—</td>
+                <td style={styles.tdNum}>—</td>
+                <td style={styles.tdNum}>—</td>
+                <td style={styles.td}>
+                  <StatusChip status={s.state || "queued"} />
+                  {s.error && (
+                    <span style={styles.fieldHint} title={s.error}> {s.error}</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
