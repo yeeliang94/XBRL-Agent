@@ -143,14 +143,22 @@ async def add_suite_doc_endpoint(
     filing_standard: str = Form("mfrs"),
     filing_level: str = Form("company"),
     benchmark_id: Optional[int] = Form(None),
+    denomination: str = Form("thousands"),
 ):
     """Add a document to a suite. The uploaded PDF/.docx is copied into managed
     storage. Optional ``benchmark_id`` attaches gold (a doc without gold still
-    contributes consistency + health)."""
+    contributes consistency + health). ``denomination`` declares how the
+    document's figures are printed (RM / RM'000 / RM mil) — per document, not
+    per suite, so a mixed corpus extracts each filing at its true scale."""
     if filing_standard not in ("mfrs", "mpers"):
         raise HTTPException(status_code=400, detail="filing_standard must be mfrs or mpers")
     if filing_level not in ("company", "group"):
         raise HTTPException(status_code=400, detail="filing_level must be company or group")
+    if denomination not in ("units", "thousands", "millions"):
+        raise HTTPException(
+            status_code=400,
+            detail="denomination must be units, thousands or millions",
+        )
     fname = file.filename or ""
     if not fname.lower().endswith((".pdf", ".docx")):
         raise HTTPException(
@@ -212,12 +220,26 @@ async def add_suite_doc_endpoint(
             filing_standard=filing_standard,
             filing_level=filing_level,
             benchmark_id=benchmark_id,
+            denomination=denomination,
         )
+        # Echo the variants the attached benchmark's gold implies (its
+        # template set encodes the statement variant — gotcha #21/#23), so
+        # the operator sees which shape this document will extract as.
+        derived_variants: dict[str, str] = {}
+        if benchmark_id is not None:
+            from eval.variants import benchmark_variants_for
+            try:
+                derived_variants = benchmark_variants_for(
+                    conn, benchmark_id, filing_standard, filing_level
+                )
+            except Exception:
+                logger.warning("variant derivation failed for benchmark %s",
+                               benchmark_id, exc_info=True)
         conn.commit()
         suite = repo.get_suite(conn, suite_id)
     finally:
         conn.close()
-    return {"doc_id": doc_id, "suite": suite}
+    return {"doc_id": doc_id, "suite": suite, "derived_variants": derived_variants}
 
 
 @router.delete("/api/suites/{suite_id}/docs/{doc_id}")

@@ -116,15 +116,21 @@ def _materialize_input(source_path: str, source_filename: str, session_dir: Path
 
 def _build_doc_config(launch: dict, doc: dict) -> RunConfigRequest:
     """A per-document RunConfigRequest from the suite-run launch config + the
-    document's filing standard/level + optional gold benchmark."""
+    document's filing standard/level/denomination + optional gold benchmark.
+    The document's benchmark-derived variants (resolved at launch into the
+    corpus snapshot) override the launch-level defaults — a run graded against
+    non-default-variant gold MUST extract that variant (gotcha #21/#23)."""
+    variants = dict(launch.get("variants") or {})
+    variants.update(doc.get("variants") or {})
     return RunConfigRequest(
         statements=launch.get("statements") or ["SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"],
-        variants=launch.get("variants") or {},
+        variants=variants,
         use_scout=bool(launch.get("use_scout")),
         notes_to_run=launch.get("notes_to_run") or [],
         model=launch.get("model"),
         filing_standard=doc.get("filing_standard", "mfrs"),
         filing_level=doc.get("filing_level", "company"),
+        denomination=doc.get("denomination") or "thousands",
         benchmark_id=doc.get("benchmark_id"),
         repeats=int(launch.get("repeats", 1) or 1),
     )
@@ -429,10 +435,38 @@ async def launch_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
         )
         # Freeze the corpus BEFORE any execution (Step 2): every queued
         # document has a durable row up front, so a doc that later fails to
-        # stage is visible as failed instead of silently absent.
+        # stage is visible as failed instead of silently absent. Each doc's
+        # variants are resolved HERE from its benchmark's template set
+        # (Step 3) — and an explicit launch variant that contradicts a doc's
+        # gold fails the whole launch fast rather than grading garbage.
+        from eval.variants import benchmark_variants_for, variant_conflicts
+
         docs = repo.list_suite_docs(conn, suite_id)
+        requested_variants = body.variants or {}
         for d in docs:
             d["source_sha256"] = _sha256_of(d.get("source_path", ""))
+            try:
+                derived = benchmark_variants_for(
+                    conn, d.get("benchmark_id"),
+                    d.get("filing_standard", "mfrs"),
+                    d.get("filing_level", "company"),
+                )
+            except Exception:
+                logger.warning("variant derivation failed for doc %s",
+                               d["id"], exc_info=True)
+                derived = {}
+            conflicts = variant_conflicts(requested_variants, derived)
+            if conflicts:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Document '{d.get('label') or d['id']}': the requested "
+                        f"variant for {', '.join(conflicts)} does not match the "
+                        f"variant its benchmark gold was built from. Remove the "
+                        f"override or attach a matching benchmark."
+                    ),
+                )
+            d["variants"] = derived
         repo.snapshot_suite_run_docs(conn, suite_run_id, docs)
         conn.commit()
     finally:

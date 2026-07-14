@@ -2577,8 +2577,8 @@ def get_suite(conn: sqlite3.Connection, suite_id: int) -> Optional[dict[str, Any
             return None
         docs = conn.execute(
             "SELECT id, label, source_filename, filing_standard, filing_level, "
-            "benchmark_id, created_at FROM eval_suite_docs WHERE suite_id = ? "
-            "ORDER BY id",
+            "benchmark_id, denomination, created_at FROM eval_suite_docs "
+            "WHERE suite_id = ? ORDER BY id",
             (suite_id,),
         ).fetchall()
     finally:
@@ -2598,13 +2598,14 @@ def add_suite_doc(
     filing_standard: str = "mfrs",
     filing_level: str = "company",
     benchmark_id: Optional[int] = None,
+    denomination: str = "thousands",
 ) -> int:
     cur = conn.execute(
         "INSERT INTO eval_suite_docs(suite_id, label, source_path, "
         "source_filename, filing_standard, filing_level, benchmark_id, "
-        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "denomination, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (suite_id, label, source_path, source_filename, filing_standard,
-         filing_level, benchmark_id, _now()),
+         filing_level, benchmark_id, denomination, _now()),
     )
     return int(cur.lastrowid)
 
@@ -2620,8 +2621,8 @@ def list_suite_docs(conn: sqlite3.Connection, suite_id: int) -> list[dict[str, A
     try:
         rows = conn.execute(
             "SELECT id, suite_id, label, source_path, source_filename, "
-            "filing_standard, filing_level, benchmark_id, created_at "
-            "FROM eval_suite_docs WHERE suite_id = ? ORDER BY id",
+            "filing_standard, filing_level, benchmark_id, denomination, "
+            "created_at FROM eval_suite_docs WHERE suite_id = ? ORDER BY id",
             (suite_id,),
         ).fetchall()
     finally:

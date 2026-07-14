@@ -322,3 +322,57 @@ def test_materialize_failure_records_failed_doc_state(env):
     assert len(states) == 1
     assert states[0]["state"] == "failed"
     assert "stage" in (states[0]["error"] or "").lower() or states[0]["error"]
+
+
+def test_launch_derives_variants_from_benchmark(env, monkeypatch):
+    """PLAN-evals-hardening Step 3: a doc attached to non-default-variant gold
+    must extract THAT variant — the launch resolves it into the snapshot and
+    the child run config; a contradicting explicit variant fails the launch."""
+    srv, runner, db, _ = env
+    sid, docs = _make_suite_with_docs(srv, 1)
+
+    # Attach a benchmark id + per-doc denomination to the doc row.
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE eval_suite_docs SET benchmark_id = 7, denomination = 'millions' "
+        "WHERE id = ?", (docs[0]["id"],),
+    )
+    conn.commit()
+    conn.close()
+
+    import eval.variants as ev
+    monkeypatch.setattr(
+        ev, "benchmark_variants_for",
+        lambda conn, bid, std, lvl: {"SOFP": "OrderOfLiquidity"} if bid == 7 else {},
+    )
+
+    captured = {}
+
+    async def fake_launch(sr_id, doc, launch, api_key, proxy_url, model_name):
+        captured["doc"] = doc
+        captured["config"] = runner._build_doc_config(launch, doc)
+        _write_completed_run(db, sr_id, doc["id"])
+
+    runner._launch_one_document = fake_launch
+    tc = TestClient(srv.app)
+
+    # Contradicting explicit variant → 422, nothing launched.
+    resp = tc.post(f"/api/suites/{sid}/run",
+                   json={"variants": {"SOFP": "CuNonCu"}})
+    assert resp.status_code == 422
+    assert "variant" in resp.json()["detail"].lower()
+
+    # Clean launch: derived variant + per-doc denomination reach the config.
+    resp = tc.post(f"/api/suites/{sid}/run", json={})
+    assert resp.status_code == 200, resp.text
+    suite_run_id = resp.json()["suite_run_id"]
+    for _ in range(100):
+        detail = tc.get(f"/api/suites/{sid}/runs/{suite_run_id}").json()
+        if detail["suite_run"]["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert captured["doc"]["variants"] == {"SOFP": "OrderOfLiquidity"}
+    cfg = captured["config"]
+    assert cfg.variants["SOFP"] == "OrderOfLiquidity"
+    assert cfg.denomination == "millions"
+    assert cfg.benchmark_id == 7

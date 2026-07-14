@@ -98,3 +98,32 @@ def test_add_doc_to_missing_suite_404(client):
         files={"file": ("x.pdf", b"%PDF", "application/pdf")},
     )
     assert resp.status_code == 404
+
+
+def test_add_document_with_denomination(client):
+    """Step 3 (PLAN-evals-hardening): denomination is per DOCUMENT — a mixed
+    corpus extracts each filing at its declared scale, never a silent
+    suite-wide 'thousands'."""
+    tc, _ = client
+    sid = tc.post("/api/suites", json={"name": "s"}).json()["id"]
+
+    resp = tc.post(
+        f"/api/suites/{sid}/docs",
+        data={"label": "mil", "denomination": "millions"},
+        files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["suite"]["docs"][0]["denomination"] == "millions"
+    # Omitted → the common Malaysian default.
+    resp2 = tc.post(
+        f"/api/suites/{sid}/docs",
+        files={"file": ("b.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+    assert resp2.json()["suite"]["docs"][1]["denomination"] == "thousands"
+    # Junk is rejected before anything is stored.
+    bad = tc.post(
+        f"/api/suites/{sid}/docs",
+        data={"denomination": "lakhs"},
+        files={"file": ("c.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+    assert bad.status_code == 400
