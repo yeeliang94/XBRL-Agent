@@ -192,39 +192,12 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def benchmark_variants(
-    standard: str, level: str, template_ids: list[str]
-) -> dict[str, str]:
-    """Map each benchmark ``template_id`` back to its registered variant.
-
-    Benchmarks are scoped by EXACT ``template_id``, which encodes the variant
-    (``...-sofp-orderofliquidity-v1`` vs ``...-sofp-cunoncu-v1``; gotcha
-    #21/#23). If the harness ran the registry-default variant it would extract a
-    different template shape, whose concept uuids don't match the gold's — every
-    gold cell grades ``missing`` and the score collapses to a false near-zero
-    regression. This reverse map recovers ``{statement_value: variant}`` so the
-    run extracts the SAME shape the gold was built from.
-    """
-    from concept_model.parser import _derive_template_id
-    from statement_types import VARIANTS, template_path
-
-    by_tid: dict[str, tuple[str, str]] = {}
-    for statement, variant_name in VARIANTS:
-        try:
-            path = template_path(statement, variant_name, level, standard)
-        except ValueError:
-            continue  # NotPrepared / standard mismatch — no template
-        if not path.exists():
-            continue
-        by_tid[_derive_template_id(path)] = (statement.value, variant_name)
-
-    out: dict[str, str] = {}
-    for tid in template_ids:
-        hit = by_tid.get(tid)
-        if hit is not None:
-            stmt_value, variant_name = hit
-            out[stmt_value] = variant_name
-    return out
+# Benchmarks encode their variant in template_id (gotcha #21/#23); running the
+# registry-default variant against non-default gold collapses the score to a
+# false near-zero. The reverse map now lives in eval/variants.py so the suite
+# runner applies the SAME recovery (PLAN-evals-hardening Step 3); re-exported
+# here because this CLI (and its tests) are the original home.
+from eval.variants import benchmark_variants  # noqa: E402  (re-export)
 
 
 def _resolve_document(pdf_dir: Path, document: Optional[str]) -> Optional[Path]:
