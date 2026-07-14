@@ -158,7 +158,7 @@ from pathlib import Path
 # 'unstyled' (plain), or NULL (legacy / reviewer-authored). Surfaced so the
 # operator can see which notes fell back to plain and need a manual formatter
 # pass. Nullable ALTER TABLE column. Pinned by tests/test_db_schema_v29.py.
-CURRENT_SCHEMA_VERSION = 31
+CURRENT_SCHEMA_VERSION = 32
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -770,7 +770,9 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         filing_standard  TEXT NOT NULL DEFAULT 'mfrs',
         filing_level     TEXT NOT NULL DEFAULT 'company',
         benchmark_id     INTEGER REFERENCES eval_benchmarks(id) ON DELETE SET NULL,
-        created_at       TEXT NOT NULL DEFAULT ''
+        created_at       TEXT NOT NULL DEFAULT '',
+        -- v32: how figures are printed in this document (extraction denomination)
+        denomination     TEXT NOT NULL DEFAULT 'thousands'
     )
     """,
     # One batch execution of a suite. `config_json` freezes model/repeats/toggles/
@@ -787,6 +789,38 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         status         TEXT NOT NULL DEFAULT 'running',
         created_at     TEXT NOT NULL DEFAULT '',
         ended_at       TEXT
+    )
+    """,
+
+    # --- v32: suite-run corpus snapshot (docs/PLAN-evals-hardening.md Step 2) ---
+    # The frozen document list of ONE suite run, written at launch BEFORE any
+    # execution. The runner (start / resume / finalize) reads only this table,
+    # never the live eval_suite_docs — so editing the suite later can't change
+    # what a partial run resumes or how its completion is judged. `suite_doc_id`
+    # is a plain INTEGER (no FK on purpose): the snapshot must survive deletion
+    # of the live doc. `state` (queued | running | finished | failed) doubles as
+    # the durable per-doc execution record — a doc that fails to stage gets
+    # state='failed' + error instead of vanishing. No CHECK constraints on
+    # status-like columns (gotcha #11).
+    """
+    CREATE TABLE IF NOT EXISTS eval_suite_run_docs (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        suite_run_id     INTEGER NOT NULL REFERENCES eval_suite_runs(id) ON DELETE CASCADE,
+        suite_doc_id     INTEGER NOT NULL,                -- frozen copy, no FK
+        label            TEXT NOT NULL DEFAULT '',
+        source_path      TEXT NOT NULL DEFAULT '',
+        source_filename  TEXT NOT NULL DEFAULT '',
+        source_sha256    TEXT NOT NULL DEFAULT '',
+        filing_standard  TEXT NOT NULL DEFAULT 'mfrs',
+        filing_level     TEXT NOT NULL DEFAULT 'company',
+        benchmark_id     INTEGER,                         -- frozen copy, no FK
+        denomination     TEXT NOT NULL DEFAULT 'thousands',
+        variants_json    TEXT,                            -- resolved per-doc variants
+        state            TEXT NOT NULL DEFAULT 'queued',
+        error            TEXT,
+        created_at       TEXT NOT NULL DEFAULT '',
+        updated_at       TEXT NOT NULL DEFAULT '',
+        UNIQUE(suite_run_id, suite_doc_id)
     )
     """,
 
@@ -1286,6 +1320,14 @@ _V30_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # suite_run_id linkage column on runs. Nullable (gotcha #11).
 _V31_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("runs", "suite_run_id", "INTEGER REFERENCES eval_suite_runs(id) ON DELETE SET NULL"),
+)
+
+# v31 → v32: suite-run corpus snapshot (docs/PLAN-evals-hardening.md Step 2).
+# The eval_suite_run_docs table is created via CREATE TABLE IF NOT EXISTS above;
+# this walks an existing DB forward by adding the per-document denomination on
+# the live suite-doc rows (defaulted, so legacy docs keep today's behaviour).
+_V32_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("eval_suite_docs", "denomination", "TEXT NOT NULL DEFAULT 'thousands'"),
 )
 
 
@@ -2329,6 +2371,41 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (31,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v31 → v32: suite-run corpus snapshot. New table created above; this
+        # adds eval_suite_docs.denomination. Same additive, duplicate-tolerant
+        # shape as every prior step.
+        if current_version is not None and current_version < 32:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 32:
+                    for table, col_name, col_ddl in _V32_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1]
+                            for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (32,),
                     )
                 conn.commit()
             except Exception:
