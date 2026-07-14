@@ -942,6 +942,11 @@ export interface SuiteCompareDocJson {
   accuracy_b: number | null;
   delta: number | null;
   gold_changed: boolean;
+  // Drill-down linkage (Step 12): the representative run per side + the gold
+  // benchmark, so a compare row can open its value-level slot diff.
+  run_id_a?: number | null;
+  run_id_b?: number | null;
+  benchmark_id?: number | null;
 }
 
 export interface SuiteCompareJson {
@@ -973,6 +978,40 @@ export interface EvalScoreJson {
   // breakdown. Null on legacy scorecards graded before the taxonomy existed.
   taxonomy?: EvalTaxonomy | null;
   per_statement?: Record<string, { gold_cells: number; matched: number }> | null;
+  // v33 gold-change guard: true = the reference answers were edited after
+  // this score was stamped (re-grade offered); null = unknown (legacy row).
+  gold_stale?: boolean | null;
+}
+
+// Reviewer contribution to a graded run (Step 12) — pre-reviewer snapshot
+// score vs final score. available:false when no reviewer pass ran.
+export interface ReviewerLiftJson {
+  available: boolean;
+  run_id: number;
+  pre_matched?: number;
+  final_matched?: number;
+  lift_slots?: number;
+  gold_cells?: number;
+  pre_accuracy?: number | null;
+  final_accuracy?: number | null;
+}
+
+// One slot in the compare drill-down (Step 12): the raw concept key plus the
+// human name resolved server-side (absent when the uuid no longer resolves).
+export interface SlotDiffRowJson {
+  key: [string, string, string];
+  gold: number;
+  sheet?: string;
+  label?: string;
+}
+
+export interface SlotDiffJson {
+  doc_id: number;
+  run_id_a: number;
+  run_id_b: number;
+  benchmark_id: number;
+  regressions: SlotDiffRowJson[];
+  fixes: SlotDiffRowJson[];
 }
 
 // Diagnosed failure counts — a partition of the wrong slots (missing +

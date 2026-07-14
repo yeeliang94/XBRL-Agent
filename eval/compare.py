@@ -171,9 +171,17 @@ def compare_suite_runs(
     cards_a = _suite_run_doc_cards(conn, suite_run_a)
     cards_b = _suite_run_doc_cards(conn, suite_run_b)
 
-    # Doc metadata for labels + gold linkage.
+    # Doc metadata for labels + gold linkage. Live docs first (freshest
+    # label), then each run's v32 corpus snapshot fills in documents deleted
+    # from the suite since — their history must stay comparable.
     suite_id = sr_a["suite_id"] if sr_a else (sr_b["suite_id"] if sr_b else None)
     docs_meta = {d["id"]: d for d in (repo.list_suite_docs(conn, suite_id) if suite_id else [])}
+    for sr_id in (suite_run_a, suite_run_b):
+        try:
+            for d in repo.list_suite_run_docs(conn, sr_id):
+                docs_meta.setdefault(d["id"], d)
+        except Exception:
+            pass
 
     t_a = sr_a.get("created_at", "") if sr_a else ""
     t_b = sr_b.get("created_at", "") if sr_b else ""
@@ -202,6 +210,11 @@ def compare_suite_runs(
             "accuracy_b": acc_b,
             "delta": delta,
             "gold_changed": gold_changed,
+            # Representative run ids + gold linkage so the UI can drill into
+            # the value-level slot diff for this document (Step 12).
+            "run_id_a": a.run_id if a else None,
+            "run_id_b": b.run_id if b else None,
+            "benchmark_id": meta.get("benchmark_id"),
         })
         if in_both and acc_a is not None and acc_b is not None:
             common_a.append(a)

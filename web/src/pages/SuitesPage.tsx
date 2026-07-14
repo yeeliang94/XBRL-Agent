@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
@@ -12,11 +12,11 @@ import { StatusLabel, type StatusState } from "../components/StatusLabel";
 import {
   fetchSuites, createSuite, getSuite, addSuiteDoc, deleteSuiteDoc,
   listSuiteRuns, estimateSuiteRun, launchSuiteRun, resumeSuiteRun, stopSuiteRun,
-  getSuiteRun, fetchSuiteResults, compareSuiteRuns, fetchBenchmarks,
+  getSuiteRun, fetchSuiteResults, compareSuiteRuns, fetchCompareSlotDiff, fetchBenchmarks,
 } from "../lib/api";
 import type {
   SuiteSummaryJson, SuiteJson, SuiteRunSummaryJson, SuiteRunDetailJson,
-  SuiteEstimateJson, SuiteResultsJson, SuiteCompareJson, BenchmarkJson,
+  SuiteEstimateJson, SuiteResultsJson, SuiteCompareJson, SlotDiffJson, BenchmarkJson,
 } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -605,13 +605,30 @@ function ResultsView({ suiteId }: { suiteId: number }) {
             Compare
           </button>
         </div>
-        {compare && <CompareTable compare={compare} />}
+        {compare && <CompareTable compare={compare} suiteId={suiteId} />}
       </div>
     </div>
   );
 }
 
-function CompareTable({ compare }: { compare: SuiteCompareJson }) {
+function CompareTable({ compare, suiteId }: { compare: SuiteCompareJson; suiteId: number }) {
+  // Value-level drill-down (Step 12): clicking a graded row fetches which
+  // line items regressed / were fixed between the two runs.
+  const [openDoc, setOpenDoc] = useState<number | null>(null);
+  const [diff, setDiff] = useState<SlotDiffJson | null>(null);
+  const toggleRow = (d: SuiteCompareJson["documents"][number]) => {
+    if (!d.in_both || d.benchmark_id == null) return;
+    if (openDoc === d.doc_id) {
+      setOpenDoc(null);
+      setDiff(null);
+      return;
+    }
+    setOpenDoc(d.doc_id);
+    setDiff(null);
+    fetchCompareSlotDiff(suiteId, compare.suite_run_a, compare.suite_run_b, d.doc_id)
+      .then(setDiff)
+      .catch(() => setDiff(null));
+  };
   return (
     <div data-testid="compare-result" style={{ marginTop: pwc.space.md }}>
       <p style={styles.muted}>
@@ -650,20 +667,93 @@ function CompareTable({ compare }: { compare: SuiteCompareJson }) {
             </tr>
           </thead>
           <tbody>
-            {compare.documents.map((d) => (
-              <tr key={d.doc_id} style={{ opacity: d.in_both ? 1 : 0.5 }}>
-                <td style={styles.td}>
-                  {d.label}{!d.in_both && " (one run only)"}
-                  {d.gold_changed && " ⚠"}
-                </td>
-                <td style={styles.tdNum}>{pct(d.accuracy_a)}</td>
-                <td style={styles.tdNum}>{pct(d.accuracy_b)}</td>
-                <td style={{ ...styles.tdNum, color: deltaColor(d.delta) }}>{fmtDelta(d.delta)}</td>
-              </tr>
-            ))}
+            {compare.documents.map((d) => {
+              const drillable = d.in_both && d.benchmark_id != null;
+              return (
+                <Fragment key={d.doc_id}>
+                  <tr
+                    data-testid={`compare-row-${d.doc_id}`}
+                    onClick={() => toggleRow(d)}
+                    style={{
+                      opacity: d.in_both ? 1 : 0.5,
+                      cursor: drillable ? "pointer" : "default",
+                    }}
+                  >
+                    <td style={styles.td}>
+                      {d.label}{!d.in_both && " (one run only)"}
+                      {d.gold_changed && " ⚠"}
+                      {drillable && (
+                        <span style={styles.drillHint}>
+                          {openDoc === d.doc_id ? " ▾" : " ▸"}
+                        </span>
+                      )}
+                    </td>
+                    <td style={styles.tdNum}>{pct(d.accuracy_a)}</td>
+                    <td style={styles.tdNum}>{pct(d.accuracy_b)}</td>
+                    <td style={{ ...styles.tdNum, color: deltaColor(d.delta) }}>{fmtDelta(d.delta)}</td>
+                  </tr>
+                  {openDoc === d.doc_id && (
+                    <tr data-testid={`compare-slots-${d.doc_id}`}>
+                      <td colSpan={4} style={styles.td}>
+                        <SlotDiffDetail diff={diff} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function SlotDiffDetail({ diff }: { diff: SlotDiffJson | null }) {
+  if (diff == null) {
+    return <span style={styles.muted}>Loading line-item changes…</span>;
+  }
+  const slotName = (r: SlotDiffJson["regressions"][number]) =>
+    r.label
+      ? [r.sheet, r.label, r.key[1], r.key[2]].filter(Boolean).join(" · ")
+      : r.key.join(" · ");
+  if (diff.regressions.length === 0 && diff.fixes.length === 0) {
+    return (
+      <span style={styles.muted}>
+        No line item changed correctness between these two runs.
+      </span>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
+      {diff.regressions.length > 0 && (
+        <div>
+          <strong style={{ color: pwc.errorText, fontSize: 13 }}>
+            Went wrong in B ({diff.regressions.length})
+          </strong>
+          <ul style={styles.slotList}>
+            {diff.regressions.map((r, i) => (
+              <li key={i} title={r.key.join(" · ")}>
+                {slotName(r)} — should be {r.gold.toLocaleString()}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {diff.fixes.length > 0 && (
+        <div>
+          <strong style={{ color: pwc.successText, fontSize: 13 }}>
+            Fixed in B ({diff.fixes.length})
+          </strong>
+          <ul style={styles.slotList}>
+            {diff.fixes.map((r, i) => (
+              <li key={i} title={r.key.join(" · ")}>
+                {slotName(r)} — now correctly {r.gold.toLocaleString()}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -752,4 +842,12 @@ const styles = {
   error: { color: pwc.errorText, fontSize: 13 } as React.CSSProperties,
   warn: { color: pwc.grey800, fontSize: 13, borderLeft: `3px solid ${pwc.warning}`, paddingLeft: pwc.space.md } as React.CSSProperties,
   muted: { color: pwc.grey700, fontSize: 14 } as React.CSSProperties,
+  drillHint: { color: pwc.grey500, fontSize: 12 } as React.CSSProperties,
+  slotList: {
+    margin: `${pwc.space.xs}px 0 0`,
+    paddingLeft: 18,
+    fontSize: 13,
+    color: pwc.grey800,
+    lineHeight: 1.6,
+  } as React.CSSProperties,
 } as const;

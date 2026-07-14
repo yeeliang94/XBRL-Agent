@@ -284,3 +284,84 @@ def test_repeat_group_carries_per_repeat_accuracy_and_slot_labels(
     slot = group["consistency"]["value_disagreements"][0]
     assert slot["sheet"] == "SOFP"
     assert slot["label"] == "Property, plant and equipment"
+
+
+def test_reviewer_lift_and_compare_slots_endpoints(tmp_path, monkeypatch):
+    """Step 12: reviewer_lift + slot_level_diff were built and unit-tested but
+    wired to nothing — these routes make them reachable."""
+    db_path = tmp_path / "xbrl.db"
+    monkeypatch.setenv("XBRL_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key-12345")
+    monkeypatch.setenv("LLM_PROXY_URL", "")
+    import server as srv
+
+    importlib.reload(srv)
+    srv.AUDIT_DB_PATH = db_path
+    init_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    _seed(conn)
+    conn.execute("INSERT INTO eval_suites(name, created_at) VALUES ('S','t')")
+    conn.execute(
+        "INSERT INTO eval_suite_docs(suite_id, label, benchmark_id, "
+        "filing_standard, filing_level) VALUES (1, 'd', 1, 'mfrs', 'company')"
+    )
+    for created in ("2026-01-01", "2026-02-01"):
+        conn.execute(
+            "INSERT INTO eval_suite_runs(suite_id, config_json, status, "
+            "created_at) VALUES (1, '{}', 'complete', ?)", (created,),
+        )
+
+    def _child_with_facts(sr_id, facts):
+        cur = conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, session_id, "
+            "suite_run_id, benchmark_id) "
+            "VALUES ('t', 'x.pdf', 'completed', ?, ?, 1)",
+            (f"suite-{sr_id}-doc-1", sr_id),
+        )
+        rid = int(cur.lastrowid)
+        for uuid, v in facts:
+            conn.execute(
+                "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
+                "entity_scope, value, value_status, updated_at) "
+                "VALUES (?, ?, 'CY', 'Company', ?, 'observed', '')",
+                (rid, uuid, v),
+            )
+        return rid
+
+    # Run A got both right; run B broke c1 (regression) — gold: c1=10, c2=20.
+    run_a = _child_with_facts(1, [("c1", 10.0), ("c2", 20.0)])
+    run_b = _child_with_facts(2, [("c1", 999.0), ("c2", 20.0)])
+    # Reviewer lift on run B: pre-reviewer snapshot had c2 wrong too.
+    for uuid, v in (("c1", 999.0), ("c2", 5.0)):
+        conn.execute(
+            "INSERT INTO run_fact_snapshots(run_id, concept_uuid, period, "
+            "entity_scope, value, value_status) "
+            "VALUES (?, ?, 'CY', 'Company', ?, 'observed')",
+            (run_b, uuid, v),
+        )
+    conn.commit()
+    conn.close()
+
+    tc = TestClient(srv.app)
+
+    # Reviewer lift: the pass fixed c2 (5 → 20), +1 slot.
+    lift = tc.get(f"/api/runs/{run_b}/reviewer-lift").json()
+    assert lift["available"] is True
+    assert lift["lift_slots"] == 1
+    # Run A never had a reviewer snapshot → honestly unavailable.
+    assert tc.get(f"/api/runs/{run_a}/reviewer-lift").json()["available"] is False
+
+    # Slot diff A→B: c1 regressed, nothing fixed; labels resolved.
+    diff = tc.get(
+        "/api/suites/1/compare/slots", params={"a": 1, "b": 2, "doc_id": 1}
+    ).json()
+    assert len(diff["regressions"]) == 1
+    assert diff["regressions"][0]["key"][0] == "c1"
+    assert diff["regressions"][0]["sheet"] == "SOFP"
+    assert diff["fixes"] == []
+
+    # Compare rows carry the drill-down linkage.
+    cmp = tc.get("/api/suites/1/compare", params={"a": 1, "b": 2}).json()
+    doc = next(r for r in cmp["documents"] if r["doc_id"] == 1)
+    assert doc["run_id_a"] == run_a and doc["run_id_b"] == run_b
+    assert doc["benchmark_id"] == 1

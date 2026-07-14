@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
-import { fetchRunEval } from "../lib/api";
-import type { EvalScoreJson, EvalTaxonomy } from "../lib/types";
+import { ui, uiClass } from "../lib/uiStyles";
+import { fetchRunEval, fetchReviewerLift, reGradeRun } from "../lib/api";
+import type { EvalScoreJson, EvalTaxonomy, ReviewerLiftJson } from "../lib/types";
 
 // Plain-language labels for each diagnosed failure mode (docs/PLAN-evals-workspace.md).
 // Ordered most-actionable first, matching the grader's priority.
@@ -38,6 +38,8 @@ function pct(score: number): string {
 export function EvalTab({ runId, initialScore = null }: EvalTabProps) {
   const [score, setScore] = useState<EvalScoreJson | null>(initialScore);
   const [loaded, setLoaded] = useState<boolean>(initialScore != null);
+  const [lift, setLift] = useState<ReviewerLiftJson | null>(null);
+  const [reGrading, setReGrading] = useState(false);
 
   useEffect(() => {
     if (initialScore != null) return;
@@ -56,6 +58,27 @@ export function EvalTab({ runId, initialScore = null }: EvalTabProps) {
       cancelled = true;
     };
   }, [runId, initialScore]);
+
+  // Reviewer contribution (Step 12) — computed since E5, now reachable.
+  useEffect(() => {
+    let cancelled = false;
+    fetchReviewerLift(runId)
+      .then((l) => {
+        if (!cancelled) setLift(l);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
+  const handleReGrade = () => {
+    setReGrading(true);
+    reGradeRun(runId)
+      .then((r) => setScore({ ...r.score, gold_stale: false }))
+      .catch(() => {})
+      .finally(() => setReGrading(false));
+  };
 
   if (!loaded) {
     return <p style={styles.muted}>Loading score…</p>;
@@ -77,6 +100,23 @@ export function EvalTab({ runId, initialScore = null }: EvalTabProps) {
 
   return (
     <div data-testid="eval-scorecard" style={styles.wrap}>
+      {score.gold_stale === true && (
+        <div data-testid="eval-gold-stale" style={styles.staleBanner}>
+          <span>
+            The reference answers for this benchmark were edited after this
+            score was recorded — the score below may no longer reflect them.
+          </span>
+          <button
+            data-testid="eval-re-grade"
+            className={uiClass.btnSecondary}
+            style={ui.buttonSecondary}
+            disabled={reGrading}
+            onClick={handleReGrade}
+          >
+            {reGrading ? "Re-grading…" : "Re-grade with current answers"}
+          </button>
+        </div>
+      )}
       <div style={styles.card}>
         <div data-testid="eval-headline" style={styles.headline}>
           {pct(score.score)}
@@ -84,6 +124,14 @@ export function EvalTab({ runId, initialScore = null }: EvalTabProps) {
         <div style={styles.fraction}>
           {score.matched_cells} / {score.gold_cells} gold cells matched
         </div>
+        {lift?.available && (
+          <div data-testid="eval-reviewer-lift" style={styles.lift}>
+            Reviewer pass: {lift.lift_slots! >= 0 ? "+" : ""}
+            {lift.lift_slots} cell{Math.abs(lift.lift_slots!) === 1 ? "" : "s"}
+            {" "}({lift.pre_accuracy != null ? pct(lift.pre_accuracy) : "—"} before
+            {" → "}{lift.final_accuracy != null ? pct(lift.final_accuracy) : "—"} after)
+          </div>
+        )}
       </div>
       <div data-testid="eval-flags" style={styles.flags}>
         {flags.length === 0 ? "No issues — every gold cell matched." : flags.join(" · ")}
@@ -202,6 +250,22 @@ const styles = {
     marginTop: pwc.space.sm,
     color: pwc.grey700,
     fontSize: 14,
+  } as React.CSSProperties,
+  lift: {
+    marginTop: pwc.space.sm,
+    color: pwc.grey500,
+    fontSize: 13,
+  } as React.CSSProperties,
+  staleBanner: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.lg,
+    border: `1px solid ${pwc.orange700}`,
+    background: pwc.orange50,
+    color: pwc.grey900,
+    fontSize: 13,
+    padding: pwc.space.lg,
   } as React.CSSProperties,
   flags: {
     fontFamily: pwc.fontBody,

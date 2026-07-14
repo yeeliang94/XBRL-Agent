@@ -532,12 +532,26 @@ async def patch_gold_fact_endpoint(benchmark_id: int, body: GoldFactPatch):
 
 @router.get("/api/runs/{run_id}/eval")
 async def get_run_eval_endpoint(run_id: int):
-    """The run's scorecard for the Eval tab. 404 when the run wasn't graded."""
+    """The run's scorecard for the Eval tab. 404 when the run wasn't graded.
+    Carries ``gold_stale`` (Step 7): True when the benchmark's gold changed
+    after this score was stamped — the tab offers a one-click re-grade."""
     from db import repository as repo
+    from eval.store import gold_fingerprint
 
     conn = server._open_audit_conn()
     try:
         score = repo.fetch_eval_score_for_run(conn, run_id)
+        if score is not None:
+            stale = None
+            if score.get("gold_fingerprint"):
+                try:
+                    stale = (
+                        gold_fingerprint(conn, int(score["benchmark_id"]))
+                        != score["gold_fingerprint"]
+                    )
+                except Exception:
+                    stale = None
+            score["gold_stale"] = stale
     finally:
         conn.close()
     if score is None:
@@ -545,18 +559,14 @@ async def get_run_eval_endpoint(run_id: int):
     return score
 
 
-def _resolve_slot_labels(conn, consistency: Optional[dict]) -> None:
-    """Attach human line-item names to disagreement rows IN PLACE (Step 11).
+def resolve_slot_labels(conn, rows: list[dict]) -> None:
+    """Attach human line-item names to slot rows IN PLACE (Step 11/12).
 
-    A disagreement key is (concept_uuid, period, entity_scope) — meaningless
-    to a reviewer. Resolve each uuid to its sheet + label via concept_nodes;
-    a uuid that no longer resolves keeps only the raw key (the panel falls
-    back to rendering it)."""
-    if not consistency:
-        return
-    rows = list(consistency.get("presence_disagreements") or []) + list(
-        consistency.get("value_disagreements") or []
-    )
+    A slot key is (concept_uuid, period, entity_scope) — meaningless to a
+    reviewer. Resolve each uuid to its sheet + label via concept_nodes; a
+    uuid that no longer resolves keeps only the raw key (the UI falls back
+    to rendering it). Shared by the consistency panel and the compare
+    drill-down."""
     uuids = {r["key"][0] for r in rows if r.get("key")}
     if not uuids:
         return
@@ -575,6 +585,30 @@ def _resolve_slot_labels(conn, consistency: Optional[dict]) -> None:
             r["sheet"], r["label"] = hit
 
 
+@router.get("/api/runs/{run_id}/reviewer-lift")
+async def reviewer_lift_endpoint(run_id: int):
+    """What the reviewer pass contributed to this run's score (Step 12 —
+    computed since E5 but never reachable). available:false when the run has
+    no benchmark or no pre-reviewer snapshot exists (no reviewer pass ran)."""
+    from eval.grader import reviewer_lift
+
+    conn = server._open_audit_conn()
+    try:
+        row = conn.execute(
+            "SELECT benchmark_id FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if row[0] is None:
+            return {"available": False, "run_id": run_id}
+        lift = reviewer_lift(conn, run_id, int(row[0]))
+    finally:
+        conn.close()
+    if lift is None:
+        return {"available": False, "run_id": run_id}
+    return {"available": True, "run_id": run_id, **lift}
+
+
 @router.get("/api/repeat-groups/{group_id}")
 async def get_repeat_group_endpoint(group_id: int):
     """A repeat group + its computed consistency result (v30). Feeds the
@@ -586,8 +620,13 @@ async def get_repeat_group_endpoint(group_id: int):
     conn = server._open_audit_conn()
     try:
         group = repo.fetch_repeat_group(conn, group_id)
-        if group is not None:
-            _resolve_slot_labels(conn, group.get("consistency"))
+        if group is not None and group.get("consistency"):
+            c = group["consistency"]
+            resolve_slot_labels(
+                conn,
+                list(c.get("presence_disagreements") or [])
+                + list(c.get("value_disagreements") or []),
+            )
     finally:
         conn.close()
     if group is None:
