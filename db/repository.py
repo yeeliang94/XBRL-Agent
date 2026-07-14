@@ -2711,6 +2711,74 @@ def list_suite_runs(
     return [dict(r) for r in rows]
 
 
+def snapshot_suite_run_docs(
+    conn: sqlite3.Connection, suite_run_id: int, docs: list[dict[str, Any]],
+) -> None:
+    """Freeze the suite's document list onto this suite run (v32, PLAN-evals-
+    hardening Step 2). Written at launch BEFORE any execution; the runner only
+    ever reads this snapshot, so later suite edits can't change a run's corpus.
+    Each doc dict is a live eval_suite_docs row, optionally enriched with
+    ``source_sha256`` and resolved per-doc ``variants``."""
+    now = _now()
+    for d in docs:
+        variants = d.get("variants")
+        conn.execute(
+            "INSERT OR IGNORE INTO eval_suite_run_docs("
+            "suite_run_id, suite_doc_id, label, source_path, source_filename, "
+            "source_sha256, filing_standard, filing_level, benchmark_id, "
+            "denomination, variants_json, state, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+            (
+                suite_run_id, d["id"], d.get("label", ""),
+                d.get("source_path", ""), d.get("source_filename", ""),
+                d.get("source_sha256", ""),
+                d.get("filing_standard", "mfrs"), d.get("filing_level", "company"),
+                d.get("benchmark_id"),
+                d.get("denomination", "thousands"),
+                json.dumps(variants) if variants else None,
+                now, now,
+            ),
+        )
+
+
+def list_suite_run_docs(
+    conn: sqlite3.Connection, suite_run_id: int
+) -> list[dict[str, Any]]:
+    """The frozen document list of one suite run. ``id`` is aliased to the
+    ORIGINAL suite_doc_id so runner code (session ids, resume matching) treats
+    snapshot rows exactly like live doc rows."""
+    prior = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT suite_doc_id AS id, suite_run_id, label, source_path, "
+            "source_filename, source_sha256, filing_standard, filing_level, "
+            "benchmark_id, denomination, variants_json, state, error, "
+            "created_at, updated_at "
+            "FROM eval_suite_run_docs WHERE suite_run_id = ? ORDER BY suite_doc_id",
+            (suite_run_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["variants"] = _parse_json_dict(d.pop("variants_json"))
+        out.append(d)
+    return out
+
+
+def update_suite_run_doc_state(
+    conn: sqlite3.Connection, suite_run_id: int, suite_doc_id: int,
+    state: str, *, error: Optional[str] = None,
+) -> None:
+    conn.execute(
+        "UPDATE eval_suite_run_docs SET state = ?, error = ?, updated_at = ? "
+        "WHERE suite_run_id = ? AND suite_doc_id = ?",
+        (state, error, _now(), suite_run_id, suite_doc_id),
+    )
+
+
 def reconcile_stale_suite_runs(conn: sqlite3.Connection) -> int:
     """Retire suite runs left 'running' by a crash (mirrors
     reconcile_stale_review_tasks). Called at startup. Returns the count."""
