@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
@@ -359,16 +359,21 @@ function LaunchForm({
       .catch(() => {});
   }, []);
 
-  const launchBody = useMemo(
+  // The estimate ignores the label server-side — keeping it out of the
+  // estimate request stops a POST per keystroke (review follow-up).
+  const estimateBody = useMemo(
     () => ({
-      label,
       repeats,
       use_scout: scout,
       model: model || null,
       statements,
       notes_to_run: notes,
     }),
-    [label, repeats, scout, model, statements, notes],
+    [repeats, scout, model, statements, notes],
+  );
+  const launchBody = useMemo(
+    () => ({ ...estimateBody, label }),
+    [estimateBody, label],
   );
 
   const toggle = <T,>(list: T[], v: T): T[] =>
@@ -376,8 +381,8 @@ function LaunchForm({
 
   useEffect(() => {
     if (docCount === 0) { setEstimate(null); return; }
-    estimateSuiteRun(suiteId, launchBody).then(setEstimate).catch(() => setEstimate(null));
-  }, [suiteId, launchBody, docCount]);
+    estimateSuiteRun(suiteId, estimateBody).then(setEstimate).catch(() => setEstimate(null));
+  }, [suiteId, estimateBody, docCount]);
 
   const launch = useCallback(async () => {
     setError(null);
@@ -708,7 +713,13 @@ function ResultsView({ suiteId }: { suiteId: number }) {
             Compare
           </button>
         </div>
-        {compare && <CompareTable compare={compare} suiteId={suiteId} />}
+        {compare && (
+          <CompareTable
+            key={`${compare.suite_run_a}-${compare.suite_run_b}`}
+            compare={compare}
+            suiteId={suiteId}
+          />
+        )}
       </div>
     </div>
   );
@@ -719,18 +730,27 @@ function CompareTable({ compare, suiteId }: { compare: SuiteCompareJson; suiteId
   // line items regressed / were fixed between the two runs.
   const [openDoc, setOpenDoc] = useState<number | null>(null);
   const [diff, setDiff] = useState<SlotDiffJson | null>(null);
+  // Guards the fetch race: rapid row switches must not render row A's diff
+  // under row B when A's slower response lands last (review follow-up).
+  const openDocRef = useRef<number | null>(null);
   const toggleRow = (d: SuiteCompareJson["documents"][number]) => {
     if (!d.in_both || d.benchmark_id == null) return;
     if (openDoc === d.doc_id) {
       setOpenDoc(null);
+      openDocRef.current = null;
       setDiff(null);
       return;
     }
     setOpenDoc(d.doc_id);
+    openDocRef.current = d.doc_id;
     setDiff(null);
     fetchCompareSlotDiff(suiteId, compare.suite_run_a, compare.suite_run_b, d.doc_id)
-      .then(setDiff)
-      .catch(() => setDiff(null));
+      .then((res) => {
+        if (openDocRef.current === d.doc_id) setDiff(res);
+      })
+      .catch(() => {
+        if (openDocRef.current === d.doc_id) setDiff(null);
+      });
   };
   return (
     <div data-testid="compare-result" style={{ marginTop: pwc.space.md }}>

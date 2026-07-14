@@ -2845,11 +2845,18 @@ def save_eval_score(
     per_statement_json = json.dumps(per_statement) if per_statement else None
     # v33: stamp the gold content hash at grade time so any later gold change
     # (edit / deletion / reassignment) is detectable against this score.
-    # Best-effort: a fingerprint failure must never block persisting the score.
+    # Best-effort: a fingerprint failure must never block persisting the score
+    # — but it IS logged, because a NULL stamp leaves gold_stale forever
+    # "unknown" and the re-grade warning can then never clear.
     try:
         from eval.store import gold_fingerprint
         fingerprint: Optional[str] = gold_fingerprint(conn, benchmark_id)
     except Exception:
+        import logging
+        logging.getLogger("server").warning(
+            "gold fingerprint failed for benchmark %s (score saved without "
+            "a gold-version stamp)", benchmark_id, exc_info=True,
+        )
         fingerprint = None
     conn.execute(
         "INSERT INTO eval_scores(run_id, benchmark_id, gold_cells, "

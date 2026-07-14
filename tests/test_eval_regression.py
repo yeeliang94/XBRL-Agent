@@ -304,6 +304,12 @@ def _mk_scores_db_with_agents():
     conn.execute(
         "CREATE TABLE run_agents (run_id INTEGER, model TEXT)"
     )
+    # baseline_prior_score only considers finished runs (review follow-up);
+    # seed a runs row per score the tests insert (ids 1-5 cover them all).
+    conn.execute("CREATE TABLE runs (id INTEGER PRIMARY KEY, status TEXT)")
+    conn.executemany(
+        "INSERT INTO runs VALUES (?, 'completed')", [(i,) for i in range(1, 6)]
+    )
     return conn
 
 
@@ -394,3 +400,19 @@ def test_baseline_best_mode_is_explicit_legacy():
     assert baseline_prior_score(
         conn, 7, exclude_run_id=None, mode="best"
     ) == pytest.approx(0.99)
+
+
+def test_baseline_latest_skips_non_terminal_runs():
+    """An aborted run's partial (low) score must never become the baseline —
+    a real regression would then pass the gate (review follow-up)."""
+    from scripts.eval_regression import baseline_prior_score
+
+    conn = _mk_scores_db_with_agents()
+    conn.executemany(
+        "INSERT INTO eval_scores VALUES (?, ?, ?, ?)",
+        [(1, 7, 100, 90), (2, 7, 100, 20)],  # run 2 = newest but aborted
+    )
+    conn.execute("UPDATE runs SET status = 'aborted' WHERE id = 2")
+    assert baseline_prior_score(
+        conn, 7, exclude_run_id=None, mode="latest"
+    ) == pytest.approx(0.90)

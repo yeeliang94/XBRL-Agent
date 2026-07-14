@@ -55,7 +55,13 @@ def prompt_state_hash(root: Path | None = None) -> str | None:
     base = root or _REPO_ROOT
     h = hashlib.sha256()
     try:
-        files = sorted((base / "prompts").rglob("*.md"))
+        # Both .md prompt files AND the .py modules that build prompt blocks
+        # inline (prompts/__init__.py, _sign_conventions.py, …) — an edit to
+        # either changes extraction behaviour.
+        files = sorted(
+            list((base / "prompts").rglob("*.md"))
+            + list((base / "prompts").rglob("*.py"))
+        )
         files.append(base / "pricing.py")
         found = False
         for f in files:
