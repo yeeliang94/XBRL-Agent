@@ -294,3 +294,103 @@ def test_resolve_document_matches_by_basename_inside_pdf_dir(tmp_path):
     # A path-shaped ref still resolves by basename, under pdf_dir only.
     assert _resolve_document(pdf_dir, "elsewhere/doc.pdf") == nested / "doc.pdf"
     assert _resolve_document(pdf_dir, "missing.pdf") is None
+
+
+# --- Step 5 (PLAN-evals-hardening): the gate can no longer false-green ------
+
+
+def _mk_scores_db_with_agents():
+    conn = _mk_scores_db()
+    conn.execute(
+        "CREATE TABLE run_agents (run_id INTEGER, model TEXT)"
+    )
+    return conn
+
+
+def test_exit_code_fails_on_zero_evaluated():
+    """A run that evaluates nothing proves nothing — it must NOT exit green."""
+    assert overall_exit_code([]) == 1
+
+
+def test_exit_code_fails_when_documents_were_skipped():
+    ok = _assess(prior=0.90, matched=95)
+    # 1 of 2 selected benchmarks evaluated → below the 100% default coverage.
+    assert overall_exit_code([ok], selected=2) == 1
+    # Full coverage passes.
+    assert overall_exit_code([ok], selected=1) == 0
+    # An explicit lower bar can accept partial coverage.
+    assert overall_exit_code([ok], selected=2, min_coverage=0.5) == 0
+
+
+def test_baseline_latest_prefers_recent_same_model():
+    from scripts.eval_regression import baseline_prior_score
+
+    conn = _mk_scores_db_with_agents()
+    conn.executemany(
+        "INSERT INTO eval_scores VALUES (?, ?, ?, ?)",
+        [
+            (1, 7, 100, 99),  # lucky old outlier (0.99) — must NOT be baseline
+            (2, 7, 100, 90),  # recent same-model run (0.90) ← baseline
+            (3, 7, 100, 50),  # current run, excluded
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO run_agents VALUES (?, ?)",
+        [(1, "m1"), (2, "m1"), (3, "m1")],
+    )
+    prior = baseline_prior_score(
+        conn, 7, exclude_run_id=3, mode="latest", model="m1"
+    )
+    assert prior == pytest.approx(0.90)
+
+
+def test_baseline_latest_skips_other_models_unless_drift_allowed():
+    from scripts.eval_regression import baseline_prior_score
+
+    conn = _mk_scores_db_with_agents()
+    conn.executemany(
+        "INSERT INTO eval_scores VALUES (?, ?, ?, ?)",
+        [(1, 7, 100, 80), (2, 7, 100, 95)],
+    )
+    conn.executemany(
+        "INSERT INTO run_agents VALUES (?, ?)", [(1, "m1"), (2, "other")]
+    )
+    # Same-model only: run 2's different model is excluded.
+    assert baseline_prior_score(
+        conn, 7, exclude_run_id=None, mode="latest", model="m1"
+    ) == pytest.approx(0.80)
+    # Drift explicitly allowed: the newest run wins regardless of model.
+    assert baseline_prior_score(
+        conn, 7, exclude_run_id=None, mode="latest", model="m1",
+        allow_config_drift=True,
+    ) == pytest.approx(0.95)
+
+
+def test_baseline_explicit_run_id():
+    from scripts.eval_regression import baseline_prior_score
+
+    conn = _mk_scores_db_with_agents()
+    conn.executemany(
+        "INSERT INTO eval_scores VALUES (?, ?, ?, ?)",
+        [(1, 7, 100, 80), (2, 7, 100, 95)],
+    )
+    assert baseline_prior_score(
+        conn, 7, exclude_run_id=None, baseline_run_id=1
+    ) == pytest.approx(0.80)
+    # An unknown baseline run yields None (first-run semantics), not a crash.
+    assert baseline_prior_score(
+        conn, 7, exclude_run_id=None, baseline_run_id=99
+    ) is None
+
+
+def test_baseline_best_mode_is_explicit_legacy():
+    from scripts.eval_regression import baseline_prior_score
+
+    conn = _mk_scores_db_with_agents()
+    conn.executemany(
+        "INSERT INTO eval_scores VALUES (?, ?, ?, ?)",
+        [(1, 7, 100, 99), (2, 7, 100, 90)],
+    )
+    assert baseline_prior_score(
+        conn, 7, exclude_run_id=None, mode="best"
+    ) == pytest.approx(0.99)

@@ -153,8 +153,27 @@ def render_report(results: list[BenchmarkRegression]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def overall_exit_code(results: list[BenchmarkRegression]) -> int:
-    """1 if any benchmark regressed beyond tolerance, else 0."""
+def overall_exit_code(
+    results: list[BenchmarkRegression],
+    *,
+    selected: Optional[int] = None,
+    min_coverage: float = 1.0,
+) -> int:
+    """1 on any regression — and on the two false-green paths the peer review
+    caught (PLAN-evals-hardening Step 5):
+
+    * ZERO evaluated benchmarks is a failing gate, not a passing one (an empty
+      run proves nothing about the release).
+    * When ``selected`` is known, evaluating fewer than ``min_coverage`` of the
+      selected benchmarks (skipped documents) also fails — a gate that silently
+      dropped half its corpus must not read as green.
+    """
+    if not results:
+        return 1
+    if selected is not None and selected > 0:
+        coverage = len(results) / selected
+        if coverage < min_coverage - 1e-9:
+            return 1
     return 1 if any(r.regressed for r in results) else 0
 
 
@@ -168,6 +187,10 @@ def best_prior_score(
 
     Excludes ``exclude_run_id`` so a freshly-graded run never compares to
     itself. Returns None when the benchmark has no other graded run yet.
+
+    NOT the default baseline any more (Step 5): a lucky stochastic run becomes
+    an unbeatable permanent ceiling, flagging honest runs as regressions (or
+    hiding real ones behind an outlier). Kept for explicit ``--baseline best``.
     """
     rows = conn.execute(
         "SELECT run_id, gold_cells, matched_cells FROM eval_scores "
@@ -184,6 +207,59 @@ def best_prior_score(
         if best is None or score > best:
             best = score
     return best
+
+
+def baseline_prior_score(
+    conn: sqlite3.Connection,
+    benchmark_id: int,
+    exclude_run_id: Optional[int],
+    *,
+    baseline_run_id: Optional[int] = None,
+    mode: str = "latest",
+    model: Optional[str] = None,
+    allow_config_drift: bool = False,
+) -> Optional[float]:
+    """The baseline this gate compares against (Step 5).
+
+    * ``baseline_run_id`` — an explicitly chosen prior run: exact, reproducible.
+    * ``mode='latest'`` (default) — the most recent prior graded run, and only
+      one produced by the SAME model unless ``allow_config_drift`` (comparing a
+      cheap-model baseline against an expensive-model run measures the model
+      change, not the code change).
+    * ``mode='best'`` — the legacy best-ever ceiling, explicit opt-in only.
+    """
+    if baseline_run_id is not None:
+        row = conn.execute(
+            "SELECT gold_cells, matched_cells FROM eval_scores "
+            "WHERE benchmark_id = ? AND run_id = ?",
+            (benchmark_id, baseline_run_id),
+        ).fetchone()
+        if row is None or not row[0]:
+            return None
+        return row[1] / row[0]
+
+    if mode == "best":
+        return best_prior_score(conn, benchmark_id, exclude_run_id)
+
+    sql = (
+        "SELECT s.run_id, s.gold_cells, s.matched_cells FROM eval_scores s "
+        "WHERE s.benchmark_id = ? "
+    )
+    params: list = [benchmark_id]
+    if model and not allow_config_drift:
+        sql += (
+            "AND EXISTS (SELECT 1 FROM run_agents a WHERE a.run_id = s.run_id "
+            "AND a.model = ?) "
+        )
+        params.append(model)
+    sql += "ORDER BY s.run_id DESC"
+    for run_id, gold_cells, matched in conn.execute(sql, tuple(params)):
+        if exclude_run_id is not None and run_id == exclude_run_id:
+            continue
+        if not gold_cells:
+            continue
+        return matched / gold_cells
+    return None
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -241,6 +317,16 @@ def resolve_model(model: Optional[str]) -> str:
     return os.environ.get("TEST_MODEL", "openai.gpt-5.4")
 
 
+@dataclass
+class LiveRegressionOutcome:
+    """What the gate actually covered: verdicts + how many selected benchmarks
+    never produced one (skipped documents must fail the gate, not vanish)."""
+
+    results: list
+    selected: int
+    skipped: list  # (benchmark_id, reason) pairs
+
+
 def run_live_regression(
     *,
     db_path: Path,
@@ -248,7 +334,10 @@ def run_live_regression(
     benchmark_ids: Optional[list[int]],
     tolerance: float,
     model: Optional[str],
-) -> list[BenchmarkRegression]:
+    baseline_mode: str = "latest",
+    baseline_run_id: Optional[int] = None,
+    allow_config_drift: bool = False,
+) -> LiveRegressionOutcome:
     """Run + grade each selected benchmark. Spends real tokens.
 
     Imported lazily so the pure-core unit tests never pull in the pipeline.
@@ -275,14 +364,21 @@ def run_live_regression(
         conn.close()
 
     resolved_model = resolve_model(model)
+    if baseline_run_id is not None and len(benchmarks) > 1:
+        raise ValueError(
+            "--baseline-run-id compares one benchmark against one prior run; "
+            "select a single benchmark with --benchmark-id."
+        )
     results: list[BenchmarkRegression] = []
+    skipped: list[tuple[int, str]] = []
     for bench in benchmarks:
         pdf = _resolve_document(pdf_dir, bench.get("document"))
         if pdf is None:
-            print(
-                f"  SKIP benchmark {bench['id']} ({bench['name']}): "
+            reason = (
                 f"document {bench.get('document')!r} not found under {pdf_dir}"
             )
+            print(f"  SKIP benchmark {bench['id']} ({bench['name']}): {reason}")
+            skipped.append((bench["id"], reason))
             continue
 
         # Recover the variant per statement from the benchmark's template_ids so
@@ -311,12 +407,18 @@ def run_live_regression(
         # guess that could race a concurrent run).
         run_id = getattr(result, "run_id", None)
         if run_id is None:
-            print(f"  SKIP benchmark {bench['id']}: run created no audit row")
+            reason = "run created no audit row"
+            print(f"  SKIP benchmark {bench['id']}: {reason}")
+            skipped.append((bench["id"], reason))
             continue
 
         conn = _connect(db_path)
         try:
-            prior = best_prior_score(conn, bench["id"], exclude_run_id=run_id)
+            prior = baseline_prior_score(
+                conn, bench["id"], exclude_run_id=run_id,
+                baseline_run_id=baseline_run_id, mode=baseline_mode,
+                model=resolved_model, allow_config_drift=allow_config_drift,
+            )
             card = grade_run(conn, run_id, bench["id"])
             save_eval_score(conn, run_id, bench["id"], card)
             conn.commit()
@@ -334,10 +436,12 @@ def run_live_regression(
         )
         print(
             f"    run {run_id}: {_fmt_pct(card.score)} "
-            f"(prior best {_fmt_pct(prior)})"
+            f"(baseline {_fmt_pct(prior)})"
         )
 
-    return results
+    return LiveRegressionOutcome(
+        results=results, selected=len(benchmarks), skipped=skipped
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -351,6 +455,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Score-drop margin before flagging a regression (default {DEFAULT_TOLERANCE}).",
     )
     parser.add_argument("--model", default=None, help="Override the extraction model.")
+    parser.add_argument(
+        "--baseline", choices=["latest", "best"], default="latest",
+        help="Baseline to compare against: the most recent same-model graded "
+             "run (default) or the legacy best-score-ever ceiling.",
+    )
+    parser.add_argument(
+        "--baseline-run-id", type=int, default=None,
+        help="Compare against this exact prior run (single benchmark only).",
+    )
+    parser.add_argument(
+        "--allow-config-drift", action="store_true",
+        help="Permit a baseline produced by a different model (off by default "
+             "— comparing across models measures the model, not the change).",
+    )
+    parser.add_argument(
+        "--min-coverage", type=float, default=1.0,
+        help="Fraction of selected benchmarks that must actually be evaluated "
+             "(default 1.0 — any skipped document fails the gate).",
+    )
     parser.add_argument(
         "--pdf-dir", default="data",
         help="Directory holding the benchmark source PDFs (default: data/).",
@@ -371,21 +494,34 @@ def main(argv: list[str]) -> int:
         print(f"Audit DB not found at {db_path}. Run the app once to create it.")
         return 1
 
-    results = run_live_regression(
+    outcome = run_live_regression(
         db_path=db_path,
         pdf_dir=ROOT / args.pdf_dir if not Path(args.pdf_dir).is_absolute() else Path(args.pdf_dir),
         benchmark_ids=args.benchmark_ids,
         tolerance=args.tolerance,
         model=args.model,
+        baseline_mode=args.baseline,
+        baseline_run_id=args.baseline_run_id,
+        allow_config_drift=args.allow_config_drift,
     )
 
-    report = render_report(results)
+    report = render_report(outcome.results)
     report_path = ROOT / args.report if not Path(args.report).is_absolute() else Path(args.report)
     report_path.write_text(report, encoding="utf-8")
     print(f"\nReport written to {report_path}\n")
     print(report)
 
-    return overall_exit_code(results)
+    if outcome.skipped:
+        print(f"GATE: {len(outcome.skipped)} of {outcome.selected} selected "
+              f"benchmark(s) were skipped — a gate that drops documents is "
+              f"not green.")
+    if not outcome.results:
+        print("GATE: zero benchmarks evaluated — failing (nothing was proven).")
+
+    return overall_exit_code(
+        outcome.results, selected=outcome.selected,
+        min_coverage=args.min_coverage,
+    )
 
 
 if __name__ == "__main__":
