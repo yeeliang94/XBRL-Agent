@@ -16,8 +16,13 @@ afterEach(() => {
 function mockFetch(impl: (url: string, init?: RequestInit) => unknown) {
   (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
     async (url: string, init?: RequestInit) => {
-      const result = impl(url, init);
-      return { ok: true, status: 200, json: async () => result } as Response;
+      const result = impl(url, init) as { __status?: number } | undefined;
+      const status = result?.__status ?? 200;
+      return {
+        ok: status < 400,
+        status,
+        json: async () => result,
+      } as Response;
     }
   );
 }
@@ -76,8 +81,8 @@ describe("BenchmarksPage", () => {
     fireEvent.click(await screen.findByTestId("benchmark-delete-1"));
     // No API delete yet — the confirm dialog is open.
     expect(calls.some((c) => c.startsWith("DELETE"))).toBe(false);
-    const dialog = await screen.findByRole("dialog", { name: /delete benchmark/i });
-    fireEvent.click(within(dialog).getByRole("button", { name: /delete benchmark/i }));
+    const dialog = await screen.findByRole("dialog", { name: /archive benchmark/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /archive benchmark/i }));
     await waitFor(() =>
       expect(calls.some((c) => c === "DELETE /api/benchmarks/1")).toBe(true));
   });
@@ -89,14 +94,14 @@ describe("BenchmarksPage", () => {
     const onSelect = vi.fn();
     render(<BenchmarksPage selectedId={null} onSelectBenchmark={onSelect} />);
     fireEvent.click(await screen.findByTestId("benchmark-delete-1"));
-    const dialog = await screen.findByRole("dialog", { name: /delete benchmark/i });
+    const dialog = await screen.findByRole("dialog", { name: /archive benchmark/i });
     // Cancel: card must not open.
     fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
     expect(onSelect).not.toHaveBeenCalled();
     // Reopen and confirm: still must not open the benchmark.
     fireEvent.click(screen.getByTestId("benchmark-delete-1"));
-    const dialog2 = await screen.findByRole("dialog", { name: /delete benchmark/i });
-    fireEvent.click(within(dialog2).getByRole("button", { name: /delete benchmark/i }));
+    const dialog2 = await screen.findByRole("dialog", { name: /archive benchmark/i });
+    fireEvent.click(within(dialog2).getByRole("button", { name: /archive benchmark/i }));
     await waitFor(() => expect(onSelect).not.toHaveBeenCalled());
   });
 
@@ -217,10 +222,15 @@ describe("BenchmarksPage", () => {
         return {
           ok: true, id: 9, ingested: 40,
           matched_by_statement: { SOFP: 40 },
-          unmatched_rows: [{ sheet: "SOFP", row: 12, label: "Weird custom line", values: [123] }],
+          unmatched_rows: [{ sheet: "SOFP", row: 12, label: "Weird custom line", values: { B: 123 } }],
+          ambiguous: [],
+          sheets_missing: [],
           prose_notes_captured: 2,
           scale_warning: null,
+          matrix_deferred: 0,
+          matrix_warning: null,
           statements: ["SOFP"],
+          template_ids: ["mfrs-company-sofp-cunoncu-v1"],
         };
       return {};
     });
@@ -262,5 +272,122 @@ describe("BenchmarksPage", () => {
     await screen.findByTestId("benchmark-card-1");
     const closedDetails = screen.getByText("Add benchmark").closest("details")!;
     expect(closedDetails.hasAttribute("open")).toBe(false);
+  });
+});
+
+describe("BenchmarksPage — Step 14 (PLAN-evals-hardening)", () => {
+  const mtoolBench = {
+    id: 7, name: "mTool FINCO", document: "FINCO.pdf",
+    filing_standard: "mfrs", filing_level: "company", created_at: "",
+    statements: ["SOFP"], gold_cell_count: 40,
+    is_archived: false, source: "mtool", scale_verified: false,
+  };
+
+  test("mTool-derived benchmark shows the scale-unverified badge; Mark verified clears it", async () => {
+    const calls: string[] = [];
+    mockFetch((url, init) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === "/api/benchmarks") return { benchmarks: [mtoolBench] };
+      if (url === "/api/benchmarks/7/scale-verified") return { ok: true };
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    expect(await screen.findByTestId("benchmark-scale-unverified-7")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("benchmark-scale-verify-7"));
+    await waitFor(() =>
+      expect(calls).toContain("POST /api/benchmarks/7/scale-verified"),
+    );
+  });
+
+  test("verified / non-mTool benchmarks carry no badge", async () => {
+    mockFetch((url) => {
+      if (url === "/api/benchmarks")
+        return { benchmarks: [
+          { ...mtoolBench, id: 8, scale_verified: true },
+          { ...mtoolBench, id: 9, source: "run", scale_verified: true },
+        ] };
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    await screen.findAllByText(/mTool FINCO/);
+    expect(screen.queryByTestId("benchmark-scale-unverified-8")).toBeNull();
+    expect(screen.queryByTestId("benchmark-scale-unverified-9")).toBeNull();
+  });
+
+  test("ingest report surfaces matrix deferral, ambiguity and missing sheets", async () => {
+    mockFetch((url, init) => {
+      if (url === "/api/benchmarks" && (init?.method ?? "GET") === "GET") return { benchmarks: [] };
+      if (url.startsWith("/api/eval/templates"))
+        return { templates: [{ template_id: "t1", statement: "SOFP", variant: "v", label: "SOFP · v" }] };
+      if (url === "/api/benchmarks/from-mtool")
+        return {
+          ok: true, id: 9, ingested: 40, matched_by_statement: { SOFP: 40 },
+          unmatched_rows: [],
+          ambiguous: [{ sheet: "SOFP", label: "Other payables", detail: "label matches rows [12, 40]" }],
+          sheets_missing: ["SOCIE"],
+          prose_notes_captured: 0, scale_warning: null,
+          matrix_deferred: 42,
+          matrix_warning: "42 SOCIE/matrix cell(s) were NOT ingested from this mTool file (matrix reverse-mapping is deferred).",
+          statements: ["SOFP"], template_ids: ["t1"],
+        };
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    await screen.findByTestId("add-benchmark-form");
+    fireEvent.click(screen.getByTestId("bench-mode-mtool"));
+    fireEvent.change(screen.getByTestId("bench-name"), { target: { value: "B" } });
+    const file = new File(["x"], "mtool.xlsx");
+    fireEvent.change(screen.getByTestId("bench-file"), { target: { files: [file] } });
+    fireEvent.change(screen.getByTestId("bench-unit"), { target: { value: "full" } });
+    await waitFor(() => expect(screen.getByTestId("bench-template-t1")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("bench-template-t1"));
+    fireEvent.click(screen.getByTestId("bench-submit"));
+
+    await screen.findByTestId("bench-ingest-report");
+    expect(screen.getByTestId("bench-matrix-warning").textContent).toContain("NOT ingested");
+    expect(screen.getByTestId("bench-ambiguous").textContent).toContain("Other payables");
+    expect(screen.getByTestId("bench-sheets-missing").textContent).toContain("SOCIE");
+  });
+
+  test("low-confidence 422 reveals the column-map form and resends with column_map", async () => {
+    let attempts = 0;
+    let sentColumnMap: unknown = null;
+    mockFetch((url, init) => {
+      if (url === "/api/benchmarks" && (init?.method ?? "GET") === "GET") return { benchmarks: [] };
+      if (url.startsWith("/api/eval/templates"))
+        return { templates: [{ template_id: "t1", statement: "SOFP", variant: "v", label: "SOFP · v" }] };
+      if (url === "/api/benchmarks/from-mtool") {
+        attempts += 1;
+        if (attempts === 1) {
+          return { __status: 422, detail: { message: "Could not confidently detect value columns for: SOFP. Provide an explicit column map." } };
+        }
+        sentColumnMap = (init!.body as FormData).get("column_map");
+        return {
+          ok: true, id: 9, ingested: 2, matched_by_statement: { SOFP: 2 },
+          unmatched_rows: [], ambiguous: [], sheets_missing: [],
+          prose_notes_captured: 0, scale_warning: null,
+          matrix_deferred: 0, matrix_warning: null,
+          statements: ["SOFP"], template_ids: ["t1"],
+        };
+      }
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    await screen.findByTestId("add-benchmark-form");
+    fireEvent.click(screen.getByTestId("bench-mode-mtool"));
+    fireEvent.change(screen.getByTestId("bench-name"), { target: { value: "B" } });
+    fireEvent.change(screen.getByTestId("bench-file"), { target: { files: [new File(["x"], "m.xlsx")] } });
+    fireEvent.change(screen.getByTestId("bench-unit"), { target: { value: "full" } });
+    await waitFor(() => expect(screen.getByTestId("bench-template-t1")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("bench-template-t1"));
+    fireEvent.click(screen.getByTestId("bench-submit"));
+
+    // The recovery form appears — previously unreachable from the UI.
+    const map = '{"SOFP": {"label_column": "A", "columns": {"current_year": "B", "prior_year": "C"}}}';
+    const area = await screen.findByTestId("bench-column-map-input");
+    fireEvent.change(area, { target: { value: map } });
+    fireEvent.click(screen.getByTestId("bench-submit"));
+    await screen.findByTestId("bench-ingest-report");
+    expect(sentColumnMap).toBe(map);
   });
 });

@@ -1045,6 +1045,12 @@ export interface BenchmarkJson {
   created_at: string;
   statements: string[];
   gold_cell_count: number;
+  // v33 (PLAN-evals-hardening Steps 9/14): archive flag, gold provenance
+  // ('run' | 'workbook' | 'mtool' | null legacy), and whether an mTool-derived
+  // benchmark's scale has been verified against a real human-filled file.
+  is_archived?: boolean;
+  source?: string | null;
+  scale_verified?: boolean;
 }
 
 export interface RunsFilterParams {

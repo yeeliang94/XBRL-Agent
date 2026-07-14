@@ -400,7 +400,11 @@ def _collect_unmatched(
         if not values:
             continue
         report.unmatched_rows.append(
-            {"sheet": sheet, "label": label_cell[1], "values": values}
+            # `row` = the workbook row number, so the operator can find the
+            # line in the mTool file (the UI printed "row undefined" while
+            # this key was missing — peer-review Step 14).
+            {"sheet": sheet, "row": row_num, "label": label_cell[1],
+             "values": values}
         )
 
 

@@ -432,6 +432,26 @@ async def delete_benchmark_endpoint(
             "scores_kept": scores}
 
 
+@router.post("/api/benchmarks/{benchmark_id}/scale-verified")
+async def mark_scale_verified_endpoint(benchmark_id: int):
+    """Clear the 'scale unverified' badge on an mTool-derived benchmark
+    (Step 14) — pressed after the operator has checked a real human-filled
+    mTool file against its PDF and confirmed the figures land at the same
+    scale as extraction stores them."""
+    conn = server._open_audit_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE eval_benchmarks SET scale_verified = 1 WHERE id = ?",
+            (benchmark_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    return {"ok": True, "id": benchmark_id, "scale_verified": True}
+
+
 @router.post("/api/benchmarks/{benchmark_id}/unarchive")
 async def unarchive_benchmark_endpoint(benchmark_id: int):
     from eval import store
