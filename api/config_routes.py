@@ -26,7 +26,8 @@ router = APIRouter()
 
 
 def _app_version() -> str:
-    """The running build's version string (cached in utils.app_version)."""
+    """The running build's version string. Prod build stamps are cached; on a
+    dev checkout it is git-derived behind a short TTL (utils.app_version)."""
     from utils.app_version import get_app_version
 
     return get_app_version()

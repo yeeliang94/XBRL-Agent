@@ -163,6 +163,53 @@ def test_best_prior_score_skips_zero_gold():
     assert best_prior_score(conn, benchmark_id=7, exclude_run_id=None) is None
 
 
+# --- explicit --baseline-run-id (peer-review Step 5 false-green) -----------
+
+
+def _mk_scores_and_runs_db():
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE eval_scores (run_id INTEGER, benchmark_id INTEGER, "
+        "gold_cells INTEGER, matched_cells INTEGER)"
+    )
+    conn.execute("CREATE TABLE runs (id INTEGER, status TEXT)")
+    return conn
+
+
+def test_explicit_baseline_resolves_a_terminal_scored_run():
+    from scripts.eval_regression import baseline_prior_score
+
+    conn = _mk_scores_and_runs_db()
+    conn.execute("INSERT INTO eval_scores VALUES (2, 7, 100, 90)")
+    conn.execute("INSERT INTO runs VALUES (2, 'completed')")
+    got = baseline_prior_score(conn, 7, exclude_run_id=None, baseline_run_id=2)
+    assert got == pytest.approx(0.90)
+
+
+def test_invalid_baseline_run_id_raises_not_silent_none():
+    """A typo'd / non-existent baseline must FAIL, never degrade to 'no baseline'
+    → 'first run, can't regress' → a green gate."""
+    from scripts.eval_regression import baseline_prior_score
+
+    conn = _mk_scores_and_runs_db()
+    conn.execute("INSERT INTO eval_scores VALUES (2, 7, 100, 90)")
+    conn.execute("INSERT INTO runs VALUES (2, 'completed')")
+    with pytest.raises(ValueError):
+        baseline_prior_score(conn, 7, exclude_run_id=None, baseline_run_id=9999)
+
+
+def test_non_terminal_baseline_run_raises():
+    from scripts.eval_regression import baseline_prior_score
+
+    conn = _mk_scores_and_runs_db()
+    conn.execute("INSERT INTO eval_scores VALUES (3, 7, 100, 40)")
+    conn.execute("INSERT INTO runs VALUES (3, 'aborted')")
+    with pytest.raises(ValueError):
+        baseline_prior_score(conn, 7, exclude_run_id=None, baseline_run_id=3)
+
+
 # --- benchmark_variants (peer-review HIGH fix) -----------------------------
 
 
@@ -383,10 +430,10 @@ def test_baseline_explicit_run_id():
     assert baseline_prior_score(
         conn, 7, exclude_run_id=None, baseline_run_id=1
     ) == pytest.approx(0.80)
-    # An unknown baseline run yields None (first-run semantics), not a crash.
-    assert baseline_prior_score(
-        conn, 7, exclude_run_id=None, baseline_run_id=99
-    ) is None
+    # An unknown EXPLICIT baseline now FAILS loudly instead of degrading to
+    # None ("first run → can't regress → green"), the peer-review false-green.
+    with pytest.raises(ValueError):
+        baseline_prior_score(conn, 7, exclude_run_id=None, baseline_run_id=99)
 
 
 def test_baseline_best_mode_is_explicit_legacy():

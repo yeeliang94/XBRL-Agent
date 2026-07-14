@@ -229,14 +229,34 @@ def baseline_prior_score(
     * ``mode='best'`` — the legacy best-ever ceiling, explicit opt-in only.
     """
     if baseline_run_id is not None:
+        # An EXPLICIT baseline that can't be resolved is an ERROR, not a silent
+        # "no baseline" that degrades to "first run → can't regress → green"
+        # (peer-review Step 5 false-green). Require a graded, terminal-success
+        # run with gradeable gold, or fail loudly.
         row = conn.execute(
-            "SELECT gold_cells, matched_cells FROM eval_scores "
-            "WHERE benchmark_id = ? AND run_id = ?",
+            "SELECT s.gold_cells, s.matched_cells, r.status FROM eval_scores s "
+            "JOIN runs r ON r.id = s.run_id "
+            "WHERE s.benchmark_id = ? AND s.run_id = ?",
             (benchmark_id, baseline_run_id),
         ).fetchone()
-        if row is None or not row[0]:
-            return None
-        return row[1] / row[0]
+        if row is None:
+            raise ValueError(
+                f"--baseline-run-id {baseline_run_id} has no graded score for "
+                f"benchmark {benchmark_id}. Choose a run graded against this "
+                f"benchmark, or drop the flag to use the latest same-model run."
+            )
+        gold_cells, matched, status = row
+        if status not in ("completed", "completed_with_errors"):
+            raise ValueError(
+                f"--baseline-run-id {baseline_run_id} is {status!r}, not a "
+                f"finished run — its partial score would mask a real regression."
+            )
+        if not gold_cells:
+            raise ValueError(
+                f"--baseline-run-id {baseline_run_id} graded 0 gold cells for "
+                f"benchmark {benchmark_id} — nothing to compare against."
+            )
+        return matched / gold_cells
 
     if mode == "best":
         return best_prior_score(conn, benchmark_id, exclude_run_id)
@@ -373,6 +393,19 @@ def run_live_regression(
             "--baseline-run-id compares one benchmark against one prior run; "
             "select a single benchmark with --benchmark-id."
         )
+    if baseline_run_id is not None:
+        # Validate the explicit baseline BEFORE spending tokens on a run — an
+        # unresolvable id must fail the gate, never silently pass as green.
+        if not benchmarks:
+            raise ValueError("No benchmark selected for --baseline-run-id.")
+        conn = _connect(db_path)
+        try:
+            baseline_prior_score(
+                conn, benchmarks[0]["id"], exclude_run_id=None,
+                baseline_run_id=baseline_run_id,
+            )
+        finally:
+            conn.close()
     results: list[BenchmarkRegression] = []
     skipped: list[tuple[int, str]] = []
     for bench in benchmarks:
@@ -498,16 +531,22 @@ def main(argv: list[str]) -> int:
         print(f"Audit DB not found at {db_path}. Run the app once to create it.")
         return 1
 
-    outcome = run_live_regression(
-        db_path=db_path,
-        pdf_dir=ROOT / args.pdf_dir if not Path(args.pdf_dir).is_absolute() else Path(args.pdf_dir),
-        benchmark_ids=args.benchmark_ids,
-        tolerance=args.tolerance,
-        model=args.model,
-        baseline_mode=args.baseline,
-        baseline_run_id=args.baseline_run_id,
-        allow_config_drift=args.allow_config_drift,
-    )
+    try:
+        outcome = run_live_regression(
+            db_path=db_path,
+            pdf_dir=ROOT / args.pdf_dir if not Path(args.pdf_dir).is_absolute() else Path(args.pdf_dir),
+            benchmark_ids=args.benchmark_ids,
+            tolerance=args.tolerance,
+            model=args.model,
+            baseline_mode=args.baseline,
+            baseline_run_id=args.baseline_run_id,
+            allow_config_drift=args.allow_config_drift,
+        )
+    except ValueError as exc:
+        # Config errors (bad/unresolvable baseline, multi-benchmark misuse) fail
+        # the gate cleanly rather than degrading to a false green.
+        print(f"GATE: {exc}")
+        return 1
 
     report = render_report(outcome.results)
     report_path = ROOT / args.report if not Path(args.report).is_absolute() else Path(args.report)

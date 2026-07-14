@@ -881,13 +881,22 @@ export interface SuiteEstimateJson {
   tokens_range?: [number, number] | null;
   cost_range_usd?: [number, number] | null;
   estimate_sample_size?: number;
+  // The model the estimate assumed + whether the history sample was actually
+  // that model (false = mixed-model fallback, so the figures are rougher).
+  estimate_model?: string;
+  estimate_model_filtered?: boolean;
 }
 
 export interface DocumentScorecardJson {
   run_id: number;
+  // The frozen-corpus document this score belongs to (lets the UI tell which
+  // documents already have a scorecard vs. which to render from doc_states).
+  doc_id?: number;
   label: string;
   status: string;
   failed: boolean;
+  // Accuracy is a mean of this many finished repeats (1 = a single run).
+  repeats_scored?: number;
   accuracy: number | null;
   gold_cells: number;
   matched_cells: number;
@@ -901,6 +910,17 @@ export interface DocumentScorecardJson {
   duration_s: number | null;
   notes_coverage: number | null;
   notes_coverage_available: boolean;
+}
+
+/** Per-document execution state on the frozen corpus — the source of truth for
+ * documents that never produced a scorecard (queued / running / failed to
+ * stage), so a staging failure and its reason stay visible. */
+export interface SuiteDocStateJson {
+  doc_id: number;
+  label: string;
+  state: string;
+  error: string | null;
+  benchmark_id: number | null;
 }
 
 export interface SuiteAggregateJson {
@@ -922,6 +942,7 @@ export interface SuiteAggregateJson {
 export interface SuiteRunDetailJson {
   suite_run: SuiteRunSummaryJson & { config?: Record<string, unknown> | null };
   documents: DocumentScorecardJson[];
+  doc_states: SuiteDocStateJson[];
   aggregate: SuiteAggregateJson;
 }
 

@@ -45,12 +45,21 @@ def _suite_docs_dir() -> Path:
     return d
 
 
+# The one allowlist both the add-document form and the denomination PATCH
+# validate against — a single source so the two checks can't drift.
+DENOMINATIONS = ("units", "thousands", "millions")
+
+
 class SuiteCreate(BaseModel):
     name: str
 
 
 class SuiteRename(BaseModel):
     name: str
+
+
+class SuiteDocUpdate(BaseModel):
+    denomination: str
 
 
 @router.get("/api/suites")
@@ -154,7 +163,7 @@ async def add_suite_doc_endpoint(
         raise HTTPException(status_code=400, detail="filing_standard must be mfrs or mpers")
     if filing_level not in ("company", "group"):
         raise HTTPException(status_code=400, detail="filing_level must be company or group")
-    if denomination not in ("units", "thousands", "millions"):
+    if denomination not in DENOMINATIONS:
         raise HTTPException(
             status_code=400,
             detail="denomination must be units, thousands or millions",
@@ -240,6 +249,34 @@ async def add_suite_doc_endpoint(
     finally:
         conn.close()
     return {"doc_id": doc_id, "suite": suite, "derived_variants": derived_variants}
+
+
+@router.patch("/api/suites/{suite_id}/docs/{doc_id}")
+async def update_suite_doc_endpoint(
+    suite_id: int, doc_id: int, body: SuiteDocUpdate
+):
+    """Edit a live suite document's declared denomination (a wrong scale silently
+    1000×'s every figure, so it must be correctable without deleting + re-adding).
+    Frozen suite-run snapshots are unaffected — only future runs see the change."""
+    from db import repository as repo
+
+    if body.denomination not in DENOMINATIONS:
+        raise HTTPException(
+            status_code=422,
+            detail="denomination must be units, thousands or millions",
+        )
+    conn = server._open_audit_conn()
+    try:
+        updated = repo.update_suite_doc_denomination(
+            conn, suite_id, doc_id, body.denomination
+        )
+        conn.commit()
+        suite = repo.get_suite(conn, suite_id) if updated else None
+    finally:
+        conn.close()
+    if not updated:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"doc_id": doc_id, "denomination": body.denomination, "suite": suite}
 
 
 @router.delete("/api/suites/{suite_id}/docs/{doc_id}")

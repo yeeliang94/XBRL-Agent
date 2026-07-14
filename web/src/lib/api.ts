@@ -447,8 +447,11 @@ import type {
 } from "./types";
 
 /** List every benchmark in the library. */
-export async function fetchBenchmarks(): Promise<BenchmarkJson[]> {
-  const data = await apiFetch<{ benchmarks: BenchmarkJson[] }>("/api/benchmarks");
+export async function fetchBenchmarks(
+  includeArchived = false,
+): Promise<BenchmarkJson[]> {
+  const qs = includeArchived ? "?include_archived=true" : "";
+  const data = await apiFetch<{ benchmarks: BenchmarkJson[] }>(`/api/benchmarks${qs}`);
   // Tolerate a malformed/empty body (e.g. a stubbed fetch in tests) — always
   // resolve to an array so callers can `.filter`/`.map` without guarding.
   return Array.isArray(data?.benchmarks) ? data.benchmarks : [];
@@ -620,6 +623,18 @@ export async function deleteSuiteDoc(suiteId: number, docId: number): Promise<vo
   await apiFetch(`/api/suites/${suiteId}/docs/${docId}`, { method: "DELETE" });
 }
 
+/** Edit a live suite document's declared denomination. Frozen snapshots of
+ *  already-launched runs are unaffected — only future runs pick up the change. */
+export async function updateSuiteDocDenomination(
+  suiteId: number, docId: number, denomination: string,
+): Promise<void> {
+  await apiFetch(`/api/suites/${suiteId}/docs/${docId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ denomination }),
+  });
+}
+
 export async function listSuiteRuns(suiteId: number): Promise<SuiteRunSummaryJson[]> {
   const data = await apiFetch<{ suite_run_list: SuiteRunSummaryJson[] }>(
     `/api/suites/${suiteId}/runs`,
@@ -695,6 +710,19 @@ export async function reGradeRun(
  *  via ?hard=true. */
 export async function deleteBenchmark(id: number): Promise<void> {
   await apiFetch(`/api/benchmarks/${id}`, { method: "DELETE" });
+}
+
+/** Restore an archived benchmark back into the pickers (Step 9). */
+export async function unarchiveBenchmark(id: number): Promise<void> {
+  await apiFetch(`/api/benchmarks/${id}/unarchive`, { method: "POST" });
+}
+
+/** Admin-only true-delete: CASCADE-destroys the gold AND every historical
+ *  score. Irreversible — always gate behind an explicit confirmation. */
+export async function hardDeleteBenchmark(
+  id: number,
+): Promise<{ scores_destroyed?: number }> {
+  return apiFetch(`/api/benchmarks/${id}?hard=true`, { method: "DELETE" });
 }
 
 /** Clear the 'scale unverified' badge after the real-file mTool check. */

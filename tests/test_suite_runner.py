@@ -302,6 +302,85 @@ def test_corpus_frozen_at_launch(env):
     assert state_ids == {docs[0]["id"], docs[1]["id"]}
 
 
+def test_deleting_doc_does_not_strand_snapshot_resume(env):
+    """Peer-review Step 2: the snapshot must freeze the document BYTES, not just
+    a path. Removing the live suite document through the real DELETE endpoint
+    (which unlinks the managed source file) must leave a queued/partial run able
+    to materialize its input on Resume."""
+    srv, runner, db, tmp_path = env
+    from db import repository as repo
+    from pathlib import Path
+
+    # A real managed source file on disk.
+    src = tmp_path / "managed_doc.pdf"
+    src.write_bytes(b"%PDF-1.4 real bytes")
+    conn = sqlite3.connect(str(db))
+    sid = repo.create_suite(conn, name="S")
+    doc_id = repo.add_suite_doc(
+        conn, suite_id=sid, label="d", source_path=str(src),
+        source_filename="managed_doc.pdf",
+    )
+    conn.commit()
+    conn.close()
+
+    # Launch, but don't actually process — we only need the snapshot written.
+    async def fake_launch(*a, **k):
+        pass
+
+    runner._launch_one_document = fake_launch
+    tc = TestClient(srv.app)
+    suite_run_id = tc.post(f"/api/suites/{sid}/run", json={}).json()["suite_run_id"]
+    for _ in range(100):
+        if tc.get(f"/api/suites/{sid}/runs/{suite_run_id}").json()[
+            "suite_run"]["status"] != "running":
+            break
+        time.sleep(0.05)
+
+    # The snapshot points at a run-owned COPY, not the managed original.
+    conn = sqlite3.connect(str(db))
+    snap = repo.list_suite_run_docs(conn, suite_run_id)[0]
+    conn.close()
+    snap_path = Path(snap["source_path"])
+    assert snap_path != src
+    assert snap_path.exists()
+
+    # Delete the live document through the real endpoint (unlinks the original).
+    assert tc.delete(f"/api/suites/{sid}/docs/{doc_id}").status_code == 200
+    assert not src.exists()
+
+    # Resume can still stage the input from the frozen copy.
+    assert snap_path.exists()
+    session_dir = tmp_path / "resume_session"
+    runner._materialize_input(snap["source_path"], snap["source_filename"], session_dir)
+    assert (session_dir / "uploaded.pdf").read_bytes() == b"%PDF-1.4 real bytes"
+
+
+def test_notes_only_run_preserves_empty_statements(env):
+    """Peer-review Step 5: an explicit empty statement list is a notes-only run,
+    not a silent expansion back to all five (the maximum paid workload)."""
+    _srv, runner, _db, _ = env
+    cfg = runner._build_doc_config(
+        {"statements": [], "notes_to_run": ["corporate_info"]}, {}
+    )
+    assert cfg.statements == []
+    assert cfg.notes_to_run == ["corporate_info"]
+    # A genuinely absent key still defaults to the full set.
+    assert runner._build_doc_config({}, {}).statements == [
+        "SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"
+    ]
+
+
+def test_empty_statements_and_notes_launch_rejected(env):
+    """Nothing selected at all → 422 up front, not a silent full run."""
+    srv, _runner, _db, _ = env
+    sid, _docs = _make_suite_with_docs(srv, 1)
+    tc = TestClient(srv.app)
+    resp = tc.post(
+        f"/api/suites/{sid}/run", json={"statements": [], "notes_to_run": []}
+    )
+    assert resp.status_code == 422
+
+
 def test_materialize_failure_records_failed_doc_state(env):
     """A document that can't be staged (missing file) must be VISIBLE as a
     failed doc with a reason — not silently absent (peer-review Step 2)."""
@@ -438,6 +517,24 @@ def test_estimate_prefers_same_model_history(env):
     tc = TestClient(srv.app)
     est = tc.post(f"/api/suites/{sid}/estimate",
                   json={"model": "fancy"}).json()
+    assert est["estimated_tokens"] == 200_000
+    assert est["estimated_cost_usd"] == pytest.approx(8.0)
+
+
+def test_estimate_resolves_default_model_not_mixed_history(env):
+    """Peer-review Step 6: the default-model UI path sends model=null. The
+    estimate must resolve it to TEST_MODEL and sample THAT model's history, not
+    the global mix — and report which model it assumed."""
+    srv, runner, db, _ = env  # env sets TEST_MODEL=test-model
+    sid, _docs = _make_suite_with_docs(srv, 1)
+    _write_history_run(db, seconds=600, tokens=200_000, cost=8.0, model="test-model")
+    _write_history_run(db, seconds=60, tokens=10_000, cost=0.5, model="other-model")
+
+    tc = TestClient(srv.app)
+    est = tc.post(f"/api/suites/{sid}/estimate", json={}).json()
+    assert est["estimate_model"] == "test-model"
+    assert est["estimate_model_filtered"] is True
+    # Figures come from the test-model run only, not the cheap other-model one.
     assert est["estimated_tokens"] == 200_000
     assert est["estimated_cost_usd"] == pytest.approx(8.0)
 

@@ -100,9 +100,12 @@ def _suite_run_doc_cards(
         if len(scored) >= 2:
             accs = [m / g for g, m in scored]
             card.accuracy = sum(accs) / len(accs)
-            card.matched_cells = round(
-                sum(m for _g, m in scored) / len(scored)
-            )
+            mean_matched = sum(m for _g, m in scored) / len(scored)
+            # Keep the exact mean for pooling; matched_cells is display-rounded.
+            # Rounding before the pool corrupts pooled accuracy (peer-review
+            # Step 7 — round(0.5)==0 sinks a 50% single-cell repeat to 0%).
+            card.matched_cells_exact = mean_matched
+            card.matched_cells = round(mean_matched)
             card.gold_cells = scored[0][0]
             card.repeats_scored = len(scored)
         out[doc_id] = card

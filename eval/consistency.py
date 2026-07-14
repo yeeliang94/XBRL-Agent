@@ -188,7 +188,9 @@ def finalize_repeat_group(
     """
     from db import repository as repo
 
-    finished = repo.list_repeat_group_run_ids(
+    # One run per repeat_index (newest attempt): a duplicated index from a
+    # legacy buggy resume must not double-count as two independent repeats.
+    finished = repo.deduped_repeat_run_ids(
         conn, group_id, statuses=["completed", "completed_with_errors"]
     )
     group = repo.fetch_repeat_group(conn, group_id)
@@ -198,8 +200,8 @@ def finalize_repeat_group(
     gold = load_gold_facts(conn, benchmark_id) if benchmark_id else None
     result = compute_consistency(repeats, gold=gold)
 
-    # Terminal status: 'complete' when every requested repeat finished, else
-    # 'partial' (some failed/aborted) — the panel labels this honestly.
+    # Terminal status: 'complete' when every requested repeat index finished,
+    # else 'partial' (some failed/aborted) — the panel labels this honestly.
     requested = group.get("repeats_requested", len(finished)) if group else len(finished)
     status = "complete" if len(finished) >= requested and finished else "partial"
     repo.save_repeat_group_consistency(conn, group_id, result.to_dict(), status)

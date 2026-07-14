@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from db.schema import init_db
 from eval.scorecards import (
     DocumentScorecard, aggregate_suite, _coverage_rate, build_document_scorecard,
@@ -62,6 +64,31 @@ def test_failed_document_excluded_and_labelled():
     assert agg["documents_graded"] == 2
     assert agg["documents_failed"] == 1
     assert agg["coverage_note"] == "2 of 3"
+
+
+def test_coverage_note_over_frozen_corpus_not_scorecard_count():
+    """Peer-review Step 3: a document that failed to stage produces no scorecard,
+    so "N of M" must count the FROZEN corpus (corpus_size), never collapse to
+    "0 of 0" when every document failed."""
+    # Two of three corpus documents never produced a scorecard.
+    agg = aggregate_suite([_doc(1, accuracy=0.9, gold=10, matched=9)], corpus_size=3)
+    assert agg["coverage_note"] == "1 of 3"
+    # All three failed to stage → zero scorecards, but M stays the corpus size.
+    empty = aggregate_suite([], corpus_size=3)
+    assert empty["coverage_note"] == "0 of 3"
+
+
+def test_pooled_accuracy_uses_exact_repeat_matched_not_rounded():
+    """Peer-review Step 7: a repeat mean of 0.5 matched must not be rounded to 0
+    before pooling. Two single-cell docs, each a 0%/100% repeat mean (0.5
+    matched, gold 1): mean accuracy 50% AND pooled accuracy 50% — not 0%."""
+    d1 = _doc(1, accuracy=0.5, gold=1, matched=0)
+    d1.matched_cells_exact = 0.5
+    d2 = _doc(2, accuracy=0.5, gold=1, matched=0)
+    d2.matched_cells_exact = 0.5
+    agg = aggregate_suite([d1, d2])
+    assert agg["mean_accuracy"] == pytest.approx(0.5)
+    assert agg["pooled_accuracy"] == pytest.approx(0.5)  # 1.0 / 2, not 0/2
 
 
 def test_taxonomy_totals_sum_across_documents():

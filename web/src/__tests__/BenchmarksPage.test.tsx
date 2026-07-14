@@ -87,6 +87,76 @@ describe("BenchmarksPage", () => {
       expect(calls.some((c) => c === "DELETE /api/benchmarks/1")).toBe(true));
   });
 
+  const archivedBench = {
+    id: 2, name: "Archived one", document: "x.pdf", filing_standard: "mfrs",
+    filing_level: "company", created_at: "2026-06-04Z", statements: ["SOFP"],
+    gold_cell_count: 10, is_archived: true,
+  };
+
+  test("show-archived toggles the include_archived filter and unarchive restores", async () => {
+    const calls: string[] = [];
+    mockFetch((url, init) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === "/api/benchmarks?include_archived=true") return { benchmarks: [archivedBench] };
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      if (url === "/api/benchmarks/2/unarchive") return {};
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} isAdmin />);
+    await screen.findByTestId("benchmarks-empty");
+
+    fireEvent.click(screen.getByTestId("benchmarks-show-archived"));
+    const card = await screen.findByTestId("benchmark-card-2");
+    expect(within(card).getByTestId("benchmark-archived-2")).toBeTruthy();
+    expect(calls.some((c) => c === "GET /api/benchmarks?include_archived=true")).toBe(true);
+
+    fireEvent.click(screen.getByTestId("benchmark-unarchive-2"));
+    await waitFor(() =>
+      expect(calls.some((c) => c === "POST /api/benchmarks/2/unarchive")).toBe(true));
+  });
+
+  test("admin hard-delete confirms via the sterner dialog before ?hard=true", async () => {
+    const calls: string[] = [];
+    mockFetch((url, init) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === "/api/benchmarks?include_archived=true") return { benchmarks: [archivedBench] };
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      if (url === "/api/benchmarks/2?hard=true") return { scores_destroyed: 3 };
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} isAdmin />);
+    await screen.findByTestId("benchmarks-empty");
+    fireEvent.click(screen.getByTestId("benchmarks-show-archived"));
+    await screen.findByTestId("benchmark-card-2");
+
+    fireEvent.click(screen.getByTestId("benchmark-hard-delete-2"));
+    const dialog = await screen.findByRole("dialog", { name: /permanently delete/i });
+    // No destructive call until the dialog is confirmed.
+    expect(calls.some((c) => c.includes("hard=true"))).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: /delete permanently/i }));
+    await waitFor(() =>
+      expect(calls.some((c) => c === "DELETE /api/benchmarks/2?hard=true")).toBe(true));
+  });
+
+  test("non-admins get no hard-delete on archived benchmarks", async () => {
+    const archived = {
+      id: 2, name: "Archived one", document: "x.pdf", filing_standard: "mfrs",
+      filing_level: "company", created_at: "2026-06-04Z", statements: ["SOFP"],
+      gold_cell_count: 10, is_archived: true,
+    };
+    mockFetch((url) => {
+      if (url === "/api/benchmarks?include_archived=true") return { benchmarks: [archived] };
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      return {};
+    });
+    render(<BenchmarksPage selectedId={null} onSelectBenchmark={() => {}} />);
+    await screen.findByTestId("benchmarks-empty");
+    fireEvent.click(screen.getByTestId("benchmarks-show-archived"));
+    await screen.findByTestId("benchmark-card-2");
+    expect(screen.queryByTestId("benchmark-hard-delete-2")).toBeNull();
+    expect(screen.getByTestId("benchmark-unarchive-2")).toBeTruthy();
+  });
+
   // UX-QA review fix: the ConfirmDialog is a sibling of the clickable card, so
   // confirming/cancelling a delete must not bubble to the card and open it.
   test("delete confirm/cancel does not open the benchmark", async () => {

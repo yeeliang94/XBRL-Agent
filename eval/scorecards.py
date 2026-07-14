@@ -38,6 +38,11 @@ class DocumentScorecard:
     accuracy: Optional[float] = None
     gold_cells: int = 0
     matched_cells: int = 0
+    # Exact (unrounded) matched count for pooling. matched_cells is rounded for
+    # display; when this document's matched is a mean over repeats, rounding it
+    # before summing corrupts the pooled figure (round(0.5)==0 turns a 50%
+    # single-cell repeat into a pooled 0%). Pooling reads THIS instead.
+    matched_cells_exact: Optional[float] = None
     taxonomy: dict = field(default_factory=dict)
     per_statement: dict = field(default_factory=dict)
     # Consistency (None unless the run is a repeat group with ≥2 finished).
@@ -58,6 +63,16 @@ class DocumentScorecard:
     # or a legacy row with no fingerprint ("unknown gold version").
     gold_fingerprint: Optional[str] = None
     gold_stale: Optional[bool] = None
+
+    @property
+    def matched_for_pool(self) -> float:
+        """The exact matched count for pooled accuracy — the unrounded mean when
+        this is a repeat aggregate, else the plain matched count."""
+        return (
+            self.matched_cells_exact
+            if self.matched_cells_exact is not None
+            else float(self.matched_cells)
+        )
 
     @property
     def failed(self) -> bool:
@@ -97,14 +112,21 @@ class DocumentScorecard:
         }
 
 
-def aggregate_suite(scorecards: list[DocumentScorecard]) -> dict:
+def aggregate_suite(
+    scorecards: list[DocumentScorecard], *, corpus_size: Optional[int] = None
+) -> dict:
     """Aggregate per-document scorecards into a suite summary.
 
     Headline = mean per-document accuracy over documents that (a) did not fail
     and (b) have gold. Pooled figure is secondary. Worst document is surfaced.
     Taxonomy totals sum across contributing documents.
+
+    ``corpus_size`` (the frozen-corpus document count) is the denominator of the
+    "N of M" coverage note when given — so a document that failed to stage (never
+    produced a scorecard) still counts toward M instead of collapsing coverage to
+    "0 of 0" (peer-review Step 3). Defaults to the scorecard count.
     """
-    total = len(scorecards)
+    total = corpus_size if corpus_size is not None else len(scorecards)
     graded = [
         s for s in scorecards
         if s.contributes and s.accuracy is not None and s.gold_cells > 0
@@ -114,7 +136,9 @@ def aggregate_suite(scorecards: list[DocumentScorecard]) -> dict:
     mean_accuracy = (
         sum(s.accuracy for s in graded) / len(graded) if graded else None
     )
-    pooled_matched = sum(s.matched_cells for s in graded)
+    # Pool from the EXACT matched counts so a repeat mean of 0.5 isn't rounded
+    # to 0 before summing (peer-review Step 7).
+    pooled_matched = sum(s.matched_for_pool for s in graded)
     pooled_gold = sum(s.gold_cells for s in graded)
     pooled_accuracy = (pooled_matched / pooled_gold) if pooled_gold > 0 else None
 
@@ -148,7 +172,7 @@ def aggregate_suite(scorecards: list[DocumentScorecard]) -> dict:
         "coverage_note": f"{len(graded)} of {total}",
         "mean_accuracy": mean_accuracy,
         "pooled_accuracy": pooled_accuracy,
-        "pooled_matched": pooled_matched,
+        "pooled_matched": round(pooled_matched, 2),
         "pooled_gold": pooled_gold,
         "worst_document": worst.to_dict() if worst else None,
         "taxonomy_totals": taxonomy_totals,

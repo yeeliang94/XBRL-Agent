@@ -662,6 +662,7 @@ export default function App() {
             onSelectBenchmark={(id) =>
               dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
             }
+            isAdmin={Boolean(user?.is_admin)}
           />
         ) : state.view === "suites" ? (
           // Evals workspace (Phase E/F): suites, batch runner, trends + compare.
