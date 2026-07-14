@@ -224,3 +224,63 @@ def test_re_grade_endpoint_updates_score_and_fingerprint(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
     assert tc.post(f"/api/runs/{bare_run}/re-grade").status_code == 422
+
+
+def test_repeat_group_carries_per_repeat_accuracy_and_slot_labels(
+    tmp_path, monkeypatch
+):
+    """Step 11: each repeat reports its own accuracy (PRD requirement) and
+    disagreement slots resolve to human sheet/label names."""
+    db_path = tmp_path / "xbrl.db"
+    monkeypatch.setenv("XBRL_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key-12345")
+    monkeypatch.setenv("LLM_PROXY_URL", "")
+    import server as srv
+
+    importlib.reload(srv)
+    srv.AUDIT_DB_PATH = db_path
+    init_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    _seed(conn)
+    conn.execute(
+        "UPDATE concept_nodes SET canonical_label = 'Property, plant and "
+        "equipment' WHERE concept_uuid = 'c1'"
+    )
+    conn.execute(
+        "INSERT INTO repeat_groups(created_at, repeats_requested, status, "
+        "consistency_json) VALUES ('t', 2, 'complete', ?)",
+        ('{"available": true, "n_repeats": 2, "union_slots": 1, '
+         '"unanimous": 0, "consistency": 0.0, "presence_disagreements": [], '
+         '"value_disagreements": [{"key": ["c1", "CY", "Company"], '
+         '"values": [10.0, 12.0], "spread": 2.0}], '
+         '"unanimous_right": null, "unanimous_wrong": null}',),
+    )
+    gid = conn.execute("SELECT id FROM repeat_groups").fetchone()[0]
+    for idx, matched in ((0, 2), (1, 1)):
+        cur = conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, session_id, "
+            "repeat_group_id, repeat_index, benchmark_id) "
+            "VALUES ('t', 'x.pdf', 'completed', 's', ?, ?, 1)",
+            (gid, idx),
+        )
+
+        class _C:
+            gold_cells = 2
+            missing = 0
+            mismatch = 0
+            extra = 0
+            scale_mismatch = 0
+
+        _C.matched = matched
+        repo.save_eval_score(conn, int(cur.lastrowid), 1, _C())
+    conn.commit()
+    conn.close()
+
+    tc = TestClient(srv.app)
+    group = tc.get(f"/api/repeat-groups/{gid}").json()
+    accs = {r["repeat_index"]: r["accuracy"] for r in group["runs"]}
+    assert accs[0] == pytest.approx(1.0)
+    assert accs[1] == pytest.approx(0.5)
+    slot = group["consistency"]["value_disagreements"][0]
+    assert slot["sheet"] == "SOFP"
+    assert slot["label"] == "Property, plant and equipment"

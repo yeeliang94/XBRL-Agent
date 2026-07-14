@@ -779,11 +779,22 @@ export interface RepeatGroupJson {
   status: string; // running | complete | partial
   config: Record<string, unknown> | null;
   consistency: ConsistencyJson | null;
-  runs: { id: number; status: string; repeat_index: number | null }[];
+  // accuracy: the repeat's own graded score (null when ungraded) — the PRD
+  // requires per-repeat accuracy next to the stability figure (Step 11).
+  runs: {
+    id: number;
+    status: string;
+    repeat_index: number | null;
+    accuracy?: number | null;
+  }[];
 }
 
 export interface ConsistencyDisagreement {
   key: [string, string, string]; // concept_uuid, period, entity_scope
+  // Human line-item name resolved server-side (Step 11); absent when the
+  // concept uuid no longer resolves — the panel falls back to the raw key.
+  sheet?: string;
+  label?: string;
   // presence rows
   filled_by?: number[];
   n_present?: number;

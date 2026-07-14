@@ -545,15 +545,49 @@ async def get_run_eval_endpoint(run_id: int):
     return score
 
 
+def _resolve_slot_labels(conn, consistency: Optional[dict]) -> None:
+    """Attach human line-item names to disagreement rows IN PLACE (Step 11).
+
+    A disagreement key is (concept_uuid, period, entity_scope) — meaningless
+    to a reviewer. Resolve each uuid to its sheet + label via concept_nodes;
+    a uuid that no longer resolves keeps only the raw key (the panel falls
+    back to rendering it)."""
+    if not consistency:
+        return
+    rows = list(consistency.get("presence_disagreements") or []) + list(
+        consistency.get("value_disagreements") or []
+    )
+    uuids = {r["key"][0] for r in rows if r.get("key")}
+    if not uuids:
+        return
+    placeholders = ",".join("?" for _ in uuids)
+    labels = {
+        u: (sheet, label)
+        for u, sheet, label in conn.execute(
+            f"SELECT concept_uuid, render_sheet, canonical_label "
+            f"FROM concept_nodes WHERE concept_uuid IN ({placeholders})",
+            tuple(uuids),
+        ).fetchall()
+    }
+    for r in rows:
+        hit = labels.get((r.get("key") or [None])[0])
+        if hit is not None:
+            r["sheet"], r["label"] = hit
+
+
 @router.get("/api/repeat-groups/{group_id}")
 async def get_repeat_group_endpoint(group_id: int):
     """A repeat group + its computed consistency result (v30). Feeds the
-    consistency panel on a grouped run's page (docs/PLAN-evals-workspace.md)."""
+    consistency panel on a grouped run's page (docs/PLAN-evals-workspace.md).
+    Disagreement slots carry resolved sheet/label names; each child run
+    carries its own accuracy (Step 11)."""
     from db import repository as repo
 
     conn = server._open_audit_conn()
     try:
         group = repo.fetch_repeat_group(conn, group_id)
+        if group is not None:
+            _resolve_slot_labels(conn, group.get("consistency"))
     finally:
         conn.close()
     if group is None:

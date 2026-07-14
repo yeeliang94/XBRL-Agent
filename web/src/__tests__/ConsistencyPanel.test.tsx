@@ -92,3 +92,56 @@ describe("ConsistencyPanel", () => {
     );
   });
 });
+
+describe("ConsistencyPanel — Step 11 (PLAN-evals-hardening)", () => {
+  test("shows per-repeat accuracy chips when repeats were graded", async () => {
+    mockGroup({
+      ...baseGroup,
+      runs: [
+        { id: 1, status: "completed", repeat_index: 0, accuracy: 0.92 },
+        { id: 2, status: "completed", repeat_index: 1, accuracy: 0.88 },
+        { id: 3, status: "completed", repeat_index: 2, accuracy: null },
+      ],
+    });
+    render(<ConsistencyPanel groupId={7} />);
+    const strip = await screen.findByTestId("consistency-repeat-accuracies");
+    expect(strip.textContent).toContain("Repeat 1: 92%");
+    expect(strip.textContent).toContain("Repeat 2: 88%");
+    // The ungraded repeat renders no chip.
+    expect(strip.textContent).not.toContain("Repeat 3");
+  });
+
+  test("renders human line-item names for disagreement slots, uuid in tooltip", async () => {
+    mockGroup({
+      ...baseGroup,
+      consistency: {
+        ...baseGroup.consistency!,
+        value_disagreements: [
+          {
+            key: ["u1", "CY", "Company"],
+            values: [100, 105, 100],
+            spread: 5,
+            sheet: "SOFP",
+            label: "Property, plant and equipment",
+          },
+        ],
+      },
+    });
+    render(<ConsistencyPanel groupId={7} />);
+    const table = await screen.findByTestId("consistency-value-disagreements");
+    expect(table.textContent).toContain(
+      "SOFP · Property, plant and equipment · CY · Company",
+    );
+    expect(table.textContent).not.toContain("u1 ·");
+    // The raw concept key survives as the tooltip for power users.
+    const labelled = table.querySelector('[title="u1 · CY · Company"]');
+    expect(labelled).not.toBeNull();
+  });
+
+  test("falls back to the raw key when no label resolved", async () => {
+    mockGroup(baseGroup);
+    render(<ConsistencyPanel groupId={7} />);
+    const table = await screen.findByTestId("consistency-value-disagreements");
+    expect(table.textContent).toContain("u1 · CY · Company");
+  });
+});
