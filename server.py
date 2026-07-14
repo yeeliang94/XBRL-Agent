@@ -6066,9 +6066,19 @@ async def run_repeat_group_stream(
     *,
     first_run_id: Optional[int] = None,
     suite_run_id: Optional[int] = None,
+    existing_group_id: Optional[int] = None,
+    start_index: int = 0,
+    should_abort: Optional[Callable[[], bool]] = None,
 ) -> AsyncIterator[dict]:
     """Launch N identically-configured runs of one document back-to-back and
     score their agreement (Evals workspace, Step D1 / PRD Flow 2).
+
+    Resume support (PLAN-evals-hardening Step 1): `existing_group_id` +
+    `start_index` (= repeats already completed) let a suite Resume top up ONLY
+    the missing repeats into the SAME group, so consistency is scored over the
+    full requested set instead of a fresh partial group. `should_abort` is
+    checked between repeats so a batch Stop reliably prevents the next repeat
+    from starting (the in-flight one is cancelled via task_registry as before).
 
     Each child is a completely normal run through ``run_multi_agent_stream`` —
     its own audit row, traces, cross-checks, and the gotcha #10 terminal-status
@@ -6086,29 +6096,32 @@ async def run_repeat_group_stream(
     import sqlite3
 
     n = max(1, min(5, int(getattr(run_config, "repeats", 1) or 1)))
+    start_index = max(0, min(int(start_index or 0), n))
 
     # Create the group up-front so a crash before the first repeat still leaves
     # an auditable row. config snapshot = the exact request every repeat runs.
-    group_id: Optional[int] = None
-    gconn = sqlite3.connect(str(AUDIT_DB_PATH))
-    try:
-        group_id = repo.create_repeat_group(
-            gconn,
-            config=run_config.model_dump(),
-            repeats_requested=n,
-            benchmark_id=run_config.benchmark_id,
-        )
-        gconn.commit()
-    except Exception:
-        logger.warning("Failed to create repeat group for %s", session_id,
-                       exc_info=True)
-    finally:
-        gconn.close()
+    # A resume passes the ORIGINAL group so topped-up repeats land in it.
+    group_id: Optional[int] = existing_group_id
+    if group_id is None:
+        gconn = sqlite3.connect(str(AUDIT_DB_PATH))
+        try:
+            group_id = repo.create_repeat_group(
+                gconn,
+                config=run_config.model_dump(),
+                repeats_requested=n,
+                benchmark_id=run_config.benchmark_id,
+            )
+            gconn.commit()
+        except Exception:
+            logger.warning("Failed to create repeat group for %s", session_id,
+                           exc_info=True)
+        finally:
+            gconn.close()
 
     # Tell the client the group id + total so the consistency panel can attach
     # and poll (GET /api/repeat-groups/{id}) as repeats land.
     yield {"event": "repeat_group", "data": {
-        "group_id": group_id, "repeats_total": n, "repeat_index": 0,
+        "group_id": group_id, "repeats_total": n, "repeat_index": start_index,
     }}
 
     def _finalize_group() -> Optional[dict]:
@@ -6132,7 +6145,12 @@ async def run_repeat_group_stream(
     current_agen = None
     finalized = False
     try:
-        for i in range(n):
+        for i in range(start_index, n):
+            # A batch Stop between repeats halts the group here — without this
+            # check, cancelling the in-flight repeat would let the loop roll
+            # straight into the next one (peer-review Step 1 finding).
+            if should_abort is not None and should_abort():
+                break
             # Announce which repeat is starting so the live UI can label it.
             yield {"event": "repeat_progress", "data": {
                 "group_id": group_id, "repeat_index": i, "repeats_total": n,

@@ -66,6 +66,39 @@ def _doc_session_id(suite_run_id: int, doc_id: int) -> str:
     return f"suite-{suite_run_id}-doc-{doc_id}"
 
 
+def _sha256_of(path: str) -> str:
+    """Best-effort content hash for the corpus snapshot (empty on any failure —
+    a missing file will surface as a failed doc at materialize time anyway)."""
+    import hashlib
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _set_doc_state(suite_run_id: int, doc_id: int, state: str,
+                   error: Optional[str] = None) -> None:
+    """Persist a snapshot doc's execution state (best-effort — state tracking
+    must never take down the batch)."""
+    from db import repository as repo
+    try:
+        conn = server._open_audit_conn()
+        try:
+            repo.update_suite_run_doc_state(
+                conn, suite_run_id, doc_id, state, error=error
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning("suite %s: could not set doc %s state=%s",
+                       suite_run_id, doc_id, state, exc_info=True)
+
+
 def _materialize_input(source_path: str, source_filename: str, session_dir: Path) -> None:
     """Place the document's input as session_dir/uploaded.pdf (converting a
     .docx at the door, exactly like the upload endpoint). Raises on failure."""
@@ -110,6 +143,29 @@ async def _drain_stream(agen) -> None:
             pass
 
 
+def _repeat_progress(suite_run_id: int, doc_id: int) -> tuple[int, Optional[int]]:
+    """(finished_repeat_count, latest repeat_group_id) for a document's session
+    in this suite run — how Resume knows where a partially-run repeat group
+    stopped so it can top up ONLY the missing repeats into the SAME group."""
+    session_id = _doc_session_id(suite_run_id, doc_id)
+    conn = server._open_audit_conn()
+    try:
+        finished = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE suite_run_id = ? AND session_id = ? "
+            "AND status IN ('completed','completed_with_errors')",
+            (suite_run_id, session_id),
+        ).fetchone()[0]
+        grp = conn.execute(
+            "SELECT repeat_group_id FROM runs WHERE suite_run_id = ? "
+            "AND session_id = ? AND repeat_group_id IS NOT NULL "
+            "ORDER BY id DESC LIMIT 1",
+            (suite_run_id, session_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(finished), (int(grp[0]) if grp else None)
+
+
 async def _launch_one_document(
     suite_run_id: int, doc: dict, launch: dict,
     api_key: str, proxy_url: str, model_name: str,
@@ -117,25 +173,40 @@ async def _launch_one_document(
     """Run a single document (the injectable unit). Sets up an isolated session,
     materializes the input, and streams a normal run to completion linked to the
     suite run. Any exception marks the doc failed (a bad doc never poisons the
-    batch)."""
+    batch); every exit records the doc's state on the corpus snapshot."""
     session_id = _doc_session_id(suite_run_id, doc["id"])
     session_dir = server.OUTPUT_DIR / session_id
+    _set_doc_state(suite_run_id, doc["id"], "running")
     try:
         _materialize_input(doc["source_path"], doc.get("source_filename", ""), session_dir)
-    except Exception:
+    except Exception as exc:
         logger.warning("suite %s: failed to materialize doc %s",
                        suite_run_id, doc["id"], exc_info=True)
+        _set_doc_state(
+            suite_run_id, doc["id"], "failed",
+            f"Could not stage the document for extraction: {exc}",
+        )
         return
     run_config = _build_doc_config(launch, doc)
+    repeats = max(1, int(run_config.repeats or 1))
+    cancel = _active_batches.get(suite_run_id)
     server.active_runs.add(session_id)
     try:
-        if run_config.repeats and run_config.repeats > 1:
+        if repeats > 1:
             # Repeats within a suite: the group stream owns its child rows; they
-            # inherit suite_run_id via run_multi_agent_stream's create path.
+            # inherit suite_run_id via run_multi_agent_stream's create path. On
+            # Resume, top up ONLY the missing repeats into the existing group so
+            # consistency is scored over the full requested set.
+            done, group_id = _repeat_progress(suite_run_id, doc["id"])
+            if done >= repeats:
+                _set_doc_state(suite_run_id, doc["id"], "finished")
+                return
             agen = server.run_repeat_group_stream(
                 session_id=session_id, session_dir=session_dir,
                 run_config=run_config, api_key=api_key, proxy_url=proxy_url,
                 model_name=model_name, suite_run_id=suite_run_id,
+                existing_group_id=group_id, start_index=done,
+                should_abort=(cancel.is_set if cancel is not None else None),
             )
         else:
             agen = server.run_multi_agent_stream(
@@ -146,6 +217,14 @@ async def _launch_one_document(
         await _drain_stream(agen)
     finally:
         server.active_runs.discard(session_id)
+        done, _ = _repeat_progress(suite_run_id, doc["id"])
+        if done >= repeats:
+            _set_doc_state(suite_run_id, doc["id"], "finished")
+        else:
+            _set_doc_state(
+                suite_run_id, doc["id"], "failed",
+                f"{done} of {repeats} repeat(s) completed",
+            )
 
 
 async def _process_documents(
@@ -168,26 +247,55 @@ async def _process_documents(
     await asyncio.gather(*[_one(d) for d in docs], return_exceptions=True)
 
 
-def _finished_doc_ids(suite_run_id: int) -> set[int]:
-    """Doc ids whose deterministic session already has a TERMINAL child run in
-    this suite run — used by Resume to skip completed documents."""
+def _finished_doc_ids(suite_run_id: int, repeats: int = 1) -> set[int]:
+    """Doc ids whose deterministic session has ALL requested repeats finished
+    in this suite run — used by Resume to skip completed documents and by
+    finalize to judge complete-vs-partial. A doc configured for 3 repeats with
+    1 finished is NOT done (the peer-review repeat-completion fix): Resume must
+    top up the missing repeats, and the suite must not report complete."""
+    repeats = max(1, int(repeats or 1))
     conn = server._open_audit_conn()
     try:
         rows = conn.execute(
-            "SELECT session_id FROM runs WHERE suite_run_id = ? "
-            "AND status IN ('completed','completed_with_errors')",
+            "SELECT session_id, COUNT(*) FROM runs WHERE suite_run_id = ? "
+            "AND status IN ('completed','completed_with_errors') "
+            "GROUP BY session_id",
             (suite_run_id,),
         ).fetchall()
     finally:
         conn.close()
     done: set[int] = set()
-    for (sid,) in rows:
+    for sid, count in rows:
+        if int(count) < repeats:
+            continue
         # session id shape: suite-{sr}-doc-{doc_id}
         try:
             done.add(int(str(sid).rsplit("-", 1)[1]))
         except (ValueError, IndexError):
             pass
     return done
+
+
+def _snapshot_docs(suite_run_id: int, suite_id: int) -> list[dict]:
+    """The suite run's frozen corpus. Falls back to (and backfills from) the
+    live suite docs for suite runs created before the v32 snapshot existed, so
+    Resume on an old partial run still works."""
+    from db import repository as repo
+
+    conn = server._open_audit_conn()
+    try:
+        docs = repo.list_suite_run_docs(conn, suite_run_id)
+        if not docs:
+            live = repo.list_suite_docs(conn, suite_id)
+            if live:
+                for d in live:
+                    d["source_sha256"] = _sha256_of(d.get("source_path", ""))
+                repo.snapshot_suite_run_docs(conn, suite_run_id, live)
+                conn.commit()
+                docs = repo.list_suite_run_docs(conn, suite_run_id)
+    finally:
+        conn.close()
+    return docs
 
 
 def _run_batch_thread(suite_run_id: int, suite_id: int, launch: dict,
@@ -202,31 +310,31 @@ def _run_batch_thread(suite_run_id: int, suite_id: int, launch: dict,
             api_key = server._resolve_api_key()
             proxy_url = os.environ.get("LLM_PROXY_URL", "")
             model_name = launch.get("model") or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+            repeats = max(1, min(5, int(launch.get("repeats", 1) or 1)))
 
-            conn = server._open_audit_conn()
-            try:
-                docs = repo.list_suite_docs(conn, suite_id)
-            finally:
-                conn.close()
+            # The frozen corpus — NEVER the live suite docs (Step 2): editing
+            # the suite after launch must not change what this run processes.
+            docs = _snapshot_docs(suite_run_id, suite_id)
 
             if resume:
-                done = _finished_doc_ids(suite_run_id)
+                done = _finished_doc_ids(suite_run_id, repeats)
                 docs = [d for d in docs if d["id"] not in done]
 
             asyncio.run(_process_documents(
                 suite_run_id, docs, launch, api_key, proxy_url, model_name
             ))
 
-            # Finalize: complete when every document produced a finished child
-            # run, else partial (a failed/aborted doc, or a Stop).
+            # Finalize: complete when every snapshot document finished ALL its
+            # repeats, else partial (a failed/aborted doc, or a Stop).
             conn = server._open_audit_conn()
             try:
-                all_docs = repo.list_suite_docs(conn, suite_id)
-                finished = _finished_doc_ids(suite_run_id)
+                all_docs = repo.list_suite_run_docs(conn, suite_run_id)
+                finished = _finished_doc_ids(suite_run_id, repeats)
                 cancelled = suite_run_id in _active_batches and _active_batches[suite_run_id].is_set()
                 status = (
                     "complete"
-                    if len(finished) >= len(all_docs) and not cancelled and all_docs
+                    if all_docs and not cancelled
+                    and all(d["id"] in finished for d in all_docs)
                     else "partial"
                 )
                 repo.update_suite_run_status(conn, suite_run_id, status, ended=True)
@@ -319,6 +427,13 @@ async def launch_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
             conn, suite_id=suite_id, label=body.label, config=launch,
             model=body.model,
         )
+        # Freeze the corpus BEFORE any execution (Step 2): every queued
+        # document has a durable row up front, so a doc that later fails to
+        # stage is visible as failed instead of silently absent.
+        docs = repo.list_suite_docs(conn, suite_id)
+        for d in docs:
+            d["source_sha256"] = _sha256_of(d.get("source_path", ""))
+        repo.snapshot_suite_run_docs(conn, suite_run_id, docs)
         conn.commit()
     finally:
         conn.close()
@@ -449,6 +564,16 @@ async def get_suite_run_endpoint(suite_id: int, suite_run_id: int):
         # One scorecard per DOCUMENT (deduped across resume-retry + repeat rows),
         # so the detail view + trend/compare agree and "N of M" isn't inflated.
         cards = list(_suite_run_doc_cards(conn, suite_run_id).values())
+        # The frozen corpus with per-doc execution state, so a document that
+        # never produced a run (e.g. failed to stage) is still visible.
+        doc_states = [
+            {
+                "doc_id": d["id"], "label": d.get("label", ""),
+                "state": d.get("state", ""), "error": d.get("error"),
+                "benchmark_id": d.get("benchmark_id"),
+            }
+            for d in repo.list_suite_run_docs(conn, suite_run_id)
+        ]
     finally:
         conn.close()
 
@@ -456,5 +581,6 @@ async def get_suite_run_endpoint(suite_id: int, suite_run_id: int):
     return {
         "suite_run": {k: v for k, v in sr.items() if k != "runs"},
         "documents": [c.to_dict() for c in cards],
+        "doc_states": doc_states,
         "aggregate": aggregate,
     }
