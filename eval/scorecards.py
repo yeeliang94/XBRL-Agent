@@ -51,11 +51,21 @@ class DocumentScorecard:
     # Notes placement coverage (None when unavailable / feature off).
     notes_coverage: Optional[float] = None
     notes_coverage_available: bool = False
+    # How many finished repeats the accuracy is a mean of (1 = a single run).
+    repeats_scored: int = 1
 
     @property
     def failed(self) -> bool:
         """A failed run is excluded from the suite aggregate + labelled."""
         return self.status == "failed"
+
+    @property
+    def contributes(self) -> bool:
+        """Only a TERMINAL-successful run feeds the suite means (PLAN-evals-
+        hardening Step 6). An aborted / draft / still-running row is labelled
+        but excluded — its partial health signals (cross-check rate over the
+        few checks that ran, zero tokens, …) would quietly skew the suite."""
+        return self.status in ("completed", "completed_with_errors")
 
     def to_dict(self) -> dict:
         return {
@@ -63,6 +73,8 @@ class DocumentScorecard:
             "label": self.label,
             "status": self.status,
             "failed": self.failed,
+            "contributes": self.contributes,
+            "repeats_scored": self.repeats_scored,
             "accuracy": self.accuracy,
             "gold_cells": self.gold_cells,
             "matched_cells": self.matched_cells,
@@ -89,7 +101,7 @@ def aggregate_suite(scorecards: list[DocumentScorecard]) -> dict:
     total = len(scorecards)
     graded = [
         s for s in scorecards
-        if not s.failed and s.accuracy is not None and s.gold_cells > 0
+        if s.contributes and s.accuracy is not None and s.gold_cells > 0
     ]
     failed = [s for s in scorecards if s.failed]
 
@@ -109,9 +121,10 @@ def aggregate_suite(scorecards: list[DocumentScorecard]) -> dict:
             taxonomy_totals[k] = taxonomy_totals.get(k, 0) + int(v or 0)
 
     # Consistency + coverage + cross-check means over documents that have them.
-    # Failed docs are excluded to stay consistent with the accuracy headline
-    # (a failed run's partial health signals shouldn't move the suite means).
-    live = [s for s in scorecards if not s.failed]
+    # Only terminal-successful docs contribute (Step 6) — a failed, aborted,
+    # draft or still-running row's partial health signals shouldn't move the
+    # suite means.
+    live = [s for s in scorecards if s.contributes]
     consistencies = [s.consistency for s in live if s.consistency is not None]
     coverages = [
         s.notes_coverage for s in live
@@ -216,10 +229,14 @@ def build_document_scorecard(
     except sqlite3.OperationalError:
         card.reviewer_flags = 0
 
-    # Tokens + duration (run-level, backfilled at completion).
+    # Tokens + duration. Tokens live on run_agents (per-agent rollups, gotcha
+    # #6) — the runs table has no totals column, so the old SELECT total_tokens
+    # FROM runs hit OperationalError and this card silently read 0 forever.
     try:
         row = conn.execute(
-            "SELECT total_tokens, started_at, ended_at FROM runs WHERE id = ?",
+            "SELECT (SELECT SUM(a.total_tokens) FROM run_agents a "
+            "WHERE a.run_id = r.id), r.started_at, r.ended_at "
+            "FROM runs r WHERE r.id = ?",
             (run_id,),
         ).fetchone()
         if row is not None:
