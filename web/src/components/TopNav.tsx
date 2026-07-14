@@ -32,25 +32,28 @@ export interface TopNavProps {
 
 // Stable URL per destination — must agree with parseRouteFromPath /
 // the URL-sync effect in App.tsx.
-const ITEMS: { id: AppView; label: string; href: string; adminOnly?: boolean }[] = [
+const ITEMS: {
+  id: AppView; label: string; href: string;
+  adminOnly?: boolean; canonicalOnly?: boolean;
+}[] = [
   { id: "extract", label: TERMS.newExtraction, href: "/" },
   { id: "history", label: TERMS.runs, href: "/history" },
   // The concept-label editor: renamed from "Template" (which an auditor read
   // as the MBRS Excel template) to "Field labels", and admin-only.
-  { id: "concepts", label: "Field labels", href: "/field-labels", adminOnly: true },
-  // Gold-standard eval (v16): the benchmark library — an internal QA feature,
-  // so admin-only too.
-  { id: "benchmarks", label: "Benchmarks", href: "/benchmarks", adminOnly: true },
-  // Evals workspace (Phase E/F): suites, batch runner, trends + compare. Shares
-  // the QA-surface admin gate with Benchmarks (which it depends on for gold).
-  { id: "suites", label: TERMS.evaluationSuites, href: "/evals", adminOnly: true },
+  { id: "concepts", label: "Field labels", href: "/field-labels", adminOnly: true, canonicalOnly: true },
+  // Gold-standard eval (v16) + Evals workspace: open to every signed-in user
+  // (PRD decision #6 — the backend has never been admin-gated; the old
+  // adminOnly flag here was the piece that contradicted the written policy).
+  { id: "benchmarks", label: "Benchmarks", href: "/benchmarks", canonicalOnly: true },
+  { id: "suites", label: TERMS.evaluationSuites, href: "/evals", canonicalOnly: true },
 ];
 
 export function TopNav({ view, onViewChange, showConcepts = true, isAdmin = false }: TopNavProps) {
-  // Both the Field-labels (concepts) and Benchmarks tabs are canonical-mode
-  // surfaces AND admin-only, so they share both gates.
+  // Field labels stays admin-only; Benchmarks/Evals are canonical-mode
+  // surfaces open to all signed-in users (decision #6).
   const items = ITEMS.filter((i) => {
-    if (i.adminOnly && (!showConcepts || !isAdmin)) return false;
+    if (i.adminOnly && !isAdmin) return false;
+    if (i.canonicalOnly && !showConcepts) return false;
     return true;
   });
   const handleClick = (event: MouseEvent<HTMLAnchorElement>, id: AppView) => {
