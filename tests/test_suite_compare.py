@@ -183,3 +183,34 @@ def test_suite_run_aggregate_keys_documents(db):
     agg = suite_run_aggregate(conn, a)
     assert "1" in agg["documents"]
     assert agg["aggregate"]["mean_accuracy"] == 0.5
+
+
+def test_repeated_doc_accuracy_is_mean_of_finished_repeats(db):
+    """PLAN-evals-hardening Step 6: 3 repeats at 50% / 100% / 100% report a
+    defined 83.3% mean — not whichever repeat has the highest run id."""
+    conn = db
+    sr = _suite_run(conn, "2026-01-10")
+    _child(conn, sr, 1, accuracy_num=1, benchmark_id=1)  # 0.5
+    _child(conn, sr, 1, accuracy_num=2, benchmark_id=1)  # 1.0
+    _child(conn, sr, 1, accuracy_num=2, benchmark_id=1)  # 1.0 (highest run id)
+    conn.commit()
+
+    agg = suite_run_aggregate(conn, sr)
+    doc = agg["documents"]["1"]
+    assert doc["accuracy"] == pytest.approx((0.5 + 1.0 + 1.0) / 3)
+    assert doc["repeats_scored"] == 3
+
+
+def test_failed_repeat_excluded_from_mean(db):
+    conn = db
+    sr = _suite_run(conn, "2026-01-10")
+    _child(conn, sr, 1, accuracy_num=2, benchmark_id=1)  # 1.0
+    run_id = _child(conn, sr, 1, accuracy_num=1, benchmark_id=1)  # 0.5 but…
+    conn.execute("UPDATE runs SET status='aborted' WHERE id=?", (run_id,))
+    conn.commit()
+
+    agg = suite_run_aggregate(conn, sr)
+    doc = agg["documents"]["1"]
+    # …the aborted repeat's score never enters the mean.
+    assert doc["accuracy"] == pytest.approx(1.0)
+    assert doc["repeats_scored"] == 1

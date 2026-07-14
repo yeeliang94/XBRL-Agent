@@ -133,3 +133,34 @@ def test_document_scorecard_counts_only_active_reviewer_flags(tmp_path):
         assert card.reviewer_flags == 2
     finally:
         conn.close()
+
+
+def test_non_terminal_runs_do_not_feed_health_means():
+    """PLAN-evals-hardening Step 6: aborted / draft / running rows are
+    labelled but must not move the suite's health means or graded counts."""
+    from eval.scorecards import DocumentScorecard, aggregate_suite
+
+    good = DocumentScorecard(
+        run_id=1, status="completed", accuracy=0.9, gold_cells=10,
+        matched_cells=9, cross_check_pass_rate=1.0, notes_coverage=1.0,
+        notes_coverage_available=True, consistency=1.0,
+    )
+    aborted = DocumentScorecard(
+        run_id=2, status="aborted", accuracy=0.1, gold_cells=10,
+        matched_cells=1, cross_check_pass_rate=0.0, notes_coverage=0.0,
+        notes_coverage_available=True, consistency=0.0,
+    )
+    running = DocumentScorecard(run_id=3, status="running",
+                                cross_check_pass_rate=0.0)
+    draft = DocumentScorecard(run_id=4, status="draft")
+
+    agg = aggregate_suite([good, aborted, running, draft])
+    assert agg["documents_graded"] == 1
+    assert agg["mean_accuracy"] == 0.9
+    assert agg["mean_cross_check_pass_rate"] == 1.0
+    assert agg["mean_consistency"] == 1.0
+    assert agg["mean_notes_coverage"] == 1.0
+    # Labelled, not hidden: they still count toward the corpus total.
+    assert agg["documents_total"] == 4
+    assert aborted.contributes is False and good.contributes is True
+    assert aborted.to_dict()["contributes"] is False

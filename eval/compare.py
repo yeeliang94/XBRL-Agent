@@ -60,10 +60,12 @@ def _suite_run_doc_cards(
     # doc_id -> (rank, run_id): rank 1 = terminal-success (wins), 0 = other;
     # within a rank the higher run id (newest attempt) wins.
     best: dict[int, tuple[int, int]] = {}
+    sessions: dict[int, str] = {}
     for run_id, session_id, status in rows:
         doc_id = _doc_id_from_session(session_id)
         if doc_id is None:
             continue
+        sessions[doc_id] = session_id
         rank = 1 if status in _TERMINAL_OK else 0
         prev = best.get(doc_id)
         if prev is None or (rank, run_id) > prev:
@@ -71,8 +73,29 @@ def _suite_run_doc_cards(
     out: dict[int, DocumentScorecard] = {}
     for doc_id, (_, run_id) in best.items():
         card = build_document_scorecard(conn, run_id)
-        if card is not None:
-            out[doc_id] = card
+        if card is None:
+            continue
+        # Repeats: the document's accuracy is the MEAN over every finished
+        # scored repeat — a defined statistic (PLAN-evals-hardening Step 6),
+        # not whichever repeat happened to have the highest run id. Health
+        # signals stay from the representative run; only accuracy averages.
+        scored = conn.execute(
+            "SELECT s.gold_cells, s.matched_cells FROM eval_scores s "
+            "JOIN runs r ON r.id = s.run_id "
+            "WHERE r.suite_run_id = ? AND r.session_id = ? "
+            "AND r.status IN ('completed','completed_with_errors') "
+            "AND s.gold_cells > 0",
+            (suite_run_id, sessions[doc_id]),
+        ).fetchall()
+        if len(scored) >= 2:
+            accs = [m / g for g, m in scored]
+            card.accuracy = sum(accs) / len(accs)
+            card.matched_cells = round(
+                sum(m for _g, m in scored) / len(scored)
+            )
+            card.gold_cells = scored[0][0]
+            card.repeats_scored = len(scored)
+        out[doc_id] = card
     return out
 
 
