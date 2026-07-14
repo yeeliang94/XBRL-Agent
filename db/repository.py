@@ -2796,7 +2796,18 @@ def update_suite_run_doc_state(
 
 def reconcile_stale_suite_runs(conn: sqlite3.Connection) -> int:
     """Retire suite runs left 'running' by a crash (mirrors
-    reconcile_stale_review_tasks). Called at startup. Returns the count."""
+    reconcile_stale_review_tasks). Called at startup. Returns the count.
+
+    Also retires their snapshot docs stuck 'running' to failed('server
+    restarted') — Step 15: the per-doc state must be honest after a crash.
+    'queued' docs stay queued (they never started; Resume relaunches them)."""
+    conn.execute(
+        "UPDATE eval_suite_run_docs SET state = 'failed', "
+        "error = 'server restarted', updated_at = ? "
+        "WHERE state = 'running' AND suite_run_id IN "
+        "(SELECT id FROM eval_suite_runs WHERE status = 'running')",
+        (_now(),),
+    )
     cur = conn.execute(
         "UPDATE eval_suite_runs SET status = 'partial', ended_at = ? "
         "WHERE status = 'running'",

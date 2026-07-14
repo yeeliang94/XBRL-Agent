@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import sqlite3
+import threading
 import time
 
 import pytest
@@ -439,3 +440,84 @@ def test_estimate_prefers_same_model_history(env):
                   json={"model": "fancy"}).json()
     assert est["estimated_tokens"] == 200_000
     assert est["estimated_cost_usd"] == pytest.approx(8.0)
+
+
+def test_global_cap_across_concurrent_suite_runs(env):
+    """Step 15 (PLAN-evals-hardening): the 3-slot cap is GLOBAL — two suite
+    runs at once must never exceed 3 in-flight documents combined."""
+    srv, runner, db, _ = env
+
+    state = {"cur": 0, "max": 0}
+
+    async def fake_launch(suite_run_id, doc, launch, api_key, proxy_url, model_name):
+        state["cur"] += 1
+        state["max"] = max(state["max"], state["cur"])
+        await asyncio.sleep(0.03)
+        state["cur"] -= 1
+
+    runner._launch_one_document = fake_launch
+    _sid1, docs1 = _make_suite_with_docs(srv, 4)
+    _sid2, docs2 = _make_suite_with_docs(srv, 4)
+
+    async def both():
+        await asyncio.gather(
+            runner._process_documents(1, docs1, {}, "k", "", "m"),
+            runner._process_documents(2, docs2, {}, "k", "", "m"),
+        )
+
+    asyncio.run(both())
+    assert state["max"] <= 3
+
+
+def test_second_launch_of_running_suite_is_409(env):
+    srv, runner, db, _ = env
+    sid, _docs = _make_suite_with_docs(srv, 1)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    async def slow_launch(suite_run_id, doc, launch, api_key, proxy_url, model_name):
+        started.set()
+        await asyncio.get_event_loop().run_in_executor(None, release.wait)
+
+    runner._launch_one_document = slow_launch
+    tc = TestClient(srv.app)
+    first = tc.post(f"/api/suites/{sid}/run", json={})
+    assert first.status_code == 200
+    assert started.wait(5)
+    try:
+        second = tc.post(f"/api/suites/{sid}/run", json={})
+        assert second.status_code == 409
+        assert "already running" in second.json()["detail"]
+    finally:
+        release.set()
+
+
+def test_crash_reconcile_retires_running_doc_states(env):
+    """A doc row stuck 'running' after a crash reads failed('server
+    restarted'); queued rows stay queued so Resume relaunches them."""
+    srv, runner, db, _ = env
+    from db import repository as repo
+
+    conn = sqlite3.connect(str(db))
+    sid = repo.create_suite(conn, name="S")
+    sr = repo.create_suite_run(conn, suite_id=sid, config={})
+    conn.execute(
+        "INSERT INTO eval_suite_run_docs(suite_run_id, suite_doc_id, label, state) "
+        "VALUES (?, 1, 'a', 'running'), (?, 2, 'b', 'queued')",
+        (sr, sr),
+    )
+    conn.commit()
+
+    repo.reconcile_stale_suite_runs(conn)
+    conn.commit()
+    rows = {
+        r[0]: (r[1], r[2])
+        for r in conn.execute(
+            "SELECT suite_doc_id, state, error FROM eval_suite_run_docs "
+            "WHERE suite_run_id = ?", (sr,),
+        )
+    }
+    conn.close()
+    assert rows[1] == ("failed", "server restarted")
+    assert rows[2] == ("queued", None)
