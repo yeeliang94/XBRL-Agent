@@ -443,6 +443,7 @@ import type {
   BenchmarkJson, EvalScoreJson, RepeatGroupJson,
   SuiteSummaryJson, SuiteJson, SuiteRunSummaryJson, SuiteRunLaunch,
   SuiteEstimateJson, SuiteRunDetailJson, SuiteResultsJson, SuiteCompareJson,
+  SlotDiffJson, ReviewerLiftJson,
 } from "./types";
 
 /** List every benchmark in the library. */
@@ -650,6 +651,25 @@ export async function compareSuiteRuns(
   suiteId: number, a: number, b: number,
 ): Promise<SuiteCompareJson> {
   return apiFetch(`/api/suites/${suiteId}/compare?a=${a}&b=${b}`);
+}
+
+/** Value-level drill-down for one compare row (Step 12). */
+export async function fetchCompareSlotDiff(
+  suiteId: number, a: number, b: number, docId: number,
+): Promise<SlotDiffJson> {
+  return apiFetch(`/api/suites/${suiteId}/compare/slots?a=${a}&b=${b}&doc_id=${docId}`);
+}
+
+/** What the reviewer pass contributed to a graded run (Step 12). */
+export async function fetchReviewerLift(runId: number): Promise<ReviewerLiftJson> {
+  return apiFetch(`/api/runs/${runId}/reviewer-lift`);
+}
+
+/** Re-grade a run against its benchmark's CURRENT gold (Step 8). */
+export async function reGradeRun(
+  runId: number,
+): Promise<{ old_score: number | null; new_score: number | null; score: EvalScoreJson }> {
+  return apiFetch(`/api/runs/${runId}/re-grade`, { method: "POST" });
 }
 
 /** Delete a benchmark (cascades to its templates + gold facts + scores). */

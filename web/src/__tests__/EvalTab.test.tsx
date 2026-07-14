@@ -110,3 +110,58 @@ describe("EvalTab", () => {
     expect(screen.queryByTestId("eval-per-statement")).toBeNull();
   });
 });
+
+describe("EvalTab — gold guard + reviewer lift (PLAN-evals-hardening)", () => {
+  function mockRoutes(routes: Record<string, unknown>) {
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      const hit = Object.entries(routes).find(([path]) => u.includes(path));
+      if (!hit) return { ok: false, status: 404, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => hit[1] };
+    }) as unknown as typeof fetch;
+  }
+
+  test("stale gold shows the warning + re-grade updates the score (Step 8)", async () => {
+    mockRoutes({
+      "/reviewer-lift": { available: false, run_id: 42 },
+      "/re-grade": {
+        ok: true, run_id: 42, benchmark_id: 5,
+        old_score: score.score, new_score: 0.5,
+        score: { ...score, matched_cells: 236, score: 0.5, gold_stale: false },
+      },
+    });
+    render(<EvalTab runId={42} initialScore={{ ...score, gold_stale: true }} />);
+    expect(screen.getByTestId("eval-gold-stale").textContent).toContain(
+      "edited after this score was recorded",
+    );
+    screen.getByTestId("eval-re-grade").click();
+    await waitFor(() =>
+      expect(screen.getByTestId("eval-headline").textContent).toBe("50%"),
+    );
+    expect(screen.queryByTestId("eval-gold-stale")).toBeNull();
+  });
+
+  test("no stale banner when the gold is unchanged or unknown", () => {
+    mockRoutes({ "/reviewer-lift": { available: false, run_id: 42 } });
+    render(<EvalTab runId={42} initialScore={{ ...score, gold_stale: false }} />);
+    expect(screen.queryByTestId("eval-gold-stale")).toBeNull();
+    cleanup();
+    render(<EvalTab runId={42} initialScore={score} />);
+    expect(screen.queryByTestId("eval-gold-stale")).toBeNull();
+  });
+
+  test("reviewer lift renders before/after when a reviewer pass ran (Step 12)", async () => {
+    mockRoutes({
+      "/reviewer-lift": {
+        available: true, run_id: 42, pre_matched: 400, final_matched: 412,
+        lift_slots: 12, gold_cells: 473,
+        pre_accuracy: 400 / 473, final_accuracy: 412 / 473,
+      },
+    });
+    render(<EvalTab runId={42} initialScore={score} />);
+    const lift = await screen.findByTestId("eval-reviewer-lift");
+    expect(lift.textContent).toContain("+12 cells");
+    expect(lift.textContent).toContain("85% before");
+    expect(lift.textContent).toContain("87% after");
+  });
+});

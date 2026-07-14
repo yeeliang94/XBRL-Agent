@@ -636,6 +636,56 @@ async def compare_suite_runs_endpoint(suite_id: int, a: int, b: int):
     return result
 
 
+@router.get("/api/suites/{suite_id}/compare/slots")
+async def compare_slot_diff_endpoint(
+    suite_id: int, a: int, b: int, doc_id: int,
+):
+    """Value-level drill-down for one document across two suite runs
+    (Step 12): which gold slots regressed A→B and which were fixed, with
+    human line-item names. Recomputed from durable facts on demand."""
+    from api.eval import resolve_slot_labels
+    from db import repository as repo
+    from eval.compare import _suite_run_doc_cards, slot_level_diff
+
+    conn = server._open_audit_conn()
+    try:
+        sr_a = repo.get_suite_run(conn, a)
+        sr_b = repo.get_suite_run(conn, b)
+        if (
+            sr_a is None or sr_b is None
+            or sr_a["suite_id"] != suite_id or sr_b["suite_id"] != suite_id
+        ):
+            raise HTTPException(status_code=404, detail="Suite run not found in this suite")
+        card_a = _suite_run_doc_cards(conn, a).get(doc_id)
+        card_b = _suite_run_doc_cards(conn, b).get(doc_id)
+        if card_a is None or card_b is None:
+            raise HTTPException(
+                status_code=404,
+                detail="This document was not run in both suite runs.",
+            )
+        # Benchmark linkage: the run rows carry it (frozen at run time).
+        row = conn.execute(
+            "SELECT benchmark_id FROM runs WHERE id = ?", (card_a.run_id,)
+        ).fetchone()
+        benchmark_id = row[0] if row else None
+        if benchmark_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="This document has no benchmark — no gold to diff against.",
+            )
+        diff = slot_level_diff(conn, card_a.run_id, card_b.run_id, int(benchmark_id))
+        resolve_slot_labels(conn, diff["regressions"] + diff["fixes"])
+    finally:
+        conn.close()
+    return {
+        "doc_id": doc_id,
+        "run_id_a": card_a.run_id,
+        "run_id_b": card_b.run_id,
+        "benchmark_id": int(benchmark_id),
+        **diff,
+    }
+
+
 @router.get("/api/suites/{suite_id}/runs/{suite_run_id}")
 async def get_suite_run_endpoint(suite_id: int, suite_run_id: int):
     """Suite-run detail: status + per-document scorecards + the aggregate."""
