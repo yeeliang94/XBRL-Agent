@@ -2818,11 +2818,20 @@ def save_eval_score(
     per_statement = getattr(card, "per_statement", None) or None
     taxonomy_json = json.dumps(taxonomy) if taxonomy else None
     per_statement_json = json.dumps(per_statement) if per_statement else None
+    # v33: stamp the gold content hash at grade time so any later gold change
+    # (edit / deletion / reassignment) is detectable against this score.
+    # Best-effort: a fingerprint failure must never block persisting the score.
+    try:
+        from eval.store import gold_fingerprint
+        fingerprint: Optional[str] = gold_fingerprint(conn, benchmark_id)
+    except Exception:
+        fingerprint = None
     conn.execute(
         "INSERT INTO eval_scores(run_id, benchmark_id, gold_cells, "
         "matched_cells, missing_cells, mismatch_cells, extra_cells, "
-        "scale_mismatch, created_at, taxonomy_json, per_statement_json) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "scale_mismatch, created_at, taxonomy_json, per_statement_json, "
+        "gold_fingerprint) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(run_id, benchmark_id) DO UPDATE SET "
         "gold_cells = excluded.gold_cells, "
         "matched_cells = excluded.matched_cells, "
@@ -2832,12 +2841,13 @@ def save_eval_score(
         "scale_mismatch = excluded.scale_mismatch, "
         "created_at = excluded.created_at, "
         "taxonomy_json = excluded.taxonomy_json, "
-        "per_statement_json = excluded.per_statement_json",
+        "per_statement_json = excluded.per_statement_json, "
+        "gold_fingerprint = excluded.gold_fingerprint",
         (
             run_id, benchmark_id,
             int(card.gold_cells), int(card.matched), int(card.missing),
             int(card.mismatch), int(card.extra), int(card.scale_mismatch),
-            now, taxonomy_json, per_statement_json,
+            now, taxonomy_json, per_statement_json, fingerprint,
         ),
     )
 
@@ -2859,7 +2869,7 @@ def fetch_eval_score(
         row = conn.execute(
             "SELECT gold_cells, matched_cells, missing_cells, mismatch_cells, "
             "extra_cells, scale_mismatch, created_at, taxonomy_json, "
-            "per_statement_json "
+            "per_statement_json, gold_fingerprint "
             "FROM eval_scores WHERE run_id = ? AND benchmark_id = ?",
             (run_id, benchmark_id),
         ).fetchone()
@@ -2882,6 +2892,9 @@ def fetch_eval_score(
         # v30 — NULL on legacy scorecards; the UI degrades gracefully.
         "taxonomy": _parse_json_dict(_row_get(row, "taxonomy_json")),
         "per_statement": _parse_json_dict(_row_get(row, "per_statement_json")),
+        # v33 — the gold content hash this score was graded against (NULL on
+        # legacy rows: "unknown gold version", never a false "unchanged").
+        "gold_fingerprint": _row_get(row, "gold_fingerprint"),
     }
 
 

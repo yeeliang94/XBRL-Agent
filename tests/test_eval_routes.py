@@ -135,9 +135,27 @@ def test_benchmark_lifecycle(client):
     edited = next(c for c in grid2["concepts"] if c["concept_uuid"] == uuid0)
     assert abs(edited["value"] - 42.0) < 1e-9
 
-    # Delete.
+    # Delete = ARCHIVE (Step 9, PLAN-evals-hardening): historical scores and
+    # the benchmark row survive; it just leaves the default picker list.
     dele = tc.delete(f"/api/benchmarks/{bench_id}")
     assert dele.status_code == 200
+    body = dele.json()
+    assert body["archived"] is True and "scores_kept" in body
+    detail = tc.get(f"/api/benchmarks/{bench_id}")
+    assert detail.status_code == 200
+    assert detail.json()["is_archived"] is True
+    default_list = tc.get("/api/benchmarks").json()["benchmarks"]
+    assert all(b["id"] != bench_id for b in default_list)
+    with_archived = tc.get(
+        "/api/benchmarks", params={"include_archived": "true"}
+    ).json()["benchmarks"]
+    assert any(b["id"] == bench_id for b in with_archived)
+
+    # Restore, then hard-delete (admin-only true-mistake path) → really gone.
+    assert tc.post(f"/api/benchmarks/{bench_id}/unarchive").status_code == 200
+    hard = tc.delete(f"/api/benchmarks/{bench_id}", params={"hard": "true"})
+    assert hard.status_code == 200
+    assert hard.json()["hard_deleted"] is True
     assert tc.get(f"/api/benchmarks/{bench_id}").status_code == 404
 
 

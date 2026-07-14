@@ -9,10 +9,13 @@ Endpoints:
   POST   /api/benchmarks                       — create from an uploaded xlsx
   POST   /api/benchmarks/from-run              — seed from a finished run's facts
   GET    /api/benchmarks/{id}                  — one benchmark (+ template set)
-  DELETE /api/benchmarks/{id}                  — remove a benchmark
+  DELETE /api/benchmarks/{id}                  — archive (default) / ?hard=true
+                                                 admin-only cascade delete
+  POST   /api/benchmarks/{id}/unarchive        — restore an archived benchmark
   GET    /api/benchmarks/{id}/concepts         — gold grid (ConceptsPage reuse)
   PATCH  /api/benchmarks/{id}/facts            — spot-edit one gold value
   GET    /api/runs/{id}/eval                   — the run's scorecard
+  POST   /api/runs/{id}/re-grade               — re-grade against current gold
 """
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 import server
@@ -49,12 +52,14 @@ class BenchmarkFromRun(BaseModel):
 
 
 @router.get("/api/benchmarks")
-async def list_benchmarks_endpoint():
+async def list_benchmarks_endpoint(include_archived: bool = False):
     from eval import store
 
     conn = server._open_audit_conn()
     try:
-        return {"benchmarks": store.list_benchmarks(conn)}
+        return {"benchmarks": store.list_benchmarks(
+            conn, include_archived=include_archived
+        )}
     finally:
         conn.close()
 
@@ -396,18 +401,92 @@ async def get_benchmark_endpoint(benchmark_id: int):
 
 
 @router.delete("/api/benchmarks/{benchmark_id}")
-async def delete_benchmark_endpoint(benchmark_id: int):
+async def delete_benchmark_endpoint(
+    benchmark_id: int, request: Request, hard: bool = False,
+):
+    """Archive the benchmark (default — scores + trends survive, Step 9).
+    ``?hard=true`` is the admin-only true-mistake path: it CASCADE-destroys
+    the gold AND every historical score; the archive response carries
+    ``scores_kept`` so the UI can state what a hard delete would cost."""
+    from auth import routes as auth_routes
     from eval import store
 
     conn = server._open_audit_conn()
     try:
-        removed = store.delete_benchmark(conn, benchmark_id)
+        if store.get_benchmark(conn, benchmark_id) is None:
+            raise HTTPException(status_code=404, detail="Benchmark not found")
+        scores = store.score_count_for_benchmark(conn, benchmark_id)
+        if hard:
+            denied = auth_routes._require_admin(conn, request)
+            if denied is not None:
+                return denied
+            store.delete_benchmark(conn, benchmark_id)
+            conn.commit()
+            return {"ok": True, "id": benchmark_id, "hard_deleted": True,
+                    "scores_destroyed": scores}
+        store.archive_benchmark(conn, benchmark_id)
         conn.commit()
     finally:
         conn.close()
-    if not removed:
+    return {"ok": True, "id": benchmark_id, "archived": True,
+            "scores_kept": scores}
+
+
+@router.post("/api/benchmarks/{benchmark_id}/unarchive")
+async def unarchive_benchmark_endpoint(benchmark_id: int):
+    from eval import store
+
+    conn = server._open_audit_conn()
+    try:
+        restored = store.unarchive_benchmark(conn, benchmark_id)
+        conn.commit()
+    finally:
+        conn.close()
+    if not restored:
         raise HTTPException(status_code=404, detail="Benchmark not found")
-    return {"ok": True, "id": benchmark_id}
+    return {"ok": True, "id": benchmark_id, "archived": False}
+
+
+@router.post("/api/runs/{run_id}/re-grade")
+async def re_grade_run_endpoint(run_id: int):
+    """Re-grade a run against its benchmark's CURRENT gold (Step 8): updates
+    the stored score + gold fingerprint in place and reports old vs new, so a
+    gold correction can be applied to history with one click instead of
+    leaving a stale trend point."""
+    from db import repository as repo
+    from eval.grader import grade_run
+
+    conn = server._open_audit_conn()
+    try:
+        row = conn.execute(
+            "SELECT benchmark_id FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        old = repo.fetch_eval_score_for_run(conn, run_id)
+        benchmark_id = (old or {}).get("benchmark_id") or row[0]
+        if benchmark_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="This run has no benchmark attached — nothing to grade against.",
+            )
+        try:
+            card = grade_run(conn, run_id, int(benchmark_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        repo.save_eval_score(conn, run_id, int(benchmark_id), card)
+        conn.commit()
+        new = repo.fetch_eval_score(conn, run_id, int(benchmark_id))
+    finally:
+        conn.close()
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "benchmark_id": int(benchmark_id),
+        "old_score": old.get("score") if old else None,
+        "new_score": new.get("score") if new else None,
+        "score": new,
+    }
 
 
 @router.get("/api/benchmarks/{benchmark_id}/concepts")

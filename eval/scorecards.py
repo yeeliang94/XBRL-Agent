@@ -53,6 +53,11 @@ class DocumentScorecard:
     notes_coverage_available: bool = False
     # How many finished repeats the accuracy is a mean of (1 = a single run).
     repeats_scored: int = 1
+    # Gold-change guard (v33). gold_stale: True = the benchmark's gold was
+    # edited/deleted/reassigned AFTER this score was stamped; None = no score
+    # or a legacy row with no fingerprint ("unknown gold version").
+    gold_fingerprint: Optional[str] = None
+    gold_stale: Optional[bool] = None
 
     @property
     def failed(self) -> bool:
@@ -75,6 +80,7 @@ class DocumentScorecard:
             "failed": self.failed,
             "contributes": self.contributes,
             "repeats_scored": self.repeats_scored,
+            "gold_stale": self.gold_stale,
             "accuracy": self.accuracy,
             "gold_cells": self.gold_cells,
             "matched_cells": self.matched_cells,
@@ -194,6 +200,18 @@ def build_document_scorecard(
         card.matched_cells = int(score.get("matched_cells", 0) or 0)
         card.taxonomy = score.get("taxonomy") or {}
         card.per_statement = score.get("per_statement") or {}
+        # Gold-change guard (Step 7): the score is a stamp of the gold AS IT
+        # WAS at grade time; flag it stale if the gold has changed since.
+        card.gold_fingerprint = score.get("gold_fingerprint")
+        if card.gold_fingerprint:
+            try:
+                from eval.store import gold_fingerprint as _current_fp
+                card.gold_stale = (
+                    _current_fp(conn, int(score["benchmark_id"]))
+                    != card.gold_fingerprint
+                )
+            except Exception:
+                card.gold_stale = None
 
     # Consistency (repeat group).
     group_id = getattr(run, "repeat_group_id", None)
