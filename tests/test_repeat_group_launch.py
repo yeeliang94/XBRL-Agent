@@ -174,3 +174,96 @@ def test_abort_mid_group_leaves_finished_repeats_and_marks_partial(audit, monkey
     assert group["status"] == "partial"
     # <2 finished → consistency unavailable, never a misleading 100%.
     assert group["consistency"]["available"] is False
+
+
+def test_resume_tops_up_existing_group(audit, monkeypatch):
+    """PLAN-evals-hardening Step 1: a resume passes existing_group_id +
+    start_index so the missing repeats land in the SAME group and consistency
+    is scored over the full requested set."""
+    # First attempt: repeat 0 finishes, repeat 1 aborts → group partial.
+    monkeypatch.setattr(
+        server, "run_multi_agent_stream",
+        _fake_stream_factory(audit, values_by_index=[1.0, 1.0, 1.0],
+                             fail_on_index=1),
+    )
+
+    async def first_attempt():
+        agen = server.run_repeat_group_stream(
+            session_id="s3", session_dir=audit.parent, run_config=_cfg(3),
+            api_key="k", proxy_url="", model_name="m",
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await _drain(agen)
+        await agen.aclose()
+
+    asyncio.run(first_attempt())
+
+    conn = sqlite3.connect(str(audit))
+    try:
+        gid = conn.execute("SELECT id FROM repeat_groups").fetchone()[0]
+    finally:
+        conn.close()
+
+    # Resume: top up the 2 missing repeats into the SAME group.
+    monkeypatch.setattr(
+        server, "run_multi_agent_stream",
+        _fake_stream_factory(audit, values_by_index=[1.0, 1.0]),
+    )
+    events = asyncio.run(_drain(server.run_repeat_group_stream(
+        session_id="s3", session_dir=audit.parent, run_config=_cfg(3),
+        api_key="k", proxy_url="", model_name="m",
+        existing_group_id=gid, start_index=1,
+    )))
+
+    # No second group was created; exactly 2 more repeats ran.
+    kinds = [e["event"] for e in events]
+    assert kinds.count("repeat_progress") == 2
+    conn = sqlite3.connect(str(audit))
+    conn.row_factory = sqlite3.Row
+    try:
+        n_groups = conn.execute("SELECT COUNT(*) FROM repeat_groups").fetchone()[0]
+        group = repo.fetch_repeat_group(conn, gid)
+    finally:
+        conn.close()
+    assert n_groups == 1
+    completed = [r for r in group["runs"] if r["status"] == "completed"]
+    assert len(completed) == 3
+    assert group["status"] == "complete"
+    assert group["consistency"]["available"] is True
+
+
+def test_should_abort_prevents_next_repeat(audit, monkeypatch):
+    """A batch Stop between repeats halts the group: the loop checks
+    should_abort before launching each repeat (peer-review Step 1 finding —
+    without this, cancelling the in-flight repeat let the next one start)."""
+    launched = {"n": 0}
+    inner = _fake_stream_factory(audit, values_by_index=[1.0, 1.0, 1.0])
+
+    async def counting(**kwargs):
+        launched["n"] += 1
+        async for ev in inner(**kwargs):
+            yield ev
+
+    monkeypatch.setattr(server, "run_multi_agent_stream", counting)
+
+    # Abort flag flips true after the first repeat completes.
+    def should_abort():
+        return launched["n"] >= 1
+
+    asyncio.run(_drain(server.run_repeat_group_stream(
+        session_id="s4", session_dir=audit.parent, run_config=_cfg(3),
+        api_key="k", proxy_url="", model_name="m",
+        should_abort=should_abort,
+    )))
+
+    assert launched["n"] == 1  # repeats 1 and 2 never started
+    conn = sqlite3.connect(str(audit))
+    conn.row_factory = sqlite3.Row
+    try:
+        gid = conn.execute(
+            "SELECT id FROM repeat_groups ORDER BY id DESC LIMIT 1"
+        ).fetchone()["id"]
+        group = repo.fetch_repeat_group(conn, gid)
+    finally:
+        conn.close()
+    assert group["status"] == "partial"
