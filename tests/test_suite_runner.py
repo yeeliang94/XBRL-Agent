@@ -376,3 +376,66 @@ def test_launch_derives_variants_from_benchmark(env, monkeypatch):
     assert cfg.variants["SOFP"] == "OrderOfLiquidity"
     assert cfg.denomination == "millions"
     assert cfg.benchmark_id == 7
+
+
+def _write_history_run(db, *, seconds, tokens, cost, model="m1"):
+    conn = sqlite3.connect(str(db))
+    cur = conn.execute(
+        "INSERT INTO runs(created_at, pdf_filename, status, session_id, "
+        "started_at, ended_at) VALUES ('t', 'x.pdf', 'completed', 'h', ?, ?)",
+        ("2026-01-01T00:00:00",
+         f"2026-01-01T00:{seconds // 60:02d}:{seconds % 60:02d}"),
+    )
+    # Tokens/cost live on run_agents (gotcha #6) — one agent row is enough.
+    conn.execute(
+        "INSERT INTO run_agents(run_id, statement_type, status, model, "
+        "total_tokens, total_cost, started_at) "
+        "VALUES (?, 'SOFP', 'succeeded', ?, ?, ?, 't')",
+        (cur.lastrowid, model, tokens, cost),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_estimate_sequential_repeats_and_cost(env):
+    """Step 4 (PLAN-evals-hardening): repeats run sequentially in one slot, so
+    1 doc × 5 repeats ≈ 5× a run's duration (the old runs÷3 formula said
+    ~1.7×); and the estimate must carry token + cost figures."""
+    srv, runner, db, _ = env
+    sid, _docs = _make_suite_with_docs(srv, 1)
+    _write_history_run(db, seconds=600, tokens=100_000, cost=2.0)
+
+    tc = TestClient(srv.app)
+    est = tc.post(f"/api/suites/{sid}/estimate", json={"repeats": 5}).json()
+    assert est["extraction_runs"] == 5
+    # ceil(1/3) × 5 × 600s = 3000s — NOT 5/3 × 600 = 1000s.
+    assert est["estimated_wall_seconds"] == pytest.approx(3000, rel=0.01)
+    assert est["estimated_tokens"] == 500_000
+    assert est["estimated_cost_usd"] == pytest.approx(10.0)
+    assert est["cost_range_usd"] == [10.0, 10.0]
+
+
+def test_estimate_parallel_docs_single_repeat(env):
+    """6 docs × 1 repeat at concurrency 3 ≈ 2 batches ≈ 2× avg duration."""
+    srv, runner, db, _ = env
+    sid, _docs = _make_suite_with_docs(srv, 6)
+    _write_history_run(db, seconds=300, tokens=50_000, cost=1.0)
+
+    tc = TestClient(srv.app)
+    est = tc.post(f"/api/suites/{sid}/estimate", json={}).json()
+    assert est["estimated_wall_seconds"] == pytest.approx(600, rel=0.01)
+    assert est["estimated_tokens"] == 300_000
+
+
+def test_estimate_prefers_same_model_history(env):
+    """A model with its own history estimates from it, not the global mix."""
+    srv, runner, db, _ = env
+    sid, _docs = _make_suite_with_docs(srv, 1)
+    _write_history_run(db, seconds=60, tokens=10_000, cost=0.5, model="cheap")
+    _write_history_run(db, seconds=600, tokens=200_000, cost=8.0, model="fancy")
+
+    tc = TestClient(srv.app)
+    est = tc.post(f"/api/suites/{sid}/estimate",
+                  json={"model": "fancy"}).json()
+    assert est["estimated_tokens"] == 200_000
+    assert est["estimated_cost_usd"] == pytest.approx(8.0)

@@ -370,28 +370,58 @@ def _run_batch_thread(suite_run_id: int, suite_id: int, launch: dict,
 # ---------------------------------------------------------------------------
 # Estimate
 # ---------------------------------------------------------------------------
-def _recent_avg_run_seconds() -> Optional[float]:
-    """Rough wall-clock estimate: the average duration of recent finished runs."""
+def _recent_run_stats(model: Optional[str] = None) -> dict:
+    """Average duration / tokens / cost of recent finished runs, preferring
+    runs of the SAME model (a Haiku baseline says nothing about an Opus
+    suite). Falls back to any recent finished run when the model has no
+    history. Token/cost sample min–max feed the estimate's range."""
     conn = server._open_audit_conn()
     try:
-        rows = conn.execute(
-            "SELECT started_at, ended_at FROM runs "
-            "WHERE status IN ('completed','completed_with_errors') "
-            "AND started_at != '' AND ended_at IS NOT NULL "
-            "ORDER BY id DESC LIMIT 20"
-        ).fetchall()
+        # Tokens/cost live on run_agents (per-agent rollups, gotcha #6) — the
+        # runs table itself carries no totals, so aggregate per run here.
+        base = (
+            "SELECT r.started_at, r.ended_at, "
+            "(SELECT SUM(a.total_tokens) FROM run_agents a WHERE a.run_id = r.id), "
+            "(SELECT SUM(a.total_cost) FROM run_agents a WHERE a.run_id = r.id) "
+            "FROM runs r "
+            "WHERE r.status IN ('completed','completed_with_errors') "
+            "AND r.started_at != '' AND r.ended_at IS NOT NULL "
+        )
+        rows: list = []
+        if model:
+            rows = conn.execute(
+                base + "AND EXISTS (SELECT 1 FROM run_agents a WHERE "
+                "a.run_id = r.id AND a.model = ?) ORDER BY r.id DESC LIMIT 20",
+                (model,),
+            ).fetchall()
+        if not rows:
+            rows = conn.execute(base + "ORDER BY r.id DESC LIMIT 20").fetchall()
     finally:
         conn.close()
     from db import repository as repo
+
     durs = [
-        d for d in (repo._parse_iso_duration(s or "", e or "") for s, e in rows)
+        d for d in (
+            repo._parse_iso_duration(s or "", e or "") for s, e, _t, _c in rows
+        )
         if d is not None
     ]
-    return (sum(durs) / len(durs)) if durs else None
+    tokens = [int(t) for _s, _e, t, _c in rows if t]
+    costs = [float(c) for _s, _e, _t, c in rows if c]
+    return {
+        "avg_seconds": (sum(durs) / len(durs)) if durs else None,
+        "avg_tokens": (sum(tokens) / len(tokens)) if tokens else None,
+        "avg_cost": (sum(costs) / len(costs)) if costs else None,
+        "tokens_range": (min(tokens), max(tokens)) if tokens else None,
+        "cost_range": (min(costs), max(costs)) if costs else None,
+        "sample_size": len(rows),
+    }
 
 
 @router.post("/api/suites/{suite_id}/estimate")
 async def estimate_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
+    from math import ceil
+
     from db import repository as repo
 
     conn = server._open_audit_conn()
@@ -404,15 +434,38 @@ async def estimate_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
     n_docs = len(suite["docs"])
     repeats = max(1, min(5, int(body.repeats or 1)))
     n_runs = n_docs * repeats
-    avg = _recent_avg_run_seconds()
-    # Wall-clock ≈ (runs / concurrency) × avg run duration.
-    wall = (n_runs / SUITE_CONCURRENCY) * avg if avg else None
+    stats = _recent_run_stats(body.model)
+    avg = stats["avg_seconds"]
+    # Wall-clock: documents share the concurrency slots, but a document's
+    # repeats run SEQUENTIALLY inside its one slot (run_repeat_group_stream is
+    # sequential-in-one-stream by design) — so repeats multiply the wall time,
+    # they don't parallelize. The old runs/concurrency formula underestimated
+    # a 5-repeat document ~3× (peer-review Step 4).
+    wall = (ceil(n_docs / SUITE_CONCURRENCY) * repeats * avg) if avg and n_docs else None
+    est_tokens = (
+        int(stats["avg_tokens"] * n_runs) if stats["avg_tokens"] else None
+    )
+    est_cost = (
+        round(stats["avg_cost"] * n_runs, 2) if stats["avg_cost"] else None
+    )
     return {
         "documents": n_docs,
         "repeats": repeats,
         "extraction_runs": n_runs,
         "avg_run_seconds": avg,
         "estimated_wall_seconds": wall,
+        "estimated_tokens": est_tokens,
+        "estimated_cost_usd": est_cost,
+        "tokens_range": (
+            [stats["tokens_range"][0] * n_runs, stats["tokens_range"][1] * n_runs]
+            if stats["tokens_range"] else None
+        ),
+        "cost_range_usd": (
+            [round(stats["cost_range"][0] * n_runs, 2),
+             round(stats["cost_range"][1] * n_runs, 2)]
+            if stats["cost_range"] else None
+        ),
+        "estimate_sample_size": stats["sample_size"],
         "concurrency": SUITE_CONCURRENCY,
     }
 
