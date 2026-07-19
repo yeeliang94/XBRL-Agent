@@ -21,7 +21,7 @@ import {
   variantsFor,
   DENOMINATION_LABELS,
 } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { abortAgent, updateSettings, fetchBenchmarks } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
@@ -282,6 +282,178 @@ function _seedScoutEnabled(
 ): boolean {
   if (cfg && typeof cfg.use_scout === "boolean") return cfg.use_scout;
   return true;  // Original default when no rehydration.
+}
+
+/** One scout-discovered note. Only the fields this editor touches are typed;
+ *  the rest of the entry (page_range, subnotes) rides along untouched. */
+export type NotesInventoryEntry = {
+  note_num?: number | null;
+  title?: string | null;
+  page_range?: [number, number] | null;
+  [k: string]: unknown;
+};
+
+/** Note numbers that should exist but don't — interior holes plus a missing
+ *  run of leading notes.
+ *
+ *  Scout drops notes silently (it read only the first heading on each page
+ *  until 2026-07-19, and a dropped FIRST or LAST note leaves the numbering
+ *  looking contiguous). The server warns about the same thing at run start;
+ *  surfacing it here lets the operator fix it BEFORE burning a run.
+ *
+ *  A missing trailing note is deliberately not guessed — nothing in the
+ *  inventory can tell us how high the numbering was meant to go, and inventing
+ *  a ceiling would cry wolf on every filing. The operator adds those by hand.
+ */
+export function findInventoryGaps(entries: NotesInventoryEntry[]): number[] {
+  const nums = entries
+    .map((e) => e.note_num)
+    .filter((n): n is number => typeof n === "number" && Number.isFinite(n))
+    .sort((a, b) => a - b);
+  if (nums.length === 0) return [];
+  const present = new Set(nums);
+  const gaps: number[] = [];
+  for (let n = 1; n < nums[nums.length - 1]; n++) {
+    if (!present.has(n)) gaps.push(n);
+  }
+  return gaps;
+}
+
+/** Add or remove notes scout missed. Edits the in-memory infopack; the
+ *  existing debounced PATCH persists it with the rest of the draft config. */
+function NotesInventoryEditor({
+  entries,
+  onChange,
+}: {
+  entries: NotesInventoryEntry[];
+  onChange: (next: NotesInventoryEntry[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [num, setNum] = useState("");
+  const [title, setTitle] = useState("");
+
+  const sorted = [...entries].sort(
+    (a, b) => (a.note_num ?? 0) - (b.note_num ?? 0),
+  );
+  const parsed = Number.parseInt(num, 10);
+  const duplicate =
+    Number.isFinite(parsed) && entries.some((e) => e.note_num === parsed);
+  const canAdd =
+    Number.isFinite(parsed) && parsed >= 1 && parsed <= 999
+    && title.trim().length > 0 && !duplicate;
+
+  const add = () => {
+    if (!canAdd) return;
+    onChange(
+      [...entries, { note_num: parsed, title: title.trim(), page_range: null }]
+        .sort((a, b) => (a.note_num ?? 0) - (b.note_num ?? 0)),
+    );
+    setNum("");
+    setTitle("");
+  };
+
+  const inputStyle = {
+    fontFamily: pwc.fontBody, fontSize: 12, padding: "4px 6px",
+    border: `1px solid ${pwc.grey300}`, borderRadius: 2,
+    color: pwc.grey800, background: pwc.white,
+  } as const;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          alignSelf: "flex-start", background: "none", border: "none",
+          padding: 0, cursor: "pointer", fontFamily: pwc.fontBody,
+          fontSize: 12, color: tokens.color.action.primary, textDecoration: "underline",
+        }}
+        aria-expanded={open}
+      >
+        {open ? "Hide notes list" : "Review or edit the notes list"}
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <ul
+            style={{
+              listStyle: "none", margin: 0, padding: 0,
+              display: "flex", flexDirection: "column", gap: 2,
+              maxHeight: 180, overflowY: "auto",
+            }}
+            aria-label="Discovered notes"
+          >
+            {sorted.map((e) => (
+              <li
+                key={`${e.note_num}-${e.title}`}
+                style={{ display: "flex", alignItems: "center", gap: 6 }}
+              >
+                <span style={{ minWidth: 28, color: pwc.grey800 }}>
+                  {e.note_num}.
+                </span>
+                <span style={{ flex: 1, color: pwc.grey800 }}>{e.title}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChange(entries.filter((x) => x !== e))
+                  }
+                  aria-label={`Remove note ${e.note_num}`}
+                  style={{
+                    background: "none", border: "none", padding: "0 4px",
+                    cursor: "pointer", color: pwc.grey700, fontSize: 12,
+                  }}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              type="number"
+              min={1}
+              max={999}
+              value={num}
+              onChange={(ev) => setNum(ev.target.value)}
+              placeholder="No."
+              aria-label="Missing note number"
+              style={{ ...inputStyle, width: 64 }}
+            />
+            <input
+              type="text"
+              value={title}
+              onChange={(ev) => setTitle(ev.target.value)}
+              placeholder="Note title"
+              aria-label="Missing note title"
+              style={{ ...inputStyle, flex: 1 }}
+            />
+            <button
+              type="button"
+              onClick={add}
+              disabled={!canAdd}
+              style={{
+                fontFamily: pwc.fontBody, fontSize: 12, padding: "4px 10px",
+                border: `1px solid ${canAdd ? tokens.color.action.primary : pwc.grey300}`,
+                background: canAdd ? tokens.color.action.primary : pwc.grey100,
+                color: canAdd ? pwc.white : pwc.grey700,
+                borderRadius: 2, cursor: canAdd ? "pointer" : "not-allowed",
+              }}
+            >
+              Add
+            </button>
+          </div>
+          {duplicate && (
+            <span style={{ color: pwc.error, fontSize: 11 }}>
+              Note {parsed} is already in the list.
+            </span>
+          )}
+          <span style={{ color: pwc.grey700, fontSize: 11 }}>
+            Added notes have no page range, so agents search the whole document
+            for them.
+          </span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false }: Props) {
@@ -1434,15 +1606,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           </div>
         )}
         {infopack && Array.isArray(infopack.notes_inventory) && (() => {
-          const count = (infopack.notes_inventory as unknown[]).length;
+          const entries = infopack.notes_inventory as NotesInventoryEntry[];
+          const count = entries.length;
           const notesRequested = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
           const hintVisible = count === 0 && notesRequested;
+          const gaps = findInventoryGaps(entries);
           return (
             <div
               style={{
                 fontFamily: pwc.fontBody, fontSize: 12,
                 color: hintVisible ? pwc.error : pwc.grey800,
-                display: "flex", flexDirection: "column", gap: 2,
+                display: "flex", flexDirection: "column", gap: 4,
               }}
               role="status"
             >
@@ -1453,6 +1627,25 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   open Advanced settings, tick "My document is a scanned image",
                   and run the pre-scan again.
                 </span>
+              )}
+              {gaps.length > 0 && (
+                <span style={{ color: pwc.error }}>
+                  Note {gaps.length === 1 ? "number" : "numbers"}{" "}
+                  {gaps.join(", ")} {gaps.length === 1 ? "was" : "were"} not
+                  found. If {gaps.length === 1 ? "it exists" : "they exist"} in
+                  the document, add {gaps.length === 1 ? "it" : "them"} below so
+                  the notes agents pick {gaps.length === 1 ? "it" : "them"} up.
+                </span>
+              )}
+              {count > 0 && (
+                <NotesInventoryEditor
+                  entries={entries}
+                  onChange={(next) =>
+                    setInfopack((prev) =>
+                      prev ? { ...prev, notes_inventory: next } : prev,
+                    )
+                  }
+                />
               )}
             </div>
           );
