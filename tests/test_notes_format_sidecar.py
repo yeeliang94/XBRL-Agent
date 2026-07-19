@@ -679,3 +679,59 @@ class TestSinkResendSupersede:
         asyncio.run(write_notes(SimpleNamespace(deps=deps), second))
         # Distinct content on one row keeps the combine semantics.
         assert len(deps.payload_sink) == 2
+
+
+# --- verbatim source passthrough (2026-07-19) ------------------------------
+# When the agent copies a Word table out of read_source_note, the styling is
+# the SOURCE document's own and arrives on `content`. The sanitiser's
+# table-tag whitelist preserves it, so there is nothing to apply — but the
+# provenance must be distinguishable from "unstyled", which signals a cell
+# that may want a formatter pass.
+
+_STYLED_TABLE = (
+    '<table><tr><td style="padding: 1px 5px; text-align: right">'
+    '1,595</td></tr></table>'
+)
+
+
+def test_source_styled_table_is_tagged_source_not_unstyled():
+    from notes.writer import _style_cell_html
+
+    warnings: list[str] = []
+    html, source = _style_cell_html(_STYLED_TABLE, None, "row", warnings)
+    assert source == "source"
+    assert "padding: 1px 5px" in html
+    assert warnings == []
+
+
+def test_plain_table_without_styling_stays_unstyled():
+    from notes.writer import _style_cell_html
+
+    warnings: list[str] = []
+    html, source = _style_cell_html(
+        "<table><tr><td>1,595</td></tr></table>", None, "row", warnings
+    )
+    assert source == "unstyled"
+
+
+def test_styled_prose_without_a_table_is_not_tagged_source():
+    """Only table tags keep inline styles through the sanitiser; prose that
+    somehow carries one must not be mislabelled as source-styled."""
+    from notes.writer import _style_cell_html
+
+    warnings: list[str] = []
+    _html, source = _style_cell_html(
+        '<p style="text-align: right">text</p>', None, "row", warnings
+    )
+    assert source == "unstyled"
+
+
+def test_format_ops_still_win_over_source_detection():
+    """An agent that supplies ops is using the translation path — ops apply
+    and the cell is tagged `ops`, not `source`."""
+    from notes.writer import _style_cell_html
+
+    warnings: list[str] = []
+    ops = [{"target": {"table": 0, "range": "all"}, "style": {"bold": True}}]
+    _html, source = _style_cell_html(_STYLED_TABLE, ops, "row", warnings)
+    assert source == "ops"
