@@ -510,3 +510,45 @@ def test_compact_is_dramatically_smaller_than_full_and_same_text():
     # Content is untouched — identical rendered text.
     assert (BeautifulSoup(compact, "html.parser").get_text()
             == BeautifulSoup(full, "html.parser").get_text())
+
+
+# --- verbatim Word styling survives into mTool (2026-07-19) ----------------
+# Verbatim passthrough puts the SOURCE document's own per-cell styling on the
+# content (see notes/writer._style_cell_html). The decorator must treat that
+# like editor-persisted formatting: keep it, and fill only the gaps. If theme
+# defaults overwrote it, the operator's Word formatting would silently become
+# our house style on the way into the filing — the exact outcome the verbatim
+# work exists to prevent.
+
+_WORD_CELL = (
+    '<table><tr>'
+    '<td style="padding: 1px 5px; text-align: right; '
+    'border-bottom: 1px solid #7F7F7F">1,595</td>'
+    '</tr></table>'
+)
+
+
+def test_word_cell_styling_is_not_overwritten_by_theme_defaults():
+    out = decorate_notes_html(_WORD_CELL, NotesTableStyle())
+    assert "padding: 1px 5px" in out
+    assert "text-align: right" in out
+    assert "#7F7F7F" in out.upper() or "#7f7f7f" in out
+
+
+def test_word_cell_without_a_border_does_not_gain_the_theme_border():
+    """A source cell that owns the border FAMILY keeps its own edges; the
+    decorator must not add a full grid on top (family-level precedence in
+    _merge_cell_style)."""
+    out = decorate_notes_html(_WORD_CELL, NotesTableStyle())
+    td = out[out.index("<td"):out.index("</td>")]
+    # Exactly one bottom border declaration — the Word one, not a theme copy.
+    assert td.count("border-bottom") == 1
+
+
+def test_unstyled_cell_still_receives_theme_defaults():
+    """Verbatim precedence must not disable decoration for PDF-sourced notes
+    that legitimately arrive plain."""
+    out = decorate_notes_html(
+        "<table><tr><td>1,595</td></tr></table>", NotesTableStyle()
+    )
+    assert "style=" in out  # the decorator did its normal job

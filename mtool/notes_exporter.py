@@ -34,7 +34,9 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from mtool.notes_decorate import DEFAULT_STYLE, NotesTableStyle, decorate_notes_html
+from mtool.notes_decorate import (
+    DEFAULT_STYLE, NotesTableStyle, decorate_notes_html, strip_inline_styles,
+)
 from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
 
 
@@ -159,8 +161,15 @@ def _resolve_note_html(
         props dropped, borders/font/alignment kept) fits.
       * ``flat``    — even lite is over, but the UNDECORATED HTML fits; the
         note renders plain but its content + the workbook stay intact.
-      * ``oversize`` — too big even flat: emit ``raw`` (smallest, honest
-        payload size) and let the fill's hard guard
+      * *(destyle retry)* — when the note carries VERBATIM source styling
+        (gotcha #16), ``raw`` itself can be over the limit, which strands every
+        rung above: ``compact`` is inoperative (it slims decorator-added
+        styling, and these cells own theirs) and ``flat`` == ``raw``. Stripping
+        the inline styles and re-walking the ladder recovers a filable note.
+        Measured on a 6-column Word table: 100 rows went oversize → compact,
+        200 rows → flat. The reported tier is the one the retry landed on.
+      * ``oversize`` — too big even flat AND after destyling: emit ``raw``
+        (smallest, honest payload size) and let the fill's hard guard
         (:data:`mtool.offline_fill.EXCEL_CELL_CHAR_LIMIT`) skip + flag it — the
         signal that the CONTENT must be split, not the styling simplified.
       * ``raw``   — decoration disabled (the fill's "no styling" diagnostic
@@ -188,4 +197,28 @@ def _resolve_note_html(
         return lite, "lite"
     if _fits(raw):
         return raw, "flat"
+    # Verbatim passthrough (gotcha #16, 2026-07-19) puts the SOURCE document's
+    # own per-cell styling on `raw`, so for a big Word table `raw` is itself
+    # over the limit and every rung above has already failed — including
+    # `compact`, which is inoperative here because compaction only strips
+    # DECORATOR-added styling and these cells own theirs. Measured on a 6-column
+    # Word table: 50 rows -> lite, 100 rows -> nothing left.
+    #
+    # Stripping the source styling gives the ladder its rungs back: content is
+    # preserved and the note files plain, instead of going `oversize` and being
+    # skipped outright by the fill guard. Strictly better than the alternative —
+    # a filed plain note beats a missing one.
+    stripped = strip_inline_styles(raw)
+    if stripped != raw:
+        destyled = decorate_notes_html(stripped, style)
+        if _fits(destyled):
+            return destyled, "full"
+        compact_destyled = decorate_notes_html(stripped, style, compact=True)
+        if compact_destyled != destyled and _fits(compact_destyled):
+            return compact_destyled, "compact"
+        lite_destyled = decorate_notes_html(stripped, style, lite=True)
+        if _fits(lite_destyled):
+            return lite_destyled, "lite"
+        if _fits(stripped):
+            return stripped, "flat"
     return raw, "oversize"
