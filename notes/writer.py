@@ -40,6 +40,7 @@ from notes.html_to_text import (
 from notes.html_sanitize import sanitize_notes_html
 
 import openpyxl
+from bs4 import BeautifulSoup
 
 from notes.payload import NotesPayload
 from utils.workbook_io import atomic_save_workbook
@@ -192,7 +193,12 @@ def write_notes_workbook(
     # Styling-source tally for the per-sheet observability line (Step 8 of
     # the sidecar plan): how many prose cells were styled from the agent's
     # observation vs left unstyled.
-    style_counts: dict[str, int] = {"ops": 0, "unstyled": 0}
+    # Every provenance _style_cell_html can return MUST have a key here — a
+    # missing one raises KeyError at :230 and takes down the whole notes agent
+    # (write_notes_workbook runs inside the write_notes tool). "source" was
+    # added by verbatim passthrough; a defaultdict would hide the next such
+    # omission, so the keys stay explicit and the log below names them all.
+    style_counts: dict[str, int] = {"ops": 0, "unstyled": 0, "source": 0}
     # Reverse map row→template label so cells_written can carry the
     # template's verbatim col-A text (what the editor shows as the row
     # header) rather than the agent's possibly-fuzzy request.
@@ -295,8 +301,9 @@ def write_notes_workbook(
         # sidecar coverage (how often agents observe formatting vs leaving
         # cells plain) without drowning the log.
         logger.info(
-            "Notes styling on %s: %d ops-styled, %d unstyled",
-            sheet_name, style_counts["ops"], style_counts["unstyled"],
+            "Notes styling on %s: %d ops-styled, %d source-copied, %d unstyled",
+            sheet_name, style_counts["ops"], style_counts["source"],
+            style_counts["unstyled"],
         )
 
     try:
@@ -340,6 +347,13 @@ def write_notes_workbook(
 # A style= attribute on a table tag — the tell for verbatim source passthrough
 # (see _carries_table_styling). Table tags are the only place the sanitiser
 # keeps inline styles on agent content, so this can't false-positive on prose.
+# Tags whose inline styles verbatim passthrough is allowed to carry. Kept in
+# step with _TABLE_STYLE_ATTR_RE below and with the sanitiser's table-tag
+# whitelist (notes/html_sanitize._STYLE_PROPS_BY_TAG).
+_TABLE_TAGS = frozenset(
+    {"table", "thead", "tbody", "tfoot", "tr", "th", "td", "col", "colgroup"}
+)
+
 _TABLE_STYLE_ATTR_RE = re.compile(
     r"<(?:table|thead|tbody|tr|th|td|col|colgroup)\b[^>]*\sstyle\s*=",
     re.IGNORECASE,
@@ -395,7 +409,7 @@ def _carries_table_styling(html: str) -> bool:
     Cheap string test rather than a parse: this runs per cell on the write
     path, and a false positive costs only a provenance label.
     """
-    if "<t" not in html:
+    if "<t" not in html.lower():
         return False
     return bool(_TABLE_STYLE_ATTR_RE.search(html))
 
@@ -449,6 +463,34 @@ def _inject_headings(payload: NotesPayload) -> NotesPayload:
     )
 
 
+def _strip_non_table_styles(html: str) -> str:
+    """Remove inline ``style=`` from every tag EXCEPT table tags.
+
+    Verbatim passthrough (gotcha #16) narrowed "content stays style-free" to
+    permit TABLE styling, on the reasoning that table tags are the only ones
+    whose inline styles the sanitiser accepts. Code review 2026-07-19 showed
+    that reasoning was wrong: `_STYLE_PROPS_BY_TAG` also grants `text-align` /
+    `margin-*` to `p`/`h3`/`li`, `color` to `span`, and `background-color` to
+    `mark`. Meanwhile `ingest/docx_html._inject_paragraph_styles` deliberately
+    writes `style=` onto `source.html` paragraphs — the very document the agent
+    is now told to copy. "Copy the table verbatim but not the paragraph beside
+    it" is a partition the model would have to get right on every write.
+
+    Enforcing it here makes the invariant true by construction. This is the
+    AGENT path only (`_sanitize_payload`); the human editor's paragraph
+    alignment arrives through the PATCH endpoint and is untouched.
+    """
+    if not html or "style=" not in html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for el in soup.find_all(True):
+        if el.name in _TABLE_TAGS:
+            continue
+        if el.has_attr("style"):
+            del el["style"]
+    return str(soup)
+
+
 def _sanitize_payload(
     payload: NotesPayload, warnings: list[str],
 ) -> NotesPayload:
@@ -467,6 +509,7 @@ def _sanitize_payload(
     if not payload.content:
         return payload
     cleaned, sub_warnings = sanitize_notes_html(payload.content)
+    cleaned = _strip_non_table_styles(cleaned)
     if sub_warnings:
         for w in sub_warnings:
             warnings.append(f"{payload.chosen_row_label}: {w}")

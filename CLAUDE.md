@@ -603,9 +603,16 @@ The sanitiser's table-tag whitelist already preserves those declarations
 per-side borders all survive), and `mtool/notes_decorate._merge_cell_style`
 gives persisted per-cell declarations precedence over theme defaults, so
 Word's own formatting reaches the review page, the clipboard and the mTool
-filing without a model re-describing it. **PROSE stays style-free** — the
-reversal is scoped to table tags only, which are the only tags whose inline
-styles the sanitiser accepts on agent content. `_style_cell_html` tags such a
+filing without a model re-describing it. **PROSE stays style-free, enforced in
+code** — `notes/writer.py::_strip_non_table_styles` removes inline `style=`
+from every non-table tag on the AGENT path (`_sanitize_payload`). That strip is
+load-bearing, not belt-and-braces: the sanitiser itself *does* permit
+`text-align`/`margin-*` on `p`/`h3`/`li`, `color` on `span` and
+`background-color` on `mark`, and `ingest/docx_html` deliberately writes
+paragraph styles into `source.html` — so without it, "copy the table verbatim
+but not the paragraph beside it" would rest on model judgement alone. The human
+TipTap editor reaches the DB through the PATCH endpoint and keeps its paragraph
+alignment. `_style_cell_html` tags such a
 cell `style_source='source'` (vs `ops` / `unstyled`) so the Notes-tab chip can
 tell "copied from the source" apart from "may want a formatter pass". Size is
 handled by the existing mTool ladder (full → compact → lite → flat →

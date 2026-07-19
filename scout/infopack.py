@@ -581,10 +581,17 @@ class Infopack:
         #     triggers on a strictly empty result). Density is the only signal
         #     available without re-reading the PDF.
         if note_nums:
+            # Ignore unknown ranges (0, 0) — an operator-added note carries no
+            # pages, and counting it as page 0 inflates the span enough to fire
+            # this warning on a perfectly complete inventory.
             page_starts = [
-                e.page_range[0] for e in self.notes_inventory if e.page_range
+                e.page_range[0] for e in self.notes_inventory
+                if e.page_range and e.page_range[0] > 0
             ]
-            page_ends = [e.page_range[1] for e in self.notes_inventory if e.page_range]
+            page_ends = [
+                e.page_range[1] for e in self.notes_inventory
+                if e.page_range and e.page_range[0] > 0
+            ]
             span = (max(page_ends) - min(page_starts) + 1) if page_starts else 0
             if span >= _SPARSE_MIN_SPAN and len(note_nums) < span / _SPARSE_PAGES_PER_NOTE:
                 warnings.append(

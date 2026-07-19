@@ -453,3 +453,68 @@ def test_no_sparse_warning_for_a_dense_inventory():
     entries = [_entry(n, 10 + n, 10 + n) for n in range(1, 13)]
     pack = _pack(entries)
     assert not any("sparse" in w for w in pack.completeness_warnings())
+
+
+# --- duplicate collapsing (code review 2026-07-19) -------------------------
+# Reading EVERY heading per page also surfaces matches search() used to hide.
+
+def test_mid_page_cross_reference_does_not_create_a_second_entry():
+    """"...see Note 5..." inside note 20's body must not open a note-5 entry
+    that truncates note 20's page range."""
+    pages = [
+        (30, "20. FINANCIAL INSTRUMENTS\nrefer to the table below\n"
+             "5. Property, plant and equipment\ncarrying amounts"),
+        (31, "continuation prose"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    nums = [e.note_num for e in inv]
+    assert len(nums) == len(set(nums)), f"duplicate note_num in {nums}"
+
+
+def test_duplicate_note_numbers_are_merged_with_a_union_page_range():
+    pages = [
+        (10, "3. INVENTORIES\nfirst"),
+        (11, "4. RECEIVABLES\nother"),
+        (12, "3. Inventories\nstray repeat"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    nums = [e.note_num for e in inv]
+    assert nums == [3, 4]
+    note3 = next(e for e in inv if e.note_num == 3)
+    # Union spans both appearances; the first title wins.
+    assert note3.page_range == (10, 12)
+    # _clean_title normalises ALL-CAPS headings to Title Case.
+    assert note3.title == "Inventories"
+
+
+def test_continuation_only_page_does_not_double_count_subnotes():
+    pages = [
+        (10, "2. SIGNIFICANT ACCOUNTING POLICIES\n2.1 Basis of preparation"),
+        (11, "2. Significant accounting policies (continued)\n2.2 Revenue"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    assert [e.note_num for e in inv] == [2]
+    refs = [s.subnote_ref for s in (inv[0].subnotes or [])]
+    assert len(refs) == len(set(refs)), f"duplicated subnotes: {refs}"
+
+
+# --- operator-added notes carry no page range (code review 2026-07-19) -----
+# The PreRunPanel editor writes page_range (0, 0) for a note the operator adds
+# by hand. Downstream that must read as "unknown", never as page 0.
+
+def test_added_note_does_not_inflate_the_sparse_span():
+    """A (0,0) entry counted as page 0 inflated the span enough to fire the
+    sparse warning on a complete inventory."""
+    entries = [_entry(n, 20 + n, 20 + n) for n in range(1, 13)]
+    entries.append(NoteInventoryEntry(note_num=13, title="Added", page_range=(0, 0)))
+    assert not any("sparse" in w for w in _pack(entries).completeness_warnings())
+
+
+def test_added_note_renders_as_page_unknown_not_page_zero():
+    from notes.agent import _render_inventory_preview
+
+    block = _render_inventory_preview(
+        [NoteInventoryEntry(note_num=7, title="Added by hand", page_range=(0, 0))]
+    )
+    assert "p.0" not in block
+    assert "page not known" in block

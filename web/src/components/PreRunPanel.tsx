@@ -308,7 +308,9 @@ export type NotesInventoryEntry = {
 export function findInventoryGaps(entries: NotesInventoryEntry[]): number[] {
   const nums = entries
     .map((e) => e.note_num)
-    .filter((n): n is number => typeof n === "number" && Number.isFinite(n))
+    // Integer check, not just isFinite: a fractional note_num would make
+    // every whole number below it read as a gap.
+    .filter((n): n is number => typeof n === "number" && Number.isInteger(n))
     .sort((a, b) => a - b);
   if (nums.length === 0) return [];
   const present = new Set(nums);
@@ -382,9 +384,9 @@ function NotesInventoryEditor({
             }}
             aria-label="Discovered notes"
           >
-            {sorted.map((e) => (
+            {sorted.map((e, i) => (
               <li
-                key={`${e.note_num}-${e.title}`}
+                key={`${e.note_num}-${e.title}-${i}`}
                 style={{ display: "flex", alignItems: "center", gap: 6 }}
               >
                 <span style={{ minWidth: 28, color: pwc.grey800 }}>

@@ -246,3 +246,27 @@ def test_note_snippet_keeps_word_cell_styling():
     """Verbatim passthrough depends on cell style= reaching the agent intact."""
     snip = ss.extract_note_snippet(_TOC_HTML, 3)
     assert "padding: 1px 5px" in snip
+
+
+def test_dot_leader_toc_entries_are_also_refused():
+    """Word contents lists use either a tab or a dot leader before the page
+    number; only the tab form was covered before (code review 2026-07-19)."""
+    html = (
+        "<p>1.  Corporate information......6</p>"
+        "<p>2.  Receivables.........14</p>"
+        "<h2>1.\tCorporate information</h2>"
+        "<p>Real body text.</p>"
+    )
+    snip = ss.extract_note_snippet(html, 1)
+    assert "Real body text" in snip
+    assert "......6" not in snip
+
+
+def test_a_heading_ending_in_a_year_is_not_treated_as_a_toc_line():
+    """The tab must be immediately followed by the page digits; a heading whose
+    TITLE ends in a number must still resolve."""
+    html = (
+        "<h2>5.\tRevenue for the year ended 31 December 2021</h2>"
+        "<p>Body.</p>"
+    )
+    assert "Body." in ss.extract_note_snippet(html, 5)
