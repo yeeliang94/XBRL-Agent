@@ -371,3 +371,85 @@ def test_build_notes_inventory_async_force_vision_skips_regex(tmp_path):
     out = asyncio.run(_run())
     assert called["vision"] is True
     assert [e.note_num for e in out] == [7]
+
+
+# --- multiple headings per page / continuations (2026-07-19) ---------------
+# Run-74 dropped notes 8, 9, 11, 12, 14, 16, 17, 19 and 22: `_detect_note_header`
+# used `search()`, so only the FIRST heading on a page ever entered the
+# inventory. Short notes routinely share a page.
+
+def test_two_note_headings_on_one_page_both_enter_the_inventory():
+    pages = [
+        (22, "7. TRADE RECEIVABLES\nblah blah\n8. OTHER PAYABLES\nmore text"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    assert [e.note_num for e in inv] == [7, 8]
+
+
+def test_three_note_headings_on_one_page_all_enter():
+    pages = [
+        (22, "7. TAXATION\na\n8. OTHER PAYABLES\nb\n9. INCOME\nc"),
+        (23, "continuation prose with no heading"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    assert [e.note_num for e in inv] == [7, 8, 9]
+    # The last note on the page keeps absorbing later pages.
+    assert inv[-1].page_range == (22, 23)
+
+
+def test_continuation_heading_extends_rather_than_duplicating():
+    pages = [
+        (10, "1. BASIS OF PREPARATION\nfirst half"),
+        (11, "1. Basis of preparation (continued)\nsecond half"),
+        (12, "2. REVENUE\nrevenue text"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    assert [e.note_num for e in inv] == [1, 2]
+    assert inv[0].page_range == (10, 11)
+
+
+def test_continuation_variants_are_recognised():
+    for marker in ("(continued)", "(cont'd)", "(Continued)", "- continued"):
+        pages = [
+            (5, "3. INVENTORIES\nfirst"),
+            (6, f"3. Inventories {marker}\nsecond"),
+        ]
+        inv = extract_inventory_from_pages(pages)
+        assert [e.note_num for e in inv] == [3], marker
+        assert inv[0].page_range == (5, 6), marker
+
+
+# --- completeness warnings at both ends (2026-07-19) -----------------------
+# The interior gap check is blind at both ends of the numbering: run 74 lost
+# Note 22 (the highest) and produced no warning at all.
+
+def _pack(entries):
+    from scout.infopack import Infopack
+    return Infopack(toc_page=1, page_offset=0, notes_inventory=entries,
+                    inventory_source="text")
+
+
+def _entry(num, start, end):
+    return NoteInventoryEntry(note_num=num, title=f"Note {num}", page_range=(start, end))
+
+
+def test_warns_when_numbering_does_not_start_at_one():
+    pack = _pack([_entry(3, 10, 11), _entry(4, 12, 13)])
+    assert any("starts at Note 3" in w for w in pack.completeness_warnings())
+
+
+def test_no_leading_warning_when_numbering_starts_at_one():
+    pack = _pack([_entry(1, 10, 11), _entry(2, 12, 13)])
+    assert not any("starts at Note" in w for w in pack.completeness_warnings())
+
+
+def test_warns_when_inventory_is_sparse_over_a_wide_span():
+    # 2 notes across 20 pages of notes — discovery clearly missed most of them.
+    pack = _pack([_entry(1, 10, 11), _entry(2, 12, 29)])
+    assert any("sparse" in w for w in pack.completeness_warnings())
+
+
+def test_no_sparse_warning_for_a_dense_inventory():
+    entries = [_entry(n, 10 + n, 10 + n) for n in range(1, 13)]
+    pack = _pack(entries)
+    assert not any("sparse" in w for w in pack.completeness_warnings())
