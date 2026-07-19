@@ -1043,7 +1043,7 @@ function SheetSection({
 function StyleSourceChip({
   source,
 }: {
-  source?: "ops" | "floor" | "unstyled" | "formatter" | null;
+  source?: "ops" | "source" | "floor" | "unstyled" | "formatter" | null;
 }) {
   if (source !== "unstyled" && source !== "floor") return null;
   const label = source === "unstyled" ? "Unstyled" : "House style";

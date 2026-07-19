@@ -582,7 +582,16 @@ async def _invoke_sub_agent_once(
     # Derive the batch's page span for the scope-nudge paragraph below.
     # Empty batch (vacuous) collapses both values to 0 and we skip the
     # line entirely — no batch, nothing to scope.
-    batch_pages = [p for entry in batch for p in range(entry.page_range[0], entry.page_range[1] + 1)]
+    # page_range (0, 0) means UNKNOWN — an operator-added note, or a malformed
+    # infopack entry. Including it would drag batch_min to 0 and tell every
+    # note in the batch its pages start at 0, weakening a hint that is
+    # otherwise precise. Excluded here; the note is still in `batch`, so the
+    # agent is told to find it — just without a false page floor.
+    batch_pages = [
+        p for entry in batch
+        if entry.page_range and entry.page_range[0] > 0
+        for p in range(entry.page_range[0], entry.page_range[1] + 1)
+    ]
     batch_min = min(batch_pages) if batch_pages else 0
     batch_max = max(batch_pages) if batch_pages else 0
 

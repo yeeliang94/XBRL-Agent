@@ -390,8 +390,16 @@ def _render_inventory_preview(inventory: list[NoteInventoryEntry]) -> str:
     lines = [f"Scout identified {len(inventory)} notes in the PDF:"]
     for e in inventory:
         start, end = e.page_range
-        pages = f"p.{start}" if start == end else f"pp.{start}-{end}"
-        lines.append(f"  Note {e.note_num}: {e.title} ({pages})")
+        if not start:
+            # (0, 0) = page UNKNOWN — an operator-added note, or a malformed
+            # infopack entry. Rendering it as "(p.0)" invents a page that does
+            # not exist; say so plainly so the agent searches instead.
+            lines.append(
+                f"  Note {e.note_num}: {e.title} (page not known — search for it)"
+            )
+        else:
+            pages = f"p.{start}" if start == end else f"pp.{start}-{end}"
+            lines.append(f"  Note {e.note_num}: {e.title} ({pages})")
         # Phase 1b — nested sub-note tree rendered as └ children. Each
         # child line is indented to read as obviously-subordinate to
         # the parent without changing the parent line format that

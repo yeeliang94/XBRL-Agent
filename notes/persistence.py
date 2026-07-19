@@ -40,7 +40,7 @@ def persist_notes_cells(
     Each entry in ``cells_written`` is a dict-like with keys:
 
         sheet, row, label, html, evidence (optional), source_pages (optional list[int]),
-        style_source (optional 'ops'|'floor'|'unstyled')
+        style_source (optional 'ops'|'source'|'floor'|'unstyled')
 
     Returns the number of rows upserted (0 if ``cells_written`` is
     empty — which is a legitimate outcome for a "no prose, numeric-only"

@@ -370,6 +370,12 @@ def extract_inventory_from_pages(
                 current_subnotes.extend(
                     _detect_subnotes_for_parent(text, current.note_num, page_num)
                 )
+                if not headers:
+                    # The continuation was this page's ONLY heading. Without
+                    # this guard control falls through to the `elif` below,
+                    # which scans the same page for sub-notes a second time and
+                    # double-lists every one of them in the prompt.
+                    continue
 
         if headers:
             for num, title in headers:
@@ -399,7 +405,48 @@ def extract_inventory_from_pages(
 
     if current is not None:
         entries.append(_commit(current))
-    return entries
+    return _merge_duplicate_notes(entries)
+
+
+def _merge_duplicate_notes(
+    entries: list[NoteInventoryEntry],
+) -> list[NoteInventoryEntry]:
+    """Collapse repeat entries for the same note number into one.
+
+    Reading EVERY heading on a page (rather than only the first) is what stops
+    notes being dropped, but it also surfaces matches the old `search()` hid —
+    most importantly a mid-page cross-reference ("... see Note 5 ...") inside
+    another note's body, which opens a spurious out-of-order entry and
+    truncates the real note's page range.
+
+    `_is_continuation_title` only inspects the FIRST heading on a page, so a
+    continuation appearing in any other position also lands here. Rather than
+    grow that special case, every duplicate path converges on one pass: keep
+    the first entry's position and title (the real heading precedes any
+    reference to it), union the page ranges, and concatenate sub-notes
+    de-duplicated by ref.
+
+    Sheet-12 fan-out iterates this list directly and bills per entry, so a
+    duplicate note_num means the same note is processed twice.
+    """
+    by_num: dict[int, NoteInventoryEntry] = {}
+    order: list[int] = []
+    for e in entries:
+        num = e.note_num
+        if num not in by_num:
+            by_num[num] = e
+            order.append(num)
+            continue
+        kept = by_num[num]
+        starts = [p for p in (kept.page_range[0], e.page_range[0]) if p]
+        ends = [p for p in (kept.page_range[1], e.page_range[1]) if p]
+        kept.page_range = (min(starts) if starts else 0, max(ends) if ends else 0)
+        if e.subnotes:
+            seen = {s.subnote_ref for s in (kept.subnotes or [])}
+            kept.subnotes = list(kept.subnotes or []) + [
+                s for s in e.subnotes if s.subnote_ref not in seen
+            ]
+    return [by_num[n] for n in order]
 
 
 def _resolve_vision_range(
