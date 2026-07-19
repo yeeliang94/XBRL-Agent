@@ -202,3 +202,47 @@ def test_end_to_end_through_mammoth(tmp_path: Path):
     write_source_html(src, session)
     snip = ss.read_note_snippet(session / "uploaded.pdf", 4)
     assert "1,595" in snip and "table" in snip.lower()
+
+
+# --- table-of-contents immunity (2026-07-19) --------------------------------
+# Word financial statements open with a contents list whose entries look
+# exactly like note headings ("1.  Corporate information<tab>6"). Before the
+# fix the slicer matched the FIRST such block, so every note resolved to its
+# one-line TOC entry (no table, no formatting) and the last TOC entry
+# swallowed everything up to the first real heading. Measured on
+# data/FINCO-Audited-Financial-Statement-2021.docx: 15 of 15 notes wrong.
+
+_TOC_HTML = """
+<h1>Contents</h1>
+<p>1.  Corporate information\t6</p>
+<p>2.  Significant accounting policies\t6</p>
+<p>3.  Office equipment\t14</p>
+<h2>1.\tCorporate information</h2>
+<p>The company is incorporated in Malaysia.</p>
+<h2>2.\tSignificant accounting policies</h2>
+<p>Prepared under MFRS.</p>
+<h2>3.\tOffice equipment</h2>
+<table><tr><td style="padding: 1px 5px">Cost</td><td>1,595</td></tr></table>
+"""
+
+
+def test_toc_entries_are_not_mistaken_for_note_headings():
+    """The real <h2> note wins over the earlier TOC <p> with the same number."""
+    snip = ss.extract_note_snippet(_TOC_HTML, 1)
+    assert "incorporated in Malaysia" in snip
+    assert "Corporate information\t6" not in snip
+
+
+def test_toc_does_not_swallow_the_body_into_the_last_entry():
+    """The final TOC line must not absorb everything up to the first real note."""
+    snip = ss.extract_note_snippet(_TOC_HTML, 3)
+    assert "<table" in snip
+    assert "1,595" in snip
+    # Must be note 3's own table, not the whole document body.
+    assert "incorporated in Malaysia" not in snip
+
+
+def test_note_snippet_keeps_word_cell_styling():
+    """Verbatim passthrough depends on cell style= reaching the agent intact."""
+    snip = ss.extract_note_snippet(_TOC_HTML, 3)
+    assert "padding: 1px 5px" in snip
