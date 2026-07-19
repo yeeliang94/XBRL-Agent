@@ -50,6 +50,13 @@ _NOTE_HEADING_LOOSE_RE = re.compile(
 )
 _HEADING_TAG_RE = re.compile(r"^\s*<h[1-6]\b", re.IGNORECASE)
 
+# A contents-list line: the title, then a page reference introduced by a tab or
+# a dot leader, at end of block. Matched against text that KEEPS its tabs (see
+# _raw_block_text) because the tab is the whole signal — collapsing it to a
+# space would also match a heading legitimately ending in a year ("... in
+# 2021"). Dot leaders ("Receivables......14") are the other common Word form.
+_TOC_LINE_RE = re.compile(r"(?:\t[ \t]*|\.{2,}\s*)\d{1,4}\s*$")
+
 # Top-level block tags mammoth emits. We split on these to find note
 # boundaries; anything else rides inside its block. A regex can't balance
 # nested tags (Malaysian FS tables use merged cells → mammoth emits nested
@@ -107,13 +114,26 @@ def _block_text(block_html: str) -> str:
     return re.sub(r"\s+", " ", _TAG_RE.sub(" ", block_html)).strip()
 
 
+def _raw_block_text(block_html: str) -> str:
+    """Plain text of a block with tabs INTACT — only newlines and runs of
+    spaces are collapsed. TOC detection keys on the tab, so _block_text's
+    whitespace collapsing would erase the signal."""
+    text = _TAG_RE.sub(" ", block_html)
+    text = text.replace("\r", "").replace("\n", " ")
+    return re.sub(r"[ ]{2,}", " ", text).strip()
+
+
 def _heading_note_num(block_html: str) -> Optional[int]:
     """The note number a block starts, or None if it isn't a note heading.
 
     Heading tags (<h1>-<h6>) use the looser rule (a bare-whitespace separator
     after the number is allowed); other blocks require punctuation so prose that
     opens with a number isn't read as a boundary.
+
+    Table-of-contents lines are refused outright — see _is_toc_entry.
     """
+    if _is_toc_entry(block_html):
+        return None
     pat = (
         _NOTE_HEADING_LOOSE_RE
         if _HEADING_TAG_RE.match(block_html)
@@ -121,6 +141,22 @@ def _heading_note_num(block_html: str) -> Optional[int]:
     )
     m = pat.match(_block_text(block_html))
     return int(m.group(1)) if m else None
+
+
+def _is_toc_entry(block_html: str) -> bool:
+    """True for a contents-list line like "1.  Corporate information<tab>6".
+
+    A Word financial statement opens with a contents list whose entries are
+    textually identical to the note headings they point at. Before this guard
+    the slicer matched the FIRST such block, so every note resolved to its
+    one-line TOC entry (no table, no formatting to copy) and the final TOC line
+    swallowed the whole front matter. Measured on the FINCO 2021 statement:
+    15 of 15 notes resolved to the wrong content.
+
+    The tell is the trailing page reference — a tab or dot leader followed by
+    digits at end of line. A real heading ends with its title.
+    """
+    return bool(_TOC_LINE_RE.search(_raw_block_text(block_html)))
 
 
 def extract_note_snippet(html: str, note_num: int) -> str:
