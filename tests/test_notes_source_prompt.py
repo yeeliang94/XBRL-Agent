@@ -25,16 +25,21 @@ def test_block_present_and_shaped_when_available():
     block = _render_source_html_block(True)
     assert block is not None
     assert "read_source_note" in block
-    assert "format_ops" in block  # styling goes through the sidecar channel
     assert "PDF wins" in block  # source is a reference, PDF is ground truth
-    # Step 7 + Phase 4: the block tells the agent to COPY real styling (not
-    # infer it), now INCLUDING padding + paragraph spacing (Phase 4 plumbed them
-    # through the write path, so the old ignore-list is gone).
-    assert "COPY the styling" in block
-    assert "do not invent" in block.lower()
-    assert "padding" in block  # copied via the padding op
-    assert "space_before" in block or "space_after" in block
-    assert "IGNORE these source properties" not in block  # ignore-list removed
+
+    # VERBATIM PASSTHROUGH (2026-07-19). The block previously told the agent to
+    # translate each source `style=` into a `format_ops` entry; that round-trip
+    # through model judgement was the "AI guessing the formatting" reported in
+    # run 74. Tables are now copied byte-for-byte into `content`.
+    assert "VERBATIM" in block.upper()
+    assert "style=" in block  # the attribute is copied, not re-described
+    lowered = block.lower()
+    assert "do not" in lowered and "translate" in lowered
+    # format_ops survives ONLY as the PDF-only fallback, never the table path.
+    assert "format_ops" in block
+    assert "fallback" in lowered
+    # Gotcha #16 is reversed for tables ONLY — prose must stay style-free.
+    assert "prose stays style-free" in lowered
 
 
 def test_render_notes_prompt_gates_on_flag():
@@ -92,3 +97,53 @@ def test_tool_registered_only_with_sidecar(tmp_path: Path):
     agent_yes, deps_yes = _make_agent(str(with_dir / "uploaded.pdf"))
     assert "read_source_note" in _tool_names(agent_yes)
     assert deps_yes.source_html_path == str(with_dir / "source.html")
+
+
+# --- unconsulted-source nudge (2026-07-19) ---------------------------------
+# Run 74: the Accounting Policies agent never called read_source_note, so its
+# tables were rebuilt from the PDF while its peers copied real Word markup.
+
+def test_unconsulted_source_nudge_is_silent_at_zero():
+    from notes.agent import format_unconsulted_source_nudge
+
+    assert format_unconsulted_source_nudge(0) == ""
+    assert format_unconsulted_source_nudge(-1) == ""
+
+
+def test_unconsulted_source_nudge_invites_a_resend_without_demanding_one():
+    from notes.agent import format_unconsulted_source_nudge
+
+    msg = format_unconsulted_source_nudge(3)
+    assert "read_source_note" in msg
+    assert "3 table cell(s)" in msg
+    # Never pushes the agent to invent formatting when the source has none.
+    assert "no action is needed" in msg.lower()
+
+
+_PN = {"number": "5", "title": "Test note"}
+
+
+def test_payload_consulted_helper_tracks_note_refs():
+    from notes.agent import NotesDeps, _payload_source_consulted
+    from notes.payload import NotesPayload
+
+    deps = NotesDeps(
+        pdf_path="x", template_path="y", model=None, output_dir="z",
+        token_report=None, template_type=None, sheet_name="s",
+        filing_level="company",
+    )
+    deps.consulted_source_notes = {5}
+    p_hit = NotesPayload(chosen_row_label="a", content="<table></table>",
+                         evidence="e", note_num=5, parent_note=_PN)
+    p_miss = NotesPayload(chosen_row_label="a", content="<table></table>",
+                          evidence="e", note_num=7, parent_note={"number": "7", "title": "Other"})
+    p_sub = NotesPayload(chosen_row_label="a", content="<table></table>",
+                         evidence="e", source_note_refs=["5.1"], parent_note=_PN)
+    p_none = NotesPayload(chosen_row_label="a", content="<table></table>",
+                          evidence="e", parent_note=_PN)
+    assert _payload_source_consulted(deps, p_hit)
+    assert not _payload_source_consulted(deps, p_miss)
+    assert _payload_source_consulted(deps, p_sub)  # "5.1" -> parent note 5
+    # parent_note number alone is enough to resolve the note (it is
+    # mandatory on any content payload), and note 5 was consulted.
+    assert _payload_source_consulted(deps, p_none)

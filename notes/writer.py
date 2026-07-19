@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import copy
 import logging
+import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -336,6 +337,15 @@ def write_notes_workbook(
     )
 
 
+# A style= attribute on a table tag — the tell for verbatim source passthrough
+# (see _carries_table_styling). Table tags are the only place the sanitiser
+# keeps inline styles on agent content, so this can't false-positive on prose.
+_TABLE_STYLE_ATTR_RE = re.compile(
+    r"<(?:table|thead|tbody|tr|th|td|col|colgroup)\b[^>]*\sstyle\s*=",
+    re.IGNORECASE,
+)
+
+
 def _style_cell_html(
     html: str,
     format_ops: Optional[list],
@@ -367,7 +377,27 @@ def _style_cell_html(
                 f"{row_label}: format_ops dropped ({exc}) — "
                 f"cell renders plain"
             )
+    # Verbatim passthrough: the agent copied a Word table straight out of
+    # `read_source_note`, so the styling is the SOURCE DOCUMENT's own and
+    # arrived on the content already (the sanitiser's table-tag whitelist
+    # preserves it — measured 2026-07-19: padding, text-align and per-side
+    # borders all survive intact). Nothing to apply; only the provenance
+    # differs from "unstyled", and the operator needs that distinction —
+    # an unstyled cell may want a formatter pass, a source-styled one does not.
+    if _carries_table_styling(html):
+        return html, "source"
     return html, "unstyled"
+
+
+def _carries_table_styling(html: str) -> bool:
+    """True when a table tag in ``html`` already carries a ``style=``.
+
+    Cheap string test rather than a parse: this runs per cell on the write
+    path, and a false positive costs only a provenance label.
+    """
+    if "<t" not in html:
+        return False
+    return bool(_TABLE_STYLE_ATTR_RE.search(html))
 
 
 def _inject_headings(payload: NotesPayload) -> NotesPayload:
