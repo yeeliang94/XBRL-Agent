@@ -581,3 +581,25 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     for node in list(soup.contents):
         wrapper.append(node.extract())
     return str(wrapper)
+
+
+def strip_inline_styles(html: str) -> str:
+    """Return ``html`` with every inline ``style=`` removed.
+
+    The last rung of the exporter's size ladder. Verbatim passthrough
+    (gotcha #16) writes the SOURCE document's own per-cell styling into the
+    note, so a large Word table can exceed Excel's cell cap on its raw bytes
+    alone — at which point every decorator tier has already failed, including
+    `compact` (which only slims DECORATOR-added styling, and these cells own
+    theirs). Stripping hands the ladder its rungs back so the note files plain
+    rather than being skipped outright.
+
+    Structure and text are untouched — only the attribute goes.
+    """
+    if not html or "style=" not in html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for el in soup.find_all(True):
+        if el.has_attr("style"):
+            del el["style"]
+    return str(soup)

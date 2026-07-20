@@ -202,19 +202,53 @@ _PREFIXED_HEADER_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 
+# A heading that RESUMES the note already in progress rather than starting a
+# new one: "1. Basis of preparation (continued)", "3. Inventories - cont'd".
+_CONTINUATION_RE = re.compile(r"\(?\b(continued|cont'?d)\b\)?\s*$", re.IGNORECASE)
 
-def _detect_note_header(page_text: str) -> Optional[tuple[int, str]]:
-    """Find the first note-header match on a page and return (num, title).
 
-    Returns None if no header looks like a note boundary.
+def _detect_note_headers(page_text: str) -> list[tuple[int, str]]:
+    """Every note header on a page, in the order they appear.
+
+    Returns [] if no header looks like a note boundary.
+
+    Reads ALL matches, not just the first: short notes routinely share a page
+    (taxation followed by EPS), and the previous `search()`-based form silently
+    dropped every heading after the first. Run 74 lost notes 8, 9, 11, 12, 14,
+    16, 17, 19 and 22 that way, with no warning — the gap check can't see a
+    dropped trailing note (see infopack.completeness_warnings).
+
+    Both patterns are scanned and the results merged by position, so a page
+    mixing "NOTE 8 - PAYABLES" and "9. INCOME" yields both in reading order.
     """
-    m = _PREFIXED_HEADER_RE.search(page_text)
-    if m:
-        return int(m.group(1)), _clean_title(m.group(2))
-    m = _NUMBERED_HEADER_RE.search(page_text)
-    if m:
-        return int(m.group(1)), _clean_title(m.group(2))
-    return None
+    found: list[tuple[int, int, str]] = []
+    for pattern in (_PREFIXED_HEADER_RE, _NUMBERED_HEADER_RE):
+        for m in pattern.finditer(page_text):
+            found.append((m.start(), int(m.group(1)), _clean_title(m.group(2))))
+    found.sort(key=lambda t: t[0])
+
+    # The two patterns can both match one physical heading ("NOTE 8 - X" is
+    # only matched by the prefixed form, but overlapping starts are possible
+    # on unusual layouts). Keep the first hit at any given offset.
+    out: list[tuple[int, str]] = []
+    seen_offsets: set[int] = set()
+    for offset, num, title in found:
+        if offset in seen_offsets:
+            continue
+        seen_offsets.add(offset)
+        out.append((num, title))
+    return out
+
+
+def _is_continuation_title(title: str) -> bool:
+    """True for a heading that resumes the note already in progress —
+    "1. Basis of preparation (continued)".
+
+    Without this, a continuation heading opens a SECOND entry for the same
+    note number: the first entry's page range is truncated to where the note
+    broke, and Sheet-12 fan-out processes the note twice.
+    """
+    return bool(_CONTINUATION_RE.search(title))
 
 
 def _clean_title(raw: str) -> str:
@@ -318,17 +352,44 @@ def extract_inventory_from_pages(
         return parent
 
     for page_num, text in pages:
-        header = _detect_note_header(text)
-        if header is not None:
-            num, title = header
-            if current is not None:
-                entries.append(_commit(current))
-            current = NoteInventoryEntry(
-                note_num=num,
-                title=title,
-                page_range=(page_num, page_num),
-            )
-            current_subnotes = _detect_subnotes_for_parent(text, num, page_num)
+        headers = _detect_note_headers(text)
+        # A continuation heading ("... (continued)") for the note already in
+        # progress resumes it instead of opening a duplicate entry. It only
+        # counts as a continuation when it names the SAME note — a different
+        # number marked "(continued)" is a genuine new note whose earlier
+        # pages we simply never saw.
+        if headers and current is not None:
+            first_num, first_title = headers[0]
+            if first_num == current.note_num and _is_continuation_title(first_title):
+                headers = headers[1:]
+                current = NoteInventoryEntry(
+                    note_num=current.note_num,
+                    title=current.title,
+                    page_range=(current.page_range[0], page_num),
+                )
+                current_subnotes.extend(
+                    _detect_subnotes_for_parent(text, current.note_num, page_num)
+                )
+                if not headers:
+                    # The continuation was this page's ONLY heading. Without
+                    # this guard control falls through to the `elif` below,
+                    # which scans the same page for sub-notes a second time and
+                    # double-lists every one of them in the prompt.
+                    continue
+
+        if headers:
+            for num, title in headers:
+                if current is not None:
+                    entries.append(_commit(current))
+                current = NoteInventoryEntry(
+                    note_num=num,
+                    title=title,
+                    page_range=(page_num, page_num),
+                )
+                # Sub-notes are detected per page, so several headings sharing
+                # a page each receive the page's sub-note hits. Over-attaching
+                # is safe (display-only enrichment); dropping them is not.
+                current_subnotes = _detect_subnotes_for_parent(text, num, page_num)
         elif current is not None:
             current = NoteInventoryEntry(
                 note_num=current.note_num,
@@ -344,7 +405,48 @@ def extract_inventory_from_pages(
 
     if current is not None:
         entries.append(_commit(current))
-    return entries
+    return _merge_duplicate_notes(entries)
+
+
+def _merge_duplicate_notes(
+    entries: list[NoteInventoryEntry],
+) -> list[NoteInventoryEntry]:
+    """Collapse repeat entries for the same note number into one.
+
+    Reading EVERY heading on a page (rather than only the first) is what stops
+    notes being dropped, but it also surfaces matches the old `search()` hid —
+    most importantly a mid-page cross-reference ("... see Note 5 ...") inside
+    another note's body, which opens a spurious out-of-order entry and
+    truncates the real note's page range.
+
+    `_is_continuation_title` only inspects the FIRST heading on a page, so a
+    continuation appearing in any other position also lands here. Rather than
+    grow that special case, every duplicate path converges on one pass: keep
+    the first entry's position and title (the real heading precedes any
+    reference to it), union the page ranges, and concatenate sub-notes
+    de-duplicated by ref.
+
+    Sheet-12 fan-out iterates this list directly and bills per entry, so a
+    duplicate note_num means the same note is processed twice.
+    """
+    by_num: dict[int, NoteInventoryEntry] = {}
+    order: list[int] = []
+    for e in entries:
+        num = e.note_num
+        if num not in by_num:
+            by_num[num] = e
+            order.append(num)
+            continue
+        kept = by_num[num]
+        starts = [p for p in (kept.page_range[0], e.page_range[0]) if p]
+        ends = [p for p in (kept.page_range[1], e.page_range[1]) if p]
+        kept.page_range = (min(starts) if starts else 0, max(ends) if ends else 0)
+        if e.subnotes:
+            seen = {s.subnote_ref for s in (kept.subnotes or [])}
+            kept.subnotes = list(kept.subnotes or []) + [
+                s for s in e.subnotes if s.subnote_ref not in seen
+            ]
+    return [by_num[n] for n in order]
 
 
 def _resolve_vision_range(

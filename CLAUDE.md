@@ -594,6 +594,32 @@ agent HTML → sanitiser → notes_cells (DB, canonical) → overlay → xlsx st
                                      ↘ NotesReviewTab (TipTap editor)
 ```
 
+**Verbatim table passthrough on Word uploads (2026-07-19) — the one exception
+to "content stays style-free."** When a run carries a `source.html` sidecar
+(gotcha #29), notes agents COPY the Word table's markup — inline `style=` and
+all — straight into `content` rather than translating it into `format_ops`.
+The sanitiser's table-tag whitelist already preserves those declarations
+(verified end-to-end on the FINCO 2021 statement: padding, text-align and
+per-side borders all survive), and `mtool/notes_decorate._merge_cell_style`
+gives persisted per-cell declarations precedence over theme defaults, so
+Word's own formatting reaches the review page, the clipboard and the mTool
+filing without a model re-describing it. **PROSE stays style-free, enforced in
+code** — `notes/writer.py::_strip_non_table_styles` removes inline `style=`
+from every non-table tag on the AGENT path (`_sanitize_payload`). That strip is
+load-bearing, not belt-and-braces: the sanitiser itself *does* permit
+`text-align`/`margin-*` on `p`/`h3`/`li`, `color` on `span` and
+`background-color` on `mark`, and `ingest/docx_html` deliberately writes
+paragraph styles into `source.html` — so without it, "copy the table verbatim
+but not the paragraph beside it" would rest on model judgement alone. The human
+TipTap editor reaches the DB through the PATCH endpoint and keeps its paragraph
+alignment. `_style_cell_html` tags such a
+cell `style_source='source'` (vs `ops` / `unstyled`) so the Notes-tab chip can
+tell "copied from the source" apart from "may want a formatter pass". Size is
+handled by the existing mTool ladder (full → compact → lite → flat →
+oversize), not by a new guard. Pinned by `tests/test_notes_source_prompt.py`,
+`tests/test_notes_format_sidecar.py`. Plan:
+docs/PLAN-notes-verbatim-and-scout-inventory.md.
+
 Key invariants:
 
 - **`notes_cells` (schema v3) is the source of truth.** The on-disk xlsx is a

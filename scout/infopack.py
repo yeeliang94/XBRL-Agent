@@ -43,6 +43,14 @@ _VALID_CONSOLIDATION: set[str] = {"company", "group", "both", "unknown"}
 # Source-honesty (rewrite Phase 6.3): how the notes inventory was built.
 _VALID_INVENTORY_SOURCE: set[str] = {"text", "vision", "none", "unknown"}
 
+# Sparse-inventory heuristic (completeness_warnings check 3c). A real notes
+# section averages well under 4 pages per note; anything thinner than that
+# across a section of at least 8 pages means discovery mostly failed. Set
+# deliberately loose — this warns, it never blocks, and a false positive on an
+# unusually verbose filing costs the operator one glance at the PDF.
+_SPARSE_MIN_SPAN = 8
+_SPARSE_PAGES_PER_NOTE = 4
+
 def _registered_variant_names(st: StatementType) -> set[str]:
     """Closed set of registered variant names for a statement.
 
@@ -552,6 +560,45 @@ class Infopack:
                     f"notes_inventory has gaps: note number(s) {preview}{more} "
                     f"were not found between Note {note_nums[0]} and "
                     f"Note {note_nums[-1]} — scout may have dropped them."
+                )
+
+            # 3b. The interior check above is blind at BOTH ends: a filing whose
+            #     Note 1 or highest note was dropped still looks contiguous. Run
+            #     74 lost Note 22 (the last one) and produced no warning at all.
+            #     A numbering that doesn't start at 1 is the observable tell for
+            #     the leading case; the trailing case can't be proven from the
+            #     inventory alone, so we flag the risk rather than a fact.
+            if note_nums[0] != 1:
+                warnings.append(
+                    f"notes_inventory starts at Note {note_nums[0]}, not Note 1 "
+                    f"— note(s) 1-{note_nums[0] - 1} were never found. Check the "
+                    "PDF and add them before running."
+                )
+
+        # 3c. A sparse inventory over a wide notes section means discovery
+        #     mostly failed — but not completely, so the empty-inventory check
+        #     (2) stays silent and the vision fallback never fires (it only
+        #     triggers on a strictly empty result). Density is the only signal
+        #     available without re-reading the PDF.
+        if note_nums:
+            # Ignore unknown ranges (0, 0) — an operator-added note carries no
+            # pages, and counting it as page 0 inflates the span enough to fire
+            # this warning on a perfectly complete inventory.
+            page_starts = [
+                e.page_range[0] for e in self.notes_inventory
+                if e.page_range and e.page_range[0] > 0
+            ]
+            page_ends = [
+                e.page_range[1] for e in self.notes_inventory
+                if e.page_range and e.page_range[0] > 0
+            ]
+            span = (max(page_ends) - min(page_starts) + 1) if page_starts else 0
+            if span >= _SPARSE_MIN_SPAN and len(note_nums) < span / _SPARSE_PAGES_PER_NOTE:
+                warnings.append(
+                    f"notes_inventory looks sparse: only {len(note_nums)} note(s) "
+                    f"found across {span} pages of notes. Discovery probably "
+                    "missed some — check the PDF, or re-scan with the "
+                    "scanned-image option if the text layer is poor."
                 )
 
         # 4. Missing entity / reporting period weakens the scout-context block

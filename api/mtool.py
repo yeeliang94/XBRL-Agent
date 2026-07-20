@@ -352,6 +352,12 @@ async def patch_mtool_template(
                             "formatting_reduced", 0)
                         notes_report["formatting_compacted"] = _ncounts.get(
                             "formatting_compacted", 0)
+                        # Verbatim-passthrough notes whose SOURCE (Word)
+                        # styling had to be stripped for size — they file with
+                        # theme styling on ANY tier (even "full"), so the tier
+                        # counters above can't carry this loss.
+                        notes_report["source_styling_dropped"] = _ncounts.get(
+                            "source_styling_dropped", 0)
                         # Honest labelling: a deliberately-unstyled diagnostic
                         # fill must be visible in the report, not mistaken for
                         # a styling bug.
@@ -707,6 +713,11 @@ def _notes_report_block(notes_report: dict | None) -> dict | None:
             # notes on the compact tier: same visible formatting, slimmer
             # styling so a big table fits Excel's cell limit.
             "formatting_compacted": notes_report.get("formatting_compacted", 0),
+            # verbatim-passthrough notes whose Word-source styling was
+            # stripped for size; they filed with theme styling instead
+            # (possibly on the "full" tier, so no other counter shows it).
+            "source_styling_dropped": notes_report.get(
+                "source_styling_dropped", 0),
         },
         "unresolved": [
             {"label": e.get("label"), "detail": e.get("detail")}
