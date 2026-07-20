@@ -80,6 +80,12 @@ class NotesTableStyle:
     heading_weight: int | None = None      # None → historic 600
     list_marker: str | None = None         # None | disc | dash | decimal
     totals_double_underline: bool = False
+    # Accountant "ruled" look: a single horizontal rule under the header row,
+    # with no cell grid (`border_style="none"`). Printed financial statements
+    # are ruled, not boxed — and it is what a Word source produces, so a
+    # PDF-sourced note stops looking visibly different from a Word-sourced one
+    # (which after `data-source-styled` renders exactly as its source).
+    header_rule: bool | None = None
 
     @classmethod
     def from_theme(cls, theme: dict | None) -> "NotesTableStyle":
@@ -139,6 +145,9 @@ class NotesTableStyle:
             heading_weight=_opt_num("headingWeight"),
             list_marker=list_marker,
             totals_double_underline=theme.get("totalsDoubleUnderline") is True,
+            # `is True` (not truthy) so a malformed value reads as "unset" and
+            # keeps the historic no-rule look, matching every field above.
+            header_rule=True if theme.get("headerRule") is True else None,
         )
 
 
@@ -200,7 +209,13 @@ def _header_extra(o: NotesTableStyle) -> str:
     # `<th>` is bold by default in most targets; header_bold=False must emit an
     # explicit 400 to override. None (un-themed) keeps the historic 600.
     weight = " font-weight: 400;" if o.header_bold is False else " font-weight: 600;"
-    return f" background: {fill};{weight}"
+    # Ruled look: the header's underline is the table's ONLY line. Emitted here
+    # rather than in `_border_css` because it is a header-row property, not a
+    # per-cell grid — `border_style` stays "none" and the legacy `border="1"`
+    # attribute stays suppressed.
+    rule = (f" border-bottom: 1px solid {o.border_color or '#999'};"
+            if o.header_rule else "")
+    return f" background: {fill};{weight}{rule}"
 
 
 def _paragraph_style(o: NotesTableStyle) -> str:
@@ -242,6 +257,39 @@ def _is_totals_row(row: Tag) -> bool:
 
 
 # --- style-merge helpers (port of clipboard.ts) -----------------------------
+# Verbatim Word passthrough (notes/writer.py::_mark_source_styled_tables): the
+# table's own borders are the WHOLE truth, including the sides it leaves silent.
+# Adding the house grid there would draw lines the source document never had.
+SOURCE_STYLED_ATTR = "data-source-styled"
+
+
+def _is_source_styled(table: Tag) -> bool:
+    return table.get(SOURCE_STYLED_ATTR) == "true"
+
+
+def _without_border_decls(css: str) -> str:
+    """Drop every border declaration from a style string, keeping the rest.
+
+    Used for source-styled tables: they still want the theme's padding, font
+    and vertical alignment — only the grid is theirs to decide.
+
+    ``border-collapse`` / ``border-spacing`` are LAYOUT, not edges, and are
+    explicitly preserved: they share the `border-` prefix (so `_style_family`
+    calls them "border"), and dropping `border-collapse: collapse` would
+    silently double every rule in the table. No caller passes them today —
+    this is a guard on the choke point, since the helper's name promises to
+    remove lines, not to change table layout.
+    """
+    kept = [d for d in _decls(css)
+            if _style_family(_prop_of(d)) != "border"
+            or _prop_of(d) in _BORDER_LAYOUT_PROPS]
+    return ("; ".join(kept) + "; ") if kept else ""
+
+
+# Border-family properties that control LAYOUT rather than a visible edge.
+_BORDER_LAYOUT_PROPS = frozenset({"border-collapse", "border-spacing"})
+
+
 def _style_family(prop: str) -> str:
     if prop == "border" or prop.startswith("border-"):
         return "border"
@@ -478,6 +526,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     # decision is per TABLE, so a user-styled table in the same note keeps the
     # full form while its siblings compact).
     compact_tables: set[int] = set()
+    # Tables whose grid came verbatim from the Word source (by identity, like
+    # compact_tables) — the theme contributes no borders to these.
+    source_styled_tables: set[int] = set()
     for table in soup.find_all("table"):
         _merge_style(table,
                      _TABLE_STYLE_KEEP_WIDTH if _table_has_explicit_width(table)
@@ -492,6 +543,11 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         cells_own_borders = any(
             "border" in (c.get("style") or "")
             for c in table.find_all(("td", "th")))
+        # A source-styled table owns its grid even where its cells state no
+        # border at all — silence is a decision there, not a gap to fill.
+        if _is_source_styled(table):
+            source_styled_tables.add(id(table))
+            cells_own_borders = True
         if no_border or cells_own_borders:
             for attr in ("border", "cellpadding", "cellspacing"):
                 if table.has_attr(attr):
@@ -519,11 +575,25 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         parent_table = row.find_parent("table")
         row_compact = (parent_table is not None
                        and id(parent_table) in compact_tables)
+        # Source-styled: keep the theme's padding/font/alignment, drop its grid
+        # so the cells' own (often deliberately absent) borders stand.
+        row_source_styled = (parent_table is not None
+                             and id(parent_table) in source_styled_tables)
+        # Stripped ONCE on the finished addition rather than on `cell_base`
+        # alone: `_header_extra` contributes its own `border-bottom` (the house
+        # header rule), so a base-only strip let that one edge through and made
+        # the mTool/clipboard output disagree with the review page, whose CSS
+        # suppresses it. One choke point = no sub-builder can leak a border.
+        def _themed(addition: str) -> str:
+            return _without_border_decls(addition) if row_source_styled else addition
         # Themed totals convention: the amount cells of a "total" row get the
         # double rule. Appended INSIDE the same merged addition so a persisted
         # per-cell border (user WYSIWYG / sidecar ops) still wins — the merge
         # skips the whole border family when the cell owns any border prop.
-        totals_row = style.totals_double_underline and _is_totals_row(row)
+        # The house totals rule is another border the source didn't ask for —
+        # a Word table already carries its own underlines where it wants them.
+        totals_row = (style.totals_double_underline and not row_source_styled
+                      and _is_totals_row(row))
         for idx, cell in enumerate(cells):
             numeric = should_right_align_cell(cell.get_text(), idx, len(cells))
             align = " text-align: right;" if numeric else " text-align: left;"
@@ -538,13 +608,15 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                     addition = "text-align: right;" + extra
                 else:
                     addition = extra.lstrip()
+                addition = _themed(addition)
                 if addition:
                     _merge_cell_style(cell, addition)
             elif cell.name == "th":
                 _merge_cell_style(
-                    cell, cell_base + _header_extra(style) + align + extra)
+                    cell,
+                    _themed(cell_base + _header_extra(style) + align + extra))
             else:
-                _merge_cell_style(cell, cell_base + align + extra)
+                _merge_cell_style(cell, _themed(cell_base + align + extra))
 
     # After merging, any border the formatter explicitly cleared still reads as
     # `hidden`/`none`; translate those to white so they render invisibly in

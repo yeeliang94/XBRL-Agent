@@ -239,3 +239,33 @@ describe("clipboardFormat — prose theme fields (house style item 1)", () => {
     expect(theme.headingWeight).toBe(700);
   });
 });
+
+// --- Accountant "ruled" look (headerRule, 2026-07-20 house style) ----------
+describe("headerRule", () => {
+  test("themeToCssVars sets --nt-header-rule only when the rule is on", () => {
+    const vars = themeToCssVars({ ...DEFAULT_FORMAT_OPTIONS, headerRule: true });
+    expect(vars["--nt-header-rule"]).toBe("1px solid #999");
+  });
+
+  test("themeToCssVars omits the var when off, so the editor is unchanged", () => {
+    expect(
+      themeToCssVars(DEFAULT_FORMAT_OPTIONS)["--nt-header-rule"],
+    ).toBeUndefined();
+  });
+
+  test("the rule follows the theme's border colour", () => {
+    const vars = themeToCssVars({
+      ...DEFAULT_FORMAT_OPTIONS,
+      headerRule: true,
+      borderColor: "#185fa5",
+    });
+    expect(vars["--nt-header-rule"]).toBe("1px solid #185fa5");
+  });
+
+  test("parsing keeps a boolean and drops a malformed value", () => {
+    expect(parseThemeOptions({ headerRule: true }).headerRule).toBe(true);
+    expect(
+      parseThemeOptions({ headerRule: "yes" } as never).headerRule,
+    ).toBeUndefined();
+  });
+});

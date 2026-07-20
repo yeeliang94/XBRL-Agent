@@ -680,3 +680,112 @@ describe("decorateHtmlForClipboard — prose theme fields (house style item 1)",
     expect(out).toContain("border-bottom: 1px solid #185fa5");
   });
 });
+
+// --- Option A: verbatim Word tables own their grid, including its absences ---
+// A Word table defines its look largely by the borders it does NOT state; the
+// theme used to paint its default grid into those gaps (run 75). The
+// `data-source-styled` marker declares that absence. Parity with the review-page
+// CSS and mtool/notes_decorate.py — all three must agree or preview != paste.
+describe("source-styled tables (verbatim Word passthrough)", () => {
+  const marked =
+    '<table data-source-styled="true"><tr>' +
+    '<td style="padding: 1px 0px">Bahrain</td>' +
+    '<td style="padding: 1px 0px">39,827</td>' +
+    "</tr></table>";
+
+  test("adds no theme border to a cell that states none", () => {
+    const out = decorateHtmlForClipboard(marked);
+    expect(out).not.toContain("border: 1px solid");
+    expect(out).not.toContain('border="1"');
+  });
+
+  test("keeps the borders the source did state", () => {
+    const withRule =
+      '<table data-source-styled="true"><tr>' +
+      '<td style="border-bottom: 1px solid #000000; padding: 1px 0px">1</td>' +
+      "</tr></table>";
+    expect(decorateHtmlForClipboard(withRule)).toContain(
+      "border-bottom: 1px solid #000000",
+    );
+  });
+
+  test("suppresses the house totals rule", () => {
+    const totals =
+      '<table data-source-styled="true"><tr>' +
+      '<td style="padding: 1px 0px">Total</td>' +
+      '<td style="padding: 1px 0px">121,622</td>' +
+      "</tr></table>";
+    const out = decorateHtmlForClipboard(totals, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      totalsDoubleUnderline: true,
+    });
+    expect(out).not.toContain("double");
+  });
+
+  test("still applies the theme's non-border styling", () => {
+    expect(decorateHtmlForClipboard(marked)).toContain("padding");
+  });
+
+  test("leaves unmarked tables on the full house grid", () => {
+    const plain = "<table><tr><td>1,595</td></tr></table>";
+    const out = decorateHtmlForClipboard(plain);
+    expect(out.includes("border: 1px solid") || out.includes('border="1"')).toBe(
+      true,
+    );
+  });
+});
+
+// --- Accountant "ruled" look on paste (house style, 2026-07-20) ------------
+// The editor preview and the paste must agree, so this mirrors the
+// themeToCssVars tests and mtool/notes_decorate.py::_header_extra.
+describe("headerRule on the clipboard", () => {
+  const table =
+    "<table><thead><tr><th>Country</th></tr></thead>" +
+    "<tbody><tr><td>Qatar</td></tr></tbody></table>";
+
+  test("draws one rule under the header and no cell grid", () => {
+    const out = decorateHtmlForClipboard(table, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      borderStyle: "none",
+      headerRule: true,
+    });
+    expect(out).toContain("border-bottom: 1px solid #999");
+    expect(out).not.toContain("border: 1px solid");
+    expect(out).not.toContain('border="1"');
+  });
+
+  test("stays off by default, keeping the historic paste byte-compatible", () => {
+    expect(decorateHtmlForClipboard(table)).not.toContain("border-bottom");
+  });
+});
+
+// Review-round finding: `_headerExtra` contributes its own border-bottom, so
+// stripping only the cell BASE let the house header rule onto a source-styled
+// table — making the paste disagree with the review page, whose CSS zeroes it.
+describe("source-styled tables ignore the house header rule", () => {
+  const marked =
+    '<table data-source-styled="true"><thead><tr><th>Country</th></tr></thead>' +
+    '<tbody><tr><td style="padding: 1px 0px">Qatar</td></tr></tbody></table>';
+
+  test("no header rule reaches a source-styled table", () => {
+    const out = decorateHtmlForClipboard(marked, {
+      ...DEFAULT_FORMAT_OPTIONS,
+      borderStyle: "none",
+      headerRule: true,
+    });
+    expect(out).not.toContain("border-bottom");
+  });
+
+  test("an ordinary table still gets it", () => {
+    const out = decorateHtmlForClipboard(
+      marked.replace(' data-source-styled="true"', ""),
+      { ...DEFAULT_FORMAT_OPTIONS, borderStyle: "none", headerRule: true },
+    );
+    expect(out).toContain("border-bottom: 1px solid #999");
+  });
+
+  test("border-collapse survives the strip (layout, not an edge)", () => {
+    // Dropping it would double every rule in the table.
+    expect(decorateHtmlForClipboard(marked)).toContain("border-collapse");
+  });
+});

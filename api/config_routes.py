@@ -130,6 +130,13 @@ def _validate_notes_table_style(raw) -> dict:
                 detail="notes_table_style.headerBold must be a boolean.",
             )
         cleaned["headerBold"] = raw["headerBold"]
+    if "headerRule" in raw:
+        if not isinstance(raw["headerRule"], bool):
+            raise HTTPException(
+                status_code=400,
+                detail="notes_table_style.headerRule must be a boolean.",
+            )
+        cleaned["headerRule"] = raw["headerRule"]
     if "listMarker" in raw and raw["listMarker"] is not None:
         if raw["listMarker"] not in _LIST_MARKERS:
             raise HTTPException(

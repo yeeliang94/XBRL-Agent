@@ -780,6 +780,27 @@ function NotesPasteFormatSection({
     };
   }, []);
 
+  // Cell edges derived from the theme, exactly as the editor/clipboard derive
+  // them: no grid when borderStyle is "none"; the header rule (when on) is a
+  // bottom edge on <th> only.
+  const previewGrid =
+    fmt.borderStyle === "none"
+      ? undefined
+      : `${fmt.borderStyle === "double" ? 3 : 1}px ${
+          fmt.borderStyle === "double" ? "double" : "solid"
+        } ${fmt.borderColor || pwc.grey300}`;
+  const previewBodyCell: React.CSSProperties = {
+    ...styles.previewCell,
+    border: previewGrid ?? "none",
+  };
+  const previewHeaderCell: React.CSSProperties = {
+    ...previewBodyCell,
+    fontWeight: fmt.headerBold === false ? 400 : 600,
+    ...(fmt.headerRule
+      ? { borderBottom: `1px solid ${fmt.borderColor || "#999"}` }
+      : {}),
+  };
+
   return (
     // Card + left rule visually mark this section as the one that AUTO-SAVES,
     // so it's clearly distinct from the Save-button-gated fields around it (C4).
@@ -809,6 +830,11 @@ function NotesPasteFormatSection({
           {saveError}
         </p>
       )}
+      {/* The preview must show what SAVING produces, not a fixed grid: it is the
+        * only place an operator sees the theme before committing it. It used to
+        * hard-code a 1px cell border, so the ruled house default (no grid, one
+        * rule under the header) previewed as boxed — the opposite of the output.
+        * Border resolution mirrors themeToCssVars + notes_decorate._header_extra. */}
       <div style={styles.notesPreview} aria-label="Notes table style preview">
         <table
           style={{
@@ -822,14 +848,14 @@ function NotesPasteFormatSection({
         >
           <thead>
             <tr style={{ background: fmt.headerFill === "transparent" ? pwc.white : (fmt.headerFill || pwc.grey100) }}>
-              <th style={styles.previewCell}>Revenue</th>
-              <th style={{ ...styles.previewCell, textAlign: "right" }}>2025</th>
+              <th style={previewHeaderCell}>Revenue</th>
+              <th style={{ ...previewHeaderCell, textAlign: "right" }}>2025</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td style={styles.previewCell}>Contract income</td>
-              <td style={{ ...styles.previewCell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>1,250,000</td>
+              <td style={previewBodyCell}>Contract income</td>
+              <td style={{ ...previewBodyCell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>1,250,000</td>
             </tr>
           </tbody>
         </table>

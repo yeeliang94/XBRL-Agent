@@ -90,6 +90,23 @@
   position: relative;
 }
 
+/* Verbatim Word passthrough (notes/writer.py::_mark_source_styled_tables).
+ * A Word financial table states a couple of underlines and leaves every other
+ * edge silent — its look IS that silence. The theme grid above would paint
+ * lines into exactly those gaps (measured on the FINCO 2021 statement: 515 of
+ * 662 cells state no border at all), so a faithfully-copied table rendered as
+ * house content came out boxed in lines the source never had.
+ *
+ * Absence can't be copied, so the writer declares it with `data-source-styled`
+ * and this rule honours it: no theme grid on those tables. A cell's own inline
+ * `border-*` still wins (inline > class rule), so the underlines Word DID state
+ * render exactly as before, and the totals rule below is suppressed to match
+ * (the source carries its own). Untouched tables keep the house grid. */
+.notes-review-tab .tiptap table[data-source-styled="true"] th,
+.notes-review-tab .tiptap table[data-source-styled="true"] td {
+  border: 0;
+}
+
 /* Totals-row double-underline convention (theme `totalsDoubleUnderline`).
  * tagNumericCells tags the numeric cells of "total" rows with .is-totals-num
  * unconditionally; the rule is only VISIBLE when the resolved theme sets
@@ -120,6 +137,13 @@
 .notes-review-tab .tiptap th {
   background: var(--nt-header-fill, #F4F4F4); /* grey100 */
   font-weight: var(--nt-header-weight, 600);
+  /* Accountant "ruled" look (theme `headerRule`): one rule under the header row
+   * with no cell grid. Only VISIBLE when themeToCssVars sets --nt-header-rule;
+   * otherwise the fallback chain lands on the normal grid border, so an
+   * un-themed editor renders exactly as before. A per-cell inline border still
+   * wins, and a source-styled table's `border: 0` (above) still suppresses it —
+   * that table carries the source's own rules. */
+  border-bottom: var(--nt-header-rule, var(--nt-grid-border, 1px solid #C9C9C9));
 }
 
 /* Numeric value cells right-align so the review preview matches the

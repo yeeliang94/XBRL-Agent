@@ -572,13 +572,21 @@ def test_output_rejected_prompt_carries_error_and_response():
 
 def test_resolve_notes_table_theme_precedence(monkeypatch, formatter_db):
     """Run override (schema v22 snapshot) wins over the firm default env; env
-    wins over nothing; malformed env degrades to {} (historic defaults)."""
+    wins over nothing; unset or malformed env degrades to the HOUSE style.
+
+    The unset/malformed legs used to resolve to `{}` here while the app resolved
+    to the house style — so the agent reasoned about a boxed grey grid over a
+    ruled, borderless display. Both now go through
+    `notes.table_theme.firm_theme`, the single resolver."""
     from db import repository as repo
     import notes.formatting_agent as fa
 
     db_path, _pdf, run_id = formatter_db
+    from notes.table_theme import HOUSE_NOTES_TABLE_STYLE
+
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
-    assert fa._resolve_notes_table_theme(str(db_path), run_id) == {}
+    assert (fa._resolve_notes_table_theme(str(db_path), run_id)
+            == HOUSE_NOTES_TABLE_STYLE)
 
     monkeypatch.setenv(
         "XBRL_NOTES_TABLE_STYLE", json.dumps({"borderStyle": "none"}),
@@ -598,7 +606,8 @@ def test_resolve_notes_table_theme_precedence(monkeypatch, formatter_db):
     monkeypatch.setenv("XBRL_NOTES_TABLE_STYLE", "{not json")
     with repo.db_session(db_path) as conn:
         repo.set_run_notes_table_style(conn, run_id, None)
-    assert fa._resolve_notes_table_theme(str(db_path), run_id) == {}
+    assert (fa._resolve_notes_table_theme(str(db_path), run_id)
+            == HOUSE_NOTES_TABLE_STYLE)
 
 
 def test_self_check_prompt_uses_rendered_appearance():
@@ -775,3 +784,47 @@ def test_bold_is_idempotent_across_repeated_patches():
     # or re-serialisation must not defeat the "already wrapped" guard.
     second = apply_sheet_patch({1: first}, patch).rows[1]
     assert second.count("<strong>") == 1
+
+
+# --- Appearance model must match what the panel actually renders ------------
+
+def test_appearance_reports_the_house_header_rule():
+    """With the ruled house style the header HAS a bottom edge even though
+    `borderStyle` is "none". Reporting "no line" invited the formatter agent to
+    add a rule that was already there."""
+    from notes.format_patch import describe_effective_appearance
+    from notes.table_theme import HOUSE_NOTES_TABLE_STYLE
+    lines = describe_effective_appearance(
+        "<table><thead><tr><th>Country</th></tr></thead>"
+        "<tbody><tr><td>Qatar</td></tr></tbody></table>",
+        HOUSE_NOTES_TABLE_STYLE,
+    )
+    header, body = lines[1], lines[2]
+    assert "bottom=1px solid #999 (theme header rule)" in header
+    assert "top=no line" in header          # the rule is a BOTTOM edge only
+    assert "bottom=no line" in body         # and applies to <th> only
+
+
+def test_appearance_treats_a_source_styled_table_as_theme_free():
+    from notes.format_patch import describe_effective_appearance
+    from notes.table_theme import HOUSE_NOTES_TABLE_STYLE
+    lines = describe_effective_appearance(
+        '<table data-source-styled="true"><thead><tr><th>C</th></tr></thead>'
+        '<tbody><tr><td style="border-bottom: 1px solid #000000">1</td></tr>'
+        "</tbody></table>",
+        HOUSE_NOTES_TABLE_STYLE,
+    )
+    assert "copied from the source document" in lines[0]
+    assert "bottom=no line (styling from the source document)" in lines[1]
+    # The cell's OWN edge is still reported verbatim.
+    assert "bottom=1px solid #000000" in lines[2]
+
+
+def test_formatter_agent_and_server_resolve_the_same_firm_theme(monkeypatch):
+    """These drifted: the agent fell back to {} while the app fell back to the
+    house style, so it reasoned about a boxed grid over a ruled display."""
+    import server
+    from notes import formatting_agent
+    monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
+    assert (formatting_agent._resolve_notes_table_theme(":memory:", 1)
+            == server._notes_table_style())

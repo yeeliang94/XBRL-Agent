@@ -25,7 +25,6 @@ import { userMessage } from "../lib/errors";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
 import { StarterKit } from "@tiptap/starter-kit";
-import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
 // Notes editor v2 marks. StarterKit already bundles bold/italic/strike/
 // underline, so only the extras are imported here. Color rides on TextStyle
@@ -46,6 +45,7 @@ import {
   type PaletteSwatch,
 } from "../lib/notesPalette";
 import {
+  StyledTable,
   StyledTableCell,
   StyledTableHeader,
   currentCellAttrs,
@@ -198,7 +198,10 @@ const TIPTAP_EXTENSIONS = [
   // resizable: true enables drag-to-resize column widths. Widths serialise as
   // a standard `<colgroup><col style="width">` + cell `colwidth` attrs, which
   // the sanitiser accepts and which paste faithfully into Word/Excel.
-  Table.configure({ resizable: true }),
+  // StyledTable additionally round-trips the verbatim-Word `data-source-styled`
+  // marker, which the CSS below reads to suppress the theme grid on those
+  // tables (a plain Table would drop it on the first save).
+  StyledTable.configure({ resizable: true }),
   TableRow,
   // Styled variants carry the WYSIWYG fill / per-side border attributes
   // (web/src/lib/cellFormatting.ts) so the accountant's formatting persists.

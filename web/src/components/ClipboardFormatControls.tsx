@@ -324,6 +324,20 @@ export function ClipboardFormatControls({
         <label style={{ ...styles.label, display: "flex", alignItems: "center", gap: pwc.space.sm }}>
           <input
             type="checkbox"
+            aria-label="Rule under header row"
+            checked={value.headerRule === true}
+            onChange={(e) =>
+              patch({ headerRule: e.target.checked ? true : undefined })
+            }
+          />
+          Rule under header row
+        </label>
+      </div>
+
+      <div style={{ ...styles.group, marginTop: pwc.space.md }}>
+        <label style={{ ...styles.label, display: "flex", alignItems: "center", gap: pwc.space.sm }}>
+          <input
+            type="checkbox"
             aria-label="Totals row double underline"
             checked={value.totalsDoubleUnderline === true}
             onChange={(e) =>

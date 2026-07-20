@@ -73,6 +73,31 @@ function _fontCss(opts: ClipboardFormatOptions): string {
   return `font-family: Arial, sans-serif; font-size: ${opts.fontSizePt}pt;`;
 }
 
+// Verbatim Word passthrough marker (notes/writer.py::_mark_source_styled_tables
+// / cellFormatting.ts). Kept as a literal rather than imported from
+// cellFormatting so this module stays free of TipTap imports (it runs in the
+// clipboard path, which has no editor).
+const SOURCE_STYLED_ATTR = "data-source-styled";
+
+/** Drop every border declaration from a style string, keeping the rest. Used
+ *  for source-styled tables: they still take the theme's padding / font /
+ *  alignment — only the grid is theirs to decide. Mirrors
+ *  `mtool/notes_decorate.py::_without_border_decls`. */
+function _withoutBorderDecls(css: string): string {
+  const kept = css
+    .split(";")
+    .map((d) => d.trim())
+    .filter((d) => d !== "")
+    .filter((d) => {
+      const prop = d.split(":", 1)[0].trim().toLowerCase();
+      // border-collapse / border-spacing are LAYOUT, not edges — dropping
+      // `border-collapse: collapse` would double every rule in the table.
+      if (prop === "border-collapse" || prop === "border-spacing") return true;
+      return prop !== "border" && !prop.startsWith("border-");
+    });
+  return kept.length ? kept.join("; ") + "; " : "";
+}
+
 // Grid-line CSS for one cell. "none" emits no border declaration at all so the
 // cell pastes borderless; "double" is the accountant double rule; "single" is a
 // 1px grid. Colour comes from the theme (`opts.borderColor`); when unset it
@@ -134,7 +159,14 @@ function _headerExtra(opts: ClipboardFormatOptions): string {
   // the target's default bold intact (peer-review MEDIUM #3). `undefined`
   // (un-themed) keeps the historic `600` so default output is byte-identical.
   const weight = opts.headerBold === false ? " font-weight: 400;" : " font-weight: 600;";
-  return ` background: ${fill};${weight}`;
+  // Ruled look: the header underline is the table's only line. A header-row
+  // property, not a per-cell grid — `borderStyle` stays "none" and the legacy
+  // `border="1"` attribute stays suppressed. Mirrors
+  // `mtool/notes_decorate.py::_header_extra`; keep the two in step.
+  const rule = opts.headerRule
+    ? ` border-bottom: 1px solid ${opts.borderColor ?? "#999"};`
+    : "";
+  return ` background: ${fill};${weight}${rule}`;
 }
 
 // Prose blocks: the same Arial face plus a bottom margin so consecutive
@@ -263,7 +295,13 @@ export function decorateHtmlForClipboard(
     // grid over a cell that the user explicitly set borderless (peer-review
     // #3). So suppress the legacy attribute whenever cells own their borders,
     // exactly as we do for the global "no border" option.
+    // A verbatim Word table owns its grid even where its cells state no border
+    // at all — silence is a decision there, not a gap for the theme to fill
+    // (notes/writer.py::_mark_source_styled_tables; parity with the review-page
+    // CSS and mtool/notes_decorate.py).
+    const sourceStyled = table.getAttribute(SOURCE_STYLED_ATTR) === "true";
     const cellsOwnBorders =
+      sourceStyled ||
       table.querySelector('td[style*="border"], th[style*="border"]') !== null;
     if (noBorder || cellsOwnBorders) {
       // "No border" must win regardless of what the input table already
@@ -293,7 +331,15 @@ export function decorateHtmlForClipboard(
     // double rule. Appended inside the same merged addition so a persisted
     // per-cell border still wins (the merge skips the whole border family
     // when the cell owns any border prop) — parity with notes_decorate.py.
-    const totalsRow = opts.totalsDoubleUnderline === true && _isTotalsRow(row);
+    // Source-styled tables keep the theme's padding/font/alignment but none of
+    // its borders — including the house totals rule, since a Word table already
+    // carries its own underlines where it wants them.
+    const rowSourceStyled =
+      row.closest(`table[${SOURCE_STYLED_ATTR}="true"]`) !== null;
+    const totalsRow =
+      opts.totalsDoubleUnderline === true &&
+      !rowSourceStyled &&
+      _isTotalsRow(row);
     cells.forEach((cell, idx) => {
       const numeric = shouldRightAlignCell(
         cell.textContent ?? "",
@@ -302,10 +348,17 @@ export function decorateHtmlForClipboard(
       );
       const align = numeric ? " text-align: right;" : " text-align: left;";
       const extra = totalsRow && numeric ? _TOTALS_RULE : "";
+      // Stripped ONCE on the finished addition, not on `cellBase` alone:
+      // `_headerExtra` contributes its own `border-bottom` (the house header
+      // rule), so a base-only strip let that edge through. One choke point =
+      // no sub-builder can leak a border onto a source-styled cell. Mirrors
+      // mtool/notes_decorate.py::_themed — keep the two in step.
+      const themed = (addition: string) =>
+        rowSourceStyled ? _withoutBorderDecls(addition) : addition;
       if (cell.tagName === "TH") {
-        _mergeCellStyle(cell, cellBase + _headerExtra(opts) + align + extra);
+        _mergeCellStyle(cell, themed(cellBase + _headerExtra(opts) + align + extra));
       } else {
-        _mergeCellStyle(cell, cellBase + align + extra);
+        _mergeCellStyle(cell, themed(cellBase + align + extra));
       }
     });
   });

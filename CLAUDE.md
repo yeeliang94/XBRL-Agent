@@ -614,7 +614,28 @@ but not the paragraph beside it" would rest on model judgement alone. The human
 TipTap editor reaches the DB through the PATCH endpoint and keeps its paragraph
 alignment. `_style_cell_html` tags such a
 cell `style_source='source'` (vs `ops` / `unstyled`) so the Notes-tab chip can
-tell "copied from the source" apart from "may want a formatter pass". Size is
+tell "copied from the source" apart from "may want a formatter pass".
+
+**Copying declarations is NOT copying the look — `data-source-styled` (run-75
+fix, 2026-07-20).** A Word financial table defines its appearance largely by the
+borders it does NOT state (measured on FINCO 2021: 515 of 662 cells state no
+border at all; zero state a fill). Every renderer here paints a theme grid where
+a cell is silent, so a perfectly-copied table came out boxed in lines the source
+never had — verbatim in the DB, house-styled on screen. Absence can't be copied,
+so it is DECLARED: `notes/writer.py::_mark_source_styled_tables` stamps
+`data-source-styled="true"` on each table in verbatim content, and that marker
+means **"this table's borders are the whole truth; add none."** It must stay in
+lock-step across FOUR surfaces or preview ≠ paste ≠ filing:
+`notes/html_sanitize.py` (`_TABLE_STRUCTURE_ATTRS`, value-checked to `"true"` —
+without it a human edit strips the marker and the grid returns on first save),
+`web/src/lib/cellFormatting.ts::StyledTable` (TipTap drops unknown attrs on
+round-trip), `NotesReviewTab.css` (`border: 0`, so per-cell inline borders still
+win), `mtool/notes_decorate.py` + `web/src/lib/clipboard.ts` (border-family
+declarations dropped from the cell base). The house totals double-underline is
+suppressed on these tables too — the source carries its own. Verified in real
+Chrome (specificity vs `.is-totals-num` is not reproducible in jsdom). Pinned by
+`tests/test_notes_format_sidecar.py`, `tests/test_mtool_notes_decorate.py`, and
+the `clipboard` / `cellFormatting` web tests. Size is
 handled by the existing mTool ladder (full → compact → lite → flat →
 oversize), not by a new guard. Pinned by `tests/test_notes_source_prompt.py`,
 `tests/test_notes_format_sidecar.py`. Plan:
@@ -750,7 +771,30 @@ Key invariants:
   picker) and is a full SNAPSHOT, not a partial diff. Per-cell manual styles win
   over the theme; "Reset cell to theme" (`resetCellToTheme`) re-inherits it. A
   totals row's double underline (`border-bottom: 3px double`) is saved document
-  formatting, and Copy reads the resolved theme at click time. Pinned by
+  formatting, and Copy reads the resolved theme at click time.
+  **The SHIPPED firm default is `notes/table_theme.py::HOUSE_NOTES_TABLE_STYLE`,
+  resolved ONLY through `firm_theme()`** (2026-07-20, chosen by the product
+  owner) — `server._notes_table_style` and
+  `formatting_agent._resolve_notes_table_theme` both delegate there. They used
+  to each parse the env var, and the formatter's copy still fell back to `{}`
+  after the house default landed, so the agent reasoned about a boxed grey grid
+  over a ruled display and would "correct" formatting that was already right.
+  A new consumer must resolve through `firm_theme()`, never re-read the env var.
+  The look: accountant *ruled*, not boxed — no cell grid
+  (`borderStyle: "none"`), one rule under the header row (`headerRule`, the knob
+  added for it), bold un-filled headers, historic Arial 10pt / 4×8px density,
+  and totals underlines left MANUAL (the auto-detect matched the word "total" in
+  row text and invented rules — the reason the house-style floor was removed,
+  2026-07-07). Two DISTINCT layers, do not conflate them: `NotesTableStyle()` /
+  `DEFAULT_FORMAT_OPTIONS` still mean "no theme configured at all" and stay
+  byte-compatible with the historic boxed output (a dozen pinning tests rely on
+  that); `_notes_table_style()` returns the HOUSE style when the setting is
+  unset. An explicit `{}` is the operator's escape hatch back to the historic
+  look, so rollback is a Settings change, not a code revert. `headerRule` moves
+  in lock-step across `mtool/notes_decorate.py`, `clipboard.ts`,
+  `themeToCssVars`, `NotesReviewTab.css` and `api/config_routes.py` — and a
+  source-styled table suppresses it (verbatim block above), since that table
+  carries the source's own rules. Pinned by
   `tests/test_settings_api.py`, `test_run_notes_table_style.py`, and the
   `clipboardFormat`/`clipboard`/`cellFormatting`/`NotesReviewTab` web tests.
 - **Numeric notes rows (sheets 13/14, `NumericCellRow`)** show grouped `1,595` at
@@ -1320,9 +1364,15 @@ primary input).
   pipeline). `create_notes_agent` registers the `read_source_note(note_num)`
   tool + a prompt block ONLY when `source.html` exists for the run (derived from
   the PDF's parent dir); PDF-only runs are byte-identical to before. The agent
-  mirrors the source's table structure and reflects styling through
-  `format_ops` — **`content` stays style-free** (gotcha #16 preserved; the
-  sidecar only changes what the agent mirrors, not how styling is applied).
+  **COPIES the source table's markup — inline `style=` included — straight into
+  `content`** (verbatim passthrough, 2026-07-19); it does NOT re-describe that
+  styling as `format_ops`, which was the original design and is what run 74
+  showed the model getting wrong. **PROSE still stays style-free**, enforced in
+  code by `notes/writer.py::_strip_non_table_styles` — the narrowing is TABLES
+  ONLY. Such tables are stamped `data-source-styled` so no renderer adds its own
+  grid. `format_ops` remains the channel for styling the agent *observes* rather
+  than copies (PDF runs, and any table with no source counterpart). See gotcha
+  #16, which owns the full rule — this bullet must not drift from it again.
 - **No DB schema change** — files live on disk (hybrid-storage, gotcha #6). The
   inert `doc_conversions` table (gotcha #11) is NOT reused.
 
