@@ -695,6 +695,7 @@ describe("MtoolFillModal", () => {
           formatting_reduced: 1,
           formatting_dropped: 1,
           source_styling_dropped: 1,
+          white_grid_dropped: 1,
         },
       },
     });
@@ -722,6 +723,11 @@ describe("MtoolFillModal", () => {
     // hidden behind an ordinary tier (code review 2026-07-20, round 2).
     expect(
       screen.getByText(/1 note\(s\) were too large to keep the Word document's own styling/i),
+    ).toBeTruthy();
+    // White-grid fallback (run 76, round 3): dropped for size — cosmetic,
+    // but the operator hears it from the report, not the popup.
+    expect(
+      screen.getByText(/1 note\(s\) may show mTool's default grey gridlines/i),
     ).toBeTruthy();
   });
 });

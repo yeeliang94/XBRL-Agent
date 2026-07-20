@@ -63,6 +63,13 @@ or reintroduce documented bugs.
   extraction remains style-free; the notes formatter agent may apply only
   validated style patches to existing `notes_cells.html` and must never mutate
   rendered text, numbers, row/column structure, or note placement.
+- **Keep the two mTool-bound decorators in lock-step, and only them.**
+  `mtool/notes_decorate.py` and `web/src/lib/clipboard.ts` are behavioural
+  twins that translate our HTML into mTool's TX dialect at decorate/copy time
+  (explicit white borders for intended-invisible edges, legacy `width` attrs
+  for page fit). Change one side, change the other. The DB, sanitiser, and
+  review page stay silent — never move this styling upstream. See CLAUDE.md
+  gotcha #16 (run-76 block) for the full rules.
 - **Don't pass `base_url=` or `openai_client=` directly to `OpenAIModel`.**
   Removed in pydantic-ai 1.x — use the `provider=OpenAIProvider(...)` pattern.
 - **Don't use temperature `< 1.0` for Gemini 3 through the proxy** — causes

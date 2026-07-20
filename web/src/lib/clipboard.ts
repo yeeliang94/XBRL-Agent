@@ -54,7 +54,7 @@
 // and its default face does not match the filing house style. The default
 // Arial 10pt face (configurable) keeps the DB / sanitiser style-free while
 // landing the paste in the expected font.
-import { shouldRightAlignCell } from "./tableAlign";
+import { isNumericCellText, shouldRightAlignCell } from "./tableAlign";
 import { resolveCellBorders } from "./cellFormatting";
 import {
   DEFAULT_FORMAT_OPTIONS,
@@ -131,13 +131,86 @@ const _CLIPBOARD_TABLE_STYLE =
 const _CLIPBOARD_TABLE_STYLE_KEEP_WIDTH =
   "border-collapse: collapse; margin: 8px 0; table-layout: fixed;";
 
+/** Property name of one CSS declaration; the whole token when there is no
+ *  colon (parity with `mtool/notes_decorate.py::_prop_of` — `indexOf` returning
+ *  -1 would silently truncate the last character instead). */
+function _propOf(decl: string): string {
+  const idx = decl.indexOf(":");
+  return (idx === -1 ? decl : decl.slice(0, idx)).trim().toLowerCase();
+}
+
 /** True if the table carries its OWN explicit `width` declaration (a resized
  *  table). Property-exact so `min-width` — which TipTap emits on every
  *  un-sized table — does NOT count as a user width. */
 function _tableHasExplicitWidth(table: Element): boolean {
   return (table.getAttribute("style") || "")
     .split(";")
-    .some((d) => d.slice(0, d.indexOf(":")).trim().toLowerCase() === "width");
+    .some((d) => _propOf(d) === "width");
+}
+
+/** True when the table's COLUMNS carry explicit sizing the page-width fit must
+ *  not override: a `<colgroup>`/`<col>` width (how TipTap serialises a column
+ *  resize) or a `colwidth` attr on a cell. The table-level width check misses
+ *  these, and the legacy `width` ATTRIBUTES the fit injects would beat the
+ *  operator's CSS in TX. Scoped to THIS table — a nested table's columns are
+ *  its own. Backend twin: `mtool/notes_decorate.py::_has_operator_column_widths`. */
+function _hasOperatorColumnWidths(table: Element): boolean {
+  for (const col of Array.from(table.querySelectorAll("col"))) {
+    if (col.closest("table") !== table) continue;
+    if (col.hasAttribute("width")) return true;
+    const style = col.getAttribute("style") || "";
+    if (style.split(";").some((d) => _propOf(d) === "width")) return true;
+  }
+  return Array.from(table.querySelectorAll("td[colwidth], th[colwidth]")).some(
+    (c) => c.closest("table") === table,
+  );
+}
+
+/** Make the table fill the page in mTool's TX editor: `width="100%"` on the
+ *  table plus percentage widths on the first full row's cells (amount columns
+ *  share a bounded slice; the label column keeps the rest, floored at 30%).
+ *  The split is applied ONLY when the trailing columns are predominantly
+ *  numeric (the accountant-cell detector) — a two-column TEXT table must not
+ *  have its second column crushed to 18%. Also skipped when any colspan makes
+ *  first-row widths ambiguous, under two columns, or when the columns are too
+ *  many for the label floor to hold (9+ columns would sum past 100% — the
+ *  page fit alone is applied). Only THIS table's rows are counted — a nested
+ *  table's rows are its own.
+ *  Backend twin: `mtool/notes_decorate.py::_fit_table_width` — keep
+ *  the two in step. */
+function _fitTableWidth(table: Element): void {
+  const rows = Array.from(table.querySelectorAll("tr")).filter(
+    (r) => r.closest("table") === table,
+  );
+  const perRow = rows.map((r) =>
+    Array.from(r.children).filter(
+      (c) => c.tagName === "TD" || c.tagName === "TH",
+    ),
+  );
+  const counts = perRow.filter((c) => c.length > 0).map((c) => c.length);
+  if (counts.length === 0) return;
+  table.setAttribute("width", "100%");
+  const ncols = Math.max(...counts);
+  if (ncols < 2) return;
+  if (perRow.some((cells) => cells.some((c) => c.hasAttribute("colspan"))))
+    return;
+  const firstFull = perRow.find((cells) => cells.length === ncols);
+  if (!firstFull) return;
+  // Accountant-shape gate: the split assumes columns 2..n hold AMOUNTS. Only
+  // apply it when the trailing cells are predominantly numeric (strict
+  // majority of the non-empty ones) — otherwise TX sizes by content.
+  const trailing = perRow.flatMap((cells) =>
+    cells.slice(1).map((c) => (c.textContent ?? "").trim()),
+  );
+  const nonEmpty = trailing.filter(Boolean);
+  const numeric = nonEmpty.filter((t) => isNumericCellText(t)).length;
+  if (nonEmpty.length === 0 || numeric * 2 <= nonEmpty.length) return;
+  const share = Math.min(18, Math.max(10, Math.floor(70 / (ncols - 1))));
+  const label = 100 - share * (ncols - 1);
+  if (label < 30) return;
+  firstFull.forEach((cell, i) => {
+    cell.setAttribute("width", i === 0 ? `${label}%` : `${share}%`);
+  });
 }
 
 function _cellStyleBase(opts: ClipboardFormatOptions): string {
@@ -280,11 +353,14 @@ export function decorateHtmlForClipboard(
   const noBorder = opts.borderStyle === "none";
 
   for (const table of Array.from(tmp.querySelectorAll("table"))) {
+    // Captured BEFORE the merge below injects the decorator's own
+    // `width: 100%` — after it, every table would look "explicitly sized" and
+    // the page-width fit below would never fire.
+    const operatorSized =
+      _tableHasExplicitWidth(table) || table.hasAttribute("width");
     _mergeStyle(
       table,
-      _tableHasExplicitWidth(table)
-        ? _CLIPBOARD_TABLE_STYLE_KEEP_WIDTH
-        : _CLIPBOARD_TABLE_STYLE,
+      operatorSized ? _CLIPBOARD_TABLE_STYLE_KEEP_WIDTH : _CLIPBOARD_TABLE_STYLE,
     );
     // Word/Outlook honour the legacy `border` attribute even when CSS
     // is partially stripped on paste. Belt-and-braces — the inline
@@ -317,6 +393,15 @@ export function decorateHtmlForClipboard(
       if (!table.hasAttribute("cellspacing"))
         table.setAttribute("cellspacing", "0");
     }
+    // Page-width fit for TX (run 76): the paste target ignores the CSS width
+    // above and sizes columns to content, jamming amounts against a long label
+    // column. Legacy width ATTRIBUTES are the dialect it honours. Explicit-
+    // width tables (TipTap-resized / source-sized) are the operator's call —
+    // so are tables whose COLUMNS the operator sized (<colgroup>/colwidth),
+    // which the table-level width check can't see.
+    if (!operatorSized && !_hasOperatorColumnWidths(table)) {
+      _fitTableWidth(table);
+    }
   }
 
   // Walk row by row so the row-label column (first cell of a multi-column
@@ -334,8 +419,11 @@ export function decorateHtmlForClipboard(
     // Source-styled tables keep the theme's padding/font/alignment but none of
     // its borders — including the house totals rule, since a Word table already
     // carries its own underlines where it wants them.
+    // The verdict comes from the row's OWN (nearest) table: a plain table
+    // nested inside a source-styled one is a separate table and keeps the
+    // theme grid. Parity with notes_decorate.py (row.find_parent("table")).
     const rowSourceStyled =
-      row.closest(`table[${SOURCE_STYLED_ATTR}="true"]`) !== null;
+      row.closest("table")?.getAttribute(SOURCE_STYLED_ATTR) === "true";
     const totalsRow =
       opts.totalsDoubleUnderline === true &&
       !rowSourceStyled &&
@@ -369,8 +457,29 @@ export function decorateHtmlForClipboard(
   // that renders invisibly (same accommodation as the automated mTool-fill path
   // in mtool/notes_decorate.py; keep the two in step). Only touches borders set
   // to hidden/none — the default grey grid on unformatted tables is left alone.
-  for (const el of Array.from(tmp.querySelectorAll("td, th, table"))) {
-    _whiteoutHiddenBorders(el);
+  //
+  // And the same for edges never DECLARED (run-76): TX draws its default grid
+  // on every undeclared boundary, so the source-styled / "none" looks — which
+  // work in a browser by staying silent — must spell silence out as white here
+  // or the paste shows a grid the review page doesn't have.
+  //
+  // Each cell is handled under ITS OWN table's verdict (a nested table is a
+  // separate table — its cells must not inherit the outer table's paint), and
+  // a side whose shared edge the neighbouring cell declares stays silent so
+  // the white can't contest a source underline or the house header rule.
+  const EMPTY_SIDES = new Set<string>();
+  for (const table of Array.from(tmp.querySelectorAll("table"))) {
+    const ownCells = Array.from(table.querySelectorAll("td, th")).filter(
+      (el) => el.closest("table") === table,
+    );
+    for (const el of ownCells) _whiteoutHiddenBorders(el);
+    if (noBorder || table.getAttribute(SOURCE_STYLED_ATTR) === "true") {
+      const skip = _neighborDeclaredSides(table);
+      for (const el of ownCells) {
+        _fillUndeclaredBordersWhite(el, skip.get(el) ?? EMPTY_SIDES);
+      }
+    }
+    _whiteoutHiddenBorders(table);
   }
 
   // Prose: Arial + a bottom margin so non-table cells paste with a
@@ -446,6 +555,16 @@ const _WHITE_BORDER = "1px solid #ffffff";
  *  hidden/none as a grey line). Untouched unless a hidden/none token is present,
  *  so the default grey grid and every other border is left alone.
  *  Backend twin: `mtool/notes_decorate.py::_whiteout_hidden_borders`. */
+function _parseDecls(style: string): Record<string, string> {
+  const parsed: Record<string, string> = {};
+  for (const d of style.split(";").map((s) => s.trim()).filter(Boolean)) {
+    const idx = d.indexOf(":");
+    if (idx === -1) continue;
+    parsed[d.slice(0, idx).trim().toLowerCase()] = d.slice(idx + 1).trim();
+  }
+  return parsed;
+}
+
 function _whiteoutHiddenBorders(el: Element): void {
   const existing = el.getAttribute("style");
   if (!existing) return;
@@ -453,12 +572,7 @@ function _whiteoutHiddenBorders(el: Element): void {
     .split(";")
     .map((s) => s.trim())
     .filter(Boolean);
-  const parsed: Record<string, string> = {};
-  for (const d of decls) {
-    const idx = d.indexOf(":");
-    if (idx === -1) continue;
-    parsed[d.slice(0, idx).trim().toLowerCase()] = d.slice(idx + 1).trim();
-  }
+  const parsed = _parseDecls(existing);
   const triggered = Object.entries(parsed).some(
     ([prop, val]) => _BORDER_LINE_PROPS.has(prop) && _INVISIBLE_BORDER_RE.test(val),
   );
@@ -483,6 +597,93 @@ function _whiteoutHiddenBorders(el: Element): void {
     out.push(`border-${side}: ${value}`);
   }
   el.setAttribute("style", out.join("; "));
+}
+
+/** Paint every border side the cell does NOT declare as explicit white.
+ *  The absent-edge twin of `_whiteoutHiddenBorders`: TX renders an undeclared
+ *  boundary as its default grey grid line, so an edge meant to be invisible
+ *  must be stated as white, not omitted. Declared sides — a Word underline,
+ *  the house header rule — are left byte-for-byte alone. Uses the `border:`
+ *  shorthand when all four sides are absent (the common case).
+ *
+ *  `skip` names sides whose SHARED edge the adjacent cell already declares
+ *  (`_neighborDeclaredSides`) — those stay silent: a boundary carries one
+ *  line, and painting our half white would contest the neighbour's declared
+ *  rule instead of yielding to it (under CSS border-collapse a same-width
+ *  white tie can WIN by position and erase the source's line).
+ *  Backend twin: `mtool/notes_decorate.py::_fill_undeclared_borders_white`. */
+function _fillUndeclaredBordersWhite(el: Element, skip: Set<string>): void {
+  const decls = (el.getAttribute("style") ?? "")
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const resolved = resolveCellBorders(_parseDecls(el.getAttribute("style") ?? ""));
+  const missing = (["Top", "Right", "Bottom", "Left"] as const).filter(
+    (side) => !resolved[`border${side}`] && !skip.has(side.toLowerCase()),
+  );
+  if (missing.length === 0) return;
+  if (missing.length === 4) {
+    decls.push(`border: ${_WHITE_BORDER}`);
+  } else {
+    for (const side of missing) {
+      decls.push(`border-${side.toLowerCase()}: ${_WHITE_BORDER}`);
+    }
+  }
+  el.setAttribute("style", decls.join("; "));
+}
+
+/** Per-cell sides whose shared edge the ADJACENT cell declares — the sides
+ *  `_fillUndeclaredBordersWhite` must NOT paint white. Computed on a
+ *  positional row×column grid of THIS table's own rows; any colspan/rowspan
+ *  makes adjacency ambiguous, so spanned tables get no suppression (every
+ *  missing side painted). Call AFTER `_whiteoutHiddenBorders` has run on the
+ *  cells so erased borders read as their white per-side longhands.
+ *  Backend twin: `mtool/notes_decorate.py::_neighbor_declared_sides`. */
+function _neighborDeclaredSides(table: Element): Map<Element, Set<string>> {
+  const rows = Array.from(table.querySelectorAll("tr")).filter(
+    (r) => r.closest("table") === table,
+  );
+  const grid = rows
+    .map((r) =>
+      Array.from(r.children).filter(
+        (c) => c.tagName === "TD" || c.tagName === "TH",
+      ),
+    )
+    .filter((cells) => cells.length > 0);
+  if (
+    grid.some((cells) =>
+      cells.some(
+        (c) => c.hasAttribute("colspan") || c.hasAttribute("rowspan"),
+      ),
+    )
+  ) {
+    return new Map();
+  }
+  const declared = grid.map((cells) =>
+    cells.map((c) => {
+      const r = resolveCellBorders(_parseDecls(c.getAttribute("style") ?? ""));
+      return {
+        top: r.borderTop,
+        right: r.borderRight,
+        bottom: r.borderBottom,
+        left: r.borderLeft,
+      };
+    }),
+  );
+  const skip = new Map<Element, Set<string>>();
+  grid.forEach((cells, r) => {
+    cells.forEach((cell, c) => {
+      const sides = new Set<string>();
+      if (c > 0 && declared[r][c - 1].right) sides.add("left");
+      if (c + 1 < cells.length && declared[r][c + 1].left) sides.add("right");
+      if (r > 0 && c < declared[r - 1].length && declared[r - 1][c].bottom)
+        sides.add("top");
+      if (r + 1 < grid.length && c < declared[r + 1].length && declared[r + 1][c].top)
+        sides.add("bottom");
+      if (sides.size) skip.set(cell, sides);
+    });
+  });
+  return skip;
 }
 
 /** Property-aware merge for a table CELL: persisted (WYSIWYG) declarations win.

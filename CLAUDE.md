@@ -760,8 +760,13 @@ Key invariants:
   by `_NUMERIC_CELL_RE`) at copy time only — the DB stays style-free, because
   external CSS doesn't travel with a paste into M-Tool / Word / Outlook. It's
   option-driven (`ClipboardFormatOptions`); **the defaults (`DEFAULT_FORMAT_OPTIONS`)
-  reproduce the old hard-coded output byte-for-byte** — keep that equivalence
-  when editing. Pinned by `web/src/__tests__/clipboard.test.ts`.
+  reproduce the old hard-coded STYLING byte-for-byte** — same border/padding/
+  font/alignment declarations; keep that equivalence when editing. Two
+  deliberate additions ride on top of it and are NOT part of the historic
+  bytes: the run-76 TX-dialect pass (legacy `width` attrs on unsized numeric
+  tables, white borders on source-styled / border-none tables — block below)
+  and, on themed copies only, the theme's own knobs. Pinned by
+  `web/src/__tests__/clipboard.test.ts`.
 - **Notes-table style THEME (docs/PLAN-notes-table-theme.md):**
   `ClipboardFormatOptions` was promoted to a full table theme that is the shared,
   server-side firm default (`XBRL_NOTES_TABLE_STYLE` via `/api/settings`). ONE
@@ -786,16 +791,48 @@ Key invariants:
   and totals underlines left MANUAL (the auto-detect matched the word "total" in
   row text and invented rules — the reason the house-style floor was removed,
   2026-07-07). Two DISTINCT layers, do not conflate them: `NotesTableStyle()` /
-  `DEFAULT_FORMAT_OPTIONS` still mean "no theme configured at all" and stay
-  byte-compatible with the historic boxed output (a dozen pinning tests rely on
-  that); `_notes_table_style()` returns the HOUSE style when the setting is
+  `DEFAULT_FORMAT_OPTIONS` still mean "no theme configured at all" and keep the
+  historic boxed STYLING (a dozen pinning tests rely on that; the run-76
+  TX-dialect attrs below layer on top for every theme, so the full output is
+  no longer literally byte-identical); `_notes_table_style()` returns the HOUSE style when the setting is
   unset. An explicit `{}` is the operator's escape hatch back to the historic
   look, so rollback is a Settings change, not a code revert. `headerRule` moves
   in lock-step across `mtool/notes_decorate.py`, `clipboard.ts`,
   `themeToCssVars`, `NotesReviewTab.css` and `api/config_routes.py` — and a
   source-styled table suppresses it (verbatim block above), since that table
-  carries the source's own rules. Pinned by
-  `tests/test_settings_api.py`, `test_run_notes_table_style.py`, and the
+  carries the source's own rules.
+  **mTool/TX renders SILENCE differently from a browser (run-76, 2026-07-20):**
+  in the TX editor an UNDECLARED cell boundary shows the default grey grid, and
+  CSS widths are ignored — there is no "no line", only "visible line" or "line
+  painted white", and no CSS page fit, only the legacy `width` ATTRIBUTE. So the
+  two mTool-bound decorators (`mtool/notes_decorate.py` + `clipboard.ts`, twins
+  — keep in step) must (a) spell out every intended-invisible edge as explicit
+  white (`_fill_undeclared_borders_white`, the absent-edge twin of the proven
+  hidden→white translation) for source-styled tables and `borderStyle: "none"`
+  themes, and (b) fit unsized tables to the page via `width="100%"` +
+  first-row percentage attrs (`_fit_table_width`; label column keeps the rest,
+  amounts share a bounded slice; skipped on colspans / operator-sized tables —
+  capture "operator-sized" BEFORE the decorator injects its own `width: 100%`
+  CSS or the fit never fires; `<colgroup>`/`colwidth` column sizing counts as
+  operator-sized too; 9+ columns bail to the page fit alone since the two
+  percentage floors would sum past 100%; nested tables fit independently —
+  row/cell scans are scoped to their OWN table). A side whose SHARED edge the
+  neighbouring cell declares is NOT painted white (`_neighbor_declared_sides`;
+  a same-width white tie wins by position under border-collapse and would
+  erase a source underline / the header rule; spans disable the suppression).
+  The white grid costs ~27 chars/cell against Excel's 32,767-char cell cap and
+  lands on exactly the tables whose `compact` tier is inoperative, so the
+  exporter ladder (gotcha #28's `_resolve_note_html`) retries full/compact/
+  lite with `fill_white_grid=False` (the exact pre-run-76 payload) BEFORE
+  falling to `flat`, and reports the drop (`white_grid_dropped` per-entry +
+  meta count, surfaced in `MtoolFillModal`) — a note never lands on a worse
+  tier than the pre-run-76 ladder gave it. `strip_inline_styles` (the destyle
+  rescue rung) also drops the `data-source-styled` marker — with the styles
+  gone its "borders are the whole truth" premise is false and it would force
+  a pointless re-paint. The DB and the review page stay silent — this is
+  strictly an mTool-dialect translation at decorate time. Pinned by
+  `tests/test_settings_api.py`, `test_run_notes_table_style.py`,
+  `test_mtool_notes_exporter.py` (ladder + no-regression pin), and the
   `clipboardFormat`/`clipboard`/`cellFormatting`/`NotesReviewTab` web tests.
 - **Numeric notes rows (sheets 13/14, `NumericCellRow`)** show grouped `1,595` at
   rest, raw while focused (`formatGroupedInput` in `web/src/lib/numberFormat.ts`);

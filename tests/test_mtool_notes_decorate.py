@@ -29,7 +29,7 @@ def test_row_label_column_stays_left_even_if_numeric():
 # --- prose decoration -------------------------------------------------------
 def test_prose_gets_arial_and_paragraph_spacing():
     out = decorate_notes_html("<p>First paragraph.</p>")
-    assert re.search(r'<p[^>]*style="[^"]*font-family: Arial[^"]*">First', out)
+    assert re.search(r'<p[^>]*style="[^"]*font-family: Arial[^"]*"[^>]*>First', out)
     assert re.search(r'<p[^>]*style="[^"]*font-size: 10pt', out)
     assert re.search(r'<p[^>]*style="[^"]*margin: 0 0 8px 0', out)
     # Wrapping container carries the face so bare <strong>/loose text inherits.
@@ -69,10 +69,10 @@ def test_numeric_columns_right_align_label_column_left():
         "<table><tbody>"
         "<tr><td>Total</td><td>(95)</td><td>-</td><td>1,125</td></tr>"
         "</tbody></table>")
-    assert re.search(r'<td[^>]*style="[^"]*text-align: left[^"]*">Total<', out)
-    assert re.search(r'<td[^>]*style="[^"]*text-align: right[^"]*">\(95\)<', out)
-    assert re.search(r'<td[^>]*style="[^"]*text-align: right[^"]*">-<', out)
-    assert re.search(r'<td[^>]*style="[^"]*text-align: right[^"]*">1,125<', out)
+    assert re.search(r'<td[^>]*style="[^"]*text-align: left[^"]*"[^>]*>Total<', out)
+    assert re.search(r'<td[^>]*style="[^"]*text-align: right[^"]*"[^>]*>\(95\)<', out)
+    assert re.search(r'<td[^>]*style="[^"]*text-align: right[^"]*"[^>]*>-<', out)
+    assert re.search(r'<td[^>]*style="[^"]*text-align: right[^"]*"[^>]*>1,125<', out)
 
 
 # --- persisted (WYSIWYG) styles win -----------------------------------------
@@ -170,12 +170,17 @@ def test_border_collapse_survives_whiteout():
 
 
 # --- options ----------------------------------------------------------------
-def test_no_border_option_suppresses_grid_but_keeps_padding():
+def test_no_border_option_paints_white_grid_and_keeps_padding():
+    """Run-76: mTool's TX renderer draws its default grey grid on UNDECLARED
+    cell boundaries — in that renderer there is no "no line", only visible or
+    white. So "none" must be spelled out as explicit white per cell, the same
+    accommodation _whiteout_hidden_borders makes for erased borders."""
     out = decorate_notes_html(
         "<table><tbody><tr><td>x</td></tr></tbody></table>",
         NotesTableStyle(border_style="none"))
     assert not re.search(r'<table[^>]*border="1"', out)
-    assert "border: 1px solid" not in out
+    assert "border: 1px solid #ffffff" in out       # explicit white, not silence
+    assert "border: 1px solid #999" not in out      # and no visible grid
     assert re.search(r'<td[^>]*style="[^"]*padding: 4px 8px', out)
 
 
@@ -333,12 +338,12 @@ def test_totals_double_underline_targets_amount_cells_only():
         "</tbody></table>", style)
     # The total row's amount cell carries the double rule…
     assert re.search(
-        r'<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">19,500<', out)
+        r'<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*"[^>]*>19,500<', out)
     # …but its label cell and the non-total row do not.
     assert not re.search(
-        r'<td[^>]*style="[^"]*3px double[^"]*">Total<', out)
+        r'<td[^>]*style="[^"]*3px double[^"]*"[^>]*>Total<', out)
     assert not re.search(
-        r'<td[^>]*style="[^"]*3px double[^"]*">10,000<', out)
+        r'<td[^>]*style="[^"]*3px double[^"]*"[^>]*>10,000<', out)
 
 
 def test_totals_rule_respects_persisted_cell_border():
@@ -421,8 +426,8 @@ def test_compact_th_keeps_fill_weight_and_explicit_align():
         compact=True)
     assert re.search(r'<th[^>]*style="[^"]*background: #f3f4f6', out)
     assert re.search(r'<th[^>]*style="[^"]*font-weight: 600', out)
-    assert re.search(r'<th[^>]*style="[^"]*text-align: left[^"]*">Item<', out)
-    assert re.search(r'<th[^>]*style="[^"]*text-align: right[^"]*">2024<', out)
+    assert re.search(r'<th[^>]*style="[^"]*text-align: left[^"]*"[^>]*>Item<', out)
+    assert re.search(r'<th[^>]*style="[^"]*text-align: right[^"]*"[^>]*>2024<', out)
 
 
 def test_compact_totals_rule_still_lands_on_amount_cells():
@@ -433,9 +438,9 @@ def test_compact_totals_rule_still_lands_on_amount_cells():
         "</tbody></table>",
         NotesTableStyle(totals_double_underline=True), compact=True)
     assert re.search(
-        r'<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">19,500<',
+        r'<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*"[^>]*>19,500<',
         out)
-    assert not re.search(r'<td[^>]*style="[^"]*3px double[^"]*">10,000<', out)
+    assert not re.search(r'<td[^>]*style="[^"]*3px double[^"]*"[^>]*>10,000<', out)
 
 
 def test_compact_skips_table_with_user_owned_cell_border():
@@ -571,9 +576,12 @@ _SOURCE_STYLED_BORDERLESS = (
 def test_source_styled_borderless_cell_gains_no_theme_border():
     """The regression that made run 75's notes look like house content: a cell
     stating only padding owns no border FAMILY, so family-precedence alone let
-    the theme grid through. The marker closes that."""
+    the theme grid through. The marker closes that. Run-76 refinement: the
+    invisible edges are spelled out as WHITE (TX draws its default grid on
+    undeclared boundaries), so assert no VISIBLE border rather than none."""
     out = decorate_notes_html(_SOURCE_STYLED_BORDERLESS, NotesTableStyle())
-    assert "border: 1px solid" not in out
+    assert "border: 1px solid #ffffff" in out
+    assert not re.search(r"border[^:]*: [^;\"]*solid (?!#ffffff)", out)
     assert 'border="1"' not in out
     # The theme's non-border contributions still apply.
     assert "padding" in out
@@ -617,7 +625,18 @@ def test_header_rule_draws_one_line_and_no_cell_grid():
         html, NotesTableStyle(border_style="none", header_rule=True)
     )
     assert "border-bottom: 1px solid #999" in out
-    assert "border: 1px solid" not in out   # no cell grid
+    # The rule is the ONLY visible line; every other edge is explicit white
+    # (undeclared edges surface as TX's default grey grid — run 76). Per-side
+    # longhands here, not the shorthand: the th owns its rule, and the td
+    # under it leaves its TOP silent so the white can't contest the rule on
+    # the shared edge (neighbour suppression).
+    assert "1px solid #ffffff" in out
+    th = out[out.index("<th"):out.index("</th>")]
+    td = out[out.index("<td"):out.index("</td>")]
+    assert "border-top: 1px solid #ffffff" in th      # header's other edges white
+    assert "border-top" not in td                      # shared edge: rule wins
+    assert "border-bottom: 1px solid #ffffff" in td
+    assert "border: 1px solid #999" not in out
     assert 'border="1"' not in out          # no legacy attr either
 
 
@@ -658,7 +677,10 @@ def test_source_styled_table_does_not_get_the_house_header_rule():
             '</tbody></table>')
     out = decorate_notes_html(html, house)
     th = out[out.index("<th"):out.index("</th>")]
-    assert "border" not in th
+    # Only invisible (white) edges on the header — the house rule must not
+    # reach it, and undeclared edges are spelled out white for TX (run 76).
+    assert "#999" not in th
+    assert "border: 1px solid #ffffff" in th
     # ...while an ordinary table still gets the rule under its header.
     plain = decorate_notes_html(html.replace(' data-source-styled="true"', ''),
                                 house)
@@ -674,3 +696,172 @@ def test_border_strip_preserves_border_collapse():
         "border-collapse: collapse; border-top: 1px solid #000; padding: 2px")
     assert "border-collapse: collapse" in out
     assert "border-top" not in out
+
+
+# --- Page-width fit for TX (run 76) -----------------------------------------
+# TX ignores CSS widths and sizes columns to content, so a long label column
+# jams the amounts against itself and the operator hand-resizes every table.
+# Legacy width ATTRIBUTES are the dialect TX honours.
+
+def test_unsized_table_gets_page_width_and_column_split():
+    out = decorate_notes_html(
+        "<table><tbody><tr><td>United Arab Emirates</td><td>60,882</td>"
+        "<td>66,336</td></tr></tbody></table>", NotesTableStyle())
+    assert re.search(r'<table[^>]*width="100%"', out)
+    widths = re.findall(r'<td[^>]*width="(\d+%)"', out)
+    assert widths == ["64%", "18%", "18%"]  # label keeps the rest
+
+
+def test_operator_sized_table_is_left_alone():
+    """A TipTap-resized table (explicit style width) is the operator's call."""
+    out = decorate_notes_html(
+        '<table style="width: 400px"><tbody><tr><td>a</td><td>1</td></tr>'
+        "</tbody></table>", NotesTableStyle())
+    assert 'width="100%"' not in out
+    assert not re.findall(r'<td[^>]*width="\d+%"', out)
+
+
+def test_colspan_table_gets_page_width_but_no_column_split():
+    """A spanned header makes first-row widths ambiguous — fit the page only."""
+    out = decorate_notes_html(
+        '<table><tbody><tr><td colspan="2">Header</td></tr>'
+        "<tr><td>a</td><td>1</td></tr></tbody></table>", NotesTableStyle())
+    assert re.search(r'<table[^>]*width="100%"', out)
+    assert not re.findall(r'<td[^>]*width="\d+%"', out)
+
+
+def test_colgroup_sized_table_is_left_alone():
+    """A TipTap column resize serialises as <colgroup><col style="width: …">
+    (gotcha #16) — that's operator sizing too, and the legacy width ATTRS the
+    fit injects would beat the operator's CSS in TX. Skip entirely."""
+    out = decorate_notes_html(
+        '<table><colgroup><col style="width: 300px"><col style="width: 80px">'
+        "</colgroup><tbody><tr><td>Label</td><td>1,000</td></tr></tbody>"
+        "</table>", NotesTableStyle())
+    assert 'width="100%"' not in out
+    assert not re.findall(r'<td[^>]*width="\d+%"', out)
+
+
+def test_colwidth_attr_counts_as_operator_sizing():
+    """TipTap's colwidth attr (unmeasured column width) is operator sizing."""
+    out = decorate_notes_html(
+        '<table><tbody><tr><td colwidth="300">Label</td>'
+        '<td colwidth="80">1,000</td></tr></tbody></table>', NotesTableStyle())
+    assert 'width="100%"' not in out
+    assert not re.findall(r'<td[^>]*width="\d+%"', out)
+
+
+def test_text_table_gets_page_fit_but_no_accountant_split():
+    """The split assumes columns 2..n hold AMOUNTS. A two-column TEXT table
+    (director / designation, address lines) must not have its second column
+    crushed to 18% — page fit only, TX sizes by content."""
+    out = decorate_notes_html(
+        "<table><tbody>"
+        "<tr><td>Dato' Ahmad bin Ismail</td><td>Managing Director</td></tr>"
+        "<tr><td>Lim Wei Ling</td><td>Independent Director</td></tr>"
+        "</tbody></table>", NotesTableStyle())
+    assert re.search(r'<table[^>]*width="100%"', out)
+    assert not re.findall(r'<td[^>]*width="\d+%"', out)
+
+
+def test_mostly_numeric_trailing_columns_still_split():
+    """Header rows (year labels, dashes, a stray unit cell) must not defeat
+    the gate — a strict majority of numeric trailing cells keeps the split."""
+    out = decorate_notes_html(
+        "<table><tbody>"
+        "<tr><td>Country</td><td>2024</td><td>2023</td></tr>"
+        "<tr><td>Qatar</td><td>60,882</td><td>-</td></tr>"
+        "</tbody></table>", NotesTableStyle())
+    assert re.findall(r'<td[^>]*width="(\d+%)"', out) == ["64%", "18%", "18%"]
+
+
+def test_nine_plus_columns_bail_to_page_fit_only():
+    """At 9+ columns the label floor (30%) and amount floor (10%) can't both
+    hold — the split would sum past 100%, which TX can't honour. Page fit
+    only; TX shares the width by content."""
+    html = ("<table><tbody><tr><td>Label</td>"
+            + "".join(f"<td>1,00{i}</td>" for i in range(9))
+            + "</tr></tbody></table>")
+    out = decorate_notes_html(html, NotesTableStyle())
+    assert re.search(r'<table[^>]*width="100%"', out)
+    assert not re.findall(r'<td[^>]*width="\d+%"', out)
+
+
+def test_nested_table_widths_stay_per_table():
+    """A nested table's rows are its own: the inner table gets its own
+    independent fit from its own 4 columns, and the outer table — whose
+    "second column" holds a table, not an amount — gets the page fit only."""
+    html = ("<table><tbody><tr><td>Outer label</td>"
+            "<td><table><tbody><tr><td>Item</td><td>1,500</td><td>2,300</td>"
+            "<td>3,100</td></tr></tbody></table></td></tr></tbody></table>")
+    out = decorate_notes_html(html, NotesTableStyle())
+    widths = re.findall(r'<td[^>]*width="(\d+%)"', out)
+    assert sorted(widths) == sorted(["46%", "18%", "18%", "18%"])
+    assert out.count('width="100%"') == 2   # both tables page-fitted
+
+
+def test_nested_plain_table_not_painted_by_source_styled_outer():
+    """A cell belongs to ITS OWN table's paint verdict: a plain (theme-grid)
+    table nested inside a source-styled one must keep its grey grid, not be
+    painted white by the outer table's pass."""
+    html = ('<table data-source-styled="true"><tbody><tr>'
+            '<td style="padding: 1px 0px">Outer</td>'
+            "<td><table><tbody><tr><td>inner</td></tr></tbody></table></td>"
+            "</tr></tbody></table>")
+    out = decorate_notes_html(html, NotesTableStyle())
+    inner = out[out.index("<table", out.index("<table") + 1):]
+    inner_td = inner[inner.index("<td"):inner.index("</td>")]
+    assert "border: 1px solid #999" in inner_td   # theme grid intact
+    assert "#ffffff" not in inner_td
+
+
+# --- neighbour suppression: white must not contest a declared shared edge ---
+
+def test_white_fill_skips_edge_declared_by_neighbour():
+    """A Word cell declaring only a bottom underline shares that edge with the
+    cell below. Painting the below-cell's TOP white would contest the underline
+    (a same-width CSS border-collapse tie is won by the TOPMOST cell — the
+    white one). The shared edge stays silent instead; all other edges of both
+    cells are painted white as usual."""
+    html = ('<table data-source-styled="true"><tbody>'
+            '<tr><td style="border-bottom: 1px solid #000000">Total</td></tr>'
+            "<tr><td>after</td></tr></tbody></table>")
+    out = decorate_notes_html(html, NotesTableStyle())
+    cells = re.findall(r"<td[^>]*>", out)
+    assert len(cells) == 2
+    top_cell, bottom_cell = cells
+    assert "border-bottom: 1px solid #000000" in top_cell   # source rule kept
+    assert "border-top" not in bottom_cell                  # shared edge silent
+    # The rest of both cells' edges are still painted white.
+    assert "border-left: 1px solid #ffffff" in bottom_cell
+    assert "border-bottom: 1px solid #ffffff" in bottom_cell
+
+
+def test_white_fill_paints_all_edges_when_spans_make_adjacency_ambiguous():
+    """colspan/rowspan break the positional grid, so suppression bails and
+    every missing side is painted (the safe, pre-refinement behaviour)."""
+    html = ('<table data-source-styled="true"><tbody>'
+            '<tr><td colspan="2" style="border-bottom: 1px solid #000">H</td></tr>'
+            "<tr><td>a</td><td>b</td></tr></tbody></table>")
+    out = decorate_notes_html(html, NotesTableStyle())
+    cells = re.findall(r"<td[^>]*>", out)
+    # The body cells get the full white shorthand — no suppression attempted.
+    assert all("border: 1px solid #ffffff" in c for c in cells[1:])
+
+
+# --- destyle retry: the marker goes with the styles --------------------------
+
+def test_strip_inline_styles_also_drops_the_source_styled_marker():
+    """The marker means "this table's borders are the whole truth" — false the
+    moment the styles are stripped. Left in place it would make the destyle
+    rescue rung re-paint every cell edge white, re-inflating the bytes the
+    strip just recovered."""
+    from mtool.notes_decorate import strip_inline_styles
+    html = ('<table data-source-styled="true"><tr>'
+            '<td style="padding: 1px 0px">x</td></tr></table>')
+    out = strip_inline_styles(html)
+    assert "style=" not in out
+    assert "data-source-styled" not in out
+    # And with the marker gone, re-decoration applies the theme grid again.
+    redecorated = decorate_notes_html(out, NotesTableStyle())
+    assert "#ffffff" not in redecorated

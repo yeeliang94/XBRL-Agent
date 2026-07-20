@@ -355,13 +355,17 @@ describe("decorateHtmlForClipboard — configurable format options", () => {
     "<tr><td>x</td><td>1,000</td></tr>" +
     "<tr><td>Total</td><td>2,000</td></tr></table>";
 
-  test("borderStyle 'none' drops cell borders and legacy table attrs", () => {
+  test("borderStyle 'none' paints cell borders white and drops legacy table attrs", () => {
     const out = decorateHtmlForClipboard(TABLE, {
       ...DEFAULT_FORMAT_OPTIONS,
       borderStyle: "none",
     });
-    // No `border:` declaration on any cell.
-    expect(out).not.toMatch(/<t[dh][^>]*style="[^"]*border: /);
+    // Run-76: TX draws its default grey grid on UNDECLARED boundaries, so
+    // "no border" must be spelled out as white, not omitted — the same
+    // accommodation _whiteoutHiddenBorders makes for erased borders.
+    expect(out).toMatch(/<t[dh][^>]*style="[^"]*border: 1px solid #ffffff/);
+    // And no visible border anywhere.
+    expect(out).not.toMatch(/border[^:]*: [^;"]*(solid|double) (?!#ffffff)/);
     // Legacy attribute that would re-draw a grid in Word/Outlook is gone.
     expect(out).not.toMatch(/<table[^>]*border="1"/);
     // Padding / font still applied so the table is still laid out.
@@ -693,9 +697,11 @@ describe("source-styled tables (verbatim Word passthrough)", () => {
     '<td style="padding: 1px 0px">39,827</td>' +
     "</tr></table>";
 
-  test("adds no theme border to a cell that states none", () => {
+  test("paints undeclared edges white instead of adding a theme border", () => {
     const out = decorateHtmlForClipboard(marked);
-    expect(out).not.toContain("border: 1px solid");
+    // White = invisible in TX; anything non-white would be an invented line.
+    expect(out).toContain("border: 1px solid #ffffff");
+    expect(out).not.toMatch(/border[^:]*: [^;"]*solid (?!#ffffff)/);
     expect(out).not.toContain('border="1"');
   });
 
@@ -743,14 +749,23 @@ describe("headerRule on the clipboard", () => {
     "<table><thead><tr><th>Country</th></tr></thead>" +
     "<tbody><tr><td>Qatar</td></tr></tbody></table>";
 
-  test("draws one rule under the header and no cell grid", () => {
+  test("draws one rule under the header and a white (invisible) grid", () => {
     const out = decorateHtmlForClipboard(table, {
       ...DEFAULT_FORMAT_OPTIONS,
       borderStyle: "none",
       headerRule: true,
     });
     expect(out).toContain("border-bottom: 1px solid #999");
-    expect(out).not.toContain("border: 1px solid");
+    // The rule is the ONLY visible line; every other edge is explicit white
+    // (undeclared edges would surface as TX's default grey grid — run 76).
+    // Per-side longhands, not the shorthand: the th owns its rule, and the td
+    // under it leaves its TOP silent so the white can't contest the rule on
+    // the shared edge (neighbour suppression).
+    const th = out.slice(out.indexOf("<th"), out.indexOf("</th>"));
+    const td = out.slice(out.indexOf("<td"), out.indexOf("</td>"));
+    expect(th).toContain("border-top: 1px solid #ffffff");
+    expect(td).not.toContain("border-top"); // shared edge: the rule wins
+    expect(td).toContain("border-bottom: 1px solid #ffffff");
     expect(out).not.toContain('border="1"');
   });
 
@@ -787,5 +802,150 @@ describe("source-styled tables ignore the house header rule", () => {
   test("border-collapse survives the strip (layout, not an edge)", () => {
     // Dropping it would double every rule in the table.
     expect(decorateHtmlForClipboard(marked)).toContain("border-collapse");
+  });
+});
+
+// --- Page-width fit for TX (run 76) ----------------------------------------
+// TX ignores CSS widths and sizes columns to content; legacy width ATTRIBUTES
+// are the dialect it honours. Backend twin: notes_decorate._fit_table_width.
+describe("page-width fit", () => {
+  test("an unsized table gets width=100% and a label/amounts split", () => {
+    const out = decorateHtmlForClipboard(
+      "<table><tbody><tr><td>United Arab Emirates</td><td>60,882</td>" +
+        "<td>66,336</td></tr></tbody></table>",
+    );
+    expect(out).toMatch(/<table[^>]*width="100%"/);
+    expect(out.match(/<td[^>]*width="(\d+%)"/g)?.length).toBe(3);
+    expect(out).toContain('width="64%"');
+    expect(out).toContain('width="18%"');
+  });
+
+  test("a TipTap-resized table is the operator's call — untouched", () => {
+    const out = decorateHtmlForClipboard(
+      '<table style="width: 400px"><tbody><tr><td>a</td><td>1</td></tr></tbody></table>',
+    );
+    expect(out).not.toContain('width="100%"');
+  });
+
+  test("colspan tables get the page fit but no ambiguous column split", () => {
+    const out = decorateHtmlForClipboard(
+      '<table><tbody><tr><td colspan="2">H</td></tr>' +
+        "<tr><td>a</td><td>1</td></tr></tbody></table>",
+    );
+    expect(out).toMatch(/<table[^>]*width="100%"/);
+    expect(out).not.toMatch(/<td[^>]*width="\d+%"/);
+  });
+
+  test("a colgroup-sized table (TipTap column resize) is untouched", () => {
+    const out = decorateHtmlForClipboard(
+      '<table><colgroup><col style="width: 300px"><col style="width: 80px">' +
+        "</colgroup><tbody><tr><td>Label</td><td>1,000</td></tr></tbody></table>",
+    );
+    expect(out).not.toContain('width="100%"');
+    expect(out).not.toMatch(/<td[^>]*width="\d+%"/);
+  });
+
+  test("a colwidth attr counts as operator sizing", () => {
+    const out = decorateHtmlForClipboard(
+      '<table><tbody><tr><td colwidth="300">Label</td>' +
+        '<td colwidth="80">1,000</td></tr></tbody></table>',
+    );
+    expect(out).not.toContain('width="100%"');
+    expect(out).not.toMatch(/<td[^>]*width="\d+%"/);
+  });
+
+  test("a two-column TEXT table gets the page fit but no accountant split", () => {
+    // The split assumes trailing columns hold amounts — a director/designation
+    // table must not have its second column crushed to 18%.
+    const out = decorateHtmlForClipboard(
+      "<table><tbody>" +
+        "<tr><td>Dato' Ahmad bin Ismail</td><td>Managing Director</td></tr>" +
+        "<tr><td>Lim Wei Ling</td><td>Independent Director</td></tr>" +
+        "</tbody></table>",
+    );
+    expect(out).toMatch(/<table[^>]*width="100%"/);
+    expect(out).not.toMatch(/<td[^>]*width="\d+%"/);
+  });
+
+  test("mostly-numeric trailing columns still split (headers don't defeat it)", () => {
+    const out = decorateHtmlForClipboard(
+      "<table><tbody>" +
+        "<tr><td>Country</td><td>2024</td><td>2023</td></tr>" +
+        "<tr><td>Qatar</td><td>60,882</td><td>-</td></tr>" +
+        "</tbody></table>",
+    );
+    expect(out).toContain('width="64%"');
+    expect(out).toContain('width="18%"');
+  });
+
+  test("9+ columns bail to the page fit only (split would sum past 100%)", () => {
+    const cells = Array.from({ length: 9 }, (_, i) => `<td>1,00${i}</td>`).join(
+      "",
+    );
+    const out = decorateHtmlForClipboard(
+      `<table><tbody><tr><td>Label</td>${cells}</tr></tbody></table>`,
+    );
+    expect(out).toMatch(/<table[^>]*width="100%"/);
+    expect(out).not.toMatch(/<td[^>]*width="\d+%"/);
+  });
+
+  test("a nested table's rows are its own — each table fits independently", () => {
+    const out = decorateHtmlForClipboard(
+      "<table><tbody><tr><td>Outer label</td>" +
+        "<td><table><tbody><tr><td>Item</td><td>1,500</td><td>2,300</td>" +
+        "<td>3,100</td></tr></tbody></table></td></tr></tbody></table>",
+    );
+    const widths = (out.match(/<td[^>]*width="(\d+%)"/g) ?? []).map(
+      (m) => /width="(\d+%)"/.exec(m)![1],
+    );
+    // Inner: 4 numeric-trailing cols → 46/18/18/18. Outer: its "second
+    // column" holds a table, not an amount — page fit only.
+    expect(widths.sort()).toEqual(["46%", "18%", "18%", "18%"].sort());
+    expect(out.match(/width="100%"/g)?.length).toBe(2); // both page-fitted
+  });
+});
+
+// --- neighbour suppression: white must not contest a declared shared edge ---
+// Backend twin: notes_decorate._neighbor_declared_sides. Under CSS
+// border-collapse a same-width white tie can WIN by position and erase the
+// source's line; leaving the shared edge silent lets the declared rule draw.
+describe("white fill neighbour suppression", () => {
+  test("skips the edge a neighbouring cell declares", () => {
+    const out = decorateHtmlForClipboard(
+      '<table data-source-styled="true"><tbody>' +
+        '<tr><td style="border-bottom: 1px solid #000000">Total</td></tr>' +
+        "<tr><td>after</td></tr></tbody></table>",
+    );
+    const cells = out.match(/<td[^>]*>/g) ?? [];
+    expect(cells.length).toBe(2);
+    expect(cells[0]).toContain("border-bottom: 1px solid #000000");
+    expect(cells[1]).not.toContain("border-top"); // shared edge silent
+    expect(cells[1]).toContain("border-left: 1px solid #ffffff");
+    expect(cells[1]).toContain("border-bottom: 1px solid #ffffff");
+  });
+
+  test("spans make adjacency ambiguous — every missing side painted", () => {
+    const out = decorateHtmlForClipboard(
+      '<table data-source-styled="true"><tbody>' +
+        '<tr><td colspan="2" style="border-bottom: 1px solid #000">H</td></tr>' +
+        "<tr><td>a</td><td>b</td></tr></tbody></table>",
+    );
+    const cells = out.match(/<td[^>]*>/g) ?? [];
+    expect(
+      cells.slice(1).every((c) => c.includes("border: 1px solid #ffffff")),
+    ).toBe(true);
+  });
+
+  test("a nested plain table keeps its grid — not painted by the outer", () => {
+    const out = decorateHtmlForClipboard(
+      '<table data-source-styled="true"><tbody><tr>' +
+        '<td style="padding: 1px 0px">Outer</td>' +
+        "<td><table><tbody><tr><td>inner</td></tr></tbody></table></td>" +
+        "</tr></tbody></table>",
+    );
+    const inner = out.slice(out.indexOf("<table", out.indexOf("<table") + 1));
+    const innerTd = inner.slice(inner.indexOf("<td"), inner.indexOf("</td>"));
+    expect(innerTd).toContain("border: 1px solid #999"); // theme grid intact
+    expect(innerTd).not.toContain("#ffffff");
   });
 });

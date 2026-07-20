@@ -209,7 +209,8 @@ def test_empty_and_unlabelled_notes_are_skipped_not_emitted(notes_db):
     assert doc["meta"]["counts"] == {
         "notes": 1, "skipped_empty": 1, "skipped_no_label": 1,
         "formatting_compacted": 0, "formatting_reduced": 0,
-        "formatting_dropped": 0, "source_styling_dropped": 0}
+        "formatting_dropped": 0, "source_styling_dropped": 0,
+        "white_grid_dropped": 0}
     assert [f["label"] for f in doc["footnotes"]] == ["Corporate information"]
 
 
@@ -259,7 +260,8 @@ def test_small_verbatim_table_keeps_its_source_styling():
     from mtool.notes_decorate import NotesTableStyle
     from mtool.notes_exporter import _resolve_note_html
 
-    html, tier, destyled = _resolve_note_html(_word_table(10), NotesTableStyle(), True)
+    html, tier, destyled, _grid = _resolve_note_html(
+        _word_table(10), NotesTableStyle(), True)
     assert tier == "full"
     assert destyled is False
     assert "padding: 1px 5px" in html
@@ -272,7 +274,7 @@ def test_oversized_verbatim_table_degrades_instead_of_being_skipped():
 
     raw = _word_table(100)
     assert len(raw) > EXCEL_CELL_CHAR_LIMIT  # raw alone is over — no easy rung
-    html, tier, destyled = _resolve_note_html(raw, NotesTableStyle(), True)
+    html, tier, destyled, _grid = _resolve_note_html(raw, NotesTableStyle(), True)
     assert tier != "oversize"
     assert len(wrap_footnote_html(html)) <= EXCEL_CELL_CHAR_LIMIT
     # Content survives even though the styling did not — and the loss is
@@ -290,7 +292,8 @@ def test_very_large_verbatim_table_still_reports_oversize():
     from mtool.notes_decorate import NotesTableStyle
     from mtool.notes_exporter import _resolve_note_html
 
-    _html, tier, destyled = _resolve_note_html(_word_table(400), NotesTableStyle(), True)
+    _html, tier, destyled, _grid = _resolve_note_html(
+        _word_table(400), NotesTableStyle(), True)
     assert tier == "oversize"
     # Oversize emits the raw note untouched — nothing was dropped, so the
     # destyle flag must not fire alongside the skip.
@@ -304,6 +307,110 @@ def test_strip_inline_styles_preserves_structure_and_text():
     assert "style=" not in out
     assert out.count("<td") == 12
     assert out.count("1,595") == 12
+
+
+# --- white-grid fallback rung (run-76 follow-up, 2026-07-20) ----------------
+# The run-76 white grid (`fill_white_grid`) costs ~27 chars per silent cell,
+# landing on exactly the tables whose `compact` rung is inoperative (source-
+# styled / border-none themes). Without a fallback, mid-size tables that used
+# to file `full` dropped to `flat` — losing ALL formatting to a cosmetic
+# accommodation. The ladder now retries full/compact/lite with the grid off
+# (the exact pre-run-76 payload) before flat, and reports the drop.
+
+def _borderless_word_table(rows: int, cols: int = 6) -> str:
+    """A source-styled Word table whose cells state only padding — the run-75
+    FINCO shape (silence is the look), i.e. maximum white-grid cost."""
+    cell = '<td style="padding: 1px 0px">39,827</td>'
+    body = "".join("<tr>" + cell * cols + "</tr>" for _ in range(rows))
+    return f'<table data-source-styled="true">{body}</table>'
+
+
+def test_white_grid_dropped_before_formatting_is_lost():
+    """A source-styled table too big for any tier WITH the white grid must land
+    on a decorated tier WITHOUT it (pre-run-76 payload) — never fall through
+    to flat while a fitting decorated form exists. The drop is reported."""
+    from mtool.notes_decorate import NotesTableStyle
+    from mtool.notes_exporter import _resolve_note_html
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+
+    html, tier, destyled, grid_dropped = _resolve_note_html(
+        _borderless_word_table(65), NotesTableStyle(), True)
+    assert tier in ("full", "compact", "lite")   # still decorated
+    assert grid_dropped is True
+    assert destyled is False                     # source styling intact…
+    assert "padding: 1px 0px" in html
+    assert "#ffffff" not in html                 # …only the white grid went
+    assert len(wrap_footnote_html(html)) <= EXCEL_CELL_CHAR_LIMIT
+
+
+def test_white_grid_kept_when_it_fits():
+    from mtool.notes_decorate import NotesTableStyle
+    from mtool.notes_exporter import _resolve_note_html
+
+    html, tier, _destyled, grid_dropped = _resolve_note_html(
+        _borderless_word_table(10), NotesTableStyle(), True)
+    assert tier == "full"
+    assert grid_dropped is False
+    assert "#ffffff" in html
+
+
+def test_no_tier_regression_vs_pre_white_grid_ladder():
+    """The invariant the fallback exists for: a note NEVER lands on a worse
+    tier than the pre-run-76 ladder gave it (the fallback rungs ARE that
+    ladder). Probed across the sizes that regressed in review."""
+    from mtool.notes_decorate import NotesTableStyle, decorate_notes_html
+    from mtool.notes_exporter import _resolve_note_html
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+
+    rank = {"full": 0, "compact": 1, "lite": 2, "flat": 3, "oversize": 4}
+    for rows in (45, 65, 80, 100):
+        raw = _borderless_word_table(rows)
+        _html, tier, _destyled, _grid = _resolve_note_html(
+            raw, NotesTableStyle(), True)
+        # Pre-run-76 equivalent: the same ladder with the white grid off.
+        def fits(h):
+            return len(wrap_footnote_html(h)) <= EXCEL_CELL_CHAR_LIMIT
+        if fits(decorate_notes_html(raw, NotesTableStyle(),
+                                    fill_white_grid=False)):
+            old_tier = "full"
+        elif fits(decorate_notes_html(raw, NotesTableStyle(), lite=True,
+                                      fill_white_grid=False)):
+            old_tier = "lite"
+        elif fits(raw):
+            old_tier = "flat"
+        else:
+            old_tier = "oversize"
+        assert rank[tier] <= rank[old_tier], (rows, tier, old_tier)
+
+
+def test_white_grid_drop_is_reported_in_the_fill_doc(notes_db):
+    db, run_id = notes_db
+    _add_note(db, run_id, "Notes-CI", 12, "Small verbatim",
+              _borderless_word_table(10))
+    _add_note(db, run_id, "Notes-Listofnotes", 17, "Mid verbatim",
+              _borderless_word_table(65))
+    doc = build_notes_fill_doc(db, run_id)
+
+    assert doc["meta"]["counts"]["white_grid_dropped"] == 1
+    mid = next(f for f in doc["footnotes"] if f["label"] == "Mid verbatim")
+    assert mid.get("white_grid_dropped") is True
+    small = next(f for f in doc["footnotes"] if f["label"] == "Small verbatim")
+    assert "white_grid_dropped" not in small
+
+
+def test_destyle_retry_does_not_repaint_the_white_grid():
+    """strip_inline_styles drops the data-source-styled marker with the
+    styles, so the destyle rescue rung re-decorates WITHOUT re-painting
+    ~27 chars of white border per cell onto a table that has no styling
+    left — the rung exists to recover bytes, not spend them."""
+    from mtool.notes_decorate import NotesTableStyle
+    from mtool.notes_exporter import _resolve_note_html
+
+    html, tier, destyled, _grid = _resolve_note_html(
+        _word_table(200), NotesTableStyle(), True)
+    assert destyled is True
+    assert tier != "oversize"
+    assert "#ffffff" not in html
 
 
 def test_destyled_note_is_reported_in_the_fill_doc(notes_db):
