@@ -439,6 +439,16 @@ def _has_invisible_border_token(value: str) -> bool:
                for t in _split_css_tokens(value))
 
 
+def _parse_decls(style: str) -> dict[str, str]:
+    """``style`` attr → {prop: value}, lowercased props, last declaration wins."""
+    parsed: dict[str, str] = {}
+    for d in _decls(style):
+        if ":" in d:
+            p, v = d.split(":", 1)
+            parsed[p.strip().lower()] = v.strip()
+    return parsed
+
+
 def _whiteout_hidden_borders(el: Tag) -> None:
     """Rewrite any border explicitly set to hidden/none — in ANY of the forms a
     browser collapses per-side borders into — to an explicit white border so a
@@ -451,11 +461,7 @@ def _whiteout_hidden_borders(el: Tag) -> None:
     if not existing:
         return
     decls = _decls(existing)
-    parsed: dict[str, str] = {}
-    for d in decls:
-        if ":" in d:
-            p, v = d.split(":", 1)
-            parsed[p.strip().lower()] = v.strip()   # last declaration wins
+    parsed = _parse_decls(existing)
     if not any(prop in _BORDER_LINE_PROPS and _has_invisible_border_token(val)
                for prop, val in parsed.items()):
         return
@@ -470,6 +476,155 @@ def _whiteout_hidden_borders(el: Tag) -> None:
             value = _WHITE_BORDER
         out.append(f"border-{side}: {value}")
     el["style"] = "; ".join(out)
+
+
+def _fit_table_width(table: Tag) -> None:
+    """Make the table fill the page in mTool's TX editor.
+
+    TX ignores CSS widths (the ``width: 100%`` in ``_TABLE_STYLE`` does
+    nothing there) and sizes columns to content — a long label column hogs the
+    row and the amount columns jam against it (run-76 observation; the operator
+    was hand-resizing every table). Like the white-border accommodation, the
+    fix is speaking the renderer's dialect: the legacy ``width`` ATTRIBUTES,
+    which old HTML engines honour.
+
+    * ``width="100%"`` on the table — the page fit itself.
+    * Percentage widths on the first full row's cells — accountant layout:
+      the amount columns share a bounded slice, the label column keeps the
+      rest. Applied ONLY when the trailing columns are predominantly numeric
+      (the existing accountant-cell detector) — a two-column TEXT table
+      (name / designation, address lines) must not have its second column
+      crushed to 18%. Also skipped when any colspan is present (a spanned
+      header makes first-row widths ambiguous), the table has fewer than two
+      columns, or the columns are too many for the label floor to hold (9+
+      columns would sum past 100% — the page fit alone is applied and TX
+      shares the width).
+
+    Tables that already carry an explicit width (TipTap-resized, or a
+    ``width`` attr from the source) are left alone — the operator or source
+    decided; the caller also skips tables with operator column widths
+    (``<colgroup>`` / ``colwidth`` — see ``_has_operator_column_widths``).
+    Harmless in browsers: attributes lose to the CSS that already says the
+    same thing. Only THIS table's rows are counted — a nested table's rows
+    are its own (they get their own pass).
+    """
+    rows = [r for r in table.find_all("tr") if r.find_parent("table") is table]
+    per_row = [_cells(r) for r in rows]
+    counts = [len(c) for c in per_row if c]
+    if not counts:
+        return
+    table["width"] = "100%"
+    ncols = max(counts)
+    if ncols < 2:
+        return
+    if any(c.has_attr("colspan") for cells in per_row for c in cells):
+        return
+    first_full = next((cells for cells in per_row if len(cells) == ncols), None)
+    if first_full is None:
+        return
+    # Accountant-shape gate: the split assumes columns 2..n hold AMOUNTS. Only
+    # apply it when the trailing cells are predominantly numeric (strict
+    # majority of the non-empty ones) — otherwise (a name/designation table,
+    # address columns) the page fit alone is applied and TX sizes by content.
+    trailing = [c.get_text().strip() for cells in per_row for c in cells[1:]]
+    non_empty = [t for t in trailing if t]
+    numeric = sum(1 for t in non_empty if is_numeric_cell_text(t))
+    if not non_empty or numeric * 2 <= len(non_empty):
+        return
+    # Amount columns get an equal bounded share; the label column keeps the
+    # rest, floored at 30% so the labels stay readable. When both floors can't
+    # hold at once (9+ columns), the split would sum past 100% — bail to the
+    # page fit alone rather than emit widths TX can't honour.
+    share = min(18, max(10, 70 // (ncols - 1)))
+    label = 100 - share * (ncols - 1)
+    if label < 30:
+        return
+    for i, cell in enumerate(first_full):
+        cell["width"] = f"{label}%" if i == 0 else f"{share}%"
+
+
+def _has_operator_column_widths(table: Tag) -> bool:
+    """True when the table's COLUMNS carry explicit sizing the fit must not
+    override: a ``<colgroup>``/``<col>`` width (how TipTap serialises a column
+    resize — gotcha #16) or a ``colwidth`` attr on a cell (TipTap's unmeasured
+    column width). The table-level check (``_table_has_explicit_width`` /
+    ``width`` attr) misses these, and the legacy ``width`` ATTRIBUTES this
+    module injects would beat the operator's CSS in TX. Scoped to THIS table —
+    a nested table's columns are its own."""
+    for col in table.find_all("col"):
+        if col.find_parent("table") is not table:
+            continue
+        if col.has_attr("width") or any(
+                _prop_of(d) == "width" for d in _decls(col.get("style") or "")):
+            return True
+    return any(
+        c.has_attr("colwidth")
+        for c in table.find_all(("td", "th"))
+        if c.find_parent("table") is table)
+
+
+def _fill_undeclared_borders_white(
+        el: Tag, skip: frozenset[str] = frozenset()) -> None:
+    """Paint every border side the cell does NOT declare as explicit white.
+
+    The absent-edge twin of :func:`_whiteout_hidden_borders`: TX renders an
+    undeclared boundary as its default grey grid line, so an edge meant to be
+    invisible must be stated as white, not omitted. Declared sides — a Word
+    underline, the house header rule — are left byte-for-byte alone. Uses the
+    ``border:`` shorthand when all four sides are absent (the common case) to
+    spare the Excel cell-size budget. Mutates ``el`` in place.
+
+    ``skip`` names sides whose SHARED edge the adjacent cell already declares
+    (:func:`_neighbor_declared_sides`) — those stay silent: a boundary carries
+    one line, and painting our half white would contest the neighbour's
+    declared rule (a Word underline, the house header rule) instead of
+    yielding to it. Under CSS border-collapse a same-width white tie can WIN
+    by position and erase the source's line; in TX the single declared line
+    already draws, so silence is safe. Twin: clipboard.ts::_fillUndeclaredBordersWhite."""
+    decls = _decls(el.get("style") or "")
+    sides = _resolve_cell_borders(_parse_decls(el.get("style") or ""))
+    missing = [s for s in _SIDE_ORDER if not sides.get(s) and s not in skip]
+    if not missing:
+        return
+    if len(missing) == 4:
+        decls.append(f"border: {_WHITE_BORDER}")
+    else:
+        decls.extend(f"border-{s}: {_WHITE_BORDER}" for s in missing)
+    el["style"] = "; ".join(decls)
+
+
+def _neighbor_declared_sides(table: Tag) -> dict[int, frozenset[str]]:
+    """Per-cell sides (keyed by ``id(cell)``) whose shared edge the ADJACENT
+    cell declares — the sides :func:`_fill_undeclared_borders_white` must NOT
+    paint white. Computed on a positional row×column grid of THIS table's own
+    rows; any colspan/rowspan makes adjacency ambiguous, so spanned tables get
+    no suppression (every missing side painted, the pre-refinement behaviour).
+    Call AFTER :func:`_whiteout_hidden_borders` has run on the cells so erased
+    borders read as their white per-side longhands, not hidden/none."""
+    rows = [r for r in table.find_all("tr") if r.find_parent("table") is table]
+    grid = [cells for cells in (_cells(r) for r in rows) if cells]
+    if any(c.has_attr("colspan") or c.has_attr("rowspan")
+           for cells in grid for c in cells):
+        return {}
+    declared = [
+        [_resolve_cell_borders(_parse_decls(c.get("style") or ""))
+         for c in cells]
+        for cells in grid]
+    skip: dict[int, frozenset[str]] = {}
+    for r, cells in enumerate(grid):
+        for c, cell in enumerate(cells):
+            s = set()
+            if c > 0 and declared[r][c - 1].get("right"):
+                s.add("left")
+            if c + 1 < len(cells) and declared[r][c + 1].get("left"):
+                s.add("right")
+            if r > 0 and c < len(grid[r - 1]) and declared[r - 1][c].get("bottom"):
+                s.add("top")
+            if r + 1 < len(grid) and c < len(grid[r + 1]) and declared[r + 1][c].get("top"):
+                s.add("bottom")
+            if s:
+                skip[id(cell)] = frozenset(s)
+    return skip
 
 
 def _has_persisted_indent(el: Tag) -> bool:
@@ -487,7 +642,8 @@ def _cells(row: Tag) -> list[Tag]:
 
 
 def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
-                        lite: bool = False, compact: bool = False) -> str:
+                        lite: bool = False, compact: bool = False,
+                        fill_white_grid: bool = True) -> str:
     """Inject the mTool-render-proven inline styles into ``html`` and return the
     decorated fragment (wrapped in a font-bearing ``<div>`` so bare
     ``<strong>`` / loose text inherit the face). Pure — does not mutate input.
@@ -513,7 +669,14 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     per-cell treatment: a ``borderStyle: none`` theme (the table attrs get
     suppressed, so there is nothing to inherit from) and any table where a
     cell owns its own border/background (user WYSIWYG / sidecar ops — a
-    table-level grid would fight the user's deliberate styling)."""
+    table-level grid would fight the user's deliberate styling).
+
+    ``fill_white_grid`` (default on) is the run-76 accommodation: paint every
+    UNDECLARED cell edge of a source-styled / border-none table explicit white
+    so TX's default grey grid can't show through. It costs ~27 chars per cell,
+    so the exporter's size ladder retries with it OFF (reporting the drop)
+    before falling all the way to ``flat`` — a grey grid on a formatted table
+    beats losing the formatting entirely."""
     if not html:
         return html
     soup = BeautifulSoup(html, "html.parser")
@@ -530,8 +693,13 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     # compact_tables) — the theme contributes no borders to these.
     source_styled_tables: set[int] = set()
     for table in soup.find_all("table"):
+        # Captured BEFORE the merge below injects the decorator's own
+        # `width: 100%` — after it, every table looks "explicitly sized" and
+        # the page-width fit would never fire (the first-cut bug).
+        operator_sized = (_table_has_explicit_width(table)
+                          or table.has_attr("width"))
         _merge_style(table,
-                     _TABLE_STYLE_KEEP_WIDTH if _table_has_explicit_width(table)
+                     _TABLE_STYLE_KEEP_WIDTH if operator_sized
                      else _TABLE_STYLE)
         # Font + wrapping hoisted here (inheritable) so cells don't each repeat
         # ~90 chars of identical boilerplate — the size win that keeps large
@@ -567,6 +735,13 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                     "background" in (c.get("style") or "")
                     for c in table.find_all(("td", "th"))):
                 compact_tables.add(id(table))
+        # Page-width fit for TX (run 76): legacy width ATTRIBUTES, since TX
+        # ignores the CSS width the style above declares. Explicit-width tables
+        # (TipTap-resized / source-sized) are the operator's decision — skip;
+        # so are tables whose COLUMNS the operator sized (<colgroup>/colwidth),
+        # which the table-level width check can't see.
+        if not operator_sized and not _has_operator_column_widths(table):
+            _fit_table_width(table)
 
     # Row-by-row so the row-label column (first cell of a multi-column row) can
     # stay left while numeric value columns go right.
@@ -621,8 +796,29 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     # After merging, any border the formatter explicitly cleared still reads as
     # `hidden`/`none`; translate those to white so they render invisibly in
     # mTool's TX editor rather than surfacing as a grey line.
-    for el in soup.find_all(("td", "th", "table")):
-        _whiteout_hidden_borders(el)
+    #
+    # And the same accommodation for edges that were never DECLARED (run-76
+    # observation): TX draws its default grey grid on every undeclared cell
+    # boundary — in that renderer there is no "no line", only "visible line" or
+    # "line painted white". A browser reads border-silence as blank, so the
+    # source-styled / ruled looks work there by staying silent; here silence
+    # must be spelled out as white or the popup shows a grid the review page
+    # doesn't have. mTool-bound copy only — the DB stays silent.
+    #
+    # Each cell is handled under ITS OWN table's verdict (a nested table is a
+    # separate table — its cells must not inherit the outer table's paint), and
+    # a side whose shared edge the neighbouring cell declares stays silent so
+    # the white can't contest a source underline or the house header rule.
+    for table in soup.find_all("table"):
+        own_cells = [el for el in table.find_all(("td", "th"))
+                     if el.find_parent("table") is table]
+        for el in own_cells:
+            _whiteout_hidden_borders(el)
+        if fill_white_grid and (no_border or id(table) in source_styled_tables):
+            skip = _neighbor_declared_sides(table)
+            for el in own_cells:
+                _fill_undeclared_borders_white(el, skip.get(id(el), frozenset()))
+        _whiteout_hidden_borders(table)
 
     para_style = _paragraph_style(style)
     heading_style = _heading_style(style)
@@ -656,7 +852,8 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
 
 
 def strip_inline_styles(html: str) -> str:
-    """Return ``html`` with every inline ``style=`` removed.
+    """Return ``html`` with every inline ``style=`` removed, along with the
+    ``data-source-styled`` marker.
 
     The last rung of the exporter's size ladder. Verbatim passthrough
     (gotcha #16) writes the SOURCE document's own per-cell styling into the
@@ -666,12 +863,21 @@ def strip_inline_styles(html: str) -> str:
     theirs). Stripping hands the ladder its rungs back so the note files plain
     rather than being skipped outright.
 
-    Structure and text are untouched — only the attribute goes.
+    The marker goes WITH the styles: it means "this table's borders are the
+    whole truth", which stops being true the moment those borders are removed.
+    Left in place it would force the retry to re-paint every cell edge white
+    (`_fill_undeclared_borders_white`) — re-inflating the very bytes the strip
+    just recovered — and suppress the theme grid that would give the destyled
+    table back some visible structure.
+
+    Structure and text are untouched otherwise — only the attributes go.
     """
-    if not html or "style=" not in html:
+    if not html or ("style=" not in html and SOURCE_STYLED_ATTR not in html):
         return html
     soup = BeautifulSoup(html, "html.parser")
     for el in soup.find_all(True):
         if el.has_attr("style"):
             del el["style"]
+        if el.has_attr(SOURCE_STYLED_ATTR):
+            del el[SOURCE_STYLED_ATTR]
     return str(soup)

@@ -553,9 +553,11 @@ def collect_size_signals(
     signals: list[dict[str, Any]] = []
     for c in cells:
         try:
-            # The third element (source-styling dropped by the destyle retry)
-            # is fill-report provenance, not a size verdict — no remedy here.
-            _html, tier, _destyled = _resolve_note_html(c.html or "", style, True)
+            # The trailing elements (source styling / white grid dropped for
+            # size) are fill-report provenance, not size verdicts — no remedy
+            # here.
+            _html, tier, _destyled, _grid = _resolve_note_html(
+                c.html or "", style, True)
         except Exception:  # noqa: BLE001 — signals are advisory; never block
             logger.warning(
                 "size-signal computation failed for row %s", c.row, exc_info=True,

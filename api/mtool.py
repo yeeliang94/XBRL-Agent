@@ -358,6 +358,11 @@ async def patch_mtool_template(
                         # counters above can't carry this loss.
                         notes_report["source_styling_dropped"] = _ncounts.get(
                             "source_styling_dropped", 0)
+                        # Notes whose run-76 white-grid painting was dropped
+                        # for size — TX shows its default grey grid there.
+                        # Cosmetic, and independent of the tier counters.
+                        notes_report["white_grid_dropped"] = _ncounts.get(
+                            "white_grid_dropped", 0)
                         # Honest labelling: a deliberately-unstyled diagnostic
                         # fill must be visible in the report, not mistaken for
                         # a styling bug.
@@ -718,6 +723,9 @@ def _notes_report_block(notes_report: dict | None) -> dict | None:
             # (possibly on the "full" tier, so no other counter shows it).
             "source_styling_dropped": notes_report.get(
                 "source_styling_dropped", 0),
+            # notes whose run-76 white-grid painting was dropped for size —
+            # mTool may show its default grey gridlines there (cosmetic).
+            "white_grid_dropped": notes_report.get("white_grid_dropped", 0),
         },
         "unresolved": [
             {"label": e.get("label"), "detail": e.get("detail")}

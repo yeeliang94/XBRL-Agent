@@ -52,6 +52,7 @@ interface NotesReport {
     // size — they filed with standard styling instead (can land on any tier,
     // so the counters above don't show it).
     source_styling_dropped?: number;
+    white_grid_dropped?: number;
   };
   unresolved?: { label: string | null; detail?: string }[];
 }
@@ -1040,7 +1041,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                   ((report.notes.counts.formatting_compacted ?? 0) > 0 ||
                     (report.notes.counts.formatting_reduced ?? 0) > 0 ||
                     (report.notes.counts.formatting_dropped ?? 0) > 0 ||
-                    (report.notes.counts.source_styling_dropped ?? 0) > 0) && (
+                    (report.notes.counts.source_styling_dropped ?? 0) > 0 ||
+                    (report.notes.counts.white_grid_dropped ?? 0) > 0) && (
                     <div style={{ color: pwc.grey700 }}>
                       {[
                         (report.notes.counts.formatting_compacted ?? 0) > 0 &&
@@ -1051,6 +1053,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                           `${report.notes.counts.formatting_dropped} note(s) written without styling (too large — consider splitting the note)`,
                         (report.notes.counts.source_styling_dropped ?? 0) > 0 &&
                           `${report.notes.counts.source_styling_dropped} note(s) were too large to keep the Word document's own styling — filed with standard styling instead`,
+                        (report.notes.counts.white_grid_dropped ?? 0) > 0 &&
+                          `${report.notes.counts.white_grid_dropped} note(s) may show mTool's default grey gridlines (the white-line painting was dropped to fit)`,
                       ]
                         .filter(Boolean)
                         .join(" · ")}

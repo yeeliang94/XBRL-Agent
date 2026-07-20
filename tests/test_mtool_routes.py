@@ -471,6 +471,29 @@ def test_patch_notes_styling_defaults_to_styled(client, monkeypatch):
     assert report["notes"]["counts"]["formatting_reduced"] == 0
     assert report["notes"]["counts"]["formatting_dropped"] == 0
     assert report["notes"]["counts"]["source_styling_dropped"] == 0
+    assert report["notes"]["counts"]["white_grid_dropped"] == 0
+
+
+def test_patch_reports_white_grid_dropped(client):
+    """A source-styled note that only fits with the run-76 white grid dropped
+    must surface that in the response header — code review 2026-07-20
+    (round 3): the exporter counted it but the route never copied it, so the
+    modal warning could never appear."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    # Borderless verbatim table sized so full/compact/lite fit only WITHOUT
+    # the white grid (65 rows × 6 cols — the measured fallback window).
+    cell = '<td style="padding: 1px 0px">39,827</td>'
+    mid = ('<table data-source-styled="true">'
+           + "".join("<tr>" + cell * 6 + "</tr>" for _ in range(65))
+           + "</table>")
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", mid)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={"strict": "true"})
+    assert resp.status_code == 200, resp.text
+    report = json.loads(resp.headers["X-mTool-Report"])
+    assert report["notes"]["counts"]["white_grid_dropped"] == 1
 
 
 def test_patch_reports_source_styling_dropped(client):
