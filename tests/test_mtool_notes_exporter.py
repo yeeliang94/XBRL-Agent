@@ -209,7 +209,7 @@ def test_empty_and_unlabelled_notes_are_skipped_not_emitted(notes_db):
     assert doc["meta"]["counts"] == {
         "notes": 1, "skipped_empty": 1, "skipped_no_label": 1,
         "formatting_compacted": 0, "formatting_reduced": 0,
-        "formatting_dropped": 0}
+        "formatting_dropped": 0, "source_styling_dropped": 0}
     assert [f["label"] for f in doc["footnotes"]] == ["Corporate information"]
 
 
@@ -236,3 +236,89 @@ def test_empty_run_yields_no_footnotes(notes_db):
     doc = build_notes_fill_doc(db, run_id)
     assert doc["footnotes"] == []
     assert doc["meta"]["counts"]["notes"] == 0
+
+
+# --- verbatim styling + the size ladder (2026-07-19) -----------------------
+# Verbatim passthrough (gotcha #16) writes the SOURCE document's own per-cell
+# styling into notes_cells. For a big Word table that makes `raw` itself
+# exceed Excel's cell cap, which strands every ordinary rung: `compact` only
+# slims DECORATOR-added styling (these cells own theirs) and `flat` == `raw`.
+# Without the destyle retry a 100-row Word table went `oversize` and the fill
+# guard skipped the note entirely — a filed plain note beats a missing one.
+
+def _word_table(rows: int, cols: int = 6) -> str:
+    cell = (
+        '<td style="padding: 1px 5px; text-align: right; '
+        'border-bottom: 1px solid #7F7F7F">1,595</td>'
+    )
+    body = "".join("<tr>" + cell * cols + "</tr>" for _ in range(rows))
+    return f"<table>{body}</table>"
+
+
+def test_small_verbatim_table_keeps_its_source_styling():
+    from mtool.notes_decorate import NotesTableStyle
+    from mtool.notes_exporter import _resolve_note_html
+
+    html, tier, destyled = _resolve_note_html(_word_table(10), NotesTableStyle(), True)
+    assert tier == "full"
+    assert destyled is False
+    assert "padding: 1px 5px" in html
+
+
+def test_oversized_verbatim_table_degrades_instead_of_being_skipped():
+    from mtool.notes_decorate import NotesTableStyle
+    from mtool.notes_exporter import _resolve_note_html
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+
+    raw = _word_table(100)
+    assert len(raw) > EXCEL_CELL_CHAR_LIMIT  # raw alone is over — no easy rung
+    html, tier, destyled = _resolve_note_html(raw, NotesTableStyle(), True)
+    assert tier != "oversize"
+    assert len(wrap_footnote_html(html)) <= EXCEL_CELL_CHAR_LIMIT
+    # Content survives even though the styling did not — and the loss is
+    # REPORTED: a destyled note re-lands on an ordinary tier (here even
+    # "full"), so without this flag the fill report would claim the Word
+    # formatting arrived intact.
+    assert destyled is True
+    assert html.count("1,595") == 600
+
+
+def test_very_large_verbatim_table_still_reports_oversize():
+    """Destyling is not a licence to claim success on a note whose CONTENT is
+    genuinely too big — that must still surface as `oversize` so the operator
+    splits it."""
+    from mtool.notes_decorate import NotesTableStyle
+    from mtool.notes_exporter import _resolve_note_html
+
+    _html, tier, destyled = _resolve_note_html(_word_table(400), NotesTableStyle(), True)
+    assert tier == "oversize"
+    # Oversize emits the raw note untouched — nothing was dropped, so the
+    # destyle flag must not fire alongside the skip.
+    assert destyled is False
+
+
+def test_strip_inline_styles_preserves_structure_and_text():
+    from mtool.notes_decorate import strip_inline_styles
+
+    out = strip_inline_styles(_word_table(2))
+    assert "style=" not in out
+    assert out.count("<td") == 12
+    assert out.count("1,595") == 12
+
+
+def test_destyled_note_is_reported_in_the_fill_doc(notes_db):
+    """The fill report must say when a note's SOURCE (Word) styling was
+    stripped for size — code review 2026-07-20: a destyled note re-lands on
+    tier "full", which read as "formatting fully intact" while the operator's
+    Word styling had silently become house style."""
+    db, run_id = notes_db
+    _add_note(db, run_id, "Notes-CI", 12, "Small verbatim", _word_table(10))
+    _add_note(db, run_id, "Notes-Listofnotes", 17, "Big verbatim",
+              _word_table(100))
+    doc = build_notes_fill_doc(db, run_id)
+
+    assert doc["meta"]["counts"]["source_styling_dropped"] == 1
+    big = next(f for f in doc["footnotes"] if f["label"] == "Big verbatim")
+    assert big.get("source_styling_dropped") is True
+    small = next(f for f in doc["footnotes"] if f["label"] == "Small verbatim")
+    assert "source_styling_dropped" not in small

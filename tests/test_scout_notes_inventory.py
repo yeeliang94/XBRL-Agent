@@ -371,3 +371,150 @@ def test_build_notes_inventory_async_force_vision_skips_regex(tmp_path):
     out = asyncio.run(_run())
     assert called["vision"] is True
     assert [e.note_num for e in out] == [7]
+
+
+# --- multiple headings per page / continuations (2026-07-19) ---------------
+# Run-74 dropped notes 8, 9, 11, 12, 14, 16, 17, 19 and 22: `_detect_note_header`
+# used `search()`, so only the FIRST heading on a page ever entered the
+# inventory. Short notes routinely share a page.
+
+def test_two_note_headings_on_one_page_both_enter_the_inventory():
+    pages = [
+        (22, "7. TRADE RECEIVABLES\nblah blah\n8. OTHER PAYABLES\nmore text"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    assert [e.note_num for e in inv] == [7, 8]
+
+
+def test_three_note_headings_on_one_page_all_enter():
+    pages = [
+        (22, "7. TAXATION\na\n8. OTHER PAYABLES\nb\n9. INCOME\nc"),
+        (23, "continuation prose with no heading"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    assert [e.note_num for e in inv] == [7, 8, 9]
+    # The last note on the page keeps absorbing later pages.
+    assert inv[-1].page_range == (22, 23)
+
+
+def test_continuation_heading_extends_rather_than_duplicating():
+    pages = [
+        (10, "1. BASIS OF PREPARATION\nfirst half"),
+        (11, "1. Basis of preparation (continued)\nsecond half"),
+        (12, "2. REVENUE\nrevenue text"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    assert [e.note_num for e in inv] == [1, 2]
+    assert inv[0].page_range == (10, 11)
+
+
+def test_continuation_variants_are_recognised():
+    for marker in ("(continued)", "(cont'd)", "(Continued)", "- continued"):
+        pages = [
+            (5, "3. INVENTORIES\nfirst"),
+            (6, f"3. Inventories {marker}\nsecond"),
+        ]
+        inv = extract_inventory_from_pages(pages)
+        assert [e.note_num for e in inv] == [3], marker
+        assert inv[0].page_range == (5, 6), marker
+
+
+# --- completeness warnings at both ends (2026-07-19) -----------------------
+# The interior gap check is blind at both ends of the numbering: run 74 lost
+# Note 22 (the highest) and produced no warning at all.
+
+def _pack(entries):
+    from scout.infopack import Infopack
+    return Infopack(toc_page=1, page_offset=0, notes_inventory=entries,
+                    inventory_source="text")
+
+
+def _entry(num, start, end):
+    return NoteInventoryEntry(note_num=num, title=f"Note {num}", page_range=(start, end))
+
+
+def test_warns_when_numbering_does_not_start_at_one():
+    pack = _pack([_entry(3, 10, 11), _entry(4, 12, 13)])
+    assert any("starts at Note 3" in w for w in pack.completeness_warnings())
+
+
+def test_no_leading_warning_when_numbering_starts_at_one():
+    pack = _pack([_entry(1, 10, 11), _entry(2, 12, 13)])
+    assert not any("starts at Note" in w for w in pack.completeness_warnings())
+
+
+def test_warns_when_inventory_is_sparse_over_a_wide_span():
+    # 2 notes across 20 pages of notes — discovery clearly missed most of them.
+    pack = _pack([_entry(1, 10, 11), _entry(2, 12, 29)])
+    assert any("sparse" in w for w in pack.completeness_warnings())
+
+
+def test_no_sparse_warning_for_a_dense_inventory():
+    entries = [_entry(n, 10 + n, 10 + n) for n in range(1, 13)]
+    pack = _pack(entries)
+    assert not any("sparse" in w for w in pack.completeness_warnings())
+
+
+# --- duplicate collapsing (code review 2026-07-19) -------------------------
+# Reading EVERY heading per page also surfaces matches search() used to hide.
+
+def test_mid_page_cross_reference_does_not_create_a_second_entry():
+    """"...see Note 5..." inside note 20's body must not open a note-5 entry
+    that truncates note 20's page range."""
+    pages = [
+        (30, "20. FINANCIAL INSTRUMENTS\nrefer to the table below\n"
+             "5. Property, plant and equipment\ncarrying amounts"),
+        (31, "continuation prose"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    nums = [e.note_num for e in inv]
+    assert len(nums) == len(set(nums)), f"duplicate note_num in {nums}"
+
+
+def test_duplicate_note_numbers_are_merged_with_a_union_page_range():
+    pages = [
+        (10, "3. INVENTORIES\nfirst"),
+        (11, "4. RECEIVABLES\nother"),
+        (12, "3. Inventories\nstray repeat"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    nums = [e.note_num for e in inv]
+    assert nums == [3, 4]
+    note3 = next(e for e in inv if e.note_num == 3)
+    # Union spans both appearances; the first title wins.
+    assert note3.page_range == (10, 12)
+    # _clean_title normalises ALL-CAPS headings to Title Case.
+    assert note3.title == "Inventories"
+
+
+def test_continuation_only_page_does_not_double_count_subnotes():
+    pages = [
+        (10, "2. SIGNIFICANT ACCOUNTING POLICIES\n2.1 Basis of preparation"),
+        (11, "2. Significant accounting policies (continued)\n2.2 Revenue"),
+    ]
+    inv = extract_inventory_from_pages(pages)
+    assert [e.note_num for e in inv] == [2]
+    refs = [s.subnote_ref for s in (inv[0].subnotes or [])]
+    assert len(refs) == len(set(refs)), f"duplicated subnotes: {refs}"
+
+
+# --- operator-added notes carry no page range (code review 2026-07-19) -----
+# The PreRunPanel editor writes page_range (0, 0) for a note the operator adds
+# by hand. Downstream that must read as "unknown", never as page 0.
+
+def test_added_note_does_not_inflate_the_sparse_span():
+    """A (0,0) entry counted as page 0 inflated the span enough to fire the
+    sparse warning on a complete inventory."""
+    entries = [_entry(n, 20 + n, 20 + n) for n in range(1, 13)]
+    entries.append(NoteInventoryEntry(note_num=13, title="Added", page_range=(0, 0)))
+    assert not any("sparse" in w for w in _pack(entries).completeness_warnings())
+
+
+def test_added_note_renders_as_page_unknown_not_page_zero():
+    from notes.agent import _render_inventory_preview
+
+    block = _render_inventory_preview(
+        [NoteInventoryEntry(note_num=7, title="Added by hand", page_range=(0, 0))]
+    )
+    assert "p.0" not in block
+    assert "page not known" in block

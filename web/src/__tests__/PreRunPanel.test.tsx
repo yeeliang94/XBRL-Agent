@@ -1,6 +1,6 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { PreRunPanel } from "../components/PreRunPanel";
+import { PreRunPanel, findInventoryGaps } from "../components/PreRunPanel";
 import type { ModelEntry, ExtendedSettingsResponse } from "../lib/types";
 
 // The inline scout model picker persists through lib/api.updateSettings.
@@ -1499,5 +1499,180 @@ describe("PreRunPanel", () => {
       // No assertions on calls; this test passes if mount + edits don't
       // throw despite the absent callback.
     });
+  });
+});
+
+// --- notes inventory gaps + editor (2026-07-19) ----------------------------
+// Scout dropped notes silently: it read only the first heading on each page,
+// and a missing FIRST or LAST note leaves the numbering looking contiguous.
+// The operator can now see and fix the list before spending a run.
+
+describe("findInventoryGaps", () => {
+  test("returns nothing for a contiguous list", () => {
+    expect(findInventoryGaps([{ note_num: 1 }, { note_num: 2 }, { note_num: 3 }]))
+      .toEqual([]);
+  });
+
+  test("finds interior holes", () => {
+    expect(findInventoryGaps([{ note_num: 1 }, { note_num: 4 }]))
+      .toEqual([2, 3]);
+  });
+
+  test("finds a missing leading run", () => {
+    // Run 74's class of bug: numbering that starts at 3 hides notes 1-2.
+    expect(findInventoryGaps([{ note_num: 3 }, { note_num: 4 }]))
+      .toEqual([1, 2]);
+  });
+
+  test("ignores entries with no usable number", () => {
+    expect(findInventoryGaps([{ note_num: 1 }, { title: "x" }, { note_num: 3 }]))
+      .toEqual([2]);
+  });
+
+  test("returns nothing for an empty inventory", () => {
+    expect(findInventoryGaps([])).toEqual([]);
+  });
+
+  test("does not guess a missing trailing note", () => {
+    // Nothing in the inventory says how high the numbering should go, so a
+    // dropped last note is the operator's to add — inventing a ceiling would
+    // cry wolf on every filing.
+    expect(findInventoryGaps([{ note_num: 1 }, { note_num: 2 }])).toEqual([]);
+  });
+});
+
+describe("notes inventory editor", () => {
+  const _inventoryConfig = {
+    filing_level: "company",
+    filing_standard: "mfrs",
+    statements: ["SOFP"],
+    variants: { SOFP: "CuNonCu" },
+    models: {},
+    notes_to_run: ["CORP_INFO"],
+    notes_models: {},
+    use_scout: true,
+    infopack: {
+      toc_page: 1,
+      page_offset: 0,
+      notes_inventory: [
+        { note_num: 1, title: "Corporate information", page_range: [6, 6] },
+        { note_num: 3, title: "Receivables", page_range: [8, 8] },
+      ],
+    },
+  };
+
+  async function renderWithInventory() {
+    const getSettings = vi.fn().mockResolvedValue(mockSettings);
+    render(
+      <PreRunPanel
+        sessionId="abc-123"
+        getSettings={getSettings}
+        onRun={vi.fn()}
+        initialConfig={_inventoryConfig}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
+    });
+  }
+
+  test("warns about the gap scout left and names the missing number", async () => {
+    await renderWithInventory();
+    expect(screen.getByText(/Found 2 notes in the document\./)).toBeInTheDocument();
+    // Note 2 sits between two discovered notes — exactly the run-74 symptom.
+    expect(screen.getByText(/Note number 2 was not found/)).toBeInTheDocument();
+  });
+
+  test("operator can add the missing note without re-running the pre-scan", async () => {
+    await renderWithInventory();
+    fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
+
+    const list = screen.getByRole("list", { name: /discovered notes/i });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+
+    fireEvent.change(screen.getByLabelText(/missing note number/i), {
+      target: { value: "2" },
+    });
+    fireEvent.change(screen.getByLabelText(/missing note title/i), {
+      target: { value: "Significant accounting policies" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+    await waitFor(() => {
+      expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    });
+    expect(within(list).getByText("Significant accounting policies")).toBeInTheDocument();
+    // Gap closed, so the warning retracts.
+    expect(screen.queryByText(/was not found/)).not.toBeInTheDocument();
+  });
+
+  test("refuses a duplicate note number", async () => {
+    await renderWithInventory();
+    fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
+    fireEvent.change(screen.getByLabelText(/missing note number/i), {
+      target: { value: "1" },
+    });
+    fireEvent.change(screen.getByLabelText(/missing note title/i), {
+      target: { value: "Duplicate" },
+    });
+    expect(screen.getByText(/Note 1 is already in the list\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^add$/i })).toBeDisabled();
+  });
+
+  test("operator can remove a wrongly-detected note", async () => {
+    await renderWithInventory();
+    fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
+    fireEvent.click(screen.getByRole("button", { name: /remove note 3/i }));
+    const list = screen.getByRole("list", { name: /discovered notes/i });
+    await waitFor(() => {
+      expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+    });
+  });
+
+  test("an added note persists with the [0, 0] unknown-page sentinel, not null", async () => {
+    // Code review 2026-07-20: `null` round-trips through Infopack.from_json's
+    // MALFORMED branch and logs "Infopack load degraded" for a deliberate
+    // operator action; [0, 0] is the backend's documented "unknown" sentinel.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const getSettings = vi.fn().mockResolvedValue(mockSettings);
+      const onConfigChange = vi.fn();
+      render(
+        <PreRunPanel
+          sessionId="abc-123"
+          getSettings={getSettings}
+          onRun={vi.fn()}
+          onConfigChange={onConfigChange}
+          initialConfig={_inventoryConfig}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
+      fireEvent.change(screen.getByLabelText(/missing note number/i), {
+        target: { value: "2" },
+      });
+      fireEvent.change(screen.getByLabelText(/missing note title/i), {
+        target: { value: "Significant accounting policies" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+      vi.advanceTimersByTime(600); // past the 500ms auto-save debounce
+      await waitFor(() => {
+        expect(onConfigChange).toHaveBeenCalled();
+      });
+      // calls[length - 1], not .at(-1) — the build targets ES2020.
+      const calls = onConfigChange.mock.calls;
+      const config = calls[calls.length - 1]?.[0];
+      const inventory = (config?.infopack as {
+        notes_inventory?: { note_num?: number; page_range?: unknown }[];
+      })?.notes_inventory;
+      const added = inventory?.find((e) => e.note_num === 2);
+      expect(added).toBeDefined();
+      expect(added?.page_range).toEqual([0, 0]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

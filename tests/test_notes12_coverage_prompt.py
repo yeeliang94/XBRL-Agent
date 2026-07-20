@@ -111,3 +111,22 @@ def test_sub_agent_prompt_empty_batch_still_renders_without_crashing(
     note_num formatting — e.g. `min([])` or `batch[0]` would crash."""
     prompt = _capture_sub_agent_prompt(tmp_path, batch=[])
     assert prompt  # renders something, no assertion on content shape
+
+
+def test_sub_agent_prompt_unknown_page_note_says_search_not_pages_0_0(
+    tmp_path: Path,
+):
+    """Code review 2026-07-20: page_range (0, 0) is the "page unknown"
+    sentinel every operator-added note carries. The scope line and the main
+    inventory render already handle it, but the per-note batch list printed
+    "on pages 0–0" — inventing a page that does not exist. The prompt must
+    say the page is unknown (mirroring notes/agent.py) while notes with real
+    pages keep their range."""
+    batch = [
+        NoteInventoryEntry(note_num=2, title="Accounting policies", page_range=(0, 0)),
+        NoteInventoryEntry(note_num=4, title="FVTPL", page_range=(22, 23)),
+    ]
+    prompt = _capture_sub_agent_prompt(tmp_path, batch)
+    assert "0–0" not in prompt
+    assert "page not known — search for it" in prompt
+    assert "on pages 22–23" in prompt

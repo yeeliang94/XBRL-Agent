@@ -209,6 +209,30 @@ class TestWriterStyling:
         assert any("format_ops dropped" in w for w in result.sanitizer_warnings)
         assert result.cells_written[0]["style_source"] == "unstyled"
 
+    def test_source_styled_table_survives_the_full_write_path(self, tmp_path: Path):
+        """END-TO-END through write_notes_workbook, not just _style_cell_html.
+
+        Code review 2026-07-19 caught a KeyError here that every unit test
+        missed: `style_counts` was seeded with only {"ops", "unstyled"}, so the
+        FIRST cell carrying copied Word markup crashed the writer — and
+        write_notes_workbook runs inside the write_notes agent tool, so the
+        notes agent died the moment verbatim passthrough actually worked. Any
+        new provenance value must be exercised through this path.
+        """
+        source_table = (
+            '<table><tr>'
+            '<td style="padding: 1px 5px; text-align: right">10,000</td>'
+            '</tr></table>'
+        )
+        result = _write(
+            tmp_path, [_payload(content="<p>Body.</p>" + source_table)]
+        )
+        assert result.success, result.errors
+        cell = result.cells_written[0]
+        assert cell["style_source"] == "source"
+        assert "padding: 1px 5px" in cell["html"]
+        assert "text-align: right" in cell["html"]
+
     def test_no_ops_default_unstyled(self, tmp_path: Path):
         # No ops → plain, tagged "unstyled". No floor exists to fall to.
         result = _write(tmp_path, [_payload()])
@@ -679,3 +703,175 @@ class TestSinkResendSupersede:
         asyncio.run(write_notes(SimpleNamespace(deps=deps), second))
         # Distinct content on one row keeps the combine semantics.
         assert len(deps.payload_sink) == 2
+
+
+# --- verbatim source passthrough (2026-07-19) ------------------------------
+# When the agent copies a Word table out of read_source_note, the styling is
+# the SOURCE document's own and arrives on `content`. The sanitiser's
+# table-tag whitelist preserves it, so there is nothing to apply — but the
+# provenance must be distinguishable from "unstyled", which signals a cell
+# that may want a formatter pass.
+
+_STYLED_TABLE = (
+    '<table><tr><td style="padding: 1px 5px; text-align: right">'
+    '1,595</td></tr></table>'
+)
+
+
+def test_source_styled_table_is_tagged_source_not_unstyled():
+    from notes.writer import _style_cell_html
+
+    warnings: list[str] = []
+    html, source = _style_cell_html(_STYLED_TABLE, None, "row", warnings)
+    assert source == "source"
+    assert "padding: 1px 5px" in html
+    assert warnings == []
+
+
+def test_plain_table_without_styling_stays_unstyled():
+    from notes.writer import _style_cell_html
+
+    warnings: list[str] = []
+    html, source = _style_cell_html(
+        "<table><tr><td>1,595</td></tr></table>", None, "row", warnings
+    )
+    assert source == "unstyled"
+
+
+def test_styled_prose_without_a_table_is_not_tagged_source():
+    """Only table tags keep inline styles through the sanitiser; prose that
+    somehow carries one must not be mislabelled as source-styled."""
+    from notes.writer import _style_cell_html
+
+    warnings: list[str] = []
+    _html, source = _style_cell_html(
+        '<p style="text-align: right">text</p>', None, "row", warnings
+    )
+    assert source == "unstyled"
+
+
+def test_format_ops_still_win_over_source_detection():
+    """An agent that supplies ops is using the translation path — ops apply
+    and the cell is tagged `ops`, not `source`."""
+    from notes.writer import _style_cell_html
+
+    warnings: list[str] = []
+    ops = [{"target": {"table": 0, "range": "all"}, "style": {"bold": True}}]
+    _html, source = _style_cell_html(_STYLED_TABLE, ops, "row", warnings)
+    assert source == "ops"
+
+
+def test_sink_write_does_not_nudge_a_verbatim_copied_table(tmp_path: Path):
+    """Code review 2026-07-20 (HIGH): the Sheet-12 sink path counted "table
+    without format_ops" by payload alone, so an agent that copied a Word table
+    VERBATIM (styling inline, no ops — exactly what the source block asks for)
+    was told "your table cells will render unstyled — re-send with format_ops".
+    Two channels steering opposite ways on the branch's headline feature; an
+    obedient re-send would downgrade source-copied styling to model-described
+    ops. A PLAIN table on the same write must still get the nudge."""
+    from notes.agent import _ensure_label_index
+
+    agent, deps = _make_sink_agent(tmp_path)
+    labels = [e.original for e in _ensure_label_index(deps)]
+    write_notes = _get_tool_function(agent, "write_notes")
+
+    styled = ('<table><tr><td style="padding: 1px 5px; text-align: right">'
+              "1,595</td></tr></table>")
+    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), json.dumps({
+        "payloads": [{
+            "chosen_row_label": labels[0], "content": styled,
+            "evidence": "Page 3, Note 1",
+            "parent_note": {"number": "1", "title": "Test"},
+        }],
+    })))
+    assert "Collected 1 payload" in msg
+    assert "without format_ops" not in msg
+
+    plain = "<table><tr><td>1,595</td></tr></table>"
+    msg2 = asyncio.run(write_notes(SimpleNamespace(deps=deps), json.dumps({
+        "payloads": [{
+            "chosen_row_label": labels[1], "content": plain,
+            "evidence": "Page 4, Note 2",
+            "parent_note": {"number": "2", "title": "Other"},
+        }],
+    })))
+    assert "without format_ops" in msg2  # plain tables keep the run-63 nudge
+
+
+@pytest.mark.parametrize("styled_td", [
+    '<td style="">1,595</td>',                    # empty attribute
+    '<td style="position: fixed">1,595</td>',     # property the sanitiser rejects
+])
+def test_sink_nudge_judges_sanitized_html_not_raw(tmp_path: Path, styled_td: str):
+    """Code review 2026-07-20 (round 2): the sink check ran on RAW html, so an
+    empty or invalid style= suppressed the nudge — while the writer later
+    strips exactly those styles and stores the cell UNSTYLED. The verdict must
+    match what the writer will store: these cells land plain, so they get the
+    nudge."""
+    from notes.agent import _ensure_label_index
+
+    agent, deps = _make_sink_agent(tmp_path)
+    label = _ensure_label_index(deps)[0].original
+    write_notes = _get_tool_function(agent, "write_notes")
+
+    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), json.dumps({
+        "payloads": [{
+            "chosen_row_label": label,
+            "content": f"<table><tr>{styled_td}</tr></table>",
+            "evidence": "Page 3, Note 1",
+            "parent_note": {"number": "1", "title": "Test"},
+        }],
+    })))
+    assert "Collected 1 payload" in msg
+    assert "without format_ops" in msg
+
+
+class TestProseStaysStyleFree:
+    """The gotcha #16 narrowing is TABLES ONLY, enforced in code.
+
+    Code review 2026-07-19: the sanitiser also permits text-align/margin on
+    p/h3/li, color on span, background-color on mark — and source.html
+    deliberately carries paragraph styles. Without an explicit strip, "copy the
+    table verbatim" would let prose styling ride along into the DB on the
+    model's judgement alone.
+    """
+
+    def test_paragraph_styles_are_stripped_from_agent_content(self, tmp_path: Path):
+        content = (
+            '<p style="margin-left: 2em; text-align: center">Body.</p>'
+            '<table><tr>'
+            '<td style="padding: 1px 5px">10,000</td>'
+            '</tr></table>'
+        )
+        result = _write(tmp_path, [_payload(content=content)])
+        assert result.success, result.errors
+        html = result.cells_written[0]["html"]
+        assert "margin-left" not in html
+        assert "text-align: center" not in html
+        # ...while the TABLE cell keeps its source styling.
+        assert "padding: 1px 5px" in html
+
+    def test_span_and_mark_colours_are_stripped_from_agent_content(self, tmp_path: Path):
+        content = (
+            '<p><span style="color: #FF0000">red</span> and '
+            '<mark style="background-color: #FFFF00">highlit</mark></p>'
+            "<table><tr><td>10,000</td></tr></table>"
+        )
+        result = _write(tmp_path, [_payload(content=content)])
+        assert result.success, result.errors
+        html = result.cells_written[0]["html"]
+        assert "#FF0000" not in html.upper()
+        assert "background-color" not in html
+        # Text and structure survive — only the attribute goes.
+        assert "red" in html and "highlit" in html
+
+    def test_heading_styles_are_stripped_but_headings_remain(self, tmp_path: Path):
+        content = (
+            '<h3 style="text-align: center">Note 2</h3>'
+            "<table><tr><td>10,000</td></tr></table>"
+        )
+        result = _write(tmp_path, [_payload(content=content)])
+        assert result.success, result.errors
+        html = result.cells_written[0]["html"]
+        assert "<h3" in html
+        assert "text-align" not in html.split("<table")[0]

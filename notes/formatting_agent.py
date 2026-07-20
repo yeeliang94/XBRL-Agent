@@ -552,7 +552,9 @@ def collect_size_signals(
     signals: list[dict[str, Any]] = []
     for c in cells:
         try:
-            _html, tier = _resolve_note_html(c.html or "", style, True)
+            # The third element (source-styling dropped by the destyle retry)
+            # is fill-report provenance, not a size verdict — no remedy here.
+            _html, tier, _destyled = _resolve_note_html(c.html or "", style, True)
         except Exception:  # noqa: BLE001 — signals are advisory; never block
             logger.warning(
                 "size-signal computation failed for row %s", c.row, exc_info=True,
