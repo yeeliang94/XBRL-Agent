@@ -289,7 +289,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [meta, setMeta] = useState<FillMeta | null>(null);
   const [notesCount, setNotesCount] = useState<number | null>(null);
   const [fillNotes, setFillNotes] = useState(true);
-  const [createMissingNotes, setCreateMissingNotes] = useState(false);
+  // Default ON: a template freshly exported from mTool has no note spots
+  // provisioned, so leaving this off silently placed zero notes (run 75) and
+  // read as a broken fill rather than a missing opt-in. The safe posture is
+  // still served by the preview — "Check notes" shows what would be created
+  // before anything is written.
+  const [createMissingNotes, setCreateMissingNotes] = useState(true);
   // Note styling mode: "styled" (default, recommended) or "none" — the
   // diagnostic fill that writes words + table structure with no formatting,
   // so an operator can isolate whether a fill problem is styling-related.
@@ -338,6 +343,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setMeta(null);
     setNotesCount(null);
     setNotesStyling("styled");
+    // This modal stays MOUNTED between sessions, so any choice not reset here
+    // silently persists into the next fill. Both of these advertise a default
+    // in their own label ("On by default"), which would be a lie on the second
+    // open after a single untick — and a stale create-missing is exactly what
+    // made run 75 place zero notes.
+    setFillNotes(true);
+    setCreateMissingNotes(true);
     setLoadErr(null);
     setFile(null);
     setReport(null);
@@ -607,8 +619,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               Add missing note spots
               <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
                 If a note has no spot in the template yet, add one next to its label.
-                Off by default — run “Check notes” first, and verify the result opens
-                correctly in mTool.
+                On by default — a template exported straight from mTool usually has
+                no spots yet. Untick it to fill only the spots that already exist,
+                and run “Check notes” to see the plan before writing.
               </span>
             </span>
           </label>
