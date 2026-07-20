@@ -299,13 +299,23 @@ def describe_effective_appearance(
     built-in theme paints a grey grid/header. Unset fields fall back to the
     editor's historic defaults (mirrors ``themeToCssVars`` in
     web/src/lib/clipboardFormat.ts)."""
-    default_edge, default_th_fill = _theme_defaults(theme or {})
+    defaults = _theme_defaults(theme or {})
     soup = BeautifulSoup(html or "", "html.parser")
     lines: list[str] = []
     for t_idx, table in enumerate(soup.find_all("table")):
         if not isinstance(table, Tag):
             continue
-        lines.append(f"table {t_idx}:")
+        # A verbatim-Word table (gotcha #16) takes NO theme borders — its own
+        # edges, including the ones it deliberately leaves silent, are the whole
+        # truth. Describing it with theme defaults would tell the agent lines
+        # exist that the panel never draws, inviting it to "fix" them.
+        source_styled = table.get(SOURCE_STYLED_ATTR) == "true"
+        table_defaults = defaults.for_table(source_styled=source_styled)
+        lines.append(
+            f"table {t_idx}:"
+            + (" (styling copied from the source document — its own edges are"
+               " authoritative; the theme adds none)" if source_styled else "")
+        )
         for r_idx, tr in enumerate(_table_rows(table), start=1):
             cells = [
                 c for c in tr.find_all(["th", "td"], recursive=False)
@@ -315,20 +325,56 @@ def describe_effective_appearance(
                 lines.append(
                     f"  r{r_idx}c{c_idx}"
                     f" {cell.get_text(' ', strip=True)[:24]!r}:"
-                    f" {_cell_appearance(cell, default_edge, default_th_fill)}"
+                    f" {_cell_appearance(cell, table_defaults)}"
                 )
     return lines
 
 
-def _theme_defaults(theme: dict[str, Any]) -> tuple[str, str]:
-    """(unstyled-edge description, unstyled-<th>-fill description) for the
-    resolved theme. Value mapping mirrors ``themeToCssVars``:
-    borderStyle none → no line; double → 3px double; single/unset → 1px solid;
-    colour defaults #c9c9c9; headerFill defaults #f4f4f4."""
+# Set by notes/writer.py::_mark_source_styled_tables on verbatim-Word tables.
+SOURCE_STYLED_ATTR = "data-source-styled"
+
+_NO_LINE = "no line (theme default)"
+
+
+@dataclass(frozen=True)
+class _ThemeDefaults:
+    """What an UNSTYLED cell actually looks like under the resolved theme.
+
+    Edge-aware, not one value for all four sides: the accountant "ruled" house
+    style draws a line under the header row and nowhere else, so a single
+    ``default_edge`` would describe three of a `<th>`'s edges wrongly or its
+    bottom wrongly. Table-aware too, via :meth:`for_table` — see
+    ``SOURCE_STYLED_ATTR``.
+    """
+    edge: str
+    th_bottom: str
+    th_fill: str
+
+    def for_table(self, *, source_styled: bool) -> "_ThemeDefaults":
+        """Defaults as they apply INSIDE one table."""
+        if not source_styled:
+            return self
+        # The theme contributes nothing to a source-styled table — no grid, no
+        # header rule, no header fill (mtool/notes_decorate.py + clipboard.ts
+        # strip the whole border family for these; the review-page CSS zeroes
+        # them). "none" here, not the theme value.
+        no_line = "no line (styling from the source document)"
+        return _ThemeDefaults(edge=no_line, th_bottom=no_line, th_fill="none")
+
+    def edge_for(self, cell: Tag, side: str) -> str:
+        return (self.th_bottom
+                if cell.name == "th" and side == "bottom" else self.edge)
+
+
+def _theme_defaults(theme: dict[str, Any]) -> _ThemeDefaults:
+    """Unstyled-cell appearance for the resolved theme. Value mapping mirrors
+    ``themeToCssVars``: borderStyle none → no line; double → 3px double;
+    single/unset → 1px solid; colour defaults #c9c9c9; headerFill defaults
+    #f4f4f4; headerRule → a 1px rule under the header row only."""
     border_style = theme.get("borderStyle")
     grid_color = theme.get("borderColor") or "#c9c9c9"
     if border_style == "none":
-        default_edge = "no line (theme default)"
+        default_edge = _NO_LINE
     elif border_style == "double":
         default_edge = f"3px double {grid_color} (theme default)"
     else:
@@ -338,16 +384,23 @@ def _theme_defaults(theme: dict[str, Any]) -> tuple[str, str]:
         default_th_fill = "none (theme default)"
     else:
         default_th_fill = f"{header_fill} (theme default)"
-    return default_edge, default_th_fill
+    # Accountant "ruled" look: the header's underline is the table's only line,
+    # and it exists even when `borderStyle` is "none" (that is the whole point
+    # of the house style). Without this the agent is told the header has no
+    # bottom edge and may add one that is already there.
+    th_bottom = (f"1px solid {theme.get('borderColor') or '#999'} "
+                 "(theme header rule)") if theme.get("headerRule") is True \
+        else default_edge
+    return _ThemeDefaults(
+        edge=default_edge, th_bottom=th_bottom, th_fill=default_th_fill,
+    )
 
 
-def _cell_appearance(
-    cell: Tag, default_edge: str, default_th_fill: str,
-) -> str:
+def _cell_appearance(cell: Tag, defaults: _ThemeDefaults) -> str:
     style = _parse_style(cell.get("style") or "")
     fill = style.get("background-color")
     if fill in (None, ""):
-        fill_desc = default_th_fill if cell.name == "th" else "none"
+        fill_desc = defaults.th_fill if cell.name == "th" else "none"
     elif fill == "transparent":
         fill_desc = "none (explicitly cleared)"
     else:
@@ -357,7 +410,7 @@ def _cell_appearance(
     for side in SIDES:
         value = style.get(f"border-{side}") or shorthand
         if value is None:
-            desc = default_edge
+            desc = defaults.edge_for(cell, side)
         elif "hidden" in value.split() or value.split() == ["none"]:
             desc = "no line (cleared)"
         else:

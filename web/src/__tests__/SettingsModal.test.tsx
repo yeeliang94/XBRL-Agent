@@ -108,6 +108,32 @@ describe("SettingsModal — P3 enhancements", () => {
     expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
   });
 
+  test("preview reflects the theme instead of a fixed grid", async () => {
+    // The preview is the ONLY place an operator sees the theme before saving.
+    // It used to hard-code a 1px cell border, so the ruled house default (no
+    // grid, one rule under the header) previewed as boxed — the opposite of
+    // what saving produced.
+    renderModal({
+      notes_table_style: { borderStyle: "none", headerRule: true },
+    });
+    const preview = await screen.findByLabelText("Notes table style preview");
+    const [header] = Array.from(preview.querySelectorAll("th"));
+    const [body] = Array.from(preview.querySelectorAll("td"));
+    // Ruled: a bottom edge on the header, nothing on the body cells.
+    expect(header.style.borderBottom).toContain("1px solid");
+    // jsdom drops `border: none` from the style object entirely (neither the
+    // shorthand nor the longhands read back), so assert the absence of a line
+    // — which is exactly the regression: a hard-coded 1px grid on every cell.
+    expect(body.style.cssText).not.toContain("solid");
+  });
+
+  test("preview draws the grid when the theme asks for one", async () => {
+    renderModal({ notes_table_style: { borderStyle: "single" } });
+    const preview = await screen.findByLabelText("Notes table style preview");
+    const [body] = Array.from(preview.querySelectorAll("td"));
+    expect(body.style.border).toContain("1px solid");
+  });
+
   test("Notes table style section persists the firm default to the server", async () => {
     // Migrated from localStorage to a shared, server-side firm default
     // (docs/PLAN-notes-table-theme.md): editing a knob POSTs notes_table_style.

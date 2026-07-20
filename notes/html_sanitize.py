@@ -327,6 +327,13 @@ _STYLE_PROPS_BY_TAG: dict[str, frozenset[str]] = {
 # default-keep branch still applies.
 _TABLE_STRUCTURE_ATTRS: frozenset[str] = frozenset({
     "colspan", "rowspan", "colwidth",
+    # Verbatim Word passthrough: marks a table whose border set is COMPLETE, so
+    # no renderer adds a default grid where the source stated nothing (see
+    # notes/writer.py::_mark_source_styled_tables). The writer sets it after
+    # sanitising, but a human edit re-sanitises through here — without this the
+    # marker is stripped on first save and the table reverts to the house grid.
+    # Value-checked to the single literal below; it is a flag, not free text.
+    "data-source-styled",
 })
 
 # Table structure values cross the browser/ProseMirror boundary too. Bound
@@ -345,6 +352,8 @@ def _is_valid_table_structure_attr(name: str, value: object) -> bool:
         return bool(_TABLE_SPAN_RE.match(raw))
     if name == "colwidth":
         return bool(_TABLE_COLWIDTH_RE.match(raw))
+    if name == "data-source-styled":
+        return raw == "true"
     return False
 
 # Tags whose *contents* are also removed on strip. A `<script>` stripped

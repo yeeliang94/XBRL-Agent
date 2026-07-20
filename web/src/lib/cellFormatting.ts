@@ -15,6 +15,7 @@
 //     side across a multi-cell selection while preserving each cell's other
 //     properties (peer-review #3 / #4).
 import { mergeAttributes } from "@tiptap/core";
+import { Table } from "@tiptap/extension-table";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import {
@@ -262,6 +263,31 @@ export const StyledTableCell = TableCell.extend({
   },
   renderHTML({ node, HTMLAttributes }) {
     return renderStyledCell("td", HTMLAttributes, node.attrs);
+  },
+});
+
+/** Marks a table whose styling was copied verbatim from an uploaded Word
+ *  document (set by notes/writer.py::_mark_source_styled_tables).
+ *
+ *  A Word financial table defines its look largely by the borders it does NOT
+ *  state, so the theme must not paint its default grid into those gaps. The
+ *  attribute has to survive the editor round-trip: without it here, TipTap
+ *  drops the marker on the first human save and the table reverts to the house
+ *  grid — the exact regression this flag exists to prevent. */
+export const SOURCE_STYLED_ATTR = "data-source-styled";
+
+export const StyledTable = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      sourceStyled: {
+        default: null,
+        parseHTML: (el: HTMLElement) =>
+          el.getAttribute(SOURCE_STYLED_ATTR) === "true" ? "true" : null,
+        renderHTML: (attrs: Record<string, unknown>) =>
+          attrs.sourceStyled === "true" ? { [SOURCE_STYLED_ATTR]: "true" } : {},
+      },
+    };
   },
 });
 

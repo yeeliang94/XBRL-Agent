@@ -30,6 +30,7 @@ from notes.format_patch import (
     apply_sheet_patch,
     describe_effective_appearance,
 )
+from notes.table_theme import firm_theme
 from model_settings import build_model_settings
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 
@@ -672,11 +673,16 @@ def _build_output_rejected_prompt(
 
 def _resolve_notes_table_theme(db_path: str, run_id: int) -> dict[str, Any]:
     """The RESOLVED notes-table style theme for a run: the run's own override
-    (a full snapshot — schema v22) wins, else the firm default from
-    ``XBRL_NOTES_TABLE_STYLE`` (same source as ``server._notes_table_style``;
-    parsed here to avoid importing server), else ``{}`` → the editor's historic
-    defaults. Mirrors ``resolveTheme`` in web/src/lib/clipboardFormat.ts so the
-    self-check describes what the panel will actually render."""
+    (a full snapshot — schema v22) wins, else the firm theme.
+
+    The firm layer resolves through ``notes.table_theme.firm_theme`` — the SAME
+    resolver ``server._notes_table_style`` uses. It used to re-parse the env var
+    here and fall back to ``{}``; once the shipped firm default became the
+    accountant-ruled house style, that made the agent reason about a boxed grey
+    grid while the panel rendered ruled and borderless, so it would "correct"
+    formatting that was already right. Mirrors ``resolveTheme`` in
+    web/src/lib/clipboardFormat.ts so the self-check describes what the panel
+    will actually render."""
     try:
         with repo.db_session(db_path) as conn:
             run = repo.fetch_run(conn, run_id)
@@ -687,15 +693,7 @@ def _resolve_notes_table_theme(db_path: str, run_id: int) -> dict[str, Any]:
         logger.warning(
             "could not read run notes_table_style run=%s", run_id, exc_info=True,
         )
-    raw = os.environ.get("XBRL_NOTES_TABLE_STYLE", "")
-    if raw:
-        try:
-            value = json.loads(raw)
-            if isinstance(value, dict):
-                return value
-        except json.JSONDecodeError:
-            pass
-    return {}
+    return firm_theme()
 
 
 def _build_self_check_prompt(

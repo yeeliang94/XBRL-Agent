@@ -552,3 +552,125 @@ def test_unstyled_cell_still_receives_theme_defaults():
         "<table><tr><td>1,595</td></tr></table>", NotesTableStyle()
     )
     assert "style=" in out  # the decorator did its normal job
+
+
+# --- Option A: verbatim Word tables own their grid, including its absences ---
+# A Word financial table defines its look largely by the borders it does NOT
+# state. The theme used to paint its default grid into exactly those gaps, so a
+# faithfully-copied table came out boxed in lines the source never had (run 75).
+# `data-source-styled` declares that absence; every renderer must honour it.
+
+_SOURCE_STYLED_BORDERLESS = (
+    '<table data-source-styled="true"><tr>'
+    '<td style="padding: 1px 0px">Bahrain</td>'
+    '<td style="padding: 1px 0px; text-align: right">39,827</td>'
+    '</tr></table>'
+)
+
+
+def test_source_styled_borderless_cell_gains_no_theme_border():
+    """The regression that made run 75's notes look like house content: a cell
+    stating only padding owns no border FAMILY, so family-precedence alone let
+    the theme grid through. The marker closes that."""
+    out = decorate_notes_html(_SOURCE_STYLED_BORDERLESS, NotesTableStyle())
+    assert "border: 1px solid" not in out
+    assert 'border="1"' not in out
+    # The theme's non-border contributions still apply.
+    assert "padding" in out
+
+
+def test_source_styled_table_keeps_the_borders_it_does_state():
+    marked = _WORD_CELL.replace("<table", '<table data-source-styled="true"', 1)
+    out = decorate_notes_html(marked, NotesTableStyle())
+    assert "border-bottom" in out
+    assert out.count("border-bottom") == 1  # Word's own, no theme copy
+
+
+def test_source_styled_table_suppresses_the_house_totals_rule():
+    """The totals double-underline is another border the source didn't ask for."""
+    html = (
+        '<table data-source-styled="true"><tr>'
+        '<td style="padding: 1px 0px">Total</td>'
+        '<td style="padding: 1px 0px">121,622</td>'
+        '</tr></table>'
+    )
+    out = decorate_notes_html(html, NotesTableStyle(totals_double_underline=True))
+    assert "double" not in out
+
+
+def test_unmarked_table_still_gets_the_full_house_grid():
+    """Option A must not leak into PDF-sourced notes."""
+    out = decorate_notes_html(
+        "<table><tr><td>1,595</td></tr></table>", NotesTableStyle()
+    )
+    assert "border: 1px solid" in out or 'border="1"' in out
+
+
+# --- Firm house style: accountant "ruled", not boxed (2026-07-20) ------------
+
+def test_header_rule_draws_one_line_and_no_cell_grid():
+    """The `ruled` look: `border_style="none"` kills the grid, `header_rule`
+    puts the single line back under the header row only."""
+    html = ('<table><thead><tr><th>Country</th></tr></thead>'
+            '<tbody><tr><td>Qatar</td></tr></tbody></table>')
+    out = decorate_notes_html(
+        html, NotesTableStyle(border_style="none", header_rule=True)
+    )
+    assert "border-bottom: 1px solid #999" in out
+    assert "border: 1px solid" not in out   # no cell grid
+    assert 'border="1"' not in out          # no legacy attr either
+
+
+def test_header_rule_honours_the_theme_border_colour():
+    out = decorate_notes_html(
+        "<table><thead><tr><th>H</th></tr></thead></table>",
+        NotesTableStyle(border_style="none", header_rule=True,
+                        border_color="#333333"),
+    )
+    assert "border-bottom: 1px solid #333333" in out
+
+
+def test_header_rule_defaults_off_so_untouched_themes_are_unchanged():
+    """Byte-compat: every field added here defaults to None/False so an
+    un-customised NotesTableStyle() reproduces the historic output."""
+    assert NotesTableStyle().header_rule is None
+    out = decorate_notes_html(
+        "<table><thead><tr><th>H</th></tr></thead></table>", NotesTableStyle()
+    )
+    assert "border-bottom" not in out
+
+
+def test_from_theme_maps_header_rule_and_ignores_malformed():
+    assert NotesTableStyle.from_theme({"headerRule": True}).header_rule is True
+    # Malformed reads as "unset", matching every other optional field.
+    assert NotesTableStyle.from_theme({"headerRule": "yes"}).header_rule is None
+    assert NotesTableStyle.from_theme({}).header_rule is None
+
+
+def test_source_styled_table_does_not_get_the_house_header_rule():
+    """Review-round finding: `_header_extra` contributes its own border-bottom,
+    so stripping only the cell BASE let the house header rule through — the
+    review page (whose CSS zeroes it) then disagreed with mTool and clipboard."""
+    from notes.table_theme import HOUSE_NOTES_TABLE_STYLE
+    house = NotesTableStyle.from_theme(HOUSE_NOTES_TABLE_STYLE)
+    html = ('<table data-source-styled="true"><thead><tr><th>Country</th></tr>'
+            '</thead><tbody><tr><td style="padding: 1px 0px">Qatar</td></tr>'
+            '</tbody></table>')
+    out = decorate_notes_html(html, house)
+    th = out[out.index("<th"):out.index("</th>")]
+    assert "border" not in th
+    # ...while an ordinary table still gets the rule under its header.
+    plain = decorate_notes_html(html.replace(' data-source-styled="true"', ''),
+                                house)
+    assert "border-bottom: 1px solid #999" in plain
+
+
+def test_border_strip_preserves_border_collapse():
+    """`border-collapse` is LAYOUT, not an edge — dropping it would double every
+    rule in the table. It shares the `border-` prefix, so the strip must exempt
+    it explicitly."""
+    from mtool.notes_decorate import _without_border_decls
+    out = _without_border_decls(
+        "border-collapse: collapse; border-top: 1px solid #000; padding: 2px")
+    assert "border-collapse: collapse" in out
+    assert "border-top" not in out

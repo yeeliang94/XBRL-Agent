@@ -875,3 +875,49 @@ class TestProseStaysStyleFree:
         html = result.cells_written[0]["html"]
         assert "<h3" in html
         assert "text-align" not in html.split("<table")[0]
+
+
+# --- Option A: the source-styled marker (writer + sanitiser lock-step) -------
+
+def test_verbatim_table_is_marked_source_styled():
+    from notes.writer import _style_cell_html
+    html, prov = _style_cell_html(
+        '<table><tr><td style="padding: 1px 0px">A</td></tr></table>',
+        None, "X", [],
+    )
+    assert prov == "source"
+    assert 'data-source-styled="true"' in html
+
+
+def test_unstyled_table_is_not_marked():
+    """The marker suppresses the theme grid, so it must never land on a table
+    that legitimately wants house styling (PDF-sourced notes)."""
+    from notes.writer import _style_cell_html
+    html, prov = _style_cell_html(
+        "<table><tr><td>A</td></tr></table>", None, "X", [],
+    )
+    assert prov == "unstyled"
+    assert "data-source-styled" not in html
+
+
+def test_marker_survives_the_human_edit_round_trip():
+    """A human edit re-sanitises the cell. If the marker were stripped there,
+    the table would silently revert to the house grid on first save."""
+    from notes.html_sanitize import sanitize_notes_html
+    from notes.writer import _style_cell_html
+    html, _ = _style_cell_html(
+        '<table><tr><td style="padding: 1px 0px">A</td></tr></table>',
+        None, "X", [],
+    )
+    again, warnings = sanitize_notes_html(html)
+    assert 'data-source-styled="true"' in again
+    assert warnings == []
+
+
+def test_forged_marker_value_is_rejected():
+    from notes.html_sanitize import sanitize_notes_html
+    out, warnings = sanitize_notes_html(
+        '<table data-source-styled="drop-my-grid"><tr><td>A</td></tr></table>'
+    )
+    assert "data-source-styled" not in out
+    assert any("data-source-styled" in w for w in warnings)

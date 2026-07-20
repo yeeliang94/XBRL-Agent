@@ -46,6 +46,12 @@ export interface ClipboardFormatOptions {
   /** Accountant totals convention: 3px double rule under the amount cells of
    *  "total" rows. Absent/false → no decoration (historic output). */
   totalsDoubleUnderline?: boolean;
+  /** Accountant "ruled" look: one horizontal rule under the header row, with no
+   *  cell grid (`borderStyle: "none"`). Printed statements are ruled, not
+   *  boxed — and it matches what a Word source produces. Absent/false → no rule
+   *  (historic output). The shipped firm default turns this on; see
+   *  `server.HOUSE_NOTES_TABLE_STYLE`. */
+  headerRule?: boolean;
 }
 
 // Defaults reproduce the previously hard-coded clipboard styling EXACTLY
@@ -164,6 +170,9 @@ export function parseThemeOptions(
   if (typeof p.totalsDoubleUnderline === "boolean") {
     out.totalsDoubleUnderline = p.totalsDoubleUnderline;
   }
+  if (typeof p.headerRule === "boolean") {
+    out.headerRule = p.headerRule;
+  }
   return out;
 }
 
@@ -234,6 +243,12 @@ export function themeToCssVars(theme: ClipboardFormatOptions): Record<string, st
   // border when unset, so an un-themed editor looks exactly as before.
   if (theme.totalsDoubleUnderline === true) {
     vars["--nt-totals-border"] = "3px double #000000";
+  }
+  // Header rule (accountant "ruled" look). Same discipline as the totals rule:
+  // the variable is only SET when the convention is on, so the stylesheet's
+  // fallback keeps an un-themed editor byte-identical to before.
+  if (theme.headerRule === true) {
+    vars["--nt-header-rule"] = `1px solid ${theme.borderColor ?? "#999"}`;
   }
   return vars;
 }

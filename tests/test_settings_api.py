@@ -195,9 +195,13 @@ def test_notes_table_style_round_trips(tmp_path, monkeypatch):
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
     from dotenv import load_dotenv
 
-    # Default: empty object (each surface keeps its historic look).
-    assert client.get("/api/settings").json()["notes_table_style"] == {}
-    assert client.get("/api/config").json()["notes_table_style"] == {}
+    # Default: the shipped firm house style (2026-07-20) — accountant "ruled",
+    # not the historic boxed grid. Both endpoints must serve the SAME resolved
+    # theme, or the editor preview and the clipboard paste disagree.
+    assert (client.get("/api/settings").json()["notes_table_style"]
+            == server.HOUSE_NOTES_TABLE_STYLE)
+    assert (client.get("/api/config").json()["notes_table_style"]
+            == server.HOUSE_NOTES_TABLE_STYLE)
 
     resp = client.post("/api/settings", json={
         "notes_table_style": {
@@ -269,3 +273,43 @@ def test_notes_table_style_prose_fields_reject_malformed(tmp_path, monkeypatch):
     ):
         resp = client.post("/api/settings", json={"notes_table_style": bad})
         assert resp.status_code == 400, bad
+
+
+# --- Shipped firm house style (2026-07-20) ----------------------------------
+
+def test_house_notes_table_style_is_accountant_ruled(monkeypatch):
+    """The look the product owner chose: ruled, not boxed; headers bold and
+    unfilled; totals underlines stay MANUAL (auto-detect invented rules on rows
+    that merely contained the word "total")."""
+    import server
+    monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
+    style = server._notes_table_style()
+    assert style["borderStyle"] == "none"
+    assert style["headerRule"] is True
+    assert style["headerBold"] is True
+    assert style["headerFill"] == "transparent"
+    assert style["totalsDoubleUnderline"] is False
+    # Density unchanged — the only values proven in mTool's TX27 popup.
+    assert style["fontSizePt"] == 10
+    assert style["cellPaddingPx"] == [4, 8]
+
+
+def test_operator_can_still_opt_out_to_the_historic_look(monkeypatch):
+    """An explicit `{}` means "each surface's historic default" — the escape
+    hatch, so the house style is a preference and not a hard-coded look."""
+    import server
+    monkeypatch.setenv("XBRL_NOTES_TABLE_STYLE", "{}")
+    assert server._notes_table_style() == {}
+
+
+def test_malformed_house_style_degrades_to_the_house_default(monkeypatch):
+    import server
+    monkeypatch.setenv("XBRL_NOTES_TABLE_STYLE", "not json{")
+    assert server._notes_table_style()["headerRule"] is True
+
+
+def test_house_style_callers_cannot_mutate_the_shared_constant(monkeypatch):
+    import server
+    monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
+    server._notes_table_style()["borderStyle"] = "double"
+    assert server.HOUSE_NOTES_TABLE_STYLE["borderStyle"] == "none"

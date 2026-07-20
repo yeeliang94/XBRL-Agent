@@ -20,6 +20,7 @@ import {
   BORDER_NONE,
   BORDER_HIDDEN,
   FILL_NONE,
+  StyledTable,
   StyledTableCell,
   StyledTableHeader,
   applyCellFill,
@@ -764,6 +765,46 @@ describe("styled cell extension round-trip (real editor)", () => {
     });
     expect(fills).toEqual([null, null]);
     expect(tops).toEqual([null, null]);
+    editor.destroy();
+  });
+});
+
+// The marker must survive the editor round-trip. Without a Table extension that
+// parses and re-renders it, TipTap drops the attribute on the first human save
+// and the table silently reverts to the house grid — the exact regression
+// `data-source-styled` exists to prevent (run 75).
+describe("source-styled marker round-trip (real editor)", () => {
+  function makeEditor(html: string): Editor {
+    return new Editor({
+      extensions: [
+        StarterKit.configure({
+          code: false,
+          codeBlock: false,
+          blockquote: false,
+          horizontalRule: false,
+        }),
+        StyledTable.configure({ resizable: false }),
+        TableRow,
+        StyledTableHeader,
+        StyledTableCell,
+      ],
+      content: html,
+    });
+  }
+
+  it("re-emits data-source-styled after a load/serialise cycle", () => {
+    const editor = makeEditor(
+      '<table data-source-styled="true"><tbody><tr>' +
+        '<td style="padding: 1px 0px">A</td>' +
+        "</tr></tbody></table>",
+    );
+    expect(editor.getHTML()).toContain('data-source-styled="true"');
+    editor.destroy();
+  });
+
+  it("does not invent the marker on an ordinary table", () => {
+    const editor = makeEditor("<table><tbody><tr><td>A</td></tr></tbody></table>");
+    expect(editor.getHTML()).not.toContain("data-source-styled");
     editor.destroy();
   });
 });

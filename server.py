@@ -2747,24 +2747,27 @@ def _spot_check_mode() -> str:
     return mode if mode in ("light", "full") else "light"
 
 
+# One definition of the firm theme for every consumer (server, formatter agent).
+# Re-exported here because callers and tests reference `server.HOUSE_...`.
+from notes.table_theme import (  # noqa: E402
+    HOUSE_NOTES_TABLE_STYLE, firm_theme,
+)
+
+
 def _notes_table_style() -> dict:
     """The firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
 
     A JSON object in ``XBRL_NOTES_TABLE_STYLE`` (border colour/style, header
     fill, font/padding/spacing) that drives BOTH the notes editor preview and
-    the clipboard paste so they match. Empty ``{}`` is the safe default — the
-    frontend then falls back to each surface's historic look. Read fresh each
-    call so a Settings change takes effect without a restart; a malformed value
-    degrades to ``{}`` rather than breaking the settings/config endpoints.
+    the clipboard paste so they match. Unset or malformed falls back to
+    ``HOUSE_NOTES_TABLE_STYLE`` (the shipped firm look) rather than ``{}`` —
+    ``{}`` means "each surface's own historic default", which is a code-level
+    fallback, not a house style anyone chose. An operator who genuinely wants
+    the historic look can store ``{}`` explicitly. Read fresh each call so a
+    Settings change takes effect without a restart; a malformed value degrades
+    to the house style rather than breaking the settings/config endpoints.
     """
-    raw = os.environ.get("XBRL_NOTES_TABLE_STYLE", "")
-    if not raw:
-        return {}
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return value if isinstance(value, dict) else {}
+    return firm_theme()
 
 
 def _entity_memory_enabled() -> bool:

@@ -399,8 +399,38 @@ def _style_cell_html(
     # differs from "unstyled", and the operator needs that distinction —
     # an unstyled cell may want a formatter pass, a source-styled one does not.
     if _carries_table_styling(html):
-        return html, "source"
+        return _mark_source_styled_tables(html), "source"
     return html, "unstyled"
+
+
+# Marks a table whose styling came verbatim from the uploaded Word document.
+# Every renderer (review page CSS, mTool decorator, clipboard decorator) treats
+# a marked table's border set as COMPLETE and contributes none of its own.
+SOURCE_STYLED_ATTR = "data-source-styled"
+
+
+def _mark_source_styled_tables(html: str) -> str:
+    """Tag every ``<table>`` in verbatim-passthrough content as source-styled.
+
+    Copying the source's declarations is not the same as reproducing its look.
+    A Word financial table states a couple of underlines and nothing else — its
+    appearance is defined largely by the borders it does NOT state. Our theme
+    paints a default grid into exactly those gaps, so a faithfully-copied table
+    rendered as if it were house content comes out wrapped in lines the source
+    never had (measured on the FINCO 2021 statement: 515 of 662 cells state no
+    border at all).
+
+    Absence can't be copied, so it is declared instead: this marker tells each
+    renderer that the cells' own borders are the whole truth for this table.
+    Cells still win per-side — a stated `border-bottom` renders — but nothing
+    is added where the source stayed silent.
+    """
+    if "<table" not in html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for table in soup.find_all("table"):
+        table[SOURCE_STYLED_ATTR] = "true"
+    return str(soup)
 
 
 def _carries_table_styling(html: str) -> bool:
