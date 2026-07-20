@@ -251,8 +251,13 @@ describe("MtoolFillModal", () => {
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
 
-    // Toggle present and OFF by default.
+    // Toggle present and ON by default: a template exported straight from mTool
+    // has no note spots provisioned, so leaving this off placed zero notes and
+    // read as a broken fill rather than a missing opt-in (run 75).
     const create = screen.getByLabelText(/add missing note spots/i) as HTMLInputElement;
+    expect(create.checked).toBe(true);
+    // Still operator-controllable in both directions.
+    fireEvent.click(create);
     expect(create.checked).toBe(false);
     fireEvent.click(create);
     expect(create.checked).toBe(true);
@@ -745,6 +750,43 @@ describe("RunDetailView mTool button", () => {
     cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  test("re-opening restores the advertised defaults", async () => {
+    // The modal stays MOUNTED between sessions, so a choice not reset in the
+    // open-session effect silently persists — and the label promises "On by
+    // default", which would be a lie on the second open after one untick.
+    vi.stubGlobal("fetch", async (input: RequestInfo) => {
+      const url = String(input);
+      if (url.includes("/mtool-notes-fill"))
+        return new Response(
+          JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }),
+          { status: 200 },
+        );
+      if (url.includes("/mtool-fill"))
+        return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    const { rerender } = render(
+      <MtoolFillModal runId={42} open onClose={() => {}} />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy(),
+    );
+
+    const create = () =>
+      screen.getByLabelText(/add missing note spots/i) as HTMLInputElement;
+    expect(create().checked).toBe(true);
+    fireEvent.click(create());
+    expect(create().checked).toBe(false);
+
+    // Close, then re-open the SAME mounted component.
+    rerender(<MtoolFillModal runId={42} open={false} onClose={() => {}} />);
+    rerender(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() =>
+      expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy(),
+    );
+    expect(create().checked).toBe(true);
   });
 
   test("button opens the modal on a completed run", async () => {
