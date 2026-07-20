@@ -613,9 +613,17 @@ async def _invoke_sub_agent_once(
     # Empty-batch case renders no list (vacuously covered; the
     # sub-coordinator skips the run anyway).
     if batch:
+        # page_range (0, 0) = page UNKNOWN (operator-added note) — same
+        # sentinel handling as the scope line above and the inventory render
+        # in notes/agent.py. Printing "on pages 0–0" would invent a page that
+        # does not exist; say so plainly so the agent searches instead.
         note_lines = "\n".join(
-            f"  - note_num={entry.note_num} ({entry.title}) on pages "
-            f"{entry.page_range[0]}–{entry.page_range[1]}"
+            f"  - note_num={entry.note_num} ({entry.title}) "
+            + (
+                f"on pages {entry.page_range[0]}–{entry.page_range[1]}"
+                if entry.page_range and entry.page_range[0] > 0
+                else "(page not known — search for it)"
+            )
             for entry in batch
         )
         batch_list = (

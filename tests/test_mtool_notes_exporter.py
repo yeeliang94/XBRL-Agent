@@ -209,7 +209,7 @@ def test_empty_and_unlabelled_notes_are_skipped_not_emitted(notes_db):
     assert doc["meta"]["counts"] == {
         "notes": 1, "skipped_empty": 1, "skipped_no_label": 1,
         "formatting_compacted": 0, "formatting_reduced": 0,
-        "formatting_dropped": 0}
+        "formatting_dropped": 0, "source_styling_dropped": 0}
     assert [f["label"] for f in doc["footnotes"]] == ["Corporate information"]
 
 
@@ -259,8 +259,9 @@ def test_small_verbatim_table_keeps_its_source_styling():
     from mtool.notes_decorate import NotesTableStyle
     from mtool.notes_exporter import _resolve_note_html
 
-    html, tier = _resolve_note_html(_word_table(10), NotesTableStyle(), True)
+    html, tier, destyled = _resolve_note_html(_word_table(10), NotesTableStyle(), True)
     assert tier == "full"
+    assert destyled is False
     assert "padding: 1px 5px" in html
 
 
@@ -271,10 +272,14 @@ def test_oversized_verbatim_table_degrades_instead_of_being_skipped():
 
     raw = _word_table(100)
     assert len(raw) > EXCEL_CELL_CHAR_LIMIT  # raw alone is over — no easy rung
-    html, tier = _resolve_note_html(raw, NotesTableStyle(), True)
+    html, tier, destyled = _resolve_note_html(raw, NotesTableStyle(), True)
     assert tier != "oversize"
     assert len(wrap_footnote_html(html)) <= EXCEL_CELL_CHAR_LIMIT
-    # Content survives even though the styling did not.
+    # Content survives even though the styling did not — and the loss is
+    # REPORTED: a destyled note re-lands on an ordinary tier (here even
+    # "full"), so without this flag the fill report would claim the Word
+    # formatting arrived intact.
+    assert destyled is True
     assert html.count("1,595") == 600
 
 
@@ -285,8 +290,11 @@ def test_very_large_verbatim_table_still_reports_oversize():
     from mtool.notes_decorate import NotesTableStyle
     from mtool.notes_exporter import _resolve_note_html
 
-    _html, tier = _resolve_note_html(_word_table(400), NotesTableStyle(), True)
+    _html, tier, destyled = _resolve_note_html(_word_table(400), NotesTableStyle(), True)
     assert tier == "oversize"
+    # Oversize emits the raw note untouched — nothing was dropped, so the
+    # destyle flag must not fire alongside the skip.
+    assert destyled is False
 
 
 def test_strip_inline_styles_preserves_structure_and_text():
@@ -296,3 +304,21 @@ def test_strip_inline_styles_preserves_structure_and_text():
     assert "style=" not in out
     assert out.count("<td") == 12
     assert out.count("1,595") == 12
+
+
+def test_destyled_note_is_reported_in_the_fill_doc(notes_db):
+    """The fill report must say when a note's SOURCE (Word) styling was
+    stripped for size — code review 2026-07-20: a destyled note re-lands on
+    tier "full", which read as "formatting fully intact" while the operator's
+    Word styling had silently become house style."""
+    db, run_id = notes_db
+    _add_note(db, run_id, "Notes-CI", 12, "Small verbatim", _word_table(10))
+    _add_note(db, run_id, "Notes-Listofnotes", 17, "Big verbatim",
+              _word_table(100))
+    doc = build_notes_fill_doc(db, run_id)
+
+    assert doc["meta"]["counts"]["source_styling_dropped"] == 1
+    big = next(f for f in doc["footnotes"] if f["label"] == "Big verbatim")
+    assert big.get("source_styling_dropped") is True
+    small = next(f for f in doc["footnotes"] if f["label"] == "Small verbatim")
+    assert "source_styling_dropped" not in small

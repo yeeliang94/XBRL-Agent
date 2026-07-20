@@ -20,10 +20,12 @@ from pydantic_ai.models import Model
 from model_settings import build_model_settings
 
 from notes.coverage import CoverageReceipt
+from notes.html_sanitize import sanitize_notes_html
 from notes.html_to_text import html_to_excel_text
 from notes.payload import NotesPayload
 from notes.writer import (
     _build_label_index,
+    _carries_table_styling,
     _resolve_row,
     evidence_col_letter,
     resolve_payload_labels,
@@ -878,6 +880,23 @@ def _payload_source_consulted(deps: "NotesDeps", payload) -> bool:
     return bool(refs & consulted)
 
 
+def _content_lands_source_styled(content: str) -> bool:
+    """Mirror the writer's eventual verdict for the sink-path nudge.
+
+    Sanitize FIRST, then test for surviving table styling — the same order
+    the final writer applies (`_sanitize_payload` → `_style_cell_html`). A
+    raw-HTML check would let an empty or invalid `style=` (e.g. `style=""` or
+    `position: fixed`, both of which the sanitiser strips) suppress the nudge
+    while the writer later stores the very same cell as unstyled — the agent
+    would never hear its table landed plain (code review 2026-07-20).
+    """
+    try:
+        cleaned, _warnings = sanitize_notes_html(content)
+    except Exception:  # noqa: BLE001 — the nudge is advisory; never block a write
+        return False
+    return _carries_table_styling(cleaned)
+
+
 def format_unconsulted_source_nudge(count: int) -> str:
     """Feedback line for table cells written without the Word source consulted.
 
@@ -1025,9 +1044,17 @@ def _sub_agent_sink_write(
         msg += "\n" + "\n".join(lines)
     if parse_errors:
         msg += "\nParse errors: " + "; ".join(parse_errors)
+    # Provenance-aware like the tool-path site (which checks
+    # style_source == "unstyled"): a table copied VERBATIM from the Word
+    # source carries its styling inline and needs no ops — nudging it to
+    # "re-send with format_ops" would contradict the source-block instruction
+    # and push the agent to re-describe formatting it already copied (the
+    # run-74 fidelity problem verbatim passthrough exists to fix). Judged on
+    # SANITIZED html so the verdict matches what the writer will store.
     msg += format_unstyled_table_nudge(sum(
         1 for p in accepted
         if not p.format_ops and "<table" in p.content.lower()
+        and not _content_lands_source_styled(p.content)
     ))
     # Word uploads only: a table written without ever calling read_source_note
     # is a missed verbatim copy, not a style choice (run 74).

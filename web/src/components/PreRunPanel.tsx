@@ -346,8 +346,15 @@ function NotesInventoryEditor({
 
   const add = () => {
     if (!canAdd) return;
+    // [0, 0] is the backend's documented "page unknown" sentinel
+    // (scout/infopack.py). A null here would round-trip through
+    // Infopack.from_json's MALFORMED branch and log "Infopack load
+    // degraded" for a deliberate operator action.
+    const added: NotesInventoryEntry = {
+      note_num: parsed, title: title.trim(), page_range: [0, 0],
+    };
     onChange(
-      [...entries, { note_num: parsed, title: title.trim(), page_range: null }]
+      [...entries, added]
         .sort((a, b) => (a.note_num ?? 0) - (b.note_num ?? 0)),
     );
     setNum("");

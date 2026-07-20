@@ -470,6 +470,29 @@ def test_patch_notes_styling_defaults_to_styled(client, monkeypatch):
     assert report["notes"]["counts"]["formatting_compacted"] == 0
     assert report["notes"]["counts"]["formatting_reduced"] == 0
     assert report["notes"]["counts"]["formatting_dropped"] == 0
+    assert report["notes"]["counts"]["source_styling_dropped"] == 0
+
+
+def test_patch_reports_source_styling_dropped(client):
+    """A verbatim Word note too big to keep its own styling files destyled —
+    and the loss must reach the operator. Code review 2026-07-20 (round 2):
+    the exporter recorded the count in the fill doc, but the route only
+    copied the three older formatting counters, so the response header (and
+    the modal reading it) never saw it."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    cell = ('<td style="padding: 1px 5px; text-align: right; '
+            'border-bottom: 1px solid #7F7F7F">1,595</td>')
+    big = ("<table>"
+           + "".join("<tr>" + cell * 6 + "</tr>" for _ in range(100))
+           + "</table>")
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", big)
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                   files=_upload_our_template(), data={"strict": "true"})
+    assert resp.status_code == 200, resp.text
+    report = json.loads(resp.headers["X-mTool-Report"])
+    assert report["notes"]["counts"]["source_styling_dropped"] == 1
 
 
 def test_patch_bad_notes_styling_is_422(client):

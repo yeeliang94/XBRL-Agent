@@ -1628,4 +1628,51 @@ describe("notes inventory editor", () => {
       expect(within(list).getAllByRole("listitem")).toHaveLength(1);
     });
   });
+
+  test("an added note persists with the [0, 0] unknown-page sentinel, not null", async () => {
+    // Code review 2026-07-20: `null` round-trips through Infopack.from_json's
+    // MALFORMED branch and logs "Infopack load degraded" for a deliberate
+    // operator action; [0, 0] is the backend's documented "unknown" sentinel.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const getSettings = vi.fn().mockResolvedValue(mockSettings);
+      const onConfigChange = vi.fn();
+      render(
+        <PreRunPanel
+          sessionId="abc-123"
+          getSettings={getSettings}
+          onRun={vi.fn()}
+          onConfigChange={onConfigChange}
+          initialConfig={_inventoryConfig}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
+      fireEvent.change(screen.getByLabelText(/missing note number/i), {
+        target: { value: "2" },
+      });
+      fireEvent.change(screen.getByLabelText(/missing note title/i), {
+        target: { value: "Significant accounting policies" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+      vi.advanceTimersByTime(600); // past the 500ms auto-save debounce
+      await waitFor(() => {
+        expect(onConfigChange).toHaveBeenCalled();
+      });
+      // calls[length - 1], not .at(-1) — the build targets ES2020.
+      const calls = onConfigChange.mock.calls;
+      const config = calls[calls.length - 1]?.[0];
+      const inventory = (config?.infopack as {
+        notes_inventory?: { note_num?: number; page_range?: unknown }[];
+      })?.notes_inventory;
+      const added = inventory?.find((e) => e.note_num === 2);
+      expect(added).toBeDefined();
+      expect(added?.page_range).toEqual([0, 0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
