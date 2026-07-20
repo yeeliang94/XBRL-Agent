@@ -689,6 +689,7 @@ describe("MtoolFillModal", () => {
           formatting_compacted: 2,
           formatting_reduced: 1,
           formatting_dropped: 1,
+          source_styling_dropped: 1,
         },
       },
     });
@@ -712,6 +713,11 @@ describe("MtoolFillModal", () => {
     );
     expect(screen.getByText(/1 note\(s\) lost minor styling to fit/i)).toBeTruthy();
     expect(screen.getByText(/1 note\(s\) written without styling \(too large/i)).toBeTruthy();
+    // Verbatim Word note destyled for size — the loss must be named, not
+    // hidden behind an ordinary tier (code review 2026-07-20, round 2).
+    expect(
+      screen.getByText(/1 note\(s\) were too large to keep the Word document's own styling/i),
+    ).toBeTruthy();
   });
 });
 

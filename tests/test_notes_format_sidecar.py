@@ -761,6 +761,71 @@ def test_format_ops_still_win_over_source_detection():
     assert source == "ops"
 
 
+def test_sink_write_does_not_nudge_a_verbatim_copied_table(tmp_path: Path):
+    """Code review 2026-07-20 (HIGH): the Sheet-12 sink path counted "table
+    without format_ops" by payload alone, so an agent that copied a Word table
+    VERBATIM (styling inline, no ops — exactly what the source block asks for)
+    was told "your table cells will render unstyled — re-send with format_ops".
+    Two channels steering opposite ways on the branch's headline feature; an
+    obedient re-send would downgrade source-copied styling to model-described
+    ops. A PLAIN table on the same write must still get the nudge."""
+    from notes.agent import _ensure_label_index
+
+    agent, deps = _make_sink_agent(tmp_path)
+    labels = [e.original for e in _ensure_label_index(deps)]
+    write_notes = _get_tool_function(agent, "write_notes")
+
+    styled = ('<table><tr><td style="padding: 1px 5px; text-align: right">'
+              "1,595</td></tr></table>")
+    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), json.dumps({
+        "payloads": [{
+            "chosen_row_label": labels[0], "content": styled,
+            "evidence": "Page 3, Note 1",
+            "parent_note": {"number": "1", "title": "Test"},
+        }],
+    })))
+    assert "Collected 1 payload" in msg
+    assert "without format_ops" not in msg
+
+    plain = "<table><tr><td>1,595</td></tr></table>"
+    msg2 = asyncio.run(write_notes(SimpleNamespace(deps=deps), json.dumps({
+        "payloads": [{
+            "chosen_row_label": labels[1], "content": plain,
+            "evidence": "Page 4, Note 2",
+            "parent_note": {"number": "2", "title": "Other"},
+        }],
+    })))
+    assert "without format_ops" in msg2  # plain tables keep the run-63 nudge
+
+
+@pytest.mark.parametrize("styled_td", [
+    '<td style="">1,595</td>',                    # empty attribute
+    '<td style="position: fixed">1,595</td>',     # property the sanitiser rejects
+])
+def test_sink_nudge_judges_sanitized_html_not_raw(tmp_path: Path, styled_td: str):
+    """Code review 2026-07-20 (round 2): the sink check ran on RAW html, so an
+    empty or invalid style= suppressed the nudge — while the writer later
+    strips exactly those styles and stores the cell UNSTYLED. The verdict must
+    match what the writer will store: these cells land plain, so they get the
+    nudge."""
+    from notes.agent import _ensure_label_index
+
+    agent, deps = _make_sink_agent(tmp_path)
+    label = _ensure_label_index(deps)[0].original
+    write_notes = _get_tool_function(agent, "write_notes")
+
+    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), json.dumps({
+        "payloads": [{
+            "chosen_row_label": label,
+            "content": f"<table><tr>{styled_td}</tr></table>",
+            "evidence": "Page 3, Note 1",
+            "parent_note": {"number": "1", "title": "Test"},
+        }],
+    })))
+    assert "Collected 1 payload" in msg
+    assert "without format_ops" in msg
+
+
 class TestProseStaysStyleFree:
     """The gotcha #16 narrowing is TABLES ONLY, enforced in code.
 

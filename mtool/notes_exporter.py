@@ -83,6 +83,7 @@ def build_notes_fill_doc(
     formatting_compacted = 0  # "compact" tier — same look, slimmer styling
     formatting_reduced = 0    # "lite" tier — cosmetic props dropped
     formatting_dropped = 0    # "flat" tier — all styling dropped
+    source_styling_dropped = 0  # destyle retry — verbatim Word styling stripped
     for r in rows:
         html = (r["html"] or "").strip()
         label = (r["label"] or "").strip()
@@ -96,7 +97,7 @@ def build_notes_fill_doc(
         # formatting (borders/fills/font/alignment) — see the module docstring.
         # `decorate=False` keeps the raw HTML (the "no styling" diagnostic
         # toggle on the fill endpoint, plus tests / debug).
-        out_html, tier = _resolve_note_html(r["html"], style, decorate)
+        out_html, tier, destyled = _resolve_note_html(r["html"], style, decorate)
         if tier == "compact":
             formatting_compacted += 1
         elif tier == "lite":
@@ -116,6 +117,13 @@ def build_notes_fill_doc(
             entry["format_tier"] = tier
         if tier == "flat":
             entry["formatting_dropped"] = True
+        # Destyle retry (verbatim passthrough): the note's own Word styling
+        # was stripped to make it fit, then re-decorated with the house theme.
+        # The tier alone would misreport this as "formatting intact", so the
+        # loss gets its own honest annotation on the entry + a meta count.
+        if destyled:
+            source_styling_dropped += 1
+            entry["source_styling_dropped"] = True
         footnotes.append(entry)
 
     meta = {
@@ -139,6 +147,11 @@ def build_notes_fill_doc(
             "formatting_compacted": formatting_compacted,
             "formatting_reduced": formatting_reduced,
             "formatting_dropped": formatting_dropped,
+            # Verbatim-passthrough notes whose SOURCE (Word) styling had to be
+            # stripped for size; they file with theme styling instead. Counted
+            # separately from the tier counters because a destyled note can
+            # re-land on any tier, including "full".
+            "source_styling_dropped": source_styling_dropped,
         },
     }
     return {"meta": meta, "footnotes": footnotes, "strict": strict}
@@ -146,10 +159,16 @@ def build_notes_fill_doc(
 
 def _resolve_note_html(
     raw: str, style: NotesTableStyle, decorate: bool,
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     """Pick the HTML to emit for one note, trading formatting for size only
-    when forced. Returns ``(html, tier)`` where tier is one of
-    ``full`` / ``compact`` / ``lite`` / ``flat`` / ``raw`` / ``oversize``.
+    when forced. Returns ``(html, tier, source_styling_dropped)`` where tier
+    is one of ``full`` / ``compact`` / ``lite`` / ``flat`` / ``raw`` /
+    ``oversize``. ``source_styling_dropped`` is True only when the destyle
+    retry below stripped the note's own (verbatim Word) styling to make it
+    fit — the tier alone can't carry that: a destyled note re-lands on
+    ``full``, which would otherwise read as "formatting fully intact" in the
+    fill report while the operator's Word styling was silently replaced with
+    the house theme.
 
     Ladder — CONTENT is never lost to formatting:
       * ``full``    — decorated HTML fits Excel's cell limit.
@@ -177,26 +196,26 @@ def _resolve_note_html(
     Sizes use the exact wrapped payload (:func:`wrap_footnote_html`) so the
     wrap overhead + Excel's unescaped-length semantics are accounted for."""
     if not decorate:
-        return raw, "raw"
+        return raw, "raw", False
 
     def _fits(h: str) -> bool:
         return len(wrap_footnote_html(h)) <= EXCEL_CELL_CHAR_LIMIT
 
     decorated = decorate_notes_html(raw, style)
     if _fits(decorated):
-        return decorated, "full"
+        return decorated, "full", False
     compact = decorate_notes_html(raw, style, compact=True)
     # Compact only helps when it actually differs from full — a compact-
     # INELIGIBLE note (user-styled cells / border-none theme) decorates
     # byte-identical to full, so it can't fit either; skip straight to lite
     # instead of re-testing the same over-limit payload under a "compact" label.
     if compact != decorated and _fits(compact):
-        return compact, "compact"
+        return compact, "compact", False
     lite = decorate_notes_html(raw, style, lite=True)
     if _fits(lite):
-        return lite, "lite"
+        return lite, "lite", False
     if _fits(raw):
-        return raw, "flat"
+        return raw, "flat", False
     # Verbatim passthrough (gotcha #16, 2026-07-19) puts the SOURCE document's
     # own per-cell styling on `raw`, so for a big Word table `raw` is itself
     # over the limit and every rung above has already failed — including
@@ -212,13 +231,15 @@ def _resolve_note_html(
     if stripped != raw:
         destyled = decorate_notes_html(stripped, style)
         if _fits(destyled):
-            return destyled, "full"
+            return destyled, "full", True
         compact_destyled = decorate_notes_html(stripped, style, compact=True)
         if compact_destyled != destyled and _fits(compact_destyled):
-            return compact_destyled, "compact"
+            return compact_destyled, "compact", True
         lite_destyled = decorate_notes_html(stripped, style, lite=True)
         if _fits(lite_destyled):
-            return lite_destyled, "lite"
+            return lite_destyled, "lite", True
         if _fits(stripped):
-            return stripped, "flat"
-    return raw, "oversize"
+            return stripped, "flat", True
+    # Oversize emits `raw` untouched — nothing was actually dropped, the
+    # note simply couldn't be made to fit; the fill guard skips + flags it.
+    return raw, "oversize", False
