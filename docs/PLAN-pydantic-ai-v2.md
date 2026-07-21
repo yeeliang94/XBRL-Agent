@@ -864,16 +864,22 @@ Recorded here so the ideas don't get lost; none are commitments.
    own on `run_agent_turns`.
 2. **Deferred tool loading** (core V2) — tools appear as one-line stubs
    until the model asks; could trim our notes agents' large prompts.
-3. **CodeMode spike** — the model writes one sandboxed Python script
-   (Monty: an embedded mini-interpreter, no terminal/subprocess, no
-   filesystem/network, stdlib-subset only; our tools surface as callable
-   functions and execute host-side so all write guards still fire)
-   instead of N sequential tool calls. Potential turn/latency win for
-   calculator-heavy verify loops; real costs: per-turn telemetry
-   collapses into `run_code` blobs and trace auditability degrades.
-   Decision instrument: one statement type, benchmark suite scorecard
-   (gotcha #30), accuracy + cost + trace-readability compared before
-   any wider adoption.
+3. **CodeMode spike** — 🟥 **RUN AND CLOSED (DELETE), 2026-07-21.** Built
+   behind a default-off toggle on SOFP, measured with an interleaved 3v3
+   A/B on FINCO/gpt-5.4 (docs/PLAN-codemode-spike.md is the full audit
+   trail): **+15.8% cost, +8.7% wall time, 1 of 3 flag-on runs failed**
+   (Monty's type-checker rejects a dynamically-built `list[dict]` against
+   the `list[FactWrite]` tool signature — dict literals pass, variables
+   don't). Round trips did NOT fall: the existing batched tools had
+   already captured the win, and the model spent extra turns fighting the
+   sandbox. Safety held everywhere (guards + save gate are host-side;
+   in-script gather over sequential tools is rejected pre-execution) and
+   the trace/ledger debuggability bar passed — the concept failed on
+   ECONOMICS, not safety. The seam was deleted per the pre-registered
+   criteria; code recoverable from git history (ec4dc01). If ever
+   revisited, solve the type-checker-vs-pydantic-model-args friction
+   FIRST, and target the face reviewer's all-text single-shot read
+   chains, not extraction.
 4. **Capabilities refactor** — bundling each agent role's tools + prompt
    + hooks as a capability could DRY the reviewer/notes/formatter
    assembly. Pure refactor; only worth it if it demonstrably reduces
