@@ -1,7 +1,7 @@
 # Implementation Plan: CodeMode Spike (Monty sandbox) — SOFP only, behind a toggle
 
-**Overall Progress:** `60%` — Phases 1–3 built + tested (2026-07-21); Phase 0/4 live
-runs pending
+**Overall Progress:** `95%` — all phases run (2026-07-21); numbers say DELETE per the
+pre-registered criteria; awaiting operator sign-off + workbook verdicts
 **PRD Reference:** none — decision instrument is docs/PLAN-pydantic-ai-v2.md §D.5 item 3
 (this plan is that spike, made concrete). Exploration evidence: 2026-07-21 session
 (telemetry query of `output/xbrl_agent.db` + three-agent codebase sweep).
@@ -121,12 +121,12 @@ same PDF + model) so prompt-cache warming and provider drift cannot favour one g
 
 ### Phase 0: Measuring stick (no CodeMode code)
 
-- [ ] 🟥 **Step 1: Baseline runs** — an early "before" reference and the operator's
+- [x] 🟩 **Step 1: Baseline runs** — an early "before" reference and the operator's
   first accuracy calibration. NOTE: the decision numbers come from Step 6's interleaved
   pairs, not from this phase alone — these runs establish the workflow and the
   operator's acceptance standard.
-  - [ ] 🟥 3 SOFP-only repeats (same PDF, same model) via the existing repeats feature
-  - [ ] 🟥 Record per run: total cost, wall time, and model round trips
+  - [x] 🟩 3 SOFP-only runs (same PDF, same model; sequential CLI runs)
+  - [x] 🟩 Record per run: total cost, wall time, and model round trips
     (`run_agent_turns` rows `WHERE node_kind='model_request'` — see metric definition
     in Key Decisions); note cache-read tokens so the pre-cache cost-estimate caveat
     is quantified, not hand-waved
@@ -255,22 +255,77 @@ same PDF + model) so prompt-cache warming and provider drift cannot favour one g
 
 ### Phase 4: Live spike + decision
 
-- [ ] 🟥 **Step 6: Interleaved A/B runs** — the decision data. Freeze the Success
+  **Step 1 results (2026-07-21, FINCO 2021, gpt-5.4, direct mode).** SOFP agent
+  only (the spot-check reviewer pass ran identically on every run and is
+  excluded). Cost is the pre-cache estimate; cache-read tokens shown for the
+  caveat.
+
+  | run | cost $ | model round trips | agent secs | cache-read tok | operator verdict |
+  |---|---|---|---|---|---|
+  | 227 | 1.607 | 8 | 304 | 392k | _pending_ |
+  | 228 | 1.363 | 10 | 245 | 295k | _pending_ |
+  | 229 | 1.726 | 11 | 234 | 521k | _pending_ |
+  | **mean** | **1.565** | **9.7** | **261** | | |
+
+- [x] 🟩 **Step 6: Interleaved A/B runs** — the decision data. Freeze the Success
   Criteria before the first flag-on run.
-  - [ ] 🟥 6 SOFP-only runs in ONE sitting, alternating flag off/on/off/on/off/on —
+  - [x] 🟩 6 SOFP-only runs in ONE sitting, alternating flag off/on/off/on/off/on —
     same PDF, same model — so prompt-cache warming and provider drift cannot favour
     either group (Step 1's runs remain an early reference, not decision data)
-  - [ ] 🟥 Comparison table in this doc: per run — cost, wall time, model round trips
+  - [x] 🟩 Comparison table in this doc: per run — cost, wall time, model round trips
     (`node_kind='model_request'` count), outer `run_code` calls, nested sandbox calls
     (from the ledger) as separate columns
   - [ ] 🟥 Operator reviews all 6 workbooks blind to which group each came from where
     practicable — same acceptable/not judgement, same person, same Step 1 standard
-  - [ ] 🟥 The debuggability bar: force one flag-on failure (e.g. a script error) and
+  - [x] 🟩 The debuggability bar: a REAL flag-on failure occurred (run 233) and was root-caused (e.g. a script error) and
     debug it from ledger + trace alone; record the experience
   - **Verify:** table filled; any rejected workbook investigated via ledger + trace
     before drawing conclusions.
-- [ ] 🟥 **Step 7: Decision record** — apply the pre-registered Success Criteria to the
+
+  **Step 6 results (2026-07-21, one sitting 11:59–12:26, alternating off/on,
+  FINCO 2021, gpt-5.4).** SOFP agent metrics from `run_agent_turns` /
+  `run_agents`; "round trips" = `node_kind='model_request'` count.
+
+  | leg | run (dir) | cost $ | round trips | run_code turns | agent secs | outcome |
+  |---|---|---|---|---|---|---|
+  | off | 230 (run_006) | 1.647 | 8 | — | 229 | ok |
+  | ON | 231 (run_007) | 2.419 | 10 | 6 | 341 | ok |
+  | off | 232 (run_008) | 1.920 | 9 | — | 288 | ok |
+  | ON | 233 (run_009) | 1.863 | 8 | 4 | 229 | **FAILED — no workbook** |
+  | off | 234 (run_010) | 1.653 | 8 | — | 232 | ok |
+  | ON | 235 (run_011) | 1.763 | 8 | 4 | 244 | ok |
+  | **off mean** | | **1.740** | **8.3** | | **250** | 3/3 ok |
+  | **ON mean** | | **2.015** | **8.7** | | **271** | 2/3 ok |
+
+  **CodeMode was NET NEGATIVE: +15.8% cost, +8.7% wall time, and 1 of 3 runs
+  failed outright.** Round trips did not fall — the write→verify→save collapse
+  the spike bet on was already largely captured by the existing batched tools,
+  and the model instead spent EXTRA turns negotiating with the sandbox.
+
+  **Failed-run root cause (debugged from the trace alone — the debuggability
+  bar PASSED):** Monty's static type-checker rejected every `write_facts` call
+  in run 233 with `Expected list[FactWrite], found list[dict]` — the model
+  built its 28 facts as a dynamically-constructed list of dicts (the natural
+  way to stage data in a script), which the checker will not structurally
+  match against the pydantic-model signature (dict LITERALS at the call site
+  do match — which is why the Phase 2 tests passed). Three retries burned,
+  zero host-side calls executed (the empty `code_mode_calls` ledger is itself
+  the diagnostic), and the agent finished without writing. Run 231 shows the
+  mirror image: it succeeded but spent 6 run_code turns and +47% cost fighting
+  the same friction.
+
+- [x] 🟩 **Step 7: Decision record** — apply the pre-registered Success Criteria to the
   Step 6 table; the criteria pick the outcome, not post-hoc judgement.
+
+  **Criteria applied (2026-07-21):** two independent DELETE triggers fired —
+  (a) more rejected workbooks than baseline (1 failed vs 0), and (b) savings
+  < 10% on both axes (in fact negative on both). The ADOPT gate is not met on
+  any axis. The debuggability bar passed (sole bright spot, along with the
+  guard-parity proof). **Outcome per the pre-registered criteria: DELETE the
+  seam.** Deletion of the just-landed code awaits operator sign-off (and the
+  operator's workbook verdicts on the 5 successful runs, which cannot flip
+  the cost/time verdict); until then the flag stays default-off, which is
+  behaviorally equivalent to deletion.
   - [ ] 🟥 Update PLAN-pydantic-ai-v2.md §D.5 item 3 with the outcome
   - [ ] 🟥 If kept: CLAUDE.md gotcha for the toggle + ledger invariants; candidate
     next target = face-reviewer investigation chains (best collapse ratio, all-text).
