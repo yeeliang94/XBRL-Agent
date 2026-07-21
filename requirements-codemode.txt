@@ -1,9 +1,0 @@
-# CodeMode spike — OPTIONAL dependency (docs/PLAN-codemode-spike.md).
-# NOT part of requirements.txt on purpose: the harness is 0.x and allows
-# breaking minor releases, so everything here is an exact == pin, tested
-# 2026-07-21 against pydantic-ai==2.9.0 / pydantic==2.12.5 (constraints.txt)
-# with a clean `pip check`. Install manually on the Mac dev box only:
-#   ./venv/bin/pip install -r requirements-codemode.txt -c constraints.txt
-# Windows/enterprise enablement is explicitly out of scope for the spike.
-pydantic-ai-harness[code-mode]==0.8.0
-pydantic-monty==0.0.18

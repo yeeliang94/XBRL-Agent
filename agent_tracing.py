@@ -134,7 +134,6 @@ def _write_trace(
     output_dir: str,
     prefix: str,
     turns: list[dict] | None,
-    code_mode_calls: list[dict] | None = None,
 ) -> None:
     """Serialize a message list (+ optional per-turn metrics) to the trace
     file. Text content is preserved verbatim (capped per cell); true binary
@@ -181,12 +180,6 @@ def _write_trace(
             {k: v for k, v in t.items() if not k.startswith("_")}
             for t in turns
         ]
-    if code_mode_calls:
-        # CodeMode spike (docs/PLAN-codemode-spike.md Phase 3): the host-side
-        # ledger of every sandbox tool call — including FAILED ones — grouped
-        # per run_code script. This is the per-tool debugging record that the
-        # collapsed `run_code` message content cannot show.
-        payload["code_mode_calls"] = code_mode_calls
 
     # Windows-forbidden filename characters (colons in agent ids like
     # "notes:LIST_OF_NOTES:sub0") must never reach the filesystem: the
@@ -206,7 +199,6 @@ def save_agent_trace(
     output_dir: str,
     prefix: str,
     turns: list[dict] | None = None,
-    code_mode_calls: list[dict] | None = None,
 ) -> None:
     """Dump a finished agent's `all_messages()` to
     `{output_dir}/{prefix}_conversation_trace.json`.
@@ -217,8 +209,7 @@ def save_agent_trace(
     trace-save failures never mask the underlying run result.
     """
     try:
-        _write_trace(result.all_messages(), output_dir, prefix, turns,
-                     code_mode_calls)
+        _write_trace(result.all_messages(), output_dir, prefix, turns)
     except Exception as e:
         logger.warning("Failed to save trace for %s: %s", prefix, e)
 
@@ -228,7 +219,6 @@ def save_messages_trace(
     output_dir: str,
     prefix: str,
     turns: list[dict] | None = None,
-    code_mode_calls: list[dict] | None = None,
 ) -> None:
     """Dump a PARTIAL run's accumulated message history to the trace file.
 
@@ -239,6 +229,6 @@ def save_messages_trace(
     (peer-review [1]). Best-effort, same as `save_agent_trace`.
     """
     try:
-        _write_trace(messages, output_dir, prefix, turns, code_mode_calls)
+        _write_trace(messages, output_dir, prefix, turns)
     except Exception as e:
         logger.warning("Failed to save partial trace for %s: %s", prefix, e)

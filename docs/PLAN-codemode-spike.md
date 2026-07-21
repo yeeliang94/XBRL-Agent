@@ -1,7 +1,10 @@
 # Implementation Plan: CodeMode Spike (Monty sandbox) — SOFP only, behind a toggle
 
-**Overall Progress:** `95%` — all phases run (2026-07-21); numbers say DELETE per the
-pre-registered criteria; awaiting operator sign-off + workbook verdicts
+**Overall Progress:** `100%` — CLOSED 2026-07-21: the seam was DELETED per the
+pre-registered criteria (operator signed off via the same-day review round whose
+primary fix was "follow the recorded decision and revert"). This doc stays as the
+audit trail; the code lives only in git history (commit ec4dc01, reverted by the
+closing commit). `pydantic-ai-harness` was uninstalled from the venv.
 **PRD Reference:** none — decision instrument is docs/PLAN-pydantic-ai-v2.md §D.5 item 3
 (this plan is that spike, made concrete). Exploration evidence: 2026-07-21 session
 (telemetry query of `output/xbrl_agent.db` + three-agent codebase sweep).
