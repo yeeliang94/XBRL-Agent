@@ -156,6 +156,10 @@ class ExtractionDeps:
         self.face_line_refs: list[dict] = []
         self.face_coverage_submitted: bool = False
         self.face_coverage_receipt = None
+        # CodeMode spike (docs/PLAN-codemode-spike.md Phase 3): host-side
+        # call ledger. None = flag off (the `ledgered` wrappers no-op); the
+        # factory initialises it to [] only on CodeMode runs.
+        self.code_mode_ledger: Optional[list] = None
 
 
 def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
@@ -682,6 +686,25 @@ def create_extraction_agent(
     from tools.pdf_search import scanned_pdf_advisory
     system_prompt += scanned_pdf_advisory(pdf_path)
 
+    # CodeMode spike seam (docs/PLAN-codemode-spike.md) — default OFF. The
+    # single branch point: one capability appended, one prompt addendum, and
+    # sequential=True on the stateful trio below. Flag off ⇒ _code_mode is
+    # False ⇒ every one of those collapses to today's exact factory output
+    # (sequential=False is the pydantic-ai default). Pinned by
+    # tests/test_code_mode_seam.py.
+    from extraction.code_mode import (
+        CODE_MODE_PROMPT_ADDENDUM,
+        build_code_mode_capability,
+        code_mode_enabled,
+        ledgered,
+    )
+    _code_mode = code_mode_enabled(statement_type.value)
+    if _code_mode:
+        system_prompt += CODE_MODE_PROMPT_ADDENDUM
+        # Phase 3: the host-side call ledger — initialised ONLY on CodeMode
+        # runs; None (the deps default) keeps the `ledgered` wrappers no-op.
+        deps.code_mode_ledger = []
+
     # Temperature is provider-aware (Phase 9, resolved inside
     # build_model_settings): Gemini stays 1.0 (CLAUDE.md gotcha #5 — Gemini 3
     # through the enterprise proxy requires T=1.0; lower values cause failures
@@ -716,13 +739,15 @@ def create_extraction_agent(
             ProcessHistory(strip_duplicate_template),
             ProcessHistory(compact_old_text_results_ctx),
             ProcessHistory(limit_warning_processor),
-        ],
+        ]
+        + ([build_code_mode_capability()] if _code_mode else []),
         end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 
     # --- Tools ---
 
     @agent.tool
+    @ledgered
     def calculator(ctx: RunContext[ExtractionDeps], expressions: List[str]) -> str:
         """Evaluate arithmetic exactly. Pass ALL the checks you want in ONE call.
 
@@ -737,6 +762,7 @@ def create_extraction_agent(
         return _calculator_impl(expressions)
 
     @agent.tool
+    @ledgered
     def lookup_definitions(ctx: RunContext[ExtractionDeps], queries: List[str]) -> str:
         """Look up the OFFICIAL SSM concept definition(s) for one or more terms.
 
@@ -797,6 +823,7 @@ def create_extraction_agent(
         return results
 
     @agent.tool
+    @ledgered
     def search_pdf_text(ctx: RunContext[ExtractionDeps], queries: List[str]) -> str:
         """Find where phrase(s) appear in the PDF text, then VERIFY by viewing.
 
@@ -812,7 +839,8 @@ def create_extraction_agent(
         from tools.pdf_search import search_pdf_text_json
         return search_pdf_text_json(ctx.deps.pdf_path, queries)
 
-    @agent.tool
+    @agent.tool(sequential=_code_mode)
+    @ledgered
     def write_facts(ctx: RunContext[ExtractionDeps], facts: List[FactWrite]) -> str:
         """Write extracted values to the statement's cells.
 
@@ -890,7 +918,8 @@ def create_extraction_agent(
         else:
             return f"Failed to fill workbook. Errors: {result.errors}"
 
-    @agent.tool
+    @agent.tool(sequential=_code_mode)
+    @ledgered
     def verify_totals(ctx: RunContext[ExtractionDeps]) -> str:
         """Verify the filled workbook — checks balance/consistency for this statement."""
         filled_path = ctx.deps.filled_path
@@ -919,7 +948,8 @@ def create_extraction_agent(
         ctx.deps.last_verify_result = result
         return _format_verify_result(result)
 
-    @agent.tool
+    @agent.tool(sequential=_code_mode)
+    @ledgered
     def save_result(
         ctx: RunContext[ExtractionDeps],
         fields_json: str,
@@ -1019,6 +1049,7 @@ def create_extraction_agent(
     # the agent behaves exactly as before.
     if deps.face_line_refs:
         @agent.tool
+        @ledgered
         def submit_face_coverage(ctx: RunContext[ExtractionDeps], receipt_json: str) -> str:
             """Account for every scout-observed face line (written | skipped).
 

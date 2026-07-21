@@ -299,6 +299,9 @@ async def run_agent_loop(
     propagates to the caller, which decides salvage-vs-fail.
     """
     tool_start_times: dict[str, float] = {}
+    # CodeMode spike: high-water mark into deps.code_mode_ledger so each
+    # run_code result echoes only ITS script's sandbox calls.
+    _cm_ledger_seen = 0
     thinking_counter = 0
     iteration = 0
     call_tools_seen = 0
@@ -408,6 +411,25 @@ async def run_agent_loop(
                         duration_ms = (
                             int((time.monotonic() - start_t) * 1000) if start_t else 0
                         )
+                        # CodeMode spike (docs/PLAN-codemode-spike.md Phase 3):
+                        # a run_code result is one opaque blob — append a
+                        # one-line echo of the sandbox calls the script made
+                        # (from the host-side ledger) so the live stream still
+                        # says what happened inside. No-op for every other
+                        # tool and for flag-off runs (ledger is None).
+                        # Known cosmetic limit: two run_code calls batched in
+                        # ONE model response run concurrently and interleave
+                        # appends, so the first result's echo can slurp the
+                        # other script's entries. SSE-display-only — the trace
+                        # file groups by per-script call-id prefixes and stays
+                        # correct.
+                        if event.part.tool_name == "run_code":
+                            _ledger = getattr(deps, "code_mode_ledger", None)
+                            if _ledger is not None:
+                                from extraction.code_mode import ledger_echo
+                                new_entries = _ledger[_cm_ledger_seen:]
+                                _cm_ledger_seen = len(_ledger)
+                                summary = (summary + ledger_echo(new_entries))[:1200]
                         await emit("tool_result", {
                             "tool_name": event.part.tool_name,
                             "tool_call_id": call_id,
