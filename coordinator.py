@@ -1010,9 +1010,22 @@ async def _run_single_agent_attempt(
         if run_obj is None:
             return
         try:
+            # CodeMode spike (Phase 3): the host-side sandbox-call ledger
+            # rides into the trace file. Self-guarded so a ledger/grouping
+            # hiccup degrades to a ledger-less trace — never to NO trace
+            # (the failed-agent trace is gotcha #6's most valuable artifact).
+            _cm_calls = None
+            try:
+                from extraction.code_mode import group_code_mode_ledger
+                _cm_calls = group_code_mode_ledger(
+                    getattr(deps, "code_mode_ledger", None)
+                ) or None
+            except Exception:  # noqa: BLE001 — ledger is advisory
+                pass
             res = getattr(run_obj, "result", None)
             if res is not None and hasattr(res, "all_messages"):
-                save_agent_trace(res, output_dir, statement_type.value, turns=_turn_records)
+                save_agent_trace(res, output_dir, statement_type.value,
+                                 turns=_turn_records, code_mode_calls=_cm_calls)
                 return
             # Partial run — pull whatever messages were exchanged so far.
             msgs = None
@@ -1022,7 +1035,8 @@ async def _run_single_agent_attempt(
                 msgs = None
             if msgs:
                 save_messages_trace(
-                    msgs, output_dir, statement_type.value, turns=_turn_records
+                    msgs, output_dir, statement_type.value,
+                    turns=_turn_records, code_mode_calls=_cm_calls
                 )
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("best-effort trace save skipped for %s", agent_role)
