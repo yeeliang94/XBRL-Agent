@@ -509,6 +509,234 @@ def _format_fact_listing(facts: Sequence[dict[str, Any]]) -> str:
     return "\n".join(lines).lstrip("\n")
 
 
+def read_concept_facts_text(
+    db_path: str | Path, run_id: int, concept_uuid: str,
+) -> str:
+    """One concept's facts across periods/scopes, rendered for the model.
+
+    The single implementation behind BOTH the ``read_facts`` tool and the
+    ``read_fact`` bundle item (plan agent-efficiency Phase 2 rule: the bundle
+    never duplicates resolution/formatting logic).
+    """
+    conn = _open_conn(db_path)
+    try:
+        node = conn.execute(
+            "SELECT canonical_label, kind, render_sheet, render_row "
+            "FROM concept_nodes WHERE concept_uuid = ?",
+            (concept_uuid,),
+        ).fetchone()
+        if node is None:
+            return f"Unknown concept_uuid {concept_uuid!r}."
+        facts = conn.execute(
+            "SELECT period, entity_scope, value, value_status, "
+            "children_status, source, evidence FROM run_concept_facts "
+            "WHERE run_id = ? AND concept_uuid = ?",
+            (run_id, concept_uuid),
+        ).fetchall()
+    finally:
+        conn.close()
+    lines = [
+        f"{node['canonical_label']} ({node['kind']}, "
+        f"{node['render_sheet']} row {node['render_row']})",
+    ]
+    if not facts:
+        lines.append("  (no fact written yet)")
+    for f in facts:
+        lines.append(
+            f"  - {f['period']}/{f['entity_scope']}: value={f['value']} "
+            f"status={f['value_status']} children={f['children_status']} "
+            f"source={f['source']!r} evidence={f['evidence']!r}"
+        )
+    return "\n".join(lines)
+
+
+def _format_candidates(cands, value: float, label_hint: str) -> str:
+    """Render find_candidate_rows results (shared by tool + bundle)."""
+    if not cands:
+        return (
+            f"No candidate rows matched value≈{value}"
+            + (f" / label~{label_hint!r}" if label_hint else "")
+            + ". Try a wider label hint, or trace down from a known total."
+        )
+    lines = [f"{len(cands)} candidate(s) for value≈{value}"
+             + (f" / label~{label_hint!r}" if label_hint else "") + ":"]
+    for c in cands:
+        lines.append(
+            f"  {c['sheet']}!row{c['row']} {c['label']!r} [{c['kind']}] "
+            f"{c['period']}/{c['entity_scope']}: {c['current_value']} "
+            f"uuid={c['concept_uuid']}"
+        )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Read-only investigation bundle (plan agent-efficiency Phase 2).
+#
+# One ordinary guarded tool that executes several ALREADY-DECIDED read-only
+# investigations in one model round trip. Justified by the Step 0.2/0.3
+# inventory: the p75 reviewer makes 8+ read calls across 6+ model requests,
+# and read-tool returns are 61% of billed text. Judgement boundaries stay
+# OUTSIDE by construction — no view_pdf_pages, no writes, no flags, no
+# verify, no mutation of any kind. Gated on
+# XBRL_REVIEWER_INVESTIGATION_BUNDLE (default OFF), read at agent creation.
+# ---------------------------------------------------------------------------
+
+MAX_BUNDLE_ITEMS = 12
+# Output budgets: per-item cap keeps one verbose listing from starving its
+# siblings; the total cap bounds the whole tool return. Both truncate with an
+# explicit continuation footer (never silently).
+BUNDLE_ITEM_CHAR_CAP = 4000
+BUNDLE_CHAR_BUDGET = 20000
+
+BUNDLE_KINDS = (
+    "read_fact", "list_sheet", "find_candidates", "trace_cascade",
+    "lookup_definitions", "search_pdf_text", "calculate",
+)
+
+BUNDLE_PROMPT_ADDENDUM = """
+
+## Batching independent reads (investigate_review_items)
+
+When you already know SEVERAL independent read-only lookups you need —
+facts to read, cascades to trace, candidate rows to find, definitions,
+PDF text searches, arithmetic — submit them together in ONE
+investigate_review_items call instead of one tool call per turn. Use it
+only for reads you have already decided on; when the next query depends on
+an earlier result, keep investigating step by step as usual. Viewing PDF
+pages, applying fixes, raising flags and verify_fixes are NEVER part of a
+bundle — use their own tools."""
+
+
+def bundle_enabled() -> bool:
+    """``XBRL_REVIEWER_INVESTIGATION_BUNDLE`` (default off), call-time read."""
+    return os.environ.get(
+        "XBRL_REVIEWER_INVESTIGATION_BUNDLE", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+
+class InvestigateItem(BaseModel):
+    """One read-only investigation. ``kind`` picks the operation; only the
+    fields that kind needs are read (the rest stay at their defaults).
+
+    Kinds: read_fact (concept_uuid) · list_sheet (sheet, '' = whole run) ·
+    find_candidates (value, label_hint?, entity_scope?) · trace_cascade
+    (concept_uuid OR sheet+row, period?, entity_scope?) · lookup_definitions
+    (terms) · search_pdf_text (phrases) · calculate (expressions).
+    """
+    kind: str
+    id: str = ""
+    concept_uuid: str = ""
+    sheet: str = ""
+    row: int = 0
+    period: str = "CY"
+    entity_scope: str = ""
+    value: Optional[float] = None
+    label_hint: str = ""
+    terms: List[str] = []
+    phrases: List[str] = []
+    expressions: List[str] = []
+
+
+def _run_bundle_item(deps: "ReviewerDeps", item: InvestigateItem) -> str:
+    """Execute ONE bundle item via the same helper the individual tool uses.
+
+    Scoping (family prefix / standard / level) comes from ``deps`` — never
+    from model-supplied fields. Raises on a bad item; the caller isolates.
+    """
+    prefix = _family_prefix(deps.filing_standard, deps.filing_level)
+    kind = (item.kind or "").strip()
+    if kind == "read_fact":
+        if not item.concept_uuid:
+            raise ValueError("read_fact needs concept_uuid")
+        return read_concept_facts_text(
+            deps.db_path, deps.run_id, item.concept_uuid)
+    if kind == "list_sheet":
+        facts = list_run_facts(
+            deps.db_path, deps.run_id, sheet=item.sheet or None,
+            template_prefix=prefix)
+        return _format_fact_listing(facts)
+    if kind == "find_candidates":
+        if item.value is None:
+            raise ValueError("find_candidates needs value")
+        cands = find_candidate_rows(
+            deps.db_path, deps.run_id, value=item.value,
+            label_hint=item.label_hint or "", template_prefix=prefix,
+            entity_scope=item.entity_scope or None)
+        return _format_candidates(cands, item.value, item.label_hint)
+    if kind == "trace_cascade":
+        if not item.concept_uuid and not (item.sheet and item.row):
+            raise ValueError("trace_cascade needs concept_uuid or sheet+row")
+        trace = trace_cascade_source(
+            deps.db_path, deps.run_id,
+            concept_uuid=item.concept_uuid or None,
+            sheet=item.sheet or None, row=item.row or None,
+            period=item.period,
+            entity_scope=item.entity_scope or "Company",
+            template_prefix=prefix)
+        return _format_trace(trace)
+    if kind == "lookup_definitions":
+        if not item.terms:
+            raise ValueError("lookup_definitions needs terms")
+        return _lookup_definitions_impl(item.terms, deps.filing_standard)
+    if kind == "search_pdf_text":
+        if not item.phrases:
+            raise ValueError("search_pdf_text needs phrases")
+        if not deps.pdf_path:
+            # Same JSON envelope the standalone tool returns (parity rule).
+            return ('{"error": "Source PDF is not available for this run.", '
+                    '"results": []}')
+        from tools.pdf_search import search_pdf_text_json
+        return search_pdf_text_json(deps.pdf_path, item.phrases)
+    if kind == "calculate":
+        if not item.expressions:
+            raise ValueError("calculate needs expressions")
+        return _calculator_impl(item.expressions)
+    raise ValueError(
+        f"unknown kind {item.kind!r} (one of: {', '.join(BUNDLE_KINDS)})")
+
+
+def run_investigation_bundle(
+    deps: "ReviewerDeps", items: Sequence[InvestigateItem],
+) -> str:
+    """Execute a bundle sequentially with per-item isolation + budgets.
+
+    Sequential on purpose (plan Step 2.2): host calls are already cheap and
+    the helpers/SQLite access are not proven concurrency-safe — correctness
+    wins. One bad item reports an error under its own id and never discards
+    successful siblings (the apply_fixes precedent).
+    """
+    if not items:
+        return ("rejected: items is required (pass a non-empty list; one "
+                "investigation is a one-element list).")
+    if len(items) > MAX_BUNDLE_ITEMS:
+        return (f"rejected: {len(items)} items exceeds the bundle cap of "
+                f"{MAX_BUNDLE_ITEMS}. Split into smaller bundles.")
+    sections: list[str] = []
+    spent = 0
+    for i, item in enumerate(items):
+        item_id = item.id or f"item{i + 1}"
+        # The budget check is BEFORE each item, so the total can overshoot by
+        # at most one item-cap (worst case 24k) — bounded, and preferable to
+        # discarding an already-computed result.
+        if spent >= BUNDLE_CHAR_BUDGET:
+            sections.append(
+                f"[{item_id}] skipped: bundle output budget "
+                f"({BUNDLE_CHAR_BUDGET} chars) exhausted — re-send the "
+                f"remaining items in a follow-up bundle.")
+            continue
+        try:
+            body = _run_bundle_item(deps, item)
+        except Exception as exc:  # noqa: BLE001 — per-item isolation
+            body = f"error: {exc}"
+        if len(body) > BUNDLE_ITEM_CHAR_CAP:
+            body = (body[:BUNDLE_ITEM_CHAR_CAP]
+                    + f"\n[truncated at {BUNDLE_ITEM_CHAR_CAP} chars — call "
+                      f"the underlying tool directly for the full result]")
+        sections.append(f"[{item_id}] {item.kind}\n{body}")
+        spent += len(body)
+    return "\n\n".join(sections)
+
+
 # ---------------------------------------------------------------------------
 # Step 6 — apply_fix: the only write path, with a deterministic no-plug guard.
 # ---------------------------------------------------------------------------
@@ -1539,12 +1767,36 @@ def create_reviewer_agent(
     # Temperature pinned to 1.0 — Gemini 3 through the enterprise proxy
     # requires it (mirrors extraction + notes agents). Phase 2: provider-correct
     # prompt caching of the static reviewer.md body + tool defs.
+    # Plan agent-efficiency Phase 2: the read-only investigation bundle is
+    # opt-in (default OFF). When on, the prompt gains one short batching
+    # paragraph (code-injected — reviewer.md and its pinning tests untouched,
+    # the _MPERS_SOPL_REVENUE_NOTE pattern) and the tool registers below.
+    _bundle_on = bundle_enabled()
+    if _bundle_on:
+        system_prompt += BUNDLE_PROMPT_ADDENDUM
+    # Plan agent-efficiency Phase 1A: optional reviewer-specific image-history
+    # compaction (default OFF — flag read at creation time). Off ⇒ NO
+    # capabilities kwarg at all, so the factory output is identical to today
+    # (pinned by tests/test_reviewer_compact_context.py). The processor is
+    # reviewer-shaped, not extraction's write-event-keyed one — see
+    # correction/history_processors.py for why.
+    _agent_kwargs: dict = {}
+    from correction.history_processors import (
+        reviewer_compact_context_enabled,
+    )
+    if reviewer_compact_context_enabled():
+        from pydantic_ai.capabilities import ProcessHistory
+        from correction.history_processors import strip_stale_reviewer_images
+        _agent_kwargs["capabilities"] = [
+            ProcessHistory(strip_stale_reviewer_images),
+        ]
     agent = Agent(
         model,
         deps_type=ReviewerDeps,
         system_prompt=system_prompt,
         model_settings=build_model_settings(model, cache_key="xbrl-reviewer"),
         end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
+        **_agent_kwargs,
     )
 
     @agent.tool
@@ -1582,36 +1834,8 @@ def create_reviewer_agent(
         evidence so you can see what the extraction agent wrote and how it
         grounded it before you change anything.
         """
-        conn = _open_conn(ctx.deps.db_path)
-        try:
-            node = conn.execute(
-                "SELECT canonical_label, kind, render_sheet, render_row "
-                "FROM concept_nodes WHERE concept_uuid = ?",
-                (concept_uuid,),
-            ).fetchone()
-            if node is None:
-                return f"Unknown concept_uuid {concept_uuid!r}."
-            facts = conn.execute(
-                "SELECT period, entity_scope, value, value_status, "
-                "children_status, source, evidence FROM run_concept_facts "
-                "WHERE run_id = ? AND concept_uuid = ?",
-                (ctx.deps.run_id, concept_uuid),
-            ).fetchall()
-        finally:
-            conn.close()
-        lines = [
-            f"{node['canonical_label']} ({node['kind']}, "
-            f"{node['render_sheet']} row {node['render_row']})",
-        ]
-        if not facts:
-            lines.append("  (no fact written yet)")
-        for f in facts:
-            lines.append(
-                f"  - {f['period']}/{f['entity_scope']}: value={f['value']} "
-                f"status={f['value_status']} children={f['children_status']} "
-                f"source={f['source']!r} evidence={f['evidence']!r}"
-            )
-        return "\n".join(lines)
+        return read_concept_facts_text(
+            ctx.deps.db_path, ctx.deps.run_id, concept_uuid)
 
     @agent.tool
     def list_facts(ctx: RunContext[ReviewerDeps], sheet: str = "") -> str:
@@ -1660,21 +1884,7 @@ def create_reviewer_agent(
                 ctx.deps.filing_standard, ctx.deps.filing_level),
             entity_scope=entity_scope or None,
         )
-        if not cands:
-            return (
-                f"No candidate rows matched value≈{value}"
-                + (f" / label~{label_hint!r}" if label_hint else "")
-                + ". Try a wider label hint, or trace down from a known total."
-            )
-        lines = [f"{len(cands)} candidate(s) for value≈{value}"
-                 + (f" / label~{label_hint!r}" if label_hint else "") + ":"]
-        for c in cands:
-            lines.append(
-                f"  {c['sheet']}!row{c['row']} {c['label']!r} [{c['kind']}] "
-                f"{c['period']}/{c['entity_scope']}: {c['current_value']} "
-                f"uuid={c['concept_uuid']}"
-            )
-        return "\n".join(lines)
+        return _format_candidates(cands, value, label_hint)
 
     @agent.tool(name="trace_cascade_source")
     def trace_cascade_source_tool(
@@ -1759,6 +1969,27 @@ def create_reviewer_agent(
         if not ctx.deps.pdf_path:
             return '{"error": "Source PDF is not available for this run.", "results": []}'
         return search_pdf_text_json(ctx.deps.pdf_path, queries)
+
+    if _bundle_on:
+        @agent.tool
+        def investigate_review_items(
+            ctx: RunContext[ReviewerDeps],
+            items: List[InvestigateItem],
+        ) -> str:
+            """Run several ALREADY-DECIDED read-only investigations in ONE call.
+
+            Each item is {kind, id?, ...args}: read_fact (concept_uuid) ·
+            list_sheet (sheet, '' = whole run) · find_candidates (value,
+            label_hint?, entity_scope?) · trace_cascade (concept_uuid OR
+            sheet+row) · lookup_definitions (terms) · search_pdf_text
+            (phrases) · calculate (expressions). Items run independently — a
+            bad one reports an error under its id and never blocks the rest.
+            Use it only for independent reads you have already decided on;
+            step-by-step investigation stays legitimate when the next query
+            depends on an earlier result. Never for viewing pages, writing,
+            flagging, or verifying — those keep their own tools.
+            """
+            return run_investigation_bundle(ctx.deps, items)
 
     @agent.tool
     def apply_fixes(
