@@ -1763,6 +1763,19 @@ async def _run_reviewer_pass(
     outcome["tool_call_count"] = sum(
         int(t.get("_n_tool_calls") or 0) for t in _turn_records
     )
+    # Plan agent-efficiency Step 0.1: hand the per-turn v8 rows to the caller
+    # (the owner of the CORRECTION run_agents row) for persistence. The loop
+    # mutates _turn_records in place, so every exit path that reaches this
+    # block — success, exhausted, wallclock, exception — carries whatever
+    # turns actually ran; the cancel path re-raises before this line.
+    outcome["turn_records"] = _turn_records
+    # Cache rollups were never captured for the reviewer (the Step 0.2 report
+    # showed every CORRECTION row at cache_read 0 while extraction rows carry
+    # hundreds of k) — sum the per-turn deltas the loop already tracks.
+    outcome["cache_read_tokens"] = sum(
+        int(t.get("cache_read_tokens") or 0) for t in _turn_records)
+    outcome["cache_write_tokens"] = sum(
+        int(t.get("cache_write_tokens") or 0) for t in _turn_records)
     try:
         from pricing import estimate_cost as _ec
         _u = agent_run.usage
@@ -5690,9 +5703,28 @@ async def run_multi_agent_stream(
                             turn_count=int(_co.get("turns_used", 0)),
                             tool_call_count=int(
                                 _co.get("tool_call_count", 0)),
+                            # Step 0.1 companion fix: cache rollups were
+                            # silently 0 for every CORRECTION row.
+                            cache_read_tokens=int(
+                                _co.get("cache_read_tokens", 0)),
+                            cache_write_tokens=int(
+                                _co.get("cache_write_tokens", 0)),
                             # v17 (item 9): classify the reviewer outcome.
                             error_type=_error_type_for_outcome(
                                 _co.get("error")),
+                        )
+                        # Plan agent-efficiency Step 0.1: the reviewer used to
+                        # collect per-turn rows and discard them — only the
+                        # rollups landed, so the CORRECTION agent had no
+                        # node_kind breakdown to measure. Same advisory
+                        # contract as the extraction/notes sites: inside this
+                        # try so a telemetry write can never fault the run.
+                        # The notes reviewer / notes formatter passes share
+                        # the same gap (rollups only) — deliberately left for
+                        # the plan's Phase 5, instrument before measuring.
+                        repo.insert_agent_turns(
+                            db_conn, correction_run_agent_id,
+                            _co.get("turn_records") or [],
                         )
                     except Exception:
                         logger.warning(

@@ -278,9 +278,21 @@ async def re_review(run_id: int, body: Optional[dict] = None):
                         outcome.get("completion_tokens", 0) or 0),
                     tool_call_count=int(
                         outcome.get("tool_call_count", 0) or 0),
+                    # Step 0.1 companion fix: cache rollups (were always 0).
+                    cache_read_tokens=int(
+                        outcome.get("cache_read_tokens", 0) or 0),
+                    cache_write_tokens=int(
+                        outcome.get("cache_write_tokens", 0) or 0),
                     # v17 (item 9): classify the manual re-review outcome.
                     error_type=server._error_type_for_outcome(
                         outcome.get("error")),
+                )
+                # Plan agent-efficiency Step 0.1: persist the per-turn rows.
+                # REPLACE, not append — re-review reuses the existing
+                # CORRECTION row, and finish_run_agent above just overwrote
+                # its rollups with this pass's numbers.
+                repo.replace_agent_turns(
+                    conn, agent_id, outcome.get("turn_records") or [],
                 )
                 conn.commit()
             finally:
