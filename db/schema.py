@@ -158,7 +158,12 @@ from pathlib import Path
 # 'unstyled' (plain), or NULL (legacy / reviewer-authored). Surfaced so the
 # operator can see which notes fell back to plain and need a manual formatter
 # pass. Nullable ALTER TABLE column. Pinned by tests/test_db_schema_v29.py.
-CURRENT_SCHEMA_VERSION = 33
+# v34 adds `run_lineage` — stage-level resume audit trail (plan
+# agent-efficiency Phase 4A): child run → parent run link with the parent
+# source hash (computed at resume time) and the reused/rerun statement lists.
+# Pure CREATE TABLE IF NOT EXISTS walk-forward (new table, no ALTER); inert
+# unless XBRL_STAGE_RESUME is used. Pinned by tests/test_db_schema_v34.py.
+CURRENT_SCHEMA_VERSION = 34
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -1105,6 +1110,26 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         updated_at      TEXT NOT NULL DEFAULT ''
     )
     """,
+    # -----------------------------------------------------------------
+    # v34: run_lineage — stage-level resume audit trail (plan
+    # agent-efficiency Phase 4A). A resume creates a NEW child run and
+    # leaves the parent terminal + immutable; this table is the only link.
+    # `source_sha256` is the parent's uploaded.pdf hash computed AT RESUME
+    # TIME (no hash is recorded at upload — the file itself is kept on
+    # disk, gotcha #29). reused/rerun statements are JSON lists of
+    # "STATEMENT/variant" strings. Inert when XBRL_STAGE_RESUME is off.
+    # -----------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS run_lineage (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        child_run_id     INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        parent_run_id    INTEGER NOT NULL REFERENCES runs(id),
+        source_sha256    TEXT,
+        reused_statements TEXT,             -- JSON list of "STMT/variant"
+        rerun_statements  TEXT,             -- JSON list of "STMT/variant"
+        created_at       TEXT NOT NULL
+    )
+    """,
 )
 
 
@@ -1112,6 +1137,8 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
 # ix_runs_created_at supports the History list's default DESC sort.
 _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_run_agents_run_id ON run_agents(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_run_lineage_child ON run_lineage(child_run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_run_lineage_parent ON run_lineage(parent_run_id)",
     "CREATE INDEX IF NOT EXISTS ix_agent_events_run_agent_id ON agent_events(run_agent_id)",
     "CREATE INDEX IF NOT EXISTS ix_extracted_fields_run_agent_id ON extracted_fields(run_agent_id)",
     "CREATE INDEX IF NOT EXISTS ix_cross_checks_run_id ON cross_checks(run_id)",
@@ -2464,6 +2491,26 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (33,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v33 → v34: add run_lineage (stage-level resume audit trail). Pure
+        # CREATE TABLE IF NOT EXISTS (already run above), so this block only
+        # advances the marker. Same BEGIN IMMEDIATE + re-check discipline.
+        if current_version is not None and current_version < 34:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 34:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (34,),
                     )
                 conn.commit()
             except Exception:

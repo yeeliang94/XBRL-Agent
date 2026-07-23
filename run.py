@@ -207,6 +207,193 @@ def run_agent(
     )
 
 
+def run_resume(
+    parent_run_id: int,
+    model: Optional[str] = None,
+    output_dir: str = _DEFAULT_OUTPUT_DIR,
+) -> AgentResult:
+    """Stage-level resume (plan agent-efficiency Phase 4A, CLI-first).
+
+    Builds the reuse/rerun plan from the parent run's durable state, prints
+    it as a preview, and — only when ``XBRL_STAGE_RESUME`` is on — creates a
+    NEW child run that copies the parent's reusable statement facts and
+    workbooks forward and reruns just the rest through the normal pipeline.
+    The parent stays terminal and immutable; ``run_lineage`` records the
+    link, the source hash, and both statement lists.
+
+    Without the flag this is preview-only: the plan prints and nothing
+    launches (safe default for an experimental feature).
+    """
+    import sqlite3
+    import uuid
+
+    import server
+    from server import run_multi_agent_stream, RunConfigRequest
+    from db import repository as repo
+    from db.schema import init_db
+    from recovery.stage_resume import (
+        build_resume_plan, stage_resume, stage_resume_enabled,
+    )
+
+    load_dotenv(ENV_FILE, override=True)
+    init_db(server.AUDIT_DB_PATH)
+
+    def _fail(msg: str) -> AgentResult:
+        print(f"  REFUSED: {msg}")
+        return AgentResult(
+            success=False, fields_filled=0, token_report=TokenReport(),
+            output_json_path="", output_excel_path="", errors=[msg])
+
+    plan = build_resume_plan(server.AUDIT_DB_PATH, parent_run_id)
+    print(f"Resume plan for run {parent_run_id} "
+          f"(parent status: {plan.parent_status or 'unknown'}):")
+    if plan.refusal:
+        return _fail(plan.refusal)
+    for d in plan.reused:
+        print(f"  REUSE  {d.statement}/{d.variant or '-'}: {d.reason}")
+    for d in plan.rerun:
+        print(f"  RERUN  {d.statement}/{d.variant or '-'}: {d.reason}")
+    if not plan.rerun:
+        return _fail(
+            "nothing to rerun — every selected statement is reusable; "
+            "re-download the parent run's workbook instead")
+    if not stage_resume_enabled():
+        print("\nPreview only — set XBRL_STAGE_RESUME=1 to launch the "
+              "child run.")
+        return AgentResult(
+            success=False, fields_filled=0, token_report=TokenReport(),
+            output_json_path="", output_excel_path="",
+            errors=["XBRL_STAGE_RESUME is off (preview only)"])
+
+    # Canonical bootstrap — same requirement as run_agent (fail-fast guard).
+    try:
+        from concept_model.bootstrap import import_all_face_templates
+        import_all_face_templates(server.AUDIT_DB_PATH)
+        server._CANONICAL_BOOTSTRAP_OK = True
+    except Exception as exc:  # noqa: BLE001
+        server._CANONICAL_BOOTSTRAP_OK = False
+        print(f"WARNING: canonical bootstrap failed: {exc}")
+
+    child_dir = Path(_next_run_dir(output_dir))
+    shutil.copyfile(plan.source_pdf, child_dir / "uploaded.pdf")
+
+    # Notes are OUT OF SCOPE for resume v1 (their cells carry human edits and
+    # tombstones with unresolved reuse semantics) — say so loudly instead of
+    # silently dropping them.
+    parent_notes = plan.parent_config.get("notes_to_run") or []
+    if parent_notes:
+        print(f"  NOTE: the parent's notes templates "
+              f"({', '.join(parent_notes)}) are NOT rerun or reused in this "
+              f"release — rerun notes via a fresh full run if needed.")
+
+    run_config = RunConfigRequest(
+        statements=[d.statement for d in plan.rerun],
+        notes_to_run=[],
+        filing_level=plan.filing_level,
+        filing_standard=plan.filing_standard,
+        denomination=plan.parent_config.get("denomination", "thousands"),
+        variants={d.statement: d.variant
+                  for d in plan.rerun if d.variant},
+    )
+    session_id = str(uuid.uuid4())
+    conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+    try:
+        child_run_id = repo.create_run(
+            conn, pdf_filename="uploaded.pdf", session_id=session_id,
+            output_dir=str(child_dir), config=run_config.model_dump(),
+            status="running")
+        conn.commit()
+    finally:
+        conn.close()
+
+    final: dict = {"success": False, "merged": None, "errors": [],
+                   "run_id": child_run_id}
+
+    def _mark_child_terminal(status: str) -> None:
+        """Best-effort terminal status for the child if nothing else set one.
+
+        Gotcha #10: `run_multi_agent_stream` guarantees a terminal status
+        only once it runs — a failure in staging (or a Ctrl-C before the
+        stream starts) would otherwise strand the child at 'running'
+        forever. Guarded so a status the stream already finalized is never
+        clobbered.
+        """
+        from datetime import datetime, timezone
+        try:
+            c = sqlite3.connect(str(server.AUDIT_DB_PATH))
+            try:
+                c.execute(
+                    "UPDATE runs SET status=?, ended_at=? WHERE id=? "
+                    "AND status IN ('running', 'draft')",
+                    (status,
+                     datetime.now(timezone.utc).strftime(
+                         "%Y-%m-%dT%H:%M:%SZ"),
+                     child_run_id))
+                c.commit()
+            finally:
+                c.close()
+        except Exception:  # noqa: BLE001 — never mask the original failure
+            pass
+
+    async def _drive() -> None:
+        async for evt in run_multi_agent_stream(
+            session_id=session_id,
+            session_dir=child_dir,
+            run_config=run_config,
+            api_key=api_key,
+            proxy_url=proxy_url,
+            model_name=model,
+            existing_run_id=child_run_id,
+        ):
+            ev = evt.get("event")
+            data = evt.get("data") or {}
+            if ev == "pipeline_stage":
+                print(f"  [stage] {data.get('stage')}")
+            elif ev == "complete":
+                role = data.get("agent_role") or data.get("agent_id")
+                ok = ("ok" if data.get("success")
+                      else f"FAILED ({data.get('error')})")
+                print(f"  [{role}] {ok}")
+            elif ev == "error":
+                final["errors"].append(str(data.get("message", "")))
+            elif ev == "run_complete":
+                final["success"] = bool(data.get("success"))
+                final["merged"] = data.get("merged_workbook")
+                for s in data.get("statements_failed", []) or []:
+                    final["errors"].append(f"{s}: extraction failed")
+
+    try:
+        staged = stage_resume(
+            server.AUDIT_DB_PATH, plan, child_run_id, child_dir)
+        print(f"\nChild run {child_run_id}: staged {staged['copied_facts']} "
+              f"facts from run {parent_run_id} "
+              f"({', '.join(staged['reused']) or 'none'}); rerunning "
+              f"{', '.join(staged['rerun'])}.")
+
+        proxy_url = os.environ.get("LLM_PROXY_URL", "")
+        api_key = (os.environ.get("GOOGLE_API_KEY", "")
+                   or os.environ.get("GEMINI_API_KEY", ""))
+        model = model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+
+        asyncio.run(_drive())
+    except KeyboardInterrupt:
+        _mark_child_terminal("aborted")
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _mark_child_terminal("failed")
+        final["errors"].append(f"resume failed before completion: {exc}")
+
+    return AgentResult(
+        success=final["success"],
+        fields_filled=0,
+        token_report=TokenReport(),
+        output_json_path=str(child_dir / "result.json"),
+        output_excel_path=final["merged"] or str(child_dir / "filled.xlsx"),
+        errors=final["errors"],
+        run_id=child_run_id,
+    )
+
+
 def _save_conversation_trace(result, output_dir: str):
     """Dump the full agent conversation (minus binary image data) for debugging."""
     import dataclasses
@@ -296,12 +483,37 @@ def build_parser():
                              "source figures: thousands (default, RM '000), "
                              "units (RM), or millions (RM mil). Treated as "
                              "authoritative by the agents (no guessing).")
+    parser.add_argument("--resume-from", type=int, default=None,
+                        metavar="RUN_ID",
+                        help="Stage-level resume (Phase 4A): reuse the given "
+                             "terminal run's completed statements and rerun "
+                             "only its failed/unfinished ones as a NEW child "
+                             "run. Prints a preview; launching needs "
+                             "XBRL_STAGE_RESUME=1. The pdf/--statements/"
+                             "--level/--standard args are ignored (the "
+                             "parent's own config governs).")
     return parser
 
 
 if __name__ == "__main__":
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.resume_from is not None:
+        load_dotenv(ENV_FILE, override=True)
+        result = run_resume(
+            args.resume_from,
+            model=args.model or os.environ.get("TEST_MODEL") or None,
+            **({"output_dir": args.output_dir} if args.output_dir else {}),
+        )
+        if result.errors:
+            print("\nErrors:")
+            for err in result.errors:
+                print(f"  - {err}")
+        if result.output_excel_path:
+            print(f"\nExcel: {result.output_excel_path}")
+        print(f"Success: {result.success}")
+        raise SystemExit(0 if result.success else 1)
 
     stmts = {StatementType(s) for s in args.statements}
     notes_set = {_NOTES_CLI_MAP[n] for n in args.notes}
