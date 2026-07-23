@@ -687,6 +687,26 @@ def insert_agent_turns(
     )
 
 
+def replace_agent_turns(
+    conn: sqlite3.Connection,
+    run_agent_id: int,
+    turns: list[dict[str, Any]],
+) -> None:
+    """Replace an agent's per-turn rows with a fresh set (v8).
+
+    For rows that get REUSED across passes — the manual re-review flips the
+    same CORRECTION run_agents row back to 'running' and overwrites its
+    rollups via finish_run_agent — appending would leave turn rows from two
+    passes under one agent, disagreeing with the rollups. Delete-then-insert
+    keeps them consistent. The delete runs even when ``turns`` is empty so a
+    re-run that recorded nothing doesn't inherit the previous pass's rows.
+    """
+    conn.execute(
+        "DELETE FROM run_agent_turns WHERE run_agent_id = ?", (run_agent_id,)
+    )
+    insert_agent_turns(conn, run_agent_id, turns)
+
+
 def log_event(
     conn: sqlite3.Connection,
     run_agent_id: int,
