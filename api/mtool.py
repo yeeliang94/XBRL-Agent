@@ -1,15 +1,22 @@
-"""mTool fill-pipeline routes (docs/PLAN.md, Phase 4).
+"""mTool fill-pipeline routes (docs/PLAN-mtool-fill-pipeline.md, Phase 4).
 
 Endpoints:
-  ``GET  /api/runs/{run_id}/mtool-fill``        — the semantic fill doc (JSON)
-  ``POST /api/runs/{run_id}/mtool-fill/patch``  — upload an empty mTool
-        template, patch it server-side from the run's facts, stream back the
-        filled workbook + run report headers.
+  ``GET  /api/runs/{run_id}/mtool-fill``            — the semantic fill doc
+  ``GET  /api/runs/{run_id}/mtool-fill/preflight``  — filing-readiness gate
+  ``POST /api/runs/{run_id}/mtool-fill/patch``      — upload an empty mTool
+        template, patch it server-side from the run's facts, return the FULL
+        run report plus a short-lived artifact id
+  ``GET  /api/runs/{run_id}/mtool-fill/artifact/{artifact_id}`` — stream the
+        filled workbook produced by a prior patch
 
 The whole thing is Excel-free (offline zip surgery), so it runs identically
 local and on the cloud. Auth middleware guards ``/api/*`` automatically
 (gotcha #24). One patcher, no fork: patching goes through
 ``mtool.offline_fill.fill_workbook`` — the same function the CLI uses.
+
+**Exposure gate (Step 8A).** Every route that can produce a filled workbook is
+gated on ``XBRL_MTOOL_FILL`` (default OFF) and 404s when it is off. The
+read-only fill-doc GETs stay available — they produce no filing artifact.
 """
 from __future__ import annotations
 
@@ -19,17 +26,22 @@ import re
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
-from starlette.background import BackgroundTask
 
 import server
-from mtool.column_detect import detect_column_map, overall_confidence
+from mtool.column_detect import (
+    detect_column_map, describe_template, fingerprint_workbook,
+    needs_confirmation, overall_confidence, unit_scale_mismatches)
 from mtool.exporter import apply_column_map, build_fill_doc
 from mtool.notes_decorate import NotesTableStyle
 from mtool.notes_exporter import build_notes_fill_doc
 from mtool.offline_fill import (
     fill_footnotes, fill_workbook, validate_input, validate_notes_input)
+from mtool.preflight import evaluate_preflight, written_keys_from_doc
+from mtool.receipt import (
+    fetch_receipts, record_receipt_download, write_fill_receipt)
+from mtool.translation import UnknownUnitClass
 
 logger = logging.getLogger("server")
 
@@ -37,7 +49,20 @@ router = APIRouter()
 
 # Runs whose facts are complete enough to fill from. Mirrors the eval
 # from-run gate (gotcha #23): draft/running/failed/aborted are refused.
+# NOTE: this is a *liveness* gate, not a filing-readiness gate — see
+# mtool/preflight.py for the latter (finding 4).
 _FILLABLE_STATUSES = {"completed", "completed_with_errors"}
+
+
+def _require_exposed() -> None:
+    """404 unless the mTool fill action is exposed (``XBRL_MTOOL_FILL``).
+
+    404 rather than 403 on purpose: with the flag off the capability does not
+    exist for this deployment, and the run page renders as if the feature were
+    never built.
+    """
+    if not server._mtool_fill_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
 
 _MAX_TEMPLATE_BYTES = 25 * 1024 * 1024  # 25 MB — an mTool template is ~100s KB
 # Total UNCOMPRESSED size across all zip members. A zip bomb is small on disk
@@ -150,11 +175,22 @@ def _resolve_notes_decorate(notes_styling: str) -> bool:
 
 
 def _build_doc(run_id: int):
+    """(run, fill doc) for a fillable run, or an HTTPException.
+
+    The translation manifest is not a parameter: the shipped default is
+    identity and only a Windows acceptance run may change that (Step 7), so
+    there is deliberately no way to pick a different one over the wire.
+    """
     run, standard, level, denom = _load_fillable_run(run_id)
-    doc = build_fill_doc(
-        server.AUDIT_DB_PATH, run_id,
-        filing_standard=standard, filing_level=level, denomination=denom,
-    )
+    try:
+        doc = build_fill_doc(
+            server.AUDIT_DB_PATH, run_id,
+            filing_standard=standard, filing_level=level, denomination=denom,
+        )
+    except UnknownUnitClass as exc:
+        # Only reachable under a non-identity manifest — but if it ever fires,
+        # it must read as a refusal to guess, not a crash.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return run, doc
 
 
@@ -170,6 +206,36 @@ def get_mtool_fill_doc(run_id: int):
     return JSONResponse(doc)
 
 
+@router.get("/api/runs/{run_id}/mtool-fill/preflight")
+def get_mtool_preflight(run_id: int):
+    """Whether this run's data is settled enough to become a filing artifact.
+
+    Read-only, so it stays available with the exposure flag off — knowing what
+    would block a fill is useful even where filling isn't offered. See
+    ``mtool/preflight.py`` for why run status alone isn't the gate.
+    """
+    _, standard, level, _ = _load_fillable_run(run_id)
+    doc = _build_doc(run_id)[1]
+    return JSONResponse(evaluate_preflight(
+        server.AUDIT_DB_PATH, run_id,
+        filing_standard=standard, filing_level=level,
+        written_keys=written_keys_from_doc(doc)))
+
+
+@router.get("/api/runs/{run_id}/mtool-fill/receipts")
+def get_mtool_fill_receipts(run_id: int):
+    """Every mTool fill produced from this run, newest first.
+
+    Read-only, so it stays available with the exposure flag off — an audit
+    trail you can't read once the feature is switched off is not an audit
+    trail. Two fills of the same run appear as two receipts with different
+    output hashes (Step 19).
+    """
+    return JSONResponse({"run_id": run_id,
+                         "receipts": fetch_receipts(server.AUDIT_DB_PATH,
+                                                    run_id)})
+
+
 @router.get("/api/runs/{run_id}/mtool-notes-fill")
 def get_mtool_notes_fill_doc(run_id: int):
     """Return the prose-notes footnote fill document for a completed run.
@@ -182,8 +248,78 @@ def get_mtool_notes_fill_doc(run_id: int):
         server.AUDIT_DB_PATH, run_id, style=_resolve_notes_style(run)))
 
 
+# --------------------------------------------------------------- artifacts
+#
+# Step 11A splits "produce the workbook" from "take the workbook". The patch
+# endpoint returns the FULL report plus an artifact id; the operator downloads
+# only after seeing the report (and, when degraded, acknowledging it). The
+# artifact is a temp file with a bounded lifetime — a holding area, not a
+# persistence decision (the durable record is the receipt, Step 19).
+
+_ARTIFACT_TTL_S = 900.0  # 15 minutes — same order as the auth idle timeout
+_MAX_LIVE_ARTIFACTS = 32  # oldest evicted past this; bounds temp-dir growth
+
+# artifact_id -> {"run_id", "dir": Path, "path": Path, "filename",
+#                 "created": monotonic, "status", "receipt_id"}
+_ARTIFACTS: dict[str, dict] = {}
+
+
+def _artifact_root() -> Path:
+    return Path(server.OUTPUT_DIR) / "_mtool_tmp"
+
+
+def _sweep_artifacts() -> None:
+    """Drop expired artifacts, evict past the cap, and clear orphaned dirs.
+
+    The orphan sweep matters because ``_ARTIFACTS`` is in-process: a restart
+    forgets the map but leaves the temp dirs behind. Anything under the staging
+    root older than the TTL is fair game.
+    """
+    import time
+
+    now = time.monotonic()
+    for aid, rec in list(_ARTIFACTS.items()):
+        if now - rec["created"] > _ARTIFACT_TTL_S:
+            _cleanup(rec["dir"])
+            _ARTIFACTS.pop(aid, None)
+    while len(_ARTIFACTS) > _MAX_LIVE_ARTIFACTS:
+        oldest = min(_ARTIFACTS.items(), key=lambda kv: kv[1]["created"])[0]
+        _cleanup(_ARTIFACTS.pop(oldest)["dir"])
+
+    root = _artifact_root()
+    if not root.is_dir():
+        return
+    live = {str(rec["dir"]) for rec in _ARTIFACTS.values()}
+    wall = time.time()
+    for child in root.iterdir():
+        if not child.is_dir() or str(child) in live:
+            continue
+        try:
+            if wall - child.stat().st_mtime > _ARTIFACT_TTL_S:
+                _cleanup(child)
+        except OSError:  # racing sweep / permissions — never fatal
+            continue
+
+
+def _register_artifact(run_id: int, tmp: Path, path: Path, *, status: str,
+                       receipt_id: int | None) -> str:
+    import time
+    import uuid as _uuid
+
+    artifact_id = _uuid.uuid4().hex
+    _ARTIFACTS[artifact_id] = {
+        "run_id": run_id, "dir": tmp, "path": path,
+        "filename": f"mtool_filled_run{run_id}.xlsx",
+        "created": time.monotonic(), "status": status,
+        "receipt_id": receipt_id,
+    }
+    _sweep_artifacts()
+    return artifact_id
+
+
 @router.post("/api/runs/{run_id}/mtool-fill/patch")
 async def patch_mtool_template(
+    request: Request,
     run_id: int,
     template: UploadFile = File(...),
     column_map: str | None = Form(default=None),
@@ -193,21 +329,30 @@ async def patch_mtool_template(
     create_missing_notes: bool = Form(default=False),
     notes_targets: str | None = Form(default=None),
     notes_styling: str = Form(default="styled"),
+    acknowledge_preflight: str | None = Form(default=None),
 ):
     """Patch an uploaded empty mTool template from the run's facts.
 
     ``column_map`` (optional JSON string) supplies the physical layout of the
     operator's template. When omitted we auto-detect it; if detection is
-    low-confidence we refuse (422) and ask for an explicit map rather than
-    risk mis-targeting. Streams back the filled ``.xlsx``; the run report is
-    returned in the ``X-mTool-Report`` header (bounded — see
-    ``_bounded_report_header`` — and logged in full).
+    low-confidence — or semantically unconfirmed (Group layouts, unknown
+    templates) — we refuse (422) and ask for an explicit map rather than risk
+    mis-targeting.
 
-    The uploaded template is written to a request-scoped temp dir under a
-    shared ``OUTPUT_DIR/_mtool_tmp`` staging area and is never persisted: the
-    whole body is wrapped so any error path cleans it up, and the success path
-    cleans it after streaming.
+    Returns the **complete** run report (no caps) plus an ``artifact_id``; the
+    workbook itself is fetched from ``…/mtool-fill/artifact/{artifact_id}``.
+    That split is deliberate: the operator must be able to see whether the fill
+    is clean *before* they hold the file (Step 11A).
+
+    ``acknowledge_preflight`` is the operator's explicit override of a blocking
+    preflight result. Without it a blocked run 409s; with it the acknowledgement
+    text is recorded on the fill receipt.
+
+    The uploaded template lands in a request-scoped temp dir under a shared
+    ``OUTPUT_DIR/_mtool_tmp`` staging area. On every failure path the dir is
+    removed; on success it survives only until the artifact expires.
     """
+    _require_exposed()
     run, doc = _build_doc(run_id)
     if not doc["writes"]:
         raise HTTPException(
@@ -217,6 +362,22 @@ async def patch_mtool_template(
     # Notes styling mode: "styled" (default) or "none" (diagnostic). Validated
     # here so a typo fails loudly, before any upload is read.
     notes_decorate = _resolve_notes_decorate(notes_styling)
+
+    # Filing-readiness gate (finding 4). Blocking is the default; an override
+    # must be an explicit acknowledgement, which lands on the receipt.
+    _, standard, level, denomination = _load_fillable_run(run_id)
+    preflight = evaluate_preflight(
+        server.AUDIT_DB_PATH, run_id,
+        filing_standard=standard, filing_level=level,
+        written_keys=written_keys_from_doc(doc))
+    acknowledged = bool((acknowledge_preflight or "").strip())
+    if not preflight["ok"] and not acknowledged:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "This run isn't ready to file yet.",
+                "preflight": preflight,
+            })
 
     # Read in bounded chunks and abort the moment we exceed the cap, so an
     # oversized upload never fully materialises in memory (Content-Length can
@@ -229,9 +390,9 @@ async def patch_mtool_template(
     # subdir per request). EVERYTHING after this point is wrapped so any raise
     # — an HTTPException from a 422 gate OR an unexpected error from
     # fill_workbook / the zip reader — cleans the temp dir before propagating.
-    # The success path returns a FileResponse whose BackgroundTask does the
-    # cleanup AFTER streaming, so the except never fires on success.
-    work_root = Path(server.OUTPUT_DIR) / "_mtool_tmp"
+    # On success the dir is handed to the artifact registry and lives only
+    # until the artifact expires, so the except never fires on success.
+    work_root = _artifact_root()
     work_root.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(dir=work_root))
     try:
@@ -257,6 +418,13 @@ async def patch_mtool_template(
             ) from exc
 
         # Resolve the column map: explicit wins; else auto-detect.
+        #
+        # Auto-detection may stand alone only when the detector both is
+        # confident AND is allowed to proceed unattended. Those are different
+        # questions (finding 3): a group layout or an unrecognised template can
+        # look perfectly "confident" while nothing has corroborated which
+        # column is which.
+        detected = detect_column_map(str(src), doc, data=data)
         if column_map:
             try:
                 cmap = json.loads(column_map)
@@ -266,14 +434,14 @@ async def patch_mtool_template(
                     detail=f"column_map is not valid JSON: {exc}") from exc
             _validate_cmap_shape(cmap)
         else:
-            detected = detect_column_map(str(src), doc, data=data)
-            if overall_confidence(detected) != "high":
+            if (overall_confidence(detected) != "high"
+                    or needs_confirmation(detected)):
                 raise HTTPException(
                     status_code=422,
                     detail={
-                        "error": "column layout could not be auto-detected "
-                                 "with confidence; supply an explicit "
-                                 "column_map",
+                        "error": "we can't be sure which columns hold the "
+                                 "labels and the figures — please confirm "
+                                 "them before we write anything",
                         "detected": detected,
                     })
             cmap = {s: {"label_column": v["label_column"],
@@ -395,25 +563,94 @@ async def patch_mtool_template(
             (notes_report or {}).get("formatting_dropped", 0),
             create_missing_notes)
         # The per-note unresolved reasons are the actionable diagnostic (why a
-        # note didn't fill: no slot / strict mismatch). The header is bounded,
-        # so log them in full here for debugging.
+        # note didn't fill: no slot / strict mismatch). Logged as well as
+        # returned so a support conversation doesn't depend on the browser.
         for u in (notes_report or {}).get("unresolved", []):
             logger.info("mTool notes unresolved run %s: label=%r detail=%r",
                         run_id, u.get("label"), u.get("detail"))
 
-        filename = f"mtool_filled_run{run_id}.xlsx"
-        return FileResponse(
-            str(final),
-            media_type=("application/vnd.openxmlformats-officedocument."
-                        "spreadsheetml.sheet"),
-            filename=filename,
-            headers={"X-mTool-Report": _bounded_report_header(report,
-                                                              notes_report)},
-            background=BackgroundTask(_cleanup, tmp),
+        summary = _full_report(report, notes_report)
+        # The template's own declared unit vs the run's denomination. Reported,
+        # never acted on — a disagreement here is the 1000×-inflation risk
+        # (finding 2) and the operator must see it, but only the translation
+        # manifest may change a value.
+        summary["unit_scale_warnings"] = unit_scale_mismatches(
+            detected, denomination)
+        summary["unit_class_unknown"] = doc["meta"].get(
+            "unit_class_unknown", [])
+
+        fingerprint = fingerprint_workbook(data)
+        receipt_id = write_fill_receipt(
+            server.AUDIT_DB_PATH,
+            run_id=run_id,
+            snapshot=doc["meta"].get("snapshot", {}),
+            source_sha256=_sha256_file(src),
+            output_sha256=_sha256_file(final),
+            template_fingerprint=fingerprint,
+            column_map=cmap,
+            translation_version=doc["meta"].get("translation_version"),
+            preflight=preflight,
+            preflight_override=(acknowledge_preflight or "").strip() or None,
+            operator=_operator_label(request),
+            report=summary,
         )
+        artifact_id = _register_artifact(
+            run_id, tmp, final, status=summary["status"],
+            receipt_id=receipt_id)
+        known = describe_template(fingerprint)
+        return JSONResponse({
+            **summary,
+            "artifact_id": artifact_id,
+            "artifact_expires_in_s": int(_ARTIFACT_TTL_S),
+            "download_url":
+                f"/api/runs/{run_id}/mtool-fill/artifact/{artifact_id}",
+            "filename": f"mtool_filled_run{run_id}.xlsx",
+            "preflight": preflight,
+            "column_map": cmap,
+            "template_fingerprint": fingerprint,
+            "template_known": known is not None,
+            "receipt_id": receipt_id,
+        })
     except Exception:
         _cleanup(tmp)
         raise
+
+
+@router.get("/api/runs/{run_id}/mtool-fill/artifact/{artifact_id}")
+def download_mtool_artifact(run_id: int, artifact_id: str,
+                            acknowledge_degraded: str | None = None):
+    """Stream a workbook produced by a prior patch call.
+
+    The second half of the Step-11A split. A degraded fill refuses to hand over
+    the file until the operator says, in so many words, that they've read the
+    report — the acknowledgement is stamped on the receipt. A clean fill
+    downloads straight through.
+    """
+    _require_exposed()
+    _sweep_artifacts()
+    rec = _ARTIFACTS.get(artifact_id)
+    if rec is None or rec["run_id"] != run_id or not rec["path"].exists():
+        raise HTTPException(
+            status_code=404,
+            detail="That filled workbook is no longer available — fills are "
+                   "held for 15 minutes. Run the fill again.")
+    ack = (acknowledge_degraded or "").strip()
+    if rec["status"] != "ok" and not ack:
+        raise HTTPException(
+            status_code=409,
+            detail="This fill came back with problems. Read the report, then "
+                   "confirm you want the file anyway.")
+    if ack and rec.get("receipt_id"):
+        record_receipt_download(server.AUDIT_DB_PATH, rec["receipt_id"],
+                                acknowledgement=ack)
+    elif rec.get("receipt_id"):
+        record_receipt_download(server.AUDIT_DB_PATH, rec["receipt_id"])
+    return FileResponse(
+        str(rec["path"]),
+        media_type=("application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"),
+        filename=rec["filename"],
+    )
 
 
 @router.post("/api/runs/{run_id}/mtool-fill/detect-columns")
@@ -427,10 +664,12 @@ async def detect_mtool_columns(
     operator confirms the label/figure columns UP FRONT (alongside the notes
     check) instead of discovering a low-confidence layout only after a failed
     Fill (the old submit → 422 → confirm → retry loop). Returns the detected
-    map plus an overall ``confidence`` (``high`` = safe to fill as-is; anything
-    else = please confirm). The patch endpoint still auto-detects + 422s as a
-    defensive fallback for callers that skip this step.
+    map, an overall ``confidence``, and ``requires_confirmation``. Only
+    ``confidence == "high"`` AND ``requires_confirmation == False`` may fill
+    unattended — the patch endpoint enforces the same pair as a defensive
+    fallback for callers that skip this step.
     """
+    _require_exposed()
     run, doc = _build_doc(run_id)
 
     raw = await _read_capped(template, _MAX_TEMPLATE_BYTES)
@@ -456,9 +695,18 @@ async def detect_mtool_columns(
             ) from exc
 
         detected = detect_column_map(str(src), doc, data=data)
+        fingerprint = fingerprint_workbook(data)
+        known = describe_template(fingerprint)
         return JSONResponse({
             "detected": detected,
             "confidence": overall_confidence(detected),
+            # The real gate — see mtool/column_detect.needs_confirmation.
+            "requires_confirmation": needs_confirmation(detected),
+            "template_fingerprint": fingerprint,
+            "template_known": known is not None,
+            "template_description": (known or {}).get("name"),
+            "unit_scale_warnings": unit_scale_mismatches(
+                detected, doc["meta"].get("denomination")),
         })
     finally:
         _cleanup(tmp)
@@ -488,6 +736,7 @@ async def preview_mtool_notes(
     (including the size-degradation tiers) reflect the styling the operator
     actually chose — a "no styling" preview must not report styled tiers.
     """
+    _require_exposed()
     run, *_ = _load_fillable_run(run_id)  # 404/409 gate, same as the patch endpoint
     notes_doc = build_notes_fill_doc(
         server.AUDIT_DB_PATH, run_id, style=_resolve_notes_style(run),
@@ -686,17 +935,15 @@ def _validate_cmap_shape(cmap) -> None:
                            "a column letter like 'E'")
 
 
-# Row-detail lists are truncated in the header so a run with many unresolved
-# labels can't blow past proxy header limits (~8 KB) and get the whole response
-# rejected/truncated. Counts are always exact; a `truncated` flag tells the UI
-# detail was elided (full detail is in the server log).
-_HEADER_LIST_CAP = 20
-_HEADER_MAX_BYTES = 6000
+# The report used to ride an HTTP header alongside the file download, which
+# forced a 20-row / 6 KB cap and meant the operator got the workbook before the
+# report. Step 11A moved it into the response BODY, so nothing is capped any
+# more — a run with 200 unresolved labels shows all 200.
 
 
 def _notes_report_block(notes_report: dict | None) -> dict | None:
-    """Compact notes-fill summary for the response header. ``None`` when notes
-    weren't filled (fill_notes off, or the run has none)."""
+    """Notes-fill summary for the response. ``None`` when notes weren't filled
+    (fill_notes off, or the run has none)."""
     if not notes_report:
         return None
     return {
@@ -727,19 +974,28 @@ def _notes_report_block(notes_report: dict | None) -> dict | None:
             # mTool may show its default grey gridlines there (cosmetic).
             "white_grid_dropped": notes_report.get("white_grid_dropped", 0),
         },
+        # FULL list — the operator needs to know which notes didn't land, not
+        # how many (Step 11A).
         "unresolved": [
-            {"label": e.get("label"), "detail": e.get("detail")}
-            for e in notes_report.get("unresolved", [])[:_HEADER_LIST_CAP]
+            {"label": e.get("label"), "detail": e.get("detail"),
+             "reason": e.get("reason")}
+            for e in notes_report.get("unresolved", [])
         ],
     }
 
 
-def _bounded_report_header(report: dict, notes_report: dict | None = None) -> str:
-    detail_keys = ("unresolved", "skipped_formula", "mismatches")
+# Problem lists returned in full. `written` is deliberately NOT included: it can
+# be hundreds of rows the operator never reads, and the receipt keeps the
+# complete record anyway.
+_DETAIL_KEYS = ("unresolved", "skipped_formula", "mismatches", "ambiguous",
+                "fuzzy_matched", "errors")
+
+
+def _full_report(report: dict, notes_report: dict | None = None) -> dict:
+    """The complete, uncapped run report returned to the operator."""
     counts = {k: len(report[k]) for k in (
         "written", "fuzzy_matched", "skipped_formula", "type_changed",
         "unresolved", "ambiguous", "mismatches", "errors")}
-    truncated = any(len(report[k]) > _HEADER_LIST_CAP for k in detail_keys)
     notes_block = _notes_report_block(notes_report)
     # Top-level status is COMBINED: a degraded notes fill must not hide behind a
     # green numeric status (the modal keys its "Clean / safe to Validate" banner
@@ -747,24 +1003,43 @@ def _bounded_report_header(report: dict, notes_report: dict | None = None) -> st
     overall = report["status"]
     if notes_block and notes_block["status"] != "ok":
         overall = "degraded"
-    payload = {
+    return {
         "status": overall,
         "numeric_status": report["status"],
         "counts": counts,
-        "truncated": truncated,
         **({"notes": notes_block} if notes_block else {}),
-        **{k: report[k][:_HEADER_LIST_CAP] for k in detail_keys},
+        **{k: report.get(k, []) for k in _DETAIL_KEYS},
     }
-    encoded = json.dumps(payload)
-    if len(encoded.encode("utf-8")) <= _HEADER_MAX_BYTES:
-        return encoded
-    # Still too big (very long labels): drop the detail lists, keep counts.
-    slim = {"status": overall, "numeric_status": report["status"],
-            "counts": counts, "truncated": True}
-    if notes_block:
-        slim["notes"] = {"status": notes_block["status"],
-                         "counts": notes_block["counts"]}
-    return json.dumps(slim)
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _operator_label(request) -> str | None:
+    """Who ran this fill, for the receipt.
+
+    Best-effort by design: auth is per-request session state (gotcha #24) and a
+    missing/dev-mode identity must never block a fill — an anonymous receipt is
+    far better than no receipt.
+    """
+    try:
+        from auth import config as auth_config, middleware as auth_mw
+        from db.repository import db_session
+
+        with db_session(server.AUDIT_DB_PATH) as conn:
+            cookie = request.cookies.get(auth_config.cookie_name())
+            session, _ = auth_mw.resolve_session(conn, cookie)
+            return session.email if session is not None else None
+    except Exception:  # noqa: BLE001
+        logger.debug("mTool receipt: could not resolve operator", exc_info=True)
+        return None
 
 
 def _cleanup(path: Path) -> None:

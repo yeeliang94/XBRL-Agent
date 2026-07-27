@@ -41,6 +41,7 @@ export interface RunDetailPageProps {
   /** Forwarded to RunDetailView to gate the "View Concepts" link on
    *  canonical mode (peer-review F6). */
   canonicalEnabled?: boolean;
+  mtoolFillEnabled?: boolean;
   /** Forwarded to RunDetailView — initial tab (the `/concepts/{id}` alias
    *  passes "values"). */
   initialTab?: RunDetailViewProps["initialTab"];
@@ -57,6 +58,7 @@ export function RunDetailPage({
   onForceAbort,
   onRegenerateNotes,
   canonicalEnabled = false,
+  mtoolFillEnabled = false,
   initialTab,
 }: RunDetailPageProps) {
   return (
@@ -94,6 +96,7 @@ export function RunDetailPage({
           onForceAbort={onForceAbort}
           onRegenerateNotes={onRegenerateNotes}
           canonicalEnabled={canonicalEnabled}
+          mtoolFillEnabled={mtoolFillEnabled}
           initialTab={initialTab}
         />
       )}
