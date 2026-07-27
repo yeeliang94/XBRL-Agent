@@ -62,6 +62,8 @@ export interface RunDetailViewProps {
    *  / Results gating (peer-review F6). Defaults to false: hidden unless the
    *  parent explicitly enables it. */
   canonicalEnabled?: boolean;
+  /** Whether the mTool fill action is exposed at all (Step 8A). */
+  mtoolFillEnabled?: boolean;
   /** Which tab to open on first render. Used by the `/concepts/{id}` alias
    *  to land directly on the Values tab. Defaults to "overview". */
   initialTab?: RunTabKey;
@@ -360,7 +362,8 @@ function writeRunTabToUrl(key: RunTabKey): void {
 
 export function RunDetailView({
   detail, onDownload, onDelete, onResumeDraft, onForceAbort, onRegenerateNotes,
-  canonicalEnabled = false, initialTab = "overview",
+  canonicalEnabled = false, mtoolFillEnabled = false,
+  initialTab = "overview",
 }: RunDetailViewProps) {
   // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
   // PDF panes) only mounts when its tab is active, so opening a run doesn't
@@ -653,7 +656,10 @@ export function RunDetailView({
           </button>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
-          <button
+          {/* Exposure gate (Step 8A): with XBRL_MTOOL_FILL off, the run page
+              renders exactly as it did before this feature existed — no
+              disabled button, no hint that something is being withheld. */}
+          {mtoolFillEnabled && <button
             type="button"
             onClick={() => setMtoolOpen(true)}
             disabled={!canFillMtool}
@@ -670,7 +676,7 @@ export function RunDetailView({
             }
           >
             Fill mTool template
-          </button>
+          </button>}
           {/* Hairline divider so the destructive action doesn't sit shoulder
               to shoulder with the most-clicked buttons. */}
           <span aria-hidden="true" style={styles.actionsDivider} />
@@ -769,7 +775,11 @@ export function RunDetailView({
         </div>
       )}
 
-      <MtoolFillModal runId={detail.id} open={mtoolOpen} onClose={() => setMtoolOpen(false)} />
+      <MtoolFillModal
+        runId={detail.id}
+        open={mtoolOpen && mtoolFillEnabled}
+        onClose={() => setMtoolOpen(false)}
+      />
 
       <ConfirmDialog
         isOpen={confirmDraftDownload}

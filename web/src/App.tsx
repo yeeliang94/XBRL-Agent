@@ -123,12 +123,22 @@ export default function App() {
   // so a raced/failed/401'd mount fetch can't strand the user by hiding
   // mandatory canonical UI (the Concepts tab + the post-run review link).
   const [canonicalEnabled, setCanonicalEnabled] = useState(true);
+  // mTool fill EXPOSURE flag (docs/PLAN-mtool-fill-pipeline.md Step 8A).
+  // Defaults to FALSE — the opposite posture to canonical mode above, and
+  // deliberately so: filling a template produces a workbook someone files with
+  // the registrar, so a raced or failed /api/config fetch must hide the action,
+  // never offer it. The backend 404s the route regardless; this only stops the
+  // UI advertising something that isn't there.
+  const [mtoolFillEnabled, setMtoolFillEnabled] = useState(false);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/config")
       .then((r) => (r.ok ? r.json() : null))
       .then((cfg) => {
-        if (!cancelled && cfg) setCanonicalEnabled(Boolean(cfg.canonical_mode));
+        if (!cancelled && cfg) {
+          setCanonicalEnabled(Boolean(cfg.canonical_mode));
+          setMtoolFillEnabled(Boolean(cfg.mtool_fill));
+        }
       })
       .catch(() => {});
     return () => {
@@ -676,6 +686,7 @@ export default function App() {
           state.selectedRunId != null ? (
             <HistoryPage
               canonicalEnabled={canonicalEnabled}
+              mtoolFillEnabled={mtoolFillEnabled}
               selectedId={state.selectedRunId}
               initialRunTab="values"
               onSelectRun={(id) => {
@@ -700,6 +711,7 @@ export default function App() {
         ) : state.view === "history" ? (
           <HistoryPage
             canonicalEnabled={canonicalEnabled}
+            mtoolFillEnabled={mtoolFillEnabled}
             selectedId={state.selectedRunId}
             onSelectRun={(id) =>
               dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })

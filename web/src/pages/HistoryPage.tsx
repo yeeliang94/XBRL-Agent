@@ -44,12 +44,13 @@ export interface HistoryPageProps {
   /** Gates the run-detail "View Concepts" link on canonical mode
    *  (peer-review F6). Forwarded straight to RunDetailPage. */
   canonicalEnabled?: boolean;
+  mtoolFillEnabled?: boolean;
   /** Initial run-detail tab. The `/concepts/{id}` alias passes "values" so
    *  the deep link lands on the values review. Forwarded to RunDetailPage. */
   initialRunTab?: RunTabKey;
 }
 
-export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeDraft, canonicalEnabled = false, initialRunTab }: HistoryPageProps = {}) {
+export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeDraft, canonicalEnabled = false, mtoolFillEnabled = false, initialRunTab }: HistoryPageProps = {}) {
   const [filters, setFilters] = useState<RunsFilterParams>({});
   const [runs, setRuns] = useState<RunSummaryJson[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -390,6 +391,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           isLoading={isDetailLoading}
           error={detailError}
           canonicalEnabled={canonicalEnabled}
+          mtoolFillEnabled={mtoolFillEnabled}
           initialTab={initialRunTab}
           onBack={() => {
             // Always clear selection directly — window.history.back()

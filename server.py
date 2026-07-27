@@ -2737,6 +2737,26 @@ def _notes_coverage_enabled() -> bool:
     return os.environ.get("XBRL_NOTES_COVERAGE", "true").lower() == "true"
 
 
+def _mtool_fill_enabled() -> bool:
+    """Whether the mTool patch/download action is EXPOSED (Step 8A of
+    docs/PLAN-mtool-fill-pipeline.md).
+
+    ``XBRL_MTOOL_FILL`` — **default OFF**. This is an exposure gate, not a
+    feature switch: the code is written and Mac-tested, but a filed workbook is
+    a regulatory artifact, and the unit-aware translation (Step 6) and semantic
+    column validation (Step 10) had not been proven on a real Windows mTool run
+    when the delivery UX landed. Off ⇒ the routes that can PRODUCE a filled
+    workbook 404 and the run page shows no mTool action; the read-only fill-doc
+    GETs stay available because they produce no filing artifact.
+
+    Only flip the default to on once Step 7 (machine-generated Windows
+    acceptance run) has passed. Read fresh each call so a Settings/env change
+    takes effect without a restart.
+    """
+    return os.environ.get("XBRL_MTOOL_FILL", "false").lower() in (
+        "1", "true", "yes", "on")
+
+
 def _spot_check_enabled() -> bool:
     """Whether a CLEAN run (all cross-checks passed, no open conflicts) still
     gets a grounded spot-check (issue 1, 2026-06-21).
